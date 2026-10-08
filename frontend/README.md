@@ -1,8 +1,9 @@
 # FRONTEND - FACEBOOK AUTOMATOR PRO
 
 > 📖 **HƯỚNG DẪN GIAO DIỆN DÀNH CHO DEVELOPER**:  
-> Đọc tài liệu chuẩn hóa Design Tokens (Facebook Light Theme) và cách dùng bộ component **shadcn/ui** tại:  
-> 🔗 **[GUIDE_UI.md](./GUIDE_UI.md)**
+> Đọc tài liệu chuẩn hóa Design Tokens (Facebook Light Theme), quy chuẩn Icon SVG gốc từ Figma và cách dùng bộ component **shadcn/ui** tại:  
+> 🔗 **[GUIDE_UI.md](./GUIDE_UI.md)**  
+> ⚠️ **LƯU Ý QUAN TRỌNG VỀ ICON**: Toàn bộ Logo và Icon chức năng phải lấy đúng file SVG gốc từ Figma vào `public/icons/`. Không tự ý lấy icon từ thư viện Lucide hay bên ngoài.
 
 ---
 

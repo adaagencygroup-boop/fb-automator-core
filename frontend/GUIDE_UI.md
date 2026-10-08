@@ -262,48 +262,78 @@ export default function AddPageModal() {
 
 ---
 
-### H. Hệ thống Icons (Lucide Icons & Brand Icons SVG)
-Dự án chia làm 2 loại icon để đảm bảo giao diện đẹp, sắc nét và nhẹ nhất:
+### H. Hệ thống Icons & Logo (Quy Định Bắt Buộc Dùng SVG Gốc Từ Figma)
 
-1. **Icon chức năng hệ thống (`lucide-react`)**:
-   ```jsx
-   import { 
-     Search, Plus, Trash2, Edit, Check, X, RefreshCw, 
-     Filter, Video, Calendar, Clock, Bell, User, Settings 
-   } from "lucide-react";
+> ⚠️ **QUY ĐỊNH BẮT BUỘC DÀNH CHO DEVELOPER**:  
+> **Toàn bộ Logo thương hiệu và Icon chức năng (nút bấm, bảng, trạng thái, modal, input, sidebar...) BẮT BUỘC PHẢI LẤY ĐÚNG SVG GỐC TỪ BẢN VẼ FIGMA** tải về thư mục `frontend/public/icons/`.  
+> **TUYỆT ĐỐI KHÔNG TỰ Ý LẤY ICON TỪ THƯ VIỆN NGOÀI (LUCIDE, HEROICONS,...)** để đảm bảo 100% đúng tỷ lệ nét vẽ (stroke), bo góc và phong cách nhận diện chuẩn của bản thiết kế.
 
-   <Search className="w-4 h-4 text-muted-foreground" />
-   <Plus className="w-4 h-4 text-white" />
-   <RefreshCw className="w-4 h-4 text-slate-500 animate-spin" />
-   ```
+#### 1. Vị trí lưu trữ tài nguyên Icon
+* Toàn bộ file SVG tải về phải được đặt tập trung tại:  
+  👉 `frontend/public/icons/`
+* Các icon thường dùng hoặc cần tương tác class màu có thể bọc thành Component tại:  
+  👉 `frontend/src/components/icons/`
 
-2. **Icon & Logo thương hiệu chuyên biệt (`@/components/icons`)**:
-   Đã được dựng sẵn dưới dạng vector SVG chuẩn nét tại `@/components/icons`:
-   ```jsx
-   import { 
-     FacebookIcon, 
-     TikTokIcon, 
-     YouTubeIcon, 
-     ZaloIcon, 
-     ReelsIcon, 
-     SparkleAIIcon 
-   } from "@/components/icons";
+#### 2. Quy trình lấy Icon gốc từ Figma về dự án
+1. **Cách 1 - Xuất trực tiếp từ Figma (Nhanh nhất - 1 Click)**:
+   - Mở file thiết kế Figma: [Figma FB Design](https://www.figma.com/design/wJSwDkSGVASfuRQ482NwMP/FB).
+   - Chọn các icon cần lấy trên canvas.
+   - Bấm phím tắt **`Ctrl + Shift + E`** (hoặc menu góc trái: *File > Export...*).
+   - Chọn định dạng **SVG**, bấm **"Export All"** để tải file `.zip`.
+   - Giải nén toàn bộ các file `.svg` vào thư mục `frontend/public/icons/`.
+2. **Cách 2 - Tự động tải qua Script Batch Exporter**:
+   - Sử dụng script batch có sẵn của dự án:
+     ```bash
+     node scripts/fetch_figma_icons.mjs
+     # Hoặc truyền token cá nhân:
+     FIGMA_TOKEN=figd_xxx node scripts/fetch_figma_icons.mjs
+     ```
 
-   <FacebookIcon className="w-5 h-5 text-primary" />
-   <TikTokIcon className="w-5 h-5 text-foreground" />
-   <YouTubeIcon className="w-5 h-5 text-red-600" />
-   <ReelsIcon className="w-5 h-5 text-primary" />
-   <SparkleAIIcon className="w-5 h-5 text-amber-500" />
-   ```
+#### 3. Quy ước đặt tên file SVG trong `public/icons/`
+Đặt tên viết thường hoàn toàn theo dạng `snake_case`, phản ánh đúng chức năng:
+* **Logo & Brand**: `app_brand_logo.svg`, `app_brand_logo_login.svg`, `zalo_logo.svg`, `zalo_chat_icon.svg`, `orbiting_ring.svg`...
+* **Icon chức năng**: `icon_shield_check.svg`, `icon_arrow_right.svg`, `icon_alert_triangle.svg`, `icon_lock.svg`, `icon_eye.svg`, `icon_eye_slash.svg`, `icon_key.svg`, `icon_cpu.svg`, `icon_user.svg`, `icon_chevron_left.svg`, `icon_chevron_right.svg`, `icon_circle_check.svg`, `icon_x_circle.svg`, `icon_info.svg`...
+
+#### 4. Cách sử dụng Icon chuẩn trong mã nguồn
+
+**Cách A: Dùng trực tiếp qua thẻ `<img>` từ `public/icons/`**:
+```jsx
+// Sử dụng trong Button, Table hoặc Input
+<img 
+  src="/icons/icon_shield_check.svg" 
+  alt="Bảo mật" 
+  className="w-4 h-4 inline-block" 
+/>
+```
+
+**Cách B: Sử dụng qua bộ Component tập trung (`@/components/icons`)**:
+```jsx
+import { 
+  FacebookIcon, 
+  TikTokIcon, 
+  YouTubeIcon, 
+  ZaloIcon, 
+  ReelsIcon, 
+  SparkleAIIcon 
+} from "@/components/icons";
+
+<FacebookIcon className="w-5 h-5 text-primary" />
+<TikTokIcon className="w-5 h-5 text-foreground" />
+<YouTubeIcon className="w-5 h-5 text-red-600" />
+<ReelsIcon className="w-5 h-5 text-primary" />
+<SparkleAIIcon className="w-5 h-5 text-amber-500" />
+```
 
 ---
 
 ## 3. CHECKLIST DÀNH CHO LẬP TRÌNH VIÊN GIAO DIỆN
 
-Khi xây dựng màn hình hoặc module mới:
-1. [ ] Đặt file giao diện trong thư mục `src/modules/module_xx_.../`
-2. [ ] Bọc giao diện trong các thẻ `<Card>` với nền trắng `bg-card` và viền xám `border-border`
-3. [ ] Sử dụng font tiêu đề `font-heading font-bold` cho các tiêu đề chính
-4. [ ] Dùng đúng các biến thể `<Badge>` theo trạng thái (`success`, `warning`, `destructive`)
-5. [ ] Dùng `<Button>` có variant phù hợp (`default` cho nút chính, `subtle` cho nút bảng, `outline` cho nút phụ)
-6. [ ] Đăng ký module vào `src/modules/index.js` để tự động hiển thị tab trên Sidebar
+Khi xây dựng màn hình hoặc module mới, lập trình viên cần tự kiểm tra:
+1. [ ] **Icon & Logo**: ĐÃ LẤY ĐÚNG SVG GỐC TỪ FIGMA vào thư mục `public/icons/`, KHÔNG tự ý lấy icon từ thư viện Lucide.
+2. [ ] **Cấu trúc thư mục**: Đặt file giao diện trong đúng thư mục `src/modules/module_xx_.../`
+3. [ ] **Container Thẻ**: Bọc giao diện trong các thẻ `<Card>` với nền trắng `bg-card` và viền xám `border-border`
+4. [ ] **Typography**: Sử dụng font tiêu đề `font-heading font-bold` cho các tiêu đề chính, `font-sans` cho dữ liệu
+5. [ ] **Huy hiệu trạng thái**: Dùng đúng các biến thể `<Badge>` theo trạng thái (`success`, `warning`, `destructive`, `info`)
+6. [ ] **Nút bấm**: Dùng `<Button>` có variant phù hợp (`default` cho nút chính, `subtle` cho bảng, `outline` cho nút phụ)
+7. [ ] **Đăng ký Module**: Đăng ký module vào `src/modules/index.js` để tự động hiển thị tab trên Sidebar
+
