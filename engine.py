@@ -133,9 +133,9 @@ def get_dashboard_stats():
         acc_live = db.fetch_one("SELECT COUNT(*) as c FROM accounts WHERE status = 'LIVE'")["c"]
         acc_die = db.fetch_one("SELECT COUNT(*) as c FROM accounts WHERE status = 'DIE'")["c"]
         pages_total = db.fetch_one("SELECT COUNT(*) as c FROM pages")["c"]
-        posts_today = db.fetch_one("SELECT COUNT(*) as c FROM posted_history WHERE date(posted_at) = date('now')")["c"]
+        posts_today = db.fetch_one("SELECT COUNT(*) as c FROM posting_history WHERE date(posted_at) = date('now')")["c"]
         proxies_active = db.fetch_one("SELECT COUNT(*) as c FROM proxies WHERE status = 'ACTIVE'")["c"]
-        recent_posts = db.fetch_all("SELECT * FROM posted_history ORDER BY id DESC LIMIT 10")
+        recent_posts = db.fetch_all("SELECT * FROM posting_history ORDER BY id DESC LIMIT 10")
         return {
             "accounts": {"total": acc_total, "live": acc_live, "die": acc_die},
             "pages_total": pages_total,

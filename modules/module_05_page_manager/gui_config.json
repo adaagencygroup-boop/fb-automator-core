@@ -1,0 +1,18 @@
+{
+    "reels_root_dir": "G:\\My Drive\\video_tiktok",
+    "video_root_dir": "G:\\My Drive\\video_ytb",
+    "gemini_key_file": "keys.txt",
+    "pixabay_key": "56272181-cf50456bbdf3acb31d70cb89d",
+    "fb_api_version": "v25.0",
+    "gemini_model": "gemini-2.5-flash",
+    "google_sheet_id": "1B_rqyFGABv1AjdIDBBt9CanphGG93W2mT9Xo22K3UO8",
+    "google_sheet_creds_path": "C:/Users/User/Documents/post_page_facebook_api/credentials.json",
+    "prompt_template": "Bạn là chuyên gia tối ưu hóa nội dung truyền thông đại chúng thế hệ mới trên mạng xã hội Facebook.\nHãy phân tích cẩn thận định hướng ngách nội dung độc bản dựa hoàn toàn trên tên thương hiệu của từng Fanpage được cung cấp. Viết nội dung mang tính viral cao, chia sẻ kiến thức sâu sắc hoặc mẹo vặt thực tế đời sống. Trình bày tối ưu cấu trúc bài đăng Facebook (tiêu đề in hoa nổi bật kèm biểu tượng emoji, chia nhỏ 2-3 đoạn ngắn dễ đọc, kèm lời kêu gọi hành động tương tác và 3-5 hashtag cốt lõi).\n\nQUY ĐỊNH ĐẦU RA SẮT ĐÁ: Trả về văn bản thuần túy, tuyệt đối cấm sử dụng các block mã code markdown như ```text hay ```. Phải tuân thủ cấu trúc phân tách khối văn bản chính xác.",
+    "ai_schedule_enabled": false,
+    "ai_schedule_times": "09:00, 15:00, 21:00",
+    "youtube_root_dir": "G:\\My Drive\\video_ytb",
+    "youtube_quick_save_dir": "",
+    "youtube_cookie_file": "",
+    "youtube_cookie_browser": "Không dùng (None)",
+    "tiktok_root_dir": "G:\\My Drive\\video_tiktok"
+}

@@ -11,7 +11,6 @@ from config.settings import settings
 from config.theme import CYBERPUNK_QSS
 from core.database.models import init_database
 from gui.components.log_viewer import LogViewer
-from modules import MODULE_REGISTRY
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -63,6 +62,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(sep)
 
         # Dynamic Navigation Buttons
+        from modules import MODULE_REGISTRY
         self.nav_buttons = []
         self.stacked_widget = QStackedWidget()
 

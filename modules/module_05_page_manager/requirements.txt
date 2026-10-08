@@ -1,0 +1,9 @@
+google-genai
+duckduckgo-search
+PyQt5
+gspread
+google-auth
+requests
+yt-dlp
+curl_cffi
+imageio-ffmpeg
