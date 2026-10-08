@@ -1,3 +1,11 @@
+# FRONTEND - FACEBOOK AUTOMATOR PRO
+
+> 📖 **HƯỚNG DẪN GIAO DIỆN DÀNH CHO DEVELOPER**:  
+> Đọc tài liệu chuẩn hóa Design Tokens (Facebook Light Theme) và cách dùng bộ component **shadcn/ui** tại:  
+> 🔗 **[GUIDE_UI.md](./GUIDE_UI.md)**
+
+---
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
 
 ## Getting Started

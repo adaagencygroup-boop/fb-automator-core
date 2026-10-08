@@ -1,3 +1,113 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    /* Canvas & Surfaces */
+    --background: 216 40% 96%;        /* #f0f4f9 */
+    --foreground: 222 47% 11%;        /* #0f172a (Slate 900) */
+    
+    --card: 0 0% 100%;                /* #ffffff */
+    --card-foreground: 222 47% 11%;   /* #0f172a */
+    
+    --popover: 0 0% 100%;             /* #ffffff */
+    --popover-foreground: 222 47% 11%;
+    
+    /* Primary (Facebook Brand Blue) */
+    --primary: 214 89% 52%;           /* #1877f2 */
+    --primary-foreground: 0 0% 100%;  /* #ffffff */
+    --primary-hover: 214 82% 49%;     /* #166fe5 */
+    --primary-subtle: 210 100% 95%;   /* #e7f3ff */
+    
+    /* Secondary & Muted */
+    --secondary: 210 40% 96.1%;       /* #f1f5f9 */
+    --secondary-foreground: 222 47% 11%;
+    
+    --muted: 210 40% 96.1%;           /* #f1f5f9 */
+    --muted-foreground: 215 16% 47%;  /* #64748b (Slate 500) */
+    
+    --accent: 210 100% 95%;           /* #e7f3ff */
+    --accent-foreground: 214 89% 52%; /* #1877f2 */
+    
+    /* Semantic Status */
+    --success: 160 84% 39%;           /* #10b981 */
+    --success-light: 152 76% 96%;     /* #ecfdf5 */
+    --success-foreground: 163 94% 20%;/* #065f46 */
+
+    --warning: 38 92% 50%;            /* #f59e0b */
+    --warning-light: 48 100% 96%;     /* #fffbeb */
+    --warning-foreground: 32 81% 29%; /* #92400e */
+
+    --destructive: 0 84% 60%;         /* #ef4444 */
+    --destructive-light: 0 86% 97%;   /* #fef2f2 */
+    --destructive-foreground: 0 74% 42%; /* #b91c1c */
+
+    --info: 217 91% 60%;              /* #2563eb */
+    --info-light: 214 100% 97%;       /* #eff6ff */
+    --info-foreground: 224 76% 48%;   /* #1d4ed8 */
+
+    /* Borders, Inputs & Radius */
+    --border: 214 32% 91%;            /* #e2e8f0 (Slate 200) */
+    --input: 214 32% 91%;             /* #e2e8f0 */
+    --ring: 214 89% 52%;              /* #1877f2 */
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 222 47% 11%;        /* #0f172a */
+    --foreground: 210 40% 98%;        /* #f8fafc */
+
+    --card: 217 33% 17%;              /* #1e293b */
+    --card-foreground: 210 40% 98%;
+
+    --popover: 217 33% 17%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 214 89% 52%;
+    --primary-foreground: 0 0% 100%;
+    --primary-hover: 214 82% 49%;
+    --primary-subtle: 217 33% 25%;
+
+    --secondary: 215 28% 17%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 215 28% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 217 33% 25%;
+    --accent-foreground: 210 40% 98%;
+
+    --success: 160 84% 39%;
+    --success-light: 160 84% 15%;
+    --success-foreground: 152 76% 96%;
+
+    --warning: 38 92% 50%;
+    --warning-light: 38 92% 15%;
+    --warning-foreground: 48 100% 96%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-light: 0 62.8% 15%;
+    --destructive-foreground: 0 86% 97%;
+
+    --info: 217 91% 60%;
+    --info-light: 217 91% 15%;
+    --info-foreground: 214 100% 97%;
+
+    --border: 217 33% 22%;
+    --input: 217 33% 22%;
+    --ring: 214 89% 52%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading), sans-serif;
+  }
+}

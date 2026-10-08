@@ -41,7 +41,7 @@ export default function Home() {
   const ModuleComponent = activeModule?.component;
 
   return (
-    <div className="flex h-screen w-screen bg-slate-950 text-slate-100 antialiased overflow-hidden">
+    <div className="flex h-screen w-screen bg-background text-foreground antialiased overflow-hidden">
       {/* SIDEBAR TỔNG */}
       <Sidebar activeTab={activeTab} onSelectTab={setActiveTab} />
 
@@ -51,11 +51,11 @@ export default function Home() {
         <Header activeTab={activeTab} engineOnline={engineOnline} />
 
         {/* CONTAINER HIỂN THỊ MODULE HIỆN TẠI */}
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto p-6 bg-background">
           {ModuleComponent ? (
             <ModuleComponent />
           ) : (
-            <div className="text-slate-500 text-sm">Module không tồn tại.</div>
+            <div className="text-muted-foreground text-xs p-4">Module không tồn tại.</div>
           )}
         </main>
 

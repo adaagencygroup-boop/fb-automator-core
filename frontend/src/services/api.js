@@ -3,7 +3,7 @@ import { API_BASE } from "../config/constants";
 
 export const api = axios.create({
   baseURL: API_BASE,
-  timeout: 30000,
+  timeout: 60000, // 60s phù hợp với các tác vụ AI và Crawl media
   headers: {
     "Content-Type": "application/json",
   },
@@ -12,7 +12,6 @@ export const api = axios.create({
 // Request Interceptor
 api.interceptors.request.use(
   (config) => {
-    // Có thể gắn token/auth header nếu cần sau này
     return config;
   },
   (error) => Promise.reject(error)
@@ -22,9 +21,13 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
-    const message = error.response?.data?.detail || error.message || "Network Error";
-    console.error("[API Error]", message);
-    return Promise.reject(new Error(message));
+    const errorMsg =
+      error.response?.data?.detail ||
+      error.response?.data?.message ||
+      error.message ||
+      "Không thể kết nối tới Local Engine (Port 28129)";
+    console.error("[API Error]", errorMsg);
+    return Promise.reject(new Error(errorMsg));
   }
 );
 

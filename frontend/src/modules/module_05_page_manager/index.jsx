@@ -5,6 +5,15 @@ import { getPages, fetchPageTokens } from "./service";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table";
 
 export default function PageManagerModule() {
   const [pages, setPages] = useState([]);
@@ -46,18 +55,20 @@ export default function PageManagerModule() {
       {/* Fetch Token Card */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between p-5 pb-3">
-          <CardTitle className="text-cyan-400">🔑 Nạp Page Từ User Access Token</CardTitle>
-          <Button onClick={handleFetchTokens} size="sm" variant="default">
+          <CardTitle className="text-primary flex items-center gap-2">
+            <span>🔑</span> Nạp Page Từ User Access Token
+          </CardTitle>
+          <Button onClick={handleFetchTokens} size="sm">
             Lấy Token Vĩnh Viễn
           </Button>
         </CardHeader>
         <CardContent className="p-5 pt-0">
-          <input
+          <Input
             type="text"
             value={userToken}
             onChange={(e) => setUserToken(e.target.value)}
             placeholder="Dán User Access Token (me/accounts) vào đây..."
-            className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-400 font-mono"
+            className="font-mono text-xs"
           />
         </CardContent>
       </Card>
@@ -65,41 +76,55 @@ export default function PageManagerModule() {
       {/* Pages Table Card */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between p-5 pb-3">
-          <CardTitle>📢 Danh Sách Fanpage Đang Quản Lý ({pages.length})</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <span>📢</span> Danh Sách Fanpage Đang Quản Lý ({pages.length})
+          </CardTitle>
           <Button onClick={loadData} disabled={loading} size="sm" variant="outline">
             {loading ? "Đang tải..." : "🔄 Cập nhật"}
           </Button>
         </CardHeader>
         <CardContent className="p-5 pt-0">
-          <div className="overflow-x-auto max-h-96">
-            <table className="w-full text-left text-xs">
-              <thead className="sticky top-0 bg-slate-950 text-slate-400">
-                <tr className="border-b border-slate-800">
-                  <th className="py-2.5 px-3">Page ID</th>
-                  <th className="py-2.5 px-3">Tên Fanpage</th>
-                  <th className="py-2.5 px-3">AI Post</th>
-                  <th className="py-2.5 px-3">Reels Folder</th>
-                  <th className="py-2.5 px-3">Trạng Thái</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60">
-                {pages.map((p, i) => (
-                  <tr key={i} className="hover:bg-slate-800/30">
-                    <td className="py-2 px-3 font-mono text-slate-400">{p.page_id}</td>
-                    <td className="py-2 px-3 font-bold text-slate-200">{p.page_name}</td>
-                    <td className="py-2 px-3 text-sky-400 font-semibold">
-                      {p.auto_ai_enabled ? "Bật" : "Tắt"}
-                    </td>
-                    <td className="py-2 px-3 text-slate-400">
-                      {p.reels_folder || "Chưa gán"}
-                    </td>
-                    <td className="py-2 px-3">
-                      <Badge variant="success">{p.status}</Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Page ID</TableHead>
+                  <TableHead>Tên Fanpage</TableHead>
+                  <TableHead>AI Auto Post</TableHead>
+                  <TableHead>Reels Folder</TableHead>
+                  <TableHead className="text-right">Trạng Thái</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pages.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                      Chưa có Fanpage nào được nạp. Hãy dán User Token ở trên để đồng bộ.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  pages.map((p, i) => (
+                    <TableRow key={p.id || i}>
+                      <TableCell className="font-mono text-muted-foreground">{p.page_id}</TableCell>
+                      <TableCell className="font-bold text-foreground">{p.page_name}</TableCell>
+                      <TableCell>
+                        <span className={p.auto_ai_enabled ? "text-primary font-semibold" : "text-muted-foreground"}>
+                          {p.auto_ai_enabled ? "● Đang bật" : "○ Tắt"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {p.reels_folder || "Chưa gán"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Badge variant={p.status === "ACTIVE" ? "success" : "destructive"}>
+                          {p.status || "ACTIVE"}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
           </div>
         </CardContent>
       </Card>

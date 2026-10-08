@@ -42,10 +42,11 @@ fb-automator-core/
 │   └── network/                       # Mạng & Proxy
 │       └── proxy_manager.py           # Xoay tua, kiểm tra sức khỏe proxy HTTP/SOCKS5
 │
-├── frontend/                          # GIAO DIỆN WEB HIỆN ĐẠI (Next.js + Tailwind CSS)
-│   ├── package.json                   # Dependencies: Next.js 14, Tailwind v3, Axios, Lucide
+├── frontend/                          # GIAO DIỆN WEB HIỆN ĐẠI (Next.js + Tailwind CSS + shadcn/ui)
+│   ├── GUIDE_UI.md                    # [TÀI LIỆU CHUẨN] Hướng dẫn Design Tokens & Component UI
+│   ├── package.json                   # Dependencies: Next.js, Tailwind, Lucide
 │   ├── components.json                # Cấu hình shadcn UI
-│   ├── tailwind.config.js             # Theme tokens, font chữ và màu sắc hiện đại
+│   ├── tailwind.config.js             # Theme tokens Facebook Light, font chữ và màu sắc
 │   └── src/
 │       ├── app/                       # Next.js App Router (layout.jsx, page.jsx)
 │       ├── components/ui/             # shadcn UI components (button, card, badge, ...)
