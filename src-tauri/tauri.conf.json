@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FB_Page_Automator",
+  "version": "2.0.0",
+  "identifier": "com.fbautomator.app",
+  "build": {
+    "beforeDevCommand": "npm --prefix frontend run dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "npm --prefix frontend run build",
+    "frontendDist": "../frontend/out"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Facebook Automator Pro - Enterprise Multi-Module",
+        "width": 1350,
+        "height": 850,
+        "minWidth": 1100,
+        "minHeight": 700,
+        "resizable": true,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/local_engine"
+    ]
+  }
+}

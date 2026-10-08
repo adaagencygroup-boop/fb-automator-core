@@ -1,0 +1,21 @@
+{
+  "name": "fb-automator-core",
+  "version": "2.0.0",
+  "description": "Facebook Automator Pro - Enterprise Tauri + PyInstaller Sidecar",
+  "scripts": {
+    "start": "python start.py",
+    "dev": "python start.py",
+    "engine:dev": "python engine.py --port 28129",
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "gui:dev": "python main.py",
+    "build:sidecar": "python scripts/build_sidecar.py",
+    "tauri": "tauri",
+    "tauri:dev": "npx @tauri-apps/cli dev",
+    "tauri:build": "npx @tauri-apps/cli build",
+    "build:all": "npm run frontend:build && python scripts/build_sidecar.py && npx @tauri-apps/cli build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  }
+}

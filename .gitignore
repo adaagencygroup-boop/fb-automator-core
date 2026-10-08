@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Database temporary files
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# Log and Downloads
+logs/*.txt
+downloads/
+
+# IDE & Build artifacts
+.vscode/
+.idea/
+*.dist/
+build/
+dist/
+
+# Tauri & Rust build artifacts
+src-tauri/target/
+src-tauri/binaries/*.exe
+
+# Node & Next.js artifacts
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/

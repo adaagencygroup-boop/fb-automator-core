@@ -1,0 +1,321 @@
+/* ===================================================================
+   CYBERPUNK WEB UI - FACEBOOK AUTOMATOR PRO (TAURI EDITION)
+   =================================================================== */
+
+:root {
+  --bg-primary: #0b0e14;
+  --bg-sidebar: #080a0f;
+  --bg-card: #111827;
+  --bg-card-hover: #162032;
+  --border-color: #1e293b;
+  --border-glow: #00f0ff33;
+  --accent-cyan: #00f0ff;
+  --accent-blue: #38bdf8;
+  --accent-green: #10b981;
+  --accent-amber: #f59e0b;
+  --accent-red: #ef4444;
+  --text-main: #f1f5f9;
+  --text-muted: #94a3b8;
+  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-family);
+  background-color: var(--bg-primary);
+  color: var(--text-main);
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+}
+
+/* Sidebar Navigation */
+#sidebar {
+  width: 250px;
+  background-color: var(--bg-sidebar);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 10px;
+  flex-shrink: 0;
+}
+
+.brand-box {
+  text-align: center;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 12px;
+}
+
+.brand-title {
+  color: var(--accent-cyan);
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.brand-subtitle {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.nav-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.nav-item:hover {
+  background-color: #131b2e;
+  color: var(--accent-blue);
+  border-left: 3px solid var(--accent-blue);
+}
+
+.nav-item.active {
+  background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+  color: var(--accent-cyan);
+  border-left: 4px solid var(--accent-cyan);
+  box-shadow: 0 0 15px var(--border-glow);
+}
+
+/* Main Workspace */
+#main-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header Bar */
+#header {
+  height: 52px;
+  background-color: #0d121d;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+}
+
+.header-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent-cyan);
+}
+
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background-color: #064e3b33;
+  border: 1px solid #059669;
+  color: #34d399;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  background-color: #10b981;
+  border-radius: 50%;
+  box-shadow: 0 0 8px #10b981;
+}
+
+/* Content Area */
+#content {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.tab-pane {
+  display: none;
+}
+
+.tab-pane.active {
+  display: block;
+}
+
+/* Cards & Layout */
+.grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.stat-card {
+  background-color: #0f172a;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 16px;
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  background-color: var(--accent-cyan);
+}
+
+.stat-card.green::before { background-color: var(--accent-green); }
+.stat-card.amber::before { background-color: var(--accent-amber); }
+.stat-card.blue::before { background-color: var(--accent-blue); }
+
+.stat-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.stat-value {
+  font-size: 28px;
+  font-weight: 900;
+  color: var(--accent-cyan);
+  margin-top: 6px;
+}
+
+.card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 20px;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Buttons */
+.btn {
+  background-color: #1e293b;
+  color: #f1f5f9;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn:hover { background-color: #334155; }
+.btn-primary { background-color: #0284c7; border-color: #38bdf8; }
+.btn-primary:hover { background-color: #0369a1; }
+.btn-success { background-color: #059669; border-color: #10b981; }
+.btn-success:hover { background-color: #047857; }
+.btn-danger { background-color: #dc2626; border-color: #ef4444; }
+.btn-danger:hover { background-color: #b91c1c; }
+
+/* Tables */
+.table-responsive {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th, td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+th {
+  background-color: #131c2e;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+tr:hover td {
+  background-color: #10192b;
+}
+
+/* Inputs */
+input, textarea, select {
+  background-color: #0b101b;
+  color: #f8fafc;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  width: 100%;
+  font-family: inherit;
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--accent-cyan);
+}
+
+/* Console Log Panel */
+#log-panel {
+  height: 160px;
+  background-color: #06090e;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+}
+
+.log-header {
+  padding: 6px 16px;
+  background-color: #0d121d;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent-cyan);
+}
+
+#log-terminal {
+  flex: 1;
+  padding: 8px 16px;
+  overflow-y: auto;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
