@@ -1,6 +1,6 @@
 "use client";
 
-import { MaskIcon } from "@/components/icons";
+import { FitMaskIcon } from "@/components/icons";
 import { findNavItem } from "@/config/navigation";
 import { CURRENT_USER } from "@/config/constants";
 
@@ -20,7 +20,9 @@ export default function Header({ activeTab, user = CURRENT_USER, onNotifications
             <img src={headerIcon.src} alt="" width={headerIcon.width} height={headerIcon.height} className="block" />
           ) : (
             // Mục chưa có icon Header riêng trong Figma: dùng icon menu, tô màu xanh như cờ Header
-            <MaskIcon {...item.icon} className="text-success" />
+            (item.icon || parent?.icon) && (
+              <FitMaskIcon {...(item.icon || parent.icon)} size={20} className="text-success" />
+            )
           )}
         </div>
         <div className="pl-3 min-w-0 flex flex-col">
@@ -39,7 +41,7 @@ export default function Header({ activeTab, user = CURRENT_USER, onNotifications
           type="button"
           onClick={onNotificationsClick}
           aria-label="Thông báo"
-          className="size-9 rounded-full border border-border flex items-center justify-center transition-colors hover:bg-slate-50"
+          className="size-9 rounded-full border border-border flex items-center justify-center transition-colors hover:bg-slate-50 outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2"
         >
           <img src="/icons/icon_bell.svg" alt="" width={12.2588} height={14} className="block" />
         </button>
@@ -47,7 +49,7 @@ export default function Header({ activeTab, user = CURRENT_USER, onNotifications
         <button
           type="button"
           onClick={onProfileClick}
-          className="ml-4 pl-1 flex items-center rounded-full transition-opacity hover:opacity-80"
+          className="ml-4 pl-1 flex items-center rounded-full transition-opacity hover:opacity-80 outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2"
         >
           <span className="size-8 rounded-full bg-primary text-white text-xs leading-4 font-bold flex items-center justify-center drop-shadow-[0px_1px_1px_rgba(0,0,0,0.05)]">
             {initials}

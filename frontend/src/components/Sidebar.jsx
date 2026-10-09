@@ -2,17 +2,21 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { MaskIcon } from "@/components/icons";
+import { MaskIcon, FitMaskIcon } from "@/components/icons";
 import { NAV_ITEMS, NAV_CHEVRON } from "@/config/navigation";
 
-// Figma: Aside - LeftSidebar (1016:5)
+// Figma: Aside - LeftSidebar (1016:5); kiểu mục cấp 1 theo 1020:13823 / 1020:13770
 export default function Sidebar({ activeTab, onSelectTab }) {
-  // Nhóm submenu: mặc định mở khi chứa mục đang active, người dùng có thể đóng/mở tay
-  const [groupOverrides, setGroupOverrides] = useState({});
-  const isGroupOpen = (item) =>
-    groupOverrides[item.id] ?? item.children.some((c) => c.id === activeTab);
+  // Accordion: mỗi lúc chỉ mở 1 nhóm submenu.
+  // openGroupId = undefined -> tự mở nhóm chứa mục đang active; null -> đóng hết.
+  const [openGroupId, setOpenGroupId] = useState(undefined);
+  const activeGroupId = NAV_ITEMS.find((item) =>
+    item.children?.some((c) => c.id === activeTab),
+  )?.id;
+  const currentOpenId = openGroupId === undefined ? activeGroupId : openGroupId;
+  const isGroupOpen = (item) => currentOpenId === item.id;
   const toggleGroup = (item) =>
-    setGroupOverrides((prev) => ({ ...prev, [item.id]: !isGroupOpen(item) }));
+    setOpenGroupId(isGroupOpen(item) ? null : item.id);
 
   return (
     <aside className="w-64 h-full bg-white border-r border-border flex flex-col shrink-0 select-none font-sans">
@@ -56,14 +60,37 @@ export default function Sidebar({ activeTab, onSelectTab }) {
               active={activeTab === item.id}
               onClick={() => onSelectTab(item.id)}
             />
-          )
+          ),
         )}
       </nav>
     </aside>
   );
 }
 
-/** Mục cấp 1 không có submenu (Dashboard, Nuôi Acc, ...) */
+/** Kích thước hiển thị chung của icon menu (px) — mọi icon được đưa về cùng cỡ */
+const TOP_ICON_SIZE = 16;
+const SUB_ICON_SIZE = 15;
+
+/** Icon menu: đặt trong khung vuông cố định + cách chữ 12px (gap của Figma 1020:13823) */
+function NavIcon({ icon, className, size = TOP_ICON_SIZE }) {
+  if (!icon) return null;
+  return (
+    <FitMaskIcon {...icon} size={size} className={cn("mr-3", className)} />
+  );
+}
+
+// Kiểu mục cấp 1 — Figma "Tổng quan" (1020:13823): px 14, py 10, bo góc 12, chữ 14px Medium #434655
+const TOP_ITEM =
+  "w-full flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl text-left text-sm leading-5 transition-colors";
+const TOP_IDLE =
+  "text-[#434655] font-medium hover:bg-slate-50 hover:text-slate-900";
+
+// Viền focus khi điều hướng bằng bàn phím (Tab) — chỉ hiện với bàn phím, không hiện khi bấm chuột.
+// Dùng ring-inset để không bị cắt bởi vùng cuộn / vùng ẩn của submenu.
+const FOCUS_RING =
+  "outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-500";
+
+/** Mục cấp 1 không có submenu (Tổng quan, Quản lý tài khoản Facebook, ...) */
 function NavLink({ item, active, onClick }) {
   return (
     <button
@@ -71,75 +98,97 @@ function NavLink({ item, active, onClick }) {
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-[13px] leading-[19.5px] transition-colors",
-        active
-          ? "bg-sky-100 text-sky-700 font-semibold"
-          : "text-slate-600 font-medium hover:bg-slate-50 hover:text-slate-800"
+        TOP_ITEM,
+        FOCUS_RING,
+        active ? "bg-sky-100 text-sky-700 font-semibold" : TOP_IDLE,
       )}
     >
       <span className="flex items-center min-w-0">
-        <MaskIcon {...item.icon} className={active ? "text-sky-700" : "text-slate-500"} />
-        <span className="truncate">{item.label}</span>
+        <NavIcon
+          icon={item.icon}
+          className={active ? "text-sky-700" : "text-[#434655]"}
+        />
+        <span>{item.label}</span>
       </span>
     </button>
   );
 }
 
-/** Nhóm có submenu (Quản lý Fanpage) */
+/** Nhóm có submenu (Đăng bài & tương tác, Tạo fanpage, Quản lý Fanpage, Spam Group, Seeding) */
 function NavGroup({ item, activeTab, open, onToggle, onSelectTab }) {
   const sectionActive = item.children.some((c) => c.id === activeTab);
+  const submenuId = `submenu-${item.id}`;
 
   return (
-    <div className={cn("w-full flex flex-col items-end", open && "gap-1 py-1")}>
+    <div className="w-full flex flex-col">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={open}
+        aria-controls={submenuId}
         className={cn(
-          "w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-[13px] leading-[19.5px] transition-colors",
-          sectionActive
-            ? "text-sky-600 font-semibold"
-            : "text-slate-600 font-medium hover:bg-slate-50 hover:text-slate-800"
+          TOP_ITEM,
+          FOCUS_RING,
+          sectionActive ? "text-sky-600 font-semibold" : TOP_IDLE,
         )}
       >
         <span className="flex items-center min-w-0">
-          <MaskIcon {...item.icon} className={sectionActive ? "text-sky-600" : "text-slate-500"} />
-          <span className="truncate">{item.label}</span>
+          <NavIcon
+            icon={item.icon}
+            className={sectionActive ? "text-sky-600" : "text-[#434655]"}
+          />
+          <span>{item.label}</span>
         </span>
         <MaskIcon
           {...NAV_CHEVRON}
           className={cn(
-            "transition-transform duration-200",
+            "transition-transform duration-200 motion-reduce:transition-none",
             open && "rotate-180",
-            sectionActive ? "text-sky-600" : "text-slate-400"
+            "shrink-0",
+            sectionActive ? "text-sky-600" : "text-slate-400",
           )}
         />
       </button>
 
-      {open && (
-        <div className="w-[215px] flex flex-col gap-1 pl-3.5 border-l-2 border-sky-100">
-          {item.children.map((child) => {
-            const active = activeTab === child.id;
-            return (
-              <button
-                key={child.id}
-                type="button"
-                onClick={() => onSelectTab(child.id)}
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "w-full flex items-center px-3 rounded-md text-left transition-colors",
-                  active
-                    ? "py-2 bg-sky-100 text-sky-700 text-[13px] leading-[19.5px] font-semibold"
-                    : "py-1.5 text-slate-600 text-[12.5px] leading-[18.75px] font-medium hover:bg-slate-50 hover:text-slate-800"
-                )}
-              >
-                <MaskIcon {...child.icon} className={active ? "text-sky-700" : "text-slate-400"} />
-                <span className="truncate">{child.label}</span>
-              </button>
-            );
-          })}
+      {/* Mở/đóng có hiệu ứng trượt: grid-template-rows 0fr <-> 1fr. Khi đóng, `inert` loại các nút khỏi thứ tự Tab. */}
+      <div
+        id={submenuId}
+        inert={!open}
+        className={cn(
+          "grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none",
+          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        )}
+      >
+        <div className="min-h-0 overflow-hidden flex justify-end">
+          <div className="w-[215px] mt-1 mb-1 flex flex-col gap-1 pl-3.5 border-l-2 border-sky-100">
+            {item.children.map((child) => {
+              const active = activeTab === child.id;
+              return (
+                <button
+                  key={child.id}
+                  type="button"
+                  onClick={() => onSelectTab(child.id)}
+                  aria-current={active ? "page" : undefined}
+                  className={cn(
+                    "w-full flex items-center px-3 rounded-md text-left transition-colors",
+                    FOCUS_RING,
+                    active
+                      ? "py-2 bg-sky-100 text-sky-700 text-[13px] leading-[19.5px] font-semibold"
+                      : "py-1.5 text-slate-600 text-[12.5px] leading-[18.75px] font-medium hover:bg-slate-50 hover:text-slate-800",
+                  )}
+                >
+                  <NavIcon
+                    icon={child.icon}
+                    size={SUB_ICON_SIZE}
+                    className={active ? "text-sky-700" : "text-slate-600"}
+                  />
+                  <span className="truncate">{child.label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

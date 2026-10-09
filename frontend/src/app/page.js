@@ -51,7 +51,7 @@ export default function Home() {
       {/* WORKSPACE CHÍNH */}
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         {/* HEADER TỔNG */}
-        <Header activeTab={activeTab} />
+        <Header activeTab={activeTab} onProfileClick={() => setActiveTab("profile")} />
 
         {/* CONTAINER HIỂN THỊ MODULE HIỆN TẠI */}
         <main className="flex-1 overflow-y-auto p-6 bg-background">
