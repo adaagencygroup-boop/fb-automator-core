@@ -1,7 +1,7 @@
 # Facebook Automator Core - Requirements
 # Python >= 3.10
 
-# GUI Framework
+# Worker threads (QThread signals) — không còn desktop GUI
 PyQt5>=5.15.10
 
 # REST API & Sidecar Engine

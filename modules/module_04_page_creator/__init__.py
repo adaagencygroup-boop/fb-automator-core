@@ -1,3 +1,3 @@
-from modules.module_04_page_creator.ui import PageCreatorTab
+from modules.module_04_page_creator.worker import PageCreatorWorker
 
-__all__ = ["PageCreatorTab"]
+__all__ = ["PageCreatorWorker"]

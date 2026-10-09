@@ -8,7 +8,6 @@
     "engine:dev": "python engine.py --port 28129",
     "frontend:dev": "npm --prefix frontend run dev",
     "frontend:build": "npm --prefix frontend run build",
-    "gui:dev": "python main.py",
     "build:sidecar": "python scripts/build_sidecar.py",
     "tauri": "tauri",
     "tauri:dev": "npx @tauri-apps/cli dev",

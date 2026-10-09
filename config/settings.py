@@ -10,7 +10,6 @@ from config.constants import CONFIG_PATH
 DEFAULT_CONFIG = {
     "app_name": "Facebook Automator Pro",
     "version": "2.0.0",
-    "theme": "cyberpunk_dark",
     "max_threads": 5,
     "request_timeout": 30,
     "anti_spam": {

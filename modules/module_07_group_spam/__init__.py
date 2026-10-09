@@ -1,3 +1,3 @@
-from modules.module_07_group_spam.ui import GroupSpamTab
+from modules.module_07_group_spam.worker import GroupSpamWorker
 
-__all__ = ["GroupSpamTab"]
+__all__ = ["GroupSpamWorker"]

@@ -1,3 +1,3 @@
-from modules.module_03_acc_farm.ui import AccFarmTab
+from modules.module_03_acc_farm.worker import AccFarmWorker
 
-__all__ = ["AccFarmTab"]
+__all__ = ["AccFarmWorker"]

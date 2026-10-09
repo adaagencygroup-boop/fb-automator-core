@@ -1,6 +1,6 @@
 # FACEBOOK AUTOMATOR PRO (ENTERPRISE MULTI-MODULE PLATFORM)
 
-Hệ thống quản lý, nuôi và tự động hóa Fanpage Facebook quy mô lớn đa nền tảng, kết hợp giữa **Next.js + Tailwind CSS** hiện đại và **Python Core Engine (FastAPI / PyQt5)**, kết nối trực tiếp **Meta Graph API**, **Google Gemini AI (Auto Key Rotation)**, bộ cào media TikTok/YouTube và cơ sở dữ liệu đám mây **Supabase PostgreSQL**.
+Hệ thống quản lý, nuôi và tự động hóa Fanpage Facebook quy mô lớn đa nền tảng, kết hợp giữa **Next.js + Tailwind CSS** hiện đại và **Python Core Engine (FastAPI)**, kết nối trực tiếp **Meta Graph API**, **Google Gemini AI (Auto Key Rotation)**, bộ cào media TikTok/YouTube và cơ sở dữ liệu đám mây **Supabase PostgreSQL**.
 
 Hệ thống được thiết kế theo mô hình **Modular Plugin-Driven Architecture**, phân tách độc lập **9 modules nghiệp vụ** cho các nhóm lập trình viên phát triển song song (cả Frontend lẫn Backend), cam kết không xảy ra xung đột mã nguồn (Git conflicts), đồng thời chia sẻ chung một nền tảng **Shared Core Engine** tối ưu và mạnh mẽ.
 
@@ -13,7 +13,6 @@ fb-automator-core/
 │── start.py                           # [1-CLICK LAUNCHER] Khởi động đồng thời cả BE & FE
 │── start.bat                          # File Batch click đúp chạy ngay trên Windows
 │── engine.py                          # Local Engine Backend (FastAPI + WebSocket port 28129)
-│── main.py                            # Điểm khởi chạy ứng dụng Desktop thuần PyQt5 (Legacy)
 │── package.json                       # Scripts quản lý Fullstack, Tauri & đóng gói .exe
 │── requirements.txt                   # Danh mục dependencies Python
 │── .env                               # Cấu hình biến môi trường thực tế (Git ignore)
@@ -23,11 +22,10 @@ fb-automator-core/
 │
 ├── config/                            # Quản lý Cấu hình & Môi trường toàn cục
 │   ├── constants.py                   # Nạp .env qua python-dotenv, hằng số, đường dẫn
-│   ├── settings.py                    # Quản lý cấu hình JSON thread-safe (data/config.json)
-│   └── theme.py                       # Bộ giao diện Cyberpunk Dark Hacker QSS cho PyQt5
+│   └── settings.py                    # Quản lý cấu hình JSON thread-safe (data/config.json)
 │
 ├── core/                              # LÕI BACKEND DÙNG CHUNG (Shared Core Engine)
-│   ├── base_module.py                 # Lớp trừu tượng BaseModuleTab & BaseWorker
+│   ├── base_module.py                 # Lớp trừu tượng BaseWorker
 │   ├── database/                      # Quản lý CSDL (Supabase PostgreSQL + SQLite Fallback)
 │   │   ├── connection.py              # ThreadedConnectionPool Supabase & SQLite WAL Mode
 │   │   └── models.py                  # Hook khởi tạo bảng (dành cho DB Designer)
@@ -65,16 +63,16 @@ fb-automator-core/
 │           ├── module_08_interaction_seeding/ # [Hưởng, Trường] Buff Like, Comment mồi, Share
 │           └── module_09_user_profile/# [Trường, Kiệt] Cài đặt hệ thống, Keys & Proxies
 │
-├── modules/                           # 9 MODULES BACKEND / PYQT5 ĐỘC LẬP
-│   ├── module_01_dashboard/           # Backend UI & worker Dashboard
-│   ├── module_02_account_manager/     # Backend UI & worker Account Manager
-│   ├── module_03_acc_farm/            # Backend UI & worker Farm tài khoản
-│   ├── module_04_page_creator/        # Backend UI & worker Page Creator
-│   ├── module_05_page_manager/        # Backend UI & worker Fanpage & Auto Poster
-│   ├── module_06_omnichannel_chat/    # Backend UI & worker Omnichannel Chat
-│   ├── module_07_group_spam/          # Backend UI & worker Group Spam
-│   ├── module_08_interaction_seeding/ # Backend UI & worker Seeding Tương tác
-│   └── module_09_user_profile/        # Backend UI & worker Hồ sơ & Cài đặt
+├── modules/                           # 9 MODULES BACKEND (workers / business logic)
+│   ├── module_01_dashboard/           # Dashboard (API qua engine)
+│   ├── module_02_account_manager/     # Worker Account Manager
+│   ├── module_03_acc_farm/            # Worker Farm tài khoản
+│   ├── module_04_page_creator/        # Worker Page Creator
+│   ├── module_05_page_manager/        # Worker Fanpage & Auto Poster
+│   ├── module_06_omnichannel_chat/    # Worker Omnichannel Chat
+│   ├── module_07_group_spam/          # Worker Group Spam
+│   ├── module_08_interaction_seeding/ # Worker Seeding Tương tác
+│   └── module_09_user_profile/        # Hồ sơ & Cài đặt (API qua engine)
 │
 ├── src-tauri/                         # Cấu hình đóng gói Desktop App bằng Tauri
 │   ├── tauri.conf.json                # Thiết lập Sidecar binary & cửa sổ ứng dụng
@@ -209,11 +207,6 @@ Nếu bạn là Backend Dev hoặc Frontend Dev và chỉ muốn chạy riêng p
   ```bash
   npm run frontend:dev
   # Hoặc: cd frontend && npm run dev
-  ```
-
-* **Chạy giao diện Desktop PyQt5 cũ (Legacy):**
-  ```bash
-  python main.py
   ```
 
 ---

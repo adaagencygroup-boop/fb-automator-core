@@ -1,3 +1,3 @@
-from modules.module_06_omnichannel_chat.ui import OmnichannelChatTab
+from modules.module_06_omnichannel_chat.worker import ChatSyncWorker
 
-__all__ = ["OmnichannelChatTab"]
+__all__ = ["ChatSyncWorker"]

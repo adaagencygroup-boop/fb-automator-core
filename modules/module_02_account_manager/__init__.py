@@ -1,3 +1,3 @@
-from modules.module_02_account_manager.ui import AccountManagerTab
+from modules.module_02_account_manager.worker import CheckLiveAccountWorker
 
-__all__ = ["AccountManagerTab"]
+__all__ = ["CheckLiveAccountWorker"]

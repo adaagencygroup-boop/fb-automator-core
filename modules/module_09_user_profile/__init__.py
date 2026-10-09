@@ -1,3 +1,3 @@
-from modules.module_09_user_profile.ui import UserProfileTab
+"""Module 9: Hồ sơ & Cài đặt — logic qua engine /api/settings, proxies, keys."""
 
-__all__ = ["UserProfileTab"]
+__all__ = []

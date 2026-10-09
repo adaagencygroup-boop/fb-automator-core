@@ -1,3 +1,3 @@
-from modules.module_01_dashboard.ui import DashboardTab
+"""Module 1: Dashboard — logic qua engine /api/dashboard."""
 
-__all__ = ["DashboardTab"]
+__all__ = []
