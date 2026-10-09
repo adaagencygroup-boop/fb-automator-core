@@ -1,3 +1,4 @@
-from modules.module_02_account_manager.worker import CheckLiveAccountWorker
+"""Independent accounts plugin. Call initialize() from the host lifespan."""
+from .plugin import initialize, shutdown
 
-__all__ = ["CheckLiveAccountWorker"]
+__all__ = ["initialize", "shutdown"]

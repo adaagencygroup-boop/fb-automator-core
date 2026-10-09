@@ -1,0 +1,89 @@
+"""Owner-scoped persistence. Plaintext is encrypted exactly once on write."""
+from datetime import datetime, timezone
+from .models import Account
+from ..context import owner_context, normalize_owner
+from ..security.encryption import encrypt_data
+from ..utils.paths import validate_uid
+
+_UNSET = object()
+
+def utc_now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+class AccountRepository:
+    @staticmethod
+    def query(db, owner_username=_UNSET, user_id=_UNSET):
+        owner = user_id if user_id is not _UNSET else owner_username
+        owner = owner_context.get() if owner is _UNSET else normalize_owner(owner)
+        return db.query(Account).filter(Account.user_id == owner)
+
+    @staticmethod
+    def get_all(db, owner_username=_UNSET, **kwargs):
+        return AccountRepository.query(db, owner_username, **kwargs).order_by(Account.id.desc()).all()
+
+    @staticmethod
+    def get_by_uid(db, uid, owner_username=_UNSET, **kwargs):
+        return AccountRepository.query(db, owner_username, **kwargs).filter(Account.uid == validate_uid(uid)).first()
+
+    @staticmethod
+    def upsert(db, data, owner_username=_UNSET, user_id=_UNSET):
+        uid = validate_uid(data["uid"])
+        query = AccountRepository.query(db, owner_username, user_id)
+        account = query.filter(Account.uid == uid).first()
+        owner = user_id if user_id is not _UNSET else owner_username
+        owner = owner_context.get() if owner is _UNSET else normalize_owner(owner)
+        if account is None:
+            account = Account(uid=uid, user_id=owner)
+            db.add(account)
+        writable = {"password", "two_fa", "cookie", "token", "email", "pass_mail", "mail_recovery", "token_hotmail", "client_id", "proxy", "profile_path"}
+        for key in writable & data.keys():
+            value = data[key]
+            if key in {"password", "two_fa", "pass_mail"} and value:
+                value = encrypt_data(value)
+            setattr(account, key, value)
+            if key in {"password", "two_fa", "pass_mail"}:
+                account.credential_encryption_version = 2
+        account.credential_encryption_version = 2
+        db.commit()
+        db.refresh(account)
+        return account
+
+    @staticmethod
+    def update_login_status(db, uid, status, profile_name=None, owner_username=_UNSET):
+        account = AccountRepository.get_by_uid(db, uid, owner_username)
+        if account:
+            account.login_status = {"logged_in": "LOGGED_IN", "not_logged_in": "NOT_LOGGED", "failed": "ERROR"}.get(status, status)
+            if account.login_status == "LOGGED_IN":
+                account.last_login_at = utc_now()
+                account.status = "LIVE"
+                account.status_checked_at = utc_now()
+            if profile_name:
+                account.profile_name = profile_name
+            db.commit()
+        return account
+
+    @staticmethod
+    def update_cookies(db, uid, cookie_str, owner_username=_UNSET):
+        account = AccountRepository.get_by_uid(db, uid, owner_username)
+        if account and cookie_str and cookie_str.strip():
+            account.cookie = cookie_str.strip()
+            db.commit()
+        return account
+
+    @staticmethod
+    def update_profile_statuses(db, statuses, owner_username=_UNSET):
+        for account in AccountRepository.query(db, owner_username).filter(Account.uid.in_(statuses)).all():
+            status = statuses[account.uid]
+            if status in ("live", "die"):
+                account.status = status.upper()
+                account.status_checked_at = utc_now()
+        db.commit()
+
+    @staticmethod
+    def delete(db, uid, owner_username=_UNSET):
+        account = AccountRepository.get_by_uid(db, uid, owner_username)
+        if not account:
+            return False
+        db.delete(account)
+        db.commit()
+        return True

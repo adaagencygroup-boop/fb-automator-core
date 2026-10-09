@@ -10,7 +10,6 @@ import argparse
 import asyncio
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
-
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -25,6 +24,8 @@ from core.ai.gemini_engine import ai_engine
 from core.media.tiktok_scraper import tiktok_scraper
 from core.media.youtube_scraper import youtube_scraper
 from core.network.proxy_manager import proxy_manager
+from modules.module_02_account_manager.api.router import router as account_router
+from modules.module_02_account_manager import initialize as initialize_accounts, shutdown as shutdown_accounts
 
 # Reconfigure stdout for safe Windows console output
 if hasattr(sys.stdout, "reconfigure"):
@@ -66,8 +67,12 @@ ws_manager = ConnectionManager()
 async def lifespan(app: FastAPI):
     # Khởi tạo CSDL SQLite khi Engine bật
     init_database()
+    initialize_accounts()
     print("[Local Engine] Database connection initialized.")
-    yield
+    try:
+        yield
+    finally:
+        await shutdown_accounts()
     print("[Local Engine] Shutting down cleanly...")
 
 app = FastAPI(
@@ -154,47 +159,7 @@ def get_dashboard_stats():
         }
 
 # ==================== MODULE 2: ACCOUNT MANAGER ====================
-class ImportAccountsRequest(BaseModel):
-    raw_data: str
-
-@app.get("/api/accounts")
-def get_accounts():
-    try:
-        rows = db.fetch_all("SELECT * FROM accounts ORDER BY id DESC")
-    except Exception:
-        rows = []
-    return {"accounts": rows}
-
-@app.post("/api/accounts/import")
-async def import_accounts(req: ImportAccountsRequest):
-    lines = [line.strip() for line in req.raw_data.split("\n") if line.strip()]
-    count = 0
-    for line in lines:
-        parts = [p.strip() for p in line.split("|")]
-        if not parts or not parts[0]:
-            continue
-        uid = parts[0]
-        pwd = parts[1] if len(parts) > 1 else ""
-        fa2 = parts[2] if len(parts) > 2 else ""
-        cookie = parts[3] if len(parts) > 3 else ""
-        token = parts[4] if len(parts) > 4 else ""
-        mail = parts[5] if len(parts) > 5 else ""
-        mail_pass = parts[6] if len(parts) > 6 else ""
-        proxy = parts[7] if len(parts) > 7 else ""
-
-        try:
-            db.execute(
-                """INSERT OR REPLACE INTO accounts 
-                (uid, password, fa2, cookie, token, mail, mail_pass, proxy, status) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'NEW')""",
-                (uid, pwd, fa2, cookie, token, mail, mail_pass, proxy)
-            )
-            count += 1
-        except Exception:
-            pass
-
-    await ws_manager.broadcast_log("AccountManager", "SUCCESS", f"Đã nhập {count} tài khoản vào hệ thống.")
-    return {"success": True, "imported_count": count}
+app.include_router(account_router)
 
 # ==================== MODULE 5: PAGE MANAGER & POSTING ====================
 @app.get("/api/pages")

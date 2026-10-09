@@ -38,3 +38,6 @@ pydantic>=2.7.0
 psycopg2-binary>=2.9.5
 psutil>=5.9.0
 python-dotenv>=1.0.0
+
+# Independent accounts plugin
+-r modules/module_02_account_manager/requirements.txt

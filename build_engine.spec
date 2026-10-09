@@ -56,6 +56,9 @@ hidden_imports = [
 ]
 
 try:
+    hidden_imports += collect_submodules("modules.module_02_account_manager")
+    hidden_imports += collect_submodules("sqlalchemy.dialects.sqlite")
+    hidden_imports += collect_submodules("sqlalchemy.dialects.postgresql")
     hidden_imports += collect_submodules("yt_dlp")
     hidden_imports += collect_submodules("duckduckgo_search")
 except Exception:
