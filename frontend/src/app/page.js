@@ -7,6 +7,7 @@ import ConsoleTerminal from "@/components/ConsoleTerminal";
 import { MODULE_REGISTRY } from "@/modules";
 import api from "@/services/api";
 import { WS_BASE } from "@/config/constants";
+import { findNavItem } from "@/config/navigation";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState("dashboard");
@@ -37,7 +38,9 @@ export default function Home() {
     };
   }, []);
 
-  const activeModule = MODULE_REGISTRY.find((m) => m.id === activeTab);
+  // activeTab = id mục menu (src/config/navigation.js) -> module tương ứng
+  const { item: activeNavItem } = findNavItem(activeTab);
+  const activeModule = MODULE_REGISTRY.find((m) => m.id === activeNavItem.moduleId);
   const ModuleComponent = activeModule?.component;
 
   return (
@@ -48,19 +51,19 @@ export default function Home() {
       {/* WORKSPACE CHÍNH */}
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         {/* HEADER TỔNG */}
-        <Header activeTab={activeTab} engineOnline={engineOnline} />
+        <Header activeTab={activeTab} />
 
         {/* CONTAINER HIỂN THỊ MODULE HIỆN TẠI */}
         <main className="flex-1 overflow-y-auto p-6 bg-background">
           {ModuleComponent ? (
             <ModuleComponent />
           ) : (
-            <div className="text-muted-foreground text-xs p-4">Module không tồn tại.</div>
+            <div className="text-muted-foreground text-xs p-4">Chức năng đang được phát triển.</div>
           )}
         </main>
 
         {/* CONSOLE TERMINAL TỔNG */}
-        <ConsoleTerminal logs={logs} />
+        <ConsoleTerminal logs={logs} engineOnline={engineOnline} />
       </div>
     </div>
   );

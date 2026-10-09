@@ -1,38 +1,74 @@
 "use client";
 
-import { MODULE_REGISTRY } from "@/modules";
+import { MaskIcon } from "@/components/icons";
+import { findNavItem } from "@/config/navigation";
+import { CURRENT_USER } from "@/config/constants";
 
-export default function Header({ activeTab, engineOnline }) {
-  const currentModule = MODULE_REGISTRY.find((m) => m.id === activeTab);
+// Figma: Header - TopBar (1016:109)
+export default function Header({ activeTab, user = CURRENT_USER, onNotificationsClick, onProfileClick }) {
+  const { item, parent } = findNavItem(activeTab);
+  const title = item.title || item.label;
+  const headerIcon = item.headerIcon || parent?.headerIcon;
+  const initials = user?.initials || getInitial(user?.name);
 
   return (
-    <header className="h-14 bg-white border-b border-border px-6 flex items-center justify-between shrink-0 shadow-subtle">
-      <div className="flex items-center gap-3">
-        <h2 className="text-sm font-heading font-bold text-foreground flex items-center gap-2">
-          <span className="text-base">{currentModule?.icon}</span>
-          <span>{currentModule?.label}</span>
-        </h2>
-        <span className="text-[11px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded border border-slate-200 font-medium">
-          Phụ trách: {currentModule?.author}
-        </span>
+    <header className="h-[74px] bg-white border-b border-border pl-8 pr-8 pt-3.5 pb-[15px] flex items-center justify-between gap-6 shrink-0 font-sans">
+      {/* Title & Subtitle */}
+      <div className="flex items-center min-w-0">
+        <div className="w-[21px] h-6 shrink-0 flex items-center justify-start">
+          {headerIcon ? (
+            <img src={headerIcon.src} alt="" width={headerIcon.width} height={headerIcon.height} className="block" />
+          ) : (
+            // Mục chưa có icon Header riêng trong Figma: dùng icon menu, tô màu xanh như cờ Header
+            <MaskIcon {...item.icon} className="text-success" />
+          )}
+        </div>
+        <div className="pl-3 min-w-0 flex flex-col">
+          <h2 className="font-sans text-lg leading-7 font-bold tracking-[-0.45px] text-sky-600 truncate">
+            {title}
+          </h2>
+          {item.description && (
+            <p className="text-xs leading-4 text-slate-500 truncate">{item.description}</p>
+          )}
+        </div>
       </div>
 
-      <div className="flex items-center gap-3">
-        <div
-          className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold border ${
-            engineOnline
-              ? "bg-emerald-50 border-emerald-200 text-emerald-700"
-              : "bg-red-50 border-red-200 text-red-600"
-          }`}
+      {/* Right Header: Notifications & User Profile */}
+      <div className="flex items-center shrink-0">
+        <button
+          type="button"
+          onClick={onNotificationsClick}
+          aria-label="Thông báo"
+          className="size-9 rounded-full border border-border flex items-center justify-center transition-colors hover:bg-slate-50"
         >
-          <span
-            className={`w-2 h-2 rounded-full ${
-              engineOnline ? "bg-emerald-500 animate-pulse" : "bg-red-500"
-            }`}
+          <img src="/icons/icon_bell.svg" alt="" width={12.2588} height={14} className="block" />
+        </button>
+
+        <button
+          type="button"
+          onClick={onProfileClick}
+          className="ml-4 pl-1 flex items-center rounded-full transition-opacity hover:opacity-80"
+        >
+          <span className="size-8 rounded-full bg-primary text-white text-xs leading-4 font-bold flex items-center justify-center drop-shadow-[0px_1px_1px_rgba(0,0,0,0.05)]">
+            {initials}
+          </span>
+          <span className="pl-2 text-xs leading-4 font-semibold text-slate-700 whitespace-nowrap">
+            {user?.name}
+          </span>
+          <img
+            src="/icons/icon_header_chevron_down.svg"
+            alt=""
+            width={16.75}
+            height={5}
+            className="block"
           />
-          <span>{engineOnline ? "Engine: Port 28129 Online" : "Engine: Offline"}</span>
-        </div>
+        </button>
       </div>
     </header>
   );
+}
+
+function getInitial(name = "") {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return (parts[parts.length - 1]?.[0] || "?").toUpperCase();
 }

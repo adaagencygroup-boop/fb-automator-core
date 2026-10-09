@@ -19,9 +19,9 @@ export const metadata = {
   title: "Facebook Automator Pro",
   description: "Enterprise Automation Platform for Facebook Fanpages & Accounts",
   icons: {
-    icon: "/icons/app_brand_logo.svg",
-    shortcut: "/icons/app_brand_logo.svg",
-    apple: "/icons/app_brand_logo.svg",
+    icon: "/icons/app_favicon_facebook.svg",
+    shortcut: "/icons/app_favicon_facebook.svg",
+    apple: "/icons/app_favicon_facebook_180.png",
   },
 };
 
