@@ -8,11 +8,14 @@ import { MODULE_REGISTRY } from "@/modules";
 import api from "@/services/api";
 import { WS_BASE } from "@/config/constants";
 import { findNavItem } from "@/config/navigation";
+import { usePersistentBoolean } from "@/lib/usePersistentBoolean";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [engineOnline, setEngineOnline] = useState(false);
   const [logs, setLogs] = useState([]);
+  const [sidebarOpen, setSidebarOpen] = usePersistentBoolean("fb-automator.sidebar-open", true);
+  const toggleSidebar = () => setSidebarOpen((v) => !v);
 
   useEffect(() => {
     // Check Engine Health via Axios
@@ -46,12 +49,17 @@ export default function Home() {
   return (
     <div className="flex h-screen w-screen bg-background text-foreground antialiased overflow-hidden">
       {/* SIDEBAR TỔNG */}
-      <Sidebar activeTab={activeTab} onSelectTab={setActiveTab} />
+      <Sidebar activeTab={activeTab} onSelectTab={setActiveTab} open={sidebarOpen} />
 
       {/* WORKSPACE CHÍNH */}
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         {/* HEADER TỔNG */}
-        <Header activeTab={activeTab} onProfileClick={() => setActiveTab("profile")} />
+        <Header
+          activeTab={activeTab}
+          onProfileClick={() => setActiveTab("profile")}
+          sidebarOpen={sidebarOpen}
+          onToggleSidebar={toggleSidebar}
+        />
 
         {/* CONTAINER HIỂN THỊ MODULE HIỆN TẠI */}
         <main className="flex-1 overflow-y-auto p-6 bg-background">
