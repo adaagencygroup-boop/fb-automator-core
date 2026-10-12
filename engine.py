@@ -326,6 +326,20 @@ async def fetch_pages_tokens(req: AddPageTokenRequest):
                 (p["id"], p["name"], p["access_token"], p.get("category", ""))
             )
             count += 1
+
+        # Tự động đồng bộ luôn sang Module 06 (Omnichannel Chat Supabase PostgreSQL)
+        try:
+            from modules.module_06_omnichannel_chat.database import SessionLocal
+            from modules.module_06_omnichannel_chat.services import FacebookSyncService
+            _db6 = SessionLocal()
+            try:
+                _sync = FacebookSyncService(_db6)
+                _sync.sync_by_token(req.user_token.strip(), system_user_id=1)
+            finally:
+                _db6.close()
+        except Exception as _e6:
+            print(f"[PageManager -> Module 06 Sync Note] {_e6}")
+
         await ws_manager.broadcast_log("PageManager", "SUCCESS", f"Đã đồng bộ {count} Fanpage từ User Token.")
         return {"success": True, "count": count}
     except Exception as e:
