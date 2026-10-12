@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { MaskIcon, FitMaskIcon } from "@/components/icons";
-import { NAV_ITEMS, NAV_CHEVRON } from "@/config/navigation";
+import Link from "next/link";
+import { NAV_ITEMS, NAV_CHEVRON, pathOf } from "@/config/navigation";
 
 /** Độ rộng sidebar (px): kéo mép phải để đổi, nhớ lại bằng localStorage */
 export const SIDEBAR_WIDTH = { min: 220, max: 400, default: 310 };
@@ -108,7 +109,7 @@ function useResizableWidth() {
 }
 
 // Figma: Aside - LeftSidebar (1016:5); kiểu mục cấp 1 theo 1020:13823 / 1020:13770
-export default function Sidebar({ activeTab, onSelectTab, open = true }) {
+export default function Sidebar({ activeTab, open = true }) {
   const { asideRef, handleProps, dragging } = useResizableWidth();
 
   // Accordion: mỗi lúc chỉ mở 1 nhóm submenu.
@@ -167,14 +168,12 @@ export default function Sidebar({ activeTab, onSelectTab, open = true }) {
               activeTab={activeTab}
               open={isGroupOpen(item)}
               onToggle={() => toggleGroup(item)}
-              onSelectTab={onSelectTab}
             />
           ) : (
             <NavLink
               key={item.id}
               item={item}
               active={activeTab === item.id}
-              onClick={() => onSelectTab(item.id)}
             />
           ),
         )}
@@ -221,12 +220,11 @@ const TOP_IDLE =
 const FOCUS_RING =
   "outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-500";
 
-/** Mục cấp 1 không có submenu (Tổng quan, Quản lý tài khoản Facebook, ...) */
-function NavLink({ item, active, onClick }) {
+/** Mục cấp 1 không có submenu (Tổng quan, Quản lý tài khoản Facebook, ...) — là link tới trang riêng */
+function NavLink({ item, active }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    <Link
+      href={pathOf(item)}
       aria-current={active ? "page" : undefined}
       className={cn(
         TOP_ITEM,
@@ -241,12 +239,12 @@ function NavLink({ item, active, onClick }) {
         />
         <span>{item.label}</span>
       </span>
-    </button>
+    </Link>
   );
 }
 
 /** Nhóm có submenu (Đăng bài & tương tác, Tạo fanpage, Quản lý Fanpage, Spam Group, Seeding) */
-function NavGroup({ item, activeTab, open, onToggle, onSelectTab }) {
+function NavGroup({ item, activeTab, open, onToggle }) {
   const sectionActive = item.children.some((c) => c.id === activeTab);
   const submenuId = `submenu-${item.id}`;
 
@@ -295,10 +293,9 @@ function NavGroup({ item, activeTab, open, onToggle, onSelectTab }) {
             {item.children.map((child) => {
               const active = activeTab === child.id;
               return (
-                <button
+                <Link
                   key={child.id}
-                  type="button"
-                  onClick={() => onSelectTab(child.id)}
+                  href={pathOf(child)}
                   aria-current={active ? "page" : undefined}
                   className={cn(
                     "w-full flex items-center px-3 rounded-md text-left transition-colors",
@@ -314,7 +311,7 @@ function NavGroup({ item, activeTab, open, onToggle, onSelectTab }) {
                     className={active ? "text-sky-700" : "text-slate-600"}
                   />
                   <span className="truncate">{child.label}</span>
-                </button>
+                </Link>
               );
             })}
           </div>
