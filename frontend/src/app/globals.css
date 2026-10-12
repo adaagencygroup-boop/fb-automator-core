@@ -111,3 +111,15 @@
     font-family: var(--font-heading), sans-serif;
   }
 }
+
+/* Toast trượt vào từ bên phải (src/components/Toaster.jsx) */
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
