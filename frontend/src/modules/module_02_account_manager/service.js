@@ -74,8 +74,7 @@ export async function getAccounts() {
     const data = await api.get("/api/accounts");
     return Array.isArray(data) ? data : data?.accounts || [];
   } catch (error) {
-    console.error("Lỗi tải danh sách tài khoản:", error);
-    return [];
+    throw new Error(formatApiError(error));
   }
 }
 

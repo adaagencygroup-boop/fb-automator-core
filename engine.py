@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
+from core.startup import startup_step
 from config.settings import settings
 from config.constants import AccountStatus, LogLevel
 from core.database.models import init_database
@@ -83,19 +84,24 @@ ws_manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_database()
-    init_auth_tables()
-    ensure_admin()
-    initialize_accounts()
-    from modules.module_05_page_manager.models import init_models as init_page_models
-    init_page_models()
-    loaded = load_backend_modules()
+    with startup_step("Core database and module schemas"):
+        init_database()
+    with startup_step("Authentication schema"):
+        init_auth_tables()
+    with startup_step("Admin account"):
+        ensure_admin()
+    with startup_step("Module 02 account manager"):
+        initialize_accounts()
+    with startup_step("Backend module imports"):
+        loaded = load_backend_modules()
     print(f"[Local Engine] PostgreSQL production ready. Loaded {len(loaded)} backend modules.")
     if farm_on_startup:
         try:
-            await farm_on_startup(ws_manager)
+            with startup_step("Module 03 farm runtime"):
+                await farm_on_startup(ws_manager)
         except Exception as e:
             print(f"[Local Engine] Module 03 (Farm) startup error: {e}")
+    print("[Startup] Backend ready", flush=True)
     try:
         yield
     finally:
