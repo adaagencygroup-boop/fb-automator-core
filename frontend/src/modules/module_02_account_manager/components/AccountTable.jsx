@@ -16,9 +16,29 @@ import {
   Search,
   ShieldCheck,
   Trash2,
-  Zap,
 } from "lucide-react";
 import { formatVietnamDateTime } from "@/lib/date-utils";
+
+function ConcurrentThreadsIcon({ className = "w-4 h-4 shrink-0" }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+    >
+      <path
+        d="M5.33073 4.66667H13.3307M13.3307 4.66667L10.6641 2M13.3307 4.66667L10.6641 7.33333M10.6641 11.3333H2.66406M2.66406 11.3333L5.33073 14M2.66406 11.3333L5.33073 8.66667"
+        stroke="#2563EB"
+        strokeWidth="1.33333"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 const avatarColors = ["#1877F2", "#0084FF", "#087A62", "#4F46E5", "#0284C7"];
 
@@ -585,7 +605,7 @@ export default function AccountTable({
         <div className="flex flex-wrap items-center justify-end gap-3">
           {/* Thread Selection */}
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-[#E2E8F0] bg-white shadow-2xs">
-            <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+            <ConcurrentThreadsIcon className="w-4 h-4 shrink-0 text-[#2563EB]" />
             <span className="text-[#475569] font-medium text-xs whitespace-nowrap">
               Luồng đồng thời:
             </span>
