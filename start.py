@@ -28,6 +28,7 @@ BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 ADMIN_DIR = BASE_DIR / "web-admin"
 LOGS_DIR = BASE_DIR / "logs"
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 BACKEND_URL = "http://127.0.0.1:28129/api/health"
 FRONTEND_URL = "http://127.0.0.1:3000"
@@ -49,7 +50,33 @@ MODULE_ENDPOINTS = [
 ]
 
 
-def wait_for_url(url: str, timeout: int = 40, proc: subprocess.Popen = None, service_name: str = "Service") -> bool:
+def free_port(port: int):
+    """Giải phóng cổng mạng nếu bị chiếm dụng bởi tiến trình chạy ngầm cũ trên Windows"""
+    if sys.platform == "win32":
+        try:
+            cmd = f'powershell -Command "Get-NetTCPConnection -LocalPort {port} -ErrorAction SilentlyContinue | ForEach-Object {{ Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }}"'
+            subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+
+def print_log_tail(log_file: Path, max_lines: int = 20):
+    """In những dòng cuối của log khi có lỗi để dev dễ chẩn đoán"""
+    if not log_file.exists():
+        return
+    try:
+        lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        tail = lines[-max_lines:]
+        print("\n--- [CHI TIET LOG LOI] ---")
+        for line in tail:
+            print(f"  {line}")
+        print("---------------------------\n")
+    except Exception:
+        pass
+
+
+def wait_for_url(url: str, timeout: int = 40, proc: subprocess.Popen = None, service_name: str = "Service", log_file: Path = None) -> bool:
+    """Chờ URL phản hồi 200 OK với timeout và kiểm tra tiến trình có sống không"""
     start_time = time.time()
     urls_to_check = [url]
     if "localhost" in url:
@@ -60,6 +87,8 @@ def wait_for_url(url: str, timeout: int = 40, proc: subprocess.Popen = None, ser
     while time.time() - start_time < timeout:
         if proc and proc.poll() is not None:
             print(f"  [ERROR] {service_name} da dung voi exit code {proc.poll()}!")
+            if log_file:
+                print_log_tail(log_file)
             return False
         for target_url in urls_to_check:
             try:
@@ -70,6 +99,9 @@ def wait_for_url(url: str, timeout: int = 40, proc: subprocess.Popen = None, ser
             except Exception:
                 pass
         time.sleep(0.5)
+
+    if log_file:
+        print_log_tail(log_file)
     return False
 
 
@@ -82,7 +114,6 @@ def kill_process_tree(pid: int):
         )
     except Exception:
         pass
-
 
 def npm_cmd():
     return "npm.cmd" if os.name == "nt" else "npm"
@@ -202,6 +233,11 @@ def run_project(self_test_only: bool = False, open_browser: bool = True):
     print("[START] KHOI DONG FACEBOOK AUTOMATOR PRO")
     print("=" * 70)
 
+    # 0. Giải phóng cổng 28129, 3000 và 3010 trước khi chạy để tránh xung đột cổng
+    free_port(28129)
+    free_port(3000)
+    free_port(3010)
+
     backend_proc = None
     frontend_proc = None
     admin_proc = None
@@ -233,6 +269,7 @@ def run_project(self_test_only: bool = False, open_browser: bool = True):
         else:
             print("  [ERROR] Admin UI khong phan hoi sau 60 giay.")
             tail_log("admin.log")
+            return False
             return False
 
         print("\n" + "=" * 70)
@@ -267,6 +304,10 @@ def run_project(self_test_only: bool = False, open_browser: bool = True):
         print("  * Da dung User UI (3000).")
         close_proc(admin_proc)
         print("  * Da dung Admin UI (3010).")
+        free_port(28129)
+        free_port(3000)
+        free_port(3010)
+        print("[CLEANUP DONE] Hoan tat don dep. Cong 28129, 3000 va 3010 da duoc giai phong!")
 
     return True
 
@@ -278,4 +319,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     success = run_project(self_test_only=args.test, open_browser=not args.no_browser)
-    sys.exit(0 if success else 1)
