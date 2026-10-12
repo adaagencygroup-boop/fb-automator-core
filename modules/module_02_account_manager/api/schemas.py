@@ -5,6 +5,7 @@ from ..utils.paths import validate_uid
 
 class OwnerRequest(BaseModel):
     owner_username: Optional[str] = Field(None, max_length=100)
+    user_id: Optional[str] = Field(None, max_length=100)
 
 class AccountInput(OwnerRequest):
     model_config = ConfigDict(populate_by_name=True)

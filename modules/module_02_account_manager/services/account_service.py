@@ -10,7 +10,7 @@ from .events import broadcast
 _FIELDS = ("cookie", "token", "email", "mail_recovery", "token_hotmail", "client_id", "proxy", "profile_name")
 
 def serialize(account, detail=False):
-    result = {"id": account.id, "owner_username": account.user_id, "uid": account.uid}
+    result = {"id": account.id, "owner_username": account.user_id, "user_id": account.user_id, "uid": account.uid}
     for name in _FIELDS:
         result[name] = getattr(account, name) or ""
     for name in ("password", "two_fa", "pass_mail"):
@@ -31,7 +31,7 @@ def require_account(db, uid):
     return account
 
 def save_account(db, item):
-    data = item.model_dump(exclude_unset=True, exclude={"owner_username"})
+    data = item.model_dump(exclude_unset=True, exclude={"owner_username", "user_id"})
     data["profile_path"] = str(profile_path(item.uid))
     return Repo.upsert(db, data)
 

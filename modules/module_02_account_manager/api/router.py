@@ -15,21 +15,52 @@ from .schemas import SingleAccountInput, ImportRequest, UidsRequest, LoginReques
 router = APIRouter(prefix="/api/accounts", tags=["Module 02: Account Manager"])
 
 async def scoped_owner(request: Request):
-    values = [request.headers.get("X-Owner-Username"), request.query_params.get("owner_username"), request.query_params.get("user_id")]
+    logged_in_user_id = None
+    auth_header = request.headers.get("Authorization")
+    has_token = bool((auth_header and auth_header.strip()) or request.cookies.get("fb_access"))
+    if has_token:
+        try:
+            from modules.module_auth.service import bearer_user
+            user = bearer_user(auth_header, require_session=True, request=request)
+            if user and user.get("id") is not None:
+                logged_in_user_id = str(user["id"])
+        except HTTPException:
+            raise
+        except Exception:
+            logged_in_user_id = None
+
+    values = [
+        request.headers.get("X-User-Id"),
+        request.headers.get("X-Owner-Username"),
+        request.query_params.get("user_id"),
+        request.query_params.get("owner_username"),
+    ]
     if request.method == "POST":
         try:
             body = await request.json()
-        except ValueError:
+        except Exception:
             body = {}
         if isinstance(body, dict):
+            values.append(body.get("user_id"))
             values.append(body.get("owner_username"))
             items = body.get("accounts")
             if isinstance(items, list):
-                values.extend(item.get("owner_username") for item in items if isinstance(item, dict))
+                for item in items:
+                    if isinstance(item, dict):
+                        values.append(item.get("user_id"))
+                        values.append(item.get("owner_username"))
     owners = {normalize_owner(value) for value in values if normalize_owner(value) is not None}
     if len(owners) > 1 or any(len(owner) > 100 for owner in owners):
         raise HTTPException(422, "Owner không hợp lệ hoặc mâu thuẫn")
-    owner = next(iter(owners), None)
+    explicit_owner = next(iter(owners), None)
+
+    if logged_in_user_id is not None:
+        if explicit_owner is not None and explicit_owner != logged_in_user_id:
+            raise HTTPException(403, "Không có quyền truy cập dữ liệu của người dùng khác")
+        owner = logged_in_user_id
+    else:
+        owner = explicit_owner
+
     with owner_scope(owner):
         yield owner
 
