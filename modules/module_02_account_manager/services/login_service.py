@@ -1,5 +1,11 @@
 """Batch login uses bounded threads and per-worker database sessions."""
 import asyncio
+import threading
+from ..utils.paths import account_key
+from fastapi import HTTPException
+
+_login_pending = set()
+_login_pending_lock = threading.Lock()
 from ..database.connection import SessionLocal
 from ..database.repository import AccountRepository as Repo
 from ..security.encryption import decrypt_data
@@ -37,5 +43,15 @@ async def login_batch(uids, threads):
         async with semaphore:
             if not runtime.stopping.is_set():
                 await asyncio.wrap_future(runtime.submit(login_one, uid))
-    await asyncio.gather(*(run(uid) for uid in uids))
+    from ..automation.browser_manager import get_profile_lock
+    keys = [account_key(uid) for uid in uids]
+    with _login_pending_lock:
+        if any(key in _login_pending or get_profile_lock(uid).locked() for key, uid in zip(keys, uids)):
+            raise HTTPException(409, "Profile is busy or queued")
+        _login_pending.update(keys)
+    try:
+        await asyncio.gather(*(run(uid) for uid in uids))
+    finally:
+        with _login_pending_lock:
+            _login_pending.difference_update(keys)
     broadcast("success", "Hoàn tất đăng nhập tất cả tài khoản!", extra={"event": "account_login_finished"})

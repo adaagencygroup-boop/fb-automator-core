@@ -28,6 +28,8 @@ export default function SingleAccountModal({
   const [tokenHotmail, setTokenHotmail] = useState("");
   const [clientId, setClientId] = useState("");
   const [proxy, setProxy] = useState("");
+  const [loadedUid, setLoadedUid] = useState(null);
+  const fetching = Boolean(isOpen && editUid && loadedUid !== editUid);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [errorField, setErrorField] = useState(null);
@@ -77,9 +79,11 @@ export default function SingleAccountModal({
         if (!ignore) {
           setError(requestError.message || "Lỗi tải thông tin tài khoản");
         }
-      });
+      })
+      .finally(() => { if (!ignore) setLoadedUid(editUid); });
 
     return () => {
+      setLoadedUid(null);
       ignore = true;
     };
   }, [isOpen, editUid]);
@@ -115,7 +119,7 @@ export default function SingleAccountModal({
       return;
     }
 
-    if (!editUid && existingAccounts.some((acc) => acc.uid === trimmedUid)) {
+    if (existingAccounts.some((acc) => acc.uid === trimmedUid && acc.uid !== editUid)) {
       setError("Tài khoản có UID này đã tồn tại trong danh sách!");
       setErrorField("uid");
       return;
@@ -140,6 +144,7 @@ export default function SingleAccountModal({
     try {
       await saveSingleAccount({
         uid: trimmedUid,
+        ...(editUid ? { original_uid: editUid } : {}),
         password: trimmedPassword,
         two_fa: twoFa.trim(),
         cookie: cookie.trim(),
@@ -151,7 +156,7 @@ export default function SingleAccountModal({
         client_id: clientId.trim(),
         proxy: proxy.trim(),
       });
-      if (onSuccess) onSuccess();
+      if (onSuccess) await onSuccess({ originalUid: editUid, uid: trimmedUid });
       handleClose();
     } catch (submitError) {
       setError(submitError.message || "Lỗi khi lưu thông tin tài khoản");
@@ -161,7 +166,7 @@ export default function SingleAccountModal({
   };
 
   const fields = [
-    { number: 1, key: "uid", label: "UID (Facebook ID) *", placeholder: "Nhập UID (Facebook ID)", value: uid, setValue: setUid, required: true, disabled: Boolean(editUid) },
+    { number: 1, key: "uid", label: "UID (Facebook ID) *", placeholder: "Nhập UID (Facebook ID)", value: uid, setValue: setUid, required: true },
     { number: 2, key: "password", label: "Mật khẩu (Pass) *", placeholder: "Nhập Mật khẩu (Pass)", value: password, setValue: setPassword, required: true },
     { number: 3, key: "two_fa", label: "Mã bảo mật (2FA Key)", placeholder: "Nhập Mã 2FA Secret", value: twoFa, setValue: setTwoFa },
     { number: 4, key: "cookie", label: "Cookie chuỗi", placeholder: "Nhập Cookie chuỗi", value: cookie, setValue: setCookie },
@@ -202,7 +207,7 @@ export default function SingleAccountModal({
         <input
           type={field.type || "text"}
           required={field.required}
-          disabled={field.disabled || loading}
+          disabled={loading || fetching}
           value={field.value}
           onChange={(event) => {
             field.setValue(event.target.value);
@@ -232,7 +237,7 @@ export default function SingleAccountModal({
         <button
           type="button"
           onClick={handleClose}
-          disabled={loading}
+          disabled={loading || fetching}
           className="absolute right-5 top-5 p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-50"
           title="Đóng"
         >
@@ -272,14 +277,14 @@ export default function SingleAccountModal({
             <button
               type="button"
               onClick={handleClose}
-              disabled={loading}
+              disabled={loading || fetching}
               className="h-9 px-4 rounded-md border border-border bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition cursor-pointer disabled:opacity-50 shadow-subtle"
             >
               Hủy
             </button>
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || fetching}
               className="flex h-9 items-center gap-1.5 rounded-md bg-primary hover:bg-primary-hover px-5 text-xs font-semibold text-white shadow-sm transition cursor-pointer disabled:opacity-50 active:scale-95"
             >
               <Check className="h-4 w-4" />

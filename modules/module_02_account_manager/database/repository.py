@@ -54,6 +54,13 @@ class AccountRepository:
         if account is None:
             account = Account(uid=uid, user_id=owner)
             db.add(account)
+        AccountRepository.apply_fields(account, data)
+        db.commit()
+        db.refresh(account)
+        return account
+
+    @staticmethod
+    def apply_fields(account, data):
         writable = {"password", "two_fa", "cookie", "token", "email", "pass_mail", "mail_recovery", "token_hotmail", "client_id", "proxy", "profile_path"}
         for key in writable & data.keys():
             value = data[key]
@@ -63,9 +70,6 @@ class AccountRepository:
             if key in {"password", "two_fa", "pass_mail"}:
                 account.credential_encryption_version = 2
         account.credential_encryption_version = 2
-        db.commit()
-        db.refresh(account)
-        return account
 
     @staticmethod
     def update_login_status(db, uid, status, profile_name=None, owner_username=_UNSET):

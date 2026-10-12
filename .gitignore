@@ -36,6 +36,7 @@ data/keys.txt
 data/proxies.txt
 data/accounts.txt
 data/browser_profiles/
+data/module_02_account_manager/
 *.db
 *.sqlite
 *.sqlite3

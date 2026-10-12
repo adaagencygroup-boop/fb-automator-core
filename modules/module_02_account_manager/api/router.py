@@ -10,7 +10,7 @@ from ..services import account_service as accounts, status_service, login_servic
 from ..services.browser_service import queue_open_browser
 from ..services.events import event_stream
 from ..utils.paths import validate_uid
-from .schemas import AccountInput, ImportRequest, UidsRequest, LoginRequest, OpenBrowserRequest, TestProxyRequest
+from .schemas import SingleAccountInput, ImportRequest, UidsRequest, LoginRequest, OpenBrowserRequest, TestProxyRequest
 
 router = APIRouter(prefix="/api/accounts", tags=["Module 02: Account Manager"])
 
@@ -55,9 +55,12 @@ async def import_accounts(req: ImportRequest, background_tasks: BackgroundTasks,
     return result
 
 @router.post("/single")
-async def save_single(item: AccountInput, db: Session = Depends(get_db)):
+async def save_single(item: SingleAccountInput, db: Session = Depends(get_db)):
     try:
-        account = accounts.save_account(db, item)
+        account = accounts.save_single_account(db, item)
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as exc:
         db.rollback()
         raise HTTPException(400, "Không thể lưu tài khoản") from exc
@@ -143,7 +146,7 @@ async def import_accounts_alias(req: ImportRequest, background_tasks: Background
     return await import_accounts(req, background_tasks, db)
 
 @alias_router.post("/accounts/single")
-async def save_single_alias(item: AccountInput, db: Session = Depends(get_db)):
+async def save_single_alias(item: SingleAccountInput, db: Session = Depends(get_db)):
     return await save_single(item, db)
 
 @alias_router.post("/accounts/bulk-delete")

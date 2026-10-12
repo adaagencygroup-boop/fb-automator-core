@@ -39,6 +39,14 @@ class AccountInput(OwnerRequest):
     def valid_uid(cls, value):
         return validate_uid(value)
 
+class SingleAccountInput(AccountInput):
+    original_uid: Optional[str] = None
+
+    @field_validator("original_uid")
+    @classmethod
+    def valid_original_uid(cls, value):
+        return validate_uid(value) if value is not None else None
+
 class ImportRequest(OwnerRequest):
     accounts: list[AccountInput] = Field(max_length=100)
     check_status: bool = False
