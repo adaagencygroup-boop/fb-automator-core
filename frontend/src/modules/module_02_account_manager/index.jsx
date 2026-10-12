@@ -200,14 +200,26 @@ export default function AccountManagerModule() {
     setIsSingleModalOpen(true);
   };
 
-  const handleImportBulk = async (accountsToImport) => {
+  const handleImportBulk = async (accountsToImport, skippedCount = 0) => {
     try {
       const res = await importAccounts(accountsToImport);
       await fetchAccounts();
-      toast.success(
-        `Đã nhập thành công ${res.added_count || 0} tài khoản mới (${res.updated_count || 0} tài khoản cập nhật).`,
-        "NHẬP THÀNH CÔNG"
-      );
+      const added = res.added_count ?? res.imported ?? 0;
+      const updated = res.updated_count ?? 0;
+
+      let msg = "";
+      if (added > 0 && updated > 0) {
+        msg = `Đã thêm mới ${added} tài khoản, cập nhật đè ${updated} tài khoản thành công.`;
+      } else if (updated > 0) {
+        msg = `Đã cập nhật đè ${updated} tài khoản thành công.`;
+      } else {
+        msg = `Đã thêm mới ${added} tài khoản thành công.`;
+      }
+      if (skippedCount > 0) {
+        msg += ` (Đã bỏ qua ${skippedCount} tài khoản trùng lặp).`;
+      }
+
+      toast.success(msg, "NHẬP THÀNH CÔNG");
       return true;
     } catch (error) {
       toast.error("Không thể nhập tài khoản: " + error.message, "LỖI NHẬP FILE");
@@ -559,7 +571,10 @@ export default function AccountManagerModule() {
         isOpen={isSingleModalOpen}
         editUid={editUid}
         onClose={() => setIsSingleModalOpen(false)}
-        onSuccess={fetchAccounts}
+        onSuccess={async ({ originalUid, uid }) => {
+          setSelectedUids((current) => Array.from(new Set(current.map((selected) => selected === originalUid ? uid : selected))));
+          await fetchAccounts();
+        }}
         existingAccounts={accounts}
       />
 

@@ -143,7 +143,7 @@ export function ToastProvider({ children }) {
   return (
     <ToastContext.Provider value={{ toasts, showToast, hideToast, error, success, warning, info }}>
       {children}
-      <div className="fixed top-5 right-5 z-[99999] flex flex-col gap-2.5 pointer-events-auto">
+      <div className="fixed top-5 right-5 z-[999999] flex flex-col gap-2.5 pointer-events-auto">
         {toasts.map((toast) => (
           <ToastNotificationItem key={toast.id} toast={toast} onDismiss={hideToast} />
         ))}

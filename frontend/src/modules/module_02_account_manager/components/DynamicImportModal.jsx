@@ -260,6 +260,10 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
     [existingUidSet, parsedAccounts, skipDuplicates],
   );
   const skippedExistingCount = parsedAccounts.length - accountsToImport.length;
+  const existingOverlapCount = useMemo(
+    () => parsedAccounts.filter((account) => existingUidSet.has(account.uid)).length,
+    [existingUidSet, parsedAccounts],
+  );
 
   const visibleColumnCount = Math.max(detectedColumnCount, DEFAULT_MAPPING.length);
   const activeMappings = columnMap.slice(0, visibleColumnCount).filter((field) => field !== "ignore");
@@ -416,13 +420,16 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
     }
 
     if (accountsToImport.length === 0) {
-      toast.warning("Tất cả tài khoản trong danh sách đã tồn tại trong hệ thống (đã bị bỏ qua do trùng lặp).", "THÔNG BÁO");
+      toast.warning(
+        `Tất cả ${parsedAccounts.length} tài khoản đều đã tồn tại trong hệ thống (đã bỏ qua). Bỏ tick ô "Tự động bỏ qua" nếu bạn muốn cập nhật đè thông tin mới.`,
+        "TÀI KHOẢN ĐÃ TỒN TẠI"
+      );
       return;
     }
 
     setIsImporting(true);
     try {
-      const success = await onImport(accountsToImport, checkAfterImport);
+      const success = await onImport(accountsToImport, skippedExistingCount);
       if (success) {
         resetForm();
         handleClose();
@@ -643,9 +650,15 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
                 <span className="rounded-md border border-border bg-white px-2.5 py-1 font-semibold text-slate-700 shadow-subtle">
                   Nhận dạng: {parsedAccounts.length} tài khoản
                 </span>
-                <span className={skippedExistingCount > 0 ? "text-amber-600 font-medium" : "text-slate-400"}>
-                  {skippedExistingCount} UID đã có sẽ bỏ qua
-                </span>
+                {skipDuplicates ? (
+                  <span className={skippedExistingCount > 0 ? "text-amber-600 font-medium" : "text-slate-400"}>
+                    {skippedExistingCount > 0 ? `${skippedExistingCount} UID đã có sẽ bỏ qua` : "Không có UID trùng"}
+                  </span>
+                ) : (
+                  <span className={existingOverlapCount > 0 ? "text-blue-600 font-medium" : "text-slate-400"}>
+                    {existingOverlapCount > 0 ? `${existingOverlapCount} UID trùng sẽ ghi đè` : "Không có UID trùng"}
+                  </span>
+                )}
                 <span
                   className={`flex items-center gap-1.5 font-medium ${
                     !lines.length

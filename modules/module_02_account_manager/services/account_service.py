@@ -35,18 +35,87 @@ def save_account(db, item):
     data["profile_path"] = str(profile_path(item.uid))
     return Repo.upsert(db, data)
 
+def save_single_account(db, item):
+    from sqlalchemy.exc import IntegrityError
+    from ..automation.browser_manager import get_profile_lock, _active_drivers, _active_drivers_lock
+    from ..context import owner_context
+    from ..utils.paths import account_key
+    from .browser_service import _open_browser_pending, _open_browser_pending_lock
+    from .login_service import _login_pending, _login_pending_lock
+    original = item.original_uid
+    if original is None:
+        return save_account(db, item)
+    locks, moved = [], False
+    try:
+        with _open_browser_pending_lock, _login_pending_lock:
+            for uid in sorted(set((original, item.uid))):
+                lock = get_profile_lock(uid)
+                if account_key(uid) in _open_browser_pending or account_key(uid) in _login_pending or not lock.acquire(blocking=False):
+                    raise HTTPException(409, "Profile is busy or queued")
+                locks.append(lock)
+        account = require_account(db, original)
+        if original != item.uid:
+            if Repo.get_by_uid(db, item.uid) is not None:
+                raise HTTPException(409, "UID already exists")
+            with _active_drivers_lock:
+                drivers = [d for d, info in _active_drivers.items() if info.get("owner") == owner_context.get() and info.get("uid") in (original, item.uid)]
+            for driver in drivers:
+                try:
+                    handles = driver.window_handles
+                except Exception as exc:
+                    raise HTTPException(409, "Cannot confirm Chrome is closed") from exc
+                if handles:
+                    raise HTTPException(409, "Close Chrome before changing UID")
+            old_path, new_path = profile_path(original), profile_path(item.uid)
+            if new_path.exists():
+                raise HTTPException(409, "Destination profile already exists")
+            if old_path.exists():
+                old_path.rename(new_path)
+                moved = True
+        data = item.model_dump(exclude_unset=True, exclude={"owner_username", "original_uid"})
+        data["profile_path"] = str(profile_path(item.uid))
+        Repo.apply_fields(account, data)
+        account.uid = item.uid
+        db.commit()
+        return account
+    except Exception as exc:
+        db.rollback()
+        if moved:
+            try:
+                new_path.rename(old_path)
+            except Exception as restore_error:
+                raise HTTPException(500, "Save failed and restoring the original profile failed") from restore_error
+        if isinstance(exc, IntegrityError):
+            raise HTTPException(409, "UID already exists") from exc
+        if isinstance(exc, ValueError):
+            raise HTTPException(422, str(exc)) from exc
+        raise
+    finally:
+        for lock in reversed(locks):
+            lock.release()
+
 def import_accounts(db, items):
-    imported, errors, uids = 0, [], []
+    added_count, updated_count, errors, uids = 0, 0, [], []
     for item in items:
         try:
+            exists = Repo.get_by_uid(db, item.uid) is not None
             save_account(db, item)
-            imported += 1
+            if exists:
+                updated_count += 1
+            else:
+                added_count += 1
             uids.append(item.uid)
         except Exception:
             db.rollback()
             errors.append({"uid": item.uid, "error": "Không thể lưu tài khoản"})
-    broadcast("info", f"Đã import {imported} tài khoản")
-    return {"imported": imported, "errors": errors}, list(dict.fromkeys(uids))
+    imported = added_count + updated_count
+    broadcast("info", f"Đã import {imported} tài khoản (Thêm mới: {added_count}, Cập nhật: {updated_count})")
+    return {
+        "imported": imported,
+        "added_count": added_count,
+        "updated_count": updated_count,
+        "errors": errors,
+    }, list(dict.fromkeys(uids))
 
 def delete_account(db, uid):
     from ..automation.browser_manager import get_profile_lock, _active_drivers, _active_drivers_lock
