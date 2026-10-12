@@ -17,22 +17,62 @@ import SingleAccountModal from "./components/SingleAccountModal";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import ExpiredFeatureView from "./components/ExpiredFeatureView";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import {
   AlertTriangle,
   ChevronDown,
   Gauge,
-  Loader2,
-  LogIn,
   Maximize2,
   Minimize2,
-  PlusCircle,
+  Plus,
   ShieldCheck,
   Trash2,
   Upload,
   Users,
 } from "lucide-react";
+
+// Helper render log message với màu highlight chuẩn Figma Terminal
+function HighlightedLogMessage({ message = "" }) {
+  // Regex tách các thành phần đặc biệt: UID, từ khóa thành công/thất bại, proxy, etc.
+  const regex = /(\b\d{10,18}\b|thành công|hoàn tất|thất bại|lỗi|checkpoint|\(Proxy:[^)]+\))/gi;
+  const parts = message.split(regex);
+
+  return (
+    <span>
+      {parts.map((part, i) => {
+        if (!part) return null;
+        if (/^\d{10,18}$/.test(part)) {
+          return (
+            <span key={i} className="text-[#93C5FD] font-mono font-medium">
+              {part}
+            </span>
+          );
+        }
+        if (/^(thành công|hoàn tất)$/i.test(part)) {
+          return (
+            <span key={i} className="text-[#34D399] font-bold">
+              {part}
+            </span>
+          );
+        }
+        if (/^(thất bại|lỗi|checkpoint)$/i.test(part)) {
+          return (
+            <span key={i} className="text-[#F43F5E] font-bold">
+              {part}
+            </span>
+          );
+        }
+        if (/^\(Proxy:/i.test(part)) {
+          return (
+            <span key={i} className="text-[#94A3B8]">
+              {part}
+            </span>
+          );
+        }
+        return <span key={i}>{part}</span>;
+      })}
+    </span>
+  );
+}
 
 export default function AccountManagerModule() {
   const toast = useToast();
@@ -148,34 +188,13 @@ export default function AccountManagerModule() {
     let ignore = false;
     getAccounts()
       .then((data) => {
-        if (!ignore) {
-          setAccounts(data);
-        }
+        if (!ignore) setAccounts(data);
       })
-      .catch((err) => console.error(err));
+      .catch((error) => console.error(error));
     return () => {
       ignore = true;
     };
   }, [isExpired]);
-
-  const handleImportBulk = async (newAccounts, checkAfterImport) => {
-    try {
-      const result = await importAccounts(newAccounts, checkAfterImport);
-      await fetchAccounts();
-      if (result.errors?.length) {
-        toast.warning(
-          `Đã import ${result.imported} tài khoản, bỏ qua ${result.errors.length} tài khoản bị lỗi.`,
-          "IMPORT HOÀN TẤT"
-        );
-      } else {
-        toast.success(`Đã import thành công ${result.imported} tài khoản vào hệ thống!`, "THÀNH CÔNG");
-      }
-      return result.imported > 0;
-    } catch (error) {
-      toast.error(error.message || "Lỗi khi lưu danh sách tài khoản", "LỖI IMPORT");
-      return false;
-    }
-  };
 
   const handleOpenAddSingle = () => {
     setEditUid(null);
@@ -187,46 +206,49 @@ export default function AccountManagerModule() {
     setIsSingleModalOpen(true);
   };
 
+  const handleImportBulk = async (accountsToImport) => {
+    try {
+      const res = await importAccounts(accountsToImport);
+      await fetchAccounts();
+      toast.success(
+        `Đã nhập thành công ${res.added_count || 0} tài khoản mới (${res.updated_count || 0} tài khoản cập nhật).`,
+        "NHẬP THÀNH CÔNG"
+      );
+    } catch (error) {
+      toast.error("Không thể nhập tài khoản: " + error.message, "LỖI NHẬP FILE");
+      throw error;
+    }
+  };
+
   const handleDeleteSingle = (uid) => {
     setDeleteTarget({ kind: "single", uid });
   };
 
   const handleBulkDelete = () => {
-    if (selectedUids.length) {
-      setDeleteTarget({ kind: "bulk", uids: [...selectedUids] });
-    }
+    if (!selectedUids.length) return;
+    setDeleteTarget({ kind: "bulk", uids: selectedUids });
   };
 
   const handleConfirmDelete = async () => {
-    if (!deleteTarget || isDeleting) return;
+    if (!deleteTarget) return;
     setIsDeleting(true);
     try {
       if (deleteTarget.kind === "single") {
         await deleteAccount(deleteTarget.uid);
-        setSelectedUids((current) => current.filter((id) => id !== deleteTarget.uid));
-        toast.success(`Đã xóa tài khoản ${deleteTarget.uid}`, "THÀNH CÔNG");
+        setSelectedUids((prev) => prev.filter((id) => id !== deleteTarget.uid));
+        toast.success(`Đã xóa tài khoản ${deleteTarget.uid}`, "ĐÃ XÓA TÀI KHOẢN");
       } else {
-        const result = await bulkDeleteAccounts(deleteTarget.uids);
-        const failedUids = (result.errors || []).map((item) => item.uid);
-        setSelectedUids((current) => [
-          ...current.filter((id) => !deleteTarget.uids.includes(id)),
-          ...failedUids,
-        ]);
-        if (failedUids.length) {
-          toast.error(
-            `Không thể xóa profile của UID: ${failedUids.join(", ")}. Hãy đóng Chrome rồi thử lại.`,
-            "Lỗi khi xóa tài khoản"
-          );
-        } else {
-          toast.success(`Đã xóa thành công ${deleteTarget.uids.length} tài khoản`, "THÀNH CÔNG");
-        }
+        const uidsToDelete = deleteTarget.uids;
+        await bulkDeleteAccounts(uidsToDelete);
+        setSelectedUids((prev) => prev.filter((id) => !uidsToDelete.includes(id)));
+        toast.success(`Đã xóa ${uidsToDelete.length} tài khoản`, "ĐÃ XÓA HÀNG LOẠT");
       }
       await fetchAccounts();
+      setDeleteTarget(null);
     } catch (error) {
-      toast.error(`Lỗi khi xóa tài khoản: ${error.message || String(error)}`, "Lỗi khi xóa");
+      toast.error("Lỗi khi xóa tài khoản: " + error.message, "LỖI XÓA");
     } finally {
       setIsDeleting(false);
-      setDeleteTarget(null);
     }
   };
 
@@ -234,6 +256,7 @@ export default function AccountManagerModule() {
     if (openingBrowserUids.has(uid)) return;
     setOpeningBrowserUids((prev) => new Set(prev).add(uid));
     try {
+      toast.info(`Đang kích hoạt trình duyệt cho ${uid}...`, "Mở trình duyệt");
       await openLiveBrowser(uid);
       setTimeout(() => {
         setOpeningBrowserUids((prev) => {
@@ -307,38 +330,30 @@ export default function AccountManagerModule() {
     {
       label: "TỔNG TÀI KHOẢN",
       value: accounts.length.toLocaleString("vi-VN"),
-      subtext: "Đã lưu trong CSDL",
       icon: Users,
-      borderClass: "border-l-sky-500",
-      valueColor: "text-sky-600",
-      iconBg: "bg-sky-50 text-sky-600",
+      labelColor: "text-[#94A3B8]",
+      iconBg: "bg-[#F1F5F9] text-[#475569]",
     },
     {
-      label: "ĐANG HOẠT ĐỘNG (LIVE)",
+      label: "ĐANG HOẠT ĐỘNG",
       value: checked ? active.toLocaleString("vi-VN") : "--",
-      subtext: checked ? `${active} tài khoản live` : "Chưa kiểm tra",
       icon: ShieldCheck,
-      borderClass: "border-l-emerald-500",
-      valueColor: "text-emerald-600",
-      iconBg: "bg-emerald-50 text-emerald-600",
+      labelColor: "text-[#059669]",
+      iconBg: "bg-[#ECFDF5] text-[#059669]",
     },
     {
-      label: "TÀI KHOẢN DIE",
+      label: "Die / Fail",
       value: checked ? dead.toLocaleString("vi-VN") : "--",
-      subtext: checked ? `${dead} tài khoản die` : "Chưa kiểm tra",
       icon: AlertTriangle,
-      borderClass: "border-l-red-500",
-      valueColor: "text-red-600",
-      iconBg: "bg-red-50 text-red-600",
+      labelColor: "text-[#F43F5E]",
+      iconBg: "bg-[#FFF1F2] text-[#E11D48]",
     },
     {
       label: "TỶ LỆ KHẢ DỤNG",
       value: availability,
-      subtext: "Tỉ lệ Live / Tổng đã check",
       icon: Gauge,
-      borderClass: "border-l-blue-500",
-      valueColor: "text-primary",
-      iconBg: "bg-primary-subtle text-primary",
+      labelColor: "text-[#2563EB]",
+      iconBg: "bg-[#EFF6FF] text-[#2563EB]",
     },
   ];
 
@@ -357,63 +372,62 @@ export default function AccountManagerModule() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header Bar */}
+    <div className="-m-6 p-6 min-h-full bg-[#F8F9FF] space-y-6">
+      {/* 1. Section - PageTitleArea */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
-            Quản Lý Tài Khoản Facebook
+          <h1 className="text-2xl font-bold tracking-tight text-[#0F172A] sm:text-3xl">
+            Quản lý tài khoản Facebook
           </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Quản lý tài khoản Facebook đã lưu trên máy, hỗ trợ mở profile Chrome và kiểm tra trạng thái
-          </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2.5">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleOpenAddSingle}
-            className="gap-1.5"
-          >
-            <PlusCircle className="h-4 w-4 text-primary" />
-            <span>Thêm một tài khoản</span>
-          </Button>
 
-          <Button
+        {/* Action Buttons */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Nút phụ: Thêm một tài khoản */}
+          <button
             type="button"
-            variant="default"
-            size="sm"
-            onClick={() => setIsDynamicImportOpen(true)}
-            className="gap-1.5"
+            onClick={handleOpenAddSingle}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200/90 bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold shadow-2xs transition-colors cursor-pointer"
           >
-            <Upload className="h-4 w-4" />
+            <Plus className="w-4 h-4 text-[#2563EB]" />
+            <span>Thêm một tài khoản</span>
+          </button>
+
+          {/* Nút chính Figma: Thêm nhiều tài khoản */}
+          <button
+            type="button"
+            onClick={() => setIsDynamicImportOpen(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-sm font-semibold shadow-[0_1px_2px_0_rgba(59,130,246,0.3)] transition-colors cursor-pointer"
+          >
+            <Upload className="w-4 h-4" />
             <span>Thêm nhiều tài khoản</span>
-          </Button>
+          </button>
         </div>
       </div>
 
-      {/* 4 Metric Cards */}
+      {/* 2. Section - StatsGrid (4 Cards) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {metricCards.map(({ label, value, subtext, icon: Icon, borderClass, valueColor, iconBg }) => (
-          <Card key={label} className={`border-l-4 ${borderClass}`}>
-            <CardHeader className="p-4 pb-1 flex flex-row items-center justify-between">
-              <CardTitle className="text-xs font-bold uppercase text-slate-500">
+        {metricCards.map(({ label, value, icon: Icon, labelColor, iconBg }) => (
+          <div
+            key={label}
+            className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] flex items-center justify-between"
+          >
+            <div>
+              <div className={`text-xs font-bold uppercase tracking-wider ${labelColor}`}>
                 {label}
-              </CardTitle>
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${iconBg}`}>
-                <Icon className="w-4 h-4" />
               </div>
-            </CardHeader>
-            <CardContent className="p-4 pt-1">
-              <div className={`text-2xl font-black ${valueColor}`}>{value}</div>
-              <p className="text-[11px] text-slate-500 mt-0.5">{subtext}</p>
-            </CardContent>
-          </Card>
+              <div className="text-3xl font-extrabold text-[#0F172A] tracking-tight mt-1">
+                {value}
+              </div>
+            </div>
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${iconBg}`}>
+              <Icon className="w-5 h-5" />
+            </div>
+          </div>
         ))}
       </div>
 
-      {/* Main Account Table */}
+      {/* 3. Section - FilterAndTableContainer (Toolbar + Table + Bottom Action Bar) */}
       <AccountTable
         accounts={accounts}
         selectedUids={selectedUids}
@@ -430,138 +444,109 @@ export default function AccountManagerModule() {
         onRefresh={handleCheckStatus}
         isCheckingStatus={isCheckingStatus}
         openingBrowserUids={openingBrowserUids}
+        effectiveThreads={effectiveThreads}
+        setCustomThreads={setCustomThreads}
+        maxThreads={maxThreads}
+        handleLogin={handleLogin}
+        isLoggingIn={isLoggingIn}
       />
 
-      {/* Action Footer Bar for Multi-threaded Batch Login */}
-      <div className="flex flex-wrap items-center justify-between sm:justify-end gap-3 rounded-xl border border-border bg-card p-4 shadow-subtle">
-        <label className="flex h-9 items-center gap-2 rounded-lg border border-border bg-slate-50 px-3 text-xs text-slate-700">
-          <span className="text-amber-500 font-bold">⚡</span>
-          <span>Số luồng đăng nhập đồng thời:</span>
-          <input
-            type="number"
-            min={1}
-            max={maxThreads}
-            value={effectiveThreads}
-            onChange={(event) =>
-              setCustomThreads(Math.max(1, Math.min(maxThreads, Number(event.target.value))))
-            }
-            className="h-6 w-12 rounded border border-border bg-white text-center font-bold text-slate-800 outline-none focus:border-primary"
-          />
-        </label>
-
-        <Button
-          type="button"
-          onClick={handleLogin}
-          disabled={isLoggingIn || !selectedUids.length}
-          size="sm"
-          className="gap-1.5"
-        >
-          {isLoggingIn ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <LogIn className="h-4 w-4" />
-          )}
-          <span>
-            {isLoggingIn ? "Đang đăng nhập..." : "Bắt đầu đăng nhập"}
-            {selectedUids.length > 0 ? ` (${selectedUids.length})` : ""}
-          </span>
-        </Button>
-      </div>
-
-      {/* Embedded Activity Log box */}
-      <section
-        className={`flex w-full flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-950 shadow-card transition-[height] duration-200 ${
-          isLogExpanded ? "h-[360px]" : "h-[190px]"
-        }`}
-      >
-        <div className="flex min-h-[42px] shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-4 bg-slate-900/80">
-          <div className="flex min-w-0 items-center gap-2">
+      {/* 4. Section - LiveLogsPanel (Nhật ký hoạt động Terminal Dark Theme) */}
+      <section className="w-full flex flex-col rounded-2xl bg-white border border-[#E2E8F0] shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] overflow-hidden">
+        {/* Terminal Header */}
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#E2E8F0] bg-[#F8FAFC]/70">
+          <div className="flex items-center gap-2.5">
             <span
-              className={`h-2 w-2 shrink-0 rounded-full ${
-                connected ? "bg-emerald-400 shadow-[0_0_8px_#34d399]" : "bg-red-400"
+              className={`w-2.5 h-2.5 rounded-full ${
+                connected ? "bg-[#10B981] animate-pulse" : "bg-red-400"
               }`}
             />
-            <span className="truncate text-xs font-bold text-slate-200">
-              Nhật ký hoạt động tài khoản (SSE Realtime)
-            </span>
-            <span className="shrink-0 text-[11px] text-slate-500">
-              {logs.length} dòng
+            <h2 className="text-sm font-bold text-[#1E293B]">
+              Nhật ký hoạt động (Live Logs)
+            </h2>
+            <span className="px-2 py-0.5 rounded bg-[#F1F5F9] text-xs font-mono font-medium text-[#94A3B8]">
+              session#{logs.length > 0 ? String(logs.length).padStart(4, "0") : "live"}
             </span>
           </div>
-          <div className="flex shrink-0 items-center gap-1.5">
+
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => {
                 clearLogs();
                 setExpandedLog(null);
               }}
-              className="rounded px-2 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
+              className="px-2.5 py-1 text-xs font-semibold text-[#64748B] hover:text-[#1E293B] rounded-lg hover:bg-slate-200/50 transition-colors cursor-pointer"
             >
               Xóa logs
             </button>
             <button
               type="button"
-              onClick={() => setIsLogExpanded((value) => !value)}
+              onClick={() => setIsLogExpanded((v) => !v)}
               title={isLogExpanded ? "Thu nhỏ nhật ký" : "Mở rộng nhật ký"}
-              className="flex h-6 w-6 items-center justify-center rounded text-slate-400 transition-colors hover:bg-slate-800 hover:text-white"
+              className="p-1 text-[#94A3B8] hover:text-[#1E293B] rounded-lg hover:bg-slate-200/50 transition-colors cursor-pointer"
             >
-              {isLogExpanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+              {isLogExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
             </button>
           </div>
         </div>
 
+        {/* Log Content Area - Dark Slate #0F172A */}
         <div
           ref={logListRef}
           onScroll={(event) => {
             const list = event.currentTarget;
             shouldAutoScrollRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
           }}
-          className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2 font-mono text-[11px]"
+          className={`bg-[#0F172A] p-4 font-mono text-xs text-[#CBD5E1] overflow-y-auto space-y-2 select-text transition-[height] duration-200 ${
+            isLogExpanded ? "min-h-[320px] max-h-[460px]" : "min-h-[160px] max-h-[240px]"
+          }`}
         >
           {visibleLogs.length ? (
             visibleLogs.map((log, index) => {
               const isOpen = expandedLog === log;
-              const color =
-                log.type === "success"
-                  ? "text-emerald-400"
-                  : log.type === "error"
-                  ? "text-red-400"
-                  : log.type === "warning"
-                  ? "text-amber-400"
-                  : "text-sky-400";
-              const symbol =
-                log.type === "success"
-                  ? "✓"
-                  : log.type === "error"
-                  ? "×"
-                  : log.type === "warning"
-                  ? "!"
-                  : "•";
-              const summary = log.message.split(/stacktrace:/i)[0].trim() || log.message;
+              const isSuccess = log.type === "success";
+              const isError = log.type === "error";
 
               return (
-                <div
-                  key={`${log.timestamp}-${index}`}
-                  className="rounded border border-transparent bg-slate-900/60 transition-colors hover:border-slate-800"
-                >
-                  <button
-                    type="button"
-                    onClick={() => setExpandedLog(isOpen ? null : log)}
-                    className="flex min-h-7 w-full items-center gap-2 px-2.5 py-1 text-left"
-                  >
-                    <span className={`w-3 shrink-0 text-center font-bold ${color}`}>{symbol}</span>
-                    <time className="w-16 shrink-0 text-[10px] tabular-nums text-slate-500">
-                      {log.timestamp}
+                <div key={`${log.timestamp}-${index}`} className="flex flex-col gap-1">
+                  <div className="flex items-start gap-2.5 leading-relaxed">
+                    {/* Icon: checkmark xanh lá cho success, dot xanh cho info, x cho lỗi */}
+                    <span className="shrink-0 mt-0.5 select-none">
+                      {isSuccess ? (
+                        <span className="text-[#34D399] font-bold">✓</span>
+                      ) : isError ? (
+                        <span className="text-[#F43F5E] font-bold">×</span>
+                      ) : (
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#60A5FA] my-1" />
+                      )}
+                    </span>
+
+                    {/* Timestamp */}
+                    <time className="shrink-0 text-[11px] text-[#94A3B8] tabular-nums select-none">
+                      [{log.timestamp}]
                     </time>
-                    <span className={`min-w-0 flex-1 truncate leading-tight ${color}`}>{summary}</span>
-                    <ChevronDown
-                      className={`h-3 w-3 shrink-0 text-slate-500 transition-transform ${
-                        isOpen ? "rotate-180" : ""
-                      }`}
-                    />
-                  </button>
+
+                    {/* Log text với Highlight */}
+                    <div className="flex-1 min-w-0 break-words">
+                      <HighlightedLogMessage message={log.message} />
+                    </div>
+
+                    {/* Xem chi tiết nếu log dài hoặc có stacktrace */}
+                    {log.message.includes("stacktrace") && (
+                      <button
+                        type="button"
+                        onClick={() => setExpandedLog(isOpen ? null : log)}
+                        className="text-[#94A3B8] hover:text-white shrink-0 ml-1"
+                      >
+                        <ChevronDown className={`w-3.5 h-3.5 ${isOpen ? "rotate-180" : ""}`} />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Collapsible raw details */}
                   {isOpen && (
-                    <div className="select-text whitespace-pre-wrap border-t border-slate-800 px-3 py-2 pl-24 text-[11px] leading-relaxed text-slate-300">
+                    <div className="pl-24 pr-2 py-1 text-[11px] text-slate-400 whitespace-pre-wrap border-l border-slate-700 ml-3">
                       {log.message}
                     </div>
                   )}
@@ -569,9 +554,10 @@ export default function AccountManagerModule() {
               );
             })
           ) : (
-            <p className="px-3 py-3 text-slate-500 italic">
-              Đang chờ hoạt động từ Local Python Engine...
-            </p>
+            <div className="flex items-center gap-2 text-[#94A3B8] italic py-2">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#60A5FA]" />
+              <span>Đang chờ sự kiện hoạt động từ hệ thống...</span>
+            </div>
           )}
         </div>
       </section>

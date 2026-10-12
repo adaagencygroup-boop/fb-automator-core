@@ -4,8 +4,20 @@ import React, { useEffect, useMemo, useState } from "react";
 import AccountDetailPanel from "./AccountDetailPanel";
 import CustomSelect from "@/components/ui/custom-select";
 import Pagination from "@/components/ui/pagination";
-import { Badge } from "@/components/ui/badge";
-import { Check, Copy, Edit3, Eye, EyeOff, Globe, Loader2, Search, ShieldCheck, Trash2 } from "lucide-react";
+import {
+  Check,
+  Copy,
+  Edit3,
+  Eye,
+  EyeOff,
+  Globe,
+  Loader2,
+  LogIn,
+  Search,
+  ShieldCheck,
+  Trash2,
+  Zap,
+} from "lucide-react";
 import { formatVietnamDateTime } from "@/lib/date-utils";
 
 const avatarColors = ["#1877F2", "#0084FF", "#087A62", "#4F46E5", "#0284C7"];
@@ -34,12 +46,12 @@ function DetailRow({ account, isClosing, onClosed, onClose }) {
   const show = isOpen && !isClosing;
 
   return (
-    <tr className="bg-slate-50/40">
+    <tr className="bg-slate-50/50">
       <td
         colSpan={8}
         className={`p-0 overflow-hidden transition-[border-color] ${
           show
-            ? "border-b border-border duration-[240ms]"
+            ? "border-b border-[#E2E8F0] duration-[240ms]"
             : "border-b-0 border-transparent duration-[260ms]"
         }`}
         style={{ fontSize: 0, lineHeight: 0 }}
@@ -77,6 +89,11 @@ export default function AccountTable({
   onRefresh,
   isCheckingStatus = false,
   openingBrowserUids,
+  effectiveThreads = 3,
+  setCustomThreads,
+  maxThreads = 10,
+  handleLogin,
+  isLoggingIn = false,
 }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [accountFilter, setAccountFilter] = useState("all");
@@ -164,53 +181,59 @@ export default function AccountTable({
     currentAccounts.every((account) => selectedUids.includes(account.uid));
 
   return (
-    <section className="w-full flex flex-col gap-4 p-5 rounded-xl bg-card border border-border shadow-card select-none">
-      {/* 1. Filter Bar */}
-      <div className="flex flex-col sm:flex-row flex-wrap xl:flex-nowrap items-stretch sm:items-center gap-3 w-full">
-        {/* Search Input */}
-        <div className="relative flex-1 min-w-[200px] w-full sm:w-auto">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={handleSearchChange}
-            placeholder="Tìm kiếm theo UID, Tên tài khoản, Email..."
-            className="w-full h-9 pl-9 pr-3 rounded-lg bg-white border border-border text-slate-800 placeholder-slate-400 text-xs focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary shadow-subtle transition-colors"
-          />
+    <section className="w-full flex flex-col rounded-2xl bg-white border border-[#E2E8F0] shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] overflow-hidden select-none">
+      {/* 1. Section - Filter / Toolbar */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 p-5 border-b border-[#E2E8F0] bg-white">
+        {/* Search & Dropdowns Container */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1 max-w-3xl">
+          {/* Search Input */}
+          <div className="relative flex-1 min-w-[220px]">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#94A3B8]" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={handleSearchChange}
+              placeholder="Tìm kiếm theo UID, Tên tài khoản..."
+              className="w-full h-10 pl-10 pr-3.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-[#1E293B] placeholder-[#6B7280] text-sm focus:outline-none focus:bg-white focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/15 transition-all"
+            />
+          </div>
+
+          {/* Account Status Filter Dropdown */}
+          <div className="w-full sm:w-48 shrink-0">
+            <CustomSelect
+              value={accountFilter}
+              onChange={handleAccountFilterChange}
+              options={accountFilterOptions}
+              className="w-full h-10 text-xs font-medium text-[#334155] rounded-xl"
+            />
+          </div>
+
+          {/* Login Status Filter Dropdown */}
+          <div className="w-full sm:w-44 shrink-0">
+            <CustomSelect
+              value={loginFilter}
+              onChange={handleLoginFilterChange}
+              options={loginFilterOptions}
+              className="w-full h-10 text-xs font-medium text-[#334155] rounded-xl"
+            />
+          </div>
         </div>
 
-        {/* Account Status Filter Dropdown */}
-        <div className="w-full sm:w-44 shrink-0">
-          <CustomSelect
-            value={accountFilter}
-            onChange={handleAccountFilterChange}
-            options={accountFilterOptions}
-            className="w-full"
-          />
-        </div>
-
-        {/* Login Status Filter Dropdown */}
-        <div className="w-full sm:w-44 shrink-0">
-          <CustomSelect
-            value={loginFilter}
-            onChange={handleLoginFilterChange}
-            options={loginFilterOptions}
-            className="w-full"
-          />
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto shrink-0">
+        {/* Toolbar Action Buttons (Check trạng thái & Xóa) */}
+        <div className="flex items-center gap-2.5 shrink-0 self-end lg:self-auto">
           {/* Check Status Button */}
           <button
             type="button"
             onClick={onRefresh}
             disabled={isCheckingStatus || selectedUids.length === 0}
-            className="flex-1 sm:flex-initial flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 px-3.5 text-xs font-semibold text-emerald-700 transition disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer shadow-subtle"
+            className="flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] hover:bg-[#D1FAE5] px-3.5 text-xs font-semibold text-[#047857] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
             title="Kiểm tra trạng thái Live/Die của các tài khoản đã chọn"
           >
             <ShieldCheck className={`w-4 h-4 ${isCheckingStatus ? "animate-spin" : ""}`} />
-            <span>{isCheckingStatus ? "Đang kiểm tra..." : "Check trạng thái"}{selectedUids.length > 0 ? ` (${selectedUids.length})` : ""}</span>
+            <span>
+              {isCheckingStatus ? "Đang kiểm tra..." : "Check trạng thái"}
+              {selectedUids.length > 0 ? ` (${selectedUids.length})` : ""}
+            </span>
           </button>
 
           {/* Bulk Delete Button */}
@@ -218,7 +241,7 @@ export default function AccountTable({
             type="button"
             onClick={onBulkDelete}
             disabled={selectedUids.length === 0}
-            className="flex-1 sm:flex-initial flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 px-3.5 text-xs font-semibold text-red-700 transition disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer shadow-subtle"
+            className="flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#FECDD3] bg-[#FFF1F2] hover:bg-[#FFE4E6] px-3.5 text-xs font-semibold text-[#BE123C] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
             title="Xóa các tài khoản đã chọn"
           >
             <Trash2 className="w-4 h-4" />
@@ -227,295 +250,363 @@ export default function AccountTable({
         </div>
       </div>
 
-      {/* 2. Table Area */}
-      <div className="w-full rounded-xl border border-border overflow-hidden bg-white shadow-subtle">
-        <div className="w-full overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[840px]">
-            <thead>
-              <tr className="h-10 bg-slate-50/80 border-b border-border">
-                <th className="w-10 px-2.5 py-2 text-center">
-                  <input
-                    type="checkbox"
-                    checked={isAllSelected}
-                    onChange={() => onSelectAll(currentAccounts.map((a) => a.uid))}
-                    className="h-4 w-4 rounded accent-primary cursor-pointer"
-                  />
-                </th>
-                <th className="w-12 px-2 py-2 font-semibold text-[11px] uppercase tracking-wider text-slate-500">
-                  STT
-                </th>
-                <th className="w-36 px-2.5 py-2 font-semibold text-[11px] uppercase tracking-wider text-slate-500">
-                  UID
-                </th>
-                <th className="px-3 py-2 font-semibold text-[11px] uppercase tracking-wider text-slate-500">
-                  TÊN TÀI KHOẢN
-                </th>
-                <th className="w-36 px-2.5 py-2 font-semibold text-[11px] uppercase tracking-wider text-slate-500 text-center whitespace-nowrap">
-                  TRẠNG THÁI TK
-                </th>
-                <th className="w-36 px-2.5 py-2 font-semibold text-[11px] uppercase tracking-wider text-slate-500 text-center whitespace-nowrap">
-                  ĐĂNG NHẬP
-                </th>
-                <th className="w-32 px-2.5 py-2 font-semibold text-[11px] uppercase tracking-wider text-slate-500">
-                  LAST LOGIN
-                </th>
-                <th className="w-36 px-2.5 py-2 font-semibold text-[11px] uppercase tracking-wider text-slate-500 text-center">
-                  HÀNH ĐỘNG
-                </th>
-              </tr>
-            </thead>
+      {/* 2. Section - Data Table */}
+      <div className="w-full overflow-x-auto">
+        <table className="w-full text-left border-collapse min-w-[880px]">
+          <thead>
+            <tr className="h-11 bg-[#F8FAFC]/70 border-b border-[#E2E8F0]">
+              <th className="w-12 px-3 py-2 text-center">
+                <input
+                  type="checkbox"
+                  checked={isAllSelected}
+                  onChange={() => onSelectAll(currentAccounts.map((a) => a.uid))}
+                  className="h-4 w-4 rounded border-[#CBD5E1] accent-[#2563EB] cursor-pointer"
+                />
+              </th>
+              <th className="w-12 px-2.5 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center">
+                STT
+              </th>
+              <th className="w-40 px-3 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B]">
+                UID
+              </th>
+              <th className="px-4 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B]">
+                TÊN TÀI KHOẢN
+              </th>
+              <th className="w-36 px-3 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center whitespace-nowrap">
+                <span className="block leading-tight">TRẠNG THÁI</span>
+                <span className="block text-[10px] text-[#94A3B8] leading-tight">TÀI KHOẢN</span>
+              </th>
+              <th className="w-36 px-3 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center whitespace-nowrap">
+                <span className="block leading-tight">TRẠNG THÁI</span>
+                <span className="block text-[10px] text-[#94A3B8] leading-tight">ĐĂNG NHẬP</span>
+              </th>
+              <th className="w-32 px-3 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B]">
+                LAST LOGIN
+              </th>
+              <th className="w-36 px-4 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-right">
+                HÀNH ĐỘNG
+              </th>
+            </tr>
+          </thead>
 
-            <tbody className="divide-y divide-slate-100 text-xs">
-              {filteredAccounts.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-4 py-12 text-center text-slate-500">
-                    <div className="flex flex-col items-center justify-center gap-2 max-w-sm mx-auto">
-                      <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400">
-                        <Search className="w-5 h-5" />
-                      </div>
-                      <p className="text-slate-800 font-semibold text-sm">
-                        {accounts.length === 0 ? "Chưa có tài khoản Facebook nào" : "Không tìm thấy tài khoản phù hợp"}
-                      </p>
-                      <p className="text-xs text-slate-500 leading-relaxed">
-                        {accounts.length === 0
-                          ? "Vui lòng bấm 'Thêm một tài khoản' hoặc 'Thêm nhiều tài khoản' để lưu tài khoản vào hệ thống."
-                          : "Vui lòng thử tìm kiếm bằng từ khóa khác hoặc điều chỉnh lại bộ lọc trạng thái."}
-                      </p>
+          <tbody className="divide-y divide-slate-100 text-xs">
+            {filteredAccounts.length === 0 ? (
+              <tr>
+                <td colSpan={8} className="px-4 py-14 text-center text-slate-500">
+                  <div className="flex flex-col items-center justify-center gap-2 max-w-sm mx-auto">
+                    <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
+                      <Search className="w-5 h-5" />
                     </div>
-                  </td>
-                </tr>
-              ) : (
-                currentAccounts.map((account, index) => {
-                  const initial = (account.profile_name || account.uid).trim().charAt(0).toUpperCase();
+                    <p className="text-[#0F172A] font-semibold text-sm">
+                      {accounts.length === 0 ? "Chưa có tài khoản Facebook nào" : "Không tìm thấy tài khoản phù hợp"}
+                    </p>
+                    <p className="text-xs text-[#64748B] leading-relaxed">
+                      {accounts.length === 0
+                        ? "Vui lòng bấm 'Thêm một tài khoản' hoặc 'Thêm nhiều tài khoản' để lưu tài khoản vào hệ thống."
+                        : "Vui lòng thử tìm kiếm bằng từ khóa khác hoặc điều chỉnh lại bộ lọc trạng thái."}
+                    </p>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              currentAccounts.map((account, index) => {
+                const initial = (account.profile_name || account.uid).trim().charAt(0).toUpperCase();
+                const isSelected = selectedUids.includes(account.uid);
 
-                  return (
-                    <React.Fragment key={account.uid}>
-                      <tr
-                        className={`h-14 transition-colors hover:bg-slate-50/80 ${
-                          selectedUids.includes(account.uid) ? "bg-blue-50/50" : ""
-                        }`}
-                      >
-                        {/* 1. Checkbox */}
-                        <td className="px-2.5 py-2 text-center">
-                          <input
-                            type="checkbox"
-                            checked={selectedUids.includes(account.uid)}
-                            onChange={() => onToggleSelect(account.uid)}
-                            className="h-4 w-4 rounded accent-primary cursor-pointer"
-                          />
-                        </td>
-
-                        {/* 2. STT */}
-                        <td className="px-2 py-2 font-mono text-slate-400 font-medium">
-                          {startIndex + index + 1}
-                        </td>
-
-                        {/* 3. UID */}
-                        <td className="px-2.5 py-2">
-                          <div className="flex items-center gap-1 max-w-[140px]">
-                            <span
-                              className="font-bold text-primary font-mono truncate"
-                              title={account.uid}
-                            >
-                              {account.uid}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleCopyUid(account.uid)}
-                              className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer shrink-0"
-                              title="Sao chép UID"
-                            >
-                              {copiedUid === account.uid ? (
-                                <Check className="w-3.5 h-3.5 text-emerald-600" />
-                              ) : (
-                                <Copy className="w-3.5 h-3.5" />
-                              )}
-                            </button>
-                          </div>
-                        </td>
-
-                        {/* 4. Tên tài khoản */}
-                        <td className="px-3 py-2">
-                          <div className="flex items-center gap-2.5">
-                            <span
-                              className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 font-bold text-[11px] text-white shadow-sm"
-                              style={{ backgroundColor: avatarColors[index % avatarColors.length] }}
-                            >
-                              {initial}
-                            </span>
-                            <div className="flex flex-col justify-center min-w-0">
-                              <span
-                                className="font-semibold text-slate-800 truncate max-w-[200px]"
-                                title={account.profile_name || "Chưa cập nhật"}
-                              >
-                                {account.profile_name || "Chưa cập nhật"}
-                              </span>
-                              {account.email && (
-                                <span
-                                  className="text-[11px] text-slate-500 truncate max-w-[200px]"
-                                  title={account.email}
-                                >
-                                  {account.email}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* 5. Trạng thái tài khoản */}
-                        <td className="px-2.5 py-2 text-center whitespace-nowrap">
-                          {account.status === "live" ? (
-                            <Badge variant="success">LIVE</Badge>
-                          ) : account.status === "die" ? (
-                            <Badge variant="destructive">DIE</Badge>
-                          ) : (
-                            <span className="text-slate-400 text-xs">--</span>
-                          )}
-                        </td>
-
-                        {/* 6. Trạng thái đăng nhập */}
-                        <td className="px-2.5 py-2 text-center whitespace-nowrap">
-                          {account.login_status === "logged_in" ? (
-                            <Badge variant="success">Đã đăng nhập</Badge>
-                          ) : account.login_status === "failed" ? (
-                            <Badge variant="destructive">Đăng nhập lỗi</Badge>
-                          ) : (
-                            <Badge variant="secondary">Chưa đăng nhập</Badge>
-                          )}
-                        </td>
-
-                        {/* 7. Last login */}
-                        <td className="px-2.5 py-2">
-                          {account.last_login_at ? (
-                            (() => {
-                              const { time, date } = formatVietnamDateTime(account.last_login_at);
-                              if (time === "--:--") return <span className="text-slate-400 text-xs">--</span>;
-                              return (
-                                <div className="flex flex-col">
-                                  <span className="font-semibold text-slate-700 font-mono text-[11px]">
-                                    {time}
-                                  </span>
-                                  <span className="text-[10px] text-slate-400">
-                                    {date}
-                                  </span>
-                                </div>
-                              );
-                            })()
-                          ) : (
-                            <span className="text-slate-400 text-xs">--</span>
-                          )}
-                        </td>
-
-                        {/* 8. Hành động */}
-                        <td className="px-2.5 py-2 text-center">
-                          <div className="flex items-center justify-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => toggleDetail(account.uid)}
-                              aria-expanded={expandedUids.has(account.uid) && !closingUids.has(account.uid)}
-                              title={expandedUids.has(account.uid) && !closingUids.has(account.uid) ? "Đóng chi tiết" : "Xem chi tiết 11 trường"}
-                              className={`flex items-center justify-center w-7 h-7 rounded-md transition-colors border cursor-pointer ${
-                                expandedUids.has(account.uid) && !closingUids.has(account.uid)
-                                  ? "bg-primary-subtle border-blue-200 text-primary"
-                                  : "border-border bg-white hover:bg-slate-50 text-slate-600 hover:text-primary"
-                              }`}
-                            >
-                              {expandedUids.has(account.uid) && !closingUids.has(account.uid) ? (
-                                <EyeOff className="w-3.5 h-3.5" />
-                              ) : (
-                                <Eye className="w-3.5 h-3.5" />
-                              )}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => onEditAccount(account.uid)}
-                              title="Chỉnh sửa thông tin"
-                              className="flex items-center justify-center w-7 h-7 rounded-md border border-border bg-white hover:bg-slate-50 text-slate-600 hover:text-primary transition-colors cursor-pointer"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => onOpenBrowser(account.uid)}
-                              disabled={openingBrowserUids?.has(account.uid)}
-                              title={openingBrowserUids?.has(account.uid) ? "Đang mở Chrome..." : "Mở trình duyệt Profile Chrome"}
-                              className={`flex items-center justify-center w-7 h-7 rounded-md border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 transition-colors cursor-pointer ${
-                                openingBrowserUids?.has(account.uid) ? "opacity-70 cursor-not-allowed" : ""
-                              }`}
-                            >
-                              {openingBrowserUids?.has(account.uid) ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <Globe className="w-3.5 h-3.5" />
-                              )}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => onDeleteAccount(account.uid)}
-                              title="Xóa tài khoản"
-                              className="flex items-center justify-center w-7 h-7 rounded-md border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 transition-colors cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-
-                      {/* Detail Panel Expand */}
-                      {expandedUids.has(account.uid) && (
-                        <DetailRow
-                          account={account}
-                          isClosing={closingUids.has(account.uid)}
-                          onClose={() => toggleDetail(account.uid)}
-                          onClosed={() => handleDetailClosed(account.uid)}
+                return (
+                  <React.Fragment key={account.uid}>
+                    <tr
+                      className={`h-14 transition-colors hover:bg-slate-50/80 ${
+                        isSelected ? "bg-[#EFF6FF]/40" : ""
+                      }`}
+                    >
+                      {/* 1. Checkbox */}
+                      <td className="px-3 py-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => onToggleSelect(account.uid)}
+                          className="h-4 w-4 rounded border-[#CBD5E1] accent-[#2563EB] cursor-pointer"
                         />
-                      )}
-                    </React.Fragment>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                      </td>
+
+                      {/* 2. STT */}
+                      <td className="px-2.5 py-2 font-medium text-[#64748B] text-center text-xs">
+                        {startIndex + index + 1}
+                      </td>
+
+                      {/* 3. UID */}
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-1.5 max-w-[150px]">
+                          <span
+                            className="font-mono font-semibold text-[#1E293B] truncate tracking-tight text-xs"
+                            title={account.uid}
+                          >
+                            {account.uid}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyUid(account.uid)}
+                            className="p-1 rounded hover:bg-slate-200/60 text-[#94A3B8] hover:text-[#1E293B] transition-colors cursor-pointer shrink-0"
+                            title="Sao chép UID"
+                          >
+                            {copiedUid === account.uid ? (
+                              <Check className="w-3.5 h-3.5 text-[#059669]" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </div>
+                      </td>
+
+                      {/* 4. Tên tài khoản */}
+                      <td className="px-4 py-2">
+                        <div className="flex items-center gap-2.5">
+                          <span
+                            className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 font-bold text-[11px] text-white shadow-2xs"
+                            style={{ backgroundColor: avatarColors[index % avatarColors.length] }}
+                          >
+                            {initial}
+                          </span>
+                          <div className="flex flex-col justify-center min-w-0">
+                            <span
+                              className="font-medium text-[#1E293B] truncate max-w-[200px] text-xs sm:text-sm"
+                              title={account.profile_name || "Chưa cập nhật"}
+                            >
+                              {account.profile_name || "Chưa cập nhật"}
+                            </span>
+                            {account.email && (
+                              <span
+                                className="text-[11px] text-[#64748B] truncate max-w-[200px]"
+                                title={account.email}
+                              >
+                                {account.email}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* 5. Trạng thái tài khoản (Badge pill với chấm tròn) */}
+                      <td className="px-3 py-2 text-center whitespace-nowrap">
+                        {account.status === "live" ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857]">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
+                            Live
+                          </span>
+                        ) : account.status === "die" ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#FFF1F2] border border-[#FECDD3] text-[#BE123C]">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#F43F5E]" />
+                            Die
+                          </span>
+                        ) : (
+                          <span className="text-[#94A3B8] text-xs">--</span>
+                        )}
+                      </td>
+
+                      {/* 6. Trạng thái đăng nhập (Badge pill với chấm tròn) */}
+                      <td className="px-3 py-2 text-center whitespace-nowrap">
+                        {account.login_status === "logged_in" ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857]">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
+                            Đã đăng nhập
+                          </span>
+                        ) : account.login_status === "failed" ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#FFF1F2] border border-[#FECDD3] text-[#BE123C]">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#F43F5E]" />
+                            Đăng nhập lỗi
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#F1F5F9] border border-[#E2E8F0] text-[#475569]">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8]" />
+                            Chưa đăng nhập
+                          </span>
+                        )}
+                      </td>
+
+                      {/* 7. Last login (2 dòng: Ngày / Giờ) */}
+                      <td className="px-3 py-2">
+                        {account.last_login_at ? (
+                          (() => {
+                            const { time, date } = formatVietnamDateTime(account.last_login_at);
+                            if (time === "--:--") return <span className="text-[#94A3B8] text-xs">--</span>;
+                            return (
+                              <div className="flex flex-col">
+                                <span className="font-semibold text-[#334155] font-mono text-[11px]">
+                                  {date}
+                                </span>
+                                <span className="text-[10px] text-[#94A3B8]">
+                                  {time}
+                                </span>
+                              </div>
+                            );
+                          })()
+                        ) : (
+                          <span className="text-[#94A3B8] text-xs">--</span>
+                        )}
+                      </td>
+
+                      {/* 8. Hành động: 4 nút vuông bo góc */}
+                      <td className="px-4 py-2 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {/* Nút 1: Mở Chrome */}
+                          <button
+                            type="button"
+                            onClick={() => onOpenBrowser(account.uid)}
+                            disabled={openingBrowserUids?.has(account.uid)}
+                            title={openingBrowserUids?.has(account.uid) ? "Đang mở Chrome..." : "Mở trình duyệt Profile Chrome"}
+                            className={`flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#475569] hover:text-[#2563EB] transition-colors cursor-pointer shadow-2xs ${
+                              openingBrowserUids?.has(account.uid) ? "opacity-70 cursor-not-allowed" : ""
+                            }`}
+                          >
+                            {openingBrowserUids?.has(account.uid) ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-[#2563EB]" />
+                            ) : (
+                              <Globe className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+
+                          {/* Nút 2: Xem/Ẩn chi tiết 11 trường */}
+                          <button
+                            type="button"
+                            onClick={() => toggleDetail(account.uid)}
+                            aria-expanded={expandedUids.has(account.uid) && !closingUids.has(account.uid)}
+                            title={expandedUids.has(account.uid) && !closingUids.has(account.uid) ? "Đóng chi tiết" : "Xem chi tiết 11 trường"}
+                            className={`flex items-center justify-center w-7 h-7 rounded-md transition-colors border cursor-pointer shadow-2xs ${
+                              expandedUids.has(account.uid) && !closingUids.has(account.uid)
+                                ? "bg-blue-50 border-blue-200 text-[#2563EB]"
+                                : "border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#475569] hover:text-[#2563EB]"
+                            }`}
+                          >
+                            {expandedUids.has(account.uid) && !closingUids.has(account.uid) ? (
+                              <EyeOff className="w-3.5 h-3.5" />
+                            ) : (
+                              <Eye className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+
+                          {/* Nút 3: Chỉnh sửa */}
+                          <button
+                            type="button"
+                            onClick={() => onEditAccount(account.uid)}
+                            title="Chỉnh sửa thông tin"
+                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#475569] hover:text-[#2563EB] transition-colors cursor-pointer shadow-2xs"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Nút 4: Xóa */}
+                          <button
+                            type="button"
+                            onClick={() => onDeleteAccount(account.uid)}
+                            title="Xóa tài khoản"
+                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#FECDD3] bg-[#FFF1F2] hover:bg-[#FFE4E6] text-[#BE123C] transition-colors cursor-pointer shadow-2xs"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+
+                    {/* Detail Panel Expand */}
+                    {expandedUids.has(account.uid) && (
+                      <DetailRow
+                        account={account}
+                        isClosing={closingUids.has(account.uid)}
+                        onClose={() => toggleDetail(account.uid)}
+                        onClosed={() => handleDetailClosed(account.uid)}
+                      />
+                    )}
+                  </React.Fragment>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
 
-      {/* 3. Table Footer & Pagination */}
-      <div className="w-full flex flex-col md:flex-row justify-between items-center gap-3 pt-1 select-none text-xs">
-        {/* Left: Summary & Page Size selector */}
-        <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 text-slate-500">
-          <span>
-            Đang hiển thị{" "}
-            <strong className="text-slate-800">
-              {totalItems > 0 ? startIndex + 1 : 0}-{Math.min(startIndex + pageSize, totalItems)}
-            </strong>{" "}
-            trong số <strong className="text-slate-800">{totalItems}</strong> kết quả
-          </span>
-          <span>· Xem:</span>
-          <CustomSelect
-            size="sm"
-            direction="up"
-            value={pageSize}
-            onChange={(val) => {
-              setPageSize(Number(val));
-              setCurrentPage(1);
-            }}
-            options={[
-              { value: 10, label: "10 / trang" },
-              { value: 20, label: "20 / trang" },
-              { value: 50, label: "50 / trang" },
-              { value: 100, label: "100 / trang" },
-            ]}
-            className="w-28"
-          />
+      {/* 3. Section - Bottom Action Bar / Concurrent Threads Controller */}
+      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4 p-4 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 text-xs">
+        {/* Cụm trái: Đã chọn X trên Y tài khoản & Pagination */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-[#2563EB]" />
+            <span className="text-[#475569] text-sm">
+              Đã chọn{" "}
+              <strong className="text-[#2563EB] font-bold">
+                {selectedUids.length}
+              </strong>{" "}
+              trên{" "}
+              <strong className="text-[#1E293B] font-bold">
+                {accounts.length}
+              </strong>{" "}
+              tài khoản
+            </span>
+          </div>
+
+          {/* Phân trang & kích thước trang tích hợp */}
+          <div className="flex items-center gap-2 pl-2 border-l border-[#CBD5E1]">
+            <CustomSelect
+              size="sm"
+              direction="up"
+              value={pageSize}
+              onChange={(val) => {
+                setPageSize(Number(val));
+                setCurrentPage(1);
+              }}
+              options={[
+                { value: 10, label: "10 / trang" },
+                { value: 20, label: "20 / trang" },
+                { value: 50, label: "50 / trang" },
+                { value: 100, label: "100 / trang" },
+              ]}
+              className="w-28 text-xs h-8 rounded-lg"
+            />
+            <Pagination
+              currentPage={safeCurrentPage}
+              totalPages={totalPages}
+              onPageChange={setCurrentPage}
+            />
+          </div>
         </div>
 
-        {/* Right: Pagination Navigation buttons */}
-        <div className="flex items-center justify-center overflow-x-auto max-w-full">
-          <Pagination
-            currentPage={safeCurrentPage}
-            totalPages={totalPages}
-            onPageChange={setCurrentPage}
-          />
+        {/* Cụm phải: Luồng đồng thời & Nút Đăng nhập */}
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {/* Thread Selection */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-[#E2E8F0] bg-white shadow-2xs">
+            <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+            <span className="text-[#475569] font-medium text-xs whitespace-nowrap">
+              Luồng đồng thời:
+            </span>
+            <input
+              type="number"
+              min={1}
+              max={maxThreads}
+              value={effectiveThreads}
+              onChange={(event) =>
+                setCustomThreads?.(Math.max(1, Math.min(maxThreads, Number(event.target.value))))
+              }
+              className="w-12 h-6 rounded-md border border-[#E2E8F0] bg-[#F8FAFC] text-center font-bold text-[#1E293B] text-xs outline-none focus:border-[#2563EB]"
+            />
+          </div>
+
+          {/* Main Batch Login Action Button */}
+          <button
+            type="button"
+            onClick={handleLogin}
+            disabled={isLoggingIn || !selectedUids.length}
+            className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold text-xs sm:text-sm shadow-[0_2px_4px_-2px_rgba(59,130,246,0.25),0_4px_6px_-1px_rgba(59,130,246,0.25)] transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          >
+            {isLoggingIn ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <LogIn className="w-4 h-4" />
+            )}
+            <span>
+              {isLoggingIn ? "Đang đăng nhập..." : "Đăng nhập"}
+              {selectedUids.length > 0 ? ` (${selectedUids.length})` : ""}
+            </span>
+          </button>
         </div>
       </div>
     </section>
