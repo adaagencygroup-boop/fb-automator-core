@@ -1,0 +1,143 @@
+// =============================================================================
+// MODULE 8: INTERACTION SEEDING - DATABASE SCHEMA (DBML)
+// Sơ đồ CSDL của Module 8 để xem trên https://dbdiagram.io
+// Khi tạo bảng thật thì dùng models.py (DBML không hỗ trợ partial index).
+// =============================================================================
+
+Project fb_automator_seeding {
+  database_type: 'PostgreSQL'
+  Note: '''
+    Module 8 - Interaction Seeding (Phụ trách: Hưởng, Trường).
+    Màn hình: Seeding Page, Seeding Trang cá nhân, Seeding bài viết, Lịch sử.
+
+    Quy ước:
+    - FK thật chỉ đặt giữa các bảng seeding_*. Tham chiếu sang module khác là tham chiếu
+      logic (giống page_id của Module 5): account_uid -> accounts.uid, created_by -> users.id.
+    - Dùng account_uid thay vì accounts.id vì import tài khoản dùng INSERT OR REPLACE,
+      SQLite sẽ xoá và tạo lại dòng (id mới) mỗi lần import lại.
+    - Bảng seeding_tasks vừa là kế hoạch phân bổ, vừa là hàng đợi bền vững, vừa là nhật ký kết quả.
+  '''
+}
+
+// 1. Đối tượng được seeding (Page / Trang cá nhân / Bài viết), dùng chung giữa các chiến dịch
+Table seeding_targets {
+  id integer [pk, increment]
+  target_type varchar(20) [not null, note: 'PAGE | PROFILE | POST']
+  fb_id varchar(100) [not null, note: 'UID / Page ID / Post ID sau khi xác thực link']
+  url text [not null]
+  display_name varchar(255) [note: 'Cột "Tên hiển thị" (Page, Trang cá nhân)']
+  content_preview text [note: 'Cột "Nội dung bài viết", chỉ dùng cho POST']
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (target_type, fb_id) [unique, name: 'unique_seeding_target']
+  }
+
+  Note: 'Đối tượng được seeding, dùng chung giữa các chiến dịch'
+}
+
+// 2. Chiến dịch seeding (mỗi lần bấm "Bắt đầu seeding") + cấu hình + bộ đếm cho trang Lịch sử
+Table seeding_campaigns {
+  id integer [pk, increment]
+  name varchar(255)
+  campaign_type varchar(20) [not null, note: 'PAGE | PROFILE | POST']
+  actions varchar(100) [not null, note: 'FOLLOW (Page, Trang cá nhân) hoặc REACT,COMMENT,SHARE (Bài viết)']
+  reactions varchar(100) [note: 'LIKE,LOVE,CARE,HAHA,WOW,SAD,ANGRY (chỉ cho POST)']
+  account_count integer [not null]
+  delay_seconds_min integer [default: 30, note: 'Thời gian nghỉ giữa 2 lần tương tác (giây)']
+  delay_seconds_max integer [default: 60]
+  status varchar(20) [default: 'PENDING', note: 'PENDING | RUNNING | STOPPING | STOPPED | COMPLETED | FAILED']
+  total_planned integer [default: 0]
+  total_success integer [default: 0]
+  total_failed integer [default: 0]
+  created_by integer [note: 'users.id (bảng core) - tham chiếu logic, không có FK']
+  started_at timestamp
+  finished_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (campaign_type, created_at) [name: 'idx_seeding_campaigns_history', note: 'Trang Lịch sử: lọc theo loại & thời gian']
+  }
+
+  Note: 'Chiến dịch seeding (mỗi lần bấm "Bắt đầu seeding") + cấu hình + bộ đếm cho trang Lịch sử'
+}
+
+// 3. Mục tiêu trong từng chiến dịch (ghi chú lấy từ file Excel) + bộ đếm cho từng dòng Lịch sử
+Table seeding_campaign_targets {
+  id integer [pk, increment]
+  campaign_id integer [not null]
+  target_id integer [not null]
+  note text [note: 'Ghi chú hoặc nhãn nội dung trong file Excel']
+  source varchar(10) [default: 'MANUAL', note: 'MANUAL | EXCEL']
+  planned_count integer [default: 0, note: 'Lịch sử: cột "Số lượng"']
+  success_count integer [default: 0, note: 'Lịch sử: cột "Thành công"']
+  failed_count integer [default: 0, note: 'Lịch sử: cột "Thất bại"']
+
+  indexes {
+    (campaign_id, target_id) [unique, name: 'unique_campaign_target']
+    target_id [name: 'idx_seeding_campaign_targets_target']
+  }
+
+  Note: 'Mục tiêu trong từng chiến dịch (ghi chú lấy từ file Excel) + bộ đếm cho từng dòng Lịch sử'
+}
+
+// 4. Kho bình luận random của chiến dịch (tối đa 50 dòng)
+Table seeding_comments {
+  id integer [pk, increment]
+  campaign_id integer [not null]
+  content text [not null]
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  Note: 'Kho bình luận random của chiến dịch (tối đa 50 dòng)'
+}
+
+// 5. Tác vụ nguyên tử: 1 tài khoản x 1 hành động x 1 mục tiêu
+Table seeding_tasks {
+  id integer [pk, increment]
+  campaign_id integer [not null]
+  campaign_target_id integer [not null]
+  target_id integer [not null]
+  account_uid varchar(100) [not null, note: 'accounts.uid (Module 2) - tham chiếu logic, không có FK']
+  action varchar(20) [not null, note: 'FOLLOW | REACT | COMMENT | SHARE']
+  reaction varchar(10) [note: 'Chỉ dùng cho REACT']
+  comment_id integer
+  status varchar(20) [default: 'PENDING', note: 'PENDING | RUNNING | SUCCESS | FAILED | SKIPPED']
+  attempts integer [default: 0]
+  error_message text
+  scheduled_at timestamp [default: `CURRENT_TIMESTAMP`, note: 'Thời điểm sớm nhất được phép chạy (giãn cách)']
+  started_at timestamp
+  finished_at timestamp
+  created_at timestamp [default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (status, scheduled_at) [name: 'idx_seeding_tasks_queue', note: 'Scheduler lấy task đến hạn']
+    (campaign_id, status) [name: 'idx_seeding_tasks_campaign', note: 'Tiến trình & chi tiết từng chiến dịch']
+    (account_uid, finished_at) [name: 'idx_seeding_tasks_account', note: 'Đếm số lượt tương tác trong ngày của từng tài khoản']
+    (account_uid, target_id, action) [unique, name: 'uq_seeding_tasks_once', note: '''
+      PARTIAL INDEX: WHERE status IN ('PENDING', 'RUNNING', 'SUCCESS').
+      Mỗi tài khoản chỉ thực hiện 1 lần mỗi hành động trên 1 mục tiêu (Follow/Like lần 2 = bỏ Follow/Like).
+      FAILED / SKIPPED không chặn, để chiến dịch sau có thể thử lại.
+      DBML không hỗ trợ WHERE - xem models.py.
+    ''']
+  }
+
+  Note: 'Tác vụ nguyên tử: 1 tài khoản x 1 hành động x 1 mục tiêu'
+}
+
+TableGroup module_08_seeding {
+  seeding_targets
+  seeding_campaigns
+  seeding_campaign_targets
+  seeding_comments
+  seeding_tasks
+}
+
+Ref: seeding_campaign_targets.campaign_id > seeding_campaigns.id [delete: cascade]
+Ref: seeding_campaign_targets.target_id > seeding_targets.id
+Ref: seeding_comments.campaign_id > seeding_campaigns.id [delete: cascade]
+Ref: seeding_tasks.campaign_id > seeding_campaigns.id [delete: cascade]
+Ref: seeding_tasks.campaign_target_id > seeding_campaign_targets.id [delete: cascade]
+Ref: seeding_tasks.target_id > seeding_targets.id
+Ref: seeding_tasks.comment_id > seeding_comments.id [delete: set null]

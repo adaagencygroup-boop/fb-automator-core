@@ -1,11 +1,18 @@
 "use client";
 
-import { FitMaskIcon } from "@/components/icons";
+import { FitMaskIcon, MaskIcon } from "@/components/icons";
 import { findNavItem } from "@/config/navigation";
 import { CURRENT_USER } from "@/config/constants";
 
 // Figma: Header - TopBar (1016:109)
-export default function Header({ activeTab, user = CURRENT_USER, onNotificationsClick, onProfileClick }) {
+export default function Header({
+  activeTab,
+  user = CURRENT_USER,
+  onNotificationsClick,
+  onProfileClick,
+  sidebarOpen = true,
+  onToggleSidebar,
+}) {
   const { item, parent } = findNavItem(activeTab);
   const title = item.title || item.label;
   const headerIcon = item.headerIcon || parent?.headerIcon;
@@ -13,8 +20,21 @@ export default function Header({ activeTab, user = CURRENT_USER, onNotifications
 
   return (
     <header className="h-[74px] bg-white border-b border-border pl-8 pr-8 pt-3.5 pb-[15px] flex items-center justify-between gap-6 shrink-0 font-sans">
-      {/* Title & Subtitle */}
+      {/* Nút ẩn/hiện sidebar + Title & Subtitle */}
       <div className="flex items-center min-w-0">
+        {onToggleSidebar && (
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            aria-controls="app-sidebar"
+            aria-expanded={sidebarOpen}
+            aria-label={sidebarOpen ? "Ẩn sidebar" : "Hiện sidebar"}
+            title={sidebarOpen ? "Ẩn sidebar" : "Hiện sidebar"}
+            className="-ml-2 mr-3 size-9 shrink-0 rounded-lg flex items-center justify-center text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+          >
+            <MaskIcon src="/icons/icon_sidebar_toggle.svg" width={16} height={16} />
+          </button>
+        )}
         <div className="w-[21px] h-6 shrink-0 flex items-center justify-start">
           {headerIcon ? (
             <img src={headerIcon.src} alt="" width={headerIcon.width} height={headerIcon.height} className="block" />
