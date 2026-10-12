@@ -3,7 +3,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import AccountDetailPanel from "./AccountDetailPanel";
 import CustomSelect from "@/components/ui/custom-select";
-import Pagination from "@/components/ui/pagination";
 import {
   Check,
   Copy,
@@ -118,8 +117,6 @@ export default function AccountTable({
   const [searchTerm, setSearchTerm] = useState("");
   const [accountFilter, setAccountFilter] = useState("all");
   const [loginFilter, setLoginFilter] = useState("all");
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
   const [expandedUids, setExpandedUids] = useState(new Set());
   const [closingUids, setClosingUids] = useState(new Set());
   const [copiedUid, setCopiedUid] = useState(null);
@@ -177,28 +174,19 @@ export default function AccountTable({
 
   const handleSearchChange = (event) => {
     setSearchTerm(event.target.value);
-    setCurrentPage(1);
   };
 
   const handleAccountFilterChange = (val) => {
     setAccountFilter(val);
-    setCurrentPage(1);
   };
 
   const handleLoginFilterChange = (val) => {
     setLoginFilter(val);
-    setCurrentPage(1);
   };
 
-  const totalItems = filteredAccounts.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize) || 1);
-  const safeCurrentPage = Math.min(currentPage, totalPages);
-  const startIndex = (safeCurrentPage - 1) * pageSize;
-  const currentAccounts = filteredAccounts.slice(startIndex, startIndex + pageSize);
-
   const isAllSelected =
-    currentAccounts.length > 0 &&
-    currentAccounts.every((account) => selectedUids.includes(account.uid));
+    filteredAccounts.length > 0 &&
+    filteredAccounts.every((account) => selectedUids.includes(account.uid));
 
   return (
     <section className="w-full flex flex-col rounded-2xl bg-white border border-[#E2E8F0] shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] overflow-hidden select-none">
@@ -270,8 +258,8 @@ export default function AccountTable({
         </div>
       </div>
 
-      {/* 2. Section - Data Table (table-fixed phân bổ đều tỷ lệ %) */}
-      <div className="w-full overflow-x-auto">
+      {/* 2. Section - Data Table (Khung cuộn tối đa 5 account như Figma) */}
+      <div className="w-full overflow-x-auto max-h-[330px] overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#4B8EFF]/60 hover:[&::-webkit-scrollbar-thumb]:bg-[#2563EB] [&::-webkit-scrollbar-thumb]:rounded-full">
         <table className="w-full table-fixed border-collapse min-w-[960px]">
           <colgroup>
             <col className="w-[4%]" />
@@ -284,37 +272,37 @@ export default function AccountTable({
             <col className="w-[14%]" />
           </colgroup>
 
-          <thead>
-            <tr className="h-11 bg-[#F8FAFC]/70 border-b border-[#E2E8F0]">
-              <th className="px-1 py-2 text-center">
+          <thead className="sticky top-0 z-10 bg-[#F8FAFC] shadow-[0_1px_0_0_#E2E8F0]">
+            <tr className="h-11 border-b border-[#E2E8F0]">
+              <th className="px-1 py-2 text-center bg-[#F8FAFC]">
                 <input
                   type="checkbox"
                   checked={isAllSelected}
-                  onChange={() => onSelectAll(currentAccounts.map((a) => a.uid))}
+                  onChange={() => onSelectAll(filteredAccounts.map((a) => a.uid))}
                   className="h-4 w-4 rounded border-[#CBD5E1] accent-[#2563EB] cursor-pointer"
                 />
               </th>
-              <th className="px-1 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center">
+              <th className="px-1 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center bg-[#F8FAFC]">
                 STT
               </th>
-              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-left">
+              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-left bg-[#F8FAFC]">
                 UID
               </th>
-              <th className="px-3 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-left">
+              <th className="px-3 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-left bg-[#F8FAFC]">
                 TÊN TÀI KHOẢN
               </th>
-              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center whitespace-nowrap">
+              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center whitespace-nowrap bg-[#F8FAFC]">
                 <span className="block leading-tight">TRẠNG THÁI</span>
                 <span className="block text-[10px] text-[#94A3B8] leading-tight">TÀI KHOẢN</span>
               </th>
-              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center whitespace-nowrap">
+              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center whitespace-nowrap bg-[#F8FAFC]">
                 <span className="block leading-tight">TRẠNG THÁI</span>
                 <span className="block text-[10px] text-[#94A3B8] leading-tight">ĐĂNG NHẬP</span>
               </th>
-              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center">
+              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center bg-[#F8FAFC]">
                 LAST LOGIN
               </th>
-              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center">
+              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center bg-[#F8FAFC]">
                 HÀNH ĐỘNG
               </th>
             </tr>
@@ -340,7 +328,7 @@ export default function AccountTable({
                 </td>
               </tr>
             ) : (
-              currentAccounts.map((account, index) => {
+              filteredAccounts.map((account, index) => {
                 const initial = (account.profile_name || account.uid).trim().charAt(0).toUpperCase();
                 const isSelected = selectedUids.includes(account.uid);
 
@@ -363,7 +351,7 @@ export default function AccountTable({
 
                       {/* 2. STT */}
                       <td className="px-1 py-2 font-medium text-[#64748B] text-center text-xs">
-                        {startIndex + index + 1}
+                        {index + 1}
                       </td>
 
                       {/* 3. UID */}
@@ -557,48 +545,21 @@ export default function AccountTable({
       </div>
 
       {/* 3. Section - Bottom Action Bar / Concurrent Threads Controller */}
-      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4 p-4 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 text-xs">
-        {/* Cụm trái: Đã chọn X trên Y tài khoản & Pagination */}
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-[#2563EB]" />
-            <span className="text-[#475569] text-sm">
-              Đã chọn{" "}
-              <strong className="text-[#2563EB] font-bold">
-                {selectedUids.length}
-              </strong>{" "}
-              trên{" "}
-              <strong className="text-[#1E293B] font-bold">
-                {accounts.length}
-              </strong>{" "}
-              tài khoản
-            </span>
-          </div>
-
-          {/* Phân trang & kích thước trang tích hợp */}
-          <div className="flex items-center gap-2 pl-2 border-l border-[#CBD5E1]">
-            <CustomSelect
-              size="sm"
-              direction="up"
-              value={pageSize}
-              onChange={(val) => {
-                setPageSize(Number(val));
-                setCurrentPage(1);
-              }}
-              options={[
-                { value: 10, label: "10 / trang" },
-                { value: 20, label: "20 / trang" },
-                { value: 50, label: "50 / trang" },
-                { value: 100, label: "100 / trang" },
-              ]}
-              className="w-28 text-xs h-8 rounded-lg"
-            />
-            <Pagination
-              currentPage={safeCurrentPage}
-              totalPages={totalPages}
-              onPageChange={setCurrentPage}
-            />
-          </div>
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 text-xs">
+        {/* Cụm trái: Đã chọn X trên Y tài khoản */}
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-[#2563EB]" />
+          <span className="text-[#475569] text-sm">
+            Đã chọn{" "}
+            <strong className="text-[#2563EB] font-bold">
+              {selectedUids.length}
+            </strong>{" "}
+            trên{" "}
+            <strong className="text-[#1E293B] font-bold">
+              {accounts.length}
+            </strong>{" "}
+            tài khoản
+          </span>
         </div>
 
         {/* Cụm phải: Luồng đồng thời & Nút Đăng nhập */}
