@@ -23,7 +23,6 @@ import {
   Gauge,
   Maximize2,
   Minimize2,
-  Plus,
   ShieldCheck,
   Trash2,
   Upload,
@@ -195,11 +194,6 @@ export default function AccountManagerModule() {
       ignore = true;
     };
   }, [isExpired]);
-
-  const handleOpenAddSingle = () => {
-    setEditUid(null);
-    setIsSingleModalOpen(true);
-  };
 
   const handleOpenEdit = (uid) => {
     setEditUid(uid);
@@ -384,16 +378,6 @@ export default function AccountManagerModule() {
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center gap-3">
-          {/* Nút phụ: Thêm một tài khoản */}
-          <button
-            type="button"
-            onClick={handleOpenAddSingle}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200/90 bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold shadow-2xs transition-colors cursor-pointer"
-          >
-            <Plus className="w-4 h-4 text-[#2563EB]" />
-            <span>Thêm một tài khoản</span>
-          </button>
-
           {/* Nút chính Figma: Thêm nhiều tài khoản */}
           <button
             type="button"
