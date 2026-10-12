@@ -85,6 +85,8 @@ async def lifespan(app: FastAPI):
     init_database()
     init_auth_tables()
     ensure_admin()
+    from modules.module_05_page_manager.models import init_models as init_page_models
+    init_page_models()
     loaded = load_backend_modules()
     print(f"[Local Engine] PostgreSQL production ready. Loaded {len(loaded)} backend modules.")
     if farm_on_startup:

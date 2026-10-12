@@ -14,14 +14,26 @@ Hai người, mỗi người một nửa. Bình làm nửa quản lý Page và �
 Hợp đồng chung, làm trước khi tách nhánh sâu:
 
 - Bình sở hữu bảng `pages` và gọi `init_models()` lúc engine lên. Cột tối thiểu: `account_uid`, `page_id`, `page_name`, `access_token`, `status`. API danh sách/xem/xóa/thêm Page xong thì Kiệt chỉ đọc Page theo `account_uid`, không tự kéo Page.
-- Kiệt thêm cột trên cùng bảng: `reels_folder`, `tiktok_keyword`, `youtube_keyword`, `youtube_url`. Không tạo bảng Page thứ hai.
+- Kiệt dùng cột `tiktok_keyword`, `youtube_keyword`, `youtube_url` trên cùng bảng `pages`. Không tạo bảng Page thứ hai. `reels_folder` là cột cũ, job mới lấy video từ bucket.
 - Mỗi người có job runner riêng (start/stop + trạng thái từng Page). Bình chạy job AI. Kiệt chạy job Reels, TikTok, YouTube. Không nhét chung vào một `AutoPostWorker.run()`.
 - Bình ghi và đọc `posting_history`. Kiệt ghi `downloaded_videos` để chống trùng, và ghi nhật ký tải (kể cả lần thất bại) để màn lịch sử của Kiệt đọc. Kiệt khi đăng Reels thành công/thất bại cũng insert `posting_history` (`post_type = REEL`) đúng schema Bình đã chốt.
 - File video của Kiệt nằm trên Supabase Storage, bucket `page-videos`. Không lưu bản phát hành trên ổ đĩa máy chạy engine và không dùng SQLite `videos.db`.
 
 Code worker được copy từ tool desktop. Các lớp `AutoPostWorker`, `TikTokBulkDownloader`, `YouTubeBulkDownloader` là `QThread`: chạy trong process, bắn log qua signal, không có route HTTP. Giao diện user hiện chỉ có một màn danh sách, năm mục menu Quản lý Fanpage đều render cùng component đó.
 
-Schema Postgres (`pages`, `posting_history`, `posting_progress`, `downloaded_videos`, `posting_schedules`) nằm trong `models.py`. `init_models()` chưa được gọi lúc engine khởi động. Worker vẫn đọc/ghi `pages_data.json`, `posting_progress.json`, `scheduler_state.json` và SQLite `videos.db`, không ghi các bảng trên.
+Schema production đã migrate ngày 12/10/2026 bằng `init_models()`. Engine gọi hàm này mỗi lần khởi động. Hàm chỉ thêm cột và bảng còn thiếu, không xóa 100 Page và 130 dòng `posting_progress` đang có.
+
+| Bảng | Vai trò |
+| --- | --- |
+| `pages` | Fanpage. Thêm `account_uid`, `ai_keyword`, `tiktok_keyword`, `youtube_keyword`, `youtube_url`. `reels_folder` / `video_folder` là đường dẫn ổ đĩa cũ, 90 Page vẫn còn giá trị này, job mới không dùng. |
+| `posting_history` | Kết quả từng bài AI hoặc Reels. Có `error_message`. `page_id` vẫn để trống được vì bảng này còn `group_id` cho module khác. |
+| `posting_progress` | Reels đã đăng tới video nào: `last_video_id`, `last_object_path`. `last_folder_index` giữ số cũ. |
+| `downloaded_videos` | ID tải thành công để chống trùng, khóa `(page_id, source, video_id)`. `object_path` là đường dẫn trong bucket. |
+| `download_logs` | Nhật ký từng lần tải TikTok/YouTube, cả lần thất bại: `status`, `object_path`, `error_message`, `created_at`. |
+| `page_jobs` | Một lần bấm Kích hoạt. `job_type` là `AI`, `REEL`, `TIKTOK` hoặc `YOUTUBE`. `config` kiểu JSON chứa lịch giờ, delay, số video, prompt, trần độ dài. |
+| `page_job_items` | Trạng thái từng Page trong job: `PENDING`, `RUNNING`, `SUCCESS`, `FAILED`, `STOPPED`. |
+
+Worker desktop vẫn đọc file JSON và `videos.db` cho đến khi Bình và Kiệt chuyển job sang các bảng này.
 
 Thư mục `core/` là bản sao của các file ở gốc module. Package import file ở gốc.
 
@@ -34,8 +46,8 @@ Thư mục `core/` là bản sao của các file ở gốc module. Package impor
 | Đăng Reels | Kiệt | FR-RL-01.1 | `upload_reel_to_facebook`, lịch giờ, giãn cách, bucket `page-videos` đã nối | API, lấy video từ bucket theo Page, tiến trình |
 | Tải TikTok | Kiệt | FR-TT-01 | Tải hàng loạt, delay, số video, số luồng, dừng, chống trùng local | Từ khóa riêng, upload object lên `page-videos`, kho ID trên Postgres |
 | Tải YouTube | Kiệt | FR-YT-01 | Từ khóa / link kênh / link video, cookie, delay, số video, số luồng, dừng | Lọc từ khóa trong kênh, trần độ dài, upload object lên `page-videos` |
-| Lịch sử đăng | Bình | Mục 5.7 | Bảng `posting_history` (chưa được worker ghi) | Tổng hợp + chi tiết AI/Reels theo ngày/tuần, theo Page |
-| Lịch sử tải | Kiệt | Mục 5.7 | Bảng `downloaded_videos` (chưa được downloader ghi) | Danh sách video đã tải: thời gian, tên, thư mục, hành động |
+| Lịch sử đăng | Bình | Mục 5.7 | Bảng `posting_history` đã có `error_message` | Worker chưa ghi. API tổng hợp theo ngày/tuần còn thiếu |
+| Lịch sử tải | Kiệt | Mục 5.7 | Bảng `download_logs` và `downloaded_videos.object_path` | Downloader chưa ghi. API danh sách video đã tải còn thiếu |
 
 ## 5.2 Danh sách Page — Bình
 
@@ -103,7 +115,7 @@ Cách gọi: `POST/GET {SUPABASE_URL}/storage/v1/...` với header `Authorizatio
 {page_id}/youtube/{video_id}.txt
 ```
 
-`downloaded_videos.link` lưu đường dẫn object (ví dụ `123456/tiktok/7123.mp4`), không lưu URL public. Reels lấy file bằng service role rồi đưa bytes sang Graph API. Postgres của app (`DATABASE_URL`) là project khác với project Storage này. Bảng nghiệp vụ vẫn ghi qua `DATABASE_URL`. File thì ghi qua ba biến Storage.
+`downloaded_videos.object_path` lưu đường dẫn object (ví dụ `123456/tiktok/7123.mp4`), không lưu URL public. Cột `link` chỉ còn để đọc dữ liệu cũ. Reels lấy file bằng service role rồi đưa bytes sang Graph API. Postgres của app (`DATABASE_URL`) là project khác với project Storage này. Bảng nghiệp vụ vẫn ghi qua `DATABASE_URL`. File thì ghi qua ba biến Storage.
 
 Downloader hiện chưa upload. Phần Kiệt cần thêm là client Storage trong job TikTok, YouTube và Reels.
 
@@ -179,17 +191,17 @@ Bốn loại: Đăng bài AI, Đăng Reels, Tải TikTok, Tải YouTube. Mỗi l
 
 ### Đã có
 
-- Bảng `posting_history` đủ field gần với chi tiết bài đăng (`page_id`, `post_type`, `title`, `caption`, `post_url`, `media_path`, `status`, `posted_at`). Dashboard đếm bảng này, nhưng worker không insert.
-- Bảng `downloaded_videos` có `video_id`, `title`, `link`, `downloaded_at`. Thiếu đường dẫn thư mục đã lưu và trạng thái thất bại (bảng hiện chỉ hợp cho ID đã tải thành công).
+- Bảng `posting_history` có `page_id`, `post_type`, `title`, `caption`, `post_url`, `media_path`, `status`, `error_message`, `posted_at`. Dashboard đếm bảng này. Worker chưa insert.
+- `downloaded_videos` chống trùng. `download_logs` là nhật ký kể cả lần thất bại, đã có `object_path`, `status`, `error_message`. Downloader chưa ghi hai bảng này.
 
 ### Cần làm
 
 - **Bình.** Job AI (và dòng Reels do Kiệt ghi) insert `posting_history` khi xong từng bài, kể cả thất bại. `GET` tổng hợp AI + Reels, filter `from`/`to`. `GET` chi tiết theo `page_id` + `post_type`.
-- **Kiệt.** Mỗi video tải xong, hoặc thất bại, ghi một dòng nhật ký. `downloaded_videos` chỉ giữ ID đã tải thành công để chống trùng. Nhật ký thất bại nằm ở bảng riêng hoặc cột `status`, `file_path`, `error`. `GET` danh sách theo nguồn TikTok hoặc YouTube.
+- **Kiệt.** Mỗi video tải xong hoặc thất bại, insert một dòng `download_logs`. Chỉ lần thành công mới insert `downloaded_videos`. `GET` danh sách theo nguồn TikTok hoặc YouTube đọc từ `download_logs`.
 
 ## Việc kỹ thuật — ai làm
 
-1. **Bình.** Gọi `init_models()` khi engine lên, trên Postgres production. Bỏ nhánh sửa DDL sang SQLite trong `models.py`. Thêm `account_uid` vào `pages`.
-2. **Kiệt.** Thêm `tiktok_keyword`, `youtube_keyword`, `youtube_url` vào `pages`. Downloader và job Reels đọc/ghi bucket `page-videos` bằng ba biến Storage trong `.env`. Ghi `downloaded_videos` trên Postgres. Ngừng ghi `videos.db` và ngừng giữ video trên ổ đĩa.
+1. **Bình.** Cột `account_uid`, `ai_keyword` và bảng `page_jobs` / `page_job_items` đã có trên production. Việc còn lại là API danh sách, lọc, xem, xóa, thêm Page theo tài khoản, và job AI ghi `posting_history`.
+2. **Kiệt.** Cột `tiktok_keyword`, `youtube_keyword`, `youtube_url`, `object_path` và bảng `download_logs` đã có trên production. Việc còn lại là downloader và job Reels đọc/ghi bucket `page-videos`, ghi `downloaded_videos` và `download_logs`. Ngừng ghi `videos.db`.
 3. **Mỗi người.** Job của mình nhận list Page từ DB, start/stop qua API, trạng thái đọc lại được. Không giữ request HTTP mở suốt vòng đời QThread.
 4. **Mỗi người.** Màn menu thuộc phần mình phải tách khỏi màn danh sách chung. Hiện `pages.list`, `pages.ai_post`, `pages.reels`, `pages.tiktok`, `pages.youtube` cùng `moduleId: "pages"`. Menu chưa có Lịch sử: Bình thêm lịch sử đăng, Kiệt thêm lịch sử tải.
