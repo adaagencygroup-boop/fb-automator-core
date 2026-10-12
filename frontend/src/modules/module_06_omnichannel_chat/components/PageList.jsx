@@ -1,0 +1,177 @@
+"use client";
+
+import { cn } from "@/lib/utils";
+
+// Figma: Section - COLUMN 1: DANH SÁCH PAGE (1072:12082)
+
+const FOCUS = "outline-none focus-visible:ring-2 focus-visible:ring-sky-500";
+
+export function PageAvatar({ page, size = 32 }) {
+  const style = { width: size, height: size };
+  if (page.avatar) {
+    return (
+      <img
+        src={page.avatar}
+        alt=""
+        style={style}
+        className="shrink-0 rounded-full object-cover"
+      />
+    );
+  }
+  if (page.initials) {
+    return (
+      <span
+        style={{ ...style, background: page.initials.bg, color: page.initials.fg }}
+        className={cn(
+          "shrink-0 rounded-full flex items-center justify-center font-bold",
+          page.initials.small ? "text-[10px] leading-5" : "text-xs leading-4",
+        )}
+      >
+        {page.initials.text}
+      </span>
+    );
+  }
+  // Page chưa có ảnh & chữ viết tắt -> icon mặc định (Figma: "Giao Tiếp Tiếng Anh")
+  return (
+    <span style={style} className="shrink-0 rounded-full bg-slate-200 flex items-center justify-center">
+      <img src="/icons/icon_page_placeholder.svg" alt="" width={15} height={12} className="block" />
+    </span>
+  );
+}
+
+function PageStatus({ page, active }) {
+  if (page.unread > 0) {
+    return (
+      <span
+        aria-label={`${page.unread} tin chưa đọc`}
+        className={cn(
+          "shrink-0 rounded-full px-1.5 text-[11px] leading-5 font-bold text-white text-center",
+          active ? "min-w-5" : "min-w-[18px]",
+          page.alert ? "bg-red-500" : active ? "bg-blue-600" : "bg-blue-500",
+        )}
+      >
+        {page.unread}
+      </span>
+    );
+  }
+  return (
+    <span className="shrink-0 w-4 h-2.5 pr-1.5" aria-label="Đang kết nối">
+      <span className="block size-2.5 rounded-full bg-emerald-500" />
+    </span>
+  );
+}
+
+export default function PageList({
+  pages,
+  total,
+  activePageId,
+  onSelectPage,
+  search,
+  onSearchChange,
+  onReset,
+  resetting,
+  className,
+}) {
+  return (
+    <section
+      aria-label="Danh sách Page"
+      className={cn("w-[317px] shrink-0 h-full flex flex-col bg-white border border-slate-200 rounded-xl drop-shadow-[0px_1px_1px_rgba(0,0,0,0.05)] overflow-hidden", className)}
+    >
+      {/* Action Buttons + tiêu đề + ô tìm kiếm */}
+      <div className="flex flex-col gap-2.5 px-3 pt-3 pb-2 shrink-0">
+        <button
+          type="button"
+          onClick={onReset}
+          disabled={resetting}
+          className={cn(
+            "w-full flex items-center justify-center gap-2 px-[13px] py-[7px] rounded-md border border-blue-200 bg-blue-50 text-blue-600 text-xs leading-4 transition-colors hover:bg-blue-100 disabled:opacity-60",
+            FOCUS,
+          )}
+        >
+          <img
+            src="/icons/icon_chat_reset.svg"
+            alt=""
+            width={11.25}
+            height={10.5}
+            className={cn("block", resetting && "animate-spin")}
+          />
+          {resetting ? "Đang đồng bộ..." : "Reset dữ liệu"}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onSelectPage(null)}
+          aria-pressed={activePageId === null}
+          className={cn(
+            "w-full flex items-center justify-center px-[13px] py-[7px] rounded-md border text-xs leading-4 transition-colors",
+            activePageId === null
+              ? "border-blue-600 bg-blue-600 text-white"
+              : "border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100",
+            FOCUS,
+          )}
+        >
+          Tất cả các trang
+        </button>
+
+        <h3 className="font-sans text-xs leading-4 font-bold tracking-[0.6px] text-slate-800 uppercase">
+          Danh sách Page ({total})
+        </h3>
+
+        <label className="relative block">
+          <span className="sr-only">Tìm Page</span>
+          <img
+            src="/icons/icon_search.svg"
+            alt=""
+            width={12}
+            height={12}
+            className="absolute left-3 top-[13px] block pointer-events-none"
+          />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Tìm Page..."
+            className="w-full rounded-lg border border-slate-200 bg-slate-50 pl-[33px] pr-[13px] py-[9px] text-xs leading-4 text-slate-800 placeholder:text-slate-400 outline-none transition-colors focus:border-sky-400 focus:bg-white focus:ring-2 focus:ring-sky-100"
+          />
+        </label>
+      </div>
+
+      {/* Scrollable Page List Items */}
+      <ul className="flex-1 min-h-0 overflow-y-auto px-2 pb-2 flex flex-col gap-0.5">
+        {pages.length === 0 && (
+          <li className="px-3 py-6 text-center text-xs text-slate-400">Không tìm thấy Page phù hợp.</li>
+        )}
+        {pages.map((page) => {
+          const active = page.id === activePageId;
+          return (
+            <li key={page.id}>
+              <button
+                type="button"
+                onClick={() => onSelectPage(page.id)}
+                aria-current={active ? "true" : undefined}
+                className={cn(
+                  "w-full flex items-center justify-between gap-2 p-2 rounded-lg border text-left transition-colors",
+                  active ? "bg-blue-50 border-blue-100" : "border-transparent hover:bg-slate-50",
+                  FOCUS,
+                )}
+              >
+                <span className="flex items-center gap-2.5 min-w-0">
+                  <PageAvatar page={page} />
+                  <span
+                    className={cn(
+                      "truncate text-xs leading-4 font-bold",
+                      active ? "text-slate-900" : "text-slate-700",
+                    )}
+                  >
+                    {page.name}
+                  </span>
+                </span>
+                <PageStatus page={page} active={active} />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
