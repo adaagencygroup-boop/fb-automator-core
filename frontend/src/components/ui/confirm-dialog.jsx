@@ -10,7 +10,7 @@ const variantStyles = {
     iconBg: "bg-red-50",
     iconBorder: "border-red-200",
     iconColor: "text-red-600",
-    confirmBtn: "bg-destructive text-destructive-foreground hover:bg-red-600",
+    confirmBtn: "bg-red-600 text-white hover:bg-red-700 shadow-sm",
     DefaultIcon: AlertTriangle,
   },
   warning: {

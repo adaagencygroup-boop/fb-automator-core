@@ -41,7 +41,7 @@
 
     --destructive: 0 84% 60%;         /* #ef4444 */
     --destructive-light: 0 86% 97%;   /* #fef2f2 */
-    --destructive-foreground: 0 74% 42%; /* #b91c1c */
+    --destructive-foreground: 0 0% 100%; /* #ffffff */
 
     --info: 217 91% 60%;              /* #2563eb */
     --info-light: 214 100% 97%;       /* #eff6ff */
