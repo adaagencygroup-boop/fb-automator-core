@@ -12,6 +12,14 @@ export const api = axios.create({
 
 let refreshPromise = null;
 
+function apiError(error) {
+  const detail = error.response?.data?.detail || error.response?.data?.message;
+  const result = new Error(typeof detail === "string" ? detail : error.message || "Không thể kết nối tới Local Engine");
+  result.status = error.response?.status || 0;
+  result.code = typeof detail === "string" ? detail : error.code;
+  return result;
+}
+
 function refreshAccess() {
   if (!refreshPromise) {
     refreshPromise = axios
@@ -24,7 +32,7 @@ function refreshAccess() {
 }
 
 function shouldSkipRefresh(url) {
-  return ["/auth/refresh", "/verify-license", "/admin/login", "/auth/register", "/auth/logout"].some((part) =>
+  return ["/auth/refresh", "/auth/login", "/registration-status", "/verify-license", "/admin/login", "/auth/register", "/auth/logout"].some((part) =>
     String(url || "").includes(part)
   );
 }
@@ -40,11 +48,7 @@ api.interceptors.response.use(
         await refreshAccess();
         return api.request(original);
       } catch (refreshError) {
-        const refreshMsg =
-          refreshError.response?.data?.detail ||
-          refreshError.message ||
-          "Phiên đăng nhập đã hết hạn";
-        return Promise.reject(new Error(refreshMsg));
+        return Promise.reject(apiError(refreshError));
       }
     }
     const errorMsg =
@@ -53,7 +57,7 @@ api.interceptors.response.use(
       error.message ||
       "Không thể kết nối tới Local Engine (Port 28129)";
     console.error("[API Error]", errorMsg);
-    return Promise.reject(new Error(typeof errorMsg === "string" ? errorMsg : "Yêu cầu thất bại"));
+    return Promise.reject(apiError(error));
   }
 );
 
