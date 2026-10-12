@@ -64,20 +64,23 @@ function ToastNotificationItem({ toast, onDismiss }) {
 
   useEffect(() => {
     if (duration <= 0) return;
+
+    // Timer tự động đóng toast sau khi hết duration
+    const dismissTimer = setTimeout(() => {
+      onDismiss(toast.id);
+    }, duration);
+
+    // Timer cập nhật thanh tiến trình (progress bar)
     const intervalTime = 30;
     const step = (intervalTime / duration) * 100;
-    const timer = setInterval(() => {
-      setProgress((prev) => {
-        if (prev <= step) {
-          clearInterval(timer);
-          onDismiss(toast.id);
-          return 0;
-        }
-        return prev - step;
-      });
+    const progressTimer = setInterval(() => {
+      setProgress((prev) => Math.max(0, prev - step));
     }, intervalTime);
 
-    return () => clearInterval(timer);
+    return () => {
+      clearTimeout(dismissTimer);
+      clearInterval(progressTimer);
+    };
   }, [duration, toast.id, onDismiss]);
 
   return (
