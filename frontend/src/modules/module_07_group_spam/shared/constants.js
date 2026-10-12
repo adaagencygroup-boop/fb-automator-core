@@ -68,3 +68,4 @@ export const AVATAR_COLORS = [
   "bg-indigo-100 text-indigo-700",
   "bg-slate-100 text-slate-600",
 ];
+

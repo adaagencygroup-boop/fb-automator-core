@@ -42,6 +42,7 @@ import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import { runGroupCampaign } from "../service";
+import Link from "next/link";
 import {
   GROUPS,
   AVATAR_COLORS,
@@ -99,25 +100,30 @@ export default function GroupCommentModule() {
   const [scheduleTime, setScheduleTime] = useState("08:00");
   const [runState, setRunState] = useState("idle");
   const [progress, setProgress] = useState(0);
+  const [accountPage, setAccountPage] = useState(1);
+  const [accountPageSize, setAccountPageSize] = useState(10);
+
+  const loadAccounts = async () => {
+    setAccountsLoading(true);
+    try {
+      const data = await getAccounts();
+      const rawList = Array.isArray(data) ? data : (data?.accounts || []);
+      const rows = rawList.map(normalizeAccount);
+      setAccounts(rows);
+      setSelectedAccountKeys(
+        rows.filter((account) => account.status === "LIVE").slice(0, 4).map((account) => account.key)
+      );
+    } catch (err) {
+      console.error("Lỗi nạp tài khoản từ Module 2:", err);
+      setAccounts([]);
+      setSelectedAccountKeys([]);
+    } finally {
+      setAccountsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    let active = true;
-    getAccounts()
-      .then((data) => {
-        if (!active) return;
-        const rows = (data.accounts || []).map(normalizeAccount);
-        setAccounts(rows);
-        setSelectedAccountKeys(rows.filter((account) => account.status === "LIVE").slice(0, 4).map((account) => account.key));
-      })
-      .catch(() => {
-        if (active) setAccounts([]);
-      })
-      .finally(() => {
-        if (active) setAccountsLoading(false);
-      });
-    return () => {
-      active = false;
-    };
+    loadAccounts();
   }, []);
 
   const filteredAccounts = useMemo(() => {
@@ -125,6 +131,11 @@ export default function GroupCommentModule() {
     if (!query) return accounts;
     return accounts.filter((account) => `${account.name} ${account.uid}`.toLowerCase().includes(query));
   }, [accountSearch, accounts]);
+
+  const paginatedAccounts = useMemo(() => {
+    const start = (accountPage - 1) * accountPageSize;
+    return filteredAccounts.slice(start, start + accountPageSize);
+  }, [filteredAccounts, accountPage, accountPageSize]);
 
   const filteredGroups = useMemo(() => {
     const query = groupFilter.trim().toLowerCase();
@@ -332,8 +343,18 @@ export default function GroupCommentModule() {
           >
             <Check className="mr-1.5 size-3.5" /> Chọn tất cả
           </Button>
-          <Button type="button" variant="outline" size="icon" className="size-8" onClick={() => setAccountSearch("")}>
-            <RefreshCw className="size-3.5" />
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="size-8"
+            title="Đồng bộ danh sách từ Module 2"
+            onClick={() => {
+              setAccountSearch("");
+              loadAccounts();
+            }}
+          >
+            <RefreshCw className={`size-3.5 ${accountsLoading ? "animate-spin text-primary" : ""}`} />
           </Button>
         </div>
 
@@ -354,7 +375,7 @@ export default function GroupCommentModule() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredAccounts.map((account, index) => {
+                {paginatedAccounts.map((account, index) => {
                   const selected = selectedAccountKeys.includes(account.key);
                   return (
                     <tr key={account.key} className={selected ? "bg-blue-50/30" : "bg-white"}>
@@ -370,7 +391,7 @@ export default function GroupCommentModule() {
                           </Avatar>
                           <div>
                             <p className="font-semibold text-slate-700">{account.name}</p>
-                            <p className="text-[10px] text-slate-400">Tài khoản Module 2</p>
+                            <p className="text-[10px] text-slate-400">{account.friends || "Tài khoản Module 2"}</p>
                           </div>
                         </div>
                       </td>
@@ -385,15 +406,37 @@ export default function GroupCommentModule() {
                 })}
                 {!accountsLoading && !filteredAccounts.length && (
                   <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center text-slate-400">
-                      Chưa có tài khoản phù hợp trong Module 2.
+                    <td colSpan={4} className="px-4 py-10 text-center">
+                      <div className="flex flex-col items-center justify-center space-y-2">
+                        <Users className="size-8 text-slate-300" />
+                        <p className="text-xs font-semibold text-slate-600">
+                          {accounts.length === 0
+                            ? "Chưa có tài khoản Facebook nào trong Module 2 (Quản lý tài khoản)"
+                            : "Không tìm thấy tài khoản Facebook phù hợp"}
+                        </p>
+                        <p className="max-w-md text-[11px] text-slate-400">
+                          {accounts.length === 0
+                            ? "Vui lòng vào Module 2 để thêm hoặc import tài khoản Facebook, sau đó quay lại để chọn tài khoản đi seeding bình luận."
+                            : "Thử tìm kiếm với từ khóa khác hoặc bấm nút làm mới."}
+                        </p>
+                        {accounts.length === 0 ? (
+                          <div className="pt-2">
+                            <Link
+                              href="/accounts"
+                              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-primary/90"
+                            >
+                              <Plus className="size-3.5" /> Thêm tài khoản tại Module 2
+                            </Link>
+                          </div>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 )}
                 {accountsLoading && (
                   <tr>
                     <td colSpan={4} className="px-4 py-10 text-center text-slate-400">
-                      Đang tải tài khoản...
+                      Đang tải tài khoản từ Module 2...
                     </td>
                   </tr>
                 )}
@@ -404,16 +447,83 @@ export default function GroupCommentModule() {
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-[10px] text-slate-400">
           <div className="flex items-center gap-4">
-            <span>Hiển thị <strong className="text-slate-600">{Math.min(filteredAccounts.length, 10)}/{accounts.length}</strong> tài khoản</span>
-            <span>Dòng / trang: <select className="ml-1 rounded border border-slate-200 bg-white px-2 py-1"><option>10</option></select></span>
-            <button type="button" className="font-semibold text-primary">Xem tất cả →</button>
+            <span>
+              Hiển thị <strong className="text-slate-600">{Math.min(filteredAccounts.length, accountPageSize)}/{accounts.length}</strong> tài khoản
+            </span>
+            <span>
+              Dòng / trang:{" "}
+              <select
+                value={accountPageSize}
+                onChange={(e) => {
+                  setAccountPageSize(Number(e.target.value));
+                  setAccountPage(1);
+                }}
+                className="ml-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 outline-none"
+              >
+                <option value={10}>10</option>
+                <option value={20}>20</option>
+                <option value={50}>50</option>
+              </select>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setAccountPageSize(accounts.length || 10);
+                setAccountPage(1);
+              }}
+              className="font-semibold text-primary hover:underline"
+            >
+              Xem tất cả →
+            </button>
           </div>
           <div className="flex items-center gap-1">
-            <button type="button" className="rounded border border-slate-200 p-1.5 text-slate-400"><ChevronLeft className="size-3" /></button>
-            <button type="button" className="size-7 rounded bg-primary font-semibold text-white">1</button>
-            <button type="button" className="size-7 rounded border border-slate-200 bg-white">2</button>
-            <button type="button" className="size-7 rounded border border-slate-200 bg-white">3</button>
-            <button type="button" className="rounded border border-slate-200 p-1.5 text-slate-500"><ChevronRight className="size-3" /></button>
+            <button
+              type="button"
+              disabled={accountPage <= 1}
+              onClick={() => setAccountPage((p) => Math.max(1, p - 1))}
+              className="rounded border border-slate-200 p-1.5 text-slate-400 hover:bg-slate-50 disabled:opacity-40"
+            >
+              <ChevronLeft className="size-3" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setAccountPage(1)}
+              className={`size-7 rounded font-semibold transition-colors ${
+                accountPage === 1 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              1
+            </button>
+            {Math.ceil(filteredAccounts.length / accountPageSize) > 1 && (
+              <button
+                type="button"
+                onClick={() => setAccountPage(2)}
+                className={`size-7 rounded font-semibold transition-colors ${
+                  accountPage === 2 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                2
+              </button>
+            )}
+            {Math.ceil(filteredAccounts.length / accountPageSize) > 2 && (
+              <button
+                type="button"
+                onClick={() => setAccountPage(3)}
+                className={`size-7 rounded font-semibold transition-colors ${
+                  accountPage === 3 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                3
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={accountPage >= Math.ceil(filteredAccounts.length / accountPageSize)}
+              onClick={() => setAccountPage((p) => p + 1)}
+              className="rounded border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+            >
+              <ChevronRight className="size-3" />
+            </button>
           </div>
         </div>
       </SectionCard>

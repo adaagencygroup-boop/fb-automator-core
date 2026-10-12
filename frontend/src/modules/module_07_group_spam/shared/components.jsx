@@ -69,11 +69,34 @@ export function initialsOf(name = "") {
 }
 
 export function normalizeAccount(account, index) {
+  const name =
+    account.profile_name ||
+    account.name ||
+    (account.uid ? `Nick FB (${account.uid})` : `Tài khoản ${index + 1}`);
+
+  const rawStatus = String(account.status || "").toUpperCase();
+  const status = rawStatus === "LIVE" ? "LIVE" : rawStatus === "DIE" ? "DIE" : rawStatus ? rawStatus : "LIVE";
+
+  const loginStatus = String(account.login_status || "").toLowerCase();
+  const subtitle = account.friends
+    ? account.friends
+    : account.friends_count
+      ? `${account.friends_count} bạn bè`
+      : account.proxy
+        ? `Proxy: ${account.proxy}`
+        : loginStatus === "logged_in"
+          ? "Đã đăng nhập"
+          : loginStatus === "failed"
+            ? "Lỗi đăng nhập"
+            : "Tài khoản Module 2";
+
   return {
     ...account,
+    id: account.id ?? index + 1,
     key: String(account.id ?? account.uid ?? index),
-    name: account.profile_name || account.name || `Tài khoản Facebook ${index + 1}`,
+    name,
     uid: String(account.uid || "—"),
-    status: String(account.status || "NEW").toUpperCase(),
+    status,
+    friends: subtitle,
   };
 }
