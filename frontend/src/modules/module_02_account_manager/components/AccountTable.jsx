@@ -13,10 +13,30 @@ import {
   Loader2,
   LogIn,
   Search,
-  ShieldCheck,
   Trash2,
 } from "lucide-react";
 import { formatVietnamDateTime } from "@/lib/date-utils";
+
+function CheckStatusIcon({ className = "w-3 h-3 shrink-0" }) {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+    >
+      <path
+        d="M0.664062 0.669482V4.00282H1.05206M11.2894 5.33615C10.9862 2.9269 9.09396 1.02652 6.68604 0.712908C4.27813 0.399296 1.96228 1.75161 1.05206 4.00282M1.05206 4.00282H3.9974M11.3307 11.3361V8.00282H10.9434M10.9434 8.00282C10.0319 10.2526 7.71658 11.6036 5.30946 11.2901C2.90235 10.9766 1.01026 9.07771 0.705396 6.66948M10.9434 8.00282H7.9974"
+        stroke="#047857"
+        strokeWidth="1.33333"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 function ConcurrentThreadsIcon({ className = "w-4 h-4 shrink-0" }) {
   return (
@@ -237,7 +257,7 @@ export default function AccountTable({
             className="flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] hover:bg-[#D1FAE5] px-3.5 text-xs font-semibold text-[#047857] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
             title="Kiểm tra trạng thái Live/Die của các tài khoản đã chọn"
           >
-            <ShieldCheck className={`w-4 h-4 ${isCheckingStatus ? "animate-spin" : ""}`} />
+            <CheckStatusIcon className={`w-3.5 h-3.5 ${isCheckingStatus ? "animate-spin" : ""}`} />
             <span>
               {isCheckingStatus ? "Đang kiểm tra..." : "Check trạng thái"}
               {selectedUids.length > 0 ? ` (${selectedUids.length})` : ""}
