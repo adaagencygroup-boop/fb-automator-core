@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState, useSyncExternalStore } from "react
 import { createPortal } from "react-dom";
 import { useToast } from "@/components/ui/toast";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
+import { DEFAULT_MAPPING, normalizeImportedValue, detectColumnMapping, isValidProxy } from "../utils/import-mapping.mjs";
 import {
   Braces, Check, ChevronDown, CircleCheck, Eye, EyeOff, Info, ListFilter,
   ShieldCheck, Sparkles, Trash2, Upload, UserRoundPlus, X,
@@ -24,153 +25,12 @@ const FIELD_OPTIONS = [
   { value: "ignore", label: "Bỏ qua cột này", shortLabel: "BỎ QUA" },
 ];
 
-const DEFAULT_MAPPING = [
-  "uid", "password", "two_fa", "cookie", "token", "email",
-  "pass_mail", "mail_recovery", "token_hotmail", "client_id", "proxy",
-];
-
 const DELIMITERS = [
   { value: "|", label: "| (dấu gạch đứng – mặc định)" },
   { value: ":", label: ": (dấu hai chấm)" },
   { value: ",", label: ", (dấu phẩy)" },
   { value: "\t", label: "Tab" },
 ];
-
-function normalizeImportedValue(value) {
-  const normalized = String(value || "").trim().replace(/\\_/g, "_");
-  const markdownEmail = normalized.match(/^\[([^\]]+@[^\]]+)\]\(mailto:[^)]+\)$/i);
-  return markdownEmail?.[1] || normalized;
-}
-
-function detectColumnMapping(lines, delimiter, columnCount) {
-  const mapping = Array.from({ length: columnCount }).fill("ignore");
-  const samplesByColumn = Array.from({ length: columnCount }, (_, columnIndex) =>
-    lines.slice(0, 50)
-      .map((line) => normalizeImportedValue(line.split(delimiter)[columnIndex] || ""))
-      .filter(Boolean),
-  );
-  const allMatch = (samples, pattern) => samples.length > 0 && samples.every((value) => pattern.test(value));
-  const someMatch = (samples, pattern) => samples.length > 0 && samples.some((value) => pattern.test(value));
-
-  const assignedFields = new Set();
-
-  // 1. Proxy
-  samplesByColumn.forEach((samples, index) => {
-    if (!samples.length || assignedFields.has("proxy")) return;
-    if (samples.every((value) => /^(?:(?:https?:\/\/)?(?:[^\s:@]+:[^\s:@]+@)?(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[\w.-]+):\d{2,5}(?::[^:|]+){0,2})$/.test(value))) {
-      mapping[index] = "proxy";
-      assignedFields.add("proxy");
-    }
-  });
-
-  // 2. Cookie chuỗi
-  samplesByColumn.forEach((samples, index) => {
-    if (!samples.length || mapping[index] !== "ignore" || assignedFields.has("cookie")) return;
-    if (samples.every((value) => /(?:^|;)\s*c_user=\d+/i.test(value) && /(?:^|;)\s*xs=/i.test(value))) {
-      mapping[index] = "cookie";
-      assignedFields.add("cookie");
-    }
-  });
-
-  // 3. Token FB
-  samplesByColumn.forEach((samples, index) => {
-    if (!samples.length || mapping[index] !== "ignore" || assignedFields.has("token")) return;
-    if (allMatch(samples, /^EAAA/i)) {
-      mapping[index] = "token";
-      assignedFields.add("token");
-    }
-  });
-
-  // 4. UID
-  samplesByColumn.forEach((samples, index) => {
-    if (!samples.length || mapping[index] !== "ignore" || assignedFields.has("uid")) return;
-    if (allMatch(samples, /^\d{5,20}$/)) {
-      mapping[index] = "uid";
-      assignedFields.add("uid");
-    }
-  });
-
-  // 5. 2FA Secret Key
-  samplesByColumn.forEach((samples, index) => {
-    if (!samples.length || mapping[index] !== "ignore" || assignedFields.has("two_fa")) return;
-    if (allMatch(samples, /^[A-Z2-7]{16,64}$/)) {
-      mapping[index] = "two_fa";
-      assignedFields.add("two_fa");
-    }
-  });
-
-  // 6. Email
-  samplesByColumn.forEach((samples, index) => {
-    if (!samples.length || mapping[index] !== "ignore") return;
-    if (allMatch(samples, /^[^\s@]+@[^\s@]+\.[^\s@]+$/i)) {
-      if (!assignedFields.has("email")) {
-        mapping[index] = "email";
-        assignedFields.add("email");
-      } else if (!assignedFields.has("mail_recovery")) {
-        mapping[index] = "mail_recovery";
-        assignedFields.add("mail_recovery");
-      }
-    }
-  });
-
-  // 7. Token Hotmail
-  samplesByColumn.forEach((samples, index) => {
-    if (!samples.length || mapping[index] !== "ignore" || assignedFields.has("token_hotmail")) return;
-    if (
-      someMatch(samples, /^(?:M\.C\d+_|MsaArtifacts|EwB)/i) ||
-      someMatch(samples, /MsaArtifacts/i) ||
-      samples.some((v) => v.length > 80 && !v.startsWith("EAAA") && !/(?:^|;)\s*c_user=/i.test(v))
-    ) {
-      mapping[index] = "token_hotmail";
-      assignedFields.add("token_hotmail");
-    }
-  });
-
-  // 8. Client ID
-  samplesByColumn.forEach((samples, index) => {
-    if (!samples.length || mapping[index] !== "ignore") return;
-    if (allMatch(samples, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
-      if (!assignedFields.has("client_id")) {
-        mapping[index] = "client_id";
-        assignedFields.add("client_id");
-      } else {
-        mapping[index] = "ignore";
-      }
-    }
-  });
-
-  // 9. Heuristic Password & Pass Mail
-  const uidIndex = mapping.indexOf("uid");
-  if (uidIndex >= 0 && uidIndex + 1 < columnCount && mapping[uidIndex + 1] === "ignore" && !assignedFields.has("password")) {
-    mapping[uidIndex + 1] = "password";
-    assignedFields.add("password");
-  }
-
-  const emailIndex = mapping.indexOf("email");
-  if (emailIndex >= 0 && emailIndex + 1 < columnCount && mapping[emailIndex + 1] === "ignore" && !assignedFields.has("pass_mail")) {
-    mapping[emailIndex + 1] = "pass_mail";
-    assignedFields.add("pass_mail");
-  }
-
-  // 10. Fallback
-  mapping.forEach((field, index) => {
-    if (field === "ignore" && index < DEFAULT_MAPPING.length) {
-      const fallback = DEFAULT_MAPPING[index];
-      if (fallback && !assignedFields.has(fallback)) {
-        mapping[index] = fallback;
-        assignedFields.add(fallback);
-      }
-    }
-  });
-
-  const finalUsed = new Set();
-  return mapping.map((field) => {
-    if (field === "ignore") return "ignore";
-    if (finalUsed.has(field)) return "ignore";
-    finalUsed.add(field);
-    return field;
-  });
-}
 
 function truncateValue(value, visible = 16) {
   const text = String(value || "");
@@ -220,7 +80,7 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
   const columnMap = useMemo(() => {
     if (manualColumnMap) {
       if (manualColumnMap.length >= detectedColumnCount) return manualColumnMap;
-      return Array.from({ length: detectedColumnCount }, (_, index) => manualColumnMap[index] || DEFAULT_MAPPING[index] || "ignore");
+      return Array.from({ length: detectedColumnCount }, (_, index) => manualColumnMap[index] || suggestedColumnMap[index] || "ignore");
     }
     return suggestedColumnMap;
   }, [manualColumnMap, detectedColumnCount, suggestedColumnMap]);
@@ -393,6 +253,11 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
           `Dòng ${rowNumber}: Mật khẩu không hợp lệ. Yêu cầu độ dài từ 4 đến 250 ký tự.`,
           "MẬT KHẨU KHÔNG HỢP LỆ"
         );
+        return;
+      }
+
+      if (!isValidProxy(acc.proxy)) {
+        toast.error(`Dòng ${rowNumber}: Proxy không hợp lệ. Kiểm tra cột Proxy hoặc chọn "Bỏ qua cột này".`, "PROXY KHÔNG HỢP LỆ");
         return;
       }
 

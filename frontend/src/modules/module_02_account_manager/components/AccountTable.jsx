@@ -118,6 +118,9 @@ function DetailRow({ account, isClosing, onClosed, onClose }) {
 
 export default function AccountTable({
   accounts = [],
+  isLoading = false,
+  loadError = null,
+  onRetry,
   selectedUids = [],
   onToggleSelect,
   onSelectAll,
@@ -253,7 +256,7 @@ export default function AccountTable({
           <button
             type="button"
             onClick={onRefresh}
-            disabled={isCheckingStatus || selectedUids.length === 0}
+            disabled={isLoading || isCheckingStatus || selectedUids.length === 0}
             className="flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] hover:bg-[#D1FAE5] px-3.5 text-xs font-semibold text-[#047857] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
             title="Kiểm tra trạng thái Live/Die của các tài khoản đã chọn"
           >
@@ -268,7 +271,7 @@ export default function AccountTable({
           <button
             type="button"
             onClick={onBulkDelete}
-            disabled={selectedUids.length === 0}
+            disabled={isLoading || selectedUids.length === 0}
             className="flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#FECDD3] bg-[#FFF1F2] hover:bg-[#FFE4E6] px-3.5 text-xs font-semibold text-[#BE123C] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
             title="Xóa các tài khoản đã chọn"
           >
@@ -280,7 +283,7 @@ export default function AccountTable({
 
       {/* 2. Section - Data Table (Khung cuộn tối đa 5 account như Figma) */}
       <div className="w-full overflow-x-auto max-h-[330px] overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#4B8EFF]/60 hover:[&::-webkit-scrollbar-thumb]:bg-[#2563EB] [&::-webkit-scrollbar-thumb]:rounded-full">
-        <table className="w-full table-fixed border-collapse min-w-[960px]">
+        <table aria-busy={isLoading} className="w-full table-fixed border-collapse min-w-[960px]">
           <colgroup>
             <col className="w-[4%]" />
             <col className="w-[5%]" />
@@ -298,6 +301,8 @@ export default function AccountTable({
                 <input
                   type="checkbox"
                   checked={isAllSelected}
+                  disabled={isLoading || !!loadError}
+                  aria-label="Chọn tất cả tài khoản"
                   onChange={() => onSelectAll(filteredAccounts.map((a) => a.uid))}
                   className="h-4 w-4 rounded border-[#CBD5E1] accent-[#2563EB] cursor-pointer"
                 />
@@ -329,7 +334,39 @@ export default function AccountTable({
           </thead>
 
           <tbody className="divide-y divide-slate-100 text-xs">
-            {filteredAccounts.length === 0 ? (
+            {isLoading ? (
+              Array.from({ length: 5 }, (_, index) => (
+                <tr key={`skeleton-${index}`} aria-hidden="true" className="h-14 motion-safe:animate-pulse">
+                  <td className="px-1 py-2"><div className="mx-auto h-4 w-4 rounded bg-slate-200/70" /></td>
+                  <td className="px-1 py-2"><div className="mx-auto h-3 w-4 rounded bg-slate-200/70" /></td>
+                  <td className="px-2 py-2"><div className="h-3 w-4/5 rounded bg-slate-200/70" /></td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="h-7 w-7 shrink-0 rounded-full bg-slate-200/70" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-3 w-3/4 rounded bg-slate-200/70" />
+                        <div className="h-2 w-1/2 rounded bg-slate-100" />
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-2 py-2"><div className="mx-auto h-5 w-14 rounded-full bg-slate-200/70" /></td>
+                  <td className="px-2 py-2"><div className="mx-auto h-5 w-24 rounded-full bg-slate-200/70" /></td>
+                  <td className="px-2 py-2"><div className="mx-auto h-3 w-16 rounded bg-slate-200/70" /></td>
+                  <td className="px-2 py-2">
+                    <div className="flex justify-center gap-1.5">
+                      {Array.from({ length: 4 }, (_, action) => <div key={action} className="h-7 w-7 rounded-md bg-slate-200/70" />)}
+                    </div>
+                  </td>
+                </tr>
+              ))
+            ) : loadError ? (
+              <tr>
+                <td colSpan={8} className="px-4 py-14 text-center">
+                  <p role="alert" className="text-sm text-red-600">Không thể tải tài khoản: {loadError}</p>
+                  <button type="button" onClick={onRetry} className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">Thử lại</button>
+                </td>
+              </tr>
+            ) : filteredAccounts.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-4 py-14 text-center text-slate-500">
                   <div className="flex flex-col items-center justify-center gap-2 max-w-sm mx-auto">
@@ -575,8 +612,8 @@ export default function AccountTable({
               {selectedUids.length}
             </strong>{" "}
             trên{" "}
-            <strong className="text-[#1E293B] font-bold">
-              {accounts.length}
+            <strong aria-busy={isLoading} className="text-[#1E293B] font-bold">
+              {isLoading ? <span aria-hidden="true" className="inline-block h-4 w-8 align-middle rounded bg-slate-200/70 motion-safe:animate-pulse" /> : loadError ? "--" : accounts.length}
             </strong>{" "}
             tài khoản
           </span>
@@ -592,6 +629,7 @@ export default function AccountTable({
             </span>
             <input
               type="number"
+              disabled={isLoading}
               min={1}
               max={maxThreads}
               value={effectiveThreads}
@@ -606,7 +644,7 @@ export default function AccountTable({
           <button
             type="button"
             onClick={handleLogin}
-            disabled={isLoggingIn || !selectedUids.length}
+            disabled={isLoading || isLoggingIn || !selectedUids.length}
             className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold text-xs sm:text-sm shadow-[0_2px_4px_-2px_rgba(59,130,246,0.25),0_4px_6px_-1px_rgba(59,130,246,0.25)] transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >
             {isLoggingIn ? (

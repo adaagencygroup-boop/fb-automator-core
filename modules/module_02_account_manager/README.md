@@ -91,6 +91,106 @@ SSE gửi connected/heartbeat và log {time,level,message,uid}. Sau commit check
 account_login_finished. Mỗi subscriber có queue riêng (1000 event; đầy thì bỏ event cũ nhất).
 Client reconnect lấy lại danh sách account; không có replay lịch sử SSE.
 
+## Hướng dẫn tái sử dụng cho các Module khác (Cross-Module Integration)
+
+Module 02 đóng vai trò là **Core Account & Automation Provider** của toàn bộ ứng dụng. Các module nghiệp vụ khác (Module 03 Nuôi nick/Farm, Module 04 Tạo Page, Module 05 Đăng bài, Module 07 Tương tác Group...) nên tái sử dụng lại luồng của Module 02 thay vì tự viết lại cấu hình Selenium/Proxy hay query DB trùng lặp.
+
+### 1. Tái sử dụng qua Python Library (Khuyến nghị cho Worker nội bộ)
+
+Tất cả các hàm nền tảng đã được đóng gói và export sẵn tại:
+```python
+from modules.module_02_account_manager.automation import (
+    create_driver,
+    close_driver_for_uid,
+    get_profile_lock,
+    ensure_logged_in,
+    is_checkpoint_url,
+    human_sleep,
+    human_type,
+    wait_and_find,
+)
+from modules.module_02_account_manager.automation.proxy_bridge import (
+    parse_proxy,
+    test_proxy_connectivity,
+    ProxyBridge,
+)
+from modules.module_02_account_manager.database.connection import SessionLocal
+from modules.module_02_account_manager.database.repository import AccountRepository
+```
+
+#### A. Khởi tạo Trình duyệt Chrome & Tự động kết nối Proxy Bridge
+Không cần tự cấu hình Selenium Options hay chạy local proxy thủ công:
+```python
+# Mở trình duyệt với scope tương ứng ('farm', 'creator', 'spam', 'live')
+# Tự động:
+# - Gán đúng thư mục Chrome Profile của UID (giữ cookie/session).
+# - Kiểm tra pre-flight test kết nối proxy.
+# - Dựng Local Proxy Bridge trên 127.0.0.1 nếu proxy có User/Password.
+# - Tự động Fallback sang IP gốc của máy và bắn cảnh báo nếu proxy lỗi.
+driver = create_driver(uid="100012345678", proxy=account.proxy, scope="farm")
+try:
+    driver.get("https://www.facebook.com")
+    # Thực hiện hành động của module tại đây...
+finally:
+    # Đóng Chrome và tự động giải phóng port Proxy Bridge
+    close_driver_for_uid("100012345678")
+```
+
+#### B. Kiểm tra Đăng nhập & Bắt Checkpoint (`ensure_logged_in`)
+Đảm bảo tài khoản đã ở trạng thái đăng nhập trước khi chạy tương tác:
+```python
+logged_in = ensure_logged_in(
+    driver=driver,
+    uid=account.uid,
+    password=plain_password,
+    two_fa=plain_2fa,
+    cookie=account.cookie,
+)
+if not logged_in:
+    if is_checkpoint_url(driver.current_url):
+        # Đánh dấu nick bị checkpoint
+        pass
+```
+
+#### C. Chống xung đột Profile (`Profile Lock`)
+Tránh lỗi hỏng Profile Chrome khi 2 module cùng lúc mở đè lên 1 UID:
+```python
+profile_lock = get_profile_lock(uid)
+if not profile_lock.acquire(blocking=False):
+    # Tài khoản đang được chạy bởi module khác (hoặc đang mở live browser)
+    return
+try:
+    # Thao tác với trình duyệt...
+finally:
+    profile_lock.release()
+```
+
+#### D. Truy vấn và Cập nhật Tài khoản (`AccountRepository`)
+Lấy thông tin tài khoản và cập nhật trạng thái đồng bộ:
+```python
+with SessionLocal() as db:
+    # Lấy tài khoản theo UID
+    acc = AccountRepository.get_by_uid(db, uid="100012345678")
+    
+    # Lấy danh sách tài khoản theo bộ lọc
+    live_accounts = AccountRepository.list_accounts(db, status="LIVE", limit=50)
+    
+    # Cập nhật trạng thái sau khi chạy tương tác xong
+    AccountRepository.update_status(db, uid="100012345678", status="LIVE")
+```
+
+---
+
+### 2. Tái sử dụng qua RESTful API / Local Engine (Tách biệt hoàn toàn)
+
+Nếu các worker chạy độc lập hoặc gọi từ Desktop UI/Frontend Tauri:
+
+* **Lấy danh sách nick sẵn sàng chạy**: `GET /api/accounts` (hỗ trợ phân trang, lọc theo status, search).
+* **Mở trình duyệt trực quan cho người dùng xem**: `POST /api/accounts/open-browser` (body: `{"uid": "..."}`).
+* **Đồng bộ Cookie mới nhất sau phiên chạy**: `POST /api/accounts/{uid}/sync-cookies`.
+* **Kiểm tra Proxy**: `POST /api/accounts/test-proxy` (body: `{"proxy": "ip:port:user:pass"}`).
+* **Đăng ký nhận Log thời gian thực**: `GET /api/accounts/stream` (SSE log stream).
+
 ## Kiểm thử
 
 Chạy: python -m unittest discover -s modules/module_02_account_manager/tests -t . -v

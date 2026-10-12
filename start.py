@@ -244,12 +244,17 @@ def run_project(self_test_only: bool = False, open_browser: bool = True):
 
     try:
         print("\n[1/3] Backend Local Engine (Port 28129)...")
-        backend_proc = spawn([sys.executable, "engine.py", "--port", "28129"], BASE_DIR, "engine.log")
-        if wait_for_url(BACKEND_URL, timeout=60, proc=backend_proc, service_name="Backend"):
+        backend_proc = spawn([sys.executable, "-u", "engine.py", "--port", "28129"], BASE_DIR, "engine.log")
+        if wait_for_url(BACKEND_URL, timeout=120, proc=backend_proc, service_name="Backend"):
             print("  [OK] Backend: http://127.0.0.1:28129")
             print("  [OK] Swagger: http://127.0.0.1:28129/docs")
         else:
-            print("  [ERROR] Backend khong phan hoi sau 60 giay.")
+            print("  [ERROR] Backend khong phan hoi sau 120 giay.")
+            engine_log = LOGS_DIR / "engine.log"
+            if engine_log.exists():
+                steps = [line for line in engine_log.read_text(encoding="utf-8", errors="replace").splitlines() if "[Startup]" in line]
+                if steps:
+                    print(f"  [LAST STARTUP STEP] {steps[-1]}")
             tail_log("engine.log")
             return False
 
