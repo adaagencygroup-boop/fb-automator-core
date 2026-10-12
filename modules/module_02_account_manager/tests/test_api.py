@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from ..api.router import router
+from ..api.router import router, alias_router
 from ..plugin import initialize, shutdown
 from ..database import connection
 from ..database.repository import AccountRepository as Repo
@@ -27,6 +27,7 @@ class TestAccountAPI(unittest.TestCase):
             await shutdown()
         app = FastAPI(lifespan=lifespan)
         app.include_router(router)
+        app.include_router(alias_router)
         self.client = TestClient(app).__enter__()
 
     def tearDown(self):
@@ -161,3 +162,24 @@ class TestAccountAPI(unittest.TestCase):
 
     def test_import_invalid_collection_is_validation_error(self):
         self.assertEqual(self.client.post("/api/accounts/import", json={"accounts": None}).status_code, 422)
+
+    def test_legacy_route_aliases_work(self):
+        self.save(uid="999", owner="charlie", password="pw")
+        # Test /accounts alias
+        resp_list = self.client.get("/accounts", headers={"X-Owner-Username": "charlie"})
+        self.assertEqual(resp_list.status_code, 200)
+        self.assertEqual(len(resp_list.json()), 1)
+        self.assertEqual(resp_list.json()[0]["uid"], "999")
+
+        # Test /tasks/open-browser alias
+        with patch(P + ".services.browser_service.runtime.submit") as submit:
+            resp_browser = self.client.post("/tasks/open-browser", json={"uid": "999", "owner_username": "charlie"})
+            self.assertEqual(resp_browser.status_code, 200)
+            self.assertEqual(resp_browser.json(), {"started": True, "uid": "999"})
+
+        # Test /tasks/login alias
+        with patch(P + ".services.login_service.login_batch") as login_mock:
+            resp_login = self.client.post("/tasks/login", json={"uids": ["999"], "threads": 2, "owner_username": "charlie"})
+            self.assertEqual(resp_login.status_code, 200)
+            self.assertEqual(resp_login.json(), {"started": True, "count": 1})
+

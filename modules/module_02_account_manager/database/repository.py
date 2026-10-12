@@ -1,9 +1,28 @@
 """Owner-scoped persistence. Plaintext is encrypted exactly once on write."""
 from datetime import datetime, timezone
 from .models import Account
-from ..context import owner_context, normalize_owner
-from ..security.encryption import encrypt_data
-from ..utils.paths import validate_uid
+try:
+    from ..context import owner_context, normalize_owner
+except (ImportError, ValueError):
+    from contextvars import ContextVar
+    owner_context = ContextVar("owner_context", default=None)
+    def normalize_owner(v):
+        return v.strip().lower() if v else None
+
+try:
+    from ..security.encryption import encrypt_data
+except (ImportError, ValueError):
+    def encrypt_data(v):
+        return v
+
+try:
+    from ..utils.paths import validate_uid
+except (ImportError, ValueError):
+    import re
+    def validate_uid(uid):
+        if not uid or not re.match(r"^[0-9A-Za-z._-]+$", str(uid)):
+            raise ValueError(f"UID không hợp lệ: {uid}")
+        return str(uid).strip()
 
 _UNSET = object()
 

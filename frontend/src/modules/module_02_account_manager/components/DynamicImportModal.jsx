@@ -1,0 +1,770 @@
+"use client";
+
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
+import { useToast } from "@/components/ui/toast";
+import ConfirmDialog from "@/components/ui/confirm-dialog";
+import {
+  Braces, Check, ChevronDown, CircleCheck, Eye, EyeOff, Info, ListFilter,
+  ShieldCheck, Sparkles, Trash2, Upload, UserRoundPlus, X,
+} from "lucide-react";
+
+const FIELD_OPTIONS = [
+  { value: "uid", label: "UID (Facebook ID) *", shortLabel: "UID" },
+  { value: "password", label: "Mật khẩu (Pass) *", shortLabel: "MẬT KHẨU" },
+  { value: "two_fa", label: "Mã bảo mật (2FA Key)", shortLabel: "2FA KEY" },
+  { value: "cookie", label: "Cookie chuỗi", shortLabel: "COOKIE" },
+  { value: "token", label: "Access Token (EAAB...)", shortLabel: "TOKEN" },
+  { value: "email", label: "Email đăng nhập", shortLabel: "EMAIL" },
+  { value: "pass_mail", label: "Mật khẩu Email (Pass Mail)", shortLabel: "PASS MAIL" },
+  { value: "mail_recovery", label: "Mail khôi phục (Mailkp)", shortLabel: "MAIL KHÔI PHỤC" },
+  { value: "token_hotmail", label: "Token Hotmail", shortLabel: "TOKEN HOTMAIL" },
+  { value: "client_id", label: "Client ID", shortLabel: "CLIENT ID" },
+  { value: "proxy", label: "Proxy (ip:port:user:pass)", shortLabel: "PROXY" },
+  { value: "ignore", label: "Bỏ qua cột này", shortLabel: "BỎ QUA" },
+];
+
+const DEFAULT_MAPPING = [
+  "uid", "password", "two_fa", "cookie", "token", "email",
+  "pass_mail", "mail_recovery", "token_hotmail", "client_id", "proxy",
+];
+
+const DELIMITERS = [
+  { value: "|", label: "| (dấu gạch đứng – mặc định)" },
+  { value: ":", label: ": (dấu hai chấm)" },
+  { value: ",", label: ", (dấu phẩy)" },
+  { value: "\t", label: "Tab" },
+];
+
+function normalizeImportedValue(value) {
+  const normalized = String(value || "").trim().replace(/\\_/g, "_");
+  const markdownEmail = normalized.match(/^\[([^\]]+@[^\]]+)\]\(mailto:[^)]+\)$/i);
+  return markdownEmail?.[1] || normalized;
+}
+
+function detectColumnMapping(lines, delimiter, columnCount) {
+  const mapping = Array.from({ length: columnCount }).fill("ignore");
+  const samplesByColumn = Array.from({ length: columnCount }, (_, columnIndex) =>
+    lines.slice(0, 50)
+      .map((line) => normalizeImportedValue(line.split(delimiter)[columnIndex] || ""))
+      .filter(Boolean),
+  );
+  const allMatch = (samples, pattern) => samples.length > 0 && samples.every((value) => pattern.test(value));
+  const someMatch = (samples, pattern) => samples.length > 0 && samples.every((value) => pattern.test(value));
+
+  const assignedFields = new Set();
+
+  // 1. Proxy
+  samplesByColumn.forEach((samples, index) => {
+    if (!samples.length || assignedFields.has("proxy")) return;
+    if (samples.every((value) => /^(?:(?:https?:\/\/)?(?:[^\s:@]+:[^\s:@]+@)?(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[\w.-]+):\d{2,5}(?::[^:|]+){0,2})$/.test(value))) {
+      mapping[index] = "proxy";
+      assignedFields.add("proxy");
+    }
+  });
+
+  // 2. Cookie chuỗi
+  samplesByColumn.forEach((samples, index) => {
+    if (!samples.length || mapping[index] !== "ignore" || assignedFields.has("cookie")) return;
+    if (samples.every((value) => /(?:^|;)\s*c_user=\d+/i.test(value) && /(?:^|;)\s*xs=/i.test(value))) {
+      mapping[index] = "cookie";
+      assignedFields.add("cookie");
+    }
+  });
+
+  // 3. Token FB
+  samplesByColumn.forEach((samples, index) => {
+    if (!samples.length || mapping[index] !== "ignore" || assignedFields.has("token")) return;
+    if (allMatch(samples, /^EAAA/i)) {
+      mapping[index] = "token";
+      assignedFields.add("token");
+    }
+  });
+
+  // 4. UID
+  samplesByColumn.forEach((samples, index) => {
+    if (!samples.length || mapping[index] !== "ignore" || assignedFields.has("uid")) return;
+    if (allMatch(samples, /^\d{5,20}$/)) {
+      mapping[index] = "uid";
+      assignedFields.add("uid");
+    }
+  });
+
+  // 5. 2FA Secret Key
+  samplesByColumn.forEach((samples, index) => {
+    if (!samples.length || mapping[index] !== "ignore" || assignedFields.has("two_fa")) return;
+    if (allMatch(samples, /^[A-Z2-7]{16,64}$/)) {
+      mapping[index] = "two_fa";
+      assignedFields.add("two_fa");
+    }
+  });
+
+  // 6. Email
+  samplesByColumn.forEach((samples, index) => {
+    if (!samples.length || mapping[index] !== "ignore") return;
+    if (allMatch(samples, /^[^\s@]+@[^\s@]+\.[^\s@]+$/i)) {
+      if (!assignedFields.has("email")) {
+        mapping[index] = "email";
+        assignedFields.add("email");
+      } else if (!assignedFields.has("mail_recovery")) {
+        mapping[index] = "mail_recovery";
+        assignedFields.add("mail_recovery");
+      }
+    }
+  });
+
+  // 7. Token Hotmail
+  samplesByColumn.forEach((samples, index) => {
+    if (!samples.length || mapping[index] !== "ignore" || assignedFields.has("token_hotmail")) return;
+    if (someMatch(samples, /^(?:M\.C\d+_|MsaArtifacts|EwB)/i) || (samples.every((v) => v.length > 120 && !v.startsWith("EAAA")))) {
+      mapping[index] = "token_hotmail";
+      assignedFields.add("token_hotmail");
+    }
+  });
+
+  // 8. Client ID
+  samplesByColumn.forEach((samples, index) => {
+    if (!samples.length || mapping[index] !== "ignore") return;
+    if (allMatch(samples, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      if (!assignedFields.has("client_id")) {
+        mapping[index] = "client_id";
+        assignedFields.add("client_id");
+      } else {
+        mapping[index] = "ignore";
+      }
+    }
+  });
+
+  // 9. Heuristic Password & Pass Mail
+  const uidIndex = mapping.indexOf("uid");
+  if (uidIndex >= 0 && uidIndex + 1 < columnCount && mapping[uidIndex + 1] === "ignore" && !assignedFields.has("password")) {
+    mapping[uidIndex + 1] = "password";
+    assignedFields.add("password");
+  }
+
+  const emailIndex = mapping.indexOf("email");
+  if (emailIndex >= 0 && emailIndex + 1 < columnCount && mapping[emailIndex + 1] === "ignore" && !assignedFields.has("pass_mail")) {
+    mapping[emailIndex + 1] = "pass_mail";
+    assignedFields.add("pass_mail");
+  }
+
+  // 10. Fallback
+  mapping.forEach((field, index) => {
+    if (field === "ignore" && index < DEFAULT_MAPPING.length) {
+      const fallback = DEFAULT_MAPPING[index];
+      if (fallback && !assignedFields.has(fallback)) {
+        mapping[index] = fallback;
+        assignedFields.add(fallback);
+      }
+    }
+  });
+
+  const finalUsed = new Set();
+  return mapping.map((field) => {
+    if (field === "ignore") return "ignore";
+    if (finalUsed.has(field)) return "ignore";
+    finalUsed.add(field);
+    return field;
+  });
+}
+
+function truncateValue(value, visible = 16) {
+  const text = String(value || "");
+  if (!text) return "—";
+  return text.length > visible ? `${text.slice(0, visible)}...` : text;
+}
+
+export default function DynamicImportModal({ isOpen, onClose, onImport, existingAccounts = [] }) {
+  const toast = useToast();
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false
+  );
+  const [rawText, setRawText] = useState("");
+  const [delimiter, setDelimiter] = useState("|");
+  const [manualColumnMap, setManualColumnMap] = useState(null);
+  const [skipDuplicates, setSkipDuplicates] = useState(true);
+  const [showOverwriteConfirm, setShowOverwriteConfirm] = useState(false);
+  const [checkAfterImport, setCheckAfterImport] = useState(true);
+  const [isImporting, setIsImporting] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+
+  const handleToggleSkipDuplicates = (checked) => {
+    if (!checked) {
+      setShowOverwriteConfirm(true);
+    } else {
+      setSkipDuplicates(true);
+    }
+  };
+
+  const lines = useMemo(
+    () => rawText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 100),
+    [rawText],
+  );
+
+  const detectedColumnCount = useMemo(() => {
+    if (!lines.length) return DEFAULT_MAPPING.length;
+    return Math.max(...lines.slice(0, 50).map((line) => line.split(delimiter).length), 1);
+  }, [delimiter, lines]);
+
+  const suggestedColumnMap = useMemo(
+    () => detectColumnMapping(lines, delimiter, detectedColumnCount),
+    [delimiter, detectedColumnCount, lines],
+  );
+
+  const columnMap = useMemo(() => {
+    if (manualColumnMap) {
+      if (manualColumnMap.length >= detectedColumnCount) return manualColumnMap;
+      return Array.from({ length: detectedColumnCount }, (_, index) => manualColumnMap[index] || DEFAULT_MAPPING[index] || "ignore");
+    }
+    return suggestedColumnMap;
+  }, [manualColumnMap, detectedColumnCount, suggestedColumnMap]);
+
+  const parsedAccounts = useMemo(() => {
+    const parsed = [];
+    const seen = new Set();
+    for (const line of lines) {
+      const values = line.split(delimiter).map(normalizeImportedValue);
+      const account = { uid: "" };
+      values.forEach((value, index) => {
+        const field = columnMap[index];
+        if (field && field !== "ignore") account[field] = value;
+      });
+      if (!account.uid || seen.has(account.uid)) continue;
+      seen.add(account.uid);
+      parsed.push(account);
+    }
+    return parsed;
+  }, [columnMap, delimiter, lines]);
+
+  const existingUidSet = useMemo(() => new Set(existingAccounts.map((account) => account.uid)), [existingAccounts]);
+  const accountsToImport = useMemo(
+    () => skipDuplicates ? parsedAccounts.filter((account) => !existingUidSet.has(account.uid)) : parsedAccounts,
+    [existingUidSet, parsedAccounts, skipDuplicates],
+  );
+  const skippedExistingCount = parsedAccounts.length - accountsToImport.length;
+
+  const visibleColumnCount = Math.max(detectedColumnCount, DEFAULT_MAPPING.length);
+  const activeMappings = columnMap.slice(0, visibleColumnCount).filter((field) => field !== "ignore");
+  const mappedFieldCount = new Set(activeMappings).size;
+  const hasUidMapping = activeMappings.includes("uid");
+  const hasPasswordMapping = activeMappings.includes("password");
+  const hasDuplicateMappings = activeMappings.some((field, index) => activeMappings.indexOf(field) !== index);
+
+  const previewColumns = useMemo(() => {
+    const list = [];
+    columnMap.slice(0, visibleColumnCount).forEach((field, index) => {
+      if (field && field !== "ignore") {
+        const option = FIELD_OPTIONS.find((opt) => opt.value === field);
+        list.push({
+          index,
+          field,
+          shortLabel: option?.shortLabel || field.toUpperCase(),
+        });
+      }
+    });
+    if (!list.length) {
+      DEFAULT_MAPPING.forEach((field, index) => {
+        const option = FIELD_OPTIONS.find((opt) => opt.value === field);
+        list.push({
+          index,
+          field,
+          shortLabel: option?.shortLabel || field.toUpperCase(),
+        });
+      });
+    }
+    return list;
+  }, [columnMap, visibleColumnCount]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape" && !isImporting) {
+        setShowPreview(false);
+        onClose();
+      }
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isImporting, isOpen, onClose]);
+
+  if (!isOpen || !mounted) return null;
+
+  const handleClose = () => {
+    setShowPreview(false);
+    onClose();
+  };
+
+  const resetForm = () => {
+    setRawText("");
+    setManualColumnMap(null);
+    setShowPreview(false);
+  };
+
+  const handleImport = async () => {
+    if (!rawText.trim() || !lines.length) {
+      toast.error("Vui lòng dán dữ liệu tài khoản vào khung nhập!", "LỖI NHẬP TÀI KHOẢN");
+      return;
+    }
+
+    const totalLinesCount = rawText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).length;
+    if (totalLinesCount > 100) {
+      toast.error(
+        `Bạn đang nhập ${totalLinesCount} tài khoản. Hệ thống chỉ cho phép tối đa 100 tài khoản cho mỗi lần import!`,
+        "VƯỢT QUÁ GIỚI HẠN"
+      );
+      return;
+    }
+
+    if (!hasUidMapping && !hasPasswordMapping) {
+      toast.error(
+        "Thiếu trường bắt buộc: Cần cấu hình cả cột UID và Mật khẩu trong Field Mapping để thực hiện import!",
+        "THIẾU TRƯỜNG BẮT BUỘC"
+      );
+      return;
+    }
+    if (!hasUidMapping) {
+      toast.error(
+        "Thiếu trường bắt buộc: Cần cấu hình cột UID (Facebook ID) trong Field Mapping!",
+        "THIẾU CỘT UID"
+      );
+      return;
+    }
+    if (!hasPasswordMapping) {
+      toast.error(
+        "Thiếu trường bắt buộc: Cần cấu hình cột Mật khẩu (Pass) trong Field Mapping!",
+        "THIẾU CỘT MẬT KHẨU"
+      );
+      return;
+    }
+
+    if (hasDuplicateMappings) {
+      toast.error(
+        "Cấu hình mapping không hợp lệ: Mỗi trường chỉ được gán cho một cột duy nhất.",
+        "LỖI FIELD MAPPING"
+      );
+      return;
+    }
+
+    const uidRegex = /^[1-9][0-9]{3,19}$/;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const values = line.split(delimiter).map(normalizeImportedValue);
+      const rowNumber = i + 1;
+      const acc = {};
+      values.forEach((value, index) => {
+        const field = columnMap[index];
+        if (field && field !== "ignore") acc[field] = value;
+      });
+
+      const rowUid = (acc.uid || "").trim();
+      const rowPassword = (acc.password || "").trim();
+
+      if (!rowUid) {
+        toast.error(`Dòng ${rowNumber}: Thiếu UID tài khoản! Yêu cầu nhập đầy đủ trường bắt buộc.`, "THIẾU DỮ LIỆU");
+        return;
+      }
+      if (!uidRegex.test(rowUid)) {
+        toast.error(
+          `Dòng ${rowNumber}: UID "${rowUid}" không hợp lệ. UID chỉ được chứa chữ số (0-9) và không bắt đầu bằng số 0.`,
+          "UID KHÔNG HỢP LỆ"
+        );
+        return;
+      }
+
+      if (!rowPassword) {
+        toast.error(`Dòng ${rowNumber}: Thiếu Mật khẩu tài khoản! Yêu cầu nhập đầy đủ trường bắt buộc.`, "THIẾU DỮ LIỆU");
+        return;
+      }
+      if (rowPassword.length < 4 || rowPassword.length > 250) {
+        toast.error(
+          `Dòng ${rowNumber}: Mật khẩu không hợp lệ. Yêu cầu độ dài từ 4 đến 250 ký tự.`,
+          "MẬT KHẨU KHÔNG HỢP LỆ"
+        );
+        return;
+      }
+    }
+
+    if (accountsToImport.length === 0) {
+      toast.warning("Tất cả tài khoản trong danh sách đã tồn tại trong hệ thống (đã bị bỏ qua do trùng lặp).", "THÔNG BÁO");
+      return;
+    }
+
+    setIsImporting(true);
+    try {
+      const success = await onImport(accountsToImport, checkAfterImport);
+      if (success) {
+        resetForm();
+        handleClose();
+      }
+    } catch (err) {
+      toast.error(err.message || "Lỗi khi lưu danh sách tài khoản", "LỖI IMPORT");
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const modalContent = (
+    <div
+      className="fixed inset-0 z-[99999] flex items-center justify-center p-3 sm:p-5 bg-slate-900/60 backdrop-blur-sm select-none w-screen h-screen overflow-y-auto animate-in fade-in"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !isImporting) handleClose();
+      }}
+    >
+      <div
+        className="flex max-h-[92vh] w-full max-w-[1140px] flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl text-slate-800 animate-in zoom-in-95 duration-200"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="h-1 shrink-0 bg-primary" />
+
+        <header className="flex shrink-0 items-center justify-between border-b border-border px-6 py-4 bg-white">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-subtle text-primary border border-blue-100 shadow-sm">
+              <UserRoundPlus className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-base font-bold text-slate-900 leading-snug">
+                Nhập danh sách tài khoản Facebook
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5 leading-normal">
+                Nhập danh sách tài khoản theo định dạng phân tách để tự động nhận diện và lưu trữ an toàn
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleClose}
+            disabled={isImporting}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-50"
+            title="Đóng"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 bg-slate-50/50">
+          <div className="grid gap-4 overflow-hidden rounded-xl border border-border bg-white shadow-subtle xl:grid-cols-[1.2fr_.8fr]">
+            {/* Cột trái: Textarea nhập dữ liệu */}
+            <section className="flex min-h-[420px] flex-col border-b border-border p-4 sm:p-5 xl:border-b-0 xl:border-r">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wide">
+                  <Braces className="h-4 w-4 text-primary" />Dữ liệu tài khoản
+                </h3>
+                <span className="rounded-full border border-blue-200 bg-primary-subtle px-2.5 py-0.5 text-[11px] font-bold font-mono text-primary">
+                  {lines.length} / 100 dòng
+                </span>
+              </div>
+
+              <div className="grid min-h-[280px] flex-1 grid-cols-[38px_1fr] overflow-hidden rounded-lg border border-border bg-slate-950 focus-within:border-primary">
+                <div aria-hidden="true" className="overflow-hidden border-r border-slate-800 bg-slate-900 py-3 text-right font-mono text-[11px] leading-6 text-slate-500 select-none">
+                  {Array.from({ length: Math.max(12, rawText.split(/\r?\n/).length) }, (_, index) => (
+                    <div key={index} className="pr-2">{String(index + 1).padStart(2, "0")}</div>
+                  ))}
+                </div>
+                <textarea
+                  value={rawText}
+                  onChange={(event) => setRawText(event.target.value)}
+                  spellCheck={false}
+                  placeholder="100084920491823|AdminPass#992|JBSWY3DPEHPK3PXP|c_user=...|EAAAAUaZA...|user@gmail.com|MailPass@2024|recovery@mail.com|hot_tok_99182a|CID_4819204|103.142.12.88:8080:user:pass"
+                  className="min-h-[280px] w-full resize-none overflow-auto bg-transparent p-3 font-mono text-[11px] leading-6 text-emerald-400 outline-none placeholder:text-slate-600"
+                />
+              </div>
+
+              <div className="mt-3.5 flex flex-col gap-2.5 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                <label className="flex min-w-0 flex-1 items-center gap-2 text-xs text-slate-600">
+                  <span className="shrink-0 font-medium">Ký tự phân cách:</span>
+                  <span className="relative min-w-0 max-w-[200px] flex-1">
+                    <select
+                      value={delimiter}
+                      onChange={(event) => {
+                        setDelimiter(event.target.value);
+                        setManualColumnMap(null);
+                      }}
+                      className="h-8 w-full appearance-none truncate rounded-md border border-border bg-white py-0 pl-2.5 pr-8 text-xs text-slate-700 outline-none focus:border-primary"
+                    >
+                      {DELIMITERS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                  </span>
+                </label>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={resetForm}
+                    disabled={!rawText}
+                    className="flex h-8 shrink-0 whitespace-nowrap items-center gap-1.5 rounded-md border border-border bg-white hover:bg-slate-50 px-3 text-xs font-semibold text-slate-600 transition-colors disabled:opacity-40"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Xóa trắng</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPreview((prev) => !prev)}
+                    className={`flex h-8 shrink-0 whitespace-nowrap items-center gap-1.5 rounded-md border px-3 text-xs font-semibold transition shadow-subtle ${
+                      showPreview
+                        ? "border-border bg-slate-100 text-slate-700 hover:bg-slate-200"
+                        : "border-blue-200 bg-primary-subtle text-primary hover:bg-blue-100"
+                    }`}
+                  >
+                    {showPreview ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    <span>{showPreview ? "Ẩn xem trước" : "Xem trước"}</span>
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            {/* Cột phải: Field Mapping */}
+            <section className="min-h-[420px] p-4 sm:p-5 flex flex-col justify-between">
+              <div>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wide">
+                    <ListFilter className="h-4 w-4 text-primary" />Field Mapping
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setManualColumnMap(null);
+                    }}
+                    disabled={!lines.length}
+                    className="flex h-7 shrink-0 whitespace-nowrap items-center gap-1 rounded-md border border-blue-200 bg-primary-subtle px-2 text-[11px] font-semibold text-primary hover:bg-blue-100 transition-colors disabled:opacity-40"
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    <span>Tự nhận dạng</span>
+                  </button>
+                </div>
+
+                <div className="max-h-[350px] space-y-1.5 overflow-y-auto pr-1">
+                  {Array.from({ length: visibleColumnCount }, (_, index) => (
+                    <div key={index} className="flex h-9 items-center gap-2 rounded-lg border border-border bg-slate-50/60 px-2.5">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-white">
+                        {index + 1}
+                      </span>
+                      <span className="min-w-[56px] flex-1 text-xs text-slate-600 font-medium">
+                        Cột {index + 1}
+                      </span>
+                      <span className="relative w-[58%] min-w-0">
+                        <select
+                          value={columnMap[index] || "ignore"}
+                          onChange={(event) => {
+                            const next = [...columnMap];
+                            next[index] = event.target.value;
+                            setManualColumnMap(next);
+                          }}
+                          className="h-7 w-full appearance-none truncate rounded border border-border bg-white py-0 pl-2 pr-7 text-xs text-slate-700 outline-none focus:border-primary"
+                        >
+                          {FIELD_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                        <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {hasDuplicateMappings && (
+                <p className="mt-2 text-xs text-red-600 font-medium">
+                  Mỗi trường dữ liệu chỉ được gán cho một cột duy nhất.
+                </p>
+              )}
+            </section>
+          </div>
+
+          {/* Phần xem trước Preview Table */}
+          <section className="mt-4">
+            <div className={`${showPreview ? "mb-2.5" : ""} flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-xs`}>
+              <h3 className="flex items-center gap-2 font-bold text-slate-800">
+                <Eye className="h-4 w-4 text-primary" />Xem trước cấu trúc (3 dòng đầu)
+              </h3>
+              <div className="flex items-center gap-3">
+                <span className="rounded-md border border-border bg-white px-2.5 py-1 font-semibold text-slate-700 shadow-subtle">
+                  Nhận dạng: {parsedAccounts.length} tài khoản
+                </span>
+                <span className={skippedExistingCount > 0 ? "text-amber-600 font-medium" : "text-slate-400"}>
+                  {skippedExistingCount} UID đã có sẽ bỏ qua
+                </span>
+                <span
+                  className={`flex items-center gap-1.5 font-medium ${
+                    !lines.length
+                      ? "text-slate-400"
+                      : hasUidMapping && hasPasswordMapping && !hasDuplicateMappings
+                      ? "text-emerald-600"
+                      : "text-red-600"
+                  }`}
+                >
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      !lines.length
+                        ? "bg-slate-300"
+                        : hasUidMapping && hasPasswordMapping && !hasDuplicateMappings
+                        ? "bg-emerald-500"
+                        : "bg-red-500"
+                    }`}
+                  />
+                  {!lines.length
+                    ? "Chờ nhập dữ liệu"
+                    : hasDuplicateMappings
+                    ? "Trùng trường mapping"
+                    : !hasUidMapping && !hasPasswordMapping
+                    ? "Thiếu cột UID và Mật khẩu"
+                    : !hasUidMapping
+                    ? "Thiếu cột UID"
+                    : !hasPasswordMapping
+                    ? "Thiếu cột Mật khẩu"
+                    : `Đã khớp ${mappedFieldCount}/${DEFAULT_MAPPING.length} trường`}
+                </span>
+              </div>
+            </div>
+
+            {showPreview && (
+              <div className="overflow-x-auto rounded-xl border border-border bg-white shadow-subtle">
+                <table className="w-full min-w-[1000px] text-left border-collapse text-xs">
+                  <thead className="h-9 border-b border-border bg-slate-50 font-bold uppercase text-[11px] text-slate-600">
+                    <tr>
+                      <th className="w-10 px-3 py-2 text-center">#</th>
+                      {previewColumns.map((col) => (
+                        <th key={`${col.field}-${col.index}`} className="px-3 py-2 whitespace-nowrap">
+                          {col.shortLabel}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {parsedAccounts.slice(0, 3).map((account, index) => (
+                      <tr key={`${account.uid}-${index}`} className="h-10 hover:bg-slate-50/60">
+                        <td className="px-3 py-2 text-center text-slate-400 font-mono">
+                          {index + 1}
+                        </td>
+                        {previewColumns.map((col) => {
+                          const val = account[col.field];
+                          const rawStr = String(val ?? "");
+                          const isUid = col.field === "uid";
+                          const isPassword = col.field === "password" || col.field === "pass_mail";
+                          const isHighlight = col.field === "two_fa" || col.field === "token";
+                          const isProxy = col.field === "proxy";
+
+                          let colorClass = "text-slate-700";
+                          if (isUid) colorClass = "font-bold text-primary font-mono";
+                          else if (isPassword) colorClass = "text-amber-700 font-mono";
+                          else if (isHighlight) colorClass = "text-sky-700 font-mono";
+                          else if (isProxy) colorClass = "text-emerald-700 font-mono";
+
+                          return (
+                            <td
+                              key={`${col.field}-${col.index}`}
+                              title={rawStr}
+                              className={`truncate px-3 py-2 whitespace-nowrap max-w-[180px] ${colorClass}`}
+                            >
+                              {truncateValue(rawStr, 20)}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                    {!parsedAccounts.length && (
+                      <tr>
+                        <td colSpan={previewColumns.length + 1} className="py-8 text-center text-slate-400">
+                          Dán dữ liệu tài khoản để xem trước cấu trúc
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {/* Tuỳ chọn Checkbox */}
+          <div className="mt-4 flex flex-col gap-2.5 rounded-xl border border-border bg-white px-4 py-3 text-xs text-slate-700 shadow-subtle lg:flex-row lg:items-center lg:justify-between">
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={skipDuplicates}
+                onChange={(event) => handleToggleSkipDuplicates(event.target.checked)}
+                className="h-4 w-4 rounded accent-primary cursor-pointer"
+              />
+              <span className="font-medium">Tự động bỏ qua UID trùng lặp trong hệ thống</span>
+            </label>
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={checkAfterImport}
+                onChange={(event) => setCheckAfterImport(event.target.checked)}
+                className="h-4 w-4 rounded accent-primary cursor-pointer"
+              />
+              <span className="font-medium">Đánh dấu kiểm tra Live/Die sau khi import</span>
+            </label>
+            <span className="flex items-center gap-1.5 text-emerald-700 font-semibold text-xs">
+              <ShieldCheck className="h-4 w-4 text-emerald-600" />Mã hóa AES-256 an toàn
+            </span>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <footer className="flex shrink-0 flex-col gap-3 border-t border-border bg-white px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="flex items-center gap-1.5 text-xs text-slate-500">
+            <Info className="h-4 w-4 text-primary" />Hệ thống hỗ trợ tối đa 100 tài khoản cho mỗi lần nhập
+          </p>
+          <div className="flex items-center justify-end gap-2.5">
+            <button
+              type="button"
+              onClick={handleClose}
+              disabled={isImporting}
+              className="h-9 px-4 rounded-md border border-border bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition cursor-pointer disabled:opacity-50"
+            >
+              Hủy
+            </button>
+            <button
+              type="button"
+              onClick={handleImport}
+              disabled={isImporting || !rawText.trim()}
+              className="flex h-9 min-w-[140px] items-center justify-center gap-1.5 rounded-md bg-primary hover:bg-primary-hover px-4 text-xs font-semibold text-white shadow-sm transition cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 active:scale-95"
+            >
+              {isImporting ? (
+                <>
+                  <CircleCheck className="h-4 w-4 animate-spin" />
+                  <span>Đang import...</span>
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4" />
+                  <span>Import {accountsToImport.length > 0 ? `(${accountsToImport.length})` : ""}</span>
+                </>
+              )}
+            </button>
+          </div>
+        </footer>
+      </div>
+
+      <ConfirmDialog
+        isOpen={showOverwriteConfirm}
+        onClose={() => setShowOverwriteConfirm(false)}
+        onConfirm={() => {
+          setSkipDuplicates(false);
+          setShowOverwriteConfirm(false);
+          toast.warning(
+            "Đã tắt bỏ qua trùng lặp: Nếu có UID trùng trong danh sách, thông tin cũ sẽ bị ghi đè!",
+            "CHẾ ĐỘ GHI ĐÈ"
+          );
+        }}
+        title="Xác nhận ghi đè thông tin tài khoản cũ"
+        description="Khi bỏ chọn tính năng này, nếu danh sách có UID đã tồn tại trong hệ thống thì toàn bộ thông tin cũ (Mật khẩu, Cookie, 2FA, Token, Proxy...) sẽ bị GHI ĐÈ bằng thông tin mới. Bạn có chắc chắn muốn cho phép ghi đè không?"
+        confirmText="Đồng ý ghi đè"
+        cancelText="Hủy bỏ (Giữ bỏ qua)"
+        variant="warning"
+      />
+    </div>
+  );
+
+  return typeof document !== "undefined" ? createPortal(modalContent, document.body) : null;
+}

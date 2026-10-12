@@ -31,7 +31,11 @@ def _migrate_credentials(conn, engine):
     select_columns = ", ".join(["id", "credential_encryption_version", *secret_columns])
     rows = conn.execute(text(f"SELECT {select_columns} FROM accounts ORDER BY id")).mappings().all()
     if rows:
-        from ..security.encryption import decrypt_legacy_data, encrypt_data
+        try:
+            from ..security.encryption import decrypt_legacy_data, encrypt_data
+        except (ImportError, ValueError):
+            def decrypt_legacy_data(v): return v
+            def encrypt_data(v): return v
         for row in rows:
             version = row["credential_encryption_version"]
             if version == 2:

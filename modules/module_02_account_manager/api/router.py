@@ -114,3 +114,59 @@ async def detail(uid: str, db: Session = Depends(get_db)):
 @router.delete("/{uid}")
 async def delete(uid: str, db: Session = Depends(get_db)):
     return accounts.delete_account(db, checked_uid(uid))
+
+# ── Route Aliases for legacy clients ──
+alias_router = APIRouter(tags=["Module 02: Account Manager Aliases"])
+alias_router.dependencies.append(Depends(scoped_owner))
+
+@alias_router.post("/tasks/open-browser")
+@router.post("/tasks/open-browser", include_in_schema=False)
+async def task_open_browser_alias(req: OpenBrowserRequest, db: Session = Depends(get_db)):
+    return await open_browser(req, db)
+
+@alias_router.post("/tasks/login")
+@router.post("/tasks/login", include_in_schema=False)
+async def task_login_alias(req: LoginRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    return await login(req, background_tasks, db)
+
+@alias_router.get("/stream")
+async def stream_alias():
+    return await stream()
+
+@alias_router.get("/accounts")
+@alias_router.get("/accounts/", include_in_schema=False)
+async def list_accounts_alias(db: Session = Depends(get_db)):
+    return await list_accounts(db)
+
+@alias_router.post("/accounts/import")
+async def import_accounts_alias(req: ImportRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    return await import_accounts(req, background_tasks, db)
+
+@alias_router.post("/accounts/single")
+async def save_single_alias(item: AccountInput, db: Session = Depends(get_db)):
+    return await save_single(item, db)
+
+@alias_router.post("/accounts/bulk-delete")
+async def bulk_delete_alias(req: UidsRequest, db: Session = Depends(get_db)):
+    return await bulk_delete(req, db)
+
+@alias_router.post("/accounts/check-status")
+async def check_status_alias(req: UidsRequest, db: Session = Depends(get_db)):
+    return await check_status(req, db)
+
+@alias_router.post("/accounts/test-proxy")
+async def test_proxy_alias(req: TestProxyRequest):
+    return await test_proxy(req)
+
+@alias_router.post("/accounts/{uid}/sync-cookies")
+async def sync_cookies_alias(uid: str, db: Session = Depends(get_db)):
+    return await sync_cookies(uid, db)
+
+@alias_router.get("/accounts/{uid}")
+async def detail_alias(uid: str, db: Session = Depends(get_db)):
+    return await detail(uid, db)
+
+@alias_router.delete("/accounts/{uid}")
+async def delete_alias(uid: str, db: Session = Depends(get_db)):
+    return await delete(uid, db)
+

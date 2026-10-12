@@ -161,3 +161,17 @@ class PersistentSessionTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["cookie"], "c_user=123")
         driver.quit.assert_called_once()
+
+    @patch("modules.module_02_account_manager.automation.login_flow.human_sleep")
+    @patch("modules.module_02_account_manager.automation.login_flow._check_logged_in", return_value=True)
+    @patch("modules.module_02_account_manager.automation.login_flow.ensure_personal_profile")
+    def test_ensure_logged_in_already_active(self, ensure_personal, check_login, sleep):
+        from modules.module_02_account_manager.automation.login_flow import ensure_logged_in
+        driver = Mock()
+        driver.current_url = "https://www.facebook.com"
+        result = ensure_logged_in(driver, "123")
+        self.assertTrue(result["success"])
+        self.assertFalse(result["reloaded"])
+        ensure_personal.assert_called_once_with(driver, "123")
+        driver.quit.assert_not_called()
+

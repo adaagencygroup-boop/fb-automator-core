@@ -623,13 +623,155 @@ def run_login(uid: str, password: str, two_fa: str = None, cookie: str = None, p
         result["error"] = str(e)
     finally:
         if driver:
-            if result["success"]:
-                from ..automation.browser_manager import extract_cookies_as_string
-                result["cookie"] = extract_cookies_as_string(driver)
+            from ..automation.browser_manager import unregister_active_driver, extract_cookies_as_string, safe_close_driver
+            unregister_active_driver(driver)
+            if result.get("success"):
+                try:
+                    result["cookie"] = extract_cookies_as_string(driver)
+                except Exception:
+                    pass
             try:
+                # Về trang chủ để sync session trước khi đóng
+                driver.get(FB_HOME)
+                time.sleep(2)
                 driver.quit()
             except Exception:
-                from ..automation.browser_manager import safe_close_driver
                 safe_close_driver(driver)
 
     return result
+
+
+def ensure_logged_in(
+    driver: webdriver.Chrome,
+    uid: str,
+    password: str = "",
+    two_fa: str = None,
+    cookie: str = None,
+) -> dict:
+    """
+    Đảm bảo driver hiện tại đang có phiên đăng nhập Facebook hợp lệ.
+    Nếu phiên còn sống: Trả về success ngay trong 1-2 giây.
+    Nếu phiên bị hết hạn / văng ra trang login: Tự động đăng nhập lại (Cookie hoặc Form + 2FA).
+    Không đóng trình duyệt driver khi hoàn tất.
+    """
+    result = {"success": False, "error": "", "reloaded": False}
+
+    def _sync_fresh_cookie():
+        try:
+            from ..automation.browser_manager import extract_cookies_as_string
+            fresh_c = extract_cookies_as_string(driver)
+            if fresh_c and "c_user" in fresh_c:
+                from ..database.connection import SessionLocal
+                from ..database.repository import AccountRepository as AccountRepo
+                with SessionLocal() as _db:
+                    AccountRepo.update_cookies(_db, uid, fresh_c)
+                    AccountRepo.update_login_status(_db, uid, "logged_in")
+        except Exception:
+            pass
+
+    try:
+        current_url = (driver.current_url or "").lower()
+        if "facebook.com" in current_url and not any(k in current_url for k in ["/login", "checkpoint", "two_step"]):
+            if _check_logged_in(driver):
+                ensure_personal_profile(driver, uid)
+                _sync_fresh_cookie()
+                result["success"] = True
+                return result
+        else:
+            driver.get(FB_HOME)
+            # Chờ tối đa 6-8 giây cho phiên Facebook load xong cookie qua proxy
+            for _ in range(5):
+                human_sleep(1.0, 1.5)
+                if _check_logged_in(driver):
+                    ensure_personal_profile(driver, uid)
+                    _sync_fresh_cookie()
+                    result["success"] = True
+                    return result
+    except Exception as e:
+        logger.debug(f"[{uid}] Quick session check exception: {e}")
+
+    logger.info(f"[{uid}] Phiên đăng nhập chưa active trên driver. Đang tiến hành đăng nhập lại...")
+    result["reloaded"] = True
+
+    # 1. Thử login bằng cookie nếu có
+    if cookie and cookie.strip():
+        if _try_cookie_login(driver, cookie):
+            logger.info(f"[{uid}] Đăng nhập lại bằng Cookie THÀNH CÔNG trong ensure_logged_in")
+            _handle_post_login_popups(driver)
+            ensure_personal_profile(driver, uid)
+            _sync_fresh_cookie()
+            result["success"] = True
+            return result
+        logger.info(f"[{uid}] Cookie hết hạn hoặc không hợp lệ, chuyển sang form login")
+
+    # 2. Thử login bằng tài khoản mật khẩu
+    if not password:
+        result["error"] = "Tài khoản bị mất phiên đăng nhập và không có mật khẩu để tự động login"
+        return result
+
+    try:
+        driver.get(FB_HOME)
+        human_sleep(2.0, 3.5)
+
+        email_el = wait_and_find(driver, LOGIN["email_input"], timeout=8)
+        human_type(email_el, uid)
+        human_sleep(0.3, 0.8)
+
+        pass_el = wait_and_find(driver, LOGIN["password_input"], timeout=8)
+        human_type(pass_el, password)
+        human_sleep(0.5, 1.2)
+
+        clicked = False
+        try:
+            login_btn = wait_and_find(driver, LOGIN["login_button"], timeout=5)
+            try:
+                login_btn.click()
+                clicked = True
+            except Exception:
+                driver.execute_script("arguments[0].click();", login_btn)
+                clicked = True
+        except Exception as err:
+            logger.info(f"[{uid}] Click login btn fallback enter: {err}")
+
+        if not clicked:
+            from selenium.webdriver.common.keys import Keys
+            pass_el.send_keys(Keys.ENTER)
+
+        human_sleep(4.0, 6.0)
+
+        # Xử lý 2FA nếu có
+        if _is_2fa_required(driver):
+            if two_fa:
+                if not _handle_2fa(driver, two_fa):
+                    result["error"] = "Xác thực mã 2FA thất bại"
+                    return result
+            else:
+                result["error"] = "Facebook yêu cầu mã 2FA nhưng tài khoản chưa có Secret Key 2FA"
+                return result
+        elif is_checkpoint_url(driver.current_url or ""):
+            result["error"] = f"Checkpoint, URL: {driver.current_url}"
+            return result
+
+        human_sleep(2.0, 3.0)
+        _handle_post_login_popups(driver)
+
+        if _check_logged_in(driver):
+            ensure_personal_profile(driver, uid)
+            _sync_fresh_cookie()
+            result["success"] = True
+            logger.info(f"[{uid}] Tự động đăng nhập lại THÀNH CÔNG")
+            return result
+        else:
+            _handle_post_login_popups(driver)
+            if _check_logged_in(driver):
+                ensure_personal_profile(driver, uid)
+                _sync_fresh_cookie()
+                result["success"] = True
+                return result
+            current_url = driver.current_url
+            result["error"] = f"Đăng nhập thất bại (URL: {current_url})"
+            return result
+    except Exception as e:
+        logger.exception(f"[{uid}] Lỗi khi tự động đăng nhập trong ensure_logged_in: {e}")
+        result["error"] = str(e)
+        return result

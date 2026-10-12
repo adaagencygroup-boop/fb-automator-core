@@ -1,5 +1,6 @@
 import { Plus_Jakarta_Sans, Inter } from "next/font/google";
 import "./globals.css";
+import { ToastProvider } from "@/components/ui/toast";
 
 const fontHeading = Plus_Jakarta_Sans({
   subsets: ["latin", "vietnamese"],
@@ -31,7 +32,9 @@ export default function RootLayout({ children }) {
       lang="vi"
       className={`${fontHeading.variable} ${fontSans.variable} font-sans h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-background text-foreground">{children}</body>
+      <body className="min-h-full flex flex-col bg-background text-foreground">
+        <ToastProvider>{children}</ToastProvider>
+      </body>
     </html>
   );
 }

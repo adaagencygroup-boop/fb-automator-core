@@ -16,8 +16,11 @@ def initialize(database_url=None):
     url = database_url or os.getenv("SUPABASE_DB_URL") or os.getenv("DATABASE_URL")
     if not url:
         if os.getenv("FB_ACCOUNT_DATA_DIR") or getattr(sys, "frozen", False):
-            from ..utils.paths import BASE_DIR
-            path = Path(BASE_DIR) / "fb_automator.db"
+            try:
+                from ..utils.paths import BASE_DIR
+                path = Path(BASE_DIR) / "fb_automator.db"
+            except (ImportError, ValueError):
+                path = Path(__file__).resolve().parents[3] / "data" / "fb_automator.db"
         else:
             path = Path(__file__).resolve().parents[3] / "data" / "fb_automator.db"
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -24,7 +24,7 @@ from core.ai.gemini_engine import ai_engine
 from core.media.tiktok_scraper import tiktok_scraper
 from core.media.youtube_scraper import youtube_scraper
 from core.network.proxy_manager import proxy_manager
-from modules.module_02_account_manager.api.router import router as account_router
+from modules.module_02_account_manager.api.router import router as account_router, alias_router as account_alias_router
 from modules.module_02_account_manager import initialize as initialize_accounts, shutdown as shutdown_accounts
 
 # Reconfigure stdout for safe Windows console output
@@ -160,6 +160,7 @@ def get_dashboard_stats():
 
 # ==================== MODULE 2: ACCOUNT MANAGER ====================
 app.include_router(account_router)
+app.include_router(account_alias_router)
 
 # ==================== MODULE 5: PAGE MANAGER & POSTING ====================
 @app.get("/api/pages")
