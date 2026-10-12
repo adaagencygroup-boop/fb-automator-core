@@ -449,50 +449,73 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 bg-slate-50/50">
-          <div className="grid gap-4 overflow-hidden rounded-xl border border-border bg-white shadow-subtle xl:grid-cols-[1.2fr_.8fr]">
-            {/* Cột trái: Textarea nhập dữ liệu */}
-            <section className="flex min-h-[420px] flex-col border-b border-border p-4 sm:p-5 xl:border-b-0 xl:border-r">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <h3 className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wide">
-                  <Braces className="h-4 w-4 text-primary" />Dữ liệu tài khoản
-                </h3>
-                <span className="rounded-full border border-blue-200 bg-primary-subtle px-2.5 py-0.5 text-[11px] font-bold font-mono text-primary">
-                  {lines.length} / 100 dòng
-                </span>
-              </div>
-
-              <div className="grid min-h-[280px] flex-1 grid-cols-[38px_1fr] overflow-hidden rounded-lg border border-border bg-slate-950 focus-within:border-primary">
-                <div aria-hidden="true" className="overflow-hidden border-r border-slate-800 bg-slate-900 py-3 text-right font-mono text-[11px] leading-6 text-slate-500 select-none">
-                  {Array.from({ length: Math.max(12, rawText.split(/\r?\n/).length) }, (_, index) => (
-                    <div key={index} className="pr-2">{String(index + 1).padStart(2, "0")}</div>
-                  ))}
+          <div className="grid gap-4 xl:grid-cols-[1.2fr_.8fr]">
+            {/* Cột trái: Section - Cột Trái: Nhập Dữ Liệu Raw Text (Figma Node 1010-3775) */}
+            <section className="flex min-h-[380px] flex-col justify-between rounded-xl border border-[#E2E8F0] bg-white p-4 sm:p-5 shadow-[0_1px_2px_0_rgba(0,0,0,0.04)]">
+              <div>
+                {/* Tiêu đề & Badge đếm dòng */}
+                <div className="mb-3 flex items-center justify-between border-b border-[#F1F5F9] pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-bold text-sm text-[#2563EB] tracking-tight">
+                      {"{ }"}
+                    </span>
+                    <h3 className="font-bold text-sm text-[#1E293B]">
+                      Dữ liệu tài khoản
+                    </h3>
+                  </div>
+                  <span className="rounded-full border border-[#BFDBFE] bg-[#EFF6FF] px-2.5 py-0.5 text-xs text-[#1D4ED8] font-normal">
+                    {lines.length} / 100 dòng
+                  </span>
                 </div>
-                <textarea
-                  value={rawText}
-                  onChange={(event) => setRawText(event.target.value)}
-                  spellCheck={false}
-                  placeholder="100084920491823|AdminPass#992|JBSWY3DPEHPK3PXP|c_user=...|EAAAAUaZA...|user@gmail.com|MailPass@2024|recovery@mail.com|hot_tok_99182a|CID_4819204|103.142.12.88:8080:user:pass"
-                  className="min-h-[280px] w-full resize-none overflow-auto bg-transparent p-3 font-mono text-[11px] leading-6 text-emerald-400 outline-none placeholder:text-slate-600"
-                />
+
+                {/* Trình nhập code / Textarea giả lập IDE với số dòng - Chuẩn Figma #F8FAFC */}
+                <div className="flex min-h-[260px] overflow-hidden rounded-lg border border-[#E2E8F0]/90 bg-[#F8FAFC] focus-within:border-[#2563EB] focus-within:ring-2 focus-within:ring-[#2563EB]/15 transition-all">
+                  {/* Cột số dòng (01, 02, 03...) */}
+                  <div
+                    aria-hidden="true"
+                    className="w-10 shrink-0 select-none border-r border-[#E2E8F0]/80 bg-[#F8FAFC] py-3 text-right font-mono text-[11px] leading-[19.5px] text-[#94A3B8]"
+                  >
+                    {Array.from(
+                      { length: Math.max(8, rawText.split(/\r?\n/).length) },
+                      (_, index) => (
+                        <div key={index} className="pr-2">
+                          {String(index + 1).padStart(2, "0")}
+                        </div>
+                      )
+                    )}
+                  </div>
+
+                  {/* Vùng nhập text */}
+                  <textarea
+                    value={rawText}
+                    onChange={(event) => setRawText(event.target.value)}
+                    spellCheck={false}
+                    placeholder="...dán thêm tài khoản tại đây..."
+                    className="min-h-[260px] w-full flex-1 resize-none bg-transparent p-3 font-mono text-xs leading-[19.5px] text-[#334155] outline-none placeholder:text-[#94A3B8] placeholder:font-mono placeholder:italic"
+                  />
+                </div>
               </div>
 
-              <div className="mt-3.5 flex flex-col gap-2.5 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
-                <label className="flex min-w-0 flex-1 items-center gap-2 text-xs text-slate-600">
-                  <span className="shrink-0 font-medium">Ký tự phân cách:</span>
-                  <span className="relative min-w-0 max-w-[200px] flex-1">
+              {/* Tùy biến dấu phân cách & Nút thao tác nhanh */}
+              <div className="mt-3.5 flex flex-col gap-2.5 border-t border-[#F1F5F9] pt-3 sm:flex-row sm:items-center sm:justify-between">
+                <label className="flex min-w-0 flex-1 items-center gap-2 text-xs text-[#475569]">
+                  <span className="shrink-0 font-normal">Ký tự phân cách:</span>
+                  <span className="relative min-w-0 max-w-[210px] flex-1">
                     <select
                       value={delimiter}
                       onChange={(event) => {
                         setDelimiter(event.target.value);
                         setManualColumnMap(null);
                       }}
-                      className="h-8 w-full appearance-none truncate rounded-md border border-border bg-white py-0 pl-2.5 pr-8 text-xs text-slate-700 outline-none focus:border-primary"
+                      className="h-8 w-full appearance-none truncate rounded-lg border border-[#E2E8F0] bg-white py-0 pl-2.5 pr-8 text-xs text-[#334155] outline-none focus:border-[#2563EB] cursor-pointer"
                     >
                       {DELIMITERS.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
                       ))}
                     </select>
-                    <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                    <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#94A3B8]" />
                   </span>
                 </label>
 
@@ -501,7 +524,7 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
                     type="button"
                     onClick={resetForm}
                     disabled={!rawText}
-                    className="flex h-8 shrink-0 whitespace-nowrap items-center gap-1.5 rounded-md border border-border bg-white hover:bg-slate-50 px-3 text-xs font-semibold text-slate-600 transition-colors disabled:opacity-40"
+                    className="flex h-8 shrink-0 whitespace-nowrap items-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-white hover:bg-slate-50 px-3 text-xs font-normal text-[#475569] transition-colors disabled:opacity-40 cursor-pointer shadow-2xs"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                     <span>Xóa trắng</span>
@@ -509,10 +532,10 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
                   <button
                     type="button"
                     onClick={() => setShowPreview((prev) => !prev)}
-                    className={`flex h-8 shrink-0 whitespace-nowrap items-center gap-1.5 rounded-md border px-3 text-xs font-semibold transition shadow-subtle ${
+                    className={`flex h-8 shrink-0 whitespace-nowrap items-center gap-1.5 rounded-lg border px-3 text-xs font-normal transition-colors cursor-pointer shadow-2xs ${
                       showPreview
-                        ? "border-border bg-slate-100 text-slate-700 hover:bg-slate-200"
-                        : "border-blue-200 bg-primary-subtle text-primary hover:bg-blue-100"
+                        ? "border-[#CBD5E1] bg-slate-100 text-[#334155] hover:bg-slate-200"
+                        : "border-[#BFDBFE] bg-[#EFF6FF] text-[#2563EB] hover:bg-blue-100/70"
                     }`}
                   >
                     {showPreview ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
@@ -523,11 +546,12 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
             </section>
 
             {/* Cột phải: Field Mapping */}
-            <section className="min-h-[420px] p-4 sm:p-5 flex flex-col justify-between">
+            <section className="flex min-h-[380px] flex-col justify-between rounded-xl border border-[#E2E8F0] bg-white p-4 sm:p-5 shadow-[0_1px_2px_0_rgba(0,0,0,0.04)]">
               <div>
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <h3 className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wide">
-                    <ListFilter className="h-4 w-4 text-primary" />Field Mapping
+                <div className="mb-3 flex items-center justify-between border-b border-[#F1F5F9] pb-2.5">
+                  <h3 className="flex items-center gap-2 text-sm font-bold text-[#1E293B]">
+                    <ListFilter className="h-4 w-4 text-[#2563EB]" />
+                    <span>Field Mapping</span>
                   </h3>
                   <button
                     type="button"
@@ -535,20 +559,23 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
                       setManualColumnMap(null);
                     }}
                     disabled={!lines.length}
-                    className="flex h-7 shrink-0 whitespace-nowrap items-center gap-1 rounded-md border border-blue-200 bg-primary-subtle px-2 text-[11px] font-semibold text-primary hover:bg-blue-100 transition-colors disabled:opacity-40"
+                    className="flex h-7 shrink-0 whitespace-nowrap items-center gap-1 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-2.5 text-xs font-normal text-[#2563EB] hover:bg-blue-100/70 transition-colors disabled:opacity-40 cursor-pointer shadow-2xs"
                   >
                     <Sparkles className="h-3 w-3" />
                     <span>Tự nhận dạng</span>
                   </button>
                 </div>
 
-                <div className="max-h-[350px] space-y-1.5 overflow-y-auto pr-1">
+                <div className="max-h-[300px] space-y-1.5 overflow-y-auto pr-1">
                   {Array.from({ length: visibleColumnCount }, (_, index) => (
-                    <div key={index} className="flex h-9 items-center gap-2 rounded-lg border border-border bg-slate-50/60 px-2.5">
-                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-white">
+                    <div
+                      key={index}
+                      className="flex h-9 items-center gap-2 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] px-2.5"
+                    >
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#2563EB] text-[10px] font-bold text-white">
                         {index + 1}
                       </span>
-                      <span className="min-w-[56px] flex-1 text-xs text-slate-600 font-medium">
+                      <span className="min-w-[56px] flex-1 text-xs text-[#475569] font-medium">
                         Cột {index + 1}
                       </span>
                       <span className="relative w-[58%] min-w-0">
@@ -559,13 +586,15 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
                             next[index] = event.target.value;
                             setManualColumnMap(next);
                           }}
-                          className="h-7 w-full appearance-none truncate rounded border border-border bg-white py-0 pl-2 pr-7 text-xs text-slate-700 outline-none focus:border-primary"
+                          className="h-7 w-full appearance-none truncate rounded-md border border-[#E2E8F0] bg-white py-0 pl-2 pr-7 text-xs text-[#334155] outline-none focus:border-[#2563EB] cursor-pointer"
                         >
                           {FIELD_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
                           ))}
                         </select>
-                        <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                        <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#94A3B8]" />
                       </span>
                     </div>
                   ))}
