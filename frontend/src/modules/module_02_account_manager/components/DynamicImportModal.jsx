@@ -273,29 +273,15 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
   const hasDuplicateMappings = activeMappings.some((field, index) => activeMappings.indexOf(field) !== index);
 
   const previewColumns = useMemo(() => {
-    const list = [];
-    columnMap.slice(0, visibleColumnCount).forEach((field, index) => {
-      if (field && field !== "ignore") {
-        const option = FIELD_OPTIONS.find((opt) => opt.value === field);
-        list.push({
-          index,
-          field,
-          shortLabel: option?.shortLabel || field.toUpperCase(),
-        });
-      }
+    return DEFAULT_MAPPING.map((field) => {
+      const option = FIELD_OPTIONS.find((opt) => opt.value === field);
+      return {
+        field,
+        shortLabel: option?.shortLabel || field.toUpperCase(),
+        label: option?.label || field,
+      };
     });
-    if (!list.length) {
-      DEFAULT_MAPPING.forEach((field, index) => {
-        const option = FIELD_OPTIONS.find((opt) => opt.value === field);
-        list.push({
-          index,
-          field,
-          shortLabel: option?.shortLabel || field.toUpperCase(),
-        });
-      });
-    }
-    return list;
-  }, [columnMap, visibleColumnCount]);
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -644,7 +630,7 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
           <section className="mt-4">
             <div className={`${showPreview ? "mb-2.5" : ""} flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-xs`}>
               <h3 className="flex items-center gap-2 font-bold text-slate-800">
-                <Eye className="h-4 w-4 text-primary" />Xem trước cấu trúc (3 dòng đầu)
+                <Eye className="h-4 w-4 text-primary" />Xem trước cấu trúc 11 trường (3 dòng đầu)
               </h3>
               <div className="flex items-center gap-3">
                 <span className="rounded-md border border-border bg-white px-2.5 py-1 font-semibold text-slate-700 shadow-subtle">
@@ -693,13 +679,13 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
             </div>
 
             {showPreview && (
-              <div className="overflow-x-auto rounded-xl border border-border bg-white shadow-subtle">
-                <table className="w-full min-w-[1000px] text-left border-collapse text-xs">
+              <div className="overflow-x-auto rounded-xl border border-border bg-white shadow-subtle [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:bg-[#4B8EFF]/60 hover:[&::-webkit-scrollbar-thumb]:bg-[#2563EB] [&::-webkit-scrollbar-thumb]:rounded-full">
+                <table className="w-full min-w-[1180px] text-left border-collapse text-xs">
                   <thead className="h-9 border-b border-border bg-slate-50 font-bold uppercase text-[11px] text-slate-600">
                     <tr>
-                      <th className="w-10 px-3 py-2 text-center">#</th>
+                      <th className="w-10 px-3 py-2 text-center bg-slate-50 sticky left-0 z-10 shadow-[1px_0_0_0_#E2E8F0]">#</th>
                       {previewColumns.map((col) => (
-                        <th key={`${col.field}-${col.index}`} className="px-3 py-2 whitespace-nowrap">
+                        <th key={col.field} className="px-3 py-2 whitespace-nowrap">
                           {col.shortLabel}
                         </th>
                       ))}
@@ -708,30 +694,33 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
                   <tbody className="divide-y divide-slate-100 text-slate-700">
                     {parsedAccounts.slice(0, 3).map((account, index) => (
                       <tr key={`${account.uid}-${index}`} className="h-10 hover:bg-slate-50/60">
-                        <td className="px-3 py-2 text-center text-slate-400 font-mono">
+                        <td className="px-3 py-2 text-center text-slate-400 font-mono bg-white sticky left-0 z-10 shadow-[1px_0_0_0_#E2E8F0]">
                           {index + 1}
                         </td>
                         {previewColumns.map((col) => {
                           const val = account[col.field];
-                          const rawStr = String(val ?? "");
+                          const hasValue = val !== undefined && val !== null && String(val).trim() !== "";
+                          const rawStr = hasValue ? String(val).trim() : "--";
                           const isUid = col.field === "uid";
                           const isPassword = col.field === "password" || col.field === "pass_mail";
                           const isHighlight = col.field === "two_fa" || col.field === "token";
                           const isProxy = col.field === "proxy";
 
-                          let colorClass = "text-slate-700";
-                          if (isUid) colorClass = "font-bold text-primary font-mono";
-                          else if (isPassword) colorClass = "text-amber-700 font-mono";
-                          else if (isHighlight) colorClass = "text-sky-700 font-mono";
-                          else if (isProxy) colorClass = "text-emerald-700 font-mono";
+                          let colorClass = hasValue ? "text-slate-700 font-mono" : "text-slate-400 font-mono text-center";
+                          if (hasValue) {
+                            if (isUid) colorClass = "font-bold text-primary font-mono";
+                            else if (isPassword) colorClass = "text-amber-700 font-mono";
+                            else if (isHighlight) colorClass = "text-sky-700 font-mono";
+                            else if (isProxy) colorClass = "text-emerald-700 font-mono";
+                          }
 
                           return (
                             <td
-                              key={`${col.field}-${col.index}`}
-                              title={rawStr}
+                              key={col.field}
+                              title={hasValue ? rawStr : "Trường này chưa có dữ liệu"}
                               className={`truncate px-3 py-2 whitespace-nowrap max-w-[180px] ${colorClass}`}
                             >
-                              {truncateValue(rawStr, 20)}
+                              {hasValue ? truncateValue(rawStr, 20) : "--"}
                             </td>
                           );
                         })}
@@ -740,7 +729,7 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
                     {!parsedAccounts.length && (
                       <tr>
                         <td colSpan={previewColumns.length + 1} className="py-8 text-center text-slate-400">
-                          Dán dữ liệu tài khoản để xem trước cấu trúc
+                          Dán dữ liệu tài khoản để xem trước cấu trúc 11 trường
                         </td>
                       </tr>
                     )}
