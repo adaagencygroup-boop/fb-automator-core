@@ -250,12 +250,23 @@ export default function AccountTable({
         </div>
       </div>
 
-      {/* 2. Section - Data Table */}
+      {/* 2. Section - Data Table (table-fixed phân bổ đều tỷ lệ %) */}
       <div className="w-full overflow-x-auto">
-        <table className="w-full text-left border-collapse min-w-[880px]">
+        <table className="w-full table-fixed border-collapse min-w-[960px]">
+          <colgroup>
+            <col className="w-[4%]" />
+            <col className="w-[5%]" />
+            <col className="w-[16%]" />
+            <col className="w-[23%]" />
+            <col className="w-[13%]" />
+            <col className="w-[14%]" />
+            <col className="w-[11%]" />
+            <col className="w-[14%]" />
+          </colgroup>
+
           <thead>
             <tr className="h-11 bg-[#F8FAFC]/70 border-b border-[#E2E8F0]">
-              <th className="w-12 px-3 py-2 text-center">
+              <th className="px-1 py-2 text-center">
                 <input
                   type="checkbox"
                   checked={isAllSelected}
@@ -263,27 +274,27 @@ export default function AccountTable({
                   className="h-4 w-4 rounded border-[#CBD5E1] accent-[#2563EB] cursor-pointer"
                 />
               </th>
-              <th className="w-12 px-2.5 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center">
+              <th className="px-1 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center">
                 STT
               </th>
-              <th className="w-40 px-3 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B]">
+              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-left">
                 UID
               </th>
-              <th className="px-4 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B]">
+              <th className="px-3 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-left">
                 TÊN TÀI KHOẢN
               </th>
-              <th className="w-36 px-3 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center whitespace-nowrap">
+              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center whitespace-nowrap">
                 <span className="block leading-tight">TRẠNG THÁI</span>
                 <span className="block text-[10px] text-[#94A3B8] leading-tight">TÀI KHOẢN</span>
               </th>
-              <th className="w-36 px-3 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center whitespace-nowrap">
+              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center whitespace-nowrap">
                 <span className="block leading-tight">TRẠNG THÁI</span>
                 <span className="block text-[10px] text-[#94A3B8] leading-tight">ĐĂNG NHẬP</span>
               </th>
-              <th className="w-32 px-3 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B]">
+              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center">
                 LAST LOGIN
               </th>
-              <th className="w-36 px-4 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-right">
+              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center">
                 HÀNH ĐỘNG
               </th>
             </tr>
@@ -321,7 +332,7 @@ export default function AccountTable({
                       }`}
                     >
                       {/* 1. Checkbox */}
-                      <td className="px-3 py-2 text-center">
+                      <td className="px-1 py-2 text-center">
                         <input
                           type="checkbox"
                           checked={isSelected}
@@ -331,13 +342,13 @@ export default function AccountTable({
                       </td>
 
                       {/* 2. STT */}
-                      <td className="px-2.5 py-2 font-medium text-[#64748B] text-center text-xs">
+                      <td className="px-1 py-2 font-medium text-[#64748B] text-center text-xs">
                         {startIndex + index + 1}
                       </td>
 
                       {/* 3. UID */}
-                      <td className="px-3 py-2">
-                        <div className="flex items-center gap-1.5 max-w-[150px]">
+                      <td className="px-2 py-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
                           <span
                             className="font-mono font-semibold text-[#1E293B] truncate tracking-tight text-xs"
                             title={account.uid}
@@ -360,24 +371,24 @@ export default function AccountTable({
                       </td>
 
                       {/* 4. Tên tài khoản */}
-                      <td className="px-4 py-2">
-                        <div className="flex items-center gap-2.5">
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
                           <span
                             className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 font-bold text-[11px] text-white shadow-2xs"
                             style={{ backgroundColor: avatarColors[index % avatarColors.length] }}
                           >
                             {initial}
                           </span>
-                          <div className="flex flex-col justify-center min-w-0">
+                          <div className="flex flex-col justify-center min-w-0 overflow-hidden">
                             <span
-                              className="font-medium text-[#1E293B] truncate max-w-[200px] text-xs sm:text-sm"
+                              className="font-medium text-[#1E293B] truncate text-xs sm:text-sm"
                               title={account.profile_name || "Chưa cập nhật"}
                             >
                               {account.profile_name || "Chưa cập nhật"}
                             </span>
                             {account.email && (
                               <span
-                                className="text-[11px] text-[#64748B] truncate max-w-[200px]"
+                                className="text-[11px] text-[#64748B] truncate"
                                 title={account.email}
                               >
                                 {account.email}
@@ -388,7 +399,7 @@ export default function AccountTable({
                       </td>
 
                       {/* 5. Trạng thái tài khoản (Badge pill với chấm tròn) */}
-                      <td className="px-3 py-2 text-center whitespace-nowrap">
+                      <td className="px-2 py-2 text-center whitespace-nowrap">
                         {account.status === "live" ? (
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857]">
                             <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
@@ -405,7 +416,7 @@ export default function AccountTable({
                       </td>
 
                       {/* 6. Trạng thái đăng nhập (Badge pill với chấm tròn) */}
-                      <td className="px-3 py-2 text-center whitespace-nowrap">
+                      <td className="px-2 py-2 text-center whitespace-nowrap">
                         {account.login_status === "logged_in" ? (
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857]">
                             <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
@@ -424,14 +435,14 @@ export default function AccountTable({
                         )}
                       </td>
 
-                      {/* 7. Last login (2 dòng: Ngày / Giờ) */}
-                      <td className="px-3 py-2">
+                      {/* 7. Last login (2 dòng: Ngày / Giờ hoặc --) */}
+                      <td className="px-2 py-2 text-center">
                         {account.last_login_at ? (
                           (() => {
                             const { time, date } = formatVietnamDateTime(account.last_login_at);
                             if (time === "--:--") return <span className="text-[#94A3B8] text-xs">--</span>;
                             return (
-                              <div className="flex flex-col">
+                              <div className="flex flex-col items-center justify-center">
                                 <span className="font-semibold text-[#334155] font-mono text-[11px]">
                                   {date}
                                 </span>
@@ -446,27 +457,10 @@ export default function AccountTable({
                         )}
                       </td>
 
-                      {/* 8. Hành động: 4 nút vuông bo góc */}
-                      <td className="px-4 py-2 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {/* Nút 1: Mở Chrome */}
-                          <button
-                            type="button"
-                            onClick={() => onOpenBrowser(account.uid)}
-                            disabled={openingBrowserUids?.has(account.uid)}
-                            title={openingBrowserUids?.has(account.uid) ? "Đang mở Chrome..." : "Mở trình duyệt Profile Chrome"}
-                            className={`flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#475569] hover:text-[#2563EB] transition-colors cursor-pointer shadow-2xs ${
-                              openingBrowserUids?.has(account.uid) ? "opacity-70 cursor-not-allowed" : ""
-                            }`}
-                          >
-                            {openingBrowserUids?.has(account.uid) ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin text-[#2563EB]" />
-                            ) : (
-                              <Globe className="w-3.5 h-3.5" />
-                            )}
-                          </button>
-
-                          {/* Nút 2: Xem/Ẩn chi tiết 11 trường */}
+                      {/* 8. Hành động: 4 nút vuông chuẩn Figma [Mắt] → [Bút chì] → [Địa cầu] → [Thùng rác] */}
+                      <td className="px-2 py-2 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          {/* Nút 1: Xem/Ẩn chi tiết 11 trường (Mắt) */}
                           <button
                             type="button"
                             onClick={() => toggleDetail(account.uid)}
@@ -475,7 +469,7 @@ export default function AccountTable({
                             className={`flex items-center justify-center w-7 h-7 rounded-md transition-colors border cursor-pointer shadow-2xs ${
                               expandedUids.has(account.uid) && !closingUids.has(account.uid)
                                 ? "bg-blue-50 border-blue-200 text-[#2563EB]"
-                                : "border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#475569] hover:text-[#2563EB]"
+                                : "border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#94A3B8] hover:text-[#2563EB]"
                             }`}
                           >
                             {expandedUids.has(account.uid) && !closingUids.has(account.uid) ? (
@@ -485,22 +479,39 @@ export default function AccountTable({
                             )}
                           </button>
 
-                          {/* Nút 3: Chỉnh sửa */}
+                          {/* Nút 2: Chỉnh sửa (Bút chì) */}
                           <button
                             type="button"
                             onClick={() => onEditAccount(account.uid)}
                             title="Chỉnh sửa thông tin"
-                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#475569] hover:text-[#2563EB] transition-colors cursor-pointer shadow-2xs"
+                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#94A3B8] hover:text-[#2563EB] transition-colors cursor-pointer shadow-2xs"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Nút 4: Xóa */}
+                          {/* Nút 3: Mở Chrome Profile (Quả địa cầu) */}
+                          <button
+                            type="button"
+                            onClick={() => onOpenBrowser(account.uid)}
+                            disabled={openingBrowserUids?.has(account.uid)}
+                            title={openingBrowserUids?.has(account.uid) ? "Đang mở Chrome..." : "Mở trình duyệt Profile Chrome"}
+                            className={`flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#94A3B8] hover:text-[#059669] transition-colors cursor-pointer shadow-2xs ${
+                              openingBrowserUids?.has(account.uid) ? "opacity-70 cursor-not-allowed text-[#2563EB]" : ""
+                            }`}
+                          >
+                            {openingBrowserUids?.has(account.uid) ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-[#2563EB]" />
+                            ) : (
+                              <Globe className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+
+                          {/* Nút 4: Xóa tài khoản (Thùng rác) */}
                           <button
                             type="button"
                             onClick={() => onDeleteAccount(account.uid)}
                             title="Xóa tài khoản"
-                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#FECDD3] bg-[#FFF1F2] hover:bg-[#FFE4E6] text-[#BE123C] transition-colors cursor-pointer shadow-2xs"
+                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-red-50/50 hover:border-[#FECDD3] text-[#94A3B8] hover:text-[#BE123C] transition-colors cursor-pointer shadow-2xs"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
