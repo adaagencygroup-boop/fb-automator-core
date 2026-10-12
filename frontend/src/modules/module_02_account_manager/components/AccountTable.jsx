@@ -257,7 +257,7 @@ export default function AccountTable({
             className="flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] hover:bg-[#D1FAE5] px-3.5 text-xs font-semibold text-[#047857] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
             title="Kiểm tra trạng thái Live/Die của các tài khoản đã chọn"
           >
-            <CheckStatusIcon className={`w-3 h-3 ${isCheckingStatus ? "animate-spin" : ""}`} />
+            <CheckStatusIcon className={`w-3 h-3 ${isCheckingStatus ? "animate-spin [animation-direction:reverse]" : ""}`} />
             <span>
               {isCheckingStatus ? "Đang kiểm tra..." : "Check trạng thái"}
               {selectedUids.length > 0 ? ` (${selectedUids.length})` : ""}
