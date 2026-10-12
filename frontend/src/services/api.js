@@ -39,6 +39,31 @@ function shouldSkipRefresh(url) {
   );
 }
 
+function extractErrorMessage(error) {
+  const detail = error.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item?.msg) {
+          const field = Array.isArray(item.loc) ? item.loc[item.loc.length - 1] : "";
+          return field ? `${field}: ${item.msg}` : item.msg;
+        }
+        return JSON.stringify(item);
+      })
+      .join("; ");
+  }
+  if (detail && typeof detail === "object") {
+    return detail.message || JSON.stringify(detail);
+  }
+  return (
+    error.response?.data?.message ||
+    error.message ||
+    "Không thể kết nối tới Local Engine (Port 28129)"
+  );
+}
+
 api.interceptors.response.use(
   (response) => {
     warned.delete("network"); // Engine đã chạy lại -> lần mất kết nối sau vẫn được ghi log
@@ -62,7 +87,7 @@ api.interceptors.response.use(
           refreshError.response?.data?.detail ||
           refreshError.message ||
           "Phiên đăng nhập đã hết hạn";
-        return Promise.reject(new Error(refreshMsg));
+        return Promise.reject(new Error(typeof refreshMsg === "string" ? refreshMsg : "Phiên đăng nhập đã hết hạn"));
       }
     }
     // Không nhận được phản hồi: Local Engine chưa chạy / sai cổng / bị chặn
@@ -72,11 +97,11 @@ api.interceptors.response.use(
       networkError.isNetworkError = true;
       return Promise.reject(networkError);
     }
-    const errorMsg = error.response.data?.detail || error.response.data?.message || error.message || "Yêu cầu thất bại";
+    const errorMsg = extractErrorMessage(error);
     // Dùng console.warn thay vì console.error: lỗi đã được báo trên giao diện,
     // console.error sẽ bật màn "Console Error" của Next.js khi chạy dev.
     if (status !== 401) console.warn(`[API ${status}] ${original?.method?.toUpperCase() || ""} ${original?.url || ""}`, errorMsg);
-    const httpError = new Error(typeof errorMsg === "string" ? errorMsg : "Yêu cầu thất bại");
+    const httpError = new Error(errorMsg);
     httpError.status = status;
     return Promise.reject(httpError);
   }
