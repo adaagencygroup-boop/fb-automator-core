@@ -1,0 +1,162 @@
+"""Account CRUD, import and profile deletion orchestration."""
+from datetime import timezone
+from fastapi import HTTPException
+from ..database.repository import AccountRepository as Repo
+from ..security.encryption import decrypt_data
+from ..utils.paths import profile_path
+from ..utils.profile_storage import delete_profiles_by_uid
+from .events import broadcast
+
+_FIELDS = ("cookie", "token", "email", "mail_recovery", "token_hotmail", "client_id", "proxy", "profile_name")
+
+def serialize(account, detail=False):
+    result = {"id": account.id, "owner_username": account.user_id, "uid": account.uid}
+    for name in _FIELDS:
+        result[name] = getattr(account, name) or ""
+    for name in ("password", "two_fa", "pass_mail"):
+        try:
+            value = decrypt_data(getattr(account, name))
+        except ValueError:
+            value = ""
+        result["twofa_secret" if name == "two_fa" and not detail else name] = value
+    result["login_status"] = {"LOGGED_IN": "logged_in", "ERROR": "failed"}.get(account.login_status, "not_logged_in")
+    result["status"] = account.status.lower() if account.status_checked_at and account.status in ("LIVE", "DIE") else None
+    result["last_login_at"] = account.last_login_at.replace(tzinfo=timezone.utc).isoformat() if account.last_login_at else None
+    return result
+
+def require_account(db, uid):
+    account = Repo.get_by_uid(db, uid)
+    if account is None:
+        raise HTTPException(404, "Account not found")
+    return account
+
+def save_account(db, item):
+    data = item.model_dump(exclude_unset=True, exclude={"owner_username"})
+    data["profile_path"] = str(profile_path(item.uid))
+    return Repo.upsert(db, data)
+
+def save_single_account(db, item):
+    from sqlalchemy.exc import IntegrityError
+    from ..automation.browser_manager import get_profile_lock, _active_drivers, _active_drivers_lock
+    from ..context import owner_context
+    from ..utils.paths import account_key
+    from .browser_service import _open_browser_pending, _open_browser_pending_lock
+    from .login_service import _login_pending, _login_pending_lock
+    original = item.original_uid
+    if original is None:
+        return save_account(db, item)
+    locks, moved = [], False
+    try:
+        with _open_browser_pending_lock, _login_pending_lock:
+            for uid in sorted(set((original, item.uid))):
+                lock = get_profile_lock(uid)
+                if account_key(uid) in _open_browser_pending or account_key(uid) in _login_pending or not lock.acquire(blocking=False):
+                    raise HTTPException(409, "Profile is busy or queued")
+                locks.append(lock)
+        account = require_account(db, original)
+        if original != item.uid:
+            if Repo.get_by_uid(db, item.uid) is not None:
+                raise HTTPException(409, "UID already exists")
+            with _active_drivers_lock:
+                drivers = [d for d, info in _active_drivers.items() if info.get("owner") == owner_context.get() and info.get("uid") in (original, item.uid)]
+            for driver in drivers:
+                try:
+                    handles = driver.window_handles
+                except Exception as exc:
+                    raise HTTPException(409, "Cannot confirm Chrome is closed") from exc
+                if handles:
+                    raise HTTPException(409, "Close Chrome before changing UID")
+            old_path, new_path = profile_path(original), profile_path(item.uid)
+            if new_path.exists():
+                raise HTTPException(409, "Destination profile already exists")
+            if old_path.exists():
+                old_path.rename(new_path)
+                moved = True
+        data = item.model_dump(exclude_unset=True, exclude={"owner_username", "original_uid"})
+        data["profile_path"] = str(profile_path(item.uid))
+        Repo.apply_fields(account, data)
+        account.uid = item.uid
+        db.commit()
+        return account
+    except Exception as exc:
+        db.rollback()
+        if moved:
+            try:
+                new_path.rename(old_path)
+            except Exception as restore_error:
+                raise HTTPException(500, "Save failed and restoring the original profile failed") from restore_error
+        if isinstance(exc, IntegrityError):
+            raise HTTPException(409, "UID already exists") from exc
+        if isinstance(exc, ValueError):
+            raise HTTPException(422, str(exc)) from exc
+        raise
+    finally:
+        for lock in reversed(locks):
+            lock.release()
+
+def import_accounts(db, items):
+    added_count, updated_count, errors, uids = 0, 0, [], []
+    for item in items:
+        try:
+            exists = Repo.get_by_uid(db, item.uid) is not None
+            save_account(db, item)
+            if exists:
+                updated_count += 1
+            else:
+                added_count += 1
+            uids.append(item.uid)
+        except Exception:
+            db.rollback()
+            errors.append({"uid": item.uid, "error": "Không thể lưu tài khoản"})
+    imported = added_count + updated_count
+    broadcast("info", f"Đã import {imported} tài khoản (Thêm mới: {added_count}, Cập nhật: {updated_count})")
+    return {
+        "imported": imported,
+        "added_count": added_count,
+        "updated_count": updated_count,
+        "errors": errors,
+    }, list(dict.fromkeys(uids))
+
+def delete_account(db, uid):
+    from ..automation.browser_manager import get_profile_lock, _active_drivers, _active_drivers_lock
+    from ..context import owner_context
+    lock = get_profile_lock(uid)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(409, "Profile đang được sử dụng")
+    try:
+        with _active_drivers_lock:
+            drivers = [d for d, info in _active_drivers.items() if info.get("uid") == uid and info.get("owner") == owner_context.get()]
+        for driver in drivers:
+            try:
+                if driver.window_handles:
+                    raise HTTPException(409, "Hãy đóng Chrome trước khi xóa tài khoản")
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+        exists = Repo.get_by_uid(db, uid) is not None
+        try:
+            removed = delete_profiles_by_uid(uid)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        deleted = Repo.delete(db, uid) if exists else False
+        if not deleted and not removed:
+            raise HTTPException(404, "Account not found")
+        broadcast("info", f"Đã xóa tài khoản {uid}", uid=uid)
+        return {"deleted": deleted, "profiles_deleted": removed}
+    finally:
+        lock.release()
+
+def bulk_delete(db, uids):
+    result = {"deleted": 0, "profiles_deleted": 0, "errors": []}
+    for uid in uids:
+        try:
+            deleted = delete_account(db, uid)
+            result["deleted"] += int(deleted["deleted"])
+            result["profiles_deleted"] += len(deleted["profiles_deleted"])
+        except Exception as exc:
+            db.rollback()
+            result["errors"].append({"uid": uid, "error": exc.detail if isinstance(exc, HTTPException) else "Không thể xóa tài khoản"})
+    return result

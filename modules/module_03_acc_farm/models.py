@@ -136,8 +136,278 @@ def _add_missing_columns():
             print(f"[Module 3 DB] Add column {table}.{column} error: {e}")
 
 
+# =============================================================================
+# TAB 2: ĐĂNG BÀI VIẾT (STATUS, REELS, STORY) & TƯƠNG TÁC TỰ ĐỘNG
+# =============================================================================
+
+TAB2_DDL_STATEMENTS_PG = [
+    # Hàm tự cập nhật updated_at
+    """
+    CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
+    BEGIN
+      NEW.updated_at := now();
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+    """,
+    # 1. post_settings
+    """
+    CREATE TABLE IF NOT EXISTS post_settings (
+      post_type TEXT PRIMARY KEY CHECK (post_type IN ('status', 'reels', 'story')),
+      api_key_file_path TEXT,
+      gemini_model TEXT,
+      prompt_template TEXT CHECK (prompt_template IS NULL OR char_length(prompt_template) <= 2000),
+      pixabay_api_key_enc BYTEA,
+      master_folder_path TEXT,
+      check_duplicate BOOLEAN NOT NULL DEFAULT TRUE,
+      schedule_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      schedule_time TIME,
+      min_delay INTEGER NOT NULL DEFAULT 600 CHECK (min_delay >= 0),
+      max_delay INTEGER NOT NULL DEFAULT 900 CHECK (max_delay >= 0),
+      thread_count INTEGER NOT NULL DEFAULT 1 CHECK (thread_count >= 1),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (min_delay <= max_delay),
+      CHECK (NOT schedule_enabled OR schedule_time IS NOT NULL)
+    );
+    """,
+    "INSERT INTO post_settings (post_type) VALUES ('status'), ('reels'), ('story') ON CONFLICT (post_type) DO NOTHING;",
+    # 2. account_folder_mappings
+    """
+    CREATE TABLE IF NOT EXISTS account_folder_mappings (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      account_uid TEXT NOT NULL,
+      post_type TEXT NOT NULL CHECK (post_type IN ('reels', 'story')),
+      subfolder_path TEXT NOT NULL,
+      available_media_count INTEGER NOT NULL DEFAULT 0 CHECK (available_media_count >= 0),
+      mapping_status TEXT NOT NULL DEFAULT 'MAPPED' CHECK (mapping_status IN ('MAPPED', 'SOURCE_ERROR')),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (account_uid, post_type)
+    );
+    """,
+    # 3. post_sessions
+    """
+    CREATE TABLE IF NOT EXISTS post_sessions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      kind TEXT NOT NULL CHECK (kind IN ('status', 'reels', 'story', 'interaction')),
+      status TEXT NOT NULL DEFAULT 'RUNNING' CHECK (status IN ('RUNNING', 'DONE', 'STOPPED', 'CRASHED')),
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      finished_at TIMESTAMPTZ
+    );
+    """,
+    # 4. posts
+    """
+    CREATE TABLE IF NOT EXISTS posts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id UUID REFERENCES post_sessions(id) ON DELETE SET NULL,
+      account_id UUID,
+      account_uid TEXT NOT NULL,
+      account_name TEXT,
+      post_type TEXT NOT NULL CHECK (post_type IN ('status', 'reels', 'story')),
+      content TEXT NOT NULL DEFAULT '' CHECK (char_length(content) <= 63206),
+      hashtags TEXT,
+      image_path TEXT,
+      media_path TEXT,
+      thumbnail_path TEXT,
+      media_hash TEXT,
+      schedule_time TIME,
+      is_selected BOOLEAN NOT NULL DEFAULT TRUE,
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN
+        ('DRAFT', 'READY', 'PENDING', 'RUNNING', 'PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE')),
+      facebook_post_url TEXT,
+      error_message TEXT,
+      published_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (post_type = 'status' OR image_path IS NULL),
+      CHECK (post_type <> 'status' OR media_path IS NULL),
+      CHECK (post_type <> 'status' OR status <> 'PENDING' OR content <> ''),
+      CHECK (post_type = 'status' OR status NOT IN ('DRAFT', 'READY'))
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_posts_type_status ON posts (post_type, status);",
+    "CREATE INDEX IF NOT EXISTS idx_posts_uid_hash ON posts (account_uid, media_hash) WHERE media_hash IS NOT NULL;",
+    "CREATE INDEX IF NOT EXISTS idx_posts_published ON posts (published_at DESC) WHERE published_at IS NOT NULL;",
+    "CREATE INDEX IF NOT EXISTS idx_posts_session ON posts (session_id);",
+    "CREATE INDEX IF NOT EXISTS idx_posts_account ON posts (account_id);",
+    # 5. post_interaction_logs
+    """
+    CREATE TABLE IF NOT EXISTS post_interaction_logs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id UUID REFERENCES post_sessions(id) ON DELETE SET NULL,
+      account_id UUID,
+      account_uid TEXT NOT NULL,
+      account_name TEXT,
+      duration_minutes INTEGER NOT NULL DEFAULT 0,
+      delay_seconds INTEGER NOT NULL DEFAULT 0,
+      random_actions_count INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'RUNNING' CHECK (status IN ('RUNNING', 'COMPLETED', 'FAILED', 'STOPPED')),
+      error_message TEXT,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      finished_at TIMESTAMPTZ
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_post_interaction_logs_session ON post_interaction_logs (session_id);",
+    "CREATE INDEX IF NOT EXISTS idx_post_interaction_logs_uid ON post_interaction_logs (account_uid);",
+    "CREATE INDEX IF NOT EXISTS idx_post_interaction_logs_started ON post_interaction_logs (started_at DESC);",
+    # Triggers & RLS
+    # Trigger dọn dẹp liên kết khi xóa nick (chỉ cài đặt nếu fb_accounts tồn tại)
+    """
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'fb_accounts') THEN
+        CREATE OR REPLACE FUNCTION fb_accounts_before_delete() RETURNS trigger AS $func$
+        BEGIN
+          DELETE FROM posts
+           WHERE account_id = OLD.id
+             AND status IN ('DRAFT', 'READY', 'PENDING', 'RUNNING');
+          DELETE FROM account_folder_mappings WHERE account_uid = OLD.uid;
+          RETURN OLD;
+        END;
+        $func$ LANGUAGE plpgsql;
+
+        DROP TRIGGER IF EXISTS trg_account_delete_cleanup ON fb_accounts;
+        CREATE TRIGGER trg_account_delete_cleanup
+          BEFORE DELETE ON fb_accounts
+          FOR EACH ROW EXECUTE FUNCTION fb_accounts_before_delete();
+      END IF;
+    END $$;
+    """,
+    """
+    DROP TRIGGER IF EXISTS trg_posts_updated_at ON posts;
+    CREATE TRIGGER trg_posts_updated_at
+      BEFORE UPDATE ON posts
+      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+    """,
+    """
+    DROP TRIGGER IF EXISTS trg_post_settings_updated_at ON post_settings;
+    CREATE TRIGGER trg_post_settings_updated_at
+      BEFORE UPDATE ON post_settings
+      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+    """,
+    """
+    DROP TRIGGER IF EXISTS trg_afm_updated_at ON account_folder_mappings;
+    CREATE TRIGGER trg_afm_updated_at
+      BEFORE UPDATE ON account_folder_mappings
+      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+    """,
+]
+
+TAB2_DDL_STATEMENTS_SQLITE = [
+    # 1. post_settings
+    """
+    CREATE TABLE IF NOT EXISTS post_settings (
+      post_type TEXT PRIMARY KEY CHECK (post_type IN ('status', 'reels', 'story')),
+      api_key_file_path TEXT,
+      gemini_model TEXT,
+      prompt_template TEXT CHECK (prompt_template IS NULL OR length(prompt_template) <= 2000),
+      pixabay_api_key_enc BLOB,
+      master_folder_path TEXT,
+      check_duplicate INTEGER NOT NULL DEFAULT 1,
+      schedule_enabled INTEGER NOT NULL DEFAULT 0,
+      schedule_time TEXT,
+      min_delay INTEGER NOT NULL DEFAULT 600 CHECK (min_delay >= 0),
+      max_delay INTEGER NOT NULL DEFAULT 900 CHECK (max_delay >= 0),
+      thread_count INTEGER NOT NULL DEFAULT 1 CHECK (thread_count >= 1),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      CHECK (min_delay <= max_delay),
+      CHECK (schedule_enabled = 0 OR schedule_time IS NOT NULL)
+    );
+    """,
+    "INSERT OR IGNORE INTO post_settings (post_type) VALUES ('status'), ('reels'), ('story');",
+    # 2. account_folder_mappings
+    """
+    CREATE TABLE IF NOT EXISTS account_folder_mappings (
+      id TEXT PRIMARY KEY,
+      account_uid TEXT NOT NULL,
+      post_type TEXT NOT NULL CHECK (post_type IN ('reels', 'story')),
+      subfolder_path TEXT NOT NULL,
+      available_media_count INTEGER NOT NULL DEFAULT 0 CHECK (available_media_count >= 0),
+      mapping_status TEXT NOT NULL DEFAULT 'MAPPED' CHECK (mapping_status IN ('MAPPED', 'SOURCE_ERROR')),
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (account_uid, post_type)
+    );
+    """,
+    # 3. post_sessions
+    """
+    CREATE TABLE IF NOT EXISTS post_sessions (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK (kind IN ('status', 'reels', 'story', 'interaction')),
+      status TEXT NOT NULL DEFAULT 'RUNNING' CHECK (status IN ('RUNNING', 'DONE', 'STOPPED', 'CRASHED')),
+      started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      finished_at DATETIME
+    );
+    """,
+    # 4. posts
+    """
+    CREATE TABLE IF NOT EXISTS posts (
+      id TEXT PRIMARY KEY,
+      session_id TEXT REFERENCES post_sessions(id) ON DELETE SET NULL,
+      account_id TEXT,
+      account_uid TEXT NOT NULL,
+      account_name TEXT,
+      post_type TEXT NOT NULL CHECK (post_type IN ('status', 'reels', 'story')),
+      content TEXT NOT NULL DEFAULT '' CHECK (length(content) <= 63206),
+      hashtags TEXT,
+      image_path TEXT,
+      media_path TEXT,
+      thumbnail_path TEXT,
+      media_hash TEXT,
+      schedule_time TEXT,
+      is_selected INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN
+        ('DRAFT', 'READY', 'PENDING', 'RUNNING', 'PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE')),
+      facebook_post_url TEXT,
+      error_message TEXT,
+      published_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      CHECK (post_type = 'status' OR image_path IS NULL),
+      CHECK (post_type <> 'status' OR media_path IS NULL),
+      CHECK (post_type <> 'status' OR status <> 'PENDING' OR content <> ''),
+      CHECK (post_type = 'status' OR status NOT IN ('DRAFT', 'READY'))
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_posts_type_status ON posts (post_type, status);",
+    "CREATE INDEX IF NOT EXISTS idx_posts_uid_hash ON posts (account_uid, media_hash);",
+    "CREATE INDEX IF NOT EXISTS idx_posts_published ON posts (published_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_posts_session ON posts (session_id);",
+    "CREATE INDEX IF NOT EXISTS idx_posts_account ON posts (account_id);",
+    # 5. post_interaction_logs
+    """
+    CREATE TABLE IF NOT EXISTS post_interaction_logs (
+      id TEXT PRIMARY KEY,
+      session_id TEXT REFERENCES post_sessions(id) ON DELETE SET NULL,
+      account_id TEXT,
+      account_uid TEXT NOT NULL,
+      account_name TEXT,
+      duration_minutes INTEGER NOT NULL DEFAULT 0,
+      delay_seconds INTEGER NOT NULL DEFAULT 0,
+      random_actions_count INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'RUNNING' CHECK (status IN ('RUNNING', 'COMPLETED', 'FAILED', 'STOPPED')),
+      error_message TEXT,
+      started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      finished_at DATETIME
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_post_interaction_logs_session ON post_interaction_logs (session_id);",
+    "CREATE INDEX IF NOT EXISTS idx_post_interaction_logs_uid ON post_interaction_logs (account_uid);",
+    "CREATE INDEX IF NOT EXISTS idx_post_interaction_logs_started ON post_interaction_logs (started_at DESC);",
+]
+
+
+def init_tab2_models():
+    """Khởi tạo schema cho Tab 2 (Đăng bài: Status, Reels, Story)"""
+    statements = TAB2_DDL_STATEMENTS_PG if db._is_postgres else TAB2_DDL_STATEMENTS_SQLITE
+    for stmt in statements:
+        try:
+            db.execute(stmt)
+        except Exception as e:
+            print(f"[Module 3 Tab 2 DB] Error: {e}")
+
+
 def init_models():
-    """Khởi tạo schema riêng cho Module 3 - Tab 1"""
+    """Khởi tạo schema toàn diện cho Module 3 (Tab 1 Tương tác + Tab 2 Đăng bài)"""
+    # 1. Khởi tạo Tab 1 (farm_*)
     for stmt in DDL_STATEMENTS:
         try:
             if not db._is_postgres:
@@ -149,3 +419,6 @@ def init_models():
         except Exception as e:
             print(f"[Module 3 DB] DDL error: {e}")
     _add_missing_columns()
+
+    # 2. Khởi tạo Tab 2 (Đăng bài: Status, Reels, Story)
+    init_tab2_models()
