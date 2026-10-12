@@ -2,17 +2,15 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from config.constants import DATABASE_URL as GLOBAL_DB_URL, DB_PATH
+from config.constants import DATABASE_URL as GLOBAL_DB_URL
 
-# Ưu tiên lấy DATABASE_URL từ môi trường, nếu không lấy từ GLOBAL_DB_URL hoặc SQLite fallback
-DATABASE_URL = os.getenv("DATABASE_URL", GLOBAL_DB_URL or f"sqlite:///{DB_PATH}")
+DATABASE_URL = os.getenv("DATABASE_URL", GLOBAL_DB_URL)
+if not DATABASE_URL or DATABASE_URL.startswith("sqlite"):
+    raise RuntimeError("Module chat chỉ dùng PostgreSQL production. Không dùng SQLite local.")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 connect_args = {}
-if DATABASE_URL.startswith("sqlite"):
-    connect_args = {"check_same_thread": False}
-elif DATABASE_URL.startswith("postgres://"):
-    # Fix URL định dạng cũ postgres:// thành postgresql://
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 engine_kwargs = {
     "connect_args": connect_args,

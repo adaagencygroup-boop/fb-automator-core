@@ -1,0 +1,1178 @@
+/* ─────────── NHẬT KÝ HOẠT ĐỘNG (Activity Log - Figma 1:1) ─────────── */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
+.act-page {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  color: #191c1e;
+}
+
+/* ── Page Header ── */
+.act-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.act-header-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.act-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  text-transform: uppercase;
+  color: #191c1e;
+  line-height: 32px;
+}
+
+.act-subtitle {
+  margin: 0;
+  font-size: 13.5px;
+  color: #64748b;
+  line-height: 20px;
+}
+
+.act-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.act-btn-export {
+  height: 36px;
+  padding: 0 16px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #191c1e;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: all 0.15s ease;
+}
+
+.act-btn-export:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.act-btn-export:disabled {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #94a3b8;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.act-btn-refresh {
+  height: 36px;
+  padding: 0 16px;
+  background: #0866ff;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffffff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 2px 4px rgba(8, 102, 255, 0.2);
+  transition: all 0.15s ease;
+}
+
+.act-btn-refresh:hover {
+  background: #0052cc;
+}
+
+.act-btn-refresh--loading svg {
+  animation: actSpin 0.75s linear infinite;
+}
+
+@keyframes actSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Filter Card ── */
+.act-filter-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+.act-filter-row-1 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.act-search-wrap {
+  flex: 1;
+  min-width: 280px;
+  max-width: 600px;
+  height: 34px;
+  background: #f2f4f7;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.act-search-wrap:focus-within {
+  background: #ffffff;
+  box-shadow: 0 0 0 2px rgba(8, 102, 255, 0.2);
+  border: 1px solid #0866ff;
+}
+
+.act-search-icon {
+  color: #424656;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.act-search-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 13px;
+  color: #191c1e;
+}
+
+.act-search-input::placeholder {
+  color: #9ca3af;
+  font-size: 13px;
+}
+
+.act-dropdown-wrap {
+  position: relative;
+  width: 195px;
+}
+
+.act-select {
+  width: 100%;
+  height: 34px;
+  background: #f2f4f7;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0 32px 0 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #191c1e;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  transition: all 0.15s ease;
+}
+
+.act-select:hover {
+  background: #e9ecef;
+}
+
+.act-select:focus {
+  background: #ffffff;
+  border-color: #0866ff;
+  box-shadow: 0 0 0 2px rgba(8, 102, 255, 0.15);
+}
+
+.act-select-arrow {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: #424656;
+  display: flex;
+  align-items: center;
+}
+
+.act-filter-row-2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+
+.act-date-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.act-date-pill {
+  height: 24px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background: #f2f4f7;
+  border: none;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #424656;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+
+.act-date-pill:hover:not(.act-date-pill--active) {
+  background: #e5e7eb;
+}
+
+.act-date-pill--active {
+  background: #0866ff;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.act-custom-date-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #ffffff;
+  border: 1px solid #d0d5dd;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #344054;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  animation: actFadeIn 0.15s ease;
+}
+
+@keyframes actFadeIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.act-custom-date-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #667085;
+}
+
+.act-custom-date-input {
+  border: 1px solid #e4e7ec;
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: #1d2939;
+  background: #f9fafb;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.15s ease;
+}
+
+.act-custom-date-input:focus {
+  border-color: #0866ff;
+  background: #ffffff;
+}
+
+.act-custom-date-input.has-error {
+  border-color: #ef4444;
+  background-color: #fffafa;
+}
+
+.act-custom-date-input.has-error:focus {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15);
+}
+
+.act-custom-date-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #dc2626;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 14px;
+  animation: actFadeIn 0.15s ease;
+}
+
+.act-custom-date-clear {
+  background: transparent;
+  border: none;
+  color: #98a2b3;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  transition: all 0.15s ease;
+}
+
+.act-custom-date-clear:hover {
+  color: #ef4444;
+  background: #fee2e2;
+}
+
+.act-btn-reset-filter {
+  background: transparent;
+  border: none;
+  color: #424656;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.act-btn-reset-filter:hover {
+  color: #0866ff;
+  background: #eff6ff;
+}
+
+/* ── Table Card ── */
+.act-table-card {
+  background: #ffffff;
+  border: 1px solid #f1f5f9;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.act-table-responsive {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.act-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.act-th {
+  height: 38px;
+  background: #f2f4f7;
+  padding: 0 16px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #424656;
+  border-bottom: 1px solid #e5e7eb;
+  white-space: nowrap;
+}
+
+.act-tr {
+  border-bottom: 1px solid #f1f5f9;
+  transition: background 0.15s ease;
+}
+
+.act-tr:hover {
+  background: #f8fafc;
+}
+
+.act-tr:last-child {
+  border-bottom: none;
+}
+
+.act-td {
+  padding: 13px 16px;
+  font-size: 13px;
+  vertical-align: middle;
+  color: #334155;
+}
+
+/* Time column */
+.act-time {
+  font-size: 12.5px;
+  color: #424656;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Admin column */
+.act-admin-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.act-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 9999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.act-avatar--blue {
+  background: #0866ff;
+}
+
+.act-avatar--green {
+  background: #10b981;
+}
+
+.act-avatar--gray {
+  background: #475569;
+}
+
+.act-admin-name {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+/* Action pills */
+.act-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.act-pill--reset_hwid {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #ea580c;
+}
+
+.act-pill--approve_user {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #16a34a;
+}
+
+.act-pill--extend_license {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #2563eb;
+}
+
+.act-pill--ban_user {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #dc2626;
+}
+
+.act-pill--unban_user {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #16a34a;
+}
+
+.act-pill--reset_password {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #475569;
+}
+
+.act-pill--login {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #334155;
+}
+
+.act-pill--add_admin {
+  background: #faf5ff;
+  border-color: #e9d5ff;
+  color: #9333ea;
+}
+
+.act-pill--register {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+  color: #64748b;
+}
+
+.act-pill--other {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #475569;
+}
+
+.act-pill--delete_user {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #dc2626;
+}
+
+.act-pill--reject_user {
+  background: #fff1f2;
+  border-color: #fecdd3;
+  color: #e11d48;
+}
+
+.act-pill--create_user {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #059669;
+}
+
+.act-pill--edit_user {
+  background: #e0e7ff;
+  border-color: #c7d2fe;
+  color: #4338ca;
+}
+
+/* Target column */
+.act-target-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.act-target-name {
+  font-weight: 600;
+  color: #0866ff;
+  font-size: 13px;
+}
+
+.act-target-name--admin {
+  color: #0f172a;
+}
+
+.act-target-sub {
+  font-size: 11px;
+  color: #64748b;
+}
+
+/* Change detail column */
+.act-detail {
+  font-size: 13px;
+  color: #334155;
+  max-width: 320px;
+}
+
+.act-detail-hl {
+  color: #0866ff;
+  font-weight: 600;
+}
+
+.act-detail-danger {
+  color: #dc2626;
+  font-weight: 500;
+}
+
+/* Result column */
+.act-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.act-result--success {
+  color: #16a34a;
+}
+
+.act-result--failed {
+  color: #dc2626;
+}
+
+/* Action button */
+.act-btn-detail {
+  height: 28px;
+  padding: 0 12px;
+  background: #eff6ff;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0866ff;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.act-btn-detail:hover {
+  background: #dbeafe;
+}
+
+/* ── Pagination Footer ── */
+.act-pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-top: 1px solid #f1f5f9;
+  background: #ffffff;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.act-pagination-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12.5px;
+  color: #64748b;
+}
+
+.act-pagination-left strong {
+  color: #0f172a;
+}
+
+.act-per-page-select {
+  height: 28px;
+  background: #f2f4f7;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #191c1e;
+  cursor: pointer;
+  outline: none;
+}
+
+.act-per-page-select:focus {
+  border-color: #0866ff;
+}
+
+.act-pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.act-page-btn {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  color: #424656;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.act-page-btn:hover:not(:disabled):not(.act-page-btn--active) {
+  background: #f2f4f7;
+}
+
+.act-page-btn--active {
+  background: #0866ff;
+  color: #ffffff;
+}
+
+.act-page-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.act-page-ellipsis {
+  padding: 0 4px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+/* ── Activity Log Modal (Figma 1:1 - Chi tiết hoạt động) ── */
+.fig-alm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 16px;
+  animation: figAlmFadeIn 0.2s ease-out;
+}
+
+@keyframes figAlmFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.fig-alm-modal {
+  width: 100%;
+  max-width: 408px;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  animation: figAlmSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
+}
+
+@keyframes figAlmSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.fig-alm-topbar {
+  background: rgba(242, 244, 247, 0.6);
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #f2f4f7;
+}
+
+.fig-alm-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fig-alm-blue-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background: #0866FF;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.fig-alm-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #191C1E;
+  margin: 0;
+  letter-spacing: 0.3px;
+}
+
+.fig-alm-close-circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.fig-alm-close-circle:hover {
+  background: #f8fafc;
+  transform: scale(1.05);
+}
+
+.fig-alm-body {
+  padding: 16px 18px;
+  max-height: calc(88vh - 56px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 2. Admin Card */
+.fig-alm-admin-card {
+  background: #F2F4F7;
+  border-radius: 12px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fig-alm-admin-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fig-alm-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 19px;
+  background: #0050CD;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 13.5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 4px rgba(0, 80, 205, 0.2);
+}
+
+.fig-alm-admin-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.fig-alm-admin-name-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.fig-alm-admin-name {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #191C1E;
+}
+
+.fig-alm-verified-icon {
+  flex-shrink: 0;
+}
+
+.fig-alm-admin-sub {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 1px;
+}
+
+.fig-alm-status-badge {
+  border-radius: 12px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.fig-alm-status-badge--success {
+  background: #DCFCE7;
+  color: #15803D;
+}
+
+.fig-alm-status-badge--failed {
+  background: #FEE2E2;
+  color: #DC2626;
+}
+
+/* 3. Grid cards: Hành động & Đối tượng */
+.fig-alm-grid-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.fig-alm-field-card {
+  background: #ffffff;
+  border: 1px solid #EAECF0;
+  border-radius: 12px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+}
+
+.fig-alm-field-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #424656;
+  letter-spacing: 0.3px;
+}
+
+.fig-alm-action-pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  background: rgba(0, 112, 222, 0.12);
+  color: #0058B1;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-weight: 600;
+  font-size: 11.5px;
+}
+
+.fig-alm-target-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow: hidden;
+}
+
+.fig-alm-target-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0050CD;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.fig-alm-target-subtext {
+  font-size: 10.5px;
+  color: #64748b;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* 4. Timestamp & Time ago row */
+.fig-alm-time-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 2px 0;
+}
+
+.fig-alm-timestamp {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: #424656;
+  font-weight: 500;
+}
+
+.fig-alm-timeago {
+  background: #ECEEF1;
+  color: #191C1E;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+/* 5. Diff section */
+.fig-alm-diff-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.fig-alm-section-heading {
+  font-size: 11px;
+  font-weight: 700;
+  color: #191C1E;
+  margin: 0 0 6px 0;
+  letter-spacing: 0.4px;
+}
+
+.fig-alm-diff-box {
+  border-radius: 12px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fig-alm-diff-box--before {
+  background: rgba(230, 232, 235, 0.6);
+}
+
+.fig-alm-diff-box--after {
+  background: rgba(220, 252, 231, 0.5);
+}
+
+.fig-alm-diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.fig-alm-diff-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.fig-alm-diff-tag--before {
+  color: #BA1A1A;
+}
+
+.fig-alm-diff-tag--after {
+  color: #15803D;
+}
+
+.fig-alm-diff-sub {
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.fig-alm-diff-sub--before {
+  color: #BA1A1A;
+}
+
+.fig-alm-diff-sub--after {
+  color: #15803D;
+}
+
+.fig-alm-diff-content {
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.fig-alm-diff-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: #191C1E;
+  word-break: break-all;
+  display: block;
+}
+
+.fig-alm-arrow-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 2px 0;
+}
+
+.fig-alm-arrow-circle {
+  width: 22px;
+  height: 22px;
+  border-radius: 11px;
+  background: #0866FF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 3px rgba(8, 102, 255, 0.3);
+}
+
+/* 6. Environment */
+.fig-alm-env-card {
+  background: #F2F4F7;
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.fig-alm-env-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #424656;
+  margin: 0;
+  letter-spacing: 0.3px;
+}
+
+.fig-alm-env-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #334155;
+  line-height: 1.4;
+}
+
+/* 7. Footer */
+.fig-alm-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.fig-alm-btn-copy {
+  flex: 1;
+  height: 38px;
+  border-radius: 8px;
+  background: #F2F4F7;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: #191C1E;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+
+.fig-alm-btn-copy:hover {
+  background: #e5e7eb;
+}
+
+.fig-alm-btn-close {
+  width: 76px;
+  height: 38px;
+  border-radius: 8px;
+  background: #F2F4F7;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: #424656;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.fig-alm-btn-close:hover {
+  background: #e5e7eb;
+  color: #191C1E;
+}
+
+.act-empty {
+  padding: 48px 24px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: #94a3b8;
+  font-size: 13.5px;
+}

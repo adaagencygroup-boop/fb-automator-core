@@ -12,6 +12,9 @@ export default function Header({
   onProfileClick,
   sidebarOpen = true,
   onToggleSidebar,
+  isAdmin = false,
+  adminUrl = "",
+  onLogout,
 }) {
   const { item, parent } = findNavItem(activeTab);
   const title = item.title || item.label;
@@ -57,6 +60,25 @@ export default function Header({
 
       {/* Right Header: Notifications & User Profile */}
       <div className="flex items-center shrink-0">
+        {isAdmin && adminUrl && (
+          <a
+            href={adminUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="mr-3 h-8 px-3 rounded-md border border-border bg-white text-xs font-semibold text-sky-600 inline-flex items-center hover:bg-slate-50"
+          >
+            Trang Admin
+          </a>
+        )}
+        {onLogout && (
+          <button
+            type="button"
+            onClick={onLogout}
+            className="mr-3 h-8 px-3 rounded-md border border-border bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Đăng xuất
+          </button>
+        )}
         <button
           type="button"
           onClick={onNotificationsClick}

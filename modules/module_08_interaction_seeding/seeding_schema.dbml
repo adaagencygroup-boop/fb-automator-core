@@ -26,7 +26,6 @@ Table seeding_targets {
   fb_id varchar(100) [not null, note: 'UID / Page ID / Post ID sau khi xác thực link']
   url text [not null]
   display_name varchar(255) [note: 'Cột "Tên hiển thị" (Page, Trang cá nhân)']
-  content_preview text [note: 'Cột "Nội dung bài viết", chỉ dùng cho POST']
   created_at timestamp [default: `CURRENT_TIMESTAMP`]
   updated_at timestamp [default: `CURRENT_TIMESTAMP`]
 
@@ -40,7 +39,6 @@ Table seeding_targets {
 // 2. Chiến dịch seeding (mỗi lần bấm "Bắt đầu seeding") + cấu hình + bộ đếm cho trang Lịch sử
 Table seeding_campaigns {
   id integer [pk, increment]
-  name varchar(255)
   campaign_type varchar(20) [not null, note: 'PAGE | PROFILE | POST']
   actions varchar(100) [not null, note: 'FOLLOW (Page, Trang cá nhân) hoặc REACT,COMMENT,SHARE (Bài viết)']
   reactions varchar(100) [note: 'LIKE,LOVE,CARE,HAHA,WOW,SAD,ANGRY (chỉ cho POST)']

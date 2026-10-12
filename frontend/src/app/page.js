@@ -9,8 +9,17 @@ import api from "@/services/api";
 import { WS_BASE } from "@/config/constants";
 import { findNavItem } from "@/config/navigation";
 import { usePersistentBoolean } from "@/lib/usePersistentBoolean";
+import AuthGate from "@/components/AuthGate";
 
 export default function Home() {
+  return (
+    <AuthGate>
+      {(session) => <Workspace session={session} />}
+    </AuthGate>
+  );
+}
+
+function Workspace({ session }) {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [engineOnline, setEngineOnline] = useState(false);
   const [logs, setLogs] = useState([]);
@@ -56,14 +65,28 @@ export default function Home() {
         {/* HEADER TỔNG */}
         <Header
           activeTab={activeTab}
+          user={{
+            name: session.user.username,
+            initials: String(session.user.username || "?").slice(0, 2).toUpperCase(),
+          }}
           onProfileClick={() => setActiveTab("profile")}
           sidebarOpen={sidebarOpen}
           onToggleSidebar={toggleSidebar}
+          isAdmin={session.isAdmin}
+          adminUrl={session.adminUrl}
+          onLogout={session.logout}
         />
 
         {/* CONTAINER HIỂN THỊ MODULE HIỆN TẠI */}
         <main className="flex-1 overflow-y-auto p-6 bg-background">
-          {ModuleComponent ? (
+          {!session.user.modules_unlocked ? (
+            <div className="mx-auto max-w-lg rounded-xl border border-border bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-bold tracking-tight text-sky-600">Chưa mở được các module</h2>
+              <p className="mt-2 text-sm leading-5 text-slate-500">
+                Tài khoản {session.user.username} đang ở trạng thái {session.user.status}. Cần admin duyệt hoặc gia hạn thì mới vào được 9 module.
+              </p>
+            </div>
+          ) : ModuleComponent ? (
             <ModuleComponent />
           ) : (
             <div className="text-muted-foreground text-xs p-4">Chức năng đang được phát triển.</div>

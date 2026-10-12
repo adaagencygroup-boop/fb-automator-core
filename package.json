@@ -7,6 +7,7 @@
     "dev": "python start.py",
     "engine:dev": "python engine.py --port 28129",
     "frontend:dev": "npm --prefix frontend run dev",
+    "admin:dev": "npm --prefix web-admin run dev",
     "frontend:build": "npm --prefix frontend run build",
     "build:sidecar": "python scripts/build_sidecar.py",
     "tauri": "tauri",
