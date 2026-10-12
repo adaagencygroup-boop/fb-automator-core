@@ -50,7 +50,7 @@ function detectColumnMapping(lines, delimiter, columnCount) {
       .filter(Boolean),
   );
   const allMatch = (samples, pattern) => samples.length > 0 && samples.every((value) => pattern.test(value));
-  const someMatch = (samples, pattern) => samples.length > 0 && samples.every((value) => pattern.test(value));
+  const someMatch = (samples, pattern) => samples.length > 0 && samples.some((value) => pattern.test(value));
 
   const assignedFields = new Set();
 
@@ -116,7 +116,11 @@ function detectColumnMapping(lines, delimiter, columnCount) {
   // 7. Token Hotmail
   samplesByColumn.forEach((samples, index) => {
     if (!samples.length || mapping[index] !== "ignore" || assignedFields.has("token_hotmail")) return;
-    if (someMatch(samples, /^(?:M\.C\d+_|MsaArtifacts|EwB)/i) || (samples.every((v) => v.length > 120 && !v.startsWith("EAAA")))) {
+    if (
+      someMatch(samples, /^(?:M\.C\d+_|MsaArtifacts|EwB)/i) ||
+      someMatch(samples, /MsaArtifacts/i) ||
+      samples.some((v) => v.length > 80 && !v.startsWith("EAAA") && !/(?:^|;)\s*c_user=/i.test(v))
+    ) {
       mapping[index] = "token_hotmail";
       assignedFields.add("token_hotmail");
     }
@@ -231,6 +235,18 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
         const field = columnMap[index];
         if (field && field !== "ignore") account[field] = value;
       });
+      // Tự động phát hiện nếu Token Hotmail bị gán nhầm vào mail_recovery
+      if (
+        account.mail_recovery &&
+        (account.mail_recovery.length > 150 ||
+          account.mail_recovery.includes("MsaArtifacts") ||
+          /^(?:M\.C\d+_|EwB)/i.test(account.mail_recovery))
+      ) {
+        if (!account.token_hotmail) {
+          account.token_hotmail = account.mail_recovery;
+        }
+        delete account.mail_recovery;
+      }
       if (!account.uid || seen.has(account.uid)) continue;
       seen.add(account.uid);
       parsed.push(account);
@@ -386,6 +402,14 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
         toast.error(
           `Dòng ${rowNumber}: Mật khẩu không hợp lệ. Yêu cầu độ dài từ 4 đến 250 ký tự.`,
           "MẬT KHẨU KHÔNG HỢP LỆ"
+        );
+        return;
+      }
+
+      if (acc.mail_recovery && acc.mail_recovery.length > 150) {
+        toast.error(
+          `Dòng ${rowNumber}: Email khôi phục vượt quá 150 ký tự. Vui lòng kiểm tra lại cấu hình cột mapping (có thể cột này là Token Hotmail)!`,
+          "EMAIL KHÔI PHỤC QUÁ DÀI"
         );
         return;
       }

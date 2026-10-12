@@ -1,6 +1,6 @@
 """Accounts page contracts; old raw-text import is intentionally replaced."""
 from typing import Optional
-from pydantic import BaseModel, Field, AliasChoices, ConfigDict, field_validator
+from pydantic import BaseModel, Field, AliasChoices, ConfigDict, field_validator, model_validator
 from ..utils.paths import validate_uid
 
 class OwnerRequest(BaseModel):
@@ -19,6 +19,20 @@ class AccountInput(OwnerRequest):
     token_hotmail: Optional[str] = Field(None, validation_alias=AliasChoices("token_hotmail", "tokenhotmail"))
     client_id: Optional[str] = Field(None, max_length=100, validation_alias=AliasChoices("client_id", "clientId"))
     proxy: Optional[str] = Field(None, max_length=255)
+
+    @model_validator(mode="before")
+    @classmethod
+    def sanitize_mail_and_token(cls, data):
+        if isinstance(data, dict):
+            mail_rec = data.get("mail_recovery") or data.get("mailkhoiphuc")
+            if isinstance(mail_rec, str) and (len(mail_rec) > 150 or "MsaArtifacts" in mail_rec or mail_rec.startswith("M.C")):
+                if not data.get("token_hotmail") and not data.get("tokenhotmail"):
+                    data["token_hotmail"] = mail_rec
+                    data.pop("mail_recovery", None)
+                    data.pop("mailkhoiphuc", None)
+                else:
+                    data["mail_recovery"] = mail_rec[:150]
+        return data
 
     @field_validator("uid")
     @classmethod

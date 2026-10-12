@@ -214,9 +214,10 @@ export default function AccountManagerModule() {
         `Đã nhập thành công ${res.added_count || 0} tài khoản mới (${res.updated_count || 0} tài khoản cập nhật).`,
         "NHẬP THÀNH CÔNG"
       );
+      return true;
     } catch (error) {
       toast.error("Không thể nhập tài khoản: " + error.message, "LỖI NHẬP FILE");
-      throw error;
+      return false;
     }
   };
 
