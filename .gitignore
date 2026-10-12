@@ -22,6 +22,10 @@ data/*.db-shm
 # Log and Downloads
 logs/*.txt
 logs/*.log
+logs/login-*.png
+logs/register-*.png
+logs/pending-*.png
+logs/locked-*.png
 downloads/
 
 # IDE & Build artifacts
