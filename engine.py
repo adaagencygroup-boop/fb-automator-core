@@ -32,6 +32,18 @@ from modules.module_auth.schema import init_auth_tables
 from modules.module_auth.service import ensure_admin
 from modules.module_auth.router import auth_router, admin_router, assert_module_access
 
+# Module 03 - Tab 1 (Tương tác tài khoản): lỗi import của module không được làm sập cả engine
+try:
+    from modules.module_03_acc_farm.routes import (
+        router as farm_router,
+        on_startup as farm_on_startup,
+        on_shutdown as farm_on_shutdown,
+    )
+    from modules.module_03_acc_farm._temp.routes import router as farm_accounts_router
+except Exception as _farm_import_error:
+    farm_router = farm_accounts_router = farm_on_startup = farm_on_shutdown = None
+    print(f"[Local Engine] Module 03 (Farm) not loaded: {_farm_import_error}")
+
 # Reconfigure stdout for safe Windows console output
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -80,7 +92,14 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(start_queue_worker())
     except Exception as qe:
         print(f"[Local Engine] Queue worker note: {qe}")
+    if farm_on_startup:
+        try:
+            await farm_on_startup(ws_manager)
+        except Exception as e:
+            print(f"[Local Engine] Module 03 (Farm) startup error: {e}")
     yield
+    if farm_on_shutdown:
+        await farm_on_shutdown()
     print("[Local Engine] Shutting down cleanly...")
 
 app = FastAPI(
@@ -164,6 +183,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if farm_router:
+    app.include_router(farm_router)
+    app.include_router(farm_accounts_router)
 
 # ==================== SYSTEM & HEALTH CHECK ====================
 @app.get("/api/health")

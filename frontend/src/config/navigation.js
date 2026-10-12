@@ -1,4 +1,4 @@
-import { ICON_GLYPHS } from "./iconGlyphs";
+import { ICON_GLYPHS } from "./iconGlyphs.js";
 
 /**
  * CẤU HÌNH MENU SIDEBAR + TIÊU ĐỀ HEADER
@@ -15,6 +15,10 @@ import { ICON_GLYPHS } from "./iconGlyphs";
  *  - icon        : { src, width, height, glyph } — width/height = đúng kích thước gốc của file SVG,
  *                  glyph = vùng hình thật (src/config/iconGlyphs.js) để Sidebar hiển thị mọi icon cùng cỡ.
  *  - children    : danh sách submenu (nhóm xổ xuống)
+ *  - path        : (tuỳ chọn) đường dẫn trang. Mặc định suy ra từ id: "pages.ai_post" -> "/pages/ai-post",
+ *                  "dashboard" -> "/". Mỗi mục lá (không có children) là một trang riêng, nằm ở
+ *                  src/app/<path>/page.js. Thêm/đổi mục -> tạo/đổi folder tương ứng
+ *                  (npm run check:routes sẽ báo nếu thiếu).
  */
 
 const icon = (name, width, height) => ({
@@ -143,7 +147,7 @@ export const NAV_ITEMS = [
   {
     id: "chat",
     label: "Quản lý Chat Page",
-    description: "Hộp thư hợp nhất cho tin nhắn của tất cả Fanpage.",
+    description: "Quản lý chat tập trung, đồng bộ các Fanpage và nhận thông báo thời gian thực.",
     moduleId: "chat",
     icon: icon("icon_nav_chat", 30, 13),
   },
@@ -235,4 +239,33 @@ export function findNavItem(id) {
     if (child) return { item: child, parent: item };
   }
   return { item: NAV_ITEMS[0], parent: null };
+}
+
+/** Đường dẫn trang của một mục menu */
+export function pathOf(item) {
+  if (item.path) return item.path;
+  if (item.id === "dashboard") return "/";
+  return "/" + item.id.replace(/\./g, "/").replace(/_/g, "-");
+}
+
+/** Tất cả mục là trang (mục lá + trang ẩn) — dùng để tạo route tĩnh khi build */
+export const NAV_ROUTES = [...NAV_ITEMS, ...HIDDEN_NAV_ITEMS].flatMap((item) =>
+  item.children?.length ? item.children : [item],
+);
+
+const normalizePath = (p = "/") => {
+  const clean = p.split(/[?#]/)[0].replace(/\/+$/, "");
+  return clean === "" ? "/" : clean;
+};
+
+/** Tìm mục menu theo đường dẫn (bỏ qua dấu "/" cuối). Không khớp -> null */
+export function findNavItemByPath(pathname) {
+  const target = normalizePath(pathname);
+  return NAV_ROUTES.find((item) => pathOf(item) === target) || null;
+}
+
+/** metadata (tiêu đề tab trình duyệt) cho trang của một mục menu — dùng trong các file src/app/.../page.js */
+export function pageMetadata(navId) {
+  const { item } = findNavItem(navId);
+  return { title: `${item.title || item.label} | Facebook Automator Pro` };
 }
