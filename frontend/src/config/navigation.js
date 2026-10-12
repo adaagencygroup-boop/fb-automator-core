@@ -177,7 +177,7 @@ export const NAV_ITEMS = [
         label: "Lịch sử",
         title: "Lịch sử Spam Group",
         description: "Nhật ký đăng bài và bình luận trong các Group.",
-        moduleId: null,
+        moduleId: "groups",
         icon: HISTORY_ICON,
       },
     ],
