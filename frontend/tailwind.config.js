@@ -12,6 +12,8 @@ module.exports = {
       fontFamily: {
         sans: ["var(--font-sans)", "-apple-system", "BlinkMacSystemFont", "sans-serif"],
         heading: ["var(--font-heading)", "-apple-system", "sans-serif"],
+        display: ["var(--font-display)", "var(--font-heading)", "-apple-system", "sans-serif"],
+        mono: ["var(--font-mono)", "ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"],
       },
       colors: {
         border: "hsl(var(--border))",
