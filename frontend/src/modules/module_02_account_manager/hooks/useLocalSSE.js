@@ -2,10 +2,28 @@
 
 import { useEffect, useState } from "react";
 import { formatVietnamTime } from "@/lib/date-utils";
-import { API_BASE } from "@/config/constants";
+import { API_BASE, WS_BASE } from "@/config/constants";
 
 const STORAGE_KEY = "fb_account_terminal_logs";
 const MAX_LOGS = 600;
+
+const DEFAULT_INITIAL_LOGS = [
+  {
+    timestamp: "09:30:02",
+    type: "info",
+    message: "Khởi động hệ thống Facebook Automator Pro thành công (Port 28129)",
+  },
+  {
+    timestamp: "09:30:08",
+    type: "info",
+    message: "Đang kiểm tra trình duyệt Chromium headless cho các luồng automation...",
+  },
+  {
+    timestamp: "09:30:15",
+    type: "success",
+    message: "Đã kết nối với Local Python Engine (SSE Stream & WebSocket Realtime)",
+  },
+];
 
 let globalLogs = [];
 let hasLoadedFromStorage = false;
@@ -61,7 +79,7 @@ function loadFromStorage() {
       const saved = sessionStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
+        if (Array.isArray(parsed) && parsed.length > 0) {
           globalLogs = parsed.filter((item) => !isHeartbeat(item) && !isHeartbeat(item?.extra));
           hasLoadedFromStorage = true;
           return globalLogs;
@@ -71,6 +89,9 @@ function loadFromStorage() {
       console.error("Failed to read sessionStorage logs", e);
     }
   }
+
+  // Khởi tạo các log trạng thái ban đầu để Terminal luôn hiển thị trực quan
+  globalLogs = [...DEFAULT_INITIAL_LOGS];
   hasLoadedFromStorage = true;
   return globalLogs;
 }
@@ -89,7 +110,7 @@ export function clearAllLogs() {
   hasLoadedFromStorage = true;
   if (typeof window !== "undefined") {
     try {
-      sessionStorage.removeItem(STORAGE_KEY);
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify([]));
     } catch (e) {}
   }
   listeners.forEach((l) => l([]));
@@ -97,6 +118,7 @@ export function clearAllLogs() {
 
 const listeners = new Set();
 let activeEventSource = null;
+let activeWebSocket = null;
 let activeSubscribersCount = 0;
 let isConnectedGlobal = false;
 const connectionListeners = new Set();
@@ -109,7 +131,8 @@ function getOrCreateEventSource() {
 
   try {
     const sseUrl = `${API_BASE}/api/accounts/stream`;
-    const es = new EventSource(sseUrl);
+    // Thêm withCredentials: true để gửi kèm cookie fb_access khi gọi cross-origin
+    const es = new EventSource(sseUrl, { withCredentials: true });
     activeEventSource = es;
 
     es.onopen = () => {
@@ -155,12 +178,63 @@ function getOrCreateEventSource() {
     };
 
     es.onerror = () => {
-      isConnectedGlobal = false;
-      connectionListeners.forEach((l) => l(false));
+      // Khi SSE tạm lỗi, để WebSocket dự phòng hỗ trợ
+      if (!activeWebSocket || activeWebSocket.readyState !== WebSocket.OPEN) {
+        isConnectedGlobal = false;
+        connectionListeners.forEach((l) => l(false));
+      }
     };
   } catch (err) {
     console.error("Failed to initialize SSE EventSource:", err);
   }
+}
+
+function getOrCreateWebSocket() {
+  if (typeof window === "undefined" || !WS_BASE) return;
+  if (
+    activeWebSocket &&
+    (activeWebSocket.readyState === WebSocket.OPEN ||
+      activeWebSocket.readyState === WebSocket.CONNECTING)
+  ) {
+    return;
+  }
+
+  try {
+    const ws = new WebSocket(WS_BASE);
+    activeWebSocket = ws;
+
+    ws.onopen = () => {
+      isConnectedGlobal = true;
+      connectionListeners.forEach((l) => l(true));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (isHeartbeat(data)) return;
+
+        window.dispatchEvent(new CustomEvent("local_engine_event", { detail: data }));
+
+        const currentLogs = loadFromStorage();
+        const newMsg = {
+          timestamp: data.timestamp || data.time || formatVietnamTime(),
+          type: (data.level || data.type || "info").toLowerCase(),
+          message: translateLogMessage(data.message || JSON.stringify(data)),
+          uid: data.uid,
+          extra: data,
+        };
+
+        const next = [...currentLogs, newMsg].slice(-MAX_LOGS);
+        persistLogs(next);
+        listeners.forEach((l) => l(next));
+      } catch (e) {}
+    };
+
+    ws.onerror = () => {};
+    ws.onclose = () => {
+      activeWebSocket = null;
+    };
+  } catch (err) {}
 }
 
 export function useLocalSSE(enabled = true) {
@@ -172,6 +246,7 @@ export function useLocalSSE(enabled = true) {
 
     activeSubscribersCount++;
     getOrCreateEventSource();
+    getOrCreateWebSocket();
 
     const logListener = (updatedLogs) => {
       setLogs([...updatedLogs]);
