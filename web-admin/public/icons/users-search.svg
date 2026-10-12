@@ -1,0 +1,19 @@
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Search / magnifying glass — Figma Filter Search Input -->
+  <circle
+    cx="7"
+    cy="7"
+    r="5"
+    stroke="#94A3B8"
+    stroke-width="1.333"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M14 14L10.5 10.5"
+    stroke="#94A3B8"
+    stroke-width="1.333"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

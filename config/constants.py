@@ -28,7 +28,7 @@ CONFIG_PATH = DATA_DIR / "config.json"
 KEYS_PATH = DATA_DIR / "keys.txt"
 PROXIES_PATH = DATA_DIR / "proxies.txt"
 
-# Cấu hình CSDL từ file .env (Để trống sẽ tự động fallback sang SQLite fb_automator.db)
+# PostgreSQL production từ .env. Không có URL local.
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
 # Cấu hình Local Engine Server

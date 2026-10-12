@@ -1,9 +1,7 @@
 """
-Thread-safe Database Connection Manager
-Primary: Supabase PostgreSQL (ThreadedConnectionPool + RealDictCursor)
-Fallback: Local SQLite (WAL Mode) nếu ngoại tuyến không có mạng
+Thread-safe Database Connection Manager.
+Chỉ PostgreSQL production (Supabase). Không fallback SQLite.
 """
-import os
 import re
 import threading
 import psycopg2
@@ -12,7 +10,7 @@ from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 from typing import Generator, List, Dict, Any, Optional
 
-from config.constants import DATABASE_URL, DB_PATH
+from config.constants import DATABASE_URL
 
 class DatabaseManager:
     _instance = None
@@ -28,24 +26,19 @@ class DatabaseManager:
         return cls._instance
 
     def _init_database(self):
-        """Khởi tạo kết nối với Supabase PostgreSQL qua connection pool"""
-        if DATABASE_URL:
-            try:
-                # Tạo ThreadedConnectionPool (min 1, max 20 connections)
-                self._pg_pool = pool.ThreadedConnectionPool(
-                    minconn=1,
-                    maxconn=20,
-                    dsn=DATABASE_URL
-                )
-                self._is_postgres = True
-                print("[Database] Connected successfully to Supabase PostgreSQL!")
-                return
-            except Exception as e:
-                print(f"[Database] Could not connect to Supabase ({e}), falling back to SQLite.")
-
-        # Fallback sang SQLite
-        self._is_postgres = False
-        self._local = threading.local()
+        """Chỉ kết nối PostgreSQL production. Thiếu URL hoặc lỗi mạng thì dừng, không ghi file local."""
+        if not DATABASE_URL or DATABASE_URL.startswith("sqlite"):
+            raise RuntimeError("DATABASE_URL phải là PostgreSQL production. Không dùng SQLite local.")
+        try:
+            self._pg_pool = pool.ThreadedConnectionPool(
+                minconn=1,
+                maxconn=20,
+                dsn=DATABASE_URL
+            )
+            self._is_postgres = True
+            print("[Database] Connected successfully to Supabase PostgreSQL!")
+        except Exception as e:
+            raise RuntimeError(f"Không kết nối được PostgreSQL production: {e}") from e
 
     def _normalize_query(self, query: str) -> str:
         """
@@ -65,33 +58,19 @@ class DatabaseManager:
     @contextmanager
     def session(self) -> Generator[Any, None, None]:
         """Context manager cấp phát cursor và tự động commit / rollback"""
-        if self._is_postgres and self._pg_pool:
-            conn = self._pg_pool.getconn()
-            try:
-                cursor = conn.cursor(cursor_factory=RealDictCursor)
-                yield cursor
-                conn.commit()
-                cursor.close()
-            except Exception as e:
-                conn.rollback()
-                raise e
-            finally:
-                self._pg_pool.putconn(conn)
-        else:
-            # SQLite fallback
-            import sqlite3
-            if not hasattr(self._local, "connection") or self._local.connection is None:
-                c = sqlite3.connect(DB_PATH, timeout=30.0)
-                c.row_factory = sqlite3.Row
-                self._local.connection = c
-            conn = self._local.connection
-            cursor = conn.cursor()
-            try:
-                yield cursor
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                raise e
+        if not self._is_postgres or not self._pg_pool:
+            raise RuntimeError("Chưa có kết nối PostgreSQL production.")
+        conn = self._pg_pool.getconn()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            yield cursor
+            conn.commit()
+            cursor.close()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            self._pg_pool.putconn(conn)
 
     def execute(self, query: str, params: tuple = ()) -> Any:
         norm_q = self._normalize_query(query)
