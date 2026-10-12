@@ -1,0 +1,285 @@
+/* AdminUserModal.css — Tailwind CSS @apply Stylesheet for Thêm Người Dùng Modal */
+
+.aum-backdrop {
+  @apply fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[999] p-4 overflow-y-auto;
+}
+
+/* THÊM NGƯỜI DÙNG MODAL */
+.aum-modal {
+  @apply relative w-[672px] max-w-[672px] bg-white border border-slate-200 rounded-2xl overflow-hidden flex flex-col items-start box-border;
+  box-shadow: 0px 25px 50px -12px rgba(0, 0, 0, 0.25);
+  animation: aum-fade-scale 0.15s ease-out;
+}
+
+@keyframes aum-fade-scale {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Modal Header */
+.aum-header {
+  @apply flex flex-row justify-between items-start px-6 py-4 w-full bg-slate-50/70 border-b border-slate-100 flex-none self-stretch;
+}
+
+.aum-header-left {
+  @apply flex flex-row items-center flex-none;
+}
+
+.aum-icon-box {
+  @apply flex flex-row justify-center items-center w-11 h-11 bg-blue-100/70 rounded-xl flex-none flex-shrink-0;
+  box-shadow: 0px 0px 0px 4px #EFF6FF;
+}
+
+.aum-header-info {
+  @apply flex flex-col items-start pl-3.5 gap-0.5 flex-none;
+}
+
+.aum-title {
+  @apply font-bold text-lg text-slate-800 leading-7 tracking-[-0.45px] m-0 flex items-center;
+}
+
+.aum-subtitle {
+  @apply font-normal text-xs text-slate-500 leading-4 m-0 flex items-center;
+}
+
+.aum-close-btn {
+  @apply flex flex-col items-center justify-center p-1.5 w-8 h-8 rounded-lg bg-transparent border-none cursor-pointer text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-all flex-none;
+}
+
+/* Modal Body Form */
+.aum-form {
+  @apply flex flex-col items-start p-6 gap-5 w-full box-border flex-none self-stretch;
+}
+
+.aum-error {
+  @apply w-full p-2.5 bg-red-50 border border-red-200 rounded-lg text-red-600 text-xs box-border;
+}
+
+/* SECTION 1: ACCOUNT & CONTACT INFO */
+.aum-section-1 {
+  @apply flex flex-col items-start gap-3.5 w-full flex-none self-stretch;
+}
+
+.aum-section-header {
+  @apply flex flex-row items-center pb-1 w-full h-[21px] border-b border-slate-100 flex-none self-stretch box-border;
+}
+
+.aum-pill-bar {
+  @apply w-1.5 h-3.5 bg-blue-600 rounded-full flex-none;
+}
+
+.aum-section-title {
+  @apply font-bold text-[11px] leading-4 tracking-[0.55px] uppercase text-slate-600 pl-2 m-0 flex items-center flex-none;
+}
+
+.aum-row-grid {
+  @apply flex flex-row justify-center items-start gap-3.5 w-full flex-none self-stretch;
+}
+
+.aum-form-group {
+  @apply flex flex-col items-start gap-1 flex-1 w-full;
+}
+
+.aum-label {
+  @apply font-medium text-xs leading-4 text-slate-700 m-0 flex items-center flex-none self-stretch;
+}
+
+.aum-required {
+  @apply text-red-500 ml-0.5;
+}
+
+.aum-input-wrap {
+  @apply relative w-full h-[34px] flex-none self-stretch;
+}
+
+.aum-input-icon {
+  @apply absolute left-0 top-0 bottom-0 w-[26px] flex items-center justify-center pl-3 text-slate-400 z-10 pointer-events-none text-xs font-medium;
+}
+
+.aum-input {
+  @apply box-border flex flex-col items-start py-2 pr-3 pl-8 w-full h-[34px] bg-white border border-slate-300 rounded-lg text-xs leading-[15px] text-slate-700 outline-none placeholder:text-gray-500 transition-all focus:border-blue-600 focus:ring-2 focus:ring-blue-600/15 disabled:bg-slate-50 disabled:text-slate-400;
+}
+
+.aum-input-error {
+  border-color: #EF4444 !important;
+  background-color: #FEF2F2 !important;
+}
+
+/* Password setup */
+.aum-pass-header {
+  @apply flex flex-row justify-between items-center w-full h-4 flex-none self-stretch;
+}
+
+.aum-gen-btn {
+  @apply font-semibold text-[11px] leading-4 text-blue-600 underline bg-transparent border-none cursor-pointer p-0 hover:text-blue-700;
+}
+
+.aum-pass-input {
+  @apply box-border w-full h-[34px] py-2 pr-8 pl-3 bg-slate-50/50 border border-slate-300 rounded-lg font-mono text-xs leading-4 text-slate-700 outline-none transition-all focus:border-blue-600 focus:ring-2 focus:ring-blue-600/15;
+}
+
+.aum-pass-toggle {
+  @apply absolute right-0 top-0 bottom-0 w-[26px] flex items-center justify-center pr-2.5 bg-transparent border-none cursor-pointer text-slate-400 hover:text-slate-600 z-10;
+}
+
+/* SECTION 2: LICENSE & HWID BINDING */
+.aum-section-2 {
+  @apply flex flex-col items-start pt-2 gap-3 w-full flex-none self-stretch;
+}
+
+.aum-durations-grid {
+  @apply flex flex-row justify-center items-start gap-2 w-full h-[52px] flex-none self-stretch;
+}
+
+.aum-duration-card {
+  @apply box-border flex flex-col justify-center items-center py-2 px-2 w-[118px] h-[52px] bg-white border border-slate-200 rounded-lg flex-1 cursor-pointer transition-all relative hover:border-slate-300;
+}
+
+.aum-duration-card--active {
+  @apply bg-blue-50/70 border-2 border-blue-600 p-2;
+}
+
+.aum-duration-title {
+  @apply font-semibold text-xs leading-4 text-center text-slate-700;
+}
+
+.aum-duration-card--active .aum-duration-title {
+  @apply font-bold text-blue-700;
+}
+
+.aum-duration-sub {
+  @apply font-normal text-[10px] leading-4 text-center text-slate-400;
+}
+
+.aum-duration-card--active .aum-duration-sub {
+  @apply font-medium text-blue-600;
+}
+
+.aum-duration-badge {
+  @apply absolute w-3.5 h-3.5 -right-0.5 -top-1 bg-blue-600 rounded-full flex items-center justify-center z-20 shadow-sm;
+}
+
+.aum-duration-card--custom {
+  @apply bg-white border border-dashed border-slate-300 hover:border-slate-400;
+}
+
+.aum-duration-card--custom.aum-duration-card--active {
+  @apply bg-blue-50/70 border-2 border-blue-600;
+}
+
+.aum-custom-input-row {
+  @apply flex items-center gap-2 mt-1;
+}
+
+.aum-custom-days-input {
+  @apply w-20 h-7 px-2 border border-blue-600 rounded text-xs outline-none;
+}
+
+/* HWID Input */
+.aum-hwid-header {
+  @apply flex flex-row justify-between items-center w-full h-4 flex-none self-stretch;
+}
+
+.aum-hwid-optional {
+  @apply italic font-normal text-[11px] leading-4 text-slate-400;
+}
+
+.aum-hwid-input {
+  @apply box-border flex flex-col items-start py-2 pr-3 pl-8 w-full h-[34px] bg-white border border-slate-300 rounded-lg text-xs leading-[15px] text-slate-700 outline-none transition-all placeholder:text-slate-400 focus:border-blue-600 focus:ring-2 focus:ring-blue-600/15;
+}
+
+/* SECTION 3: INITIAL STATUS & APPROVAL */
+.aum-section-3 {
+  @apply flex flex-col items-start pt-2 gap-3 w-full flex-none self-stretch;
+}
+
+.aum-status-grid {
+  @apply flex flex-row justify-center items-start gap-3 w-full h-[77px] flex-none self-stretch;
+}
+
+.aum-status-card {
+  @apply box-border flex flex-row items-start p-3 w-[305px] h-[77px] rounded-xl flex-1 cursor-pointer transition-all;
+}
+
+.aum-status-card--approved-active {
+  @apply bg-emerald-50/40 border border-emerald-300;
+}
+
+.aum-status-card--approved-inactive {
+  @apply bg-white border border-slate-200 hover:border-slate-300;
+}
+
+.aum-status-card--pending-active {
+  @apply bg-slate-50 border border-slate-500;
+}
+
+.aum-status-card--pending-inactive {
+  @apply bg-white border border-slate-200 hover:border-slate-300;
+}
+
+.aum-radio-checked-green {
+  @apply box-border flex flex-col justify-center items-center w-4 h-4 bg-emerald-600 rounded-full flex-shrink-0 mt-0.5;
+}
+
+.aum-radio-dot {
+  @apply w-1.5 h-1.5 bg-white rounded-full;
+}
+
+.aum-radio-checked-dark {
+  @apply box-border flex flex-col justify-center items-center w-4 h-4 bg-slate-700 rounded-full flex-shrink-0 mt-0.5;
+}
+
+.aum-radio-unchecked {
+  @apply box-border w-3.5 h-3.5 bg-white border border-gray-500 rounded-full flex-shrink-0 mt-0.5;
+}
+
+.aum-status-info {
+  @apply flex flex-col items-start pl-2.5 gap-0.5 flex-1;
+}
+
+.aum-status-title-green {
+  @apply font-semibold text-xs leading-4 text-emerald-900 m-0 flex items-center;
+}
+
+.aum-status-desc-green {
+  @apply font-normal text-[11px] leading-4 text-emerald-700 m-0 flex items-center;
+}
+
+.aum-status-title-dark {
+  @apply font-semibold text-xs leading-4 text-slate-800 m-0 flex items-center;
+}
+
+.aum-status-desc-dark {
+  @apply font-normal text-[11px] leading-4 text-slate-500 m-0 flex items-center;
+}
+
+/* Modal Footer Actions */
+.aum-footer {
+  @apply box-border flex flex-row justify-between items-center pt-4 w-full h-[51px] border-t border-slate-100 flex-none self-stretch;
+}
+
+.aum-footer-left {
+  @apply flex flex-row items-center flex-none;
+}
+
+.aum-footer-text {
+  @apply font-normal text-[11px] leading-4 text-slate-400 pl-1.5 m-0 flex items-center;
+}
+
+.aum-footer-right {
+  @apply flex flex-row items-center gap-2.5 flex-none;
+}
+
+.aum-cancel-btn {
+  @apply box-border flex flex-col justify-center items-center py-2 px-4 h-[34px] bg-white border border-slate-300 rounded-lg font-semibold text-xs leading-4 text-slate-700 cursor-pointer transition-all hover:bg-slate-50;
+}
+
+.aum-submit-btn {
+  @apply box-border flex flex-row items-center justify-center py-2 px-5 h-[34px] bg-blue-600 shadow-sm rounded-lg border-none font-semibold text-xs leading-4 text-white cursor-pointer gap-1.5 transition-all hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed;
+}

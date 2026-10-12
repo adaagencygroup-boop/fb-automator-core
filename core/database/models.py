@@ -73,3 +73,10 @@ def init_database():
         print("[Database] Initialized DB schema for Module 05 (Page Manager).")
     except Exception as e:
         print(f"[Database] Notice initializing Module 05 DB: {e}")
+
+    try:
+        from modules.module_03_acc_farm.models import init_models as init_module_03
+        init_module_03()
+        print("[Database] Initialized DB schema for Module 03 (Acc Farm - Tab 1).")
+    except Exception as e:
+        print(f"[Database] Notice initializing Module 03 DB: {e}")

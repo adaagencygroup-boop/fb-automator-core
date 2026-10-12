@@ -26,7 +26,6 @@ Table seeding_targets {
   fb_id varchar(100) [not null, note: 'UID / Page ID / Post ID sau khi xác thực link']
   url text [not null]
   display_name varchar(255) [note: 'Cột "Tên hiển thị" (Page, Trang cá nhân)']
-  content_preview text [note: 'Cột "Nội dung bài viết", chỉ dùng cho POST']
   created_at timestamp [default: `CURRENT_TIMESTAMP`]
   updated_at timestamp [default: `CURRENT_TIMESTAMP`]
 

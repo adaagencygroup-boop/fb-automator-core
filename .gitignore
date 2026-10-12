@@ -18,9 +18,13 @@ venv/
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
+data/*.db
+data/browser_profiles/
 
 # Log and Downloads
 logs/*.txt
+logs/*.log
+logs/*.log.*
 downloads/
 
 # IDE & Build artifacts
