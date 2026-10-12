@@ -75,6 +75,11 @@ async def lifespan(app: FastAPI):
     ensure_admin()
     loaded = load_backend_modules()
     print(f"[Local Engine] PostgreSQL production ready. Loaded {len(loaded)} backend modules.")
+    try:
+        from modules.module_06_omnichannel_chat.queue_worker import start_queue_worker
+        asyncio.create_task(start_queue_worker())
+    except Exception as qe:
+        print(f"[Local Engine] Queue worker note: {qe}")
     yield
     print("[Local Engine] Shutting down cleanly...")
 
@@ -87,6 +92,15 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(admin_router)
 
+from modules.module_06_omnichannel_chat.routers import all_routers as module_06_routers
+for r in module_06_routers:
+    app.include_router(r)
+
+from fastapi.staticfiles import StaticFiles
+uploads_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "uploads"))
+os.makedirs(uploads_dir, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+
 _PUBLIC_API = {
     "/api/health",
     "/api/shutdown",
@@ -95,7 +109,10 @@ _PUBLIC_API = {
     "/api/v1/auth/verify-license",
     "/api/v1/auth/me",
     "/api/v1/admin/login",
+    "/api/facebook/webhook",
+    "/api/facebook/config",
 }
+
 
 
 class LicenseMiddleware:
