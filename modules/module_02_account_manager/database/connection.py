@@ -19,7 +19,9 @@ def initialize(database_url=None):
     # Use the driver declared in requirements, independent of SQLAlchemy defaults.
     if url.startswith("postgresql://"):
         url = "postgresql+psycopg2://" + url[len("postgresql://"):]
-    kwargs = {"pool_pre_ping": True}
+    # Core/auth has a separate pool. SQLAlchemy's default 5 + 10 overflow
+    # can consume all 15 Supabase session-pool connections by itself.
+    kwargs = {"pool_pre_ping": True, "pool_size": 3, "max_overflow": 2, "pool_timeout": 10}
     candidate = create_engine(url, **kwargs)
     try:
         from .migrations import migrate

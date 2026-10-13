@@ -713,7 +713,7 @@ function HistoryView() {
                 {pageRows.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="px-5 py-12 text-center text-sm text-slate-500">
-                      {rows.length === 0 ? "Chưa có page nào được tạo." : "Không có dòng nào khớp bộ lọc."}
+                      {rows.length === 0 ? "Chưa có lịch sử tạo Fanpage." : "Không có dòng nào khớp bộ lọc."}
                     </td>
                   </tr>
                 ) : pageRows.map((row, index) => {

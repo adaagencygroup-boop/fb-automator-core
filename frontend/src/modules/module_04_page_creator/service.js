@@ -28,6 +28,12 @@ export function getCreatorTaskStatus() {
   return api.get("/api/creator/tasks/status");
 }
 
-export function getCreatedPageHistory() {
-  return api.get("/api/creator/pages/history");
+export async function getCreatedPageHistory() {
+  try {
+    return await api.get("/api/creator/pages/history", { timeout: 15000 });
+  } catch (error) {
+    // No creation history is available yet on this Engine: show the empty state.
+    if (error.status === 404) return [];
+    throw error;
+  }
 }
