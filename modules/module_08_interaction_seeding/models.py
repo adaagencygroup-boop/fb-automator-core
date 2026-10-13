@@ -20,11 +20,9 @@ DDL_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS seeding_targets (
         id SERIAL PRIMARY KEY,
         target_type VARCHAR(20) NOT NULL, -- 'PAGE', 'PROFILE', 'POST'
-        fb_id VARCHAR(100) NOT NULL, -- UID / Page ID / Post ID sau khi xác thực link
+        fb_id VARCHAR(100) NOT NULL, -- Định danh cắt từ đuôi link (username / ID), không mở link
         url TEXT NOT NULL,
-        display_name VARCHAR(255),
-        avatar_url TEXT,
-        content_preview TEXT, -- Trích đoạn nội dung, chỉ dùng cho POST
+        display_name VARCHAR(255), -- Display name, cut from end of link
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT unique_seeding_target UNIQUE (target_type, fb_id)
@@ -35,14 +33,12 @@ DDL_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS seeding_campaigns (
         id SERIAL PRIMARY KEY,
-        name VARCHAR(255),
         campaign_type VARCHAR(20) NOT NULL, -- 'PAGE', 'PROFILE', 'POST'
-        actions VARCHAR(100) NOT NULL, -- 'FOLLOW,LIKE_PAGE' hoặc 'REACT,COMMENT,SHARE'
+        actions VARCHAR(100) NOT NULL,
         reactions VARCHAR(100), -- 'LIKE,LOVE,CARE,HAHA,WOW,SAD,ANGRY' (chỉ cho POST)
         account_count INT NOT NULL,
         delay_seconds_min INT DEFAULT 30, -- Thời gian nghỉ giữa 2 lần tương tác (giây)
         delay_seconds_max INT DEFAULT 60,
-        max_retries INT DEFAULT 3,
         status VARCHAR(20) DEFAULT 'PENDING', -- 'PENDING', 'RUNNING', 'STOPPING', 'STOPPED', 'COMPLETED', 'FAILED'
         total_planned INT DEFAULT 0,
         total_success INT DEFAULT 0,
@@ -61,7 +57,6 @@ DDL_STATEMENTS = [
         id SERIAL PRIMARY KEY,
         campaign_id INT NOT NULL REFERENCES seeding_campaigns(id) ON DELETE CASCADE,
         target_id INT NOT NULL REFERENCES seeding_targets(id),
-        priority VARCHAR(10) DEFAULT 'MEDIUM', -- 'HIGH', 'MEDIUM', 'LOW'
         note TEXT,
         source VARCHAR(10) DEFAULT 'MANUAL', -- 'MANUAL', 'EXCEL'
         planned_count INT DEFAULT 0,
@@ -89,7 +84,7 @@ DDL_STATEMENTS = [
         campaign_target_id INT NOT NULL REFERENCES seeding_campaign_targets(id) ON DELETE CASCADE,
         target_id INT NOT NULL REFERENCES seeding_targets(id),
         account_uid VARCHAR(100) NOT NULL, -- accounts.uid (Module 2)
-        action VARCHAR(20) NOT NULL, -- 'FOLLOW', 'LIKE_PAGE', 'REACT', 'COMMENT', 'SHARE'
+        action VARCHAR(20) NOT NULL, -- 'FOLLOW', 'REACT', 'COMMENT', 'SHARE'
         reaction VARCHAR(10), -- Chỉ dùng cho REACT
         comment_id INT REFERENCES seeding_comments(id) ON DELETE SET NULL,
         status VARCHAR(20) DEFAULT 'PENDING', -- 'PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'SKIPPED'

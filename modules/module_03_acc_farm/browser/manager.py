@@ -9,7 +9,8 @@ import random
 import subprocess
 import logging
 import threading
-from typing import Optional, Dict
+from dataclasses import dataclass, field
+from typing import Optional, Dict, List, Tuple
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -27,6 +28,66 @@ from modules.module_03_acc_farm.browser.proxy_bridge import (
 logger = logging.getLogger(__name__)
 
 from modules.module_03_acc_farm.browser.paths import get_profile_path
+
+
+# ─────────────────────── BẢNG CẤU HÌNH THEO SEED ──────────────────────────
+# Mỗi nick chọn 1 bộ cố định dựa trên canvas_seed; giá trị thay đổi thật qua Chrome flag,
+# không override JS nên viewport / Accept-Language / Intl đều nhất quán.
+
+WINDOW_SIZES: List[Tuple[int, int]] = [
+    (1366, 768), (1440, 900), (1536, 864), (1600, 900), (1920, 1080),
+    (1280, 800), (1280, 720), (1360, 768), (1680, 1050),
+]
+
+LOCALE_CONFIGS: List[Dict[str, any]] = [
+    {"lang_flag": "vi-VN", "languages_js": "['vi-VN', 'vi', 'en-US', 'en']"},
+    {"lang_flag": "vi",    "languages_js": "['vi', 'vi-VN', 'en-US', 'en']"},
+    {"lang_flag": "vi-VN", "languages_js": "['vi-VN', 'vi', 'en']"},
+    {"lang_flag": "vi",    "languages_js": "['vi', 'en-US', 'en']"},
+    {"lang_flag": "vi-VN", "languages_js": "['vi-VN', 'en-US', 'vi', 'en']"},
+]
+
+TYPING_PROFILES: List[Dict[str, Tuple[float, float]]] = [
+    {"type_delay": (0.02, 0.06), "sleep_factor": 0.8},
+    {"type_delay": (0.03, 0.08), "sleep_factor": 0.9},
+    {"type_delay": (0.04, 0.10), "sleep_factor": 1.0},
+    {"type_delay": (0.05, 0.11), "sleep_factor": 1.1},
+    {"type_delay": (0.06, 0.14), "sleep_factor": 1.2},
+]
+
+
+def _pick_by_seed(seed: int, table: list):
+    return table[seed % len(table)]
+
+
+@dataclass
+class BrowserConfig:
+    """Cấu hình trình duyệt tập trung cho 1 nick, resolve 1 lần từ seed."""
+    uid: str
+    seed: int
+    mode: str  # "legacy" | "native"
+    window_size: Tuple[int, int] = (1280, 900)
+    lang_flag: str = "vi-VN"
+    languages_js: str = "['vi-VN', 'vi', 'en-US', 'en']"
+    type_delay: Tuple[float, float] = (0.03, 0.09)
+    sleep_factor: float = 1.0
+
+    @classmethod
+    def from_fingerprint(cls, uid: str, fingerprint: dict) -> "BrowserConfig":
+        seed = int(fingerprint.get("canvas_seed") or 1)
+        mode = fingerprint.get("mode", "legacy")
+        ws = _pick_by_seed(seed, WINDOW_SIZES)
+        locale = _pick_by_seed(seed, LOCALE_CONFIGS)
+        typing = _pick_by_seed(seed, TYPING_PROFILES)
+        return cls(
+            uid=uid, seed=seed, mode=mode,
+            window_size=ws,
+            lang_flag=locale["lang_flag"],
+            languages_js=locale["languages_js"],
+            type_delay=typing["type_delay"],
+            sleep_factor=typing["sleep_factor"],
+        )
+
 
 # ── Quản lý khóa Profile theo UID & Danh sách Driver đang hoạt động ──
 _profile_locks = {}
@@ -308,6 +369,32 @@ _FINGERPRINT_NOISE_JS = r"""
       return result;
     }, origReadPixels);
   }
+
+  // AudioContext fingerprint noise: nhiễu output data theo seed, không ảnh hưởng playback.
+  const audioNoise = (arr) => {
+    if (!arr || !arr.length) return;
+    for (let i = 0; i < arr.length; i++) {
+      if (((i + SEED) % 13) !== 0) continue;
+      let x = (SEED ^ Math.imul(i + 1, 2246822507)) >>> 0;
+      x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0;
+      arr[i] += ((x % 200) - 100) * 1e-7;
+    }
+  };
+  if (window.AnalyserNode) {
+    const origGetFloat = AnalyserNode.prototype.getFloatFrequencyData;
+    AnalyserNode.prototype.getFloatFrequencyData = hide(function getFloatFrequencyData(arr) {
+      origGetFloat.call(this, arr);
+      try { audioNoise(arr); } catch (e) {}
+    }, origGetFloat);
+  }
+  if (window.AudioBuffer) {
+    const origGetChannel = AudioBuffer.prototype.getChannelData;
+    AudioBuffer.prototype.getChannelData = hide(function getChannelData(ch) {
+      const data = origGetChannel.call(this, ch);
+      try { audioNoise(data); } catch (e) {}
+      return data;
+    }, origGetChannel);
+  }
 })();
 """
 
@@ -374,6 +461,11 @@ def create_driver(
     profile_path = get_profile_path(uid)
     options = Options()
 
+    # Dấu vân tay theo UID (phải xác định trước khi Chrome tạo thư mục Default cho profile mới)
+    fingerprint = resolve_fingerprint(uid, profile_path)
+    browser_config = BrowserConfig.from_fingerprint(uid, fingerprint)
+    w, h = browser_config.window_size
+
     # ─── Persistent Profile ───
     options.add_argument(f"--user-data-dir={profile_path}")
     options.add_argument("--profile-directory=Default")
@@ -393,8 +485,8 @@ def create_driver(
     options.add_argument("--no-default-browser-check")
     options.add_argument("--disable-sync")
     options.add_argument("--disable-extensions")
-    options.add_argument("--lang=vi-VN")
-    options.add_argument("--window-size=1280,900")
+    options.add_argument(f"--lang={browser_config.lang_flag}")
+    options.add_argument(f"--window-size={w},{h}")
 
     # Anti-Crash exit flag & tắt thông báo khó chịu
     options.add_experimental_option("prefs", {
@@ -405,14 +497,9 @@ def create_driver(
         "profile.exited_cleanly": True,
     })
 
-    # Dấu vân tay theo UID (phải xác định trước khi Chrome tạo thư mục Default cho profile mới)
-    fingerprint = resolve_fingerprint(uid, profile_path)
-    # Không ép UA cho cả 2 chế độ: UA cố định Chrome/127 lệch với Client Hints (sec-ch-ua) mà Chrome thật vẫn gửi,
-    # đó là dấu hiệu bot rõ. Với nick cũ, UA lên phiên bản mới chỉ giống một lần cập nhật Chrome bình thường.
-
     if headless:
         options.add_argument("--headless=new")
-        options.add_argument("--window-size=1920,1080")
+        options.add_argument(f"--window-size={w},{h}")
 
     if scope == "farm":
         # Tương tác nuôi nick: không để Chrome hãm timer / tạm dừng video khi cửa sổ bị che hoặc thu nhỏ
@@ -510,20 +597,18 @@ def create_driver(
 
         driver.quit = quit_with_cleanup
 
-        # Giữ plugins thật của Chrome cho mọi profile (mảng số giả [1..5] dễ bị nhận ra).
-        # Chỉ profile mới (native) thêm nhiễu canvas/WebGL theo UID; profile cũ giữ nguyên canvas để không đổi thiết bị.
-        stealth_js = """
-            Object.defineProperty(navigator, 'webdriver', {
+        stealth_js = f"""
+            Object.defineProperty(navigator, 'webdriver', {{
                 get: () => undefined
-            });
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['vi-VN', 'vi', 'en-US', 'en']
-            });
+            }});
+            Object.defineProperty(navigator, 'languages', {{
+                get: () => {browser_config.languages_js}
+            }});
         """
-        if fingerprint["mode"] != "legacy":
-            stealth_js += _FINGERPRINT_NOISE_JS.replace("__SEED__", str(int(fingerprint["canvas_seed"] or 1)))
+        if browser_config.mode != "legacy":
+            stealth_js += _FINGERPRINT_NOISE_JS.replace("__SEED__", str(browser_config.seed))
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": stealth_js})
-        logger.info(f"[{uid}] Fingerprint mode={fingerprint['mode']}")
+        logger.info(f"[{uid}] Fingerprint mode={browser_config.mode}, window={w}x{h}, lang={browser_config.lang_flag}")
 
         if scope == "farm":
             # Page Visibility luôn báo đang hiển thị và chặn sự kiện visibilitychange tới script của trang
@@ -544,7 +629,8 @@ def create_driver(
 
         driver.proxy_mode = proxy_mode
         driver.proxy_egress_ip = proxy_egress_ip
-        driver.fingerprint_mode = fingerprint["mode"]
+        driver.fingerprint_mode = browser_config.mode
+        driver.browser_config = browser_config
 
         # ─── Kiểm tra Egress IP trong chính Chrome nếu proxy active ───
         # Proxy chỉ cho phép Facebook chặn trang đọc IP, kiểm tra sẽ luôn thất bại nên bỏ qua
@@ -571,18 +657,21 @@ def create_driver(
         raise
 
 
-def human_type(element, text: str, min_delay: float = 0.03, max_delay: float = 0.09):
-    """
-    Gõ phím từng ký tự với độ trễ ngẫu nhiên mô phỏng người dùng thật.
-    """
+def human_type(element, text: str, min_delay: float = 0.03, max_delay: float = 0.09,
+               config: Optional[BrowserConfig] = None):
+    """Gõ phím từng ký tự với độ trễ ngẫu nhiên mô phỏng người dùng thật."""
+    if config:
+        min_delay, max_delay = config.type_delay
     for char in text:
         element.send_keys(char)
         time.sleep(random.uniform(min_delay, max_delay))
 
 
-def human_sleep(min_s: float = 2.0, max_s: float = 4.5):
-    """Dừng ngẫu nhiên trong khoảng [min_s, max_s] giây."""
-    time.sleep(random.uniform(min_s, max_s))
+def human_sleep(min_s: float = 2.0, max_s: float = 4.5,
+                config: Optional[BrowserConfig] = None):
+    """Dừng ngẫu nhiên trong khoảng [min_s, max_s] giây, nhân hệ số theo profile nick."""
+    factor = config.sleep_factor if config else 1.0
+    time.sleep(random.uniform(min_s * factor, max_s * factor))
 
 
 def wait_and_find(driver: webdriver.Chrome, locators: list, timeout: int = 15):
