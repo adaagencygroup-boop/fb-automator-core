@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { attachDragSelection } from "../utils/drag-selection.mjs";
 import AccountDetailPanel from "./AccountDetailPanel";
 import CustomSelect from "@/components/ui/custom-select";
@@ -119,6 +119,8 @@ function DetailRow({ account, isClosing, onClosed, onClose }) {
 
 export default function AccountTable({
   accounts = [],
+  tableRef, total = 0, hasMore = false, isLoadingMore = false, moreError, onLoadMore, onRetryMore,
+  searchTerm, setSearchTerm, accountFilter, setAccountFilter, loginFilter, setLoginFilter,
   isLoading = false,
   loadError = null,
   onRetry,
@@ -139,14 +141,45 @@ export default function AccountTable({
   handleLogin,
   isLoggingIn = false,
 }) {
-  const [searchTerm, setSearchTerm] = useState("");
-  const [accountFilter, setAccountFilter] = useState("all");
-  const [loginFilter, setLoginFilter] = useState("all");
   const [expandedUids, setExpandedUids] = useState(new Set());
   const [closingUids, setClosingUids] = useState(new Set());
   const [copiedUid, setCopiedUid] = useState(null);
   const scrollRef = useRef(null);
   const selectedUidsRef = useRef(selectedUids);
+  const sentinelRef = useRef(null);
+  const anchorRef = useRef(null);
+  const rowsRef = useRef(accounts);
+  useLayoutEffect(() => { rowsRef.current = accounts; }, [accounts]);
+  useLayoutEffect(() => {
+    if (!tableRef) return;
+    tableRef.current = {
+      reset: () => { scrollRef.current.scrollTop = 0; anchorRef.current = null; },
+      capture: () => {
+        const root = scrollRef.current;
+        const top = root.getBoundingClientRect().top + (root.querySelector("thead")?.offsetHeight || 0);
+        const row = [...root.querySelectorAll("[data-account-uid]")].find(row => row.getBoundingClientRect().bottom > top);
+        return row ? { uid: row.dataset.accountUid, id: rowsRef.current.find(account => account.uid === row.dataset.accountUid)?.id, offset: row.getBoundingClientRect().top - root.getBoundingClientRect().top } : null;
+      },
+      restore: anchor => { anchorRef.current = anchor; },
+    };
+    return () => { tableRef.current = null; };
+  }, [tableRef]);
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    if (!anchor) return;
+    anchorRef.current = null;
+    const root = scrollRef.current;
+    const row = [...root.querySelectorAll("[data-account-uid]")].find(row => row.dataset.accountUid === anchor.uid);
+    if (row) root.scrollTop += row.getBoundingClientRect().top - root.getBoundingClientRect().top - anchor.offset;
+  }, [accounts]);
+  useEffect(() => {
+    if (!hasMore || isLoading || isLoadingMore || moreError || !sentinelRef.current) return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) onLoadMore();
+    }, { root: scrollRef.current, rootMargin: "160px" });
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [hasMore, isLoading, isLoadingMore, moreError, onLoadMore]);
 
   useEffect(() => {
     selectedUidsRef.current = selectedUids;
@@ -185,24 +218,7 @@ export default function AccountTable({
     setTimeout(() => setCopiedUid(null), 1500);
   };
 
-  const filteredAccounts = useMemo(() => {
-    const search = searchTerm.trim().toLowerCase();
-    return accounts.filter((account) => {
-      const matchesSearch =
-        !search ||
-        account.uid.toLowerCase().includes(search) ||
-        account.profile_name?.toLowerCase().includes(search) ||
-        account.email?.toLowerCase().includes(search);
-      const normalizedStatus = account.status;
-      const loginStatus = account.login_status || "not_logged_in";
-      return (
-        matchesSearch &&
-        (accountFilter === "all" || normalizedStatus === accountFilter) &&
-        (loginFilter === "all" || loginStatus === loginFilter)
-      );
-    });
-  }, [accounts, searchTerm, accountFilter, loginFilter]);
-
+  const filteredAccounts = accounts;
   const handleSearchChange = (event) => {
     setSearchTerm(event.target.value);
   };
@@ -219,14 +235,12 @@ export default function AccountTable({
     filteredAccounts.length > 0 &&
     filteredAccounts.every((account) => selectedUids.includes(account.uid));
 
-  const visibleUids = useMemo(() => filteredAccounts.map((account) => account.uid), [filteredAccounts]);
-  const availableUids = useMemo(() => accounts.map((account) => account.uid), [accounts]);
 
   useEffect(() => {
     if (!scrollRef.current || !onSelectionChange) return;
     return attachDragSelection(scrollRef.current, {
-      visibleUids,
-      availableUids,
+      getVisibleUids: () => rowsRef.current.map(row => row.uid),
+      getAvailableUids: () => rowsRef.current.map(row => row.uid),
       getSelectedUids: () => selectedUidsRef.current,
       onSelectionChange: (uids) => {
         selectedUidsRef.current = uids;
@@ -234,7 +248,7 @@ export default function AccountTable({
       },
       disabled: isLoading || Boolean(loadError),
     });
-  }, [visibleUids, availableUids, onSelectionChange, isLoading, loadError]);
+  }, [onSelectionChange, isLoading, loadError]);
 
   return (
     <section className="w-full flex flex-col rounded-2xl bg-white border border-[#E2E8F0] shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] overflow-hidden select-none">
@@ -626,12 +640,16 @@ export default function AccountTable({
             )}
           </tbody>
         </table>
+        <div ref={sentinelRef} className="h-1" />
+        {isLoadingMore && <p role="status" className="p-3 text-center text-sm text-slate-500">Đang tải thêm...</p>}
+        {moreError && <div role="alert" className="p-3 text-center text-sm text-red-600">{moreError} <button type="button" onClick={onRetryMore} className="ml-2 text-blue-600 underline">Thử lại</button></div>}
       </div>
 
       {/* 3. Section - Bottom Action Bar / Concurrent Threads Controller */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 text-xs">
         {/* Cụm trái: Đã chọn X trên Y tài khoản */}
         <div className="flex flex-wrap items-center gap-2">
+          <span className="basis-full text-sm text-slate-600">Đã tải {accounts.length} / {total} tài khoản</span>
           <span className="w-2 h-2 rounded-full bg-[#2563EB]" />
           <span className="text-[#475569] text-sm">
             Đã chọn{" "}

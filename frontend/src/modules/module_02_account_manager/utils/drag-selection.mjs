@@ -7,10 +7,10 @@ export function selectRowRange(uids, anchor, end, previous = []) {
 
 /** Mouse selection uses the visible row order and one selection snapshot per gesture. */
 export function attachDragSelection(container, {
-  visibleUids, availableUids, getSelectedUids, onSelectionChange, disabled = false,
+  visibleUids, availableUids, getVisibleUids = () => visibleUids, getAvailableUids = () => availableUids, getSelectedUids, onSelectionChange, disabled = false,
 }) {
   const view = container.ownerDocument.defaultView;
-  const available = new Set(availableUids);
+  const available = new Set(getAvailableUids());
   const selected = getSelectedUids();
   const retained = selected.filter((uid) => available.has(uid));
   if (retained.length !== selected.length) onSelectionChange(retained);
@@ -50,10 +50,10 @@ export function attachDragSelection(container, {
       if (uid === undefined || rect.top <= y) uid = row.dataset.accountUid;
       if (rect.bottom >= y) break;
     }
-    const end = visibleUids.indexOf(uid);
+    const end = getVisibleUids().indexOf(uid);
     if (end < 0 || end === gesture.end) return;
     gesture.end = end;
-    onSelectionChange(selectRowRange(visibleUids, gesture.anchor, end, gesture.previous));
+    onSelectionChange(selectRowRange(getVisibleUids(), gesture.anchor, end, gesture.previous));
   }
 
   function tick(timestamp) {
@@ -106,13 +106,13 @@ export function attachDragSelection(container, {
     if (disabled || event.pointerType !== "mouse" || event.button !== 0 || event.target.closest(INTERACTIVE)) return;
     const row = event.target.closest(ROW_SELECTOR);
     if (!row || !container.contains(row)) return;
-    const anchor = visibleUids.indexOf(row.dataset.accountUid);
+    const anchor = getVisibleUids().indexOf(row.dataset.accountUid);
     if (anchor < 0) return;
     stop();
     gesture = {
       pointerId: event.pointerId, anchor, end: null, started: false,
       startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY,
-      previous: event.ctrlKey || event.metaKey ? getSelectedUids().filter((uid) => available.has(uid)) : [],
+      previous: event.ctrlKey || event.metaKey ? getSelectedUids().filter((uid) => getAvailableUids().includes(uid)) : [],
     };
     view.addEventListener("pointermove", move, { capture: true, passive: false });
     view.addEventListener("pointerup", finish, true);

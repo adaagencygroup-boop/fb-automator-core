@@ -1,5 +1,5 @@
 """HTTP adapter for the independent account plugin."""
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from ..context import owner_scope, normalize_owner, owner_context
@@ -77,9 +77,49 @@ def checked_uid(uid):
 async def list_accounts(db: Session = Depends(get_db)):
     return [accounts.serialize(a) for a in Repo.get_all(db)]
 
+@router.get("/page")
+async def page_accounts(limit: int = Query(10, ge=1), cursor: int | None = Query(None, ge=1), search: str = "", status: str = "all", login_status: str = "all", db: Session = Depends(get_db)):
+    from sqlalchemy import or_, func
+    from ..database.models import Account
+    query = Repo.query(db)
+    if search.strip():
+        pattern = "%" + search.strip().lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        query = query.filter(or_(*(func.lower(column).like(pattern, escape="\\") for column in (Account.uid, Account.profile_name, Account.email))))
+    if status not in ("all", "live", "die") or login_status not in ("all", "logged_in", "failed", "not_logged_in"):
+        raise HTTPException(422, "Invalid status filter")
+    if status != "all":
+        query = query.filter(Account.status == status.upper(), Account.status_checked_at.isnot(None))
+    if login_status == "not_logged_in":
+        query = query.filter(or_(Account.login_status.is_(None), Account.login_status.notin_(("LOGGED_IN", "ERROR"))))
+    elif login_status != "all":
+        query = query.filter(Account.login_status == {"logged_in": "LOGGED_IN", "failed": "ERROR"}[login_status])
+    total = query.count()
+    if cursor is not None:
+        query = query.filter(Account.id < cursor)
+    limit = min(limit, 10)
+    rows = query.order_by(Account.id.desc()).limit(limit + 1).all()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    return {"accounts": [accounts.serialize(row) for row in rows], "total": total, "next_cursor": rows[-1].id if rows and has_more else None, "has_more": has_more}
+
+@router.get("/stats")
+async def account_stats(db: Session = Depends(get_db)):
+    from ..database.models import Account
+    query = Repo.query(db)
+    checked = query.filter(Account.status_checked_at.isnot(None))
+    return {"total": query.count(), "live": checked.filter(Account.status == "LIVE").count(), "die": checked.filter(Account.status == "DIE").count()}
+
+@router.post("/existing-uids")
+async def existing_uids(req: UidsRequest, db: Session = Depends(get_db)):
+    from ..database.models import Account
+    found = []
+    for start in range(0, len(req.uids), 500):
+        found.extend(uid for (uid,) in Repo.query(db).with_entities(Account.uid).filter(Account.uid.in_(req.uids[start:start + 500])).all())
+    return {"uids": found}
+
 @router.post("/import")
 async def import_accounts(req: ImportRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    result, uids = accounts.import_accounts(db, req.accounts)
+    result, uids = accounts.import_accounts(db, req.accounts, req.skip_existing)
     result["checking"] = len(uids) if req.check_status else 0
     if req.check_status and uids:
         background_tasks.add_task(run_owned, owner_context.get(), status_service.check_imported, uids)

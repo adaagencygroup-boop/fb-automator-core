@@ -55,6 +55,7 @@ class AccountInput(OwnerRequest):
 
 class SingleAccountInput(AccountInput):
     original_uid: Optional[str] = None
+    create_only: bool = False
 
     @field_validator("original_uid")
     @classmethod
@@ -64,6 +65,7 @@ class SingleAccountInput(AccountInput):
 class ImportRequest(OwnerRequest):
     accounts: list[AccountInput] = Field(max_length=100)
     check_status: bool = False
+    skip_existing: bool = False
 
 class UidsRequest(OwnerRequest):
     uids: list[str]

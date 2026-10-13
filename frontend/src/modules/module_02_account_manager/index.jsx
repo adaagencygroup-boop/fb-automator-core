@@ -1,8 +1,7 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  getAccounts,
   importAccounts,
   deleteAccount,
   bulkDeleteAccounts,
@@ -11,6 +10,7 @@ import {
   loginAccounts,
   openLiveBrowser,
 } from "./service";
+import { useAccountPages } from "./hooks/useAccountPages";
 import { useLocalSSE } from "./hooks/useLocalSSE";
 import AccountTable from "./components/AccountTable";
 import DynamicImportModal from "./components/DynamicImportModal";
@@ -84,9 +84,6 @@ export default function AccountManagerModule() {
     return false;
   });
 
-  const [accounts, setAccounts] = useState([]);
-  const [isInitialLoading, setIsInitialLoading] = useState(true);
-  const [loadError, setLoadError] = useState(null);
   const [selectedUids, setSelectedUids] = useState([]);
   const [isDynamicImportOpen, setIsDynamicImportOpen] = useState(false);
   const [isSingleModalOpen, setIsSingleModalOpen] = useState(false);
@@ -106,17 +103,17 @@ export default function AccountManagerModule() {
   const { logs, connected, clearLogs } = useLocalSSE();
   const logListRef = useRef(null);
   const shouldAutoScrollRef = useRef(true);
-  const accountsRequestRef = useRef(0);
-  const mountedRef = useRef(false);
-  const hasLoadedRef = useRef(false);
-
+  const tableRef = useRef(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [search, setSearch] = useState("");
+  const [accountFilter, setAccountFilter] = useState("all");
+  const [loginFilter, setLoginFilter] = useState("all");
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      accountsRequestRef.current += 1;
-    };
-  }, []);
+    const timer = setTimeout(() => setSearch(searchTerm.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+  const query = useMemo(() => ({ search, status: accountFilter, login_status: loginFilter }), [search, accountFilter, loginFilter]);
+  const { accounts, setAccounts, stats, total, has_more: hasMore, isInitialLoading, isLoadingMore, loadError, moreError, fetchAccounts, loadMore, retryMore } = useAccountPages(query, !isExpired, tableRef, setSelectedUids);
 
   useEffect(() => {
     if (shouldAutoScrollRef.current && logListRef.current) {
@@ -131,28 +128,6 @@ export default function AccountManagerModule() {
       : selectedUids.length > 0
       ? Math.min(selectedUids.length, 10)
       : 3;
-
-  const fetchAccounts = useCallback(async () => {
-    if (!mountedRef.current) return;
-    const requestId = ++accountsRequestRef.current;
-    try {
-      const updatedAccounts = await getAccounts();
-      if (mountedRef.current && requestId === accountsRequestRef.current) {
-        setAccounts(updatedAccounts);
-        hasLoadedRef.current = true;
-        setLoadError(null);
-      }
-    } catch (error) {
-      console.error(error);
-      if (mountedRef.current && requestId === accountsRequestRef.current && !hasLoadedRef.current) {
-        setLoadError(error.message || "Không thể tải danh sách tài khoản.");
-      }
-    } finally {
-      if (mountedRef.current && requestId === accountsRequestRef.current) {
-        setIsInitialLoading(false);
-      }
-    }
-  }, []);
 
   useEffect(() => {
     const handleLocalEngineEvent = (event) => {
@@ -207,28 +182,17 @@ export default function AccountManagerModule() {
 
     window.addEventListener("local_engine_event", handleLocalEngineEvent);
     return () => window.removeEventListener("local_engine_event", handleLocalEngineEvent);
-  }, [isExpired, fetchAccounts]);
-
-  useEffect(() => {
-    if (isExpired) return;
-    let cancelled = false;
-    Promise.resolve().then(() => {
-      if (!cancelled) fetchAccounts();
-    });
-    return () => {
-      cancelled = true;
-      accountsRequestRef.current += 1;
-    };
-  }, [isExpired, fetchAccounts]);
+  }, [isExpired, fetchAccounts, setAccounts]);
 
   const handleOpenEdit = (uid) => {
     setEditUid(uid);
     setIsSingleModalOpen(true);
   };
 
-  const handleImportBulk = async (accountsToImport, skippedCount = 0) => {
+  const handleImportBulk = async (accountsToImport, skippedCount = 0, skipExisting = false) => {
     try {
-      const res = await importAccounts(accountsToImport);
+      const res = await importAccounts(accountsToImport, false, skipExisting);
+      skippedCount += res.skipped_count || 0;
       await fetchAccounts();
       const added = res.added_count ?? res.imported ?? 0;
       const updated = res.updated_count ?? 0;
@@ -400,15 +364,15 @@ export default function AccountManagerModule() {
     }
   };
 
-  const active = accounts.filter((account) => account.status === "live").length;
-  const dead = accounts.filter((account) => account.status === "die").length;
+  const active = stats.live;
+  const dead = stats.die;
   const checked = active + dead;
   const availability = checked ? `${((active / checked) * 100).toFixed(1)}%` : "--";
 
   const metricCards = [
     {
       label: "TỔNG TÀI KHOẢN",
-      value: accounts.length.toLocaleString("vi-VN"),
+      value: stats.total.toLocaleString("vi-VN"),
       icon: Users,
       labelColor: "text-[#94A3B8]",
       iconBg: "bg-[#F1F5F9] text-[#475569]",
@@ -500,13 +464,15 @@ export default function AccountManagerModule() {
 
       {/* 3. Section - FilterAndTableContainer (Toolbar + Table + Bottom Action Bar) */}
       <AccountTable
+        tableRef={tableRef}
+        searchTerm={searchTerm} setSearchTerm={setSearchTerm}
+        accountFilter={accountFilter} setAccountFilter={setAccountFilter}
+        loginFilter={loginFilter} setLoginFilter={setLoginFilter}
+        total={total} hasMore={hasMore} isLoadingMore={isLoadingMore}
+        moreError={moreError} onLoadMore={loadMore} onRetryMore={retryMore}
         isLoading={isInitialLoading}
         loadError={loadError}
-        onRetry={() => {
-          setIsInitialLoading(true);
-          setLoadError(null);
-          fetchAccounts();
-        }}
+        onRetry={() => fetchAccounts(true)}
         accounts={accounts}
         selectedUids={selectedUids}
         onToggleSelect={(uid) =>

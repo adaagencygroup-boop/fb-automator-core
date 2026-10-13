@@ -54,7 +54,7 @@ function table({ selected = ["hidden"], visible = ["1", "2", "3", "4", "5", "6"]
   const getSelectedUids = () => selection;
   const onSelectionChange = (value) => { selection = value; changes.push(value); };
   const availableUids = [...visible, "hidden"];
-  const destroy = attachDragSelection(container, { visibleUids: visible, availableUids, getSelectedUids, onSelectionChange, disabled });
+  const destroy = attachDragSelection(container, { getVisibleUids: () => visible, getAvailableUids: () => availableUids, getSelectedUids, onSelectionChange, disabled });
   return {
     view, container, rows, frames, changes, destroy, getSelectedUids, onSelectionChange,
     selected: () => selection,
@@ -73,6 +73,11 @@ function table({ selected = ["hidden"], visible = ["1", "2", "3", "4", "5", "6"]
       const callbacks = [...frames.values()];
       frames.clear();
       callbacks.forEach((callback) => callback(timestamp));
+    },
+    append(uid) {
+      const index = rows.length;
+      visible.push(uid); availableUids.push(uid);
+      rows.push({ dataset: { accountUid: uid }, getBoundingClientRect: () => ({ top: 50 + index * 40 - scrollTop, bottom: 90 + index * 40 - scrollTop }) });
     },
     captured: () => captured,
   };
@@ -253,4 +258,15 @@ test("reconciliation preserves selected rows hidden by the filter", () => {
   const t = table({ selected: ["hidden", "2", "deleted"] });
   assert.deepEqual(t.selected(), ["hidden", "2"]);
   t.destroy();
+});
+
+test("appending a page during a drag preserves capture and includes the new rows", () => {
+  const t = table({ visible: ["1", "2"] });
+  t.down(); t.move(1);
+  assert.equal(t.captured(), 1);
+  t.append("3"); t.append("4");
+  t.move(3);
+  assert.equal(t.captured(), 1);
+  assert.deepEqual(t.selected(), ["1", "2", "3", "4"]);
+  t.view.emit("pointerup"); t.destroy();
 });

@@ -48,6 +48,8 @@ def save_single_account(db, item):
     from .login_service import _login_pending, _login_pending_lock
     original = item.original_uid
     if original is None:
+        if item.create_only and Repo.get_by_uid(db, item.uid) is not None:
+            raise HTTPException(409, "UID already exists")
         return save_account(db, item)
     locks, moved = [], False
     try:
@@ -98,11 +100,15 @@ def save_single_account(db, item):
         for lock in reversed(locks):
             lock.release()
 
-def import_accounts(db, items):
+def import_accounts(db, items, skip_existing=False):
     added_count, updated_count, errors, uids = 0, 0, [], []
+    skipped_count = 0
     for item in items:
         try:
             exists = Repo.get_by_uid(db, item.uid) is not None
+            if exists and skip_existing:
+                skipped_count += 1
+                continue
             save_account(db, item)
             if exists:
                 updated_count += 1
@@ -116,6 +122,7 @@ def import_accounts(db, items):
     broadcast("info", f"Đã import {imported} tài khoản (Thêm mới: {added_count}, Cập nhật: {updated_count})")
     return {
         "imported": imported,
+        "skipped_count": skipped_count,
         "added_count": added_count,
         "updated_count": updated_count,
         "errors": errors,

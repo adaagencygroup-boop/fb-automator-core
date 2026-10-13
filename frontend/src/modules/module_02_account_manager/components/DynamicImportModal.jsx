@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState, useSyncExternalStore } from "react
 import { createPortal } from "react-dom";
 import { useToast } from "@/components/ui/toast";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
+import { checkExistingUids } from "../service";
 import { DEFAULT_MAPPING, normalizeImportedValue, detectColumnMapping, isValidProxy } from "../utils/import-mapping.mjs";
 import {
   Braces, Check, ChevronDown, CircleCheck, Eye, EyeOff, Info, ListFilter,
@@ -38,7 +39,7 @@ function truncateValue(value, visible = 16) {
   return text.length > visible ? `${text.slice(0, visible)}...` : text;
 }
 
-export default function DynamicImportModal({ isOpen, onClose, onImport, existingAccounts = [] }) {
+export default function DynamicImportModal({ isOpen, onClose, onImport }) {
   const toast = useToast();
   const mounted = useSyncExternalStore(
     () => () => {},
@@ -114,7 +115,24 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
     return parsed;
   }, [columnMap, delimiter, lines]);
 
-  const existingUidSet = useMemo(() => new Set(existingAccounts.map((account) => account.uid)), [existingAccounts]);
+  const [existingUidSet, setExistingUidSet] = useState(new Set());
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false);
+  const [duplicateError, setDuplicateError] = useState(null);
+  useEffect(() => {
+    if (!isOpen || !parsedAccounts.length) return;
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      setCheckingDuplicates(true);
+      setDuplicateError(null);
+      return checkExistingUids(parsedAccounts.map(account => account.uid)).then(uids => {
+        if (!cancelled) setExistingUidSet(new Set(uids));
+      }).catch(error => {
+        if (!cancelled) setDuplicateError(error.message);
+      }).finally(() => { if (!cancelled) setCheckingDuplicates(false); });
+    });
+    return () => { cancelled = true; };
+  }, [isOpen, parsedAccounts]);
   const accountsToImport = useMemo(
     () => skipDuplicates ? parsedAccounts.filter((account) => !existingUidSet.has(account.uid)) : parsedAccounts,
     [existingUidSet, parsedAccounts, skipDuplicates],
@@ -270,17 +288,9 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
       }
     }
 
-    if (accountsToImport.length === 0) {
-      toast.warning(
-        `Tất cả ${parsedAccounts.length} tài khoản đều đã tồn tại trong hệ thống (đã bỏ qua). Bỏ tick ô "Tự động bỏ qua" nếu bạn muốn cập nhật đè thông tin mới.`,
-        "TÀI KHOẢN ĐÃ TỒN TẠI"
-      );
-      return;
-    }
-
     setIsImporting(true);
     try {
-      const success = await onImport(accountsToImport, skippedExistingCount);
+      const success = await onImport(parsedAccounts, 0, skipDuplicates);
       if (success) {
         resetForm();
         handleClose();
@@ -501,7 +511,7 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, existing
                 <span className="rounded-md border border-border bg-white px-2.5 py-1 font-semibold text-slate-700 shadow-subtle">
                   Nhận dạng: {parsedAccounts.length} tài khoản
                 </span>
-                {skipDuplicates ? (
+                {checkingDuplicates ? <span className="text-slate-400">{ "Đang kiểm tra UID..." }</span> : duplicateError ? <span className="text-red-600">{duplicateError}</span> : skipDuplicates ? (
                   <span className={skippedExistingCount > 0 ? "text-amber-600 font-medium" : "text-slate-400"}>
                     {skippedExistingCount > 0 ? `${skippedExistingCount} UID đã có sẽ bỏ qua` : "Không có UID trùng"}
                   </span>
