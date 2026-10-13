@@ -820,13 +820,27 @@ def _run_single_campaign(campaign_id: int):
         db.close()
 
 
+def _campaign_status(campaign_id: int) -> Optional[str]:
+    """Đọc trạng thái hiện tại của chiến dịch trong DB."""
+    db = SessionLocal()
+    try:
+        row = db.query(SeedingCampaign.status).filter(SeedingCampaign.id == campaign_id).first()
+        return row[0] if row else None
+    finally:
+        db.close()
+
+
 def _execute_campaign_runner(initial_campaign_id: int):
     """Hàm chạy nền điều phối tuần tự các chiến dịch trong cùng một batch."""
     chain = _batch_campaign_chains.get(initial_campaign_id, [initial_campaign_id])
-    for cid in chain:
+    for idx, cid in enumerate(chain):
         # Kiểm tra nếu có yêu cầu dừng toàn batch
         stop_req = any(_active_seeding_campaigns.get(c, {}).get("stop_requested", False) for c in chain)
         if stop_req:
+            break
+        # Cờ stop_requested mất khi chiến dịch trước chạy xong, nên các chiến dịch kế tiếp
+        # phải dựa vào trạng thái STOPPED mà API dừng đã ghi vào DB.
+        if idx > 0 and _campaign_status(cid) == "STOPPED":
             break
         _run_single_campaign(cid)
 
@@ -862,6 +876,30 @@ async def stop_seeding_campaign(campaign_id: int, db: Session = Depends(get_db))
 
     broadcast("warning", f"⏹ Đã dừng khẩn cấp chiến dịch #{campaign_id} và đóng toàn bộ trình duyệt.")
     return {"message": "Đã dừng chiến dịch", "campaign_id": campaign_id}
+
+
+@router.post("/stop-all")
+async def stop_all_seeding(db: Session = Depends(get_db)):
+    """Dừng khẩn cấp mọi chiến dịch seeding đang chạy trên engine này (khi giao diện không còn giữ campaign_id)."""
+    # Chỉ lấy các chiến dịch đang chạy trong tiến trình này và phần còn lại của batch của chúng,
+    # không đụng tới chiến dịch RUNNING của máy khác trên cùng DB.
+    campaign_ids = set()
+    for cid in list(_active_seeding_campaigns.keys()):
+        campaign_ids.update(_batch_campaign_chains.get(cid, [cid]))
+
+    for cid in campaign_ids:
+        if cid in _active_seeding_campaigns:
+            _active_seeding_campaigns[cid]["stop_requested"] = True
+        c = db.query(SeedingCampaign).filter(SeedingCampaign.id == cid).first()
+        if c and c.status in ("PENDING", "RUNNING"):
+            c.status = "STOPPED"
+    db.commit()
+
+    # Đóng ngay lập tức các trình duyệt đang thuộc scope seeding
+    close_scoped_active_drivers(scope="seeding", force=True)
+
+    broadcast("warning", f"⏹ Đã dừng khẩn cấp {len(campaign_ids)} chiến dịch seeding và đóng toàn bộ trình duyệt.")
+    return {"message": "Đã dừng toàn bộ chiến dịch seeding", "campaign_ids": sorted(campaign_ids)}
 
 
 # ─────────────────────────────────────────────────────────────
