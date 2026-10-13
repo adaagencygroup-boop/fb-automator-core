@@ -103,10 +103,11 @@ class AccountRepository:
         db.commit()
 
     @staticmethod
-    def delete(db, uid, owner_username=_UNSET):
+    def delete(db, uid, owner_username=_UNSET, *, commit=True):
         account = AccountRepository.get_by_uid(db, uid, owner_username)
         if not account:
             return False
         db.delete(account)
-        db.commit()
+        if commit:
+            db.commit()
         return True

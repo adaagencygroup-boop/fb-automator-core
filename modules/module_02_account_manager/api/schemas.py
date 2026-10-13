@@ -73,6 +73,9 @@ class UidsRequest(OwnerRequest):
     def valid_uids(cls, values):
         return list(dict.fromkeys(validate_uid(uid) for uid in values))
 
+class DeleteAccountsRequest(UidsRequest):
+    delete_pages: bool = False
+
 class LoginRequest(UidsRequest):
     threads: int = Field(3, ge=1, le=10)
 

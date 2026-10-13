@@ -6,6 +6,7 @@ import {
   importAccounts,
   deleteAccount,
   bulkDeleteAccounts,
+  getDeletePreview,
   checkAccountStatuses,
   loginAccounts,
   openLiveBrowser,
@@ -21,6 +22,7 @@ import {
   AlertTriangle,
   ChevronDown,
   Gauge,
+  Loader2,
   Maximize2,
   Minimize2,
   ShieldCheck,
@@ -97,6 +99,9 @@ export default function AccountManagerModule() {
   const [expandedLog, setExpandedLog] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deletePreview, setDeletePreview] = useState({ loading: false, pagesTotal: 0, error: null });
+  const [deletingPages, setDeletingPages] = useState(false);
+  const deletingRef = useRef(false);
 
   const { logs, connected, clearLogs } = useLocalSSE();
   const logListRef = useRef(null);
@@ -248,34 +253,80 @@ export default function AccountManagerModule() {
     }
   };
 
-  const handleDeleteSingle = (uid) => {
-    setDeleteTarget({ kind: "single", uid });
+  const prepareDelete = (target) => {
+    if (deletingRef.current) return;
+    setDeletePreview({ loading: true, pagesTotal: 0, error: null });
+    setDeleteTarget(target);
   };
+
+  const handleDeleteSingle = (uid) => prepareDelete({ kind: "single", uid });
 
   const handleBulkDelete = () => {
     if (!selectedUids.length) return;
-    setDeleteTarget({ kind: "bulk", uids: selectedUids });
+    prepareDelete({ kind: "bulk", uids: [...selectedUids] });
   };
 
-  const handleConfirmDelete = async () => {
+  useEffect(() => {
     if (!deleteTarget) return;
+    let cancelled = false;
+    const uids = deleteTarget.kind === "single" ? [deleteTarget.uid] : deleteTarget.uids;
+    getDeletePreview(uids).then(
+      (result) => {
+        if (!cancelled) setDeletePreview({ loading: false, pagesTotal: result.pages_total, error: null });
+      },
+      (error) => {
+        if (!cancelled) setDeletePreview({ loading: false, pagesTotal: 0, error: error.message });
+      }
+    );
+    return () => { cancelled = true; };
+  }, [deleteTarget]);
+
+  const handleCloseDelete = () => {
+    if (!deletingRef.current) setDeleteTarget(null);
+  };
+
+  const handleConfirmDelete = async (deletePages = false) => {
+    if (!deleteTarget || deletePreview.loading || deletePreview.error || deletingRef.current) return;
+    deletingRef.current = true;
+    setDeletingPages(deletePages);
     setIsDeleting(true);
     try {
+      let result;
+      let successfulUids;
       if (deleteTarget.kind === "single") {
-        await deleteAccount(deleteTarget.uid);
-        setSelectedUids((prev) => prev.filter((id) => id !== deleteTarget.uid));
-        toast.success(`Đã xóa tài khoản ${deleteTarget.uid}`, "ĐÃ XÓA TÀI KHOẢN");
+        result = await deleteAccount(deleteTarget.uid, deletePages);
+        successfulUids = [deleteTarget.uid];
       } else {
-        const uidsToDelete = deleteTarget.uids;
-        await bulkDeleteAccounts(uidsToDelete);
-        setSelectedUids((prev) => prev.filter((id) => !uidsToDelete.includes(id)));
-        toast.success(`Đã xóa ${uidsToDelete.length} tài khoản`, "ĐÃ XÓA HÀNG LOẠT");
+        result = await bulkDeleteAccounts(deleteTarget.uids, deletePages);
+        successfulUids = result.deleted_uids;
       }
+      const errors = result.errors || [];
+      setSelectedUids((prev) => prev.filter((id) => !successfulUids.includes(id)));
+      const pageMessage = result.pages_deleted > 0
+        ? ` Đã xóa ${result.pages_deleted} Fanpage liên quan.`
+        : result.pages_unlinked > 0
+        ? ` Đã giữ lại và ngắt liên kết ${result.pages_unlinked} Fanpage.`
+        : "";
+      const successMessage = deleteTarget.kind === "single"
+        ? `Đã xóa tài khoản ${deleteTarget.uid}.`
+        : `Đã xóa ${result.deleted} tài khoản.`;
+      if (errors.length) {
+        const details = errors.slice(0, 3).map((item) => `${item.uid}: ${item.error}`).join("; ");
+        const remaining = errors.length > 3 ? `; và ${errors.length - 3} tài khoản khác` : "";
+        if (successfulUids.length) {
+          toast.warning(`${successMessage}${pageMessage} Không thể xóa ${errors.length} tài khoản. ${details}${remaining}`, "KẾT QUẢ XÓA");
+        } else {
+          toast.error(`Không thể xóa các tài khoản đã chọn. ${details}${remaining}`, "LỖI XÓA");
+        }
+      } else {
+        toast.success(`${successMessage}${pageMessage}`, "XÓA THÀNH CÔNG");
+      }
+      if (successfulUids.length) setDeleteTarget(null);
       await fetchAccounts();
-      setDeleteTarget(null);
     } catch (error) {
       toast.error("Lỗi khi xóa tài khoản: " + error.message, "LỖI XÓA");
     } finally {
+      deletingRef.current = false;
       setIsDeleting(false);
     }
   };
@@ -610,15 +661,41 @@ export default function AccountManagerModule() {
 
       <ConfirmDialog
         isOpen={deleteTarget !== null}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={handleConfirmDelete}
+        onClose={handleCloseDelete}
+        onConfirm={() => handleConfirmDelete(deletePreview.pagesTotal > 0)}
         title="Xác nhận xóa tài khoản"
         description={
-          deleteTarget?.kind === "single"
-            ? `Bạn có chắc chắn muốn xóa tài khoản ${deleteTarget.uid}? Toàn bộ profile trình duyệt sẽ bị gỡ bỏ.`
-            : `Bạn có chắc chắn muốn xóa ${deleteTarget?.uids.length ?? 0} tài khoản đã chọn?`
+          deletePreview.loading ? (
+            <span role="status" className="inline-flex items-center gap-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Đang kiểm tra dữ liệu liên quan…
+            </span>
+          ) : deletePreview.error ? (
+            <span role="alert">
+              Không thể kiểm tra Fanpage: {deletePreview.error}.{" "}
+              <button type="button" className="font-semibold text-primary underline" onClick={() => prepareDelete({ ...deleteTarget })}>
+                Thử lại
+              </button>
+            </span>
+          ) : (
+            <span>
+              {deleteTarget?.kind === "single"
+                ? `Xóa tài khoản ${deleteTarget.uid}?`
+                : `Xóa ${deleteTarget?.uids.length ?? 0} tài khoản đã chọn?`}{" "}
+              {deletePreview.pagesTotal > 0 && (
+                <span className="mt-2 block">
+                  Có {deletePreview.pagesTotal} Fanpage liên quan. Chỉ xóa tài khoản sẽ giữ Fanpage và ngắt liên kết; xóa cả hai sẽ gỡ Fanpage khỏi phần mềm.
+                </span>
+              )}
+              <span className="mt-2 block">Dữ liệu trình duyệt và phiên đăng nhập của tài khoản sẽ bị xóa. Nếu thêm lại tài khoản, bạn cần đăng nhập lại.</span>
+            </span>
+          )
         }
-        confirmText="Xóa"
+        confirmText={deletePreview.pagesTotal > 0 ? "Xóa cả tài khoản & Fanpage" : "Xóa tài khoản"}
+        secondaryText={deletePreview.pagesTotal > 0 ? "Chỉ xóa tài khoản" : undefined}
+        onSecondaryConfirm={() => handleConfirmDelete(false)}
+        hideConfirm={deletePreview.loading || Boolean(deletePreview.error)}
+        loadingAction={deletePreview.pagesTotal > 0 && !deletingPages ? "secondary" : "confirm"}
         cancelText="Hủy bỏ"
         variant="danger"
         icon={<Trash2 className="h-5 w-5" />}

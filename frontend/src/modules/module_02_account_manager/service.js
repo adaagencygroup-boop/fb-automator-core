@@ -105,17 +105,25 @@ export async function saveSingleAccount(account) {
   }
 }
 
-export async function deleteAccount(uid) {
+export async function getDeletePreview(uids) {
   try {
-    return await api.delete(`/api/accounts/${encodeURIComponent(uid)}`);
+    return await api.post("/api/accounts/delete-preview", { uids });
   } catch (error) {
     throw new Error(formatApiError(error));
   }
 }
 
-export async function bulkDeleteAccounts(uids) {
+export async function deleteAccount(uid, deletePages = false) {
   try {
-    return await api.post("/api/accounts/bulk-delete", { uids });
+    return await api.delete(`/api/accounts/${encodeURIComponent(uid)}`, { params: { delete_pages: deletePages } });
+  } catch (error) {
+    throw new Error(formatApiError(error));
+  }
+}
+
+export async function bulkDeleteAccounts(uids, deletePages = false) {
+  try {
+    return await api.post("/api/accounts/bulk-delete", { uids, delete_pages: deletePages });
   } catch (error) {
     throw new Error(formatApiError(error));
   }

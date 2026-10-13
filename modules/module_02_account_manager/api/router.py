@@ -10,7 +10,7 @@ from ..services import account_service as accounts, status_service, login_servic
 from ..services.browser_service import queue_open_browser
 from ..services.events import event_stream
 from ..utils.paths import validate_uid
-from .schemas import SingleAccountInput, ImportRequest, UidsRequest, LoginRequest, OpenBrowserRequest, TestProxyRequest
+from .schemas import SingleAccountInput, ImportRequest, UidsRequest, DeleteAccountsRequest, LoginRequest, OpenBrowserRequest, TestProxyRequest
 
 router = APIRouter(prefix="/api/accounts", tags=["Module 02: Account Manager"])
 
@@ -98,8 +98,12 @@ async def save_single(item: SingleAccountInput, db: Session = Depends(get_db)):
     return {"success": True, "uid": account.uid}
 
 @router.post("/bulk-delete")
-async def bulk_delete(req: UidsRequest, db: Session = Depends(get_db)):
-    return accounts.bulk_delete(db, req.uids)
+async def bulk_delete(req: DeleteAccountsRequest, db: Session = Depends(get_db)):
+    return accounts.bulk_delete(db, req.uids, delete_pages=req.delete_pages)
+
+@router.post("/delete-preview")
+async def delete_preview(req: UidsRequest, db: Session = Depends(get_db)):
+    return accounts.delete_preview(db, req.uids)
 
 @router.post("/check-status")
 async def check_status(req: UidsRequest, db: Session = Depends(get_db)):
@@ -146,8 +150,8 @@ async def detail(uid: str, db: Session = Depends(get_db)):
     return accounts.serialize(accounts.require_account(db, checked_uid(uid)), detail=True)
 
 @router.delete("/{uid}")
-async def delete(uid: str, db: Session = Depends(get_db)):
-    return accounts.delete_account(db, checked_uid(uid))
+async def delete(uid: str, db: Session = Depends(get_db), delete_pages: bool = False):
+    return accounts.delete_account(db, checked_uid(uid), delete_pages=delete_pages)
 
 # ── Route Aliases for legacy clients ──
 alias_router = APIRouter(tags=["Module 02: Account Manager Aliases"])
@@ -181,8 +185,12 @@ async def save_single_alias(item: SingleAccountInput, db: Session = Depends(get_
     return await save_single(item, db)
 
 @alias_router.post("/accounts/bulk-delete")
-async def bulk_delete_alias(req: UidsRequest, db: Session = Depends(get_db)):
+async def bulk_delete_alias(req: DeleteAccountsRequest, db: Session = Depends(get_db)):
     return await bulk_delete(req, db)
+
+@alias_router.post("/accounts/delete-preview")
+async def delete_preview_alias(req: UidsRequest, db: Session = Depends(get_db)):
+    return await delete_preview(req, db)
 
 @alias_router.post("/accounts/check-status")
 async def check_status_alias(req: UidsRequest, db: Session = Depends(get_db)):
@@ -201,6 +209,6 @@ async def detail_alias(uid: str, db: Session = Depends(get_db)):
     return await detail(uid, db)
 
 @alias_router.delete("/accounts/{uid}")
-async def delete_alias(uid: str, db: Session = Depends(get_db)):
-    return await delete(uid, db)
+async def delete_alias(uid: str, db: Session = Depends(get_db), delete_pages: bool = False):
+    return await delete(uid, db, delete_pages=delete_pages)
 

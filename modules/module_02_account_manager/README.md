@@ -59,13 +59,31 @@ OpenAPI của FastAPI mô tả request; các response chính:
 | POST /single | uid và các trường account | success, uid |
 | POST /import | accounts, check_status=false, owner_username | imported, errors:[{uid,error}], checking |
 | POST /check-status | uids | statuses:{uid:live/die}, live, die, inconclusive |
-| DELETE /{uid} | owner qua query/header | deleted, profiles_deleted:[path] |
-| POST /bulk-delete | uids, owner_username | deleted, profiles_deleted:count, errors:[{uid,error}] |
+| POST /delete-preview | uids, owner_username | page_counts:{uid:count}, pages_total |
+| DELETE /{uid} | owner qua query/header, delete_pages=false qua query | deleted, profiles_deleted:[path], pages_deleted, pages_unlinked |
+| POST /bulk-delete | uids, owner_username, delete_pages=false | deleted, deleted_uids, profiles_deleted:count, pages_deleted, pages_unlinked, errors:[{uid,error}] |
 | POST /test-proxy | proxy | success, host, port, has_auth, egress_ip, message |
 | POST /login | uids, threads=3, owner_username | started, count |
 | POST /open-browser | uid, owner_username | started, uid |
 | POST /{uid}/sync-cookies | owner qua query/header | success, uid, source hoặc message |
 | GET /stream | owner qua query/header | text/event-stream |
+
+### Xóa tài khoản và Fanpage
+
+Nút xóa mở hộp thoại và gọi delete-preview để kiểm tra Fanpage liên quan. Khi có
+Fanpage, người dùng chọn chỉ xóa tài khoản hoặc xóa cả tài khoản và Fanpage;
+không có Fanpage thì chỉ hiện một nút xóa. Hủy hộp thoại không thay đổi dữ liệu.
+
+Mặc định giữ bản ghi Fanpage và đặt pages.account_uid = NULL. delete_pages=true
+xóa các bản ghi Fanpage liên quan trong phần mềm, không xóa Fanpage trên Facebook.
+Thay đổi Fanpage và tài khoản dùng cùng transaction; giữ lịch sử, nhật ký và video.
+Nếu UID có Fanpage đồng thời thuộc tài khoản của người dùng khác, từ chối xóa
+vì bảng pages chưa phân biệt được chủ sở hữu. Không import kết nối DB của host.
+
+Profile đang chạy hoặc không thể dọn sẽ chặn xóa dữ liệu DB. Nếu DB lỗi sau khi
+profile đã được dọn, dữ liệu DB rollback nhưng không khôi phục được profile.
+Xóa hàng loạt tiếp tục khi một UID thất bại; deleted_uids chỉ gồm các UID xử lý
+thành công để giao diện giữ chọn những tài khoản lỗi và báo đúng kết quả.
 
 Account gồm uid, owner_username, password, two_fa, cookie, token, email, pass_mail,
 mail_recovery, token_hotmail, client_id, proxy, profile_name, login_status, status,
