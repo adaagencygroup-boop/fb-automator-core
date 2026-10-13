@@ -2,7 +2,6 @@ import { Plus_Jakarta_Sans, Inter, Space_Grotesk, JetBrains_Mono } from "next/fo
 import "./globals.css";
 import AppShell from "@/components/AppShell";
 import Toaster from "@/components/Toaster";
-import { ToastProvider } from "@/components/ui/toast";
 
 const fontHeading = Plus_Jakarta_Sans({
   subsets: ["latin", "vietnamese"],
@@ -51,10 +50,7 @@ export default function RootLayout({ children }) {
       className={`${fontHeading.variable} ${fontSans.variable} ${fontDisplay.variable} ${fontMono.variable} font-sans h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
-        {/* ToastProvider: toast của các module (useToast). Toaster: toast màn đăng nhập (lib/toast) */}
-        <AppShell>
-          <ToastProvider>{children}</ToastProvider>
-        </AppShell>
+        <AppShell>{children}</AppShell>
         <Toaster />
       </body>
     </html>

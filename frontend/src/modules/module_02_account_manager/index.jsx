@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   getAccounts,
   importAccounts,
@@ -83,6 +83,8 @@ export default function AccountManagerModule() {
   });
 
   const [accounts, setAccounts] = useState([]);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [selectedUids, setSelectedUids] = useState([]);
   const [isDynamicImportOpen, setIsDynamicImportOpen] = useState(false);
   const [isSingleModalOpen, setIsSingleModalOpen] = useState(false);
@@ -100,6 +102,16 @@ export default function AccountManagerModule() {
   const logListRef = useRef(null);
   const shouldAutoScrollRef = useRef(true);
   const accountsRequestRef = useRef(0);
+  const mountedRef = useRef(false);
+  const hasLoadedRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      accountsRequestRef.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     if (shouldAutoScrollRef.current && logListRef.current) {
@@ -115,17 +127,27 @@ export default function AccountManagerModule() {
       ? Math.min(selectedUids.length, 10)
       : 3;
 
-  const fetchAccounts = async () => {
+  const fetchAccounts = useCallback(async () => {
+    if (!mountedRef.current) return;
     const requestId = ++accountsRequestRef.current;
     try {
       const updatedAccounts = await getAccounts();
-      if (requestId === accountsRequestRef.current) {
+      if (mountedRef.current && requestId === accountsRequestRef.current) {
         setAccounts(updatedAccounts);
+        hasLoadedRef.current = true;
+        setLoadError(null);
       }
     } catch (error) {
       console.error(error);
+      if (mountedRef.current && requestId === accountsRequestRef.current && !hasLoadedRef.current) {
+        setLoadError(error.message || "Không thể tải danh sách tài khoản.");
+      }
+    } finally {
+      if (mountedRef.current && requestId === accountsRequestRef.current) {
+        setIsInitialLoading(false);
+      }
     }
-  };
+  }, []);
 
   useEffect(() => {
     const handleLocalEngineEvent = (event) => {
@@ -180,20 +202,19 @@ export default function AccountManagerModule() {
 
     window.addEventListener("local_engine_event", handleLocalEngineEvent);
     return () => window.removeEventListener("local_engine_event", handleLocalEngineEvent);
-  }, [isExpired]);
+  }, [isExpired, fetchAccounts]);
 
   useEffect(() => {
     if (isExpired) return;
-    let ignore = false;
-    getAccounts()
-      .then((data) => {
-        if (!ignore) setAccounts(data);
-      })
-      .catch((error) => console.error(error));
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (!cancelled) fetchAccounts();
+    });
     return () => {
-      ignore = true;
+      cancelled = true;
+      accountsRequestRef.current += 1;
     };
-  }, [isExpired]);
+  }, [isExpired, fetchAccounts]);
 
   const handleOpenEdit = (uid) => {
     setEditUid(uid);
@@ -372,7 +393,6 @@ export default function AccountManagerModule() {
         featureName="Quản lý Tài khoản Facebook"
         onRenewed={() => {
           setIsExpired(false);
-          fetchAccounts();
         }}
       />
     );
@@ -403,7 +423,8 @@ export default function AccountManagerModule() {
       </div>
 
       {/* 2. Section - StatsGrid (4 Cards) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      <p role="status" className="sr-only">{isInitialLoading ? "Đang tải tài khoản" : ""}</p>
+      <div aria-busy={isInitialLoading} className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {metricCards.map(({ label, value, icon: Icon, labelColor, iconBg }) => (
           <div
             key={label}
@@ -414,7 +435,9 @@ export default function AccountManagerModule() {
                 {label}
               </div>
               <div className="text-3xl font-extrabold text-[#0F172A] tracking-tight mt-1">
-                {value}
+                {isInitialLoading ? (
+                  <span aria-hidden="true" className="block h-9 w-24 rounded bg-slate-200/70 motion-safe:animate-pulse" />
+                ) : loadError ? "--" : value}
               </div>
             </div>
             <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${iconBg}`}>
@@ -426,6 +449,13 @@ export default function AccountManagerModule() {
 
       {/* 3. Section - FilterAndTableContainer (Toolbar + Table + Bottom Action Bar) */}
       <AccountTable
+        isLoading={isInitialLoading}
+        loadError={loadError}
+        onRetry={() => {
+          setIsInitialLoading(true);
+          setLoadError(null);
+          fetchAccounts();
+        }}
         accounts={accounts}
         selectedUids={selectedUids}
         onToggleSelect={(uid) =>

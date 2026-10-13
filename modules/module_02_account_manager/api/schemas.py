@@ -2,9 +2,11 @@
 from typing import Optional
 from pydantic import BaseModel, Field, AliasChoices, ConfigDict, field_validator, model_validator
 from ..utils.paths import validate_uid
+from ..automation.proxy_bridge import parse_proxy, ProxyFormatError
 
 class OwnerRequest(BaseModel):
     owner_username: Optional[str] = Field(None, max_length=100)
+    user_id: Optional[str] = Field(None, max_length=100)
 
 class AccountInput(OwnerRequest):
     model_config = ConfigDict(populate_by_name=True)
@@ -19,6 +21,18 @@ class AccountInput(OwnerRequest):
     token_hotmail: Optional[str] = Field(None, validation_alias=AliasChoices("token_hotmail", "tokenhotmail"))
     client_id: Optional[str] = Field(None, max_length=100, validation_alias=AliasChoices("client_id", "clientId"))
     proxy: Optional[str] = Field(None, max_length=255)
+
+    @field_validator("proxy")
+    @classmethod
+    def valid_proxy(cls, value):
+        if value is None:
+            return None
+        value = value.strip()
+        try:
+            parse_proxy(value)
+        except (ProxyFormatError, ValueError) as exc:
+            raise ValueError("Proxy không hợp lệ. Dùng HOST:PORT, HOST:PORT:USER:PASS hoặc URL HTTP/HTTPS.") from exc
+        return value
 
     @model_validator(mode="before")
     @classmethod
