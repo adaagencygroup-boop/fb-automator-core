@@ -2,9 +2,10 @@ import re
 import unittest
 from pathlib import Path
 
-from modules.module_03_acc_farm.models import ADDED_COLUMNS, DDL_STATEMENTS
+from modules.module_03_acc_farm.models import ADDED_COLUMNS, DDL_STATEMENTS, SHARED_DDL_STATEMENTS
 
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "001_tab1_farm_schema.sql"
+SHARED_MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "005_browser_fingerprints.sql"
 
 
 def _normalize(stmt: str) -> str:
@@ -45,6 +46,28 @@ class MigrationSyncTests(unittest.TestCase):
     def test_every_table_enables_rls(self):
         tables = {re.search(r"create table if not exists (\w+)", s).group(1)
                   for s in self.from_models if s.startswith("create table")}
+        rls = set(re.findall(r"ALTER TABLE public\.(\w+) ENABLE ROW LEVEL SECURITY", self.sql))
+        self.assertEqual(rls, tables)
+
+    def test_runs_in_one_transaction(self):
+        body = re.sub(r"--[^\n]*", "", self.sql).strip()
+        self.assertTrue(body.startswith("BEGIN;"))
+        self.assertTrue(body.endswith("COMMIT;"))
+
+
+class SharedMigrationSyncTests(unittest.TestCase):
+    """Bảng dùng chung của core/browser: models.py và 005_browser_fingerprints.sql phải khớp nhau."""
+
+    def setUp(self):
+        self.sql = SHARED_MIGRATION.read_text(encoding="utf-8")
+        self.from_models = {_normalize(s) for s in SHARED_DDL_STATEMENTS}
+        self.from_sql = _schema_statements(self.sql)
+
+    def test_same_tables_and_columns(self):
+        self.assertEqual(self.from_sql, self.from_models)
+
+    def test_every_table_enables_rls(self):
+        tables = {re.search(r"create table if not exists (\w+)", s).group(1) for s in self.from_models}
         rls = set(re.findall(r"ALTER TABLE public\.(\w+) ENABLE ROW LEVEL SECURITY", self.sql))
         self.assertEqual(rls, tables)
 

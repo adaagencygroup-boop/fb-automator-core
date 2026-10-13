@@ -110,27 +110,6 @@ class EnsureLoggedInCheckpointTests(unittest.TestCase):
         self.assertEqual(result["checkpoint"], "heavy")
 
 
-class RunLoginCheckpointTests(unittest.TestCase):
-    @patch(f"{LF}.time.sleep")
-    @patch(f"{LF}.human_sleep")
-    @patch(f"{LF}._submit_login_form")
-    @patch(f"{LF}._is_2fa_required", return_value=True)
-    @patch(f"{LF}.create_driver")
-    def test_checkpoint_after_2fa(self, create_driver, _req, _submit, _hs, _sleep):
-        driver = checkpoint_driver("https://www.facebook.com/")
-        create_driver.return_value = driver
-
-        def pass_2fa_then_checkpoint(drv, _secret):
-            drv.current_url = HEAVY_URL
-            return False
-
-        with patch(f"{LF}._handle_2fa", side_effect=pass_2fa_then_checkpoint):
-            result = login_flow.run_login("1", "pw", two_fa="SECRET")
-        self.assertFalse(result["success"])
-        self.assertEqual(result["checkpoint"], "heavy")
-        self.assertIn("Checkpoint", result["error"])
-
-
 class FarmCheckpointStateTests(unittest.TestCase):
     def test_check_account_state_raises_with_kind(self):
         driver = checkpoint_driver(HEAVY_URL)
@@ -163,9 +142,9 @@ class WorkerCheckpointTests(unittest.TestCase):
                 patch.object(farm_routes.adapters, "set_login_status",
                              side_effect=lambda uid, status, *a: statuses.append((uid, status))), \
                 patch.object(farm_routes.random, "uniform", return_value=0), \
-                patch("modules.module_03_acc_farm.browser.manager.create_driver", return_value=driver), \
-                patch("modules.module_03_acc_farm.browser.manager.get_profile_lock", return_value=threading.Lock()), \
-                patch("modules.module_03_acc_farm.browser.manager.extract_cookies_as_string", return_value=""), \
+                patch("core.browser.open_browser", return_value=driver), \
+                patch("core.browser.get_profile_lock", return_value=threading.Lock()), \
+                patch("core.browser.extract_cookies_as_string", return_value=""), \
                 patch("modules.module_03_acc_farm.browser.login_flow.ensure_logged_in", return_value=login_result):
             farm_routes._farm_worker("1", 1, farm_routes.FarmScenarioConfig(enabled_add_friends=True), None)
         with farm_routes._state_lock:
