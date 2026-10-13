@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { attachDragSelection } from "../utils/drag-selection.mjs";
 import AccountDetailPanel from "./AccountDetailPanel";
 import CustomSelect from "@/components/ui/custom-select";
 import {
@@ -124,6 +125,7 @@ export default function AccountTable({
   selectedUids = [],
   onToggleSelect,
   onSelectAll,
+  onSelectionChange,
   onEditAccount,
   onDeleteAccount,
   onOpenBrowser,
@@ -143,6 +145,12 @@ export default function AccountTable({
   const [expandedUids, setExpandedUids] = useState(new Set());
   const [closingUids, setClosingUids] = useState(new Set());
   const [copiedUid, setCopiedUid] = useState(null);
+  const scrollRef = useRef(null);
+  const selectedUidsRef = useRef(selectedUids);
+
+  useEffect(() => {
+    selectedUidsRef.current = selectedUids;
+  }, [selectedUids]);
 
   const handleDetailClosed = (uid) => {
     setExpandedUids((prev) => {
@@ -210,6 +218,23 @@ export default function AccountTable({
   const isAllSelected =
     filteredAccounts.length > 0 &&
     filteredAccounts.every((account) => selectedUids.includes(account.uid));
+
+  const visibleUids = useMemo(() => filteredAccounts.map((account) => account.uid), [filteredAccounts]);
+  const availableUids = useMemo(() => accounts.map((account) => account.uid), [accounts]);
+
+  useEffect(() => {
+    if (!scrollRef.current || !onSelectionChange) return;
+    return attachDragSelection(scrollRef.current, {
+      visibleUids,
+      availableUids,
+      getSelectedUids: () => selectedUidsRef.current,
+      onSelectionChange: (uids) => {
+        selectedUidsRef.current = uids;
+        onSelectionChange(uids);
+      },
+      disabled: isLoading || Boolean(loadError),
+    });
+  }, [visibleUids, availableUids, onSelectionChange, isLoading, loadError]);
 
   return (
     <section className="w-full flex flex-col rounded-2xl bg-white border border-[#E2E8F0] shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] overflow-hidden select-none">
@@ -281,8 +306,8 @@ export default function AccountTable({
         </div>
       </div>
 
-      {/* 2. Section - Data Table (Khung cuộn tối đa 5 account như Figma) */}
-      <div className="w-full overflow-x-auto max-h-[330px] overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#4B8EFF]/60 hover:[&::-webkit-scrollbar-thumb]:bg-[#2563EB] [&::-webkit-scrollbar-thumb]:rounded-full">
+      {/* 2. Section - Data Table (Khung cuộn hiển thị 10 dòng tài khoản) */}
+      <div ref={scrollRef} className="w-full overflow-x-auto max-h-[605px] overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#4B8EFF]/60 hover:[&::-webkit-scrollbar-thumb]:bg-[#2563EB] [&::-webkit-scrollbar-thumb]:rounded-full">
         <table aria-busy={isLoading} className="w-full table-fixed border-collapse min-w-[960px]">
           <colgroup>
             <col className="w-[4%]" />
@@ -392,8 +417,10 @@ export default function AccountTable({
                 return (
                   <React.Fragment key={account.uid}>
                     <tr
+                      data-account-uid={account.uid}
+                      aria-selected={isSelected}
                       className={`h-14 transition-colors hover:bg-slate-50/80 ${
-                        isSelected ? "bg-[#EFF6FF]/40" : ""
+                        isSelected ? "bg-[#EFF6FF] hover:bg-[#EFF6FF]" : ""
                       }`}
                     >
                       {/* 1. Checkbox */}
@@ -604,7 +631,7 @@ export default function AccountTable({
       {/* 3. Section - Bottom Action Bar / Concurrent Threads Controller */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 text-xs">
         {/* Cụm trái: Đã chọn X trên Y tài khoản */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-[#2563EB]" />
           <span className="text-[#475569] text-sm">
             Đã chọn{" "}
@@ -617,6 +644,7 @@ export default function AccountTable({
             </strong>{" "}
             tài khoản
           </span>
+          <span className="basis-full pl-4 text-[11px] text-[#64748B]">Kéo chuột để chọn dòng · Ctrl/Cmd + kéo để chọn thêm</span>
         </div>
 
         {/* Cụm phải: Luồng đồng thời & Nút Đăng nhập */}

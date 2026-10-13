@@ -515,6 +515,7 @@ export default function AccountManagerModule() {
           )
         }
         onSelectAll={handleSelectAll}
+        onSelectionChange={setSelectedUids}
         onEditAccount={handleOpenEdit}
         onDeleteAccount={handleDeleteSingle}
         onOpenBrowser={handleOpenBrowser}
