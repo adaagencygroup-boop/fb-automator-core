@@ -148,6 +148,42 @@ class LoginTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual("Max-Age=" in response.headers["set-cookie"], remember)
 
+    def test_admin_refresh_returns_bearer_token_from_cookie(self):
+        token = self.security.create_refresh_token({"sub": "member", "remember_me": True})
+        access = self.security.create_access_token({"sub": "member", "role": "admin", "sid": 91, "typ": "access"})
+        self.client.cookies.set("fb_refresh", token, path="/api/v1/auth")
+        with patch.object(self.router, "refresh_access_token", return_value=access) as refresh:
+            response = self.client.post("/api/v1/auth/refresh", headers={"X-Auth-Client": "admin"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["access_token"], access)
+        self.assertEqual(self.client.cookies.get("fb_access"), access)
+        refresh.assert_called_once_with(token)
+
+    def test_admin_refresh_rejects_user_role_without_setting_access_cookie(self):
+        token = self.security.create_refresh_token({"sub": "member"})
+        access = self.security.create_access_token({"sub": "member", "role": "user", "sid": 91})
+        self.client.cookies.set("fb_refresh", token, path="/api/v1/auth")
+        with patch.object(self.router, "refresh_access_token", return_value=access):
+            response = self.client.post("/api/v1/auth/refresh", headers={"X-Auth-Client": "admin"})
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn("access_token", response.json())
+        self.assertNotIn("set-cookie", response.headers)
+
+    def test_user_refresh_does_not_expose_bearer_token(self):
+        token = self.security.create_refresh_token({"sub": "member"})
+        self.client.cookies.set("fb_refresh", token, path="/api/v1/auth")
+        with patch.object(self.router, "refresh_access_token", return_value="new-access"):
+            response = self.client.post("/api/v1/auth/refresh")
+        self.assertEqual(response.json(), {"ok": True})
+
+    def test_revoked_admin_refresh_returns_no_token(self):
+        self.client.cookies.set("fb_refresh", "revoked", path="/api/v1/auth")
+        with patch.object(self.router, "refresh_access_token", side_effect=HTTPException(401, "SESSION_REVOKED")):
+            response = self.client.post("/api/v1/auth/refresh", headers={"X-Auth-Client": "admin"})
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn("access_token", response.json())
+        self.assertNotIn("set-cookie", response.headers)
+
 
 if __name__ == "__main__":
     unittest.main()
