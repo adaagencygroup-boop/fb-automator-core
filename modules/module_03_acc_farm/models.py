@@ -2,7 +2,7 @@
 =============================================================================
 MODULE 3 - TAB 1: TƯƠNG TÁC TÀI KHOẢN (NUÔI NICK) - DATABASE MODELS & SCHEMA
 CSDL riêng của Tab 1 (Phụ trách: Bình Kiến).
-Tài khoản Facebook KHÔNG nằm ở đây: lưu local (xem _temp/local_db.py).
+Tài khoản Facebook KHÔNG nằm ở đây: dùng bảng accounts của Module 02 (qua adapters.py).
 Thời gian lưu dạng TIMESTAMP theo giờ UTC, code luôn tự truyền giá trị.
 =============================================================================
 """
@@ -120,6 +120,41 @@ DDL_STATEMENTS = [
 ADDED_COLUMNS = [
     ("farm_run_history", "groups_keyword", "TEXT"),
 ]
+
+
+# Bảng dùng chung của core/browser (mọi module mở Chrome qua core). Tạm đặt ở Module 03 vì Module 03 là
+# module đầu tiên dùng core; khi các module khác dùng core thì chuyển DDL này sang core.
+# Khớp với migrations/005_browser_fingerprints.sql (tests/test_migration_sync.py kiểm tra).
+SHARED_DDL_STATEMENTS = [
+    """
+    CREATE TABLE IF NOT EXISTS browser_fingerprints (
+        uid VARCHAR(50) PRIMARY KEY,
+        mode VARCHAR(10) NOT NULL,
+        canvas_seed INT,
+        created_at TIMESTAMP NOT NULL
+    );
+    """,
+]
+
+# Chép seed từ bảng cũ của Tab 1 để nick đã chạy giữ nguyên dấu vân tay; dòng đã có thì bỏ qua.
+# Bỏ được khi không còn bảng farm_browser_fingerprints.
+COPY_LEGACY_FINGERPRINTS = """
+    INSERT INTO browser_fingerprints (uid, mode, canvas_seed, created_at)
+    SELECT uid, mode, canvas_seed, created_at FROM farm_browser_fingerprints
+    ON CONFLICT (uid) DO NOTHING
+"""
+
+
+def _init_shared_tables():
+    for stmt in SHARED_DDL_STATEMENTS:
+        try:
+            db.execute(stmt)
+        except Exception as e:
+            print(f"[Module 3 DB] Shared DDL error: {e}")
+    try:
+        db.execute(COPY_LEGACY_FINGERPRINTS)
+    except Exception as e:
+        print(f"[Module 3 DB] Copy fingerprints error: {e}")
 
 
 def _add_missing_columns():
@@ -419,6 +454,7 @@ def init_models():
         except Exception as e:
             print(f"[Module 3 DB] DDL error: {e}")
     _add_missing_columns()
+    _init_shared_tables()
 
     # 2. Khởi tạo Tab 2 (Đăng bài: Status, Reels, Story)
     init_tab2_models()

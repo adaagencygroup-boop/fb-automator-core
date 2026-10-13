@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from modules.module_03_acc_farm.browser import manager as browser_manager
+from core.browser import driver as browser_manager
 from modules.module_03_acc_farm.farming import flow as farming_flow
 from modules.module_03_acc_farm import routes as farm_routes
 
