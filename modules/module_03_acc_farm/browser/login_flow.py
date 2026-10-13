@@ -16,9 +16,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 
-from modules.module_03_acc_farm.browser.manager import (
-    create_driver, human_type, human_sleep, wait_and_find, load_cookies
-)
+from core.browser import extract_cookies_as_string, human_sleep, human_type, load_cookies, wait_and_find
 from modules.module_03_acc_farm.browser.locators import LOGIN
 from modules.module_03_acc_farm.browser.otp import generate_totp
 
@@ -697,113 +695,6 @@ def _get_profile_name(driver: webdriver.Chrome) -> str:
     return ""
 
 
-def run_login(uid: str, password: str, two_fa: str = None, cookie: str = None,
-              proxy: str = None, expected_name: str = "") -> dict:
-    """
-    Thực thi toàn bộ luồng đăng nhập cho một tài khoản.
-    Args:
-        uid: UID / Email đăng nhập Facebook.
-        password: Mật khẩu plaintext (đã giải mã AES từ DB).
-        two_fa: Secret key 2FA (Base32), None nếu không có.
-        cookie: Cookie string, None nếu không có.
-        proxy: Chuỗi Proxy (None nếu không dùng).
-    Returns:
-        dict với keys: success (bool), profile_name (str), error (str),
-        checkpoint ("light" / "heavy" nếu dừng vì checkpoint, ngược lại None)
-    """
-    result = {"success": False, "profile_name": "", "error": "", "checkpoint": None}
-    driver = None
-
-    try:
-        driver = create_driver(uid, proxy=proxy, scope="login")
-
-        # ── Bước 1: Thử cookie login ──
-        if cookie and cookie.strip():
-            if _try_cookie_login(driver, cookie):
-                _handle_post_login_popups(driver)
-                result["profile_name"] = _get_profile_name(driver)
-                if not _check_logged_in(driver):
-                    if _on_checkpoint(driver):
-                        return _checkpoint_failure(driver, result)
-                    result["error"] = f"Checkpoint or profile unavailable, URL: {driver.current_url}"
-                    return result
-                logger.info(f"[{uid}] Cookie login SUCCESS")
-                result["success"] = True
-                return result
-            if _on_checkpoint(driver):
-                return _checkpoint_failure(driver, result)
-            logger.info(f"[{uid}] Cookie expired, falling back to form login")
-
-        # ── Bước 2: Form login ──
-        if not password:
-            result["error"] = "No usable password and no authenticated cookie session"
-            return result
-        driver.get(FB_HOME)
-        human_sleep(2.0, 3.5)
-        # Facebook đã khóa nick thì trang chủ chuyển thẳng sang checkpoint, không còn form để điền
-        if _on_checkpoint(driver):
-            return _checkpoint_failure(driver, result)
-        _submit_login_form(driver, uid, password, expected_name)
-
-        # ── Bước 3: Xử lý 2FA nếu cần hoặc Checkpoint ──
-        if _is_2fa_required(driver):
-            if two_fa:
-                if not _handle_2fa(driver, two_fa):
-                    if _on_checkpoint(driver):
-                        return _checkpoint_failure(driver, result)
-                    result["error"] = "2FA authentication failed"
-                    return result
-            else:
-                result["error"] = "2FA required but no secret key provided"
-                return result
-        elif _on_checkpoint(driver):
-            return _checkpoint_failure(driver, result)
-
-        # ── Bước 4: Kiểm tra đăng nhập thành công & bắt Dismiss popup ──
-        human_sleep(2.0, 3.0)
-        _handle_post_login_popups(driver)
-
-        if not _check_logged_in(driver):
-            _handle_post_login_popups(driver)
-            if not _check_logged_in(driver):
-                if _on_checkpoint(driver):
-                    return _checkpoint_failure(driver, result)
-                current_url = driver.current_url
-                result["error"] = f"Login failed, URL: {current_url}"
-                return result
-
-        # ── Bước 5: Bắt Dismiss popup (nếu có) & Lấy tên profile ──
-        _handle_post_login_popups(driver)
-        result["profile_name"] = _get_profile_name(driver)
-        if not _check_logged_in(driver):
-            if _on_checkpoint(driver):
-                return _checkpoint_failure(driver, result)
-            result["error"] = f"Checkpoint or profile unavailable, URL: {driver.current_url}"
-            return result
-        result["success"] = True
-        logger.info(f"[{uid}] Login SUCCESS, name='{result['profile_name']}'")
-
-    except Exception as e:
-        logger.exception(f"[{uid}] Unexpected error during login: {e}")
-        if _on_checkpoint(driver):
-            _checkpoint_failure(driver, result)
-        else:
-            result["error"] = str(e)
-    finally:
-        if driver:
-            from modules.module_03_acc_farm.browser.manager import unregister_active_driver
-            unregister_active_driver(driver)
-            try:
-                # Về trang chủ để sync session trước khi đóng
-                driver.get(FB_HOME)
-                time.sleep(2)
-                driver.quit()
-            except Exception:
-                pass
-
-    return result
-
-
 def ensure_logged_in(
     driver: webdriver.Chrome,
     uid: str,
@@ -834,7 +725,6 @@ def ensure_logged_in(
                 ensure_personal_profile(driver, uid)
                 # Tự động đồng bộ cookie còn sống vào database
                 try:
-                    from modules.module_03_acc_farm.browser.manager import extract_cookies_as_string
                     fresh_c = extract_cookies_as_string(driver)
                     if fresh_c and "c_user" in fresh_c:
                         from modules.module_03_acc_farm import adapters

@@ -41,9 +41,8 @@ try:
         on_startup as farm_on_startup,
         on_shutdown as farm_on_shutdown,
     )
-    from modules.module_03_acc_farm._temp.routes import router as farm_accounts_router
 except Exception as _farm_import_error:
-    farm_router = farm_accounts_router = farm_on_startup = farm_on_shutdown = None
+    farm_router = farm_on_startup = farm_on_shutdown = None
     print(f"[Local Engine] Module 03 (Farm) not loaded: {_farm_import_error}")
 
 # Reconfigure stdout for safe Windows console output
@@ -185,7 +184,6 @@ app.add_middleware(
 
 if farm_router:
     app.include_router(farm_router)
-    app.include_router(farm_accounts_router)
 
 # ==================== SYSTEM & HEALTH CHECK ====================
 @app.get("/api/health")
