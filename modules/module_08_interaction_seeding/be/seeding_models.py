@@ -9,7 +9,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
-from app.database.local_db import Base, utc_now, to_vn_iso
+from modules.module_02_account_manager.database.connection import Base
+from modules.module_02_account_manager.database.repository import utc_now
 
 
 # 1. Đối tượng được seeding (Page / Trang cá nhân / Bài viết), dùng chung giữa các chiến dịch

@@ -29,6 +29,7 @@ from core.media.youtube_scraper import youtube_scraper
 from core.network.proxy_manager import proxy_manager
 from modules.module_02_account_manager.api.router import router as account_router, alias_router as account_alias_router
 from modules.module_02_account_manager import initialize as initialize_accounts, shutdown as shutdown_accounts
+from modules.module_08_interaction_seeding.be.seeding_routes import seeding_router
 from modules import load_backend_modules
 from modules.module_auth.schema import init_auth_tables
 from modules.module_auth.service import ensure_admin
@@ -264,6 +265,9 @@ def get_dashboard_stats():
 # ==================== MODULE 2: ACCOUNT MANAGER ====================
 app.include_router(account_router)
 app.include_router(account_alias_router)
+
+# ==================== MODULE 8: INTERACTION SEEDING ====================
+app.include_router(seeding_router, prefix="/api")
 
 # ==================== MODULE 5: PAGE MANAGER & POSTING ====================
 @app.get("/api/pages")
