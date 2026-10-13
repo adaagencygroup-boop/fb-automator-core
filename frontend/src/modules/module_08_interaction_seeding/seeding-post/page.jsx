@@ -1,8 +1,7 @@
 "use client";
 
-import { localApi } from "@/modules/module_08_interaction_seeding/service";
+import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
 import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
-import { SeedingTargetItem } from "@/types/seeding";
 import { FileText } from "lucide-react";
 import { useEffect, useState } from "react";
 import PostAccountConfig from "./_components/PostAccountConfig";
@@ -14,17 +13,17 @@ import PostSummaryCards from "./_components/PostSummaryCards";
 import PostTargetSection from "./_components/PostTargetSection";
 
 export default function SeedingPostPage() {
-  const [targets, setTargets] = useState<SeedingTargetItem[]>([]);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [targets, setTargets] = useState([]);
+  const [successMessage, setSuccessMessage] = useState(null);
 
   // Interaction options - Mặc định ban đầu không tích chọn mục nào (người dùng tự chọn)
   const [doLike, setDoLike] = useState(false);
   const [doComment, setDoComment] = useState(false);
   const [doShare, setDoShare] = useState(false);
-  const [selectedReactions, setSelectedReactions] = useState<string[]>([]);
+  const [selectedReactions, setSelectedReactions] = useState([]);
 
   // Comments pool
-  const [comments, setComments] = useState<string[]>([]);
+  const [comments, setComments] = useState([]);
 
   // Account config
   const [accountCount, setAccountCount] = useState(2);
@@ -32,23 +31,21 @@ export default function SeedingPostPage() {
   const [delayMax, setDelayMax] = useState(60);
 
   const [isRunning, setIsRunning] = useState(false);
-  const [currentCampaignId, setCurrentCampaignId] = useState<number | null>(
-    null,
-  );
+  const [currentCampaignId, setCurrentCampaignId] = useState(null);
 
   const [liveAccountsCount, setLiveAccountsCount] = useState(0);
   const [totalAccountsCount, setTotalAccountsCount] = useState(0);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "instant" });
-    localApi
+    seedingApi
       .getAccounts()
       .then((accs) => {
         if (Array.isArray(accs)) {
           setTotalAccountsCount(accs.length);
           // Tài khoản khả dụng: BẮT BUỘC có trạng thái live và đã đăng nhập (logged_in)
           const validLiveLoggedIn = accs.filter(
-            (a: any) =>
+            (a) =>
               a.status?.toLowerCase() === "live" &&
               a.login_status?.toLowerCase() === "logged_in",
           );
@@ -62,19 +59,9 @@ export default function SeedingPostPage() {
 
   // Realtime logs: local UI notifications + SSE backend stream
   const { logs: sseLogs } = useLocalSSE(true);
-  const [localLogs, setLocalLogs] = useState<
-    Array<{
-      id: string;
-      text: string;
-      time: string;
-      type?: "info" | "success" | "warn" | "error";
-    }>
-  >([]);
+  const [localLogs, setLocalLogs] = useState([]);
 
-  const addLog = (
-    text: string,
-    type: "info" | "success" | "warn" | "error" = "info",
-  ) => {
+  const addLog = (text, type = "info") => {
     const time = new Date().toLocaleTimeString("vi-VN");
     setLocalLogs((prev) => [
       ...prev,
@@ -89,11 +76,7 @@ export default function SeedingPostPage() {
       id: `sse-${l.timestamp}-${idx}`,
       text: l.message,
       time: l.timestamp,
-      type: (l.type === "warning" ? "warn" : l.type) as
-        | "info"
-        | "success"
-        | "warn"
-        | "error",
+      type: l.type === "warning" ? "warn" : l.type,
     })),
   ];
 
@@ -104,7 +87,7 @@ export default function SeedingPostPage() {
     const interval = setInterval(async () => {
       try {
         const detail =
-          await localApi.getSeedingCampaignDetail(currentCampaignId);
+          await seedingApi.getSeedingCampaignDetail(currentCampaignId);
         if (detail) {
           const status = detail.status || detail.campaign?.status;
           const isBatchActive = detail.is_batch_active;
@@ -131,7 +114,7 @@ export default function SeedingPostPage() {
 
   // Load saved targets and comments from database on mount
   useEffect(() => {
-    localApi
+    seedingApi
       .getSeedingTargets("POST")
       .then((res) => {
         if (res && res.targets && res.targets.length > 0) {
@@ -143,7 +126,7 @@ export default function SeedingPostPage() {
       })
       .catch(() => {});
 
-    localApi
+    seedingApi
       .getSeedingComments()
       .then((res) => {
         if (res && res.comments && res.comments.length > 0) {
@@ -153,13 +136,13 @@ export default function SeedingPostPage() {
       .catch(() => {});
   }, []);
 
-  const handleToggleReaction = (rId: string) => {
+  const handleToggleReaction = (rId) => {
     setSelectedReactions((prev) =>
       prev.includes(rId) ? prev.filter((id) => id !== rId) : [...prev, rId],
     );
   };
 
-  const handleDoLikeChange = (val: boolean) => {
+  const handleDoLikeChange = (val) => {
     setDoLike(val);
     if (val) {
       // Khi chọn Like bài viết thì mặc định tích chọn cảm xúc Like (LIKE / Thích)
@@ -169,25 +152,25 @@ export default function SeedingPostPage() {
     }
   };
 
-  const handleAddTargets = async (rawUrls: string[]) => {
+  const handleAddTargets = async (rawUrls) => {
     try {
-      const res = await localApi.validateSeedingTargets("POST", rawUrls);
+      const res = await seedingApi.validateSeedingTargets("POST", rawUrls);
       if (res && res.targets) {
         setTargets(res.targets);
         setSuccessMessage(
           `Đã lưu thành công ${res.targets.length} bài viết vào cơ sở dữ liệu`,
         );
       }
-    } catch (e: any) {
+    } catch (e) {
       addLog(`Lỗi lưu link: ${e.message}`, "error");
     }
   };
 
-  const handleRemoveTarget = async (index: number) => {
+  const handleRemoveTarget = async (index) => {
     const targetToRemove = targets[index];
     if (targetToRemove) {
       try {
-        await localApi.deleteSeedingTarget(targetToRemove.url, "POST");
+        await seedingApi.deleteSeedingTarget(targetToRemove.url, "POST");
       } catch (err) {}
     }
     setTargets((prev) => {
@@ -205,17 +188,17 @@ export default function SeedingPostPage() {
 
   const handleClearTargets = async () => {
     try {
-      await localApi.clearSeedingTargets("POST");
+      await seedingApi.clearSeedingTargets("POST");
     } catch (err) {}
     setTargets([]);
     setSuccessMessage(null);
   };
 
-  const handleAddComment = async (cmt: string) => {
+  const handleAddComment = async (cmt) => {
     const trimmed = cmt.trim();
     if (!trimmed) return;
     try {
-      const res = await localApi.addSeedingComments([trimmed]);
+      const res = await seedingApi.addSeedingComments([trimmed]);
       if (res && res.comments) {
         setComments(res.comments);
         return;
@@ -224,11 +207,11 @@ export default function SeedingPostPage() {
     setComments((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
   };
 
-  const handleAddBulkComments = async (newCmts: string[]) => {
+  const handleAddBulkComments = async (newCmts) => {
     const cleaned = newCmts.map((c) => c.trim()).filter((c) => c.length > 0);
     if (cleaned.length === 0) return;
     try {
-      const res = await localApi.addSeedingComments(cleaned);
+      const res = await seedingApi.addSeedingComments(cleaned);
       if (res && res.comments) {
         setComments(res.comments);
         return;
@@ -237,11 +220,11 @@ export default function SeedingPostPage() {
     setComments((prev) => Array.from(new Set([...prev, ...cleaned])));
   };
 
-  const handleRemoveComment = async (index: number) => {
+  const handleRemoveComment = async (index) => {
     const cmtToRemove = comments[index];
     if (cmtToRemove) {
       try {
-        await localApi.deleteSeedingComment(cmtToRemove);
+        await seedingApi.deleteSeedingComment(cmtToRemove);
       } catch (e) {}
     }
     setComments((prev) => prev.filter((_, idx) => idx !== index));
@@ -249,7 +232,7 @@ export default function SeedingPostPage() {
 
   const handleClearAllComments = async () => {
     try {
-      await localApi.clearSeedingComments();
+      await seedingApi.clearSeedingComments();
     } catch (e) {}
     setComments([]);
   };
@@ -295,12 +278,12 @@ export default function SeedingPostPage() {
       setIsRunning(true);
       addLog("Khởi tạo chiến dịch Seeding Bài viết trên máy thật...", "info");
 
-      const actions: string[] = [];
+      const actions = [];
       if (doLike) actions.push("REACT");
       if (doComment) actions.push("COMMENT");
       if (doShare) actions.push("SHARE");
 
-      const campaign = await localApi.createSeedingCampaign({
+      const campaign = await seedingApi.createSeedingCampaign({
         name: `Seeding Post - ${new Date().toLocaleTimeString("vi-VN")}`,
         campaign_type: "POST",
         actions,
@@ -323,8 +306,8 @@ export default function SeedingPostPage() {
         "success",
       );
 
-      await localApi.startSeedingCampaign(campaign.id);
-    } catch (e: any) {
+      await seedingApi.startSeedingCampaign(campaign.id);
+    } catch (e) {
       setIsRunning(false);
       addLog(`Lỗi khởi chạy seeding: ${e.message}`, "error");
     }
@@ -337,12 +320,12 @@ export default function SeedingPostPage() {
         "warn",
       );
       if (currentCampaignId) {
-        await localApi.stopSeedingCampaign(currentCampaignId);
+        await seedingApi.stopSeedingCampaign(currentCampaignId);
       } else {
-        await localApi.stopAllSeeding();
+        await seedingApi.stopAllSeeding();
       }
       addLog("Đã dừng hẳn chiến dịch seeding thành công.", "warn");
-    } catch (e: any) {
+    } catch (e) {
       addLog(`Lỗi khi dừng: ${e.message}`, "error");
     } finally {
       setIsRunning(false);

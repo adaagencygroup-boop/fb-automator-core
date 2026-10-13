@@ -2,21 +2,13 @@
 
 import React from "react";
 import { ClipboardList, BarChart2, Info, Lightbulb, CheckCircle2, Check, Shield } from "lucide-react";
-import { SeedingTargetItem } from "@/types/seeding";
-
-interface PageSummaryCardsProps {
-  targets: SeedingTargetItem[];
-  accountCount: number;
-  minDelay: number;
-  maxDelay: number;
-}
 
 export default function PageSummaryCards({
   targets,
   accountCount,
   minDelay,
   maxDelay,
-}: PageSummaryCardsProps) {
+}) {
   const targetCount = targets.length;
   const estimatedFollows = accountCount;
 
@@ -80,7 +72,6 @@ export default function PageSummaryCards({
             <Info className="w-3.5 h-3.5 text-gray-400" />
           </div>
 
-          {/* Container hiển thị 5 mục, nếu > 5 mục thì có scrollbar cuộn xuống */}
           <div className="overflow-y-auto max-h-[195px] pr-1">
             <table className="w-full text-left text-xs border-collapse">
               <thead className="sticky top-0 bg-white z-10">

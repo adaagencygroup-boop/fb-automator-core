@@ -1,23 +1,7 @@
 import React from "react";
 import { Users, Info, Clock } from "lucide-react";
 
-interface PostAccountConfigProps {
-  accountCount: number;
-  onAccountCountChange: (val: number) => void;
-  availableAccounts?: number;
-  liveAccounts?: number;
-  totalAccounts?: number;
-  minDelay: number;
-  maxDelay: number;
-  onMinDelayChange: (val: number) => void;
-  onMaxDelayChange: (val: number) => void;
-  selectedReactionsCount: number;
-  doLike: boolean;
-  doComment: boolean;
-  doShare: boolean;
-}
-
-export default function PostAccountConfig({
+export default function ProfileAccountConfig({
   accountCount,
   onAccountCountChange,
   availableAccounts = 0,
@@ -27,19 +11,15 @@ export default function PostAccountConfig({
   maxDelay,
   onMinDelayChange,
   onMaxDelayChange,
-  selectedReactionsCount,
-  doLike,
-  doComment,
-  doShare,
-}: PostAccountConfigProps) {
+}) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
-      {/* Step 4: Số lượng tài khoản sử dụng */}
+      {/* Step 2: Số lượng tài khoản sử dụng */}
       <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-6 flex flex-col justify-between space-y-4">
         {/* Header */}
         <div className="flex items-center gap-3">
           <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
-            4
+            2
           </span>
           <h2 className="text-base font-bold text-gray-900">
             Số lượng tài khoản sử dụng
@@ -100,27 +80,20 @@ export default function PostAccountConfig({
         <div className="p-3.5 rounded-xl bg-blue-50/70 border border-blue-100 flex items-start gap-2.5 text-xs text-blue-900 leading-relaxed mt-auto">
           <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
           <div>
-            <p className="font-bold text-blue-950">Mỗi tài khoản:</p>
-            <ul className="text-blue-800/90 mt-1 space-y-0.5 list-disc list-inside">
-              {doLike && (
-                <li>1 Cảm xúc (ngẫu nhiên 1 trong {selectedReactionsCount} loại đã chọn)</li>
-              )}
-              {doComment && <li>1 Bình luận (ngẫu nhiên từ danh sách)</li>}
-              {doShare && <li>1 Chia sẻ</li>}
-              {!doLike && !doComment && !doShare && (
-                <li className="italic text-gray-500">Chưa chọn hành động tương tác nào</li>
-              )}
-            </ul>
+            <p className="font-bold text-blue-950">Tổng lượt Follow tối đa = Số tài khoản</p>
+            <p className="text-blue-800/90 mt-0.5">
+              Ví dụ: {accountCount} tài khoản → tối đa {accountCount} Follow Trang cá nhân (mỗi tài khoản chỉ thực hiện 1 lần Follow cho mỗi Trang cá nhân).
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Step 5: Thiết lập thời gian */}
+      {/* Step 3: Thiết lập thời gian */}
       <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-6 flex flex-col justify-between space-y-4">
         {/* Header */}
         <div className="flex items-center gap-3">
           <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
-            5
+            3
           </span>
           <h2 className="text-base font-bold text-gray-900">
             Thiết lập thời gian

@@ -1,18 +1,6 @@
 import React from "react";
 import { Users, Info, Clock } from "lucide-react";
 
-interface PageAccountConfigProps {
-  accountCount: number;
-  onAccountCountChange: (val: number) => void;
-  availableAccounts?: number;
-  liveAccounts?: number;
-  totalAccounts?: number;
-  minDelay: number;
-  maxDelay: number;
-  onMinDelayChange: (val: number) => void;
-  onMaxDelayChange: (val: number) => void;
-}
-
 export default function PageAccountConfig({
   accountCount,
   onAccountCountChange,
@@ -23,7 +11,7 @@ export default function PageAccountConfig({
   maxDelay,
   onMinDelayChange,
   onMaxDelayChange,
-}: PageAccountConfigProps) {
+}) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
       {/* Step 2: Số lượng tài khoản sử dụng */}

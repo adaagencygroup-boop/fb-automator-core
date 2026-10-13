@@ -3,19 +3,12 @@
 import React from "react";
 import { Play, Square, Loader2 } from "lucide-react";
 
-interface ProfileActionBarProps {
-  isRunning: boolean;
-  onStart: () => void;
-  onStop: () => void;
-  disabled?: boolean;
-}
-
-export default function ProfileActionBar({
+export default function PostActionBar({
   isRunning,
   onStart,
   onStop,
   disabled = false,
-}: ProfileActionBarProps) {
+}) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
       <button

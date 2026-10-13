@@ -1,13 +1,8 @@
 "use client";
 
 import React from "react";
-import { SeedingStats } from "@/types/seeding";
 
-interface HistoryStatsCardsProps {
-  stats: SeedingStats;
-}
-
-export default function HistoryStatsCards({ stats }: HistoryStatsCardsProps) {
+export default function HistoryStatsCards({ stats = {} }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       {/* 1. Tổng chiến dịch */}
@@ -21,7 +16,7 @@ export default function HistoryStatsCards({ stats }: HistoryStatsCardsProps) {
         <div>
           <p className="text-xs text-slate-500 font-medium">Tổng chiến dịch</p>
           <p className="text-[26px] font-bold text-blue-600 tracking-tight mt-0.5">
-            {stats.total_campaigns.toLocaleString("vi-VN")}
+            {(stats?.total_campaigns ?? 0).toLocaleString("vi-VN")}
           </p>
         </div>
       </div>
@@ -39,7 +34,7 @@ export default function HistoryStatsCards({ stats }: HistoryStatsCardsProps) {
         <div>
           <p className="text-xs text-slate-500 font-medium">Tổng lượt tương tác</p>
           <p className="text-[26px] font-bold text-slate-900 tracking-tight mt-0.5">
-            {stats.total_interactions.toLocaleString("vi-VN")}
+            {(stats?.total_interactions ?? 0).toLocaleString("vi-VN")}
           </p>
         </div>
       </div>
@@ -55,7 +50,7 @@ export default function HistoryStatsCards({ stats }: HistoryStatsCardsProps) {
         <div>
           <p className="text-xs text-slate-500 font-medium">Thành công</p>
           <p className="text-[26px] font-bold text-emerald-600 tracking-tight mt-0.5">
-            {stats.total_success.toLocaleString("vi-VN")}
+            {(stats?.total_success ?? 0).toLocaleString("vi-VN")}
           </p>
         </div>
       </div>
@@ -72,7 +67,7 @@ export default function HistoryStatsCards({ stats }: HistoryStatsCardsProps) {
         <div>
           <p className="text-xs text-slate-500 font-medium">Thất bại</p>
           <p className="text-[26px] font-bold text-red-600 tracking-tight mt-0.5">
-            {stats.total_failed.toLocaleString("vi-VN")}
+            {(stats?.total_failed ?? 0).toLocaleString("vi-VN")}
           </p>
         </div>
       </div>

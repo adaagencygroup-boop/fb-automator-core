@@ -2,16 +2,7 @@
 
 import React, { useState } from "react";
 import { Link2, FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink } from "lucide-react";
-import { SeedingTargetItem } from "@/types/seeding";
 import ExcelImportModal from "../../_components/ExcelImportModal";
-
-interface ProfileTargetSectionProps {
-  targets: SeedingTargetItem[];
-  onAddTargets: (rawUrls: string[]) => void;
-  onRemoveTarget: (index: number) => void;
-  onClearTargets: () => void;
-  successMessage?: string | null;
-}
 
 export default function ProfileTargetSection({
   targets,
@@ -19,8 +10,8 @@ export default function ProfileTargetSection({
   onRemoveTarget,
   onClearTargets,
   successMessage,
-}: ProfileTargetSectionProps) {
-  const [activeTab, setActiveTab] = useState<"manual" | "excel">("manual");
+}) {
+  const [activeTab, setActiveTab] = useState("manual");
   const [textInput, setTextInput] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
 
@@ -125,8 +116,6 @@ export default function ProfileTargetSection({
           </div>
         </div>
       </div>
-
-
 
       {/* Targets Table */}
       {targets.length > 0 && (

@@ -32,7 +32,6 @@ from modules.module_02_account_manager.automation.browser_manager import (
 )
 from modules.module_08_interaction_seeding.be.seeding_flow import FacebookSeedingBot
 from modules.module_02_account_manager.services.browser_service import HWID
-# TODO: LocalSetting (bảng local_settings) chưa có trên main - get/save_draft_comments sẽ lỗi cho tới khi bổ sung.
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/seeding", tags=["Seeding"])
@@ -107,28 +106,34 @@ def to_vn_iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.astimezone(VN_TZ).isoformat()
 
 
+_draft_seeding_comments: List[str] = []
+
+
 def get_draft_comments(db: Session) -> List[str]:
-    """Lấy danh sách các câu bình luận nháp từ local_settings."""
-    setting = db.query(LocalSetting).filter(LocalSetting.key == "draft_seeding_comments").first()
-    if setting and setting.value:
-        try:
-            return json.loads(setting.value)
-        except Exception:
-            pass
-    # Fallback: lấy bình luận duy nhất trong seeding_comments
-    cmts = db.query(SeedingComment.content).distinct().all()
-    return [c[0] for c in cmts if c[0]]
+    """Lấy danh sách các câu bình luận từ cơ sở dữ liệu seeding_comments hoặc bộ đệm hiện tại."""
+    global _draft_seeding_comments
+    if _draft_seeding_comments:
+        return list(_draft_seeding_comments)
+    try:
+        cmts = (
+            db.query(SeedingComment.content)
+            .distinct()
+            .order_by(desc(SeedingComment.id))
+            .limit(50)
+            .all()
+        )
+        if cmts:
+            _draft_seeding_comments = [c[0] for c in cmts if c[0]]
+            return list(_draft_seeding_comments)
+    except Exception as e:
+        logger.warning(f"Lỗi lấy seeding_comments từ DB: {e}")
+    return []
 
 
 def save_draft_comments(db: Session, comments: List[str]):
-    """Lưu danh sách các câu bình luận nháp vào local_settings."""
-    setting = db.query(LocalSetting).filter(LocalSetting.key == "draft_seeding_comments").first()
-    if not setting:
-        setting = LocalSetting(key="draft_seeding_comments", value=json.dumps(comments, ensure_ascii=False))
-        db.add(setting)
-    else:
-        setting.value = json.dumps(comments, ensure_ascii=False)
-    db.commit()
+    """Cập nhật danh sách câu bình luận vào bộ nhớ đệm."""
+    global _draft_seeding_comments
+    _draft_seeding_comments = list(comments)
 
 
 # ─────────────────────────────────────────────────────────────

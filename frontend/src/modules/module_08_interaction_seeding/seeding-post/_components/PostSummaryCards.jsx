@@ -2,18 +2,6 @@
 
 import React from "react";
 import { ClipboardList, BarChart2, Lightbulb, Check, Shield } from "lucide-react";
-import { SeedingTargetItem } from "@/types/seeding";
-
-interface PostSummaryCardsProps {
-  targets: SeedingTargetItem[];
-  accountCount: number;
-  doLike: boolean;
-  doComment: boolean;
-  doShare: boolean;
-  selectedReactions: string[];
-  minDelay: number;
-  maxDelay: number;
-}
 
 export default function PostSummaryCards({
   targets,
@@ -24,9 +12,8 @@ export default function PostSummaryCards({
   selectedReactions,
   minDelay,
   maxDelay,
-}: PostSummaryCardsProps) {
+}) {
   const targetCount = targets.length;
-  const totalInteractions = targetCount * accountCount;
 
   // Estimation counts
   const reactPerPost = doLike ? accountCount : 0;
@@ -123,7 +110,6 @@ export default function PostSummaryCards({
             </span>
           </div>
 
-          {/* Container hiển thị 5 mục, nếu > 5 mục thì có scrollbar cuộn xuống */}
           <div className="overflow-y-auto max-h-[195px] pr-1">
             <table className="w-full text-center text-xs border-collapse">
               <thead className="sticky top-0 bg-white z-10">

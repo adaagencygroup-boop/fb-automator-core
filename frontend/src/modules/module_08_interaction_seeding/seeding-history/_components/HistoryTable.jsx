@@ -2,17 +2,6 @@
 
 import React from "react";
 import { Table as TableIcon, ChevronLeft, ChevronRight } from "lucide-react";
-import { SeedingCampaign } from "@/types/seeding";
-
-interface HistoryTableProps {
-  campaigns: SeedingCampaign[];
-  onOpenDetail: (campaign: SeedingCampaign) => void;
-  currentPage: number;
-  totalPages: number;
-  onPageChange: (page: number) => void;
-  pageSize: number;
-  onPageSizeChange: (size: number) => void;
-}
 
 export default function HistoryTable({
   campaigns,
@@ -22,7 +11,7 @@ export default function HistoryTable({
   onPageChange,
   pageSize,
   onPageSizeChange,
-}: HistoryTableProps) {
+}) {
   return (
     <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm overflow-hidden flex flex-col">
       {/* Table Header */}

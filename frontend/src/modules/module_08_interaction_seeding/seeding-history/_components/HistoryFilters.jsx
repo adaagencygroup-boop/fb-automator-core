@@ -3,22 +3,6 @@
 import React, { useState } from "react";
 import { Search, Filter, RotateCcw, ChevronDown } from "lucide-react";
 
-interface HistoryFiltersProps {
-  searchTerm: string;
-  onSearchTermChange: (val: string) => void;
-  typeFilter: string;
-  onTypeFilterChange: (val: string) => void;
-  statusFilter: string;
-  onStatusFilterChange: (val: string) => void;
-  fromDate: string;
-  onFromDateChange: (val: string) => void;
-  toDate: string;
-  onToDateChange: (val: string) => void;
-  onReset: () => void;
-  onApply: () => void;
-  appliedSummary?: string;
-}
-
 export default function HistoryFilters({
   searchTerm,
   onSearchTermChange,
@@ -33,14 +17,14 @@ export default function HistoryFilters({
   onReset,
   onApply,
   appliedSummary,
-}: HistoryFiltersProps) {
+}) {
   const [timePreset, setTimePreset] = useState("CUSTOM");
 
-  const handlePresetChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handlePresetChange = (e) => {
     const val = e.target.value;
     setTimePreset(val);
     const now = new Date();
-    const formatDate = (d: Date) => d.toISOString().split("T")[0];
+    const formatDate = (d) => d.toISOString().split("T")[0];
 
     if (val === "TODAY") {
       const todayStr = formatDate(now);
@@ -64,7 +48,7 @@ export default function HistoryFilters({
   };
 
   const getFilterSummary = () => {
-    const parts: string[] = [];
+    const parts = [];
     if (typeFilter !== "ALL") {
       parts.push(typeFilter === "PAGE" ? "Page" : typeFilter === "PROFILE" ? "Trang cá nhân" : "Bài viết");
     }

@@ -1,6 +1,6 @@
 import api from "@/services/api";
 
-export const localApi = {
+export const seedingApi = {
   getAccounts: async () => {
     try {
       const res = await api.get("/api/accounts");
@@ -112,7 +112,7 @@ export const localApi = {
 };
 
 export async function startSeeding(data) {
-  return localApi.createSeedingCampaign(data);
+  return seedingApi.createSeedingCampaign(data);
 }
 
-export default localApi;
+export default seedingApi;

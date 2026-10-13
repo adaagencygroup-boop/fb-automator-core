@@ -1,8 +1,7 @@
 "use client";
 
-import { localApi } from "@/modules/module_08_interaction_seeding/service";
+import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
 import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
-import { SeedingTargetItem } from "@/types/seeding";
 import { Send } from "lucide-react";
 import { useEffect, useState } from "react";
 import PageAccountConfig from "./_components/PageAccountConfig";
@@ -12,15 +11,13 @@ import PageSummaryCards from "./_components/PageSummaryCards";
 import PageTargetSection from "./_components/PageTargetSection";
 
 export default function SeedingPageMain() {
-  const [targets, setTargets] = useState<SeedingTargetItem[]>([]);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [targets, setTargets] = useState([]);
+  const [successMessage, setSuccessMessage] = useState(null);
   const [accountCount, setAccountCount] = useState(2);
   const [delayMin, setDelayMin] = useState(30);
   const [delayMax, setDelayMax] = useState(60);
   const [isRunning, setIsRunning] = useState(false);
-  const [currentCampaignId, setCurrentCampaignId] = useState<number | null>(
-    null,
-  );
+  const [currentCampaignId, setCurrentCampaignId] = useState(null);
 
   // Accounts counter from database
   const [liveAccountsCount, setLiveAccountsCount] = useState(0);
@@ -28,14 +25,14 @@ export default function SeedingPageMain() {
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "instant" });
-    localApi
+    seedingApi
       .getAccounts()
       .then((accs) => {
         if (Array.isArray(accs)) {
           setTotalAccountsCount(accs.length);
           // Tài khoản khả dụng: BẮT BUỘC có trạng thái live và đã đăng nhập (logged_in)
           const validLiveLoggedIn = accs.filter(
-            (a: any) =>
+            (a) =>
               a.status?.toLowerCase() === "live" &&
               a.login_status?.toLowerCase() === "logged_in",
           );
@@ -49,19 +46,9 @@ export default function SeedingPageMain() {
 
   // Realtime logs: local UI notifications + SSE backend stream
   const { logs: sseLogs } = useLocalSSE(true);
-  const [localLogs, setLocalLogs] = useState<
-    Array<{
-      id: string;
-      text: string;
-      time: string;
-      type?: "info" | "success" | "warn" | "error";
-    }>
-  >([]);
+  const [localLogs, setLocalLogs] = useState([]);
 
-  const addLog = (
-    text: string,
-    type: "info" | "success" | "warn" | "error" = "info",
-  ) => {
+  const addLog = (text, type = "info") => {
     const time = new Date().toLocaleTimeString("vi-VN");
     setLocalLogs((prev) => [
       ...prev,
@@ -76,11 +63,7 @@ export default function SeedingPageMain() {
       id: `sse-${l.timestamp}-${idx}`,
       text: l.message,
       time: l.timestamp,
-      type: (l.type === "warning" ? "warn" : l.type) as
-        | "info"
-        | "success"
-        | "warn"
-        | "error",
+      type: l.type === "warning" ? "warn" : l.type,
     })),
   ];
 
@@ -91,7 +74,7 @@ export default function SeedingPageMain() {
     const interval = setInterval(async () => {
       try {
         const detail =
-          await localApi.getSeedingCampaignDetail(currentCampaignId);
+          await seedingApi.getSeedingCampaignDetail(currentCampaignId);
         if (detail) {
           const status = detail.status || detail.campaign?.status;
           const isBatchActive = detail.is_batch_active;
@@ -118,7 +101,7 @@ export default function SeedingPageMain() {
 
   // Load saved targets from database on mount
   useEffect(() => {
-    localApi
+    seedingApi
       .getSeedingTargets("PAGE")
       .then((res) => {
         if (res && res.targets && res.targets.length > 0) {
@@ -131,25 +114,25 @@ export default function SeedingPageMain() {
       .catch(() => {});
   }, []);
 
-  const handleAddTargets = async (rawUrls: string[]) => {
+  const handleAddTargets = async (rawUrls) => {
     try {
-      const res = await localApi.validateSeedingTargets("PAGE", rawUrls);
+      const res = await seedingApi.validateSeedingTargets("PAGE", rawUrls);
       if (res && res.targets) {
         setTargets(res.targets);
         setSuccessMessage(
           `Đã lưu thành công ${res.targets.length} page vào cơ sở dữ liệu`,
         );
       }
-    } catch (e: any) {
+    } catch (e) {
       addLog(`Lỗi lưu link: ${e.message}`, "error");
     }
   };
 
-  const handleRemoveTarget = async (index: number) => {
+  const handleRemoveTarget = async (index) => {
     const targetToRemove = targets[index];
     if (targetToRemove) {
       try {
-        await localApi.deleteSeedingTarget(targetToRemove.url, "PAGE");
+        await seedingApi.deleteSeedingTarget(targetToRemove.url, "PAGE");
       } catch (err) {}
     }
     setTargets((prev) => {
@@ -167,7 +150,7 @@ export default function SeedingPageMain() {
 
   const handleClearTargets = async () => {
     try {
-      await localApi.clearSeedingTargets("PAGE");
+      await seedingApi.clearSeedingTargets("PAGE");
     } catch (err) {}
     setTargets([]);
     setSuccessMessage(null);
@@ -197,7 +180,7 @@ export default function SeedingPageMain() {
       setIsRunning(true);
       addLog("Khởi tạo chiến dịch Seeding Page trên máy thật...", "info");
 
-      const campaign = await localApi.createSeedingCampaign({
+      const campaign = await seedingApi.createSeedingCampaign({
         name: `Seeding Page - ${new Date().toLocaleTimeString("vi-VN")}`,
         campaign_type: "PAGE",
         actions: ["FOLLOW"],
@@ -218,8 +201,8 @@ export default function SeedingPageMain() {
         "success",
       );
 
-      await localApi.startSeedingCampaign(campaign.id);
-    } catch (e: any) {
+      await seedingApi.startSeedingCampaign(campaign.id);
+    } catch (e) {
       setIsRunning(false);
       addLog(`Lỗi khởi chạy seeding: ${e.message}`, "error");
     }
@@ -232,12 +215,12 @@ export default function SeedingPageMain() {
         "warn",
       );
       if (currentCampaignId) {
-        await localApi.stopSeedingCampaign(currentCampaignId);
+        await seedingApi.stopSeedingCampaign(currentCampaignId);
       } else {
-        await localApi.stopAllSeeding();
+        await seedingApi.stopAllSeeding();
       }
       addLog("Đã dừng hẳn chiến dịch seeding thành công.", "warn");
-    } catch (e: any) {
+    } catch (e) {
       addLog(`Lỗi khi dừng: ${e.message}`, "error");
     } finally {
       setIsRunning(false);

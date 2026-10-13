@@ -4,21 +4,13 @@ import React, { useState } from "react";
 import { Clipboard, FileSpreadsheet, Trash2, Plus, MessageSquare } from "lucide-react";
 import ExcelImportModal from "../../_components/ExcelImportModal";
 
-interface PostCommentsManagerProps {
-  comments: string[];
-  onAddComment: (comment: string) => void;
-  onAddBulkComments: (comments: string[]) => void;
-  onRemoveComment: (index: number) => void;
-  onClearAllComments: () => void;
-}
-
 export default function PostCommentsManager({
   comments,
   onAddComment,
   onAddBulkComments,
   onRemoveComment,
   onClearAllComments,
-}: PostCommentsManagerProps) {
+}) {
   const [bulkText, setBulkText] = useState("");
   const [singleText, setSingleText] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
@@ -51,7 +43,7 @@ export default function PostCommentsManager({
     }
   };
 
-  const handleSingleAdd = (e: React.FormEvent) => {
+  const handleSingleAdd = (e) => {
     e.preventDefault();
     if (!singleText.trim()) return;
     onAddComment(singleText.trim());

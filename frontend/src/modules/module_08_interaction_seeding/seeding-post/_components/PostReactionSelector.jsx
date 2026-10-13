@@ -3,21 +3,10 @@
 import React from "react";
 import { ThumbsUp, MessageCircle, Share2, Info, Check } from "lucide-react";
 
-interface PostReactionSelectorProps {
-  doLike: boolean;
-  onDoLikeChange: (val: boolean) => void;
-  doComment: boolean;
-  onDoCommentChange: (val: boolean) => void;
-  doShare: boolean;
-  onDoShareChange: (val: boolean) => void;
-  selectedReactions: string[];
-  onToggleReaction: (reaction: string) => void;
-}
-
-// ─────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────
 // 7 REACTION ICONS CHUẨN FACEBOOK (SVG)
-// ─────────────────────────────────────────────────────────────
-function FbLikeIcon({ className = "w-9 h-9" }: { className?: string }) {
+// ────────────────────────────────────────────────────────────
+function FbLikeIcon({ className = "w-9 h-9" }) {
   return (
     <svg className={className} viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
       <g filter="url(#filter0_d_1778_3553)">
@@ -40,7 +29,7 @@ function FbLikeIcon({ className = "w-9 h-9" }: { className?: string }) {
   );
 }
 
-function FbLoveIcon({ className = "w-9 h-9" }: { className?: string }) {
+function FbLoveIcon({ className = "w-9 h-9" }) {
   return (
     <svg className={className} viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
       <g filter="url(#filter0_d_1778_3564)">
@@ -67,7 +56,7 @@ function FbLoveIcon({ className = "w-9 h-9" }: { className?: string }) {
   );
 }
 
-function FbCareIcon({ className = "w-9 h-9" }: { className?: string }) {
+function FbCareIcon({ className = "w-9 h-9" }) {
   return (
     <svg className={className} viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
       <g filter="url(#filter0_d_1778_3574)">
@@ -100,7 +89,7 @@ function FbCareIcon({ className = "w-9 h-9" }: { className?: string }) {
   );
 }
 
-function FbHahaIcon({ className = "w-9 h-9" }: { className?: string }) {
+function FbHahaIcon({ className = "w-9 h-9" }) {
   return (
     <svg className={className} viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
       <g filter="url(#filter0_d_1778_3586)">
@@ -137,7 +126,7 @@ function FbHahaIcon({ className = "w-9 h-9" }: { className?: string }) {
   );
 }
 
-function FbWowIcon({ className = "w-9 h-9" }: { className?: string }) {
+function FbWowIcon({ className = "w-9 h-9" }) {
   return (
     <svg className={className} viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
       <g filter="url(#filter0_d_1778_3601)">
@@ -170,7 +159,7 @@ function FbWowIcon({ className = "w-9 h-9" }: { className?: string }) {
   );
 }
 
-function FbSadIcon({ className = "w-9 h-9" }: { className?: string }) {
+function FbSadIcon({ className = "w-9 h-9" }) {
   return (
     <svg className={className} viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
       <g filter="url(#filter0_d_1778_3616)">
@@ -203,7 +192,7 @@ function FbSadIcon({ className = "w-9 h-9" }: { className?: string }) {
   );
 }
 
-function FbAngryIcon({ className = "w-9 h-9" }: { className?: string }) {
+function FbAngryIcon({ className = "w-9 h-9" }) {
   return (
     <svg className={className} viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
       <g filter="url(#filter0_d_1778_3628)">
@@ -258,7 +247,7 @@ export default function PostReactionSelector({
   onDoShareChange,
   selectedReactions,
   onToggleReaction,
-}: PostReactionSelectorProps) {
+}) {
   return (
     <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-6 space-y-5">
       {/* Step Header */}

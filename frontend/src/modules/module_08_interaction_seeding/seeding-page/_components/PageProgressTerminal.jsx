@@ -3,21 +3,11 @@
 import React, { useRef, useEffect } from "react";
 import { Activity, CheckCircle, AlertTriangle } from "lucide-react";
 
-interface ProfileProgressTerminalProps {
-  logs: Array<{
-    id: string;
-    text: string;
-    time: string;
-    type?: "info" | "success" | "warn" | "error";
-  }>;
-  isRunning: boolean;
-}
-
-export default function ProfileProgressTerminal({
+export default function PageProgressTerminal({
   logs,
   isRunning,
-}: ProfileProgressTerminalProps) {
-  const terminalContainerRef = useRef<HTMLDivElement>(null);
+}) {
+  const terminalContainerRef = useRef(null);
 
   useEffect(() => {
     // Chỉ cuộn riêng khung chứa terminal, tuyệt đối không cuộn toàn bộ trang web
@@ -51,7 +41,7 @@ export default function ProfileProgressTerminal({
       >
         {logs.length === 0 ? (
           <div className="h-full flex items-center justify-center text-gray-500 italic">
-            Chưa có tiến trình nào đang chạy. Nhấn "Bắt đầu Seeding" để khởi chạy tự động.
+            Chưa có tiến trình nào đang chạy. Nhấn &quot;Bắt đầu Seeding&quot; để khởi chạy tự động.
           </div>
         ) : (
           logs.map((log) => (

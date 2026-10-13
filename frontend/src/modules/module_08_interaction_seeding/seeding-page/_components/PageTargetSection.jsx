@@ -2,25 +2,16 @@
 
 import React, { useState } from "react";
 import { Link2, FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink } from "lucide-react";
-import { SeedingTargetItem } from "@/types/seeding";
 import ExcelImportModal from "../../_components/ExcelImportModal";
 
-interface PostTargetSectionProps {
-  targets: SeedingTargetItem[];
-  onAddTargets: (rawUrls: string[]) => void;
-  onRemoveTarget: (index: number) => void;
-  onClearTargets: () => void;
-  successMessage?: string | null;
-}
-
-export default function PostTargetSection({
+export default function PageTargetSection({
   targets,
   onAddTargets,
   onRemoveTarget,
   onClearTargets,
   successMessage,
-}: PostTargetSectionProps) {
-  const [activeTab, setActiveTab] = useState<"manual" | "excel">("manual");
+}) {
+  const [activeTab, setActiveTab] = useState("manual");
   const [textInput, setTextInput] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
 
@@ -48,7 +39,7 @@ export default function PostTargetSection({
           1
         </span>
         <h2 className="text-base font-bold text-gray-900">
-          Thêm bài viết cần seeding
+          Thêm Page cần seeding
         </h2>
       </div>
 
@@ -64,7 +55,7 @@ export default function PostTargetSection({
           }`}
         >
           <Link2 className="w-3.5 h-3.5" />
-          Nhập link bài viết
+          Nhập link page
         </button>
 
         <button
@@ -83,7 +74,7 @@ export default function PostTargetSection({
           rows={4}
           value={textInput}
           onChange={(e) => setTextInput(e.target.value)}
-          placeholder={`https://www.facebook.com/post/post123\nhttps://www.facebook.com/post/post456\nhttps://www.facebook.com/post/post789\nhttps://www.facebook.com/post/post321`}
+          placeholder={`https://www.facebook.com/adagroup\nhttps://www.facebook.com/dulichvietnam\nhttps://www.facebook.com/amthucmoingay`}
           className="w-full text-xs font-mono p-3.5 rounded-xl border border-gray-200 bg-gray-50/50 text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all resize-y"
         />
 
@@ -126,8 +117,6 @@ export default function PostTargetSection({
         </div>
       </div>
 
-
-
       {/* Targets Table */}
       {targets.length > 0 && (
         <div className="border border-gray-100 rounded-xl overflow-hidden mt-2">
@@ -137,8 +126,8 @@ export default function PostTargetSection({
                 <tr>
                   <th className="py-2.5 px-4 w-14 text-center">STT</th>
                   <th className="py-2.5 px-4">Tên hiển thị</th>
-                  <th className="py-2.5 px-4">Link bài viết</th>
-                  <th className="py-2.5 px-4 w-20 text-center">Thao tác</th>
+                  <th className="py-2.5 px-4">Link Page</th>
+                  <th className="py-2.5 px-4 w-20 text-center">Hành động</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 text-gray-700 font-medium">
@@ -147,8 +136,8 @@ export default function PostTargetSection({
                     <td className="py-2.5 px-4 text-center text-gray-400 font-mono">
                       {idx + 1}
                     </td>
-                    <td className="py-2.5 px-4 font-semibold text-gray-900 truncate max-w-xs">
-                      {item.display_name || `Bài viết ${idx + 1}`}
+                    <td className="py-2.5 px-4 font-semibold text-gray-900">
+                      {item.display_name || `Page ${idx + 1}`}
                     </td>
                     <td className="py-2.5 px-4 font-mono text-blue-600">
                       <a
@@ -183,7 +172,7 @@ export default function PostTargetSection({
       <ExcelImportModal
         isOpen={isExcelModalOpen}
         onClose={() => setIsExcelModalOpen(false)}
-        targetType="POST"
+        targetType="PAGE"
         onImportTargets={(imported) => {
           if (imported.length > 0) {
             onAddTargets(imported.map((item) => item.url));

@@ -2,21 +2,13 @@
 
 import React from "react";
 import { ClipboardList, BarChart2, Info, Lightbulb, CheckCircle2, Check, Shield } from "lucide-react";
-import { SeedingTargetItem } from "@/types/seeding";
-
-interface ProfileSummaryCardsProps {
-  targets: SeedingTargetItem[];
-  accountCount: number;
-  minDelay: number;
-  maxDelay: number;
-}
 
 export default function ProfileSummaryCards({
   targets,
   accountCount,
   minDelay,
   maxDelay,
-}: ProfileSummaryCardsProps) {
+}) {
   const targetCount = targets.length;
   const estimatedFollows = accountCount;
 

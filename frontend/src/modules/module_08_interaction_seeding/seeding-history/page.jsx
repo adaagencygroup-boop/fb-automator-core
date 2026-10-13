@@ -1,24 +1,23 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect } from "react";
 import { Clock, Download, RefreshCw } from "lucide-react";
 import * as XLSX from "xlsx";
 import HistoryStatsCards from "./_components/HistoryStatsCards";
 import HistoryFilters from "./_components/HistoryFilters";
 import HistoryTable from "./_components/HistoryTable";
 import CampaignDetailModal from "./_components/CampaignDetailModal";
-import { SeedingCampaign, SeedingStats } from "@/types/seeding";
-import { localApi } from "@/modules/module_08_interaction_seeding/service";
+import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
 
 export default function SeedingHistoryPage() {
-  const [stats, setStats] = useState<SeedingStats>({
+  const [stats, setStats] = useState({
     total_campaigns: 0,
     total_interactions: 0,
     total_success: 0,
     total_failed: 0,
   });
 
-  const [campaigns, setCampaigns] = useState<SeedingCampaign[]>([]);
+  const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
@@ -44,51 +43,55 @@ export default function SeedingHistoryPage() {
   const [totalCount, setTotalCount] = useState(0);
 
   // Detail Modal
-  const [selectedCampaign, setSelectedCampaign] = useState<SeedingCampaign | null>(null);
+  const [selectedCampaign, setSelectedCampaign] = useState(null);
 
   // Fetch real data from Local Engine Backend (chỉ phụ thuộc vào appliedFilters và phân trang)
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      // 1. Thống kê
-      const statsRes = await localApi.getSeedingStats();
-      if (statsRes) {
-        setStats(statsRes);
-      }
+  useEffect(() => {
+    let ignore = false;
+    seedingApi
+      .getSeedingStats()
+      .then((statsRes) => {
+        if (!ignore && statsRes) {
+          setStats(statsRes);
+        }
+      })
+      .catch(() => {});
 
-      // 2. Danh sách chiến dịch
-      const params: Record<string, any> = {
-        page: currentPage,
-        page_size: pageSize,
-      };
-      if (appliedFilters.type !== "ALL") params.campaign_type = appliedFilters.type;
-      if (appliedFilters.status !== "ALL") params.status = appliedFilters.status;
-      if (appliedFilters.search.trim()) params.search = appliedFilters.search.trim();
-      if (appliedFilters.fromDate) params.from_date = appliedFilters.fromDate;
-      if (appliedFilters.toDate) params.to_date = appliedFilters.toDate;
+    const params = {
+      page: currentPage,
+      page_size: pageSize,
+    };
+    if (appliedFilters.type !== "ALL") params.campaign_type = appliedFilters.type;
+    if (appliedFilters.status !== "ALL") params.status = appliedFilters.status;
+    if (appliedFilters.search.trim()) params.search = appliedFilters.search.trim();
+    if (appliedFilters.fromDate) params.from_date = appliedFilters.fromDate;
+    if (appliedFilters.toDate) params.to_date = appliedFilters.toDate;
 
-      const res = await localApi.getSeedingCampaigns(params);
-      if (res && Array.isArray(res.items)) {
-        setCampaigns(res.items);
-        setTotalCount(res.total || res.items.length);
-      } else {
-        setCampaigns([]);
-        setTotalCount(0);
-      }
-    } catch (err) {
-      console.error("Lỗi tải dữ liệu lịch sử seeding:", err);
-    } finally {
-      setLoading(false);
-    }
+    seedingApi
+      .getSeedingCampaigns(params)
+      .then((res) => {
+        if (!ignore) {
+          if (res && Array.isArray(res.items)) {
+            setCampaigns(res.items);
+            setTotalCount(res.total || res.items.length);
+          } else {
+            setCampaigns([]);
+            setTotalCount(0);
+          }
+        }
+      })
+      .catch((err) => {
+        console.error("Lỗi tải dữ liệu lịch sử seeding:", err);
+      });
+
+    return () => {
+      ignore = true;
+    };
   }, [currentPage, pageSize, appliedFilters]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "instant" });
   }, []);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
 
   // Chỉ khi bấm nút LỌC mới cập nhật appliedFilters
   const handleApplyFilter = () => {
@@ -121,7 +124,7 @@ export default function SeedingHistoryPage() {
 
   // Chuỗi tóm tắt bộ lọc đang thực sự áp dụng
   const getAppliedSummary = () => {
-    const parts: string[] = [];
+    const parts = [];
     if (appliedFilters.type !== "ALL") {
       parts.push(
         appliedFilters.type === "PAGE"
@@ -157,7 +160,7 @@ export default function SeedingHistoryPage() {
       setIsExporting(true);
 
       // Gọi API lấy toàn bộ danh sách bản ghi theo bộ lọc đang áp dụng (page_size lớn)
-      const exportParams: Record<string, any> = {
+      const exportParams = {
         page: 1,
         page_size: 50000,
       };
@@ -167,8 +170,8 @@ export default function SeedingHistoryPage() {
       if (appliedFilters.fromDate) exportParams.from_date = appliedFilters.fromDate;
       if (appliedFilters.toDate) exportParams.to_date = appliedFilters.toDate;
 
-      const res = await localApi.getSeedingCampaigns(exportParams);
-      const allCampaigns: SeedingCampaign[] =
+      const res = await seedingApi.getSeedingCampaigns(exportParams);
+      const allCampaigns =
         res && Array.isArray(res.items) && res.items.length > 0 ? res.items : campaigns;
 
       if (!allCampaigns || allCampaigns.length === 0) {
@@ -256,7 +259,7 @@ export default function SeedingHistoryPage() {
       XLSX.utils.book_append_sheet(wb, ws, "Lich_Su_Seeding");
 
       const now = new Date();
-      const pad = (n: number) => String(n).padStart(2, "0");
+      const pad = (n) => String(n).padStart(2, "0");
       const dateFormatted = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(
         now.getDate()
       )}_${pad(now.getHours())}${pad(now.getMinutes())}`;

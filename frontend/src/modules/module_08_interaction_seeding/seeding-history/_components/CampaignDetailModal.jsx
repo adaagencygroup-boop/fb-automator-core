@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
   X,
@@ -19,35 +19,25 @@ import {
   MessageCircle,
   Share2,
 } from "lucide-react";
-import { SeedingCampaign } from "@/types/seeding";
-import { localApi } from "@/modules/module_08_interaction_seeding/service";
+import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
 
-interface CampaignDetailModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  campaign: SeedingCampaign | null;
-}
+const emptySubscribe = () => () => {};
+const useIsMounted = () => useSyncExternalStore(emptySubscribe, () => true, () => false);
 
 export default function CampaignDetailModal({
   isOpen,
   onClose,
   campaign,
-}: CampaignDetailModalProps) {
-  const [detailData, setDetailData] = useState<SeedingCampaign | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [copied, setCopied] = useState<boolean>(false);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-    return () => setMounted(false);
-  }, []);
+}) {
+  const [detailData, setDetailData] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const mounted = useIsMounted();
 
   // Lock body scroll and handle ESC key
   useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = "hidden";
-      const handleKeyDown = (e: KeyboardEvent) => {
+      const handleKeyDown = (e) => {
         if (e.key === "Escape" && onClose) {
           onClose();
         }
@@ -63,30 +53,28 @@ export default function CampaignDetailModal({
   }, [isOpen, onClose]);
 
   useEffect(() => {
-    if (!isOpen || !campaign?.id) {
-      setDetailData(null);
-      return;
-    }
+    if (!isOpen || !campaign?.id) return;
 
-    setLoading(true);
-    localApi
+    let isCancelled = false;
+    seedingApi
       .getSeedingCampaignDetail(campaign.id)
       .then((res) => {
-        if (res) {
+        if (!isCancelled && res) {
           setDetailData(res);
         }
       })
       .catch((err) => {
         console.error("Lỗi khi tải chi tiết chiến dịch:", err);
-      })
-      .finally(() => {
-        setLoading(false);
       });
+
+    return () => {
+      isCancelled = true;
+    };
   }, [isOpen, campaign?.id]);
 
   if (!isOpen || !campaign) return null;
 
-  const data = detailData || campaign;
+  const data = (detailData && detailData.id === campaign.id) ? detailData : campaign;
   const isProfile = (data.campaign_type || "").toUpperCase() === "PROFILE";
   const isPage = (data.campaign_type || "").toUpperCase() === "PAGE";
   const isPost = (data.campaign_type || "").toUpperCase() === "POST";
@@ -176,7 +164,7 @@ export default function CampaignDetailModal({
 
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto space-y-5 text-xs">
-          {loading ? (
+          {false ? (
             <div className="py-12 flex flex-col items-center justify-center gap-2 text-gray-500">
               <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
               <span>Đang tải thông tin chi tiết từ hệ thống...</span>
@@ -579,4 +567,3 @@ export default function CampaignDetailModal({
     document.body
   );
 }
-
