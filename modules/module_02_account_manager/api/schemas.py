@@ -31,7 +31,7 @@ class AccountInput(OwnerRequest):
         try:
             parse_proxy(value)
         except (ProxyFormatError, ValueError) as exc:
-            raise ValueError("Proxy không hợp lệ. Dùng HOST:PORT, HOST:PORT:USER:PASS hoặc URL HTTP/HTTPS.") from exc
+            raise ValueError("Proxy không hợp lệ. Dùng HOST:PORT, HOST:PORT:USER:PASS hoặc URL HTTP/HTTPS/SOCKS5.") from exc
         return value
 
     @model_validator(mode="before")

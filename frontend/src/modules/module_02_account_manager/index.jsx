@@ -336,7 +336,7 @@ export default function AccountManagerModule() {
       const res = await checkAccountStatuses(selectedUids);
       await fetchAccounts();
       toast.success(
-        `Đã kiểm tra xong: ${res.live || 0} Live, ${res.die || 0} Die.`,
+        `Đã kiểm tra xong: ${res.live || 0} Live, ${res.die || 0} Die, ${res.inconclusive || 0} chưa kết luận được.`,
         "KIỂM TRA HOÀN TẤT"
       );
     } catch (error) {

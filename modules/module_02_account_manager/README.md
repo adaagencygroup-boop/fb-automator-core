@@ -58,7 +58,7 @@ OpenAPI của FastAPI mô tả request; các response chính:
 | GET /{uid} | owner qua query/header | Account chi tiết |
 | POST /single | uid và các trường account | success, uid |
 | POST /import | accounts, check_status=false, owner_username | imported, errors:[{uid,error}], checking |
-| POST /check-status | uids | statuses:{uid:live/die}, live, die |
+| POST /check-status | uids | statuses:{uid:live/die}, live, die, inconclusive |
 | DELETE /{uid} | owner qua query/header | deleted, profiles_deleted:[path] |
 | POST /bulk-delete | uids, owner_username | deleted, profiles_deleted:count, errors:[{uid,error}] |
 | POST /test-proxy | proxy | success, host, port, has_auth, egress_ip, message |
@@ -81,13 +81,18 @@ Login nhận 1–10 luồng, executor chung tối đa 10. Profile đang bận tr
 xóa profile lỗi giữ bản ghi DB. Có thể xóa profile mồ côi trong root đúng owner.
 
 Status API: live/die/null; login_status: logged_in/not_logged_in/failed.
-Thời gian đăng nhập trả ISO 8601 UTC. Check Live/Die giữ heuristic nguồn, bao gồm
-trả die khi Chrome không chạy được; đây không phải xác nhận tài khoản đã bị khóa.
+Thời gian đăng nhập trả ISO 8601 UTC. Check Live/Die chạy Graph ảnh đại diện → HTTP
+profile công khai → Selenium Chrome headless khi chưa kết luận được. Không dùng cookie,
+token, proxy hay profile đăng nhập của tài khoản; browser dùng profile tạm và được đóng sau check.
+Ảnh hợp lệ qua Facebook CDN hoặc bằng chứng profile đúng UID xác nhận live; thông báo
+profile không khả dụng xác nhận die. Lỗi mạng, trang đăng nhập/checkpoint hoặc Chrome lỗi
+không kết luận die: giữ trạng thái và thời điểm check cũ, UID mới vẫn có status=null.
+statuses chỉ chứa kết quả xác định; inconclusive đếm UID chưa kết luận được.
 Cookie sync giữ fallback nguồn: tìm dấu c_user trong DB profile, không giải mã cookie Chrome.
 Proxy giữ hành vi nguồn: lỗi proxy có thể fallback kết nối trực tiếp và phát warning.
 
 SSE gửi connected/heartbeat và log {time,level,message,uid}. Sau commit check trạng thái:
-{event: account_statuses_updated, statuses: {...}}. Hoàn thành login phát
+{event: account_statuses_updated, statuses: {...}, live, die, inconclusive}. Hoàn thành login phát
 account_login_finished. Mỗi subscriber có queue riêng (1000 event; đầy thì bỏ event cũ nhất).
 Client reconnect lấy lại danh sách account; không có replay lịch sử SSE.
 
