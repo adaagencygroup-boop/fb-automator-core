@@ -72,7 +72,7 @@ def main():
         expect(page.get_by_role("dialog")).not_to_be_visible()
         for error, message in [
             ("ACCOUNT_NOT_FOUND", "Tài khoản không tồn tại trên hệ thống."),
-            ("INVALID_PASSWORD", "Mật khẩu không chính xác."),
+            ("INVALID_PASSWORD", "Mật khẩu không khớp với bản quyền đã đăng ký"),
         ]:
             state["error"] = error
             submit.click()
@@ -100,7 +100,7 @@ def main():
         page.get_by_role("checkbox", name="Ghi nhớ đăng nhập").check()
         state["error"] = None
         submit.click()
-        expect(page.locator(".auth-feedback")).to_contain_text("BẢN QUYỀN HẾT HẠN")
+        expect(page.locator(".auth-feedback")).to_contain_text("BẢN QUYỀN LICENSE ĐÃ HẾT HẠN")
         page.screenshot(path="logs/login-license.png", full_page=True)
         page.set_viewport_size({"width": 1440, "height": 900})
         expect(page.get_by_role("heading", name="Chưa mở được các module")).to_be_visible()

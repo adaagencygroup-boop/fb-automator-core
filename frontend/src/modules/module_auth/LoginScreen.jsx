@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AuthFeedback } from "./components/AuthFeedback";
+import { loginFeedback } from "./loginFeedback";
 import api from "@/services/api";
 import { AuthLayout } from "./components/AuthLayout";
 import { LoginHeroBanner } from "./components/LoginHeroBanner";
@@ -76,14 +77,10 @@ export default function LoginScreen({ onAuthenticated, onStatus, onRegister, ses
       });
       if (rememberMe) localStorage.setItem("remembered_username", username.trim());
       else localStorage.removeItem("remembered_username");
-      setFeedback({
+      setFeedback(result.status === "expired" ? loginFeedback.license : {
         success: true,
-        tone: result.status === "expired" ? "error" : "success",
-        kind: result.status === "expired" ? "license" : undefined,
-        title: result.status === "expired" ? "BẢN QUYỀN HẾT HẠN" : "XÁC THỰC THÀNH CÔNG",
-        message: result.status === "expired"
-          ? "Bản quyền của bạn đã hết hạn! Vui lòng gia hạn để sử dụng đầy đủ tính năng."
-          : "Đăng nhập thành công! Đang chuyển hướng vào hệ thống...",
+        title: "XÁC THỰC THÀNH CÔNG",
+        message: "Đăng nhập thành công! Đang chuyển hướng vào hệ thống...",
       });
       await new Promise((resolve) => setTimeout(resolve, 800));
       if (alive.current) await onAuthenticated();
@@ -93,7 +90,7 @@ export default function LoginScreen({ onAuthenticated, onStatus, onRegister, ses
       const statuses = { ACCOUNT_PENDING: "pending", ACCOUNT_REJECTED: "rejected", ACCOUNT_BANNED: "banned", ACCOUNT_LOCKED: "banned", ERR_HWID_MISMATCH: "hwid" };
       if (statuses[message]) {
         if (message === "ERR_HWID_MISMATCH") {
-          setFeedback({ title: "LỖI XÁC THỰC PHẦN CỨNG HWID", message: "Mã máy hiện tại không trùng khớp với mã HWID đã được kích hoạt trong License của tài khoản này. Mỗi License chỉ có giá trị với duy nhất 1 thiết bị." });
+          setFeedback(loginFeedback.hwid);
           await new Promise((resolve) => setTimeout(resolve, 1000));
           if (!alive.current) return;
         }
@@ -103,7 +100,9 @@ export default function LoginScreen({ onAuthenticated, onStatus, onRegister, ses
       const translated = { ACCOUNT_NOT_FOUND: "Tài khoản không tồn tại trên hệ thống.", INVALID_PASSWORD: "Mật khẩu không chính xác." }[message] || message;
       if (message === "ACCOUNT_NOT_FOUND") setFieldErrors({ username: translated });
       if (message === "INVALID_PASSWORD") setFieldErrors({ password: translated });
-      setFeedback({ title: "ĐĂNG NHẬP THẤT BẠI", message: translated });
+      setFeedback(message === "INVALID_PASSWORD" ? loginFeedback.credentials
+        : message === "LICENSE_EXPIRED" ? loginFeedback.license
+        : { title: "ĐĂNG NHẬP THẤT BẠI", message: translated });
     } finally {
       if (alive.current) { setLoading(false); setHwidLoading(false); }
     }

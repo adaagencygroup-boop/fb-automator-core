@@ -118,6 +118,44 @@
 .auth-feedback-title { margin-bottom: 6px; color: var(--feedback-accent); font-size: 13px; font-weight: 700; }
 .auth-feedback-message { font-size: 13px; line-height: 1.7; }
 
+.auth-feedback[data-login-design] {
+  --feedback-accent: #ed4145;
+  --feedback-soft: #f3d9d9;
+  width: min(546px, calc(100vw - 40px));
+  gap: 16px;
+  padding: 18px 20px 18px 24px;
+  border-color: #ff8589;
+  background: #f5f5f5;
+  color: #705d5d;
+  box-shadow: 0 16px 22px -8px rgba(65, 35, 35, 0.5);
+}
+.auth-feedback[data-login-design]::before {
+  width: 16px;
+  background: linear-gradient(90deg, #ff7378cc, transparent);
+}
+.auth-feedback[data-login-design] .auth-feedback-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  border-color: #ff999e;
+  color: #ff6974;
+}
+.auth-feedback[data-login-design] .auth-feedback-icon svg { width: 24px; height: 24px; stroke-width: 1.8; }
+.auth-feedback[data-kind="license"] .auth-feedback-icon { width: 35px; height: 35px; margin-top: 2px; border-radius: 9px; }
+.auth-feedback[data-kind="license"] .auth-feedback-icon svg { width: 20px; height: 20px; }
+.auth-feedback[data-login-design] .auth-feedback-title {
+  margin-bottom: 4px;
+  font-family: var(--font-display), sans-serif;
+  font-size: 14px;
+  line-height: 22px;
+  letter-spacing: 0.3px;
+}
+.auth-feedback[data-login-design] .auth-feedback-message {
+  font-family: var(--font-heading), sans-serif;
+  font-size: 13px;
+  line-height: 21px;
+}
+
 @media (max-width: 639px) {
   .auth-feedback { top: 16px; right: 16px; padding: 16px 14px 16px 20px; gap: 10px; }
 }
