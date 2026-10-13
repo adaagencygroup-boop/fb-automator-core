@@ -1,0 +1,308 @@
+"use client";
+
+import { localApi } from "@/modules/module_08_interaction_seeding/service";
+import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
+import { SeedingTargetItem } from "@/types/seeding";
+import { Send } from "lucide-react";
+import { useEffect, useState } from "react";
+import PageAccountConfig from "./_components/PageAccountConfig";
+import PageActionBar from "./_components/PageActionBar";
+import PageProgressTerminal from "./_components/PageProgressTerminal";
+import PageSummaryCards from "./_components/PageSummaryCards";
+import PageTargetSection from "./_components/PageTargetSection";
+
+export default function SeedingPageMain() {
+  const [targets, setTargets] = useState<SeedingTargetItem[]>([]);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [accountCount, setAccountCount] = useState(2);
+  const [delayMin, setDelayMin] = useState(30);
+  const [delayMax, setDelayMax] = useState(60);
+  const [isRunning, setIsRunning] = useState(false);
+  const [currentCampaignId, setCurrentCampaignId] = useState<number | null>(
+    null,
+  );
+
+  // Accounts counter from database
+  const [liveAccountsCount, setLiveAccountsCount] = useState(0);
+  const [totalAccountsCount, setTotalAccountsCount] = useState(0);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    localApi
+      .getAccounts()
+      .then((accs) => {
+        if (Array.isArray(accs)) {
+          setTotalAccountsCount(accs.length);
+          // Tài khoản khả dụng: BẮT BUỘC có trạng thái live và đã đăng nhập (logged_in)
+          const validLiveLoggedIn = accs.filter(
+            (a: any) =>
+              a.status?.toLowerCase() === "live" &&
+              a.login_status?.toLowerCase() === "logged_in",
+          );
+          const validCount = validLiveLoggedIn.length;
+          setLiveAccountsCount(validCount);
+          setAccountCount(validCount > 0 ? Math.min(validCount, 10) : 0);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Realtime logs: local UI notifications + SSE backend stream
+  const { logs: sseLogs } = useLocalSSE(true);
+  const [localLogs, setLocalLogs] = useState<
+    Array<{
+      id: string;
+      text: string;
+      time: string;
+      type?: "info" | "success" | "warn" | "error";
+    }>
+  >([]);
+
+  const addLog = (
+    text: string,
+    type: "info" | "success" | "warn" | "error" = "info",
+  ) => {
+    const time = new Date().toLocaleTimeString("vi-VN");
+    setLocalLogs((prev) => [
+      ...prev,
+      { id: Math.random().toString(), text, time, type },
+    ]);
+  };
+
+  // Merge SSE logs with local UI logs
+  const combinedLogs = [
+    ...localLogs,
+    ...sseLogs.map((l, idx) => ({
+      id: `sse-${l.timestamp}-${idx}`,
+      text: l.message,
+      time: l.timestamp,
+      type: (l.type === "warning" ? "warn" : l.type) as
+        | "info"
+        | "success"
+        | "warn"
+        | "error",
+    })),
+  ];
+
+  // Poll campaign status while running
+  useEffect(() => {
+    if (!isRunning || !currentCampaignId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const detail =
+          await localApi.getSeedingCampaignDetail(currentCampaignId);
+        if (detail) {
+          const status = detail.status || detail.campaign?.status;
+          const isBatchActive = detail.is_batch_active;
+          if (
+            !isBatchActive &&
+            (status === "COMPLETED" ||
+              status === "FAILED" ||
+              status === "STOPPED")
+          ) {
+            setIsRunning(false);
+            addLog(
+              `Chiến dịch hoàn tất với trạng thái: ${detail.status_display || status}.`,
+              status === "COMPLETED" ? "success" : "warn",
+            );
+          }
+        }
+      } catch (err) {
+        // Ignore polling error
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [isRunning, currentCampaignId]);
+
+  // Load saved targets from database on mount
+  useEffect(() => {
+    localApi
+      .getSeedingTargets("PAGE")
+      .then((res) => {
+        if (res && res.targets && res.targets.length > 0) {
+          setTargets(res.targets);
+          setSuccessMessage(
+            `Đã tải ${res.targets.length} page từ cơ sở dữ liệu`,
+          );
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleAddTargets = async (rawUrls: string[]) => {
+    try {
+      const res = await localApi.validateSeedingTargets("PAGE", rawUrls);
+      if (res && res.targets) {
+        setTargets(res.targets);
+        setSuccessMessage(
+          `Đã lưu thành công ${res.targets.length} page vào cơ sở dữ liệu`,
+        );
+      }
+    } catch (e: any) {
+      addLog(`Lỗi lưu link: ${e.message}`, "error");
+    }
+  };
+
+  const handleRemoveTarget = async (index: number) => {
+    const targetToRemove = targets[index];
+    if (targetToRemove) {
+      try {
+        await localApi.deleteSeedingTarget(targetToRemove.url, "PAGE");
+      } catch (err) {}
+    }
+    setTargets((prev) => {
+      const updated = prev
+        .filter((_, idx) => idx !== index)
+        .map((item, idx) => ({ ...item, stt: idx + 1 }));
+      setSuccessMessage(
+        updated.length > 0
+          ? `Đã cập nhật danh sách (${updated.length} page)`
+          : null,
+      );
+      return updated;
+    });
+  };
+
+  const handleClearTargets = async () => {
+    try {
+      await localApi.clearSeedingTargets("PAGE");
+    } catch (err) {}
+    setTargets([]);
+    setSuccessMessage(null);
+  };
+
+  const handleStart = async () => {
+    if (targets.length === 0) {
+      alert("Vui lòng thêm ít nhất 1 page cần seeding!");
+      return;
+    }
+
+    if (liveAccountsCount === 0) {
+      alert(
+        "Không có tài khoản Facebook nào khả dụng! Yêu cầu tài khoản phải có trạng thái 'Đã đăng nhập' và còn 'Live'. Vui lòng kiểm tra lại trang Quản lý tài khoản.",
+      );
+      return;
+    }
+
+    if (accountCount <= 0 || accountCount > liveAccountsCount) {
+      alert(
+        `Số lượng tài khoản muốn chạy (${accountCount}) không hợp lệ hoặc vượt quá số tài khoản khả dụng (${liveAccountsCount})!`,
+      );
+      return;
+    }
+
+    try {
+      setIsRunning(true);
+      addLog("Khởi tạo chiến dịch Seeding Page trên máy thật...", "info");
+
+      const campaign = await localApi.createSeedingCampaign({
+        name: `Seeding Page - ${new Date().toLocaleTimeString("vi-VN")}`,
+        campaign_type: "PAGE",
+        actions: ["FOLLOW"],
+        targets: targets.map((t) => ({
+          url: t.url,
+          display_name: t.display_name,
+        })),
+        account_count: accountCount,
+        threads: 1,
+        min_delay_sec: delayMin,
+        max_delay_sec: delayMax,
+      });
+
+      setCurrentCampaignId(campaign.id);
+      const totalPages = campaign.total_targets || targets.length;
+      addLog(
+        `Đã khởi tạo ${totalPages} chiến dịch riêng biệt (${campaign.total_tasks} tác vụ). Bắt đầu thực thi...`,
+        "success",
+      );
+
+      await localApi.startSeedingCampaign(campaign.id);
+    } catch (e: any) {
+      setIsRunning(false);
+      addLog(`Lỗi khởi chạy seeding: ${e.message}`, "error");
+    }
+  };
+
+  const handleStop = async () => {
+    try {
+      addLog(
+        "Đang gửi yêu cầu dừng chiến dịch và đóng toàn bộ trình duyệt Chrome...",
+        "warn",
+      );
+      if (currentCampaignId) {
+        await localApi.stopSeedingCampaign(currentCampaignId);
+      } else {
+        await localApi.stopAllSeeding();
+      }
+      addLog("Đã dừng hẳn chiến dịch seeding thành công.", "warn");
+    } catch (e: any) {
+      addLog(`Lỗi khi dừng: ${e.message}`, "error");
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  return (
+    <div className="w-full space-y-6 animate-fadeIn">
+      {/* Page Header */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-sm shadow-blue-500/20 shrink-0">
+            <Send className="w-6 h-6 stroke-[2.2]" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
+              Seeding Page
+            </h1>
+            <p className="text-xs text-slate-500 mt-1 font-normal">
+              Tăng Follow và Like Fanpage tự động bằng Chrome profiles thực tế.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Step 1: Input Targets */}
+      <PageTargetSection
+        targets={targets}
+        onAddTargets={handleAddTargets}
+        onRemoveTarget={handleRemoveTarget}
+        onClearTargets={handleClearTargets}
+        successMessage={successMessage}
+      />
+
+      {/* Steps 2 & 3: Account Config & Delay */}
+      <PageAccountConfig
+        accountCount={accountCount}
+        onAccountCountChange={setAccountCount}
+        availableAccounts={liveAccountsCount}
+        liveAccounts={liveAccountsCount}
+        totalAccounts={totalAccountsCount}
+        minDelay={delayMin}
+        maxDelay={delayMax}
+        onMinDelayChange={setDelayMin}
+        onMaxDelayChange={setDelayMax}
+      />
+
+      {/* Summary Cards */}
+      <PageSummaryCards
+        targets={targets}
+        accountCount={accountCount}
+        minDelay={delayMin}
+        maxDelay={delayMax}
+      />
+
+      {/* Live Terminal */}
+      <PageProgressTerminal logs={combinedLogs} isRunning={isRunning} />
+
+      {/* Bottom Action Bar */}
+      <PageActionBar
+        isRunning={isRunning}
+        onStart={handleStart}
+        onStop={handleStop}
+        disabled={targets.length === 0}
+      />
+    </div>
+  );
+}

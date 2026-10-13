@@ -1,46 +1,51 @@
 "use client";
 
 import { useState } from "react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import SeedingPageMain from "./seeding-page/page";
+import SeedingProfileMain from "./seeding-profile/page";
+import SeedingPostPage from "./seeding-post/page";
+import SeedingHistoryPage from "./seeding-history/page";
 
-export default function InteractionSeedingModule() {
-  const [postUrl, setPostUrl] = useState("");
-  const [actionType, setActionType] = useState("BUFF_LIKE");
+const TABS = [
+  { id: "seeding.page", label: "Seeding Page", icon: "📢" },
+  { id: "seeding.profile", label: "Seeding Trang cá nhân", icon: "👤" },
+  { id: "seeding.post", label: "Seeding Bài viết", icon: "📝" },
+  { id: "seeding.history", label: "Lịch sử Seeding", icon: "📜" },
+];
+
+export default function InteractionSeedingModule({ subPage }) {
+  const [activeTab, setActiveTab] = useState(subPage || "seeding.page");
+  const currentTab = subPage || activeTab;
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between p-5 pb-3">
-          <CardTitle className="text-pink-400">❤️ Seeding Bài &amp; Page (Buff Tương Tác)</CardTitle>
-          <Button size="sm" variant="default">🚀 Bắt Đầu Seeding</Button>
-        </CardHeader>
-        <CardContent className="p-5 pt-0 space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-xs text-slate-400">Link bài viết / Video:</label>
-            <input
-              type="text"
-              value={postUrl}
-              onChange={(e) => setPostUrl(e.target.value)}
-              placeholder="https://facebook.com/watch/?v=123456..."
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:outline-none focus:border-pink-400 font-mono"
-            />
-          </div>
+    <div className="space-y-4">
+      {!subPage && (
+        <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+          {TABS.map((tab) => {
+            const isActive = currentTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`px-4 py-2 text-xs font-semibold rounded-xl transition-all flex items-center gap-2 ${
+                  isActive
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300"
+                }`}
+              >
+                <span>{tab.icon}</span>
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
-          <div className="flex items-center gap-3">
-            <label className="text-xs text-slate-400">Hành động buff:</label>
-            <select
-              value={actionType}
-              onChange={(e) => setActionType(e.target.value)}
-              className="bg-slate-950 border border-slate-800 rounded p-2 text-xs text-slate-200"
-            >
-              <option value="BUFF_LIKE">Thả Cảm Xúc (Like/Love/Haha)</option>
-              <option value="BUFF_COMMENT">Bình Luận Mồi Theo Kịch Bản</option>
-              <option value="BUFF_SHARE">Chia Sẻ Bài Viết</option>
-            </select>
-          </div>
-        </CardContent>
-      </Card>
+      {currentTab === "seeding.page" && <SeedingPageMain />}
+      {currentTab === "seeding.profile" && <SeedingProfileMain />}
+      {currentTab === "seeding.post" && <SeedingPostPage />}
+      {currentTab === "seeding.history" && <SeedingHistoryPage />}
     </div>
   );
 }
