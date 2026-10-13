@@ -12,7 +12,7 @@ import json
 import re
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Query
@@ -20,16 +20,19 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, or_
 
-from app.database.local_db import get_db, SessionLocal, FbAccount, LocalSetting, utc_now, to_vn_iso
-from app.database.seeding_models import (
+from modules.module_02_account_manager.database.connection import get_db, SessionLocal
+from modules.module_02_account_manager.database.models import Account
+from modules.module_02_account_manager.database.repository import utc_now
+from modules.module_08_interaction_seeding.be.seeding_models import (
     SeedingTarget, SeedingCampaign, SeedingCampaignTarget, SeedingComment, SeedingTask
 )
-from app.local_api.sse_broadcaster import broadcast
-from app.automation.browser_manager import (
+from modules.module_02_account_manager.services.events import broadcast
+from modules.module_02_account_manager.automation.browser_manager import (
     create_driver, safe_close_driver, close_driver_for_uid, close_scoped_active_drivers
 )
-from app.automation.seeding_flow import FacebookSeedingBot
-from app.local_api.routes import HWID
+from modules.module_08_interaction_seeding.be.seeding_flow import FacebookSeedingBot
+from modules.module_02_account_manager.services.browser_service import HWID
+# TODO: LocalSetting (bảng local_settings) chưa có trên main - get/save_draft_comments sẽ lỗi cho tới khi bổ sung.
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/seeding", tags=["Seeding"])
@@ -90,6 +93,18 @@ def extract_fb_id(url: str, target_type: str = "") -> str:
     if slug and len(slug) <= 100:
         return slug
     return hashlib.md5(clean.encode("utf-8")).hexdigest()[:32]
+
+
+VN_TZ = timezone(timedelta(hours=7))
+
+
+def to_vn_iso(dt: Optional[datetime]) -> Optional[str]:
+    """Đổi datetime UTC (naive) trong DB sang chuỗi ISO giờ Việt Nam (UTC+7)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(VN_TZ).isoformat()
 
 
 def get_draft_comments(db: Session) -> List[str]:
@@ -358,22 +373,22 @@ async def create_seeding_campaign(req: CreateCampaignRequest, db: Session = Depe
     # 1. Lấy danh sách UID tài khoản Facebook thật từ DB (bắt buộc Live và Đã đăng nhập)
     available_accounts = []
     if req.uids and len(req.uids) > 0:
-        available_accounts = db.query(FbAccount).filter(
-            FbAccount.uid.in_(req.uids),
-            FbAccount.status == "live",
-            FbAccount.login_status == "logged_in"
+        available_accounts = db.query(Account).filter(
+            Account.uid.in_(req.uids),
+            Account.status == "LIVE",
+            Account.login_status == "LOGGED_IN"
         ).all()
         if not available_accounts:
-            available_accounts = db.query(FbAccount).filter(FbAccount.uid.in_(req.uids)).all()
+            available_accounts = db.query(Account).filter(Account.uid.in_(req.uids)).all()
     else:
-        # Lọc nghiêm ngặt: status == 'live' VÀ login_status == 'logged_in'
-        q = db.query(FbAccount).filter(
-            FbAccount.status == "live",
-            FbAccount.login_status == "logged_in"
+        # Lọc nghiêm ngặt: status == 'LIVE' VÀ login_status == 'LOGGED_IN'
+        q = db.query(Account).filter(
+            Account.status == "LIVE",
+            Account.login_status == "LOGGED_IN"
         )
         if req.owner_username:
-            q = q.filter(FbAccount.owner_username == req.owner_username)
-        available_accounts = q.order_by(FbAccount.id.asc()).limit(req.account_count).all()
+            q = q.filter(Account.user_id == req.owner_username)
+        available_accounts = q.order_by(Account.id.asc()).limit(req.account_count).all()
 
     if not available_accounts:
         raise HTTPException(
@@ -573,7 +588,7 @@ def _process_account_tasks(campaign_id: int, uid: str, task_ids: List[int], dela
         if _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested"):
             return
 
-        account_record = db.query(FbAccount).filter(FbAccount.uid == uid).first()
+        account_record = db.query(Account).filter(Account.uid == uid).first()
         if not account_record:
             logger.error(f"Account {uid} not found in DB")
             return
@@ -978,7 +993,7 @@ async def get_seeding_campaign_detail(campaign_id: int, db: Session = Depends(ge
     tasks = db.query(SeedingTask).filter(SeedingTask.campaign_id == campaign_id).order_by(SeedingTask.id.asc()).all()
     tasks_data = []
     for t in tasks:
-        acc = db.query(FbAccount).filter(FbAccount.uid == t.account_uid).first()
+        acc = db.query(Account).filter(Account.uid == t.account_uid).first()
         acc_name = acc.profile_name if (acc and acc.profile_name) else t.account_uid
         target = db.query(SeedingTarget).filter(SeedingTarget.id == t.target_id).first()
 

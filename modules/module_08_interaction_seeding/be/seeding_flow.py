@@ -23,8 +23,8 @@ from selenium.common.exceptions import (
     TimeoutException, NoSuchElementException, ElementClickInterceptedException
 )
 
-from app.database.encryption import decrypt
-from app.utils.otp_generator import generate_totp
+from modules.module_02_account_manager.services.credentials import decrypt
+from modules.module_02_account_manager.utils.otp_generator import generate_totp
 
 logger = logging.getLogger(__name__)
 
