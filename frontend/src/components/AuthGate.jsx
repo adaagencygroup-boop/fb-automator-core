@@ -138,7 +138,7 @@ export default function AuthGate({ children }) {
   }, [hasUser, loadMe, sessionUsername]);
 
   async function logout() {
-    await api.post("/api/v1/auth/logout").catch(() => {});
+    await api.post("/api/v1/auth/logout").catch(() => { });
     setUser(null);
     localStorage.removeItem("pending_username");
     localStorage.removeItem("locked_username");

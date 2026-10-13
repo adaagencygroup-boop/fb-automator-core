@@ -1,4 +1,8 @@
-# Python
+# =====================================================================
+# GITIGNORE - FACEBOOK AUTOMATOR PRO
+# =====================================================================
+
+# 1. Python Environment & Bytecode
 __pycache__/
 *.py[cod]
 *$py.class
@@ -7,40 +11,99 @@ __pycache__/
 env/
 venv/
 .venv/
+ENV/
+env.bak/
+venv.bak/
 
-# Environment files
+# 2. Environment & Secrets
 .env
 .env.local
 .env.*.local
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
 !.env.example
+!.env.test
 
-# Database temporary files
+# 3. Database & Local Data
+data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
+data/*.sqlite
+data/*.sqlite3
+data/keys.txt
+data/proxies.txt
+data/accounts.txt
+data/browser_profiles/
+data/module_02_account_manager/
+*.db
+*.sqlite
+*.sqlite3
 
-# Log and Downloads
+# 4. Logs & Temp Files
+logs/
 logs/*.txt
 logs/*.log
 logs/login-*.png
 logs/register-*.png
 logs/pending-*.png
 logs/locked-*.png
+logs/*.log.*
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 downloads/
+temp/
+tmp/
 
-# IDE & Build artifacts
-.vscode/
-.idea/
-*.dist/
-build/
-dist/
+# 5. Browser Automation & Profiles
+profiles/
+chrome_profiles/
+user_data/
+sessions/
+.playwright/
 
-# Tauri & Rust build artifacts
-src-tauri/target/
-src-tauri/binaries/*.exe
-
-# Node & Next.js artifacts
+# 6. Node & Next.js Artifacts
 node_modules/
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+frontend/.turbo/
+.turbo/
+.pnp
+.pnp.js
+
+# 7. IDE & Editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# 8. OS System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# 9. Build, Packaging & Tauri
+*.dist/
+build/
+dist/
+*.egg-info/
+src-tauri/target/
+src-tauri/binaries/*.exe
+*.pdb
+
+# 10. Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/

@@ -6,6 +6,7 @@ Cấu hình hệ thống và Nhật ký hoạt động chung.
 =============================================================================
 """
 from core.database.connection import db
+from core.startup import startup_step
 
 # 1. BẢNG DÙNG CHUNG CỐT LÕI (Users, Admin, Settings, Logs)
 CORE_DDL_STATEMENTS = [
@@ -64,12 +65,22 @@ def init_database():
     2. Khởi tạo riêng schema cho Module 5 (Page Manager)
     """
     print("[Database] Initializing Core & Admin tables (users, system_settings, activity_logs)...")
-    init_core_tables()
+    with startup_step("Core tables"):
+        init_core_tables()
 
     # Chỉ khởi tạo cho Module 5 (Page Manager)
     try:
         from modules.module_05_page_manager.models import init_models as init_module_05
-        init_module_05()
+        with startup_step("Module 05 schema"):
+            init_module_05()
         print("[Database] Initialized DB schema for Module 05 (Page Manager).")
     except Exception as e:
         print(f"[Database] Notice initializing Module 05 DB: {e}")
+
+    try:
+        from modules.module_03_acc_farm.models import init_models as init_module_03
+        with startup_step("Module 03 schema"):
+            init_module_03()
+        print("[Database] Initialized DB schema for Module 03 (Acc Farm - Tab 1).")
+    except Exception as e:
+        print(f"[Database] Notice initializing Module 03 DB: {e}")

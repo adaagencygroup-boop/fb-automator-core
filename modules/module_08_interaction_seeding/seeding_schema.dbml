@@ -119,6 +119,8 @@ Table seeding_tasks {
       FAILED / SKIPPED không chặn, để chiến dịch sau có thể thử lại.
       DBML không hỗ trợ WHERE - xem models.py.
     ''']
+
+    
   }
 
   Note: 'Tác vụ nguyên tử: 1 tài khoản x 1 hành động x 1 mục tiêu'

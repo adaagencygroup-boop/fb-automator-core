@@ -1,0 +1,29 @@
+/** Bộ lọc dùng chung cho Hội thoại và Thông báo */
+export const CONVERSATION_FILTERS = [
+  { id: "all", label: "Tất cả" },
+  { id: "unread", label: "Chưa xem" },
+  { id: "unreplied", label: "Chưa trả lời" },
+];
+
+/** Nhãn gắn cho hội thoại (nút "Tag" trên đầu khung chat) */
+export const CONVERSATION_TAGS = [
+  { id: "potential", label: "Khách tiềm năng", className: "bg-blue-50 text-blue-700 border-blue-200" },
+  { id: "ordered", label: "Đã chốt đơn", className: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  { id: "callback", label: "Cần gọi lại", className: "bg-amber-50 text-amber-700 border-amber-200" },
+  { id: "spam", label: "Spam", className: "bg-slate-100 text-slate-600 border-slate-200" },
+];
+
+/** Câu trả lời mẫu (nút mặt cười màu xanh bên trái ô nhập) */
+export const QUICK_REPLIES = [
+  "Dạ chào bạn, page có thể hỗ trợ gì cho bạn ạ?",
+  "Bạn vui lòng để lại số điện thoại, bên mình sẽ gọi lại tư vấn chi tiết nhé ạ.",
+  "Dạ page đã nhận được thông tin, bạn chờ bên mình kiểm tra chút nhé ạ.",
+  "Cảm ơn bạn đã quan tâm, chúc bạn một ngày tốt lành ạ!",
+];
+
+/** Cảm xúc nhanh cho tin nhắn + bảng emoji trong ô nhập */
+export const REACTIONS = ["👍", "❤️", "😆", "😮", "😢", "😡"];
+export const EMOJIS = ["😀", "😁", "😂", "😊", "😍", "😘", "😉", "😎", "🤔", "😅", "😭", "😡", "👍", "👏", "🙏", "💪", "❤️", "🔥", "🎉", "✅"];
+
+/** Facebook chỉ cho Page nhắn tin tự do trong 24 giờ kể từ tin nhắn cuối của khách */
+export const REPLY_WINDOW_MS = 24 * 60 * 60 * 1000;

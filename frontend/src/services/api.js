@@ -10,6 +10,16 @@ export const api = axios.create({
   },
 });
 
+export const NETWORK_ERROR_MESSAGE = "Không thể kết nối tới Local Engine. Hãy kiểm tra Engine đã được bật chưa.";
+
+// Engine tắt thì mọi request đều lỗi — chỉ ghi log 1 lần để console không bị spam
+const warned = new Set();
+function warnOnce(key, message) {
+  if (warned.has(key)) return;
+  warned.add(key);
+  console.warn(message);
+}
+
 let refreshPromise = null;
 
 function apiError(error) {
@@ -37,8 +47,36 @@ function shouldSkipRefresh(url) {
   );
 }
 
+function extractErrorMessage(error) {
+  const detail = error.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item?.msg) {
+          const field = Array.isArray(item.loc) ? item.loc[item.loc.length - 1] : "";
+          return field ? `${field}: ${item.msg}` : item.msg;
+        }
+        return JSON.stringify(item);
+      })
+      .join("; ");
+  }
+  if (detail && typeof detail === "object") {
+    return detail.message || JSON.stringify(detail);
+  }
+  return (
+    error.response?.data?.message ||
+    error.message ||
+    "Không thể kết nối tới Local Engine (Port 28129)"
+  );
+}
+
 api.interceptors.response.use(
-  (response) => response.data,
+  (response) => {
+    warned.delete("network"); // Engine đã chạy lại -> lần mất kết nối sau vẫn được ghi log
+    return response.data;
+  },
   async (error) => {
     const status = error.response?.status;
     const original = error.config;
