@@ -3,7 +3,7 @@
 import re
 import os
 import shutil
-import subprocess
+import logging
 import tempfile
 from html import unescape
 from html.parser import HTMLParser
@@ -11,6 +11,15 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+
+logger = logging.getLogger(__name__)
+_FACEBOOK_HOSTS = {"facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com"}
+_CHALLENGE = re.compile(
+    r"checkpoint|confirm your identity|enter login code|security check|temporarily locked|"
+    r"sorry, something went wrong|too many requests|try again later|"
+    r"account disabled|account has been disabled|account has been suspended|"
+    r"xác nhận danh tính|tài khoản.*(?:bị khóa|vô hiệu hóa)", re.IGNORECASE,
+)
 
 
 _UNAVAILABLE = re.compile(
@@ -110,43 +119,98 @@ def _find_chrome() -> str | None:
     return str(next((path for path in candidates if path.is_file()), "")) or None
 
 
-def _check_in_browser(uid: str, chrome: str, profile_dir: str) -> str:
-    url = f"https://www.facebook.com/profile.php?id={uid}"
+def _classify_profile(uid: str, response: httpx.Response, body_text: str = "") -> str | None:
+    """Separate a confirmed unavailable profile from an inaccessible check."""
+    if response.url.host not in _FACEBOOK_HOSTS:
+        return None
+    if response.url.path.lower().startswith(("/login", "/checkpoint", "/recover", "/error")):
+        return None
+    if response.status_code not in (200, 404, 410):
+        return None
+    metadata = _ProfileMetadata()
+    metadata.feed(response.text)
+    visible = " ".join(metadata.visible_text) + " " + body_text
+    if _CHALLENGE.search(visible):
+        return None
+    if _points_to_uid(str(response.url), uid) and (
+        _UNAVAILABLE.search(visible) or _UNAVAILABLE.search(metadata.meta.get("og:description", ""))
+    ):
+        return "die"
+    return "live" if profile_exists(uid, response) else None
+
+
+def _browser_snapshot(uid: str, driver) -> str | None:
+    from selenium.webdriver.common.by import By
+
+    response = httpx.Response(200, text=driver.page_source, request=httpx.Request("GET", driver.current_url))
+    return _classify_profile(uid, response, driver.find_element(By.TAG_NAME, "body").text)
+
+
+def _check_in_browser(uid: str, chrome: str, profile_dir: str) -> str | None:
+    from selenium import webdriver
+    from selenium.common.exceptions import TimeoutException
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    driver = None
     try:
-        result = subprocess.run(
-            [chrome, "--headless=new", "--no-sandbox", "--disable-gpu",
-             "--disable-gpu-sandbox", "--disable-gpu-compositing",
-             "--disable-software-rasterizer", "--disable-features=VizDisplayCompositor,UseSkiaRenderer",
-             "--no-first-run",
-             "--no-default-browser-check", "--disable-extensions", "--lang=vi-VN",
-             f"--user-data-dir={profile_dir}", "--dump-dom", url],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-            check=False,
-        )
-        if result.returncode != 0 or not result.stdout:
-            return "die"
-        response = httpx.Response(200, text=result.stdout, request=httpx.Request("GET", url))
-        return "live" if profile_exists(uid, response) else "die"
+        options = Options()
+        options.binary_location = chrome
+        for argument in ("--headless=new", "--disable-gpu", "--no-first-run",
+                         "--no-default-browser-check", "--disable-extensions", "--lang=vi-VN",
+                         f"--user-data-dir={profile_dir}"):
+            options.add_argument(argument)
+        driver = webdriver.Chrome(options=options)
+        driver.set_page_load_timeout(30)
+        driver.get(f"https://m.facebook.com/profile.php?id={uid}")
+        try:
+            return WebDriverWait(driver, 6).until(lambda current: _browser_snapshot(uid, current))
+        except TimeoutException:
+            return None
     except Exception:
-        return "die"
+        logger.debug("Browser profile check failed for UID %s", uid, exc_info=True)
+        return None
+    finally:
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                logger.debug("Could not close status browser for UID %s", uid, exc_info=True)
 
 
-def check_profile_status(uid: str) -> str:
-    """Open the public profile URL and classify it from the returned Facebook page."""
+def check_profile_status(uid: str) -> str | None:
+    """Graph picture, public HTTP profile, then isolated browser; None is inconclusive."""
     if not uid.isascii() or not uid.isdigit():
-        return "die"
+        return None
+    with httpx.Client(follow_redirects=True, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+    }) as client:
+        try:
+            picture = client.get(f"https://graph.facebook.com/{uid}/picture?type=normal", timeout=10)
+            host = picture.url.host or ""
+            if (picture.status_code == 200 and (host == "fbcdn.net" or host.endswith(".fbcdn.net"))
+                    and not host.startswith("static.") and "rsrc.php" not in picture.url.path.lower()
+                    and picture.headers.get("content-type", "").lower().startswith("image/")
+                    and picture.content):
+                return "live"
+        except httpx.HTTPError:
+            logger.debug("Graph picture check failed for UID %s", uid)
+        try:
+            response = client.get(f"https://m.facebook.com/profile.php?id={uid}", timeout=15)
+            status = _classify_profile(uid, response)
+            if status is not None:
+                return status
+        except httpx.HTTPError:
+            logger.debug("Public HTTP check failed for UID %s", uid)
     chrome = _find_chrome()
     if not chrome:
-        return "die"
+        return None
     try:
         from ..utils.paths import PROFILES_DIR
         profiles_dir = Path(PROFILES_DIR)
-        profiles_dir.mkdir(exist_ok=True)
+        profiles_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="fb-status-", dir=profiles_dir, ignore_cleanup_errors=True) as profile_dir:
             return _check_in_browser(uid, chrome, profile_dir)
     except Exception:
-        return "die"
+        logger.debug("Status profile setup failed for UID %s", uid, exc_info=True)
+        return None

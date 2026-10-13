@@ -78,11 +78,12 @@ export async function getAccounts() {
   }
 }
 
-export async function importAccounts(accounts, checkStatus = false) {
+export async function importAccounts(accounts, checkStatus = false, skipExisting = false) {
   try {
     return await api.post("/api/accounts/import", {
       accounts,
       check_status: checkStatus,
+      skip_existing: skipExisting,
     });
   } catch (error) {
     throw new Error(formatApiError(error));
@@ -105,17 +106,25 @@ export async function saveSingleAccount(account) {
   }
 }
 
-export async function deleteAccount(uid) {
+export async function getDeletePreview(uids) {
   try {
-    return await api.delete(`/api/accounts/${encodeURIComponent(uid)}`);
+    return await api.post("/api/accounts/delete-preview", { uids });
   } catch (error) {
     throw new Error(formatApiError(error));
   }
 }
 
-export async function bulkDeleteAccounts(uids) {
+export async function deleteAccount(uid, deletePages = false) {
   try {
-    return await api.post("/api/accounts/bulk-delete", { uids });
+    return await api.delete(`/api/accounts/${encodeURIComponent(uid)}`, { params: { delete_pages: deletePages } });
+  } catch (error) {
+    throw new Error(formatApiError(error));
+  }
+}
+
+export async function bulkDeleteAccounts(uids, deletePages = false) {
+  try {
+    return await api.post("/api/accounts/bulk-delete", { uids, delete_pages: deletePages });
   } catch (error) {
     throw new Error(formatApiError(error));
   }
@@ -151,4 +160,17 @@ export async function testProxy(proxy) {
   } catch (error) {
     throw new Error(formatApiError(error));
   }
+}
+
+export async function getAccountsPage(query = {}) {
+  try { return await api.get("/api/accounts/page", { params: { limit: 10, ...query } }); }
+  catch (error) { throw new Error(formatApiError(error)); }
+}
+export async function getAccountsStats() {
+  try { return await api.get("/api/accounts/stats"); }
+  catch (error) { throw new Error(formatApiError(error)); }
+}
+export async function checkExistingUids(uids) {
+  try { return (await api.post("/api/accounts/existing-uids", { uids })).uids; }
+  catch (error) { throw new Error(formatApiError(error)); }
 }

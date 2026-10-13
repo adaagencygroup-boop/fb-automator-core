@@ -58,14 +58,32 @@ OpenAPI của FastAPI mô tả request; các response chính:
 | GET /{uid} | owner qua query/header | Account chi tiết |
 | POST /single | uid và các trường account | success, uid |
 | POST /import | accounts, check_status=false, owner_username | imported, errors:[{uid,error}], checking |
-| POST /check-status | uids | statuses:{uid:live/die}, live, die |
-| DELETE /{uid} | owner qua query/header | deleted, profiles_deleted:[path] |
-| POST /bulk-delete | uids, owner_username | deleted, profiles_deleted:count, errors:[{uid,error}] |
+| POST /check-status | uids | statuses:{uid:live/die}, live, die, inconclusive |
+| POST /delete-preview | uids, owner_username | page_counts:{uid:count}, pages_total |
+| DELETE /{uid} | owner qua query/header, delete_pages=false qua query | deleted, profiles_deleted:[path], pages_deleted, pages_unlinked |
+| POST /bulk-delete | uids, owner_username, delete_pages=false | deleted, deleted_uids, profiles_deleted:count, pages_deleted, pages_unlinked, errors:[{uid,error}] |
 | POST /test-proxy | proxy | success, host, port, has_auth, egress_ip, message |
 | POST /login | uids, threads=3, owner_username | started, count |
 | POST /open-browser | uid, owner_username | started, uid |
 | POST /{uid}/sync-cookies | owner qua query/header | success, uid, source hoặc message |
 | GET /stream | owner qua query/header | text/event-stream |
+
+### Xóa tài khoản và Fanpage
+
+Nút xóa mở hộp thoại và gọi delete-preview để kiểm tra Fanpage liên quan. Khi có
+Fanpage, người dùng chọn chỉ xóa tài khoản hoặc xóa cả tài khoản và Fanpage;
+không có Fanpage thì chỉ hiện một nút xóa. Hủy hộp thoại không thay đổi dữ liệu.
+
+Mặc định giữ bản ghi Fanpage và đặt pages.account_uid = NULL. delete_pages=true
+xóa các bản ghi Fanpage liên quan trong phần mềm, không xóa Fanpage trên Facebook.
+Thay đổi Fanpage và tài khoản dùng cùng transaction; giữ lịch sử, nhật ký và video.
+Nếu UID có Fanpage đồng thời thuộc tài khoản của người dùng khác, từ chối xóa
+vì bảng pages chưa phân biệt được chủ sở hữu. Không import kết nối DB của host.
+
+Profile đang chạy hoặc không thể dọn sẽ chặn xóa dữ liệu DB. Nếu DB lỗi sau khi
+profile đã được dọn, dữ liệu DB rollback nhưng không khôi phục được profile.
+Xóa hàng loạt tiếp tục khi một UID thất bại; deleted_uids chỉ gồm các UID xử lý
+thành công để giao diện giữ chọn những tài khoản lỗi và báo đúng kết quả.
 
 Account gồm uid, owner_username, password, two_fa, cookie, token, email, pass_mail,
 mail_recovery, token_hotmail, client_id, proxy, profile_name, login_status, status,
@@ -81,13 +99,18 @@ Login nhận 1–10 luồng, executor chung tối đa 10. Profile đang bận tr
 xóa profile lỗi giữ bản ghi DB. Có thể xóa profile mồ côi trong root đúng owner.
 
 Status API: live/die/null; login_status: logged_in/not_logged_in/failed.
-Thời gian đăng nhập trả ISO 8601 UTC. Check Live/Die giữ heuristic nguồn, bao gồm
-trả die khi Chrome không chạy được; đây không phải xác nhận tài khoản đã bị khóa.
+Thời gian đăng nhập trả ISO 8601 UTC. Check Live/Die chạy Graph ảnh đại diện → HTTP
+profile công khai → Selenium Chrome headless khi chưa kết luận được. Không dùng cookie,
+token, proxy hay profile đăng nhập của tài khoản; browser dùng profile tạm và được đóng sau check.
+Ảnh hợp lệ qua Facebook CDN hoặc bằng chứng profile đúng UID xác nhận live; thông báo
+profile không khả dụng xác nhận die. Lỗi mạng, trang đăng nhập/checkpoint hoặc Chrome lỗi
+không kết luận die: giữ trạng thái và thời điểm check cũ, UID mới vẫn có status=null.
+statuses chỉ chứa kết quả xác định; inconclusive đếm UID chưa kết luận được.
 Cookie sync giữ fallback nguồn: tìm dấu c_user trong DB profile, không giải mã cookie Chrome.
 Proxy giữ hành vi nguồn: lỗi proxy có thể fallback kết nối trực tiếp và phát warning.
 
 SSE gửi connected/heartbeat và log {time,level,message,uid}. Sau commit check trạng thái:
-{event: account_statuses_updated, statuses: {...}}. Hoàn thành login phát
+{event: account_statuses_updated, statuses: {...}, live, die, inconclusive}. Hoàn thành login phát
 account_login_finished. Mỗi subscriber có queue riêng (1000 event; đầy thì bỏ event cũ nhất).
 Client reconnect lấy lại danh sách account; không có replay lịch sử SSE.
 

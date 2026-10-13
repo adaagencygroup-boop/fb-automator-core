@@ -336,18 +336,20 @@ def create_driver(
                 res = test_proxy_connectivity(proxy_info, timeout=6)
                 egress_ip = res.get("egress_ip", "")
 
-                # 2. Xử lý Proxy có xác thực qua Local Proxy Bridge
-                if proxy_info["has_auth"]:
+                # 2. Xử lý Proxy qua Local Proxy Bridge nếu có auth hoặc là SOCKS5
+                proto = proxy_info.get("protocol", "http")
+                if proxy_info["has_auth"] or proto == "socks5":
                     bridge = ProxyBridge(
                         upstream_host=proxy_info["host"],
                         upstream_port=proxy_info["port"],
                         username=proxy_info["username"],
                         password=proxy_info["password"],
+                        protocol=proto,
                     )
                     bridge_port = bridge.start()
                     register_active_bridge(uid, bridge)
                     options.add_argument(f"--proxy-server=http://127.0.0.1:{bridge_port}")
-                    logger.info(f"[{uid}] Authenticated Proxy routed through Local Bridge: 127.0.0.1:{bridge_port}")
+                    logger.info(f"[{uid}] Proxy ({proto.upper()}) routed through Local Bridge: 127.0.0.1:{bridge_port}")
                 else:
                     proxy_server = proxy_info["server"]
                     options.add_argument(f"--proxy-server={proxy_server}")
@@ -356,7 +358,7 @@ def create_driver(
                 proxy_applied = True
                 try:
                     from ..services.events import broadcast
-                    broadcast("info", f"🌐 [{uid}] Sử dụng Proxy: {proxy_info['host']}:{proxy_info['port']} (Egress IP: {egress_ip or 'OK'})", uid=uid)
+                    broadcast("info", f"🌐 [{uid}] Sử dụng Proxy ({proto.upper()}): {proxy_info['host']}:{proxy_info['port']} (Egress IP: {egress_ip or 'OK'})", uid=uid)
                 except Exception:
                     pass
         except Exception as proxy_err:
