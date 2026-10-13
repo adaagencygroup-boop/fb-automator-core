@@ -1,8 +1,14 @@
 # Database module auth
 
-Phạm vi hiện tại: chuyển schema auth của `project_auto_create_page_facebook`
-sang Supabase PostgreSQL, tổ chức riêng trong `modules/module_auth` theo yêu
-cầu. Chưa viết API, giao diện, initializer Python hoặc sửa source hiện có.
+Schema và API auth của `project_auto_create_page_facebook` được chuyển sang
+Supabase PostgreSQL và FastAPI, tổ chức riêng trong `modules/module_auth`.
+Giao diện đăng nhập/đăng ký dùng Next.js JSX trong
+`frontend/src/modules/module_auth`; `schema.py` khởi tạo bảng qua engine.
+
+Đăng ký kiểm tra quy tắc mật khẩu 8–12 ký tự gồm chữ hoa/thường, số và ký tự
+đặc biệt, tạo user/pending và thông báo admin trong cùng transaction. Sau
+commit, `notification_events.py` phát sự kiện đăng ký cho SSE admin. Các
+API quản trị/đổi mật khẩu đang giữ validator riêng hiện có.
 
 ## File và bảng
 

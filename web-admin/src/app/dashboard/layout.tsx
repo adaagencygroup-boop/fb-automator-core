@@ -109,7 +109,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     const VPS_BASE = getVpsBase();
     let es: EventSource | null = null;
     try {
-      es = new EventSource(`${VPS_BASE}/api/v1/admin/notifications/stream`);
+      es = new EventSource(`${VPS_BASE}/api/v1/admin/notifications/stream`, { withCredentials: true });
       es.onmessage = (event) => {
         try {
           if (sessionStorage.getItem("pending_logout_modal")) return;

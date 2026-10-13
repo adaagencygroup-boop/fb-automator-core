@@ -16,6 +16,9 @@ def initialize(database_url=None):
         raise RuntimeError("Module tài khoản chỉ dùng PostgreSQL production. Không dùng SQLite local.")
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
+    # Use the driver declared in requirements, independent of SQLAlchemy defaults.
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
     kwargs = {"pool_pre_ping": True}
     candidate = create_engine(url, **kwargs)
     try:
