@@ -32,7 +32,7 @@ class DatabaseManager:
         try:
             self._pg_pool = pool.ThreadedConnectionPool(
                 minconn=1,
-                maxconn=20,
+                maxconn=5,
                 dsn=DATABASE_URL
             )
             self._is_postgres = True

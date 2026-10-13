@@ -91,6 +91,9 @@ async def lifespan(app: FastAPI):
         ensure_admin()
     with startup_step("Module 02 account manager"):
         initialize_accounts()
+    with startup_step("Module 04 created pages"):
+        from modules.module_04_page_creator.database import ensure_schema as ensure_creator_schema
+        ensure_creator_schema()
     with startup_step("Module 05 page manager"):
         from modules.module_05_page_manager.models import init_models as init_page_models
         init_page_models()
@@ -262,6 +265,9 @@ def get_dashboard_stats():
 # ==================== MODULE 2: ACCOUNT MANAGER ====================
 app.include_router(account_router)
 app.include_router(account_alias_router)
+
+from modules.module_04_page_creator.routes import router as creator_router
+app.include_router(creator_router)
 
 # ==================== MODULE 5: PAGE MANAGER & POSTING ====================
 @app.get("/api/pages")

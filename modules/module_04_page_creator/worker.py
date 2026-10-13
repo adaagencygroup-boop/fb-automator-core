@@ -1,7 +1,6 @@
 """
-Worker Tạo Fanpage Facebook Hàng Loạt
-Phụ trách: Minh
-Tạo page, lấy Page Access Token vĩnh viễn và đồng bộ ngay vào CSDL bảng pages của Module 5
+Stub Graph API cũ. Luồng tạo page đang chạy là Selenium trong routes.py
+(POST /api/creator/tasks/start). Không gọi class này.
 """
 import time
 import requests
@@ -17,6 +16,7 @@ class PageCreatorWorker(BaseWorker):
         self.category = category
 
     def run(self):
+        raise RuntimeError("Tạo page chạy qua POST /api/creator/tasks/start")
         total_names = len(self.page_names)
         self.log_info(f"Bắt đầu chu trình tạo {total_names} Fanpage hàng loạt...")
 

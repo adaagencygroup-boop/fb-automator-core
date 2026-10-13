@@ -87,7 +87,7 @@ export const NAV_ITEMS = [
       {
         id: "creator.create",
         label: "Tạo Fanpage",
-        description: "Tạo Fanpage hàng loạt từ danh sách tài khoản.",
+        description: "Tự động tạo và thiết lập nhiều Fanpage theo dữ liệu và cấu hình đã chuẩn bị.",
         moduleId: "creator",
         icon: icon("icon_nav_post_facebook", 14, 14), // Figma dùng chung icon với "Đăng bài viết Facebook"
       },
