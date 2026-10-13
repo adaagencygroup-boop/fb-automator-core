@@ -1,0 +1,172 @@
+"use client";
+
+import { cn } from "@/lib/utils";
+import NotificationList from "./NotificationList";
+import StatusFilter from "./StatusFilter";
+
+// Figma: Section - COLUMN 3: CONVERSATION LIST (HỘI THOẠI & THÔNG BÁO) (1072:12294)
+
+const FOCUS = "outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-500";
+
+
+const formatTime = (iso) =>
+  new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
+
+/** "KH: 29224347..." — rút gọn mã khách hàng như Figma */
+const shortCustomer = (id) => (String(id).length > 8 ? `${String(id).slice(0, 8)}...` : id);
+
+function Tabs({ tab, onTabChange, notificationCount }) {
+  const tabs = [
+    { id: "conversations", label: "Hội thoại" },
+    { id: "notifications", label: `Thông báo (${notificationCount})`, dot: notificationCount > 0 },
+  ];
+  return (
+    <div role="tablist" aria-label="Hội thoại và thông báo" className="flex border-b border-slate-200 shrink-0">
+      {tabs.map((t) => {
+        const active = tab === t.id;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onTabChange(t.id)}
+            className={cn(
+              "flex-1 flex items-center justify-center gap-1.5 pt-3 pb-3.5 -mb-px border-b-2 text-xs leading-4 font-bold uppercase transition-colors",
+              active ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 hover:text-slate-700",
+              FOCUS,
+            )}
+          >
+            {t.label}
+            {t.dot && !active && <span className="size-2 rounded-full bg-red-500" aria-hidden="true" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FilterBar({ filter, onFilterChange, sort, onSortChange }) {
+  return (
+    <StatusFilter filter={filter} onFilterChange={onFilterChange} label="Lọc hội thoại">
+      <button
+        type="button"
+        onClick={() => onSortChange(sort === "newest" ? "oldest" : "newest")}
+        className={cn("shrink-0 flex items-center gap-1 rounded px-1 text-[11px] leading-4 text-slate-600 hover:text-slate-900", FOCUS)}
+        title="Đổi thứ tự sắp xếp"
+      >
+        {sort === "newest" ? "Mới nhất" : "Cũ nhất"}
+        <img
+          src="/icons/icon_sort_chevron.svg"
+          alt=""
+          width={7.875}
+          height={4.5}
+          className={cn("block transition-transform", sort === "oldest" && "rotate-180")}
+        />
+      </button>
+    </StatusFilter>
+  );
+}
+
+function ConversationItem({ conversation, pageName, active, first, onSelect }) {
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-current={active ? "true" : undefined}
+        className={cn(
+          "w-full flex flex-col gap-1 px-3 text-left transition-colors",
+          first ? "py-3" : "pt-[13px] pb-3 border-t border-slate-100",
+          active ? "bg-blue-50/30" : "hover:bg-slate-50",
+          FOCUS,
+        )}
+      >
+        <span className="w-full flex items-center justify-between">
+          <span className="flex items-center gap-1.5 min-w-0">
+            <img src="/icons/icon_facebook_source.svg" alt="Facebook" width={11.625} height={11.5547} className="block shrink-0" />
+            <span className="truncate text-xs leading-4 font-bold text-slate-900">
+              KH: {shortCustomer(conversation.customer)}
+            </span>
+          </span>
+          <time dateTime={conversation.updatedAt} className="shrink-0 text-[10px] leading-5 text-slate-400">
+            {formatTime(conversation.updatedAt)}
+          </time>
+        </span>
+        <span className="w-full truncate text-xs leading-4 text-slate-600">
+          {conversation.lastMessage}
+        </span>
+        {pageName && (
+          <span className="pt-0.5">
+            <span className="inline-flex px-[9px] py-[3px] rounded border border-blue-100 bg-blue-50 text-[10px] leading-5 text-blue-600">
+              {pageName}
+            </span>
+          </span>
+        )}
+      </button>
+    </li>
+  );
+}
+
+export default function ConversationList({
+  tab,
+  onTabChange,
+  filter,
+  onFilterChange,
+  sort,
+  onSortChange,
+  conversations,
+  notifications,
+  pagesById,
+  activeConversationId,
+  onSelectConversation,
+  notificationType,
+  onNotificationTypeChange,
+  notificationFilter,
+  onNotificationFilterChange,
+  onOpenNotification,
+  className,
+}) {
+  return (
+    <section
+      aria-label="Hội thoại và thông báo"
+      className={cn(
+        "flex-1 min-w-0 h-full flex flex-col bg-white border border-slate-200 rounded-xl drop-shadow-[0px_1px_1px_rgba(0,0,0,0.05)] overflow-hidden",
+        className,
+      )}
+    >
+      <Tabs tab={tab} onTabChange={onTabChange} notificationCount={notifications.filter((n) => n.unread).length} />
+
+      {tab === "conversations" ? (
+        <>
+          <FilterBar filter={filter} onFilterChange={onFilterChange} sort={sort} onSortChange={onSortChange} />
+          <ul className="flex-1 min-h-0 overflow-y-auto">
+            {conversations.length === 0 && (
+              <li className="px-3 py-10 text-center text-xs text-slate-400">Không có hội thoại nào.</li>
+            )}
+            {conversations.map((c, i) => (
+              <ConversationItem
+                key={c.id}
+                conversation={c}
+                pageName={pagesById[c.pageId]?.name}
+                active={c.id === activeConversationId}
+                first={i === 0}
+                onSelect={() => onSelectConversation(c.id)}
+              />
+            ))}
+          </ul>
+        </>
+      ) : (
+        <NotificationList
+          notifications={notifications}
+          pagesById={pagesById}
+          type={notificationType}
+          onTypeChange={onNotificationTypeChange}
+          filter={notificationFilter}
+          onFilterChange={onNotificationFilterChange}
+          onOpenNotification={onOpenNotification}
+        />
+      )}
+    </section>
+  );
+}

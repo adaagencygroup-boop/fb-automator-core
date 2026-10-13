@@ -1,0 +1,262 @@
+/* ApprovalModal.css — Figma Spec for Admin Approve User Modal */
+
+.apm-backdrop {
+  @apply fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[999] p-4 overflow-y-auto;
+}
+
+/* MODAL CONTAINER */
+.apm-modal {
+  @apply relative w-[970px] max-w-[970px] h-[640px] max-h-[95vh] bg-white border border-slate-200 rounded-[20px] shadow-2xl overflow-hidden flex flex-col box-border;
+  box-shadow: 0px 25px 50px -12px rgba(0, 0, 0, 0.25);
+  animation: apm-fade-scale 0.15s ease-out;
+}
+
+@keyframes apm-fade-scale {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.apm-close-btn {
+  @apply absolute top-5 right-5 text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors z-20 cursor-pointer border-none bg-transparent;
+}
+
+/* MAIN GRID LAYOUT */
+.apm-body-grid {
+  @apply grid grid-cols-2 gap-5 p-6 w-full h-full box-border overflow-y-auto;
+}
+
+/* LEFT COLUMN: USER DETAILS */
+.apm-left-card {
+  @apply bg-white border border-slate-200 rounded-2xl p-6 flex flex-col justify-between box-border shadow-sm;
+}
+
+.apm-user-header {
+  @apply flex items-center justify-between pb-4 border-b border-slate-100;
+}
+
+.apm-user-profile {
+  @apply flex items-center gap-3.5;
+}
+
+.apm-avatar-wrap {
+  @apply relative w-14 h-14 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center flex-shrink-0;
+}
+
+.apm-status-dot-bottom {
+  @apply absolute bottom-0 right-0 w-3.5 h-3.5 bg-blue-600 border-2 border-white rounded-full;
+}
+
+.apm-user-info {
+  @apply flex flex-col gap-0.5;
+}
+
+.apm-username {
+  @apply font-bold text-xl text-slate-900 leading-tight m-0;
+}
+
+.apm-uid {
+  @apply font-mono text-xs text-slate-400 m-0;
+}
+
+.apm-status-badge {
+  @apply bg-amber-50 border border-amber-200 text-amber-700 rounded-full px-3 py-1 text-xs font-semibold flex items-center gap-1.5;
+}
+
+.apm-status-dot {
+  @apply w-2 h-2 rounded-full bg-amber-500;
+}
+
+/* LEFT DETAILS LIST */
+.apm-details-list {
+  @apply flex flex-col gap-3 my-4;
+}
+
+.apm-detail-item {
+  @apply bg-slate-50/70 rounded-xl p-3.5 flex items-center justify-between;
+}
+
+.apm-detail-left {
+  @apply flex items-center gap-2.5 text-xs text-slate-600 font-medium;
+}
+
+.apm-detail-icon {
+  @apply text-slate-400 w-4 h-4;
+}
+
+.apm-detail-val-badge {
+  @apply bg-slate-200/60 text-slate-800 font-mono text-xs font-semibold px-2.5 py-1 rounded-lg;
+}
+
+.apm-detail-val-text {
+  @apply text-right text-xs font-semibold text-slate-800 leading-tight;
+}
+
+.apm-detail-subtext {
+  @apply text-right text-[11px] text-slate-400 font-normal;
+}
+
+.apm-hwid-badge {
+  @apply bg-blue-50 text-blue-600 border border-blue-100 font-mono text-xs font-semibold px-2.5 py-1 rounded-lg flex items-center gap-1.5;
+}
+
+.apm-copy-btn {
+  @apply text-slate-400 hover:text-slate-600 cursor-pointer p-0.5 transition-colors border-none bg-transparent;
+}
+
+.apm-left-footer {
+  @apply pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400;
+}
+
+.apm-ip-dot {
+  width: 6px;
+  height: 6px;
+  background: #10B981;
+  border-radius: 9999px;
+  display: inline-block;
+  flex: none;
+}
+
+/* RIGHT COLUMN: LICENSE ALLOCATION */
+.apm-right-card {
+  @apply bg-[#F4F8FE] border border-blue-100 rounded-2xl p-6 flex flex-col justify-between box-border;
+}
+
+.apm-right-header {
+  @apply flex items-center justify-between mb-3;
+}
+
+.apm-right-title-wrap {
+  @apply flex items-center gap-3;
+}
+
+.apm-key-icon-box {
+  @apply w-10 h-10 rounded-xl bg-blue-100/70 border border-blue-200 flex items-center justify-center flex-shrink-0;
+}
+
+.apm-right-title {
+  @apply font-bold text-lg text-slate-900 m-0;
+}
+
+.apm-tier-badge {
+  @apply bg-blue-50 border border-blue-200 text-blue-600 font-bold text-[10px] tracking-wider rounded-md px-2 py-1 uppercase;
+}
+
+/* DURATION RADIOS */
+.apm-section-label {
+  @apply font-semibold text-xs text-slate-700 mb-2 block;
+}
+
+.apm-durations-stack {
+  @apply flex flex-col gap-2.5 mb-3;
+}
+
+.apm-duration-radio-card {
+  @apply box-border flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all border;
+}
+
+.apm-duration-radio-card--active {
+  @apply bg-blue-50/80 border-2 border-blue-600;
+}
+
+.apm-duration-radio-card--inactive {
+  @apply bg-white border-slate-200 hover:border-slate-300;
+}
+
+.apm-radio-circle-active {
+  @apply w-4 h-4 rounded-full border-4 border-blue-600 bg-white flex-shrink-0;
+}
+
+.apm-radio-circle-inactive {
+  @apply w-4 h-4 rounded-full border border-slate-300 bg-slate-100 flex-shrink-0;
+}
+
+.apm-duration-card-left {
+  @apply flex items-center gap-3;
+}
+
+.apm-duration-card-title {
+  @apply font-bold text-xs text-slate-800;
+}
+
+.apm-badge-recommend {
+  @apply bg-blue-100 text-blue-700 text-[11px] font-semibold px-2.5 py-0.5 rounded-lg;
+}
+
+.apm-badge-quarter {
+  @apply text-[11px] text-slate-400 font-medium;
+}
+
+.apm-badge-save {
+  @apply bg-emerald-50 text-emerald-600 border border-emerald-200 text-[11px] font-semibold px-2.5 py-0.5 rounded-lg;
+}
+
+/* INPUT TIME */
+.apm-input-time-wrap {
+  @apply relative w-full mb-3;
+}
+
+.apm-input-time {
+  @apply w-full border border-slate-200 rounded-xl px-4 py-2.5 bg-white text-xs text-slate-800 placeholder:text-slate-400 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 transition-all;
+}
+
+.apm-input-time-suffix {
+  @apply absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-medium text-slate-600 pointer-events-none;
+}
+
+/* EXPR DATE */
+.apm-exp-header {
+  @apply flex items-center justify-between mb-1.5;
+}
+
+.apm-exp-auto {
+  @apply font-semibold text-xs text-blue-600;
+}
+
+.apm-exp-input-wrap {
+  @apply relative w-full mb-4 cursor-pointer;
+}
+
+.apm-exp-input-wrap:hover .apm-exp-input {
+  @apply border-blue-400 ring-2 ring-blue-500/10;
+}
+
+.apm-exp-input-wrap:hover .apm-exp-icon {
+  @apply text-blue-600 scale-110;
+}
+
+.apm-exp-input {
+  @apply w-full border border-slate-200 rounded-xl px-4 py-2.5 bg-white text-xs font-mono text-slate-800 outline-none pr-10 transition-all;
+}
+
+.apm-exp-icon {
+  @apply absolute right-3.5 top-1/2 -translate-y-1/2 text-[#475569] pointer-events-none transition-all;
+  width: 13.5px;
+  height: 15px;
+}
+
+.apm-error {
+  @apply w-full p-2.5 mb-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-xs box-border;
+}
+
+/* ACTIONS GRID */
+.apm-actions-grid {
+  @apply grid grid-cols-2 gap-3 mt-auto pt-2;
+}
+
+.apm-approve-btn {
+  @apply w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm shadow-md shadow-blue-500/25 flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 border-none cursor-pointer;
+}
+
+.apm-reject-btn {
+  @apply w-full py-3 rounded-xl bg-red-50 hover:bg-red-100 border border-red-200 text-red-600 font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 cursor-pointer;
+}
+
+.apm-cancel-btn {
+  @apply w-full py-3 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 cursor-pointer;
+}

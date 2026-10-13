@@ -6,16 +6,18 @@ Chạy ngầm tại cổng 28129 cho ứng dụng Tauri Desktop
 """
 import sys
 import os
+import json
 import argparse
 import asyncio
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
+from core.startup import startup_step
 from config.settings import settings
 from config.constants import AccountStatus, LogLevel
 from core.database.models import init_database
@@ -25,6 +27,24 @@ from core.ai.gemini_engine import ai_engine
 from core.media.tiktok_scraper import tiktok_scraper
 from core.media.youtube_scraper import youtube_scraper
 from core.network.proxy_manager import proxy_manager
+from modules.module_02_account_manager.api.router import router as account_router, alias_router as account_alias_router
+from modules.module_02_account_manager import initialize as initialize_accounts, shutdown as shutdown_accounts
+from modules import load_backend_modules
+from modules.module_auth.schema import init_auth_tables
+from modules.module_auth.service import ensure_admin
+from modules.module_auth.router import auth_router, admin_router, assert_module_access
+
+# Module 03 - Tab 1 (Tương tác tài khoản): lỗi import của module không được làm sập cả engine
+try:
+    from modules.module_03_acc_farm.routes import (
+        router as farm_router,
+        on_startup as farm_on_startup,
+        on_shutdown as farm_on_shutdown,
+    )
+    from modules.module_03_acc_farm._temp.routes import router as farm_accounts_router
+except Exception as _farm_import_error:
+    farm_router = farm_accounts_router = farm_on_startup = farm_on_shutdown = None
+    print(f"[Local Engine] Module 03 (Farm) not loaded: {_farm_import_error}")
 
 # Reconfigure stdout for safe Windows console output
 if hasattr(sys.stdout, "reconfigure"):
@@ -64,10 +84,33 @@ ws_manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Khởi tạo CSDL SQLite khi Engine bật
-    init_database()
-    print("[Local Engine] Database connection initialized.")
-    yield
+    with startup_step("Core database and module schemas"):
+        init_database()
+    with startup_step("Authentication schema"):
+        init_auth_tables()
+    with startup_step("Admin account"):
+        ensure_admin()
+    with startup_step("Module 02 account manager"):
+        initialize_accounts()
+    with startup_step("Module 05 page manager"):
+        from modules.module_05_page_manager.models import init_models as init_page_models
+        init_page_models()
+    with startup_step("Backend module imports"):
+        loaded = load_backend_modules()
+    print(f"[Local Engine] PostgreSQL production ready. Loaded {len(loaded)} backend modules.")
+    if farm_on_startup:
+        try:
+            with startup_step("Module 03 farm runtime"):
+                await farm_on_startup(ws_manager)
+        except Exception as e:
+            print(f"[Local Engine] Module 03 (Farm) startup error: {e}")
+    print("[Startup] Backend ready", flush=True)
+    try:
+        yield
+    finally:
+        await shutdown_accounts()
+        if farm_on_shutdown:
+            await farm_on_shutdown()
     print("[Local Engine] Shutting down cleanly...")
 
 app = FastAPI(
@@ -76,14 +119,73 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+app.include_router(auth_router)
+app.include_router(admin_router)
+
+_PUBLIC_API = {
+    "/api/health",
+    "/api/shutdown",
+    "/api/v1/auth/hwid",
+    "/api/v1/auth/register",
+    "/api/v1/auth/verify-license",
+    "/api/v1/auth/me",
+    "/api/v1/admin/login",
+}
+
+
+class LicenseMiddleware:
+    """ASGI thuần. Middleware HTTP của Starlette nuốt stream SSE và làm treo các request sau."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path") or ""
+        method = scope.get("method") or ""
+        if method != "OPTIONS" and path.startswith("/api/") and path not in _PUBLIC_API and not path.startswith("/api/v1/"):
+            headers = {key.decode("latin1").lower(): value.decode("latin1") for key, value in scope.get("headers") or []}
+            auth = headers.get("authorization")
+            if not auth:
+                for part in headers.get("cookie", "").split(";"):
+                    name, _, value = part.strip().partition("=")
+                    if name == "fb_access" and value:
+                        auth = f"Bearer {value}"
+                        break
+            try:
+                assert_module_access(auth)
+            except HTTPException as exc:
+                body = json.dumps({"detail": exc.detail}).encode()
+                await send({
+                    "type": "http.response.start",
+                    "status": exc.status_code,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"content-length", str(len(body)).encode()),
+                    ],
+                })
+                await send({"type": "http.response.body", "body": body})
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(LicenseMiddleware)
+
+
 # Cho phép Web UI (localhost:3000, tauri://localhost) gọi API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+if farm_router:
+    app.include_router(farm_router)
+    app.include_router(farm_accounts_router)
 
 # ==================== SYSTEM & HEALTH CHECK ====================
 @app.get("/api/health")
@@ -94,6 +196,12 @@ def health_check():
         "version": "2.0.0",
         "port": 28129
     }
+
+
+@app.get("/api/modules")
+def list_modules():
+    from modules import MODULE_REGISTRY
+    return {"count": len(MODULE_REGISTRY), "modules": MODULE_REGISTRY}
 
 @app.post("/api/shutdown")
 def shutdown_engine():
@@ -154,47 +262,8 @@ def get_dashboard_stats():
         }
 
 # ==================== MODULE 2: ACCOUNT MANAGER ====================
-class ImportAccountsRequest(BaseModel):
-    raw_data: str
-
-@app.get("/api/accounts")
-def get_accounts():
-    try:
-        rows = db.fetch_all("SELECT * FROM accounts ORDER BY id DESC")
-    except Exception:
-        rows = []
-    return {"accounts": rows}
-
-@app.post("/api/accounts/import")
-async def import_accounts(req: ImportAccountsRequest):
-    lines = [line.strip() for line in req.raw_data.split("\n") if line.strip()]
-    count = 0
-    for line in lines:
-        parts = [p.strip() for p in line.split("|")]
-        if not parts or not parts[0]:
-            continue
-        uid = parts[0]
-        pwd = parts[1] if len(parts) > 1 else ""
-        fa2 = parts[2] if len(parts) > 2 else ""
-        cookie = parts[3] if len(parts) > 3 else ""
-        token = parts[4] if len(parts) > 4 else ""
-        mail = parts[5] if len(parts) > 5 else ""
-        mail_pass = parts[6] if len(parts) > 6 else ""
-        proxy = parts[7] if len(parts) > 7 else ""
-
-        try:
-            db.execute(
-                """INSERT OR REPLACE INTO accounts 
-                (uid, password, fa2, cookie, token, mail, mail_pass, proxy, status) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'NEW')""",
-                (uid, pwd, fa2, cookie, token, mail, mail_pass, proxy)
-            )
-            count += 1
-        except Exception:
-            pass
-
-    await ws_manager.broadcast_log("AccountManager", "SUCCESS", f"Đã nhập {count} tài khoản vào hệ thống.")
-    return {"success": True, "imported_count": count}
+app.include_router(account_router)
+app.include_router(account_alias_router)
 
 # ==================== MODULE 5: PAGE MANAGER & POSTING ====================
 @app.get("/api/pages")

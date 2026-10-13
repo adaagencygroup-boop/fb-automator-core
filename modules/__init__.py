@@ -51,4 +51,15 @@ MODULE_REGISTRY = [
     },
 ]
 
-__all__ = ["MODULE_REGISTRY"]
+__all__ = ["MODULE_REGISTRY", "load_backend_modules"]
+
+
+def load_backend_modules():
+    """Import từng package module để engine không chạy khi thiếu backend."""
+    import importlib
+
+    loaded = []
+    for item in MODULE_REGISTRY:
+        importlib.import_module(f"modules.{item['id']}")
+        loaded.append(item["id"])
+    return loaded
