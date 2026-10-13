@@ -12,13 +12,13 @@ from ..database.connection import get_db
 
 class TestProxyValidation(unittest.TestCase):
     def test_supported_formats_and_empty(self):
-        for value in (None, "", " ", "host:1", "host:65535:user:pass", "user:pass@host:8080", "http://host:80", "https://host:443"):
+        for value in (None, "", " ", "host:1", "host:65535:user:pass", "user:pass@host:8080", "http://host:80", "https://host:443", "socks5://host:8080"):
             with self.subTest(value=value):
                 self.assertEqual(AccountInput(uid="123", proxy=value).proxy, value.strip() if value is not None else None)
 
     def test_invalid_proxy_for_both_inputs(self):
         for model in (AccountInput, SingleAccountInput):
-            for value in ("8b4ba9dd-3ea5-4e5f-86f1-ddba2230dcf2", "host:0", "host:65536", "host:abc", "socks5://host:8080"):
+            for value in ("8b4ba9dd-3ea5-4e5f-86f1-ddba2230dcf2", "host:0", "host:65536", "host:abc", "socks4://host:8080"):
                 with self.subTest(model=model, value=value), self.assertRaises(ValidationError):
                     model(uid="123", proxy=value)
 

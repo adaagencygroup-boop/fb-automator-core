@@ -34,7 +34,7 @@ DDL_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS seeding_campaigns (
         id SERIAL PRIMARY KEY,
         campaign_type VARCHAR(20) NOT NULL, -- 'PAGE', 'PROFILE', 'POST'
-        actions VARCHAR(100) NOT NULL
+        actions VARCHAR(100) NOT NULL,
         reactions VARCHAR(100), -- 'LIKE,LOVE,CARE,HAHA,WOW,SAD,ANGRY' (chỉ cho POST)
         account_count INT NOT NULL,
         delay_seconds_min INT DEFAULT 30, -- Thời gian nghỉ giữa 2 lần tương tác (giây)
