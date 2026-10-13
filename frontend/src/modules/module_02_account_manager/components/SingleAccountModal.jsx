@@ -144,6 +144,7 @@ export default function SingleAccountModal({
     try {
       await saveSingleAccount({
         uid: trimmedUid,
+        create_only: !editUid,
         ...(editUid ? { original_uid: editUid } : {}),
         password: trimmedPassword,
         two_fa: twoFa.trim(),

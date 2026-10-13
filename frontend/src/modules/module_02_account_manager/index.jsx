@@ -1,15 +1,16 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  getAccounts,
   importAccounts,
   deleteAccount,
   bulkDeleteAccounts,
+  getDeletePreview,
   checkAccountStatuses,
   loginAccounts,
   openLiveBrowser,
 } from "./service";
+import { useAccountPages } from "./hooks/useAccountPages";
 import { useLocalSSE } from "./hooks/useLocalSSE";
 import AccountTable from "./components/AccountTable";
 import DynamicImportModal from "./components/DynamicImportModal";
@@ -21,6 +22,7 @@ import {
   AlertTriangle,
   ChevronDown,
   Gauge,
+  Loader2,
   Maximize2,
   Minimize2,
   ShieldCheck,
@@ -82,9 +84,6 @@ export default function AccountManagerModule() {
     return false;
   });
 
-  const [accounts, setAccounts] = useState([]);
-  const [isInitialLoading, setIsInitialLoading] = useState(true);
-  const [loadError, setLoadError] = useState(null);
   const [selectedUids, setSelectedUids] = useState([]);
   const [isDynamicImportOpen, setIsDynamicImportOpen] = useState(false);
   const [isSingleModalOpen, setIsSingleModalOpen] = useState(false);
@@ -97,21 +96,24 @@ export default function AccountManagerModule() {
   const [expandedLog, setExpandedLog] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deletePreview, setDeletePreview] = useState({ loading: false, pagesTotal: 0, error: null });
+  const [deletingPages, setDeletingPages] = useState(false);
+  const deletingRef = useRef(false);
 
   const { logs, connected, clearLogs } = useLocalSSE();
   const logListRef = useRef(null);
   const shouldAutoScrollRef = useRef(true);
-  const accountsRequestRef = useRef(0);
-  const mountedRef = useRef(false);
-  const hasLoadedRef = useRef(false);
-
+  const tableRef = useRef(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [search, setSearch] = useState("");
+  const [accountFilter, setAccountFilter] = useState("all");
+  const [loginFilter, setLoginFilter] = useState("all");
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      accountsRequestRef.current += 1;
-    };
-  }, []);
+    const timer = setTimeout(() => setSearch(searchTerm.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+  const query = useMemo(() => ({ search, status: accountFilter, login_status: loginFilter }), [search, accountFilter, loginFilter]);
+  const { accounts, setAccounts, stats, total, has_more: hasMore, isInitialLoading, isLoadingMore, loadError, moreError, fetchAccounts, loadMore, retryMore } = useAccountPages(query, !isExpired, tableRef, setSelectedUids);
 
   useEffect(() => {
     if (shouldAutoScrollRef.current && logListRef.current) {
@@ -126,28 +128,6 @@ export default function AccountManagerModule() {
       : selectedUids.length > 0
       ? Math.min(selectedUids.length, 10)
       : 3;
-
-  const fetchAccounts = useCallback(async () => {
-    if (!mountedRef.current) return;
-    const requestId = ++accountsRequestRef.current;
-    try {
-      const updatedAccounts = await getAccounts();
-      if (mountedRef.current && requestId === accountsRequestRef.current) {
-        setAccounts(updatedAccounts);
-        hasLoadedRef.current = true;
-        setLoadError(null);
-      }
-    } catch (error) {
-      console.error(error);
-      if (mountedRef.current && requestId === accountsRequestRef.current && !hasLoadedRef.current) {
-        setLoadError(error.message || "Không thể tải danh sách tài khoản.");
-      }
-    } finally {
-      if (mountedRef.current && requestId === accountsRequestRef.current) {
-        setIsInitialLoading(false);
-      }
-    }
-  }, []);
 
   useEffect(() => {
     const handleLocalEngineEvent = (event) => {
@@ -202,28 +182,17 @@ export default function AccountManagerModule() {
 
     window.addEventListener("local_engine_event", handleLocalEngineEvent);
     return () => window.removeEventListener("local_engine_event", handleLocalEngineEvent);
-  }, [isExpired, fetchAccounts]);
-
-  useEffect(() => {
-    if (isExpired) return;
-    let cancelled = false;
-    Promise.resolve().then(() => {
-      if (!cancelled) fetchAccounts();
-    });
-    return () => {
-      cancelled = true;
-      accountsRequestRef.current += 1;
-    };
-  }, [isExpired, fetchAccounts]);
+  }, [isExpired, fetchAccounts, setAccounts]);
 
   const handleOpenEdit = (uid) => {
     setEditUid(uid);
     setIsSingleModalOpen(true);
   };
 
-  const handleImportBulk = async (accountsToImport, skippedCount = 0) => {
+  const handleImportBulk = async (accountsToImport, skippedCount = 0, skipExisting = false) => {
     try {
-      const res = await importAccounts(accountsToImport);
+      const res = await importAccounts(accountsToImport, false, skipExisting);
+      skippedCount += res.skipped_count || 0;
       await fetchAccounts();
       const added = res.added_count ?? res.imported ?? 0;
       const updated = res.updated_count ?? 0;
@@ -248,34 +217,80 @@ export default function AccountManagerModule() {
     }
   };
 
-  const handleDeleteSingle = (uid) => {
-    setDeleteTarget({ kind: "single", uid });
+  const prepareDelete = (target) => {
+    if (deletingRef.current) return;
+    setDeletePreview({ loading: true, pagesTotal: 0, error: null });
+    setDeleteTarget(target);
   };
+
+  const handleDeleteSingle = (uid) => prepareDelete({ kind: "single", uid });
 
   const handleBulkDelete = () => {
     if (!selectedUids.length) return;
-    setDeleteTarget({ kind: "bulk", uids: selectedUids });
+    prepareDelete({ kind: "bulk", uids: [...selectedUids] });
   };
 
-  const handleConfirmDelete = async () => {
+  useEffect(() => {
     if (!deleteTarget) return;
+    let cancelled = false;
+    const uids = deleteTarget.kind === "single" ? [deleteTarget.uid] : deleteTarget.uids;
+    getDeletePreview(uids).then(
+      (result) => {
+        if (!cancelled) setDeletePreview({ loading: false, pagesTotal: result.pages_total, error: null });
+      },
+      (error) => {
+        if (!cancelled) setDeletePreview({ loading: false, pagesTotal: 0, error: error.message });
+      }
+    );
+    return () => { cancelled = true; };
+  }, [deleteTarget]);
+
+  const handleCloseDelete = () => {
+    if (!deletingRef.current) setDeleteTarget(null);
+  };
+
+  const handleConfirmDelete = async (deletePages = false) => {
+    if (!deleteTarget || deletePreview.loading || deletePreview.error || deletingRef.current) return;
+    deletingRef.current = true;
+    setDeletingPages(deletePages);
     setIsDeleting(true);
     try {
+      let result;
+      let successfulUids;
       if (deleteTarget.kind === "single") {
-        await deleteAccount(deleteTarget.uid);
-        setSelectedUids((prev) => prev.filter((id) => id !== deleteTarget.uid));
-        toast.success(`Đã xóa tài khoản ${deleteTarget.uid}`, "ĐÃ XÓA TÀI KHOẢN");
+        result = await deleteAccount(deleteTarget.uid, deletePages);
+        successfulUids = [deleteTarget.uid];
       } else {
-        const uidsToDelete = deleteTarget.uids;
-        await bulkDeleteAccounts(uidsToDelete);
-        setSelectedUids((prev) => prev.filter((id) => !uidsToDelete.includes(id)));
-        toast.success(`Đã xóa ${uidsToDelete.length} tài khoản`, "ĐÃ XÓA HÀNG LOẠT");
+        result = await bulkDeleteAccounts(deleteTarget.uids, deletePages);
+        successfulUids = result.deleted_uids;
       }
+      const errors = result.errors || [];
+      setSelectedUids((prev) => prev.filter((id) => !successfulUids.includes(id)));
+      const pageMessage = result.pages_deleted > 0
+        ? ` Đã xóa ${result.pages_deleted} Fanpage liên quan.`
+        : result.pages_unlinked > 0
+        ? ` Đã giữ lại và ngắt liên kết ${result.pages_unlinked} Fanpage.`
+        : "";
+      const successMessage = deleteTarget.kind === "single"
+        ? `Đã xóa tài khoản ${deleteTarget.uid}.`
+        : `Đã xóa ${result.deleted} tài khoản.`;
+      if (errors.length) {
+        const details = errors.slice(0, 3).map((item) => `${item.uid}: ${item.error}`).join("; ");
+        const remaining = errors.length > 3 ? `; và ${errors.length - 3} tài khoản khác` : "";
+        if (successfulUids.length) {
+          toast.warning(`${successMessage}${pageMessage} Không thể xóa ${errors.length} tài khoản. ${details}${remaining}`, "KẾT QUẢ XÓA");
+        } else {
+          toast.error(`Không thể xóa các tài khoản đã chọn. ${details}${remaining}`, "LỖI XÓA");
+        }
+      } else {
+        toast.success(`${successMessage}${pageMessage}`, "XÓA THÀNH CÔNG");
+      }
+      if (successfulUids.length) setDeleteTarget(null);
       await fetchAccounts();
-      setDeleteTarget(null);
     } catch (error) {
       toast.error("Lỗi khi xóa tài khoản: " + error.message, "LỖI XÓA");
     } finally {
+      deletingRef.current = false;
       setIsDeleting(false);
     }
   };
@@ -336,7 +351,7 @@ export default function AccountManagerModule() {
       const res = await checkAccountStatuses(selectedUids);
       await fetchAccounts();
       toast.success(
-        `Đã kiểm tra xong: ${res.live || 0} Live, ${res.die || 0} Die.`,
+        `Đã kiểm tra xong: ${res.live || 0} Live, ${res.die || 0} Die, ${res.inconclusive || 0} chưa kết luận được.`,
         "KIỂM TRA HOÀN TẤT"
       );
     } catch (error) {
@@ -349,15 +364,15 @@ export default function AccountManagerModule() {
     }
   };
 
-  const active = accounts.filter((account) => account.status === "live").length;
-  const dead = accounts.filter((account) => account.status === "die").length;
+  const active = stats.live;
+  const dead = stats.die;
   const checked = active + dead;
   const availability = checked ? `${((active / checked) * 100).toFixed(1)}%` : "--";
 
   const metricCards = [
     {
       label: "TỔNG TÀI KHOẢN",
-      value: accounts.length.toLocaleString("vi-VN"),
+      value: stats.total.toLocaleString("vi-VN"),
       icon: Users,
       labelColor: "text-[#94A3B8]",
       iconBg: "bg-[#F1F5F9] text-[#475569]",
@@ -449,13 +464,15 @@ export default function AccountManagerModule() {
 
       {/* 3. Section - FilterAndTableContainer (Toolbar + Table + Bottom Action Bar) */}
       <AccountTable
+        tableRef={tableRef}
+        searchTerm={searchTerm} setSearchTerm={setSearchTerm}
+        accountFilter={accountFilter} setAccountFilter={setAccountFilter}
+        loginFilter={loginFilter} setLoginFilter={setLoginFilter}
+        total={total} hasMore={hasMore} isLoadingMore={isLoadingMore}
+        moreError={moreError} onLoadMore={loadMore} onRetryMore={retryMore}
         isLoading={isInitialLoading}
         loadError={loadError}
-        onRetry={() => {
-          setIsInitialLoading(true);
-          setLoadError(null);
-          fetchAccounts();
-        }}
+        onRetry={() => fetchAccounts(true)}
         accounts={accounts}
         selectedUids={selectedUids}
         onToggleSelect={(uid) =>
@@ -464,6 +481,7 @@ export default function AccountManagerModule() {
           )
         }
         onSelectAll={handleSelectAll}
+        onSelectionChange={setSelectedUids}
         onEditAccount={handleOpenEdit}
         onDeleteAccount={handleDeleteSingle}
         onOpenBrowser={handleOpenBrowser}
@@ -610,15 +628,41 @@ export default function AccountManagerModule() {
 
       <ConfirmDialog
         isOpen={deleteTarget !== null}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={handleConfirmDelete}
+        onClose={handleCloseDelete}
+        onConfirm={() => handleConfirmDelete(deletePreview.pagesTotal > 0)}
         title="Xác nhận xóa tài khoản"
         description={
-          deleteTarget?.kind === "single"
-            ? `Bạn có chắc chắn muốn xóa tài khoản ${deleteTarget.uid}? Toàn bộ profile trình duyệt sẽ bị gỡ bỏ.`
-            : `Bạn có chắc chắn muốn xóa ${deleteTarget?.uids.length ?? 0} tài khoản đã chọn?`
+          deletePreview.loading ? (
+            <span role="status" className="inline-flex items-center gap-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Đang kiểm tra dữ liệu liên quan…
+            </span>
+          ) : deletePreview.error ? (
+            <span role="alert">
+              Không thể kiểm tra Fanpage: {deletePreview.error}.{" "}
+              <button type="button" className="font-semibold text-primary underline" onClick={() => prepareDelete({ ...deleteTarget })}>
+                Thử lại
+              </button>
+            </span>
+          ) : (
+            <span>
+              {deleteTarget?.kind === "single"
+                ? `Xóa tài khoản ${deleteTarget.uid}?`
+                : `Xóa ${deleteTarget?.uids.length ?? 0} tài khoản đã chọn?`}{" "}
+              {deletePreview.pagesTotal > 0 && (
+                <span className="mt-2 block">
+                  Có {deletePreview.pagesTotal} Fanpage liên quan. Chỉ xóa tài khoản sẽ giữ Fanpage và ngắt liên kết; xóa cả hai sẽ gỡ Fanpage khỏi phần mềm.
+                </span>
+              )}
+              <span className="mt-2 block">Dữ liệu trình duyệt và phiên đăng nhập của tài khoản sẽ bị xóa. Nếu thêm lại tài khoản, bạn cần đăng nhập lại.</span>
+            </span>
+          )
         }
-        confirmText="Xóa"
+        confirmText={deletePreview.pagesTotal > 0 ? "Xóa cả tài khoản & Fanpage" : "Xóa tài khoản"}
+        secondaryText={deletePreview.pagesTotal > 0 ? "Chỉ xóa tài khoản" : undefined}
+        onSecondaryConfirm={() => handleConfirmDelete(false)}
+        hideConfirm={deletePreview.loading || Boolean(deletePreview.error)}
+        loadingAction={deletePreview.pagesTotal > 0 && !deletingPages ? "secondary" : "confirm"}
         cancelText="Hủy bỏ"
         variant="danger"
         icon={<Trash2 className="h-5 w-5" />}

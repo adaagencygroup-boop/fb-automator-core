@@ -33,9 +33,9 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from core.browser import ProxyError, parse_proxy
 from modules.module_03_acc_farm import adapters, repository
 from modules.module_03_acc_farm.browser.login_flow import CHECKPOINT_HEAVY, HEAVY_CHECKPOINT_PREFIX
-from modules.module_03_acc_farm.browser.proxy_bridge import ProxyError, parse_proxy
 from modules.module_03_acc_farm.farming.flow import (
     FarmAccountDead,
     FarmControl,
@@ -304,11 +304,9 @@ def _build_plan(cfg: FarmScenarioConfig) -> List[tuple]:
 
 def _uid_has_other_browser(uid: str) -> bool:
     """Nick có trình duyệt khác đang mở thật không (cửa sổ đã bị đóng tay thì gỡ khỏi danh sách)."""
-    from modules.module_03_acc_farm.browser.manager import _active_drivers, _active_drivers_lock, unregister_active_driver
-    with _active_drivers_lock:
-        drivers = [d for d, info in _active_drivers.items() if isinstance(info, dict) and info.get("uid") == str(uid)]
+    from core.browser import get_active_drivers, unregister_active_driver
     alive = False
-    for d in drivers:
+    for d in get_active_drivers(uid, adapters.ACCOUNT_OWNER):
         try:
             if d.window_handles:
                 alive = True
@@ -421,9 +419,37 @@ def _finalize(uid: str, cfg: FarmScenarioConfig, owner: Optional[str]):
 
 # ─────────────────────── WORKER ────────────────────────────
 
+# Tương tác nuôi nick: không để Chrome hãm timer / tạm dừng video khi cửa sổ bị che hoặc thu nhỏ
+FARM_CHROME_ARGUMENTS = [
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--disable-backgrounding-occluded-windows",
+    "--autoplay-policy=no-user-gesture-required",
+]
+
+# Page Visibility luôn báo đang hiển thị và chặn sự kiện visibilitychange tới script của trang
+FARM_VISIBILITY_JS = """
+    Object.defineProperty(document, 'hidden', { get: () => false });
+    Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+    const stopVisibility = (e) => e.stopImmediatePropagation();
+    window.addEventListener('visibilitychange', stopVisibility, true);
+    document.addEventListener('visibilitychange', stopVisibility, true);
+"""
+
+
+def _save_session_cookie(uid: str, driver):
+    """Chrome của nick bị đóng để mở lại: lưu cookie còn sống trước khi đóng."""
+    from core.browser import extract_cookies_as_string
+
+    cookies = extract_cookies_as_string(driver)
+    if cookies and "c_user=" in cookies:
+        adapters.save_cookie(uid, cookies)
+        adapters.set_login_status(uid, "logged_in")
+
+
 def _farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[str]):
     """Chạy toàn bộ kịch bản đã tick cho 1 nick trên cùng 1 tab Chrome."""
-    from modules.module_03_acc_farm.browser.manager import create_driver, extract_cookies_as_string, get_profile_lock
+    from core.browser import extract_cookies_as_string, get_profile_lock, open_browser
     from modules.module_03_acc_farm.browser.login_flow import ensure_logged_in, is_checkpoint_url
 
     ctl = _control
@@ -442,7 +468,7 @@ def _farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[s
         _set_account(uid, status="FAILED", error=msg, activity=msg)
         return
 
-    profile_lock = get_profile_lock(uid)
+    profile_lock = get_profile_lock(uid, adapters.ACCOUNT_OWNER)
     if not profile_lock.acquire(timeout=5):
         msg = "Nick đang bận ở tiến trình khác, bỏ qua lượt này"
         _emit("error", f"{msg}: {uid}", uid, slot)
@@ -469,7 +495,10 @@ def _farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[s
         pop_notices()
         pop_light_checkpoint()
         # Nick có proxy mà proxy chết thì dừng nick, không chạy bằng IP thật của máy
-        driver = create_driver(uid, proxy=proxy, scope="farm", allow_direct_fallback=False)
+        driver = open_browser(uid, owner=adapters.ACCOUNT_OWNER, proxy=proxy, scope="farm",
+                              allow_direct_fallback=False,
+                              extra_arguments=FARM_CHROME_ARGUMENTS, extra_init_scripts=[FARM_VISIBILITY_JS],
+                              on_before_close=lambda d, _uid=uid: _save_session_cookie(_uid, d))
         mode = getattr(driver, "proxy_mode", "none")
         _hist(uid, proxy_mode=mode, egress_ip=getattr(driver, "proxy_egress_ip", None),
               fingerprint_mode=getattr(driver, "fingerprint_mode", None))
@@ -621,12 +650,9 @@ def _farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[s
 # ─────────────────────── VÒNG ĐỜI ENGINE ────────────────────────────
 
 async def on_startup(ws_manager):
-    """engine.py gọi trong lifespan sau init_database(): log, DB local, thread ghi, dọn lượt treo của máy này."""
-    from modules.module_03_acc_farm._temp.local_db import init_local_db
-
+    """engine.py gọi trong lifespan sau init_database(): log, thread ghi, dọn lượt treo của máy này."""
     adapters.setup_logging()
     adapters.register_log_channel(ws_manager, asyncio.get_running_loop())
-    await asyncio.to_thread(init_local_db)
     repository.writer.start()
     try:
         stale = await asyncio.to_thread(repository.mark_stale_runs, await asyncio.to_thread(adapters.get_machine_id))

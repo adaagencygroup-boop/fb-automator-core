@@ -74,11 +74,11 @@ def parse_proxy(proxy_str: Optional[str]) -> Optional[Dict[str, Any]]:
 
     raw = str(proxy_str).strip()
 
-    # 1. Từ chối SOCKS từ sớm
+    # 1. Từ chối SOCKS4 (chỉ hỗ trợ HTTP/HTTPS và SOCKS5)
     lower_raw = raw.lower()
-    if lower_raw.startswith("socks4://") or lower_raw.startswith("socks5://"):
+    if lower_raw.startswith("socks4://"):
         raise ProxyFormatError(
-            "Proxy SOCKS chưa được hỗ trợ bởi trình duyệt này. Vui lòng sử dụng Proxy định dạng HTTP/HTTPS!"
+            "Proxy SOCKS4 không được hỗ trợ. Vui lòng sử dụng Proxy định dạng HTTP/HTTPS hoặc SOCKS5!"
         )
 
     scheme = "http"
@@ -87,12 +87,14 @@ def parse_proxy(proxy_str: Optional[str]) -> Optional[Dict[str, Any]]:
     host: Optional[str] = None
     port: Optional[int] = None
 
-    # 2. Xử lý định dạng URL đầy đủ: http(s)://[user:pass@]host:port
+    # 2. Xử lý định dạng URL đầy đủ: http(s)://[user:pass@]host:port hoặc socks5://...
     if "://" in raw:
         parsed_url = urllib.parse.urlparse(raw)
         scheme = parsed_url.scheme.lower() or "http"
-        if scheme not in ("http", "https"):
-            raise ProxyFormatError(f"Giao thức '{scheme}' không được hỗ trợ. Hãy sử dụng http:// hoặc https://")
+        if scheme not in ("http", "https", "socks5", "socks5h"):
+            raise ProxyFormatError(f"Giao thức '{scheme}' không được hỗ trợ. Hãy sử dụng http://, https:// hoặc socks5://")
+        if scheme == "socks5h":
+            scheme = "socks5"
 
         host = parsed_url.hostname
         port = parsed_url.port
@@ -154,9 +156,11 @@ def parse_proxy(proxy_str: Optional[str]) -> Optional[Dict[str, Any]]:
         raise ProxyFormatError(f"Cổng (Port) của proxy phải nằm trong khoảng 1-65535 (nhận được: {port})")
 
     has_auth = bool(username and password)
+    protocol = scheme if scheme in ("socks5", "https") else ("auto" if "://" not in raw else "http")
 
     return {
         "scheme": scheme,
+        "protocol": protocol,
         "host": host,
         "port": port,
         "username": username if has_auth else None,
@@ -169,16 +173,151 @@ def parse_proxy(proxy_str: Optional[str]) -> Optional[Dict[str, Any]]:
     }
 
 
+def _recv_exact(sock: socket.socket, num_bytes: int) -> bytes:
+    buf = b""
+    while len(buf) < num_bytes:
+        chunk = sock.recv(num_bytes - len(buf))
+        if not chunk:
+            raise EOFError("Socket ngắt kết nối đột ngột khi đang nhận dữ liệu SOCKS5.")
+        buf += chunk
+    return buf
+
+
+def _socks5_connect_tunnel(
+    sock: socket.socket,
+    target_host: str,
+    target_port: int,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
+    timeout: float = 15.0,
+) -> None:
+    """
+    Thực hiện bắt tay và thiết lập tunnel SOCKS5 (RFC 1928 & RFC 1929) qua một socket đã kết nối.
+    """
+    sock.settimeout(timeout)
+    # 1. Handshake (Method negotiation)
+    if username and password:
+        sock.sendall(b"\x05\x02\x00\x02")
+    else:
+        sock.sendall(b"\x05\x01\x00")
+
+    resp = _recv_exact(sock, 2)
+    ver, method = resp[0], resp[1]
+    if ver != 5:
+        raise ProxyConnectionError(f"Máy chủ không phải SOCKS5 (version: {ver})")
+
+    # 2. Authentication nếu server yêu cầu
+    if method == 2:
+        if not username or not password:
+            raise ProxyConnectionError("Máy chủ SOCKS5 yêu cầu xác thực Username/Password nhưng cấu hình không có!")
+        u_bytes = username.encode("utf-8")
+        p_bytes = password.encode("utf-8")
+        auth_req = b"\x01" + bytes([len(u_bytes)]) + u_bytes + bytes([len(p_bytes)]) + p_bytes
+        sock.sendall(auth_req)
+        auth_resp = _recv_exact(sock, 2)
+        if len(auth_resp) < 2 or auth_resp[1] != 0:
+            raise ProxyConnectionError("Xác thực SOCKS5 thất bại: sai Username hoặc Password!")
+    elif method == 0:
+        pass
+    else:
+        raise ProxyConnectionError(f"Máy chủ SOCKS5 từ chối phương thức xác thực (method: {method})")
+
+    # 3. Gửi lệnh CONNECT (RFC 1928)
+    try:
+        packed_ip = socket.inet_aton(target_host)
+        atyp = b"\x01"
+        dst_addr = packed_ip
+    except socket.error:
+        tgt_bytes = target_host.encode("idna")
+        atyp = b"\x03"
+        dst_addr = bytes([len(tgt_bytes)]) + tgt_bytes
+
+    port_bytes = target_port.to_bytes(2, byteorder="big")
+    req = b"\x05\x01\x00" + atyp + dst_addr + port_bytes
+    sock.sendall(req)
+
+    # 4. Đọc phản hồi kết nối từ SOCKS5 server
+    head = _recv_exact(sock, 4)
+    rep, resp_atyp = head[1], head[3]
+    if rep != 0:
+        err_map = {
+            1: "Lỗi chung từ máy chủ SOCKS5",
+            2: "Kết nối bị từ chối bởi cấu hình proxy rules",
+            3: "Mạng đích không thể tiếp cận (Network unreachable)",
+            4: "Host đích không thể tiếp cận (Host unreachable)",
+            5: "Máy chủ đích từ chối kết nối (Connection refused)",
+            6: "TTL hết hạn",
+            7: "Lệnh không được hỗ trợ",
+            8: "Kiểu địa chỉ không được hỗ trợ",
+        }
+        raise ProxyConnectionError(f"SOCKS5 kết nối tới {target_host}:{target_port} thất bại: {err_map.get(rep, f'Mã lỗi {rep}')}")
+
+    if resp_atyp == 1:
+        _recv_exact(sock, 4 + 2)
+    elif resp_atyp == 3:
+        dlen = _recv_exact(sock, 1)[0]
+        _recv_exact(sock, dlen + 2)
+    elif resp_atyp == 4:
+        _recv_exact(sock, 16 + 2)
+
+
+def _test_socks5_connectivity(proxy_info: Dict[str, Any], timeout: int = 15) -> Dict[str, Any]:
+    host = proxy_info["host"]
+    port = proxy_info["port"]
+    user = proxy_info.get("username")
+    pwd = proxy_info.get("password")
+
+    endpoints = [
+        ("api.ipify.org", 80, "/"),
+        ("httpbin.org", 80, "/ip"),
+    ]
+    egress_ip = None
+    last_err = None
+
+    for target_host, target_port, path in endpoints:
+        s = None
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect((host, port))
+            _socks5_connect_tunnel(s, target_host, target_port, user, pwd, timeout=timeout)
+            req = f"GET {path} HTTP/1.1\r\nHost: {target_host}\r\nUser-Agent: Mozilla/5.0 Chrome/127.0.0.0\r\nConnection: close\r\n\r\n".encode("latin-1")
+            s.sendall(req)
+            data = b""
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            body = data.decode("utf-8", errors="ignore")
+            ip_match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", body)
+            if ip_match:
+                egress_ip = ip_match.group(0)
+                break
+        except Exception as e:
+            last_err = e
+        finally:
+            if s:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+
+    if not egress_ip:
+        raise ProxyConnectionError(f"Proxy SOCKS5 {host}:{port} kiểm tra kết nối thất bại: {last_err}")
+
+    proxy_info["protocol"] = "socks5"
+    logger.info(f"SOCKS5 proxy verified successfully: {host}:{port}, Egress IP={egress_ip}")
+    return {"ok": True, "egress_ip": egress_ip}
+
+
 # ─── 2. PRE-FLIGHT CONNECTIVITY TEST ──────────────────────────────────────────
 
 def test_proxy_connectivity(proxy_info: Dict[str, Any], timeout: int = 15) -> Dict[str, Any]:
     """
     Thực hiện kiểm tra kết nối qua Proxy (Pre-flight test):
-    - Kiểm tra kết nối HTTP qua http://httpbin.org/ip hoặc http://api.ipify.org
-    - Kiểm tra kết nối HTTPS qua https://api.ipify.org hoặc https://httpbin.org/ip
-
-    Chỉ khi cả 2 bài test đều thành công mới cho phép mở trình duyệt.
-    Nếu thất bại, raise ProxyConnectionError kèm lý do chi tiết.
+    - Hỗ trợ cả HTTP/HTTPS và SOCKS5 (tự động nhận diện nếu chưa rõ giao thức).
+    - Lấy IP đầu ra (Egress IP) để chuẩn bị cho bước đối chiếu chống rò rỉ IP thật.
     """
     if not proxy_info:
         raise ProxyFormatError("Dữ liệu proxy rỗng")
@@ -187,81 +326,100 @@ def test_proxy_connectivity(proxy_info: Dict[str, Any], timeout: int = 15) -> Di
     port = proxy_info["port"]
     user = proxy_info.get("username")
     pwd = proxy_info.get("password")
+    protocol = proxy_info.get("protocol") or ("socks5" if proxy_info.get("scheme") == "socks5" else "auto")
 
-    if user and pwd:
-        # URL encode thông tin auth khi đưa vào urllib handler
-        enc_user = urllib.parse.quote(user, safe="")
-        enc_pwd = urllib.parse.quote(pwd, safe="")
-        proxy_url = f"http://{enc_user}:{enc_pwd}@{host}:{port}"
+    if protocol == "socks5":
+        return _test_socks5_connectivity(proxy_info, timeout)
+
+    # Thử HTTP trước
+    http_error = None
+    try:
+        if user and pwd:
+            enc_user = urllib.parse.quote(user, safe="")
+            enc_pwd = urllib.parse.quote(pwd, safe="")
+            proxy_url = f"http://{enc_user}:{enc_pwd}@{host}:{port}"
+        else:
+            proxy_url = f"http://{host}:{port}"
+
+        proxy_handler = urllib.request.ProxyHandler({
+            "http": proxy_url,
+            "https": proxy_url,
+        })
+        opener = urllib.request.build_opener(proxy_handler)
+
+        logger.info(f"Testing proxy connectivity: http://{host}:{port} (auth={bool(user)})")
+
+        egress_ip = None
+        http_endpoints = [
+            "http://api.ipify.org",
+            "http://httpbin.org/ip",
+        ]
+        http_ok = False
+        last_http_err = None
+        for ep in http_endpoints:
+            try:
+                req = urllib.request.Request(
+                    ep,
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/127.0.0.0"}
+                )
+                with opener.open(req, timeout=timeout) as resp:
+                    if resp.status == 200:
+                        http_ok = True
+                        break
+            except Exception as e:
+                last_http_err = e
+
+        if not http_ok:
+            raise ProxyConnectionError(f"HTTP test failed: {last_http_err}")
+
+        https_endpoints = [
+            "https://api.ipify.org",
+            "https://httpbin.org/ip",
+        ]
+        https_ok = False
+        last_https_err = None
+        for ep in https_endpoints:
+            try:
+                req = urllib.request.Request(
+                    ep,
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/127.0.0.0"}
+                )
+                with opener.open(req, timeout=timeout) as resp:
+                    if resp.status == 200:
+                        body = resp.read().decode("utf-8", errors="ignore").strip()
+                        ip_match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", body)
+                        if ip_match:
+                            egress_ip = ip_match.group(0)
+                        https_ok = True
+                        break
+            except Exception as e:
+                last_https_err = e
+
+        if not https_ok:
+            raise ProxyConnectionError(f"HTTPS test failed: {last_https_err}")
+
+        proxy_info["protocol"] = "http"
+        logger.info(f"All proxy tests passed! Proxy supports HTTP/HTTPS, Egress IP={egress_ip}")
+        return {"ok": True, "egress_ip": egress_ip}
+
+    except Exception as e:
+        http_error = e
+
+    # Nếu giao thức là 'auto' và HTTP thất bại, tự động thử sang SOCKS5
+    if protocol == "auto":
+        logger.info(f"[{host}:{port}] HTTP proxy test không thành công ({http_error}). Tự động dò kiểm tra SOCKS5...")
+        try:
+            res = _test_socks5_connectivity(proxy_info, timeout)
+            proxy_info["protocol"] = "socks5"
+            return res
+        except Exception as socks_err:
+            msg = f"Proxy {host}:{port} kiểm tra kết nối thất bại cả HTTP ({http_error}) và SOCKS5 ({socks_err})"
+            logger.warning(msg)
+            raise ProxyConnectionError(msg)
     else:
-        proxy_url = f"http://{host}:{port}"
-
-    proxy_handler = urllib.request.ProxyHandler({
-        "http": proxy_url,
-        "https": proxy_url,
-    })
-    opener = urllib.request.build_opener(proxy_handler)
-
-    logger.info(f"Testing proxy connectivity: http://{host}:{port} (auth={bool(user)})")
-
-    egress_ip = None
-
-    # Test HTTP
-    http_endpoints = [
-        "http://api.ipify.org",
-        "http://httpbin.org/ip",
-    ]
-    http_ok = False
-    last_http_err = None
-    for ep in http_endpoints:
-        try:
-            req = urllib.request.Request(
-                ep,
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/127.0.0.0"}
-            )
-            with opener.open(req, timeout=timeout) as resp:
-                if resp.status == 200:
-                    http_ok = True
-                    break
-        except Exception as e:
-            last_http_err = e
-
-    if not http_ok:
-        msg = f"Proxy {host}:{port} kiểm tra kết nối HTTP thất bại: {last_http_err}"
+        msg = f"Proxy {host}:{port} kiểm tra kết nối HTTP/HTTPS thất bại: {http_error}"
         logger.warning(msg)
         raise ProxyConnectionError(msg)
-
-    # Test HTTPS
-    https_endpoints = [
-        "https://api.ipify.org",
-        "https://httpbin.org/ip",
-    ]
-    https_ok = False
-    last_https_err = None
-    for ep in https_endpoints:
-        try:
-            req = urllib.request.Request(
-                ep,
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/127.0.0.0"}
-            )
-            with opener.open(req, timeout=timeout) as resp:
-                if resp.status == 200:
-                    body = resp.read().decode("utf-8", errors="ignore").strip()
-                    ip_match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", body)
-                    if ip_match:
-                        egress_ip = ip_match.group(0)
-                    https_ok = True
-                    break
-        except Exception as e:
-            last_https_err = e
-
-    if not https_ok:
-        msg = f"Proxy {host}:{port} kiểm tra kết nối HTTPS thất bại: {last_https_err}"
-        logger.warning(msg)
-        raise ProxyConnectionError(msg)
-
-    logger.info(f"All proxy tests passed! Proxy supports HTTP/HTTPS, Egress IP={egress_ip}")
-    return {"ok": True, "egress_ip": egress_ip}
 
 
 # ─── 3. GET DIRECT MACHINE IP ────────────────────────────────────────────────
@@ -318,11 +476,13 @@ class ProxyBridge:
         upstream_port: int,
         username: Optional[str] = None,
         password: Optional[str] = None,
+        protocol: str = "http",
     ):
         self.upstream_host = upstream_host
         self.upstream_port = upstream_port
         self.username = username
         self.password = password
+        self.protocol = protocol.lower() if protocol else "http"
 
         if self.username and self.password:
             creds = f"{self.username}:{self.password}".encode("utf-8")
@@ -336,6 +496,26 @@ class ProxyBridge:
         self._active_sockets: Set[socket.socket] = set()
         self._sockets_lock = threading.Lock()
         self._server_thread: Optional[threading.Thread] = None
+
+    def _get_protocol(self) -> str:
+        if self.protocol in ("socks5", "http"):
+            return self.protocol
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(3.0)
+            s.connect((self.upstream_host, self.upstream_port))
+            s.sendall(b"\x05\x01\x02" if self.username else b"\x05\x01\x00")
+            resp = s.recv(2)
+            s.close()
+            if len(resp) >= 2 and resp[0] == 5:
+                self.protocol = "socks5"
+                logger.info(f"[ProxyBridge:{self.port}] Auto-detected upstream protocol: SOCKS5")
+                return "socks5"
+        except Exception:
+            pass
+        self.protocol = "http"
+        logger.info(f"[ProxyBridge:{self.port}] Auto-detected upstream protocol: HTTP")
+        return "http"
 
     def start(self) -> int:
         """Khởi động socket server trên 127.0.0.1 với cổng ngẫu nhiên do OS cấp phát."""
@@ -352,7 +532,7 @@ class ProxyBridge:
             daemon=True,
         )
         self._server_thread.start()
-        logger.info(f"Local Proxy Bridge started on 127.0.0.1:{self.port} -> {self.upstream_host}:{self.upstream_port}")
+        logger.info(f"Local Proxy Bridge started on 127.0.0.1:{self.port} -> {self.upstream_host}:{self.upstream_port} ({self.protocol})")
         return self.port
 
     def _track_socket(self, sock: socket.socket):
@@ -414,8 +594,89 @@ class ProxyBridge:
                 return
 
             method, target = parts[0].upper(), parts[1]
+            proto = self._get_protocol()
 
-            # ── 1. XỬ LÝ HTTPS (CONNECT METHOD) ──
+            # ── A. XỬ LÝ SOCKS5 UPSTREAM ──
+            if proto == "socks5":
+                if method == "CONNECT":
+                    if ":" in target:
+                        tgt_host, tgt_p = target.split(":", 1)
+                        tgt_port = int(tgt_p)
+                    else:
+                        tgt_host, tgt_port = target, 443
+
+                    upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    upstream_sock.settimeout(30.0)
+                    self._track_socket(upstream_sock)
+                    upstream_sock.connect((self.upstream_host, self.upstream_port))
+                    _socks5_connect_tunnel(
+                        upstream_sock,
+                        tgt_host,
+                        tgt_port,
+                        username=self.username,
+                        password=self.password,
+                        timeout=30.0,
+                    )
+                    client_sock.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    self._relay_bidirectional(client_sock, upstream_sock)
+                    return
+
+                # Plain HTTP qua SOCKS5
+                tgt_host = None
+                tgt_port = 80
+                if "://" in target:
+                    parsed = urllib.parse.urlparse(target)
+                    tgt_host = parsed.hostname
+                    tgt_port = parsed.port or 80
+                    path = parsed.path or "/"
+                    if parsed.query:
+                        path += "?" + parsed.query
+                else:
+                    path = target
+
+                if not tgt_host:
+                    for line in lines[1:]:
+                        if line.lower().startswith(b"host:"):
+                            host_val = line.split(b":", 1)[1].strip().decode("latin-1")
+                            if ":" in host_val:
+                                tgt_host, p_str = host_val.split(":", 1)
+                                tgt_port = int(p_str)
+                            else:
+                                tgt_host, tgt_port = host_val, 80
+                            break
+
+                if not tgt_host:
+                    return
+
+                upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                upstream_sock.settimeout(30.0)
+                self._track_socket(upstream_sock)
+                upstream_sock.connect((self.upstream_host, self.upstream_port))
+                _socks5_connect_tunnel(
+                    upstream_sock,
+                    tgt_host,
+                    tgt_port,
+                    username=self.username,
+                    password=self.password,
+                    timeout=30.0,
+                )
+
+                new_req_line = f"{method} {path} HTTP/1.1\r\n".encode("latin-1")
+                forward_headers = [new_req_line]
+                for line in lines[1:]:
+                    low = line.lower()
+                    if not low.startswith(b"proxy-authorization:") and not low.startswith(b"proxy-connection:"):
+                        forward_headers.append(line + b"\r\n")
+                forward_headers.append(b"\r\n")
+                upstream_sock.sendall(b"".join(forward_headers))
+                if body_bytes:
+                    upstream_sock.sendall(body_bytes)
+
+                self._relay_bidirectional(client_sock, upstream_sock)
+                return
+
+            # ── B. XỬ LÝ HTTP UPSTREAM ──
+            # 1. Xử lý HTTPS (CONNECT method)
             if method == "CONNECT":
                 upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 upstream_sock.settimeout(30.0)
@@ -456,7 +717,7 @@ class ProxyBridge:
                     client_sock.sendall(resp_data)
                 return
 
-            # ── 2. XỬ LÝ HTTP THÔNG THƯỜNG ──
+            # 2. Xử lý HTTP thông thường
             upstream_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             upstream_sock.settimeout(30.0)
             self._track_socket(upstream_sock)

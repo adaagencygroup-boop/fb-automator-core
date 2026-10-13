@@ -1,8 +1,7 @@
 """
 adapters.py
-Cổng nối giữa luồng Tab 1 và phần xung quanh chưa có trong repo tổng.
-Luồng farm chỉ gọi qua file này; khi Module 02 (tài khoản) / đăng nhập / license của repo hoàn thiện
-thì chỉ sửa ở đây, không sửa luồng.
+Cổng nối giữa luồng Tab 1 và phần xung quanh: tài khoản (Module 02), định danh máy, license, log.
+Luồng farm chỉ gọi qua file này; nguồn bên ngoài đổi thì chỉ sửa ở đây, không sửa luồng.
 """
 import asyncio
 import hashlib
@@ -12,9 +11,11 @@ from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, Optional, Tuple
 
-from modules.module_03_acc_farm.browser.paths import LOG_PATH
+from config.constants import LOGS_DIR
 
 logger = logging.getLogger(__name__)
+
+LOG_PATH = str(LOGS_DIR / "module_03_farm.log")
 
 MODULE_LOG_NAME = "Tương tác tài khoản"
 VN_TZ = timezone(timedelta(hours=7))
@@ -40,13 +41,29 @@ def get_machine_id() -> str:
     return hashlib.sha256(f"m03-machine::{get_hwid()}".encode("utf-8")).hexdigest()
 
 
-# ─────────────────────────── TÀI KHOẢN (tạm: _temp/local_db.py) ────────────────────────────
+# ─────────────────────────── TÀI KHOẢN (bảng accounts của Module 02) ────────────────────────────
+
+# Owner của nick (accounts.user_id) dùng để đọc tài khoản và tìm profile Chrome (core.browser).
+# Tab 1 chưa nhận owner từ giao diện: chỉ dùng nick local (user_id NULL).
+ACCOUNT_OWNER: Optional[str] = None
+
+# Module 02 lưu trạng thái chữ hoa; luồng farm dùng chữ thường như trước
+_LOGIN_STATUS_FROM_M02 = {"LOGGED_IN": "logged_in", "NOT_LOGGED": "not_logged_in", "ERROR": "failed"}
+
+
+def _m02():
+    from modules.module_02_account_manager.database.connection import SessionLocal
+    from modules.module_02_account_manager.database.repository import AccountRepository
+    return SessionLocal, AccountRepository
+
 
 def get_account(uid: str) -> Optional[Dict[str, Any]]:
-    from modules.module_03_acc_farm._temp.local_db import AccountRepo, SessionLocal
-    db = SessionLocal()
-    try:
-        acc = AccountRepo.get_by_uid(db, uid)
+    SessionLocal, Repo = _m02()
+    with SessionLocal() as db:
+        try:
+            acc = Repo.get_by_uid(db, uid, owner_username=ACCOUNT_OWNER)
+        except ValueError:  # UID sai định dạng
+            return None
         if not acc:
             return None
         return {
@@ -54,53 +71,50 @@ def get_account(uid: str) -> Optional[Dict[str, Any]]:
             "profile_name": acc.profile_name or "",
             "proxy": acc.proxy,
             "cookie": acc.cookie,
-            "status": acc.status,
-            "login_status": acc.login_status,
+            "status": (acc.status or "").lower() or None,
+            "login_status": _LOGIN_STATUS_FROM_M02.get(acc.login_status, (acc.login_status or "").lower()),
             "has_password": bool(acc.password),
             "has_2fa": bool(acc.two_fa),
         }
-    finally:
-        db.close()
 
 
 def get_credentials(uid: str) -> Tuple[str, Optional[str]]:
     """(mật khẩu, 2FA secret) đã giải mã; giải mã lỗi thì trả rỗng để luồng thử phiên cookie."""
-    from modules.module_03_acc_farm._temp.local_db import AccountRepo, SessionLocal
-    from modules.module_03_acc_farm.browser.encryption import decrypt
-    db = SessionLocal()
-    try:
-        acc = AccountRepo.get_by_uid(db, uid)
+    from modules.module_02_account_manager.security.encryption import decrypt_data
+    SessionLocal, Repo = _m02()
+    with SessionLocal() as db:
+        acc = Repo.get_by_uid(db, uid, owner_username=ACCOUNT_OWNER)
         if not acc:
             return "", None
         try:
-            password = decrypt(acc.password, get_hwid()) if acc.password else ""
-        except Exception:
+            password = decrypt_data(acc.password)
+        except ValueError:
             password = ""
         try:
-            two_fa = decrypt(acc.two_fa, get_hwid()) if acc.two_fa else None
-        except Exception:
+            two_fa = decrypt_data(acc.two_fa) or None
+        except ValueError:
             two_fa = None
         return password, two_fa
-    finally:
-        db.close()
 
 
 def save_cookie(uid: str, cookie: str):
-    from modules.module_03_acc_farm._temp.local_db import AccountRepo, SessionLocal
-    db = SessionLocal()
-    try:
-        AccountRepo.update_cookies(db, uid, cookie)
-    finally:
-        db.close()
+    SessionLocal, Repo = _m02()
+    with SessionLocal() as db:
+        Repo.update_cookies(db, uid, cookie, owner_username=ACCOUNT_OWNER)
 
 
 def set_login_status(uid: str, status: str, profile_name: Optional[str] = None):
-    from modules.module_03_acc_farm._temp.local_db import AccountRepo, SessionLocal
-    db = SessionLocal()
-    try:
-        AccountRepo.update_login_status(db, uid, status, profile_name)
-    finally:
-        db.close()
+    """status: logged_in / not_logged_in / failed / checkpoint (checkpoint = ERROR + nick CHECKPOINT ở Module 02)."""
+    SessionLocal, Repo = _m02()
+    with SessionLocal() as db:
+        if status != "checkpoint":
+            Repo.update_login_status(db, uid, status, profile_name, owner_username=ACCOUNT_OWNER)
+            return
+        acc = Repo.update_login_status(db, uid, "failed", profile_name, owner_username=ACCOUNT_OWNER)
+        if acc:
+            acc.status = "CHECKPOINT"
+            acc.status_checked_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            db.commit()
 
 
 # ─────────────────────────── LICENSE / NGƯỜI DÙNG ────────────────────────────

@@ -31,7 +31,7 @@ class AccountInput(OwnerRequest):
         try:
             parse_proxy(value)
         except (ProxyFormatError, ValueError) as exc:
-            raise ValueError("Proxy không hợp lệ. Dùng HOST:PORT, HOST:PORT:USER:PASS hoặc URL HTTP/HTTPS.") from exc
+            raise ValueError("Proxy không hợp lệ. Dùng HOST:PORT, HOST:PORT:USER:PASS hoặc URL HTTP/HTTPS/SOCKS5.") from exc
         return value
 
     @model_validator(mode="before")
@@ -55,6 +55,7 @@ class AccountInput(OwnerRequest):
 
 class SingleAccountInput(AccountInput):
     original_uid: Optional[str] = None
+    create_only: bool = False
 
     @field_validator("original_uid")
     @classmethod
@@ -64,6 +65,7 @@ class SingleAccountInput(AccountInput):
 class ImportRequest(OwnerRequest):
     accounts: list[AccountInput] = Field(max_length=100)
     check_status: bool = False
+    skip_existing: bool = False
 
 class UidsRequest(OwnerRequest):
     uids: list[str]
@@ -72,6 +74,9 @@ class UidsRequest(OwnerRequest):
     @classmethod
     def valid_uids(cls, values):
         return list(dict.fromkeys(validate_uid(uid) for uid in values))
+
+class DeleteAccountsRequest(UidsRequest):
+    delete_pages: bool = False
 
 class LoginRequest(UidsRequest):
     threads: int = Field(3, ge=1, le=10)

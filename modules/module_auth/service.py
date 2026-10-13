@@ -6,8 +6,10 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import HTTPException, Request
+from psycopg2.errors import UniqueViolation
 
 from core.database.connection import db
+from modules.module_auth.notification_events import publish
 from modules.module_auth.security import (
     ACCESS_TOKEN_MINUTES,
     create_access_token,
@@ -147,9 +149,9 @@ def _open_session(user, request: Optional[Request], token: str):
     return row["id"], ip_address, device, browser, os_name
 
 
-def issue_browser_tokens(user, request: Optional[Request]):
+def issue_browser_tokens(user, request: Optional[Request], remember_me: bool = True):
     """Access ngắn trong cookie HttpOnly. Refresh giữ phiên để cấp lại access."""
-    refresh = create_refresh_token({"sub": user["username"], "role": user.get("role"), "uid": user["id"]})
+    refresh = create_refresh_token({"sub": user["username"], "role": user.get("role"), "uid": user["id"], "remember_me": remember_me})
     session_id, ip_address, device, browser, os_name = _open_session(user, request, refresh)
     access = create_access_token(
         {
@@ -167,8 +169,6 @@ def issue_browser_tokens(user, request: Optional[Request]):
 def session_is_active(user, token: str) -> bool:
     if user.get("status") in LOCKED_STATUSES:
         return False
-    if user.get("role") in ("admin", "ADMIN"):
-        return True
     try:
         payload = decode_token(token)
     except Exception:
@@ -180,13 +180,7 @@ def session_is_active(user, token: str) -> bool:
             (sid, user["id"], True),
         )
         return row is not None
-    fingerprint = token_fingerprint(token)
-    row = db.fetch_one(
-        """SELECT id FROM user_sessions
-           WHERE user_id = ? AND is_active = ? AND token_hash = ?""",
-        (user["id"], True, fingerprint),
-    )
-    return row is not None
+    return False
 
 
 def public_user(user, now=None):
@@ -226,10 +220,7 @@ def validate_username(username: str):
 
 
 def validate_password(password: str):
-    if not password or not password.strip():
-        raise HTTPException(400, "Mật khẩu không được để trống hoặc chỉ chứa khoảng trắng.")
-    if len(password) < 6 or not re.fullmatch(r"[A-Za-z0-9]+", password):
-        raise HTTPException(400, "Mật khẩu tối thiểu 6 ký tự, chỉ gồm chữ hoặc số.")
+    validate_registration_password(password)
 
 
 def validate_phone(contact: str) -> str:
@@ -238,25 +229,82 @@ def validate_phone(contact: str) -> str:
         raise HTTPException(400, "Vui lòng nhập số điện thoại liên hệ.")
     if not re.match(r"^[0-9]+$", trimmed):
         raise HTTPException(400, "Số điện thoại chỉ được chứa các chữ số.")
-    if not trimmed.startswith("0") or len(trimmed) != 10:
-        raise HTTPException(400, "Số điện thoại phải bắt đầu bằng số 0 và có đủ 10 chữ số.")
+    if len(trimmed) > 10:
+        raise HTTPException(400, "Số điện thoại không được vượt quá 10 chữ số.")
+    if not trimmed.startswith("0"):
+        raise HTTPException(400, "Số điện thoại phải bắt đầu bằng số 0.")
+    if len(trimmed) < 10:
+        raise HTTPException(400, "Số điện thoại phải có đủ 10 chữ số.")
     return trimmed
+
+
+def validate_registration_password(password: str):
+    if not password or not password.strip():
+        raise HTTPException(400, "Mật khẩu không được để trống hoặc chỉ chứa khoảng trắng.")
+    if len(password) > 12:
+        raise HTTPException(400, "Mật khẩu không được vượt quá 12 ký tự.")
+    if len(password) < 8 or not all(re.search(pattern, password) for pattern in (r"[A-Z]", r"[a-z]", r"[0-9]", r"[^a-zA-Z0-9]")):
+        raise HTTPException(400, "Mật khẩu phải từ 8 đến 12 ký tự, bao gồm ít nhất 1 chữ hoa, 1 chữ thường, 1 chữ số và 1 ký tự đặc biệt.")
 
 
 def register_user(username, password, contact_info, hwid):
     username = validate_username(username)
-    validate_password(password)
+    validate_registration_password(password)
     contact = validate_phone(contact_info)
     if _row(username):
         raise HTTPException(409, "Tên đăng nhập đã tồn tại trên hệ thống")
-    db.execute(
-        """INSERT INTO users (username, password_hash, contact_info, hwid, role, status, created_at)
-           VALUES (?, ?, ?, ?, 'user', 'pending', ?)""",
-        (username, hash_password(password), contact, hwid or None, utcnow()),
-    )
-    user = _row(username)
-    notify(user["id"], "NEW_REGISTRATION", "admin", f"Người dùng mới đăng ký: {username} | Liên hệ: {contact}")
-    return {"message": "Registration successful. Please wait for admin approval.", "user_id": user["id"], "status": "pending"}
+    if not hwid:
+        raise HTTPException(503, "Không nhận diện được mã máy (HWID). Vui lòng thử lại.")
+    created_at = utcnow()
+    message = f"Người dùng mới đăng ký: {username} | Liên hệ: {contact}"
+    password_hash = hash_password(password)
+    try:
+        with db.session() as cursor:
+            cursor.execute(
+                """INSERT INTO users (username, password_hash, contact_info, hwid, role, status, created_at)
+                   VALUES (%s, %s, %s, %s, 'user', 'pending', %s) RETURNING id""",
+                (username, password_hash, contact, hwid, created_at),
+            )
+            user_id = cursor.fetchone()["id"]
+            cursor.execute(
+                """INSERT INTO system_notifications (user_id, type, target, message, is_read, created_at)
+                   VALUES (%s, 'NEW_REGISTRATION', 'admin', %s, FALSE, %s) RETURNING id""",
+                (user_id, message, created_at),
+            )
+            notification_id = cursor.fetchone()["id"]
+    except UniqueViolation as error:
+        raise HTTPException(409, "Tên đăng nhập đã tồn tại trên hệ thống") from error
+    publish({"type": "NEW_REGISTRATION", "id": notification_id, "user_id": user_id,
+             "username": username, "message": message, "created_at": created_at.isoformat()})
+    return {"message": "Registration successful. Please wait for admin approval.", "user_id": user_id, "status": "pending"}
+
+
+def create_registration_ticket(username, user_id, hwid):
+    """A status-only capability; never a workspace or refresh credential."""
+    return create_access_token({"sub": username, "uid": user_id, "hwid": hwid, "typ": "registration"}, expires_delta=timedelta(days=1))
+
+
+def registration_status(ticket, hwid, allow_refresh=False):
+    try:
+        payload = decode_token(ticket)
+    except Exception as error:
+        raise HTTPException(401, "Phiên kiểm tra đăng ký đã hết hạn. Vui lòng đăng nhập lại.") from error
+    is_registration = payload.get("typ") == "registration"
+    is_refresh = allow_refresh and payload.get("typ") == "refresh"
+    if not (is_registration or is_refresh) or (is_registration and payload.get("hwid") != hwid):
+        raise HTTPException(401, "Phiên kiểm tra đăng ký không hợp lệ.")
+    user = _row_by_id(payload.get("uid"))
+    if not user or user.get("username") != payload.get("sub"):
+        raise HTTPException(401, "Phiên kiểm tra đăng ký không hợp lệ.")
+    data = {"username": user["username"], "status": user.get("status")}
+    if user.get("hwid") and user["hwid"] != hwid:
+        data["hwid_mismatch"] = True
+    return data
+
+
+def pending_login_ticket(username, hwid):
+    user = _row(username.strip())
+    return create_registration_ticket(user["username"], user["id"], hwid)
 
 
 def _refresh_expiry(user):
@@ -272,7 +320,7 @@ def _refresh_expiry(user):
     return user
 
 
-def verify_license(username, password, hwid, request: Optional[Request]):
+def verify_license(username, password, hwid, request: Optional[Request], remember_me: bool = True):
     user = _row(username)
     if not user or not verify_password(password, user.get("password_hash")):
         if not user:
@@ -283,14 +331,14 @@ def verify_license(username, password, hwid, request: Optional[Request]):
     if user.get("status") in ("rejected", "banned", "locked"):
         raise HTTPException(403, f"ACCOUNT_{str(user.get('status')).upper()}")
     user = _refresh_expiry(user)
-    if user.get("hwid") and hwid and user["hwid"] != hwid:
+    if user.get("hwid") and user["hwid"] != hwid:
         raise HTTPException(403, "ERR_HWID_MISMATCH")
     if not user.get("hwid") and hwid:
         db.execute("UPDATE users SET hwid = ? WHERE id = ?", (hwid, user["id"]))
         user["hwid"] = hwid
     now = utcnow()
     is_expired = user.get("status") == "expired"
-    access, refresh, _ip, _device, _browser, _os_name = issue_browser_tokens(user, request)
+    access, refresh, _ip, _device, _browser, _os_name = issue_browser_tokens(user, request, remember_me)
     expired = _as_dt(user.get("expired_at"))
     return {
         "access_token": access,
@@ -304,6 +352,30 @@ def verify_license(username, password, hwid, request: Optional[Request]):
         "status": user.get("status"),
         "contact_info": user.get("contact_info"),
     }
+
+
+def login_user(username, password, hwid, request: Optional[Request], remember_me: bool = False):
+    """Đăng nhập user/admin bằng một yêu cầu, giữ cookie HttpOnly của engine."""
+    username = (username or "").strip()
+    if not username:
+        raise HTTPException(400, "Vui lòng nhập tên đăng nhập.")
+    if not password:
+        raise HTTPException(400, "Vui lòng nhập mật khẩu.")
+    user = _row(username)
+    if not user:
+        raise HTTPException(401, "ACCOUNT_NOT_FOUND")
+    if user.get("role") in ("admin", "ADMIN"):
+        if not verify_password(password, user.get("password_hash")) and not (username == admin_username() and password == admin_password()):
+            raise HTTPException(401, "INVALID_PASSWORD")
+        if user.get("status") in LOCKED_STATUSES:
+            raise HTTPException(403, f"ACCOUNT_{str(user.get('status')).upper()}")
+        data = admin_login(username, password, request, remember_me)
+        data["access_token"] = data.pop("cookie_access")
+        data["refresh_token"] = data.pop("cookie_refresh")
+        return data
+    if not hwid:
+        raise HTTPException(503, "Không nhận diện được mã máy (HWID). Vui lòng thử lại.")
+    return verify_license(username, password, hwid, request, remember_me)
 
 
 def ensure_admin():
@@ -326,11 +398,11 @@ def ensure_admin():
     return _row(name)
 
 
-def admin_login(username, password, request: Optional[Request]):
+def admin_login(username, password, request: Optional[Request], remember_me: bool = True):
     if username == admin_username() and password == admin_password():
         user = ensure_admin()
-        token = create_access_token({"sub": username, "role": "admin", "uid": user["id"]})
-        access, refresh, ip_address, device, browser, os_name = issue_browser_tokens(user, request)
+        access, refresh, ip_address, device, browser, os_name = issue_browser_tokens(user, request, remember_me)
+        token = create_access_token({"sub": username, "role": "admin", "uid": user["id"], "sid": decode_token(access)["sid"], "typ": "access"})
         log_activity(username, "admin", "login", change_detail=f"IP: {ip_address} ({device} / {browser} / {os_name})",
                      ip_address=ip_address, user_agent=request.headers.get("user-agent", "") if request else "")
         return {
@@ -349,8 +421,8 @@ def admin_login(username, password, request: Optional[Request]):
             raise HTTPException(403, "Tài khoản của bạn đã bị khóa")
         if user.get("status") not in ("approved", "ACTIVE"):
             raise HTTPException(403, "Tài khoản admin đang bị khóa hoặc chưa được duyệt")
-        token = create_access_token({"sub": user["username"], "role": user.get("role"), "uid": user["id"]})
-        access, refresh, ip_address, device, browser, os_name = issue_browser_tokens(user, request)
+        access, refresh, ip_address, device, browser, os_name = issue_browser_tokens(user, request, remember_me)
+        token = create_access_token({"sub": user["username"], "role": user.get("role"), "uid": user["id"], "sid": decode_token(access)["sid"], "typ": "access"})
         log_activity(user["username"], user.get("role"), "login",
                      change_detail=f"IP: {ip_address} ({device} / {browser} / {os_name})",
                      ip_address=ip_address, user_agent=request.headers.get("user-agent", "") if request else "")
@@ -382,14 +454,16 @@ def bearer_user(authorization: Optional[str], require_session=True, request: Opt
         payload = decode_token(token)
     except Exception:
         raise HTTPException(401, "TOKEN_INVALID")
-    if payload.get("typ") == "refresh":
+    if payload.get("typ") in ("refresh", "registration"):
         raise HTTPException(401, "TOKEN_INVALID")
     username = payload.get("sub")
     user = _row(username) if username else None
     if not user:
         raise HTTPException(401, "ACCOUNT_NOT_FOUND")
-    if require_session and not session_is_active(user, token):
-        raise HTTPException(401, "SESSION_REVOKED")
+    if require_session:
+        assert_account_status(user)
+        if not session_is_active(user, token):
+            raise HTTPException(401, "SESSION_REVOKED")
     user["_token"] = token
     user["_role_claim"] = payload.get("role")
     return user
@@ -643,6 +717,12 @@ def change_password(username, old_password, new_password):
     return {"success": True, "message": "Đổi mật khẩu thành công. Vui lòng đăng nhập lại."}
 
 
+def assert_account_status(user):
+    status = user.get("status")
+    if status in (*LOCKED_STATUSES, "pending"):
+        raise HTTPException(401, f"ACCOUNT_{status.upper()}")
+
+
 def refresh_access_token(refresh_token: str) -> str:
     if not refresh_token:
         raise HTTPException(401, "Thiếu thông tin xác thực đăng nhập")
@@ -655,8 +735,7 @@ def refresh_access_token(refresh_token: str) -> str:
     user = _row(payload.get("sub"))
     if not user:
         raise HTTPException(401, "ACCOUNT_NOT_FOUND")
-    if user.get("status") in LOCKED_STATUSES:
-        raise HTTPException(401, "ACCOUNT_BANNED")
+    assert_account_status(user)
     user = _refresh_expiry(user)
     fingerprint = token_fingerprint(refresh_token)
     row = db.fetch_one(
