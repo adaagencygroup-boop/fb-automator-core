@@ -158,7 +158,7 @@ function UsersPageContent() {
     setSelectedIds([]);
 
     const VPS_BASE = getVpsBase();
-    const es = new EventSource(`${VPS_BASE}/api/v1/admin/notifications/stream`);
+    const es = new EventSource(`${VPS_BASE}/api/v1/admin/notifications/stream`, { withCredentials: true });
 
     es.onmessage = (event) => {
       try {

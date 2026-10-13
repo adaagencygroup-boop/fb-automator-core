@@ -125,6 +125,7 @@ export function translateApiError(raw: any): string {
 async function fetchApi(path: string, options?: RequestInit) {
   const token = typeof window !== "undefined" ? localStorage.getItem("admin_token") : null;
   const res = await fetch(`${getVpsBase()}${path}`, {
+    credentials: "include",
     ...options,
     headers: {
       "Content-Type": "application/json",
