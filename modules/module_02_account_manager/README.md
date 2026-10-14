@@ -216,6 +216,24 @@ Nếu các worker chạy độc lập hoặc gọi từ Desktop UI/Frontend Taur
 
 ## Kiểm thử
 
+### Ảnh đại diện account
+
+Sau đăng nhập thành công (phiên có sẵn, cookie hoặc mật khẩu), Module 02 lấy tên
+và ảnh cùng một lượt từ khối account trên trang chủ. Tên lấy từ text của link
+profile đúng UID; ảnh đọc từ
+`xlink:href`/`href` của SVG avatar trong link profile đúng UID trên trang chủ,
+dự phòng nút tài khoản, bằng chính browser đang đăng nhập. Không bấm/mở link
+profile để lấy ảnh. Chỉ khi thiếu tên mới dùng fallback lấy tên qua `/me`.
+Cookie `c_user` phải khớp UID; URL HTTPS Facebook CDN
+được lưu vào `avatar_url` và trả trong API danh sách/phân trang/chi tiết.
+Không lấy được ảnh thì giữ URL cũ, không làm đăng nhập thất bại. Đổi UID xóa
+URL cũ. Giao diện dùng chữ cái khi chưa có ảnh hoặc ảnh tải lỗi. URL có thể hết
+hạn; lần đăng nhập thành công tiếp theo sẽ cập nhật lại. Migration v4 bổ sung
+cột khi khởi tạo module, không cần lấy ảnh cho toàn bộ account lúc khởi động.
+
+Áp dụng cho cả đăng nhập hàng loạt, Mở Chrome và watcher phát hiện đăng nhập
+thủ công. Quá trình lấy và lưu ảnh không phát log riêng.
+
 Chạy: python -m unittest discover -s modules/module_02_account_manager/tests -t . -v
 
 Test dùng DB/profile tạm, mock Chrome/Facebook/HWID; proxy bridge test dùng loopback.

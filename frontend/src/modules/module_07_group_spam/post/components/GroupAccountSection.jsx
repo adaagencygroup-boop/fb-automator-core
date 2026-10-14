@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import Link from "next/link";
 import {
   Search,
@@ -6,24 +6,24 @@ import {
   RefreshCw,
   Users,
   Plus,
-  ChevronLeft,
-  ChevronRight,
+  MousePointerClick,
 } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { SectionCard, initialsOf } from "../../shared/components";
-import { AVATAR_COLORS } from "../../shared/constants";
+import { AVATAR_COLORS, MOCK_ACCOUNTS } from "../../shared/constants";
+import { attachDragSelection } from "../../shared/drag-selection";
 
 /**
  * ============================================================================
  * MODULE 07 - BƯỚC 1: CHỌN TÀI KHOẢN / NGƯỜI DÙNG ĐI SEEDING (GroupAccountSection)
  * Kế thừa nghiệp vụ từ FaceBook_Post_Group.py:
- * 1. Quản lý & nạp danh sách tài khoản Facebook (từ Module 2)
+ * 1. Quản lý & nạp danh sách tài khoản Facebook (từ Module 2 hoặc 20 tài khoản clone tĩnh để test)
  * 2. Tìm kiếm nhanh tài khoản theo UID, Tên người dùng
  * 3. Chọn tất cả / Bỏ chọn từng tài khoản
- * 4. Phân trang linh hoạt (10, 20, 50 hoặc Xem tất cả)
+ * 4. Cuộn trực tiếp không phân trang, hiển thị đầy đủ tài khoản
  * 5. Hiển thị thông tin Live/Die, Proxy, Bạn bè
  * ============================================================================
  */
@@ -34,33 +34,52 @@ export default function GroupAccountSection({
   setSelectedAccountKeys,
   onRefreshAccounts,
 }) {
+  // Gán trực tiếp danh sách tĩnh MOCK_ACCOUNTS (20 tài khoản) từ constants.js để test nhiều tài khoản
+  const effectiveAccounts = MOCK_ACCOUNTS;
+
   const [accountSearch, setAccountSearch] = useState("");
-  const [accountPage, setAccountPage] = useState(1);
-  const [accountPageSize, setAccountPageSize] = useState(10);
 
   // Lọc tài khoản theo từ khóa tìm kiếm
   const filteredAccounts = useMemo(() => {
     const query = accountSearch.trim().toLowerCase();
-    if (!query) return accounts;
-    return accounts.filter((account) =>
-      `${account.name} ${account.uid}`.toLowerCase().includes(query)
+    if (!query) return effectiveAccounts;
+    return effectiveAccounts.filter((account) =>
+      `${account.name} ${account.uid} ${account.email || ""}`.toLowerCase().includes(query)
     );
-  }, [accountSearch, accounts]);
+  }, [accountSearch, effectiveAccounts]);
 
-  // Phân trang danh sách tài khoản
-  const paginatedAccounts = useMemo(() => {
-    const start = (accountPage - 1) * accountPageSize;
-    return filteredAccounts.slice(start, start + accountPageSize);
-  }, [filteredAccounts, accountPage, accountPageSize]);
+  const tableContainerRef = useRef(null);
+  const rowsRef = useRef(filteredAccounts);
+  rowsRef.current = filteredAccounts;
+  const selectedKeysRef = useRef(selectedAccountKeys);
+  selectedKeysRef.current = selectedAccountKeys;
 
-  // Tổng số trang
-  const totalPages = Math.ceil(filteredAccounts.length / accountPageSize) || 1;
+  // Gắn cơ chế drag-to-select (giữ chuột kéo để chọn nhiều dòng liên tục)
+  useEffect(() => {
+    if (!tableContainerRef.current) return;
+    return attachDragSelection(tableContainerRef.current, {
+      getVisibleKeys: () => rowsRef.current.map((row) => row.key),
+      getSelectedKeys: () => selectedKeysRef.current,
+      onSelectionChange: (keys) => {
+        selectedKeysRef.current = keys;
+        setSelectedAccountKeys(keys);
+      },
+      disabled: accountsLoading,
+    });
+  }, [accountsLoading, setSelectedAccountKeys]);
 
   // Toggle chọn 1 tài khoản
   const toggleAccount = (key, checked) => {
     setSelectedAccountKeys((current) =>
       checked ? [...new Set([...current, key])] : current.filter((item) => item !== key)
     );
+  };
+
+  // Click vào dòng tài khoản để toggle nhanh
+  const handleRowClick = (accountKey, event) => {
+    if (event.target.closest("button, input, select, textarea, a, [role='button']")) return;
+    const isCurrentlySelected = selectedAccountKeys.includes(accountKey);
+    toggleAccount(accountKey, !isCurrentlySelected);
   };
 
   // Chọn tất cả tài khoản trong kết quả lọc
@@ -71,18 +90,17 @@ export default function GroupAccountSection({
   // Làm mới và đồng bộ lại danh sách tài khoản
   const handleRefresh = () => {
     setAccountSearch("");
-    setAccountPage(1);
     if (onRefreshAccounts) onRefreshAccounts();
   };
 
   return (
     <SectionCard
       number="1"
-      title="Chọn tài khoản / người dùng đi seeding"
+      title="Chọn tài khoản"
       description="Chọn danh sách tài khoản Facebook sẽ thực hiện đăng bài và tương tác"
       aside={
         <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
-          + Đã chọn {selectedAccountKeys.length}/{accounts.length} tài khoản
+          + Đã chọn {selectedAccountKeys.length}/{effectiveAccounts.length} tài khoản
         </span>
       }
     >
@@ -91,10 +109,7 @@ export default function GroupAccountSection({
           <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
           <Input
             value={accountSearch}
-            onChange={(event) => {
-              setAccountSearch(event.target.value);
-              setAccountPage(1);
-            }}
+            onChange={(event) => setAccountSearch(event.target.value)}
             placeholder="Tìm kiếm UID, tên tài khoản Facebook..."
             className="pl-9"
           />
@@ -106,7 +121,7 @@ export default function GroupAccountSection({
           onClick={handleSelectAll}
           className="cursor-pointer"
         >
-          <Check className="mr-1.5 size-3.5" /> Chọn tất cả ({filteredAccounts.length})
+          <Check className="mr-1.5 size-3.5" /> Chọn tất cả
         </Button>
         <Button
           type="button"
@@ -121,8 +136,8 @@ export default function GroupAccountSection({
       </div>
 
       <div className="overflow-hidden rounded-lg border border-slate-200">
-        <div className="max-h-[330px] overflow-auto">
-          <table className="w-full min-w-[650px] text-left text-[11px]">
+        <div ref={tableContainerRef} className="max-h-[360px] overflow-auto select-none">
+          <table className="w-full min-w-[650px] text-left text-[11px] select-none">
             <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500 shadow-xs">
               <tr className="border-b border-slate-200">
                 <th className="w-12 px-4 py-3">
@@ -142,12 +157,15 @@ export default function GroupAccountSection({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {paginatedAccounts.map((account, index) => {
+              {filteredAccounts.map((account, index) => {
                 const selected = selectedAccountKeys.includes(account.key);
                 return (
                   <tr
                     key={account.key}
-                    className={`transition-colors ${selected ? "bg-blue-50/30" : "bg-white hover:bg-slate-50/50"}`}
+                    data-account-key={account.key}
+                    onClick={(e) => handleRowClick(account.key, e)}
+                    className={`cursor-pointer transition-colors select-none ${selected ? "bg-blue-50/70 hover:bg-blue-100/60" : "bg-white hover:bg-slate-50"
+                      }`}
                   >
                     <td className="px-4 py-2.5">
                       <Checkbox
@@ -165,7 +183,7 @@ export default function GroupAccountSection({
                         <div>
                           <p className="font-semibold text-slate-700">{account.name}</p>
                           <p className="text-[10px] text-slate-400">
-                            {account.friends || "Tài khoản Module 2"}
+                            {account.email || "Chưa có email"}
                           </p>
                         </div>
                       </div>
@@ -229,76 +247,12 @@ export default function GroupAccountSection({
         </div>
       </div>
 
-      {/* THANH PHÂN TRANG */}
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-[10px] text-slate-400">
-        <div className="flex items-center gap-4">
-          <span>
-            Hiển thị{" "}
-            <strong className="text-slate-600">
-              {Math.min(filteredAccounts.length, accountPageSize)}/{accounts.length}
-            </strong>{" "}
-            tài khoản
-          </span>
-          <span>
-            Dòng / trang:{" "}
-            <select
-              value={accountPageSize}
-              onChange={(e) => {
-                setAccountPageSize(Number(e.target.value));
-                setAccountPage(1);
-              }}
-              className="ml-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 outline-none"
-            >
-              <option value={10}>10</option>
-              <option value={20}>20</option>
-              <option value={50}>50</option>
-            </select>
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              setAccountPageSize(accounts.length || 10);
-              setAccountPage(1);
-            }}
-            className="font-semibold text-primary hover:underline cursor-pointer"
-          >
-            Xem tất cả →
-          </button>
-        </div>
-
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            disabled={accountPage <= 1}
-            onClick={() => setAccountPage((p) => Math.max(1, p - 1))}
-            className="rounded border border-slate-200 p-1.5 text-slate-400 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-          >
-            <ChevronLeft className="size-3" />
-          </button>
-
-          {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1).map((page) => (
-            <button
-              key={page}
-              type="button"
-              onClick={() => setAccountPage(page)}
-              className={`size-7 rounded font-semibold transition-colors cursor-pointer ${accountPage === page
-                  ? "bg-primary text-white"
-                  : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                }`}
-            >
-              {page}
-            </button>
-          ))}
-
-          <button
-            type="button"
-            disabled={accountPage >= totalPages}
-            onClick={() => setAccountPage((p) => Math.min(totalPages, p + 1))}
-            className="rounded border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-          >
-            <ChevronRight className="size-3" />
-          </button>
-        </div>
+      {/* THÔNG TIN HIỂN THỊ */}
+      <div className="mt-3 flex items-center justify-end text-[11px] text-slate-400">
+        <span className="flex items-center gap-1.5 text-slate-400">
+          <MousePointerClick className="size-3 text-primary/70" />
+          <span>Giữ & kéo chuột để chọn dải tài khoản</span>
+        </span>
       </div>
     </SectionCard>
   );

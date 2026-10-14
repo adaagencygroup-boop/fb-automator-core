@@ -60,12 +60,20 @@ export default function SeedingPageMain() {
   // Merge SSE logs with local UI logs
   const combinedLogs = [
     ...localLogs,
-    ...sseLogs.map((l, idx) => ({
-      id: `sse-${l.timestamp}-${idx}`,
-      text: l.message,
-      time: l.timestamp,
-      type: l.type === "warning" ? "warn" : l.type,
-    })),
+    ...sseLogs.map((l, idx) => {
+      let displayTime = l.timestamp || l.time;
+      if (displayTime && displayTime.length > 10) {
+        try {
+          displayTime = new Date(displayTime).toLocaleTimeString("vi-VN");
+        } catch {}
+      }
+      return {
+        id: `sse-${l.timestamp || l.time || idx}-${idx}`,
+        text: l.message,
+        time: displayTime || "--:--:--",
+        type: l.type === "warning" ? "warn" : l.type || "info",
+      };
+    }),
   ];
 
   // Poll campaign status while running

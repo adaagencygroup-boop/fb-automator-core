@@ -27,15 +27,19 @@ def login_one(uid):
                     return decrypt_data(value)
                 except ValueError:
                     return ""
+            stage = "đăng nhập"
             try:
                 result = run_login(uid, secret(account.password), secret(account.two_fa), account.cookie, account.proxy)
-                Repo.update_login_status(db, uid, "logged_in" if result["success"] else "failed", result.get("profile_name"))
+                stage = "lưu kết quả đăng nhập vào DB"
+                Repo.update_login_status(db, uid, "logged_in" if result["success"] else "failed", result.get("profile_name"), avatar_url=result.get("avatar_url"))
+                stage = "lưu cookie vào DB"
                 if result.get("cookie"):
                     Repo.update_cookies(db, uid, result["cookie"])
                 broadcast("success" if result["success"] else "error", f"Đăng nhập {'thành công' if result['success'] else 'thất bại'}: {uid}", uid=uid)
-            except Exception:
+            except Exception as exc:
                 db.rollback()
-                broadcast("error", f"Đăng nhập lỗi: {uid}", uid=uid)
+                reason = "DB đã hết kết nối khả dụng" if "EMAXCONNSESSION" in str(exc) else type(exc).__name__
+                broadcast("error", f"Lỗi {stage}: {uid} ({reason})", uid=uid)
 
 async def login_batch(uids, threads):
     semaphore = asyncio.Semaphore(threads)

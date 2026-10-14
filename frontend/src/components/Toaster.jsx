@@ -104,13 +104,13 @@ function ToastCard({ item }) {
   );
 }
 
-/** Vùng hiển thị toast (góc trên bên phải, z-[999999] để không bao giờ bị modal che). Đặt trong src/app/layout.js */
+/** Vùng hiển thị toast (góc dưới bên phải, z-[999999] để không bao giờ bị modal che). Đặt trong src/app/layout.js */
 export default function Toaster() {
   const items = useToasts();
   return (
     <ol
       aria-live="assertive"
-      className="pointer-events-none fixed right-4 top-4 z-[999999] flex w-[min(520px,calc(100vw-2rem))] flex-col gap-3"
+      className="pointer-events-none fixed right-4 bottom-4 z-[999999] flex w-[min(520px,calc(100vw-2rem))] flex-col-reverse gap-3"
     >
       {items.map((t) => (
         <ToastCard key={t.id} item={t} />

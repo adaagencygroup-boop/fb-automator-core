@@ -33,6 +33,7 @@ class Account(Base):
     client_id = Column(String(100), nullable=True)
     proxy = Column(String(255), nullable=True)                       # Proxy dạng ip:port:user:pass
     profile_name = Column(String(150), nullable=True)                # Tên hiển thị Facebook
+    avatar_url = Column(Text, nullable=True)
     profile_path = Column(String(255), nullable=True)                # Đường dẫn thư mục Chrome Profile
     status = Column(String(20), default="NEW", nullable=False)       # NEW, LIVE, DIE, CHECKPOINT
     login_status = Column(String(30), default="NOT_LOGGED", nullable=False) # NOT_LOGGED, LOGGED_IN, ERROR

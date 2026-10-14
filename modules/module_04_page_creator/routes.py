@@ -75,6 +75,13 @@ class SettingItem(BaseModel):
     value: str
 
 
+class ManualPageRequest(BaseModel):
+    page_name: str
+    manager_uid: str
+    page_url: Optional[str] = ""
+    page_category: Optional[str] = ""
+
+
 async def _run_with_owner(owner, fn):
     with owner_scope(owner):
         await fn()
@@ -788,6 +795,106 @@ async def page_history(request: Request = None, owner_username: Optional[str] = 
         }
         for p in pages
     ]
+
+
+def _manager_uid(page):
+    admin = (page.shared_admin_uid or "").strip()
+    return admin or (page.creator_fb_uid or "").strip()
+
+
+def _manager_names(db, uids, owner):
+    wanted = [uid for uid in uids if uid]
+    if not wanted:
+        return {}
+    from modules.module_02_account_manager.database.models import Account
+
+    names = {}
+    for account in db.query(Account).filter(Account.uid.in_(wanted)).all():
+        if owner and account.user_id and str(account.user_id) != str(owner):
+            continue
+        label = (account.profile_name or "").strip()
+        if not label:
+            continue
+        current = names.get(account.uid)
+        if current is None or (owner and str(account.user_id or "") == str(owner)):
+            names[account.uid] = label
+    return names
+
+
+def _managed_row(page, names):
+    from modules.module_04_page_creator.automation.facebook_urls import facebook_picture_url
+    from modules.module_04_page_creator.automation.page_flow import clean_facebook_page_url
+    from modules.module_04_page_creator.database import to_vn_iso
+
+    manager = _manager_uid(page)
+    page_url = clean_facebook_page_url(page.page_url) if page.page_url else ""
+    return {
+        "id": page.id,
+        "page_name": page.page_name,
+        "page_category": page.page_category or "",
+        "page_url": page_url,
+        "page_avatar_url": facebook_picture_url(page_url),
+        "status": page.status,
+        "creator_fb_uid": page.creator_fb_uid,
+        "manager_uid": manager,
+        "manager_name": names.get(manager, ""),
+        "manager_avatar_url": facebook_picture_url(manager),
+        "created_at": to_vn_iso(page.created_at),
+    }
+
+
+@router.get("/pages/managed")
+def list_managed_pages(db: Session = Depends(get_db)):
+    """Danh sách fanpage Module 4, kèm tài khoản đang quản lý."""
+    from modules.module_04_page_creator.database import PageRepo
+
+    owner = get_owner_username()
+    pages = PageRepo.get_all(db, owner_username=owner)
+    names = _manager_names(db, {_manager_uid(page) for page in pages}, owner)
+    return {"pages": [_managed_row(page, names) for page in pages]}
+
+
+@router.post("/pages/manual")
+def add_manual_page(req: ManualPageRequest, db: Session = Depends(get_db)):
+    """Thêm fanpage có sẵn vào danh sách, không tạo page trên Facebook."""
+    from modules.module_04_page_creator.automation.page_flow import clean_facebook_page_url
+    from modules.module_04_page_creator.database import PageRepo
+
+    name = (req.page_name or "").strip()
+    manager = (req.manager_uid or "").strip()
+    if not name or len(name) > 255:
+        raise HTTPException(status_code=400, detail="Nhập tên fanpage.")
+    if not manager.isdigit() or not (4 <= len(manager) <= 20):
+        raise HTTPException(status_code=400, detail="UID quản lý phải là số Facebook.")
+    url = clean_facebook_page_url(req.page_url or "")
+    if (req.page_url or "").strip() and not url:
+        raise HTTPException(status_code=400, detail="Link fanpage không hợp lệ.")
+    owner = get_owner_username()
+    page = PageRepo.create(
+        db,
+        {
+            "creator_fb_uid": manager,
+            "shared_admin_uid": manager,
+            "page_name": name,
+            "page_category": (req.page_category or "").strip(),
+            "page_url": url,
+            "status": "SUCCESS",
+            "log_detail": "Thêm tay từ danh sách Fanpage",
+        },
+        owner_username=owner,
+    )
+    names = _manager_names(db, {manager}, owner)
+    return {"page": _managed_row(page, names)}
+
+
+@router.delete("/pages/{page_id}")
+def delete_managed_page(page_id: int, db: Session = Depends(get_db)):
+    from modules.module_04_page_creator.database import PageRepo
+
+    owner = get_owner_username()
+    if not PageRepo.delete_owned(db, page_id, owner_username=owner):
+        raise HTTPException(status_code=404, detail="Không tìm thấy fanpage.")
+    return {"success": True}
 
 
 @router.get("/settings")

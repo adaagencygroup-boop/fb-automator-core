@@ -98,7 +98,11 @@ export const seedingApi = {
   },
 
   getSeedingCampaignDetail: async (campaignId) => {
-    return await api.get(`/api/seeding/campaigns/${campaignId}/detail`);
+    try {
+      return await api.get(`/api/seeding/campaigns/${campaignId}/detail`);
+    } catch {
+      return null;
+    }
   },
 
   getSeedingStats: async () => {
