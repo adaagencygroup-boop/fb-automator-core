@@ -1,32 +1,26 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
-  Bold,
-  CalendarDays,
-  Check,
-  Clock3,
-  Download,
-  ExternalLink,
-  FileText,
-  FileUp,
-  ImageIcon,
-  Info,
-  Italic,
-  Link2,
-  List,
-  ListFilter,
-  Play,
-  Plus,
-  RefreshCw,
-  RotateCcw,
-  RotateCw,
-  Search,
   Sparkles,
+  RotateCcw,
+  Plus,
+  Play,
   Square,
-  Trash2,
-  Underline,
+  RefreshCw,
+  Clock3,
+  CalendarDays,
+  ListFilter,
   Users,
+  Search,
+  Check,
+  Info,
+  ImageIcon,
+  Bold,
+  Italic,
+  Underline,
+  List,
+  Link2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -35,6 +29,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import {
   generateGroupPosts,
@@ -45,8 +40,8 @@ import {
   testGroupAiConnection,
 } from "../service";
 import {
-  GROUPS,
   INITIAL_POST,
+  MOCK_ACCOUNTS,
 } from "../shared/constants";
 import {
   SectionCard,
@@ -74,10 +69,11 @@ const DEFAULT_GEMINI_MODELS = [
 export default function GroupPostModule() {
   const mediaInputRef = useRef(null);
 
-  const [accounts, setAccounts] = useState([]);
-  const [customGroups, setCustomGroups] = useState(GROUPS);
-  const [accountsLoading, setAccountsLoading] = useState(true);
-  const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
+  const [accounts, setAccounts] = useState(MOCK_ACCOUNTS);
+  const [accountsLoading, setAccountsLoading] = useState(false);
+  const [selectedAccountKeys, setSelectedAccountKeys] = useState(
+    MOCK_ACCOUNTS.slice(0, 4).map((account) => account.key)
+  );
   const [model, setModel] = useState("gpt-4o");
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
@@ -86,21 +82,16 @@ export default function GroupPostModule() {
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsAction, setSettingsAction] = useState("");
   const [settingsFeedback, setSettingsFeedback] = useState(null);
+  const [isSettingsLocked, setIsSettingsLocked] = useState(false);
   const [threads, setThreads] = useState("2");
   const [restMinutes, setRestMinutes] = useState("10");
   const [maxPosts, setMaxPosts] = useState("10");
   const [groupSource, setGroupSource] = useState("file");
-  const [groupFile, setGroupFile] = useState({
-    name: "danh_sach_nhom_tiem_nang_04.txt",
-    size: 24780,
-    status: "valid",
-    dedupCount: 5,
-    invalidCount: 4,
-    validGroupsCount: 68,
-  });
-  const [groupSearch, setGroupSearch] = useState("việc làm online, tuyển dụng ctv, kinh doanh online");
+  const [groupFile, setGroupFile] = useState(null);
+  const [customGroups, setCustomGroups] = useState([]);
+  const [groupSearch, setGroupSearch] = useState("việc làm online, tuyển dụng ctv");
   const [groupFilter, setGroupFilter] = useState("");
-  const [selectedGroupKeys, setSelectedGroupKeys] = useState(GROUPS.map((group) => group.key));
+  const [selectedGroupKeys, setSelectedGroupKeys] = useState([]);
   const [mediaFiles, setMediaFiles] = useState([]);
   const [minMedia, setMinMedia] = useState("1");
   const [maxMedia, setMaxMedia] = useState("4");
@@ -122,17 +113,14 @@ export default function GroupPostModule() {
   const loadAccounts = async () => {
     setAccountsLoading(true);
     try {
-      const data = await getAccounts();
-      const rawList = Array.isArray(data) ? data : (data?.accounts || []);
-      const rows = rawList.map(normalizeAccount);
-      setAccounts(rows);
-      setSelectedAccountKeys(
-        rows.filter((account) => account.status === "LIVE").slice(0, 4).map((account) => account.key)
+      setAccounts(MOCK_ACCOUNTS);
+      setSelectedAccountKeys((current) =>
+        current.length ? current : MOCK_ACCOUNTS.slice(0, 4).map((account) => account.key)
       );
     } catch (err) {
-      console.warn("Lỗi nạp tài khoản từ Module 2:", err);
-      setAccounts([]);
-      setSelectedAccountKeys([]);
+      console.warn("Lỗi nạp tài khoản:", err);
+      setAccounts(MOCK_ACCOUNTS);
+      setSelectedAccountKeys(MOCK_ACCOUNTS.slice(0, 4).map((account) => account.key));
     } finally {
       setAccountsLoading(false);
     }
@@ -154,10 +142,14 @@ export default function GroupPostModule() {
         setRestMinutes(String(data.rest_minutes));
         setMaxPosts(String(data.max_posts));
         setProviderStatus(data.providers || {});
+        const activeProv = data.model?.startsWith("gemini-") || data.model === "gemini" ? "gemini" : "openai";
+        if (data.providers?.[activeProv]?.configured) {
+          setIsSettingsLocked(true);
+        }
       })
       .catch((error) => {
         if (cancelled) return;
-        setSettingsFeedback({ type: "error", message: error.message || "Không đọc được cấu hình local" });
+        setSettingsFeedback({ type: "error", title: "Lỗi nạp cấu hình", message: error.message || "Không đọc được cấu hình local" });
       })
       .finally(() => {
         if (!cancelled) setSettingsLoading(false);
@@ -169,7 +161,7 @@ export default function GroupPostModule() {
     if (groupSource === "file" && groupFile?.groups?.length) {
       return groupFile.groups;
     }
-    return customGroups;
+    return customGroups || [];
   }, [groupSource, groupFile, customGroups]);
 
   const selectedAccounts = accounts.filter((account) => selectedAccountKeys.includes(account.key));
@@ -209,7 +201,7 @@ export default function GroupPostModule() {
     setSettingsFeedback(null);
   };
 
-  const handleSaveSettings = async () => {
+  const handleSaveSettings = async (shouldScroll = true) => {
     setSettingsAction("saving");
     setSettingsFeedback(null);
     try {
@@ -218,9 +210,21 @@ export default function GroupPostModule() {
       setApiKey("");
       setShowApiKey(false);
       setSettingsFeedback({ type: "success", message: "Đã lưu cấu hình trên máy này" });
+      toast.success("Đã lưu cấu hình trên máy này thành công.", "LƯU THÀNH CÔNG");
+      setIsSettingsLocked(true);
+
+      if (shouldScroll) {
+        setTimeout(() => {
+          const step3Element = document.getElementById("step-3-group-source");
+          if (step3Element) {
+            step3Element.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        }, 120);
+      }
+
       return true;
     } catch (error) {
-      setSettingsFeedback({ type: "error", message: error.message || "Không thể lưu cấu hình" });
+      setSettingsFeedback({ type: "error", title: "Lỗi lưu cấu hình", message: error.message || "Không thể lưu cấu hình" });
       return false;
     } finally {
       setSettingsAction("");
@@ -234,43 +238,44 @@ export default function GroupPostModule() {
       if (!hasApiKey) throw new Error("Hãy nhập API Key trước khi kiểm tra");
       const result = await testGroupAiConnection({ model, api_key: apiKey.trim() || null });
       setSettingsFeedback({ type: "success", message: result.message || "Kết nối API thành công" });
+      toast.success(result.message || "Kết nối API thành công!", "KIỂM TRA THÀNH CÔNG");
     } catch (error) {
-      setSettingsFeedback({ type: "error", message: error.message || "API Key không hợp lệ" });
+      setSettingsFeedback({ type: "error", title: "Lỗi kiểm tra API", message: error.message || "API Key không hợp lệ" });
     } finally {
       setSettingsAction("");
     }
   };
 
-  // function tải model
   const handleLoadGeminiModels = async () => {
-    // 1. Bật trạng thái loading cho nút bấm
     setSettingsAction("loading-models");
-
     setSettingsFeedback(null);
     try {
       if (!apiKey.trim() && !providerStatus.gemini?.configured) {
         throw new Error("Hãy nhập Google AI Studio API Key trước khi tải model");
       }
       const result = await getGeminiModels({ api_key: apiKey.trim() || null });
-
-      // 2. Cập nhật danh sách model vào state
       setGeminiModels(result.models);
-
-      // 3. Chọn model đầu tiên nếu chưa chọn model nào
       if (!result.models.some((item) => item.id === model)) {
         setModel(result.models[0].id);
       }
-      setSettingsFeedback({ type: "success", message: `Đã tải ${result.count} model khả dụng từ Google AI Studio` });
+      setSettingsFeedback({
+        type: "success",
+        message: `Đã tải ${result.count} model khả dụng từ Google AI Studio`,
+      });
+      toast.success(`Đã tải ${result.count} model khả dụng từ Google AI Studio.`, "TẢI MODEL THÀNH CÔNG");
     } catch (error) {
-      setSettingsFeedback({ type: "error", message: error.message || "Không tải được danh sách model Google" });
+      setSettingsFeedback({
+        type: "error",
+        title: "Lỗi tải model Google",
+        message: error.message || "Không tải được danh sách model Google",
+      });
     } finally {
       setSettingsAction("");
     }
   };
 
-
-  const handleFiles = (files) => {
-    const nextFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/") || file.type.startsWith("video/"));
+  const handleFiles = (fileList) => {
+    const nextFiles = Array.from(fileList || []).slice(0, 10);
     setMediaFiles(nextFiles);
   };
 
@@ -312,8 +317,10 @@ export default function GroupPostModule() {
     setRunState("starting");
     setProgress(4);
     try {
-      const saved = await handleSaveSettings();
-      if (!saved) throw new Error("Cấu hình chưa hợp lệ");
+      if (!isSettingsLocked) {
+        const saved = await handleSaveSettings(false);
+        if (!saved) throw new Error("Cấu hình chưa hợp lệ");
+      }
       const activeGroups = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
       await runGroupCampaign({
         action_type: "POST",
@@ -360,7 +367,7 @@ export default function GroupPostModule() {
         </p>
       </div>
 
-      {/* Bước 1: Chọn tài khoản / người dùng đi seeding - Đã tách thành file GroupAccountSection.jsx riêng */}
+      {/* Bước 1: Chọn tài khoản / người dùng đi seeding */}
       <GroupAccountSection
         accounts={accounts}
         accountsLoading={accountsLoading}
@@ -369,8 +376,7 @@ export default function GroupPostModule() {
         onRefreshAccounts={loadAccounts}
       />
 
-
-      {/* Bước 2: Cấu hình API & thông số chung - Đã tách thành file GroupSettingsSection.jsx riêng */}
+      {/* Bước 2: Cấu hình API & thông số chung */}
       <GroupSettingsSection
         model={model}
         setModel={setModel}
@@ -397,23 +403,27 @@ export default function GroupPostModule() {
         onTestApi={handleTestApi}
         onLoadGeminiModels={handleLoadGeminiModels}
         onModelChange={handleModelChange}
+        isLocked={isSettingsLocked}
+        setIsLocked={setIsSettingsLocked}
       />
 
-      {/* Bước 3: Nguồn nhóm - Đã tách thành file GroupSourceSection.jsx riêng */}
-      <GroupSourceSection
-        groupSource={groupSource}
-        setGroupSource={setGroupSource}
-        groupFile={groupFile}
-        setGroupFile={setGroupFile}
-        groupSearch={groupSearch}
-        setGroupSearch={setGroupSearch}
-        groupFilter={groupFilter}
-        setGroupFilter={setGroupFilter}
-        selectedGroupKeys={selectedGroupKeys}
-        setSelectedGroupKeys={setSelectedGroupKeys}
-        customGroups={customGroups}
-        setCustomGroups={setCustomGroups}
-      />
+      {/* Bước 3: Nguồn nhóm */}
+      <div id="step-3-group-source" className="scroll-mt-6">
+        <GroupSourceSection
+          groupSource={groupSource}
+          setGroupSource={setGroupSource}
+          groupFile={groupFile}
+          setGroupFile={setGroupFile}
+          groupSearch={groupSearch}
+          setGroupSearch={setGroupSearch}
+          groupFilter={groupFilter}
+          setGroupFilter={setGroupFilter}
+          selectedGroupKeys={selectedGroupKeys}
+          setSelectedGroupKeys={setSelectedGroupKeys}
+          customGroups={customGroups}
+          setCustomGroups={setCustomGroups}
+        />
+      </div>
 
       {/* Bước 4 */}
       <SectionCard number="4" title="Chọn media (ảnh/video)">
@@ -501,8 +511,9 @@ export default function GroupPostModule() {
                 type="button"
                 key={index}
                 onClick={() => setActivePost(index)}
-                className={`h-9 min-w-20 flex-1 text-[10px] font-semibold ${activePost === index ? "bg-primary text-white" : "text-slate-500 hover:bg-white"
-                  }`}
+                className={`h-9 min-w-20 flex-1 text-[10px] font-semibold ${
+                  activePost === index ? "bg-primary text-white" : "text-slate-500 hover:bg-white"
+                }`}
               >
                 Bài {index + 1}
               </button>

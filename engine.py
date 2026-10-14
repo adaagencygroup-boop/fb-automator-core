@@ -169,6 +169,7 @@ _PUBLIC_API = {
     "/api/v1/admin/login",
     "/api/facebook/webhook",
     "/api/facebook/config",
+    "/api/groups/source/template",
 }
 
 

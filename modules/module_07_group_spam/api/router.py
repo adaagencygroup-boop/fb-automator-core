@@ -131,6 +131,8 @@ class ParseFileInput(BaseModel):
 class SearchGroupInput(BaseModel):
     keyword: str = Field(min_length=1, max_length=200)
     max_results: int = Field(default=50, ge=1, le=200)
+    member_filter: str = Field(default="all")
+    group_type: str = Field(default="all")
 
 
 class CampaignInput(BaseModel):
@@ -176,7 +178,13 @@ async def download_group_template():
 async def search_groups(item: SearchGroupInput):
     """Tìm kiếm nhóm theo từ khóa (kế thừa FaceBook_Post_Group.py)."""
     try:
-        results = await asyncio.to_thread(search_facebook_groups, item.keyword, item.max_results)
+        results = await asyncio.to_thread(
+            search_facebook_groups,
+            item.keyword,
+            item.max_results,
+            item.member_filter,
+            item.group_type,
+        )
         return {"groups": results, "count": len(results)}
     except Exception as exc:
         raise HTTPException(400, f"Lỗi tìm kiếm nhóm: {exc}") from exc
