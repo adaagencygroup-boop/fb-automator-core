@@ -146,14 +146,15 @@ def set_login_status(uid: str, status: str, profile_name: Optional[str] = None, 
 
 def owner_from_request(request) -> Optional[str]:
     """
-    Owner của request = id người đang đăng nhập (cookie fb_access / Bearer), giống Module 02 router.scoped_owner,
+    Owner của request = id người đang đăng nhập (Bearer hoặc cookie phiên), giống Module 02 router.scoped_owner,
     để Tab 1 thấy đúng nick người đó đã import và mở đúng thư mục profile. Không đăng nhập thì None (nick local).
+    Cookie phiên lấy qua module_auth.token_from_request (app gửi X-Auth-Client: user -> fb_user_access).
     """
     from fastapi import HTTPException
-    from modules.module_auth.service import bearer_user
+    from modules.module_auth.service import bearer_user, token_from_request
 
     auth_header = request.headers.get("Authorization")
-    if not ((auth_header and auth_header.strip()) or request.cookies.get("fb_access")):
+    if not ((auth_header and auth_header.strip()) or token_from_request(None, request)):
         return None
     try:
         user = bearer_user(auth_header, require_session=True, request=request)
