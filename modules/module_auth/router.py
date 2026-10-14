@@ -489,3 +489,10 @@ def assert_module_access(authorization: Optional[str]):
     if not licensed_for_modules(user):
         raise HTTPException(403, "LICENSE_REQUIRED")
     return user
+
+
+def assert_request_module_access(authorization: Optional[str], path: str, method: str):
+    # Dashboard summaries stay readable; their routers still enforce owner scope.
+    if method == "GET" and path in {"/api/accounts/stats", "/api/creator/pages/history"}:
+        return bearer_user(authorization)
+    return assert_module_access(authorization)
