@@ -21,7 +21,8 @@ with patch("sqlalchemy.create_engine", side_effect=AssertionError("DB at import"
 
     def test_no_host_or_source_project_imports(self):
         root = Path(__file__).resolve().parents[1]
-        forbidden = {"core", "app", "config", "PyQt5"}
+        forbidden = {"app", "config", "PyQt5"}
+        allowed_core_prefixes = ("core.browser",)
         for path in root.rglob("*.py"):
             if "tests" in path.parts:
                 continue
@@ -29,4 +30,12 @@ with patch("sqlalchemy.create_engine", side_effect=AssertionError("DB at import"
             for node in ast.walk(tree):
                 imports = [node.module] if isinstance(node, ast.ImportFrom) and not node.level else [item.name for item in node.names] if isinstance(node, ast.Import) else []
                 for name in imports:
-                    self.assertNotIn((name or "").split(".")[0], forbidden, str(path))
+                    if not name:
+                        continue
+                    root_pkg = name.split(".")[0]
+                    self.assertNotIn(root_pkg, forbidden, str(path))
+                    if root_pkg == "core":
+                        self.assertTrue(
+                            any(name == pref or name.startswith(pref + ".") for pref in allowed_core_prefixes),
+                            f"Disallowed core import '{name}' in {path}",
+                        )

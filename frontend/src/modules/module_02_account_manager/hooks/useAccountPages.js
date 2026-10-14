@@ -7,6 +7,7 @@ export function useAccountPages(query, enabled, tableRef, clearSelection) {
   const [stats, setStats] = useState({ total: 0, live: 0, die: 0 });
   const [page, setPage] = useState({ total: 0, next_cursor: null, has_more: false });
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState(null);
   const [moreError, setMoreError] = useState(null);
@@ -33,7 +34,10 @@ export function useAccountPages(query, enabled, tableRef, clearSelection) {
       setAccounts([]);
       setPage({ total: 0, next_cursor: null, has_more: false });
       setIsInitialLoading(true);
+      setIsRefreshing(false);
       tableRef.current?.reset();
+    } else if (current.current.accounts.length > 0) {
+      setIsRefreshing(true);
     }
     const statsRequest = getAccountsStats().then(result => {
       if (id === generation.current) setStats(result);
@@ -60,7 +64,11 @@ export function useAccountPages(query, enabled, tableRef, clearSelection) {
       }
     } finally {
       await statsRequest;
-      if (id === generation.current) { busy.current = false; setIsInitialLoading(false); }
+      if (id === generation.current) {
+        busy.current = false;
+        setIsInitialLoading(false);
+        setIsRefreshing(false);
+      }
     }
   }, [tableRef, clearSelection]);
 
@@ -93,5 +101,5 @@ export function useAccountPages(query, enabled, tableRef, clearSelection) {
     Promise.resolve().then(() => { if (enabled && !cancelled) fetchAccounts(true); });
     return () => { cancelled = true; generation.current += 1; busy.current = false; };
   }, [query, enabled, fetchAccounts]);
-  return { ...page, accounts, setAccounts, stats, isInitialLoading, isLoadingMore, loadError, moreError, fetchAccounts, loadMore, retryMore };
+  return { ...page, accounts, setAccounts, stats, isInitialLoading, isRefreshing, isLoadingMore, loadError, moreError, fetchAccounts, loadMore, retryMore };
 }

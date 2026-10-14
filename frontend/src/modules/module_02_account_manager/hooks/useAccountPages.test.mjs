@@ -4,9 +4,9 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 // Exercise request orchestration with controlled network promises and hook state.
-function harness() {
+function harness({ statsFailure = false } = {}) {
   const slots = [], effects = [], calls = [], anchors = [];
-  let cursor = 0, selected = ["old"], query = {};
+  let cursor = 0, selected = ["old"], query = {}, cleanup;
   const tableRef = { current: { capture: () => ({ uid: "1", offset: 20 }), restore: anchor => anchors.push(anchor), reset: () => anchors.push("reset") } };
   const context = {
     useState(initial) {
@@ -19,9 +19,9 @@ function harness() {
       return slots[index] ??= { current: initial };
     },
     useCallback: callback => callback,
-    useEffect: () => {},
+    useEffect: callback => { cleanup = callback(); },
     useLayoutEffect: callback => effects.push(callback),
-    getAccountsStats: async () => ({ total: 37, live: 20, die: 17 }),
+    getAccountsStats: async () => { if (statsFailure) throw new Error("stats unavailable"); return { total: 37, live: 20, die: 17 }; },
     getAccountsPage: params => new Promise((resolve, reject) => calls.push({ params, resolve, reject })),
   };
   let source = readFileSync(new URL("./useAccountPages.js", import.meta.url), "utf8");
@@ -34,7 +34,7 @@ function harness() {
     effects.splice(0).forEach(effect => effect());
     return hook;
   }
-  return { render, calls, anchors, selected: () => selected };
+  return { render, calls, anchors, selected: () => selected, unmount: () => cleanup?.() };
 }
 const result = (start, length = 10, has_more = true) => ({ accounts: Array.from({ length }, (_, index) => ({ uid: String(start + index) })), total: 37, next_cursor: has_more ? start + length : null, has_more });
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -120,3 +120,47 @@ test("mutation completion through an earlier callback refreshes the current quer
   h.calls[0].resolve(result(300, 1, false)); await pending;
   assert.equal(h.render().accounts[0].uid, "300");
 });
+
+test("FE06 stats failure still renders list and releases pagination lock", async () => {
+  const h = harness({ statsFailure: true });
+  const first = h.render().fetchAccounts(true);
+  h.calls[0].resolve(result(1)); await first;
+  assert.equal(h.render().accounts.length, 10);
+  assert.equal(h.render().isInitialLoading, false);
+  const more = h.render().loadMore();
+  h.calls[1].resolve(result(11, 1, false)); await more;
+  assert.equal(h.render().accounts.length, 11);
+});
+
+test("FE07 unmount invalidates a pending page", async () => {
+  const h = harness();
+  const request = h.render().fetchAccounts(true);
+  h.unmount();
+  h.calls[0].resolve(result(1)); await request;
+  assert.equal(h.render().accounts.length, 0);
+});
+
+test("FE08 initial failure retries the first page through fetchAccounts", async () => {
+  const h = harness();
+  const first = h.render().fetchAccounts(true);
+  h.calls[0].reject(new Error("list unavailable")); await first;
+  assert.equal(h.render().loadError, "list unavailable");
+  const retry = h.render().fetchAccounts(true);
+  assert.equal(h.calls[1].params.cursor, undefined);
+  h.calls[1].resolve(result(1, 1, false)); await retry;
+  assert.equal(h.render().loadError, null);
+  assert.equal(h.render().accounts.length, 1);
+});
+
+test("isRefreshing is true during background refresh and false upon completion", async () => {
+  const h = harness();
+  const first = h.render().fetchAccounts(true);
+  h.calls[0].resolve(result(1)); await first;
+  let hook = h.render();
+  assert.equal(hook.isRefreshing, false);
+  const refresh = hook.fetchAccounts(false);
+  assert.equal(h.render().isRefreshing, true);
+  h.calls[1].resolve(result(1)); await refresh;
+  assert.equal(h.render().isRefreshing, false);
+});
+
