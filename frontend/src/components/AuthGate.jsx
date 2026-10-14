@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import api from "@/services/api";
+import { clearSessionUserId } from "@/services/sessionIdentity.mjs";
 import LoginScreen from "@/modules/module_auth/LoginScreen";
 import RegisterScreen from "@/modules/module_auth/RegisterScreen";
 import PendingScreen from "@/modules/module_auth/PendingScreen";
@@ -19,6 +20,8 @@ export default function AuthGate({ children }) {
   const [sessionNotice, setSessionNotice] = useState("");
 
   const loadMe = useCallback(async () => {
+    // Called after an explicit successful login: permit the newly selected user.
+    clearSessionUserId();
     const me = await api.get("/api/v1/auth/me");
     localStorage.removeItem("pending_username");
     localStorage.removeItem("locked_username");
@@ -56,6 +59,8 @@ export default function AuthGate({ children }) {
           localStorage.removeItem("pending_username");
           localStorage.removeItem("locked_username");
           setSessionNotice("Phiên đăng nhập đã bị thu hồi. Vui lòng đăng nhập lại.");
+        } else if (error.code === "SESSION_IDENTITY_CHANGED") {
+          setSessionNotice("Danh tính phiên đăng nhập đã thay đổi. Vui lòng đăng nhập lại tài khoản của bạn.");
         } else if (localStorage.getItem("pending_username") || localStorage.getItem("locked_username")) {
           try {
             const profile = await api.get("/api/v1/auth/registration-status");
@@ -101,7 +106,7 @@ export default function AuthGate({ children }) {
       } else if (message === "ACCOUNT_REJECTED") {
         setScreen("rejected");
       } else {
-        setSessionNotice(message === "SESSION_REVOKED" ? "Phiên đăng nhập đã bị thu hồi. Vui lòng đăng nhập lại." : "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
+        setSessionNotice(message === "SESSION_IDENTITY_CHANGED" ? "Danh tính phiên đăng nhập đã thay đổi. Vui lòng đăng nhập lại tài khoản của bạn." : message === "SESSION_REVOKED" ? "Phiên đăng nhập đã bị thu hồi. Vui lòng đăng nhập lại." : "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
         setScreen("login");
       }
     };
@@ -139,6 +144,7 @@ export default function AuthGate({ children }) {
 
   async function logout() {
     await api.post("/api/v1/auth/logout").catch(() => { });
+    clearSessionUserId();
     setUser(null);
     localStorage.removeItem("pending_username");
     localStorage.removeItem("locked_username");

@@ -1,6 +1,7 @@
 """API khớp hợp đồng web-admin nguồn: /api/v1/auth và /api/v1/admin."""
 import asyncio
 import json
+import logging
 import os
 from queue import Empty
 import time
@@ -123,37 +124,47 @@ def _secure_cookie() -> bool:
     return os.environ.get("COOKIE_SECURE", "").lower() in ("1", "true", "yes")
 
 
-def set_auth_cookies(response: Response, access: str, refresh: str, remember_me: bool = True) -> None:
-    response.delete_cookie("fb_registration", path="/api/v1/auth")
+def set_auth_cookies(response: Response, access: str, refresh: str, remember_me: bool = True, admin_client: bool = False, user_client: bool = False) -> None:
+    if not admin_client:
+        response.delete_cookie("fb_registration", path="/api/v1/auth")
     secure = _secure_cookie()
     response.set_cookie(
-        "fb_access",
+        "fb_admin_access" if admin_client else "fb_user_access" if user_client else "fb_access",
         access,
         max_age=ACCESS_TOKEN_MINUTES * 60 if remember_me else None,
         httponly=True,
         secure=secure,
         samesite="lax",
-        path="/",
+        path="/api/v1/" if admin_client else "/",
     )
     response.set_cookie(
-        "fb_refresh",
+        "fb_admin_refresh" if admin_client else "fb_user_refresh" if user_client else "fb_refresh",
         refresh,
         max_age=REFRESH_TOKEN_DAYS * 24 * 60 * 60 if remember_me else None,
         httponly=True,
         secure=secure,
         samesite="lax",
-        path="/api/v1/auth",
+        path="/api/v1/" if admin_client else "/api/v1/auth",
     )
 
 
-def clear_auth_cookies(response: Response) -> None:
+def clear_auth_cookies(response: Response, admin_client: bool = False, user_client: bool = False) -> None:
+    if admin_client:
+        response.delete_cookie("fb_admin_access", path="/api/v1/")
+        response.delete_cookie("fb_admin_refresh", path="/api/v1/")
+        return
+    if user_client:
+        response.delete_cookie("fb_user_access", path="/")
+        response.delete_cookie("fb_user_refresh", path="/api/v1/auth")
+        response.delete_cookie("fb_registration", path="/api/v1/auth")
+        return
     response.delete_cookie("fb_access", path="/")
     response.delete_cookie("fb_refresh", path="/api/v1/auth")
     response.delete_cookie("fb_registration", path="/api/v1/auth")
 
 
-def set_registration_cookie(response: Response, ticket: str):
-    clear_auth_cookies(response)
+def set_registration_cookie(response: Response, ticket: str, user_client: bool = False):
+    clear_auth_cookies(response, user_client=user_client)
     response.set_cookie("fb_registration", ticket, max_age=86400, httponly=True,
                         secure=_secure_cookie(), samesite="lax", path="/api/v1/auth")
 
@@ -164,21 +175,22 @@ def read_hwid():
 
 
 @auth_router.post("/register", status_code=201)
-def register(body: RegisterBody, response: Response):
+def register(body: RegisterBody, request: Request, response: Response):
     hwid = get_hwid()
     data = register_user(body.username, body.password, body.contact_info, hwid)
-    set_registration_cookie(response, create_registration_ticket(body.username.strip(), data["user_id"], hwid))
+    set_registration_cookie(response, create_registration_ticket(body.username.strip(), data["user_id"], hwid), user_client=request.headers.get("x-auth-client") == "user")
     return data
 
 
 @auth_router.get("/registration-status")
 def read_registration_status(request: Request):
     hwid = get_hwid()
-    for name in ("fb_refresh", "fb_registration"):
+    refresh_name = "fb_user_refresh" if request.headers.get("x-auth-client") == "user" else "fb_refresh"
+    for name in (refresh_name, "fb_registration"):
         ticket = request.cookies.get(name)
         if ticket:
             try:
-                return registration_status(ticket, hwid, allow_refresh=name == "fb_refresh")
+                return registration_status(ticket, hwid, allow_refresh=name == refresh_name)
             except HTTPException as error:
                 if error.status_code != 401:
                     raise
@@ -188,7 +200,7 @@ def read_registration_status(request: Request):
 @auth_router.post("/verify-license")
 def verify(body: LicenseBody, request: Request, response: Response):
     data = verify_license(body.username, body.password, body.hwid or "", request)
-    set_auth_cookies(response, data.pop("access_token"), data.pop("refresh_token"))
+    set_auth_cookies(response, data.pop("access_token"), data.pop("refresh_token"), user_client=request.headers.get("x-auth-client") == "user")
     return data
 
 
@@ -201,28 +213,33 @@ def login(body: UserLoginBody, request: Request, response: Response):
         if error.detail not in ("ACCOUNT_PENDING", "ACCOUNT_BANNED", "ACCOUNT_LOCKED", "ERR_HWID_MISMATCH"):
             raise
         result = JSONResponse(status_code=error.status_code, content={"detail": error.detail})
-        set_registration_cookie(result, pending_login_ticket(body.username, hwid))
+        set_registration_cookie(result, pending_login_ticket(body.username, hwid), user_client=request.headers.get("x-auth-client") == "user")
         return result
-    set_auth_cookies(response, data.pop("access_token"), data.pop("refresh_token"), body.remember_me)
+    set_auth_cookies(response, data.pop("access_token"), data.pop("refresh_token"), body.remember_me, user_client=request.headers.get("x-auth-client") == "user")
     return data
 
 
 @auth_router.post("/refresh")
 def refresh(request: Request, response: Response):
-    refresh_token = request.cookies.get("fb_refresh", "")
-    access = refresh_access_token(refresh_token)
     admin_client = request.headers.get("x-auth-client") == "admin"
+    user_client = request.headers.get("x-auth-client") == "user"
+    # Accept a legacy admin session until the next login, but prefer its isolated cookie.
+    refresh_token = request.cookies.get("fb_user_refresh", "") if user_client else (request.cookies.get("fb_admin_refresh") if admin_client else None) or request.cookies.get("fb_refresh", "")
+    access = refresh_access_token(refresh_token)
+    expected_user = request.headers.get("x-auth-user-id")
+    if expected_user and str(decode_token(access).get("uid")) != expected_user:
+        raise HTTPException(401, "SESSION_IDENTITY_CHANGED")
     if admin_client and decode_token(access).get("role") not in ("admin", "ADMIN"):
         raise HTTPException(403, "Chỉ admin mới được thao tác")
     remember_me = decode_token(refresh_token).get("remember_me", True)
     response.set_cookie(
-        "fb_access",
+        "fb_admin_access" if admin_client else "fb_user_access" if user_client else "fb_access",
         access,
         max_age=ACCESS_TOKEN_MINUTES * 60 if remember_me else None,
         httponly=True,
         secure=_secure_cookie(),
         samesite="lax",
-        path="/",
+        path="/api/v1/" if admin_client else "/",
     )
     return {"ok": True, "access_token": access} if admin_client else {"ok": True}
 
@@ -258,31 +275,47 @@ def password(body: PasswordBody, request: Request, authorization: Optional[str] 
 
 @auth_router.post("/logout")
 def logout(request: Request, response: Response, authorization: Optional[str] = Header(None)):
-    token = request.cookies.get("fb_refresh") or ""
+    admin_client = request.headers.get("x-auth-client") == "admin"
+    user_client = request.headers.get("x-auth-client") == "user"
+    token = request.cookies.get("fb_admin_refresh" if admin_client else "fb_user_refresh" if user_client else "fb_refresh") or ""
     if not token and authorization and authorization.startswith("Bearer "):
         token = authorization[7:].strip()
     if not token:
-        token = request.cookies.get("fb_access") or ""
+        token = request.cookies.get("fb_admin_access" if admin_client else "fb_user_access" if user_client else "fb_access") or ""
     if token:
+        try:
+            claims = decode_token(token)
+        except Exception:
+            claims = {}
+        logging.getLogger("uvicorn.error").info(
+            "Auth: explicit logout client=%s user_id=%s session_id=%s token_type=%s",
+            "admin" if admin_client else "user", claims.get("uid"), claims.get("sid"), claims.get("typ"),
+        )
         logout_token(token)
-    clear_auth_cookies(response)
+    clear_auth_cookies(response, admin_client=admin_client, user_client=user_client)
     return {"success": True, "message": "Đã đăng xuất"}
 
 
 @admin_router.post("/login")
-async def login_admin(request: Request, response: Response, username: str = "", password: str = ""):
+async def login_admin(request: Request, response: Response, username: str = "", password: str = "", remember_me: bool = True):
     if not username or not password:
         try:
             data = await request.json()
             username = username or data.get("username", "")
             password = password or data.get("password", "")
+            if "remember_me" in data:
+                if not isinstance(data["remember_me"], bool):
+                    raise HTTPException(422, "remember_me phải là boolean")
+                remember_me = data["remember_me"]
+        except HTTPException:
+            raise
         except Exception:
             pass
-    data = admin_login(username, password, request)
+    data = admin_login(username, password, request, remember_me)
     access = data.pop("cookie_access", None)
     refresh = data.pop("cookie_refresh", None)
     if access and refresh:
-        set_auth_cookies(response, access, refresh)
+        set_auth_cookies(response, access, refresh, remember_me, admin_client=True)
     if request.headers.get("x-auth-client") == "browser":
         data.pop("access_token", None)
     return data
@@ -376,10 +409,12 @@ async def hwid_reset(user_id: int, request: Request):
 async def notification_stream(request: Request):
     """Cookie-authenticated SSE; registration events are sent only after commit."""
     def validate_stream_user():
-        refresh = request.cookies.get("fb_refresh")
+        refresh = request.cookies.get("fb_admin_refresh")
         authorization = request.headers.get("authorization")
         if refresh and not authorization:
             authorization = f"Bearer {refresh_access_token(refresh)}"
+        elif request.cookies.get("fb_admin_access") and not authorization:
+            authorization = f"Bearer {request.cookies['fb_admin_access']}"
         user = bearer_user(authorization, request=request)
         if user.get("role") not in ("admin", "ADMIN"):
             raise HTTPException(403, "Chỉ admin mới được thao tác")

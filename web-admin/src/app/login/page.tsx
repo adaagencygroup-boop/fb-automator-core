@@ -92,7 +92,7 @@ export default function LoginPage() {
 
     try {
       console.log(`[Admin Login] Sending login request for user: ${finalUsername}`);
-      const data = await api.adminLogin(finalUsername, finalPassword);
+      const data = await api.adminLogin(finalUsername, finalPassword, remember);
       console.log("[Admin Login] Login successful, redirecting to dashboard...");
       localStorage.setItem("admin_token", data.access_token);
       if (remember) localStorage.setItem(REMEMBER_KEY, finalUsername);
