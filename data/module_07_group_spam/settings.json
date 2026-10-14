@@ -1,0 +1,9 @@
+{
+  "model": "gemini-pro-latest",
+  "threads": 2,
+  "rest_minutes": 10,
+  "max_posts": 10,
+  "api_keys": {
+    "gemini": "bGTHP1DlkMi++u0njQWXC6TeO2thAQ3uVTZi7TW32gD8jgw0CT6l6Gil47HRe3dYTdmDfk5ZnRX5G5Zm8ONX8gattWoIaaPT7fGrQn1kfow="
+  }
+}
