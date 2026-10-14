@@ -225,7 +225,7 @@ export const HIDDEN_NAV_ITEMS = [
   {
     id: "profile",
     label: "Hồ sơ cá nhân",
-    description: "Thông tin cá nhân, proxy và API key của bạn.",
+    description: "Quản trị thông tin xác thực tài khoản, thời hạn License và liên kết phần cứng HWID an toàn.",
     moduleId: "settings",
     icon: icon("icon_nav_profile", 30, 13),
   },
