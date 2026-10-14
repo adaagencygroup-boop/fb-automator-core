@@ -9,6 +9,8 @@ import {
   ChevronRight,
   Clock3,
   Download,
+  Eye,
+  EyeOff,
   ExternalLink,
   FileText,
   FileUp,
@@ -39,7 +41,14 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
-import { runGroupCampaign } from "../service";
+import {
+  generateGroupPosts,
+  getGeminiModels,
+  getGroupSettings,
+  runGroupCampaign,
+  saveGroupSettings,
+  testGroupAiConnection,
+} from "../service";
 import Link from "next/link";
 import {
   GROUPS,
@@ -55,6 +64,18 @@ import {
   normalizeAccount,
 } from "../shared/components";
 
+const DEFAULT_GEMINI_MODELS = [
+  { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
+  { id: "gemini-3.7-flash", name: "Gemini 3.7 Flash" },
+  { id: "gemini-3.6-flash", name: "Gemini 3.6 Flash" },
+  { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash" },
+  { id: "gemini-3.5-flash-lite", name: "Gemini 3.5 Flash-Lite" },
+  { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" },
+  { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash (quyền truy cập cũ)" },
+  { id: "gemini-2.5-flash-lite", name: "Gemini 2.5 Flash-Lite (quyền truy cập cũ)" },
+  { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro (quyền truy cập cũ)" },
+];
+
 export default function GroupPostModule() {
   const mediaInputRef = useRef(null);
   const groupFileInputRef = useRef(null);
@@ -65,6 +86,12 @@ export default function GroupPostModule() {
   const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
   const [model, setModel] = useState("gpt-4o");
   const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [providerStatus, setProviderStatus] = useState({});
+  const [geminiModels, setGeminiModels] = useState(DEFAULT_GEMINI_MODELS);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsAction, setSettingsAction] = useState("");
+  const [settingsFeedback, setSettingsFeedback] = useState(null);
   const [threads, setThreads] = useState("2");
   const [restMinutes, setRestMinutes] = useState("10");
   const [maxPosts, setMaxPosts] = useState("10");
@@ -98,6 +125,7 @@ export default function GroupPostModule() {
   const [progress, setProgress] = useState(0);
   const [accountPage, setAccountPage] = useState(1);
   const [accountPageSize, setAccountPageSize] = useState(10);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const loadAccounts = async () => {
     setAccountsLoading(true);
@@ -110,7 +138,7 @@ export default function GroupPostModule() {
         rows.filter((account) => account.status === "LIVE").slice(0, 4).map((account) => account.key)
       );
     } catch (err) {
-      console.error("Lỗi nạp tài khoản từ Module 2:", err);
+      console.warn("Lỗi nạp tài khoản từ Module 2:", err);
       setAccounts([]);
       setSelectedAccountKeys([]);
     } finally {
@@ -119,7 +147,30 @@ export default function GroupPostModule() {
   };
 
   useEffect(() => {
-    loadAccounts();
+    let cancelled = false;
+    Promise.resolve().then(loadAccounts);
+    Promise.resolve().then(getGroupSettings)
+      .then((data) => {
+        if (cancelled) return;
+        setModel(data.model);
+        if (data.model?.startsWith("gemini-")) {
+          setGeminiModels((current) => current.some((item) => item.id === data.model)
+            ? current
+            : [{ id: data.model, name: data.model }, ...current]);
+        }
+        setThreads(String(data.threads));
+        setRestMinutes(String(data.rest_minutes));
+        setMaxPosts(String(data.max_posts));
+        setProviderStatus(data.providers || {});
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setSettingsFeedback({ type: "error", message: error.message || "Không đọc được cấu hình local" });
+      })
+      .finally(() => {
+        if (!cancelled) setSettingsLoading(false);
+      });
+    return () => { cancelled = true; };
   }, []);
 
   const filteredAccounts = useMemo(() => {
@@ -145,6 +196,88 @@ export default function GroupPostModule() {
   const activeGroupsCount = groupSource === "file" ? (groupFile?.validGroupsCount || 68) : selectedGroups.length;
   const generatedCount = posts.filter((post) => post.trim()).length;
   const totalPlanned = Math.min(Number(maxPosts) || 0, activeGroupsCount * Math.max(selectedAccounts.length, 1));
+  const activeProvider = model === "gemini" || model.startsWith("gemini-") ? "gemini" : "openai";
+  const savedKey = providerStatus[activeProvider];
+  const hasApiKey = Boolean(apiKey.trim() || savedKey?.configured);
+
+  const normalizedSettings = () => {
+    const values = {
+      model,
+      api_key: apiKey.trim() || null,
+      threads: Number(threads),
+      rest_minutes: Number(restMinutes),
+      max_posts: Number(maxPosts),
+    };
+    if (!Number.isInteger(values.threads) || values.threads < 1 || values.threads > 10) {
+      throw new Error("Số luồng phải là số nguyên từ 1 đến 10");
+    }
+    if (!Number.isInteger(values.rest_minutes) || values.rest_minutes < 0 || values.rest_minutes > 1440) {
+      throw new Error("Thời gian nghỉ phải là số nguyên từ 0 đến 1440 phút");
+    }
+    if (!Number.isInteger(values.max_posts) || values.max_posts < 1 || values.max_posts > 1000) {
+      throw new Error("Max bài phải là số nguyên từ 1 đến 1000");
+    }
+    return values;
+  };
+
+  const handleModelChange = (event) => {
+    setModel(event.target.value);
+    setApiKey("");
+    setShowApiKey(false);
+    setSettingsFeedback(null);
+  };
+
+  const handleSaveSettings = async () => {
+    setSettingsAction("saving");
+    setSettingsFeedback(null);
+    try {
+      const result = await saveGroupSettings(normalizedSettings());
+      setProviderStatus(result.providers || {});
+      setApiKey("");
+      setShowApiKey(false);
+      setSettingsFeedback({ type: "success", message: "Đã lưu cấu hình trên máy này" });
+      return true;
+    } catch (error) {
+      setSettingsFeedback({ type: "error", message: error.message || "Không thể lưu cấu hình" });
+      return false;
+    } finally {
+      setSettingsAction("");
+    }
+  };
+
+  const handleTestApi = async () => {
+    setSettingsAction("testing");
+    setSettingsFeedback(null);
+    try {
+      if (!hasApiKey) throw new Error("Hãy nhập API Key trước khi kiểm tra");
+      const result = await testGroupAiConnection({ model, api_key: apiKey.trim() || null });
+      setSettingsFeedback({ type: "success", message: result.message || "Kết nối API thành công" });
+    } catch (error) {
+      setSettingsFeedback({ type: "error", message: error.message || "API Key không hợp lệ" });
+    } finally {
+      setSettingsAction("");
+    }
+  };
+
+  const handleLoadGeminiModels = async () => {
+    setSettingsAction("loading-models");
+    setSettingsFeedback(null);
+    try {
+      if (!apiKey.trim() && !providerStatus.gemini?.configured) {
+        throw new Error("Hãy nhập Google AI Studio API Key trước khi tải model");
+      }
+      const result = await getGeminiModels({ api_key: apiKey.trim() || null });
+      setGeminiModels(result.models);
+      if (!result.models.some((item) => item.id === model)) {
+        setModel(result.models[0].id);
+      }
+      setSettingsFeedback({ type: "success", message: `Đã tải ${result.count} model khả dụng từ Google AI Studio` });
+    } catch (error) {
+      setSettingsFeedback({ type: "error", message: error.message || "Không tải được danh sách model Google" });
+    } finally {
+      setSettingsAction("");
+    }
+  };
 
   const toggleAccount = (key, checked) => {
     setSelectedAccountKeys((current) =>
@@ -242,17 +375,33 @@ export default function GroupPostModule() {
     }
   };
 
-  const generatePosts = () => {
+  const generatePosts = async () => {
     const amount = Math.max(1, Math.min(10, Number(aiCount) || 1));
-    const source = prompt.trim() || "Viết bài tuyển cộng tác viên làm online tại nhà, giọng văn thân thiện và rõ ràng.";
-    setPosts(
-      Array.from({ length: amount }, (_, index) =>
-        index === 0
-          ? `${source}\n\nCông việc linh hoạt, phù hợp cho người muốn tăng thêm thu nhập. Ai quan tâm hãy nhắn tin để nhận thông tin chi tiết nhé! 💙`
-          : `${source}\n\nPhiên bản ${index + 1}: Nội dung được điều chỉnh để hạn chế trùng lặp khi đăng vào nhiều nhóm.`,
-      ),
-    );
-    setActivePost(0);
+    if (!prompt.trim()) {
+      setSettingsFeedback({ type: "error", message: "Hãy nhập chủ đề/mô tả trước khi tạo nội dung" });
+      return;
+    }
+    if (!hasApiKey) {
+      setSettingsFeedback({ type: "error", message: "Chưa cấu hình API Key cho model đã chọn" });
+      return;
+    }
+    setIsGenerating(true);
+    setSettingsFeedback(null);
+    try {
+      const result = await generateGroupPosts({
+        model,
+        api_key: apiKey.trim() || null,
+        prompt: prompt.trim(),
+        count: amount,
+      });
+      setPosts(result.posts);
+      setActivePost(0);
+      setSettingsFeedback({ type: "success", message: `Đã tạo ${result.count} bài bằng ${model}` });
+    } catch (error) {
+      setSettingsFeedback({ type: "error", message: error.message || "Không thể tạo nội dung AI" });
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const updateActivePost = (value) => {
@@ -264,6 +413,8 @@ export default function GroupPostModule() {
     setRunState("starting");
     setProgress(4);
     try {
+      const saved = await handleSaveSettings();
+      if (!saved) throw new Error("Cấu hình chưa hợp lệ");
       const activeGroups = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
       await runGroupCampaign({
         action_type: "POST",
@@ -286,7 +437,8 @@ export default function GroupPostModule() {
       });
       setRunState("running");
       setProgress(12);
-    } catch {
+    } catch (error) {
+      setSettingsFeedback({ type: "error", message: error.message || "Không thể bắt đầu chiến dịch" });
       setRunState("idle");
       setProgress(0);
     }
@@ -527,34 +679,70 @@ export default function GroupPostModule() {
       <SectionCard number="2" title="Cấu hình API & thông số chung">
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Model AI" required>
-            <SelectField value={model} onChange={(event) => setModel(event.target.value)}>
-              <option value="gpt-4o">GPT-4o (OpenAI)</option>
-              <option value="gpt-4o-mini">GPT-4o mini (OpenAI)</option>
-              <option value="gemini">Gemini</option>
+            <SelectField value={model} onChange={handleModelChange} disabled={settingsLoading}>
+              <optgroup label="OpenAI">
+                <option value="gpt-4o">GPT-4o</option>
+                <option value="gpt-4o-mini">GPT-4o mini</option>
+              </optgroup>
+              <optgroup label="Google AI Studio">
+                {geminiModels.map((item) => (
+                  <option key={item.id} value={item.id}>{item.name}</option>
+                ))}
+              </optgroup>
             </SelectField>
-            <span className="block text-[10px] font-normal text-slate-400">Chọn mô hình AI tạo nội dung theo phong cách mong muốn.</span>
+            <span className="block text-[10px] font-normal text-slate-400">Model đang dùng: {model}. Có thể tải danh sách thực theo quyền của API Key.</span>
           </Field>
           <Field label="API Key" required>
-            <Input
-              type="password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder="sk-ant-api03-••••••••••••••••"
-              className="font-mono"
-            />
-            <span className="block text-[10px] font-normal text-slate-400">Nhập API Key hợp lệ của nhà cung cấp AI đã chọn.</span>
+            <div className="relative">
+              <Input
+                type={showApiKey ? "text" : "password"}
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                placeholder={savedKey?.configured ? `Đã lưu ${savedKey.hint}` : activeProvider === "openai" ? "sk-••••••••••••••••" : "AIza••••••••••••••••"}
+                className="pr-10 font-mono"
+                autoComplete="off"
+              />
+              <button
+                type="button"
+                onClick={() => setShowApiKey((current) => !current)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                aria-label={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
+                title={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
+              >
+                {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+            <span className="block text-[10px] font-normal text-slate-400">
+              {savedKey?.configured ? `Đang dùng khóa đã mã hóa trên máy (${savedKey.hint}). Nhập khóa mới để thay thế.` : "Nhập API Key hợp lệ của nhà cung cấp AI đã chọn."}
+            </span>
           </Field>
         </div>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <Field label="Luồng">
-            <Input type="number" min="1" value={threads} onChange={(event) => setThreads(event.target.value)} />
+            <Input type="number" min="1" max="10" value={threads} onChange={(event) => setThreads(event.target.value)} />
           </Field>
           <Field label="Nghỉ (phút)">
-            <Input type="number" min="0" value={restMinutes} onChange={(event) => setRestMinutes(event.target.value)} />
+            <Input type="number" min="0" max="1440" value={restMinutes} onChange={(event) => setRestMinutes(event.target.value)} />
           </Field>
           <Field label="Max bài">
-            <Input type="number" min="1" value={maxPosts} onChange={(event) => setMaxPosts(event.target.value)} />
+            <Input type="number" min="1" max="1000" value={maxPosts} onChange={(event) => setMaxPosts(event.target.value)} />
           </Field>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+          <div className={`text-[11px] ${settingsFeedback?.type === "error" ? "text-red-600" : "text-emerald-600"}`}>
+            {settingsLoading ? "Đang đọc cấu hình local..." : settingsFeedback?.message || (hasApiKey ? "API Key đã được cấu hình trên máy" : "Chưa có API Key cho model này")}
+          </div>
+          <div className="flex gap-2">
+            <Button type="button" size="sm" variant="outline" disabled={Boolean(settingsAction) || settingsLoading} onClick={handleLoadGeminiModels}>
+              {settingsAction === "loading-models" ? "Đang tải model..." : "Tải model Google"}
+            </Button>
+            <Button type="button" size="sm" variant="outline" disabled={Boolean(settingsAction) || settingsLoading} onClick={handleTestApi}>
+              {settingsAction === "testing" ? "Đang kiểm tra..." : "Kiểm tra API"}
+            </Button>
+            <Button type="button" size="sm" disabled={Boolean(settingsAction) || settingsLoading || !hasApiKey} onClick={handleSaveSettings}>
+              {settingsAction === "saving" ? "Đang lưu..." : "Lưu cấu hình"}
+            </Button>
+          </div>
         </div>
       </SectionCard>
 
@@ -913,8 +1101,8 @@ export default function GroupPostModule() {
                 <option value="10">10</option>
               </SelectField>
             </Field>
-            <Button type="button" onClick={generatePosts} className="w-full">
-              <Sparkles className="mr-2 size-3.5" /> Tạo nội dung AI
+            <Button type="button" onClick={generatePosts} disabled={isGenerating} className="w-full">
+              <Sparkles className="mr-2 size-3.5" /> {isGenerating ? "Đang tạo nội dung..." : "Tạo nội dung AI"}
             </Button>
           </div>
         </div>
@@ -925,7 +1113,7 @@ export default function GroupPostModule() {
               <p className="text-xs font-bold text-slate-800">Kết quả nội dung AI ({generatedCount} bài)</p>
               <p className="text-[10px] text-slate-400">Bạn có thể chỉnh sửa nội dung trước khi đăng</p>
             </div>
-            <Button type="button" size="sm" variant="outline" className="text-primary" onClick={generatePosts}>
+            <Button type="button" size="sm" variant="outline" className="text-primary" disabled={isGenerating} onClick={generatePosts}>
               <RotateCcw className="mr-1.5 size-3.5" /> Tạo lại
             </Button>
           </div>
@@ -1028,7 +1216,7 @@ export default function GroupPostModule() {
           {[
             [<Users key="a" className="size-3.5" />, "Tài khoản", `${selectedAccounts.length} tài khoản đã chọn`],
             [<ListFilter key="b" className="size-3.5" />, "Hạn bài", `${maxPosts} bài`],
-            [<Sparkles key="c" className="size-3.5" />, "API Key", apiKey ? "Đã nhập" : "Chưa nhập"],
+            [<Sparkles key="c" className="size-3.5" />, "API Key", hasApiKey ? "Đã cấu hình" : "Chưa cấu hình"],
             [<Sparkles key="d" className="size-3.5" />, "Số bài AI", `${generatedCount} bài`],
             [<Search key="e" className="size-3.5" />, "Nguồn nhóm", groupSource === "search" ? "Tìm theo từ khóa" : "Từ file link nhóm"],
             [<ImageIcon key="f" className="size-3.5" />, "Min / Max media", `${minMedia} – ${maxMedia} ảnh`],
@@ -1048,7 +1236,7 @@ export default function GroupPostModule() {
               </span>
               <strong
                 className={
-                  value === "Đã nhập" || (label === "Hẹn giờ" && scheduleEnabled)
+                  value === "Đã cấu hình" || (label === "Hẹn giờ" && scheduleEnabled)
                     ? "text-emerald-600"
                     : "text-slate-700"
                 }
@@ -1099,7 +1287,7 @@ export default function GroupPostModule() {
           <Button
             type="button"
             variant="success"
-            disabled={runState !== "idle" || !selectedAccounts.length || !hasGroups}
+            disabled={runState !== "idle" || !selectedAccounts.length || !hasGroups || !hasApiKey || settingsLoading}
             onClick={handleStart}
           >
             <Play className="mr-2 size-3.5 fill-current" /> BẮT ĐẦU ĐĂNG BÀI
