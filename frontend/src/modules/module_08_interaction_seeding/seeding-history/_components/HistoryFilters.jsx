@@ -1,7 +1,29 @@
 "use client";
 
 import React, { useState } from "react";
-import { Search, Filter, RotateCcw, ChevronDown } from "lucide-react";
+import { Search, Filter, RotateCcw } from "lucide-react";
+import CustomSelect from "@/components/ui/custom-select";
+
+const typeOptions = [
+  { value: "ALL", label: "Tất cả" },
+  { value: "PAGE", label: "Page" },
+  { value: "PROFILE", label: "Trang cá nhân" },
+  { value: "POST", label: "Bài viết" },
+];
+
+const statusOptions = [
+  { value: "ALL", label: "Tất cả" },
+  { value: "COMPLETED", label: "Hoàn thành" },
+  { value: "FAILED", label: "Không hoàn thành" },
+];
+
+const timePresetOptions = [
+  { value: "CUSTOM", label: "Tùy chọn" },
+  { value: "TODAY", label: "Hôm nay" },
+  { value: "LAST_7_DAYS", label: "7 ngày qua" },
+  { value: "LAST_30_DAYS", label: "30 ngày qua" },
+  { value: "THIS_MONTH", label: "Tháng này" },
+];
 
 export default function HistoryFilters({
   searchTerm,
@@ -20,8 +42,7 @@ export default function HistoryFilters({
 }) {
   const [timePreset, setTimePreset] = useState("CUSTOM");
 
-  const handlePresetChange = (e) => {
-    const val = e.target.value;
+  const handlePresetChange = (val) => {
     setTimePreset(val);
     const now = new Date();
     const formatDate = (d) => d.toISOString().split("T")[0];
@@ -117,19 +138,14 @@ export default function HistoryFilters({
           <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
             LOẠI SEEDING
           </label>
-          <div className="relative">
-            <select
-              value={typeFilter}
-              onChange={(e) => onTypeFilterChange(e.target.value)}
-              className="w-full h-10 px-3.5 pr-8 text-xs rounded-xl border border-slate-200 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 appearance-none font-medium cursor-pointer"
-            >
-              <option value="ALL">Tất cả</option>
-              <option value="PAGE">Page</option>
-              <option value="PROFILE">Trang cá nhân</option>
-              <option value="POST">Bài viết</option>
-            </select>
-            <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-          </div>
+          <CustomSelect
+            value={typeFilter}
+            onChange={onTypeFilterChange}
+            options={typeOptions}
+            className="w-full"
+            buttonClassName="h-10 rounded-xl border-slate-200 bg-white text-xs font-medium text-slate-800"
+            dropdownClassName="rounded-xl border-slate-200 shadow-lg"
+          />
         </div>
 
         {/* Status Filter */}
@@ -137,18 +153,14 @@ export default function HistoryFilters({
           <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
             TRẠNG THÁI
           </label>
-          <div className="relative">
-            <select
-              value={statusFilter}
-              onChange={(e) => onStatusFilterChange(e.target.value)}
-              className="w-full h-10 px-3.5 pr-8 text-xs rounded-xl border border-slate-200 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 appearance-none font-medium cursor-pointer"
-            >
-              <option value="ALL">Tất cả</option>
-              <option value="COMPLETED">Hoàn thành</option>
-              <option value="FAILED">Không hoàn thành</option>
-            </select>
-            <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-          </div>
+          <CustomSelect
+            value={statusFilter}
+            onChange={onStatusFilterChange}
+            options={statusOptions}
+            className="w-full"
+            buttonClassName="h-10 rounded-xl border-slate-200 bg-white text-xs font-medium text-slate-800"
+            dropdownClassName="rounded-xl border-slate-200 shadow-lg"
+          />
         </div>
       </div>
 
@@ -158,20 +170,14 @@ export default function HistoryFilters({
           <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
             THỜI GIAN
           </label>
-          <div className="relative">
-            <select
-              value={timePreset}
-              onChange={handlePresetChange}
-              className="w-full h-10 px-3.5 pr-8 text-xs rounded-xl border border-slate-200 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 appearance-none font-medium cursor-pointer"
-            >
-              <option value="CUSTOM">Tùy chọn</option>
-              <option value="TODAY">Hôm nay</option>
-              <option value="LAST_7_DAYS">7 ngày qua</option>
-              <option value="LAST_30_DAYS">30 ngày qua</option>
-              <option value="THIS_MONTH">Tháng này</option>
-            </select>
-            <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-          </div>
+          <CustomSelect
+            value={timePreset}
+            onChange={handlePresetChange}
+            options={timePresetOptions}
+            className="w-full"
+            buttonClassName="h-10 rounded-xl border-slate-200 bg-white text-xs font-medium text-slate-800"
+            dropdownClassName="rounded-xl border-slate-200 shadow-lg"
+          />
         </div>
 
         <div className="md:col-span-3 space-y-1.5">
@@ -215,7 +221,7 @@ export default function HistoryFilters({
               setTimePreset("CUSTOM");
               onReset();
             }}
-            className="h-10 px-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm shrink-0"
+            className="h-10 px-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm shrink-0 cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
             Đặt lại
@@ -223,7 +229,7 @@ export default function HistoryFilters({
           <button
             type="button"
             onClick={onApply}
-            className="h-10 px-7 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm shadow-blue-500/20 flex-1 sm:flex-initial"
+            className="h-10 px-7 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm shadow-blue-500/20 flex-1 sm:flex-initial cursor-pointer"
           >
             <Filter className="w-3.5 h-3.5 text-white" />
             Lọc

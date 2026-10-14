@@ -1,5 +1,6 @@
 import axios from "axios";
 import { API_BASE } from "../config/constants";
+import { acceptSessionUser, getSessionUserId } from "./sessionIdentity.mjs";
 
 export const api = axios.create({
   baseURL: API_BASE,
@@ -7,7 +8,16 @@ export const api = axios.create({
   withCredentials: true,
   headers: {
     "Content-Type": "application/json",
+    "X-Auth-Client": "user",
   },
+});
+
+api.interceptors.request.use((config) => {
+  const userId = getSessionUserId();
+  const identityFree = ["/auth/login", "/auth/register", "/verify-license", "/registration-status"].some((path) => String(config.url).includes(path));
+  if (userId && !identityFree) config.headers["X-Auth-User-Id"] = userId;
+  else delete config.headers["X-Auth-User-Id"];
+  return config;
 });
 
 export const NETWORK_ERROR_MESSAGE = "Không thể kết nối tới Local Engine. Hãy kiểm tra Engine đã được bật chưa.";
@@ -33,7 +43,10 @@ function apiError(error) {
 function refreshAccess() {
   if (!refreshPromise) {
     refreshPromise = axios
-      .post(`${API_BASE}/api/v1/auth/refresh`, {}, { withCredentials: true, timeout: 15000 })
+      .post(`${API_BASE}/api/v1/auth/refresh`, {}, {
+        withCredentials: true, timeout: 15000,
+        headers: { "X-Auth-Client": "user", ...(getSessionUserId() ? { "X-Auth-User-Id": getSessionUserId() } : {}) },
+      })
       .finally(() => {
         refreshPromise = null;
       });
@@ -74,13 +87,15 @@ function extractErrorMessage(error) {
 
 api.interceptors.response.use(
   (response) => {
+    if (String(response.config.url).split("?")[0].endsWith("/api/v1/auth/me")) acceptSessionUser(response.data);
     warned.delete("network"); // Engine đã chạy lại -> lần mất kết nối sau vẫn được ghi log
     return response.data;
   },
   async (error) => {
     const status = error.response?.status;
     const original = error.config;
-    if (status === 401 && original && !original._retry && !shouldSkipRefresh(original.url)) {
+    const detail = error.response?.data?.detail;
+    if (status === 401 && !["SESSION_IDENTITY_CHANGED", "SESSION_REVOKED"].includes(detail) && original && !original._retry && !shouldSkipRefresh(original.url)) {
       original._retry = true;
       try {
         await refreshAccess();

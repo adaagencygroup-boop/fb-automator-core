@@ -21,6 +21,13 @@ from config.settings import settings
 from core.database.connection import db
 from core.database.models import init_database
 from core.facebook.fb_graph_client import fb_client
+from core.ai.gemini_engine import ai_engine
+from core.media.tiktok_scraper import tiktok_scraper
+from core.media.youtube_scraper import youtube_scraper
+from core.network.proxy_manager import proxy_manager
+from modules.module_02_account_manager.api.router import router as account_router, alias_router as account_alias_router
+from modules.module_07_group_spam.api import router as group_router
+from modules.module_02_account_manager import initialize as initialize_accounts, shutdown as shutdown_accounts
 from core.startup import startup_step
 from modules import load_backend_modules
 from modules.module_02_account_manager import initialize as initialize_accounts
@@ -30,7 +37,7 @@ from modules.module_02_account_manager.api.router import (
 )
 from modules.module_02_account_manager.api.router import router as account_router
 from modules.module_08_interaction_seeding.be.seeding_routes import seeding_router
-from modules.module_auth.router import admin_router, assert_module_access, auth_router
+from modules.module_auth.router import admin_router, assert_request_module_access, auth_router
 from modules.module_auth.schema import init_auth_tables
 from modules.module_auth.service import ensure_admin
 
@@ -190,13 +197,16 @@ class LicenseMiddleware:
             }
             auth = headers.get("authorization")
             if not auth:
+                # EventSource cannot send custom headers; prefer the user cookie there too.
+                cookie_names = {part.strip().partition("=")[0] for part in headers.get("cookie", "").split(";")}
+                access_cookie = "fb_user_access" if headers.get("x-auth-client") == "user" or "fb_user_access" in cookie_names else "fb_access"
                 for part in headers.get("cookie", "").split(";"):
                     name, _, value = part.strip().partition("=")
-                    if name == "fb_access" and value:
+                    if name == access_cookie and value:
                         auth = f"Bearer {value}"
                         break
             try:
-                assert_module_access(auth)
+                assert_request_module_access(auth, path, method)
             except HTTPException as exc:
                 body = json.dumps({"detail": exc.detail}).encode()
                 await send(
@@ -329,6 +339,9 @@ def get_dashboard_stats():
 # ==================== MODULE 2: ACCOUNT MANAGER ====================
 app.include_router(account_router)
 app.include_router(account_alias_router)
+
+# ==================== MODULE 7: GROUP POSTING ====================
+app.include_router(group_router)
 
 # ==================== MODULE 8: INTERACTION SEEDING ====================
 app.include_router(seeding_router, prefix="/api")

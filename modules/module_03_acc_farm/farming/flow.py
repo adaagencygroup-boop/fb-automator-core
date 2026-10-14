@@ -311,6 +311,31 @@ def _focus_is_text_field(driver) -> bool:
         return True
 
 
+def _focus_on_page(driver) -> bool:
+    """
+    Focus đang ở trang (body), không ở nút / link / ô nhập. Chỉ lúc này PAGE_DOWN / SPACE mới là cuộn:
+    SPACE khi focus còn ở nút (vd nút chuông sau khi đóng bảng thông báo bằng ESC) sẽ bấm nút đó.
+    """
+    try:
+        return bool(driver.execute_script(
+            "const el = document.activeElement;"
+            "return !el || el === document.body || el === document.documentElement;"
+        ))
+    except WebDriverException:
+        return False
+
+
+def _release_focus(driver):
+    """Bỏ focus khỏi nút vừa dùng (như bấm ra vùng trống) để phím cuộn về sau không bấm nhầm nút đó."""
+    try:
+        driver.execute_script(
+            "const el = document.activeElement;"
+            "if (el && el !== document.body && typeof el.blur === 'function') el.blur();"
+        )
+    except WebDriverException:
+        pass
+
+
 def _scroll_origin(driver, element=None) -> Optional[ScrollOrigin]:
     """
     Điểm phát sự kiện bánh xe: trên element nếu có, không thì giữa màn hình.
@@ -328,9 +353,9 @@ def _scroll_origin(driver, element=None) -> Optional[ScrollOrigin]:
 def human_scroll(driver, distance: int, allow_keys: bool = True, element=None):
     """
     Cuộn bằng sự kiện bánh xe thật (chia nhiều nấc nhỏ) xen kẽ phím PAGE_DOWN/SPACE thật.
-    Không dùng window.scrollTo nhảy cóc.
+    Không dùng window.scrollTo nhảy cóc. Phím chỉ gửi khi focus đang ở trang, không thì cuộn bánh xe.
     """
-    if allow_keys and distance > 0 and random.random() < 0.25 and not _focus_is_text_field(driver):
+    if allow_keys and distance > 0 and random.random() < 0.25 and _focus_on_page(driver):
         try:
             ActionChains(driver).send_keys(random.choice([Keys.PAGE_DOWN, Keys.SPACE])).perform()
             return
@@ -906,10 +931,55 @@ def run_check_notifications(driver, ctl: FarmControl, report: Callable[[str], No
             _human_click(driver, random.choice(unread[:5]))
             ctl.sleep(random.uniform(4.0, 8.0))
             check_account_state(driver)
+            _leave_opened_notification(driver, ctl)
             return _result("SUCCESS", "Đã xem thông báo và mở 1 thông báo chưa đọc", 1)
 
+    _close_notif_panel(driver)
+    return _result("SUCCESS", "Đã xem danh sách thông báo")
+
+
+def _move_mouse_off(driver):
+    """Đưa chuột vào vùng nội dung để tắt dòng nhắc 'Thông báo' còn hiện dưới nút chuông."""
+    targets = _find_visible(driver, ['//div[@role="main"]'])
     try:
-        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        ActionChains(driver).move_to_element(targets[0] if targets else driver.find_element(By.TAG_NAME, "body")).perform()
     except WebDriverException:
         pass
-    return _result("SUCCESS", "Đã xem danh sách thông báo")
+
+
+def _close_notif_panel(driver):
+    """Đóng bảng thông báo và kiểm tra lại: ESC tối đa 2 lần, vẫn mở thì bấm lại nút chuông (bấm lần 2 là đóng)."""
+    for _ in range(2):
+        if not _find_visible(driver, FARM_NOTIF["panel"]):
+            break
+        try:
+            ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        except WebDriverException:
+            pass
+        time.sleep(random.uniform(0.8, 1.5))
+    if _find_visible(driver, FARM_NOTIF["panel"]):
+        bells = _find_visible(driver, FARM_NOTIF["bell_button"][:1])
+        if bells:
+            _human_click(driver, bells[0])
+            time.sleep(random.uniform(0.8, 1.5))
+    if _find_visible(driver, FARM_NOTIF["panel"]):
+        logger.warning("Check thông báo: không đóng được bảng thông báo")
+    # ESC đóng bảng xong Facebook trả focus về nút chuông
+    _release_focus(driver)
+    _move_mouse_off(driver)
+
+
+def _leave_opened_notification(driver, ctl: FarmControl):
+    """
+    Thông báo vừa mở có thể là bài viết dạng cửa sổ nổi (vd bình luận) nằm đè lên trang và không tự tắt:
+    đóng cửa sổ đó; nếu đã chuyển sang trang khác (nhóm, trang cá nhân) thì quay về trang chủ.
+    """
+    for _ in range(2):
+        if not _find_visible(driver, ['//div[@role="dialog"]']):
+            break
+        _close_dialogs(driver)
+        time.sleep(random.uniform(1.0, 2.0))
+    if not _same_page(driver.current_url, FB_HOME):
+        _open(driver, ctl, FB_HOME)
+    _release_focus(driver)
+    _move_mouse_off(driver)

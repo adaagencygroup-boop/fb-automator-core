@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, CalendarDays, CheckCircle2, Flag, Headset, RefreshCw, ShieldCheck, UserRound, XCircle } from "lucide-react";
+import { ArrowRight, CheckCircle2, Flag, Headset, RefreshCw, UserRound, XCircle } from "lucide-react";
 import { getDashboardStats } from "./service";
 import { SUPPORT } from "@/config/support";
 import { useSession } from "@/components/SessionContext";
-import { formatVietnamDateTime } from "@/lib/date-utils";
+import DashboardLicenseBanner from "./DashboardLicenseBanner";
+import RenewalContactDialog from "./RenewalContactDialog";
 import styles from "./dashboard.module.css";
 
 const percent = (count, total) => total > 0 ? Math.round(count / total * 1000) / 10 : 0;
@@ -56,16 +57,12 @@ export default function DashboardModule() {
 
   const { accounts, pages, errors = {} } = data || {};
   const user = session?.user;
-  const active = user?.modules_unlocked === true;
   const available = accounts ? percent(accounts.live, accounts.total) : null;
 
   return <div className={styles.dashboard} aria-busy={loading}>
     <div className={styles.heading}><h1>Tổng quan FB Automation</h1><button type="button" className={styles.refresh} onClick={fetchStats} disabled={loading} aria-label="Làm mới tổng quan" title="Làm mới tổng quan"><RefreshCw size={15} className={loading ? "animate-spin" : ""} /></button></div>
     {error && <p role="alert" className={styles.error}>{error}</p>}
-    <section className={styles.license} aria-label="Bản quyền và xác thực HWID">
-      <div className={styles.licenseInfo}><div className={styles.shield}><ShieldCheck size={27} /></div><div><h2>Bản quyền &amp; Xác thực HWID</h2><span className={`${styles.status} ${user && !active ? styles.inactive : ""}`}><span />{user ? (active ? "Đang hoạt động" : "Chưa kích hoạt") : "Đang tải bản quyền"}</span></div></div>
-      <div className={styles.expiry}><div className={styles.calendar}><CalendarDays size={19} /></div><div><div>{user?.expired_at ? <>Còn <strong>{Math.max(0, user.days_remaining ?? 0)}</strong> ngày</> : user ? (active ? "Không giới hạn" : "Chưa có bản quyền") : "—"}</div><small>{user?.expired_at ? `(Hết hạn: ${formatVietnamDateTime(user.expired_at).date})` : ""}</small></div></div>
-    </section>
+    <DashboardLicenseBanner user={user} onRenew={() => setShowRenewal(true)} />
     <section className={styles.section} aria-labelledby="accounts-overview">
       <h2 id="accounts-overview" className={styles.sectionTitle}><span>1</span>Tổng quan tài khoản Facebook</h2>
       {errors.accounts && <p role="alert" className={styles.error}>{errors.accounts}</p>}
@@ -96,6 +93,6 @@ export default function DashboardModule() {
       <div><Headset size={17} /><span>Cần trợ giúp kích hoạt lại tài khoản bản quyền hoặc thay đổi thiết bị HWID?</span></div>
       <nav aria-label="Hỗ trợ bản quyền"><a href={SUPPORT.telegram.url} target="_blank" rel="noreferrer">Liên hệ Kỹ thuật viên</a><span>•</span><button type="button" onClick={() => setShowRenewal((open) => !open)} aria-expanded={showRenewal} aria-controls="dashboard-renewal">Hướng dẫn gia hạn</button></nav>
     </footer>
-    {showRenewal && <div id="dashboard-renewal" className={styles.renewal}><h2>Hướng dẫn gia hạn bản quyền</h2><p>Liên hệ kỹ thuật viên qua <a href={SUPPORT.telegram.url} target="_blank" rel="noreferrer">Telegram {SUPPORT.telegram.display}</a> hoặc <a href={SUPPORT.zalo.url} target="_blank" rel="noreferrer">Zalo {SUPPORT.zalo.display}</a>, gửi tên tài khoản {user?.username} để được hỗ trợ gia hạn hoặc đổi thiết bị HWID.</p></div>}
+    {showRenewal && <RenewalContactDialog onClose={() => setShowRenewal(false)} />}
   </div>;
 }

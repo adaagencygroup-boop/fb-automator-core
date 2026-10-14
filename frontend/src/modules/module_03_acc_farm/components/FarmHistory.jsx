@@ -1,0 +1,315 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Download, Eraser, Info, Search } from "lucide-react";
+import CustomSelect from "@/components/ui/custom-select";
+import Pagination from "@/components/ui/pagination";
+import { toast } from "@/lib/toast";
+import { formatVietnamDateTime } from "@/lib/date-utils";
+import { ACTION_FULL_LABELS, FINAL_STATUSES, FRIEND_SOURCE_LABELS, PROXY_MODE_LABELS, RUN_STATUS } from "../constants";
+import { cleanupFarmHistory, downloadFarmHistoryCsv, getFarmHistory } from "../service";
+import HistoryDetail from "./HistoryDetail";
+import { ActionChip, NumberInput, PageTitle, RunStatusBadge, UidCopy, formatDuration } from "./parts";
+
+const PAGE_SIZE = 10;
+const EMPTY_FILTERS = { search: "", action: "", status: "", proxy: "", date_from: "", date_to: "" };
+
+const ACTION_OPTIONS = [{ value: "", label: "Tất cả hành động" }, ...Object.entries(ACTION_FULL_LABELS).map(([value, label]) => ({ value, label }))];
+const STATUS_OPTIONS = [{ value: "", label: "Tất cả trạng thái" }, ...FINAL_STATUSES.map((value) => ({ value, label: RUN_STATUS[value].label }))];
+const PROXY_OPTIONS = [
+  { value: "", label: "Tất cả" },
+  { value: "with", label: "Có proxy" },
+  { value: "without", label: "Không proxy (IP máy)" },
+];
+
+/** Các dòng mô tả kết quả từng kịch bản của 1 lượt */
+function scenarioLines(h) {
+  const actions = h.actions_summary || [];
+  const has = (a) => actions.some((x) => x.action === a);
+  const lines = [];
+  if (has("CHECK_NOTIF")) lines.push(h.notif_checked ? (h.notif_opened ? "Đã xem & mở thông báo mới" : "Đã xem thông báo") : "Chưa xem được thông báo");
+  if (has("NEWSFEED")) lines.push(`Lướt Newsfeed ${formatDuration(h.newsfeed_seconds)}, ${h.newsfeed_scrolls} lần cuộn`);
+  if (has("WATCH")) lines.push(`Xem ${h.watch_videos} video trong ${formatDuration(h.watch_seconds)}`);
+  if (has("ADD_FRIEND")) {
+    lines.push(`Gửi ${h.friends_sent} lời mời kết bạn${h.friends_source ? ` (${FRIEND_SOURCE_LABELS[h.friends_source] || h.friends_source})` : ""}`);
+  }
+  if (has("JOIN_GROUP")) lines.push(`Tham gia ${h.groups_joined} nhóm${h.groups_keyword ? `: "${h.groups_keyword}"` : " (đề xuất)"}`);
+  return lines;
+}
+
+function CleanupDialog({ onClose, onDone }) {
+  const [days, setDays] = useState("30");
+  const [loading, setLoading] = useState(false);
+
+  const submit = async () => {
+    setLoading(true);
+    try {
+      const res = await cleanupFarmHistory(Math.max(1, parseInt(days, 10) || 1));
+      toast.success(`Đã xóa ${res.history} lượt lịch sử, ${res.logs} log hành động`, "ĐÃ DỌN NHẬT KÝ");
+      onDone();
+      onClose();
+    } catch (err) {
+      toast.error(err.message, "KHÔNG DỌN ĐƯỢC NHẬT KÝ");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100000] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm" onClick={(e) => e.target === e.currentTarget && !loading && onClose()}>
+      <div className="w-full max-w-md rounded-2xl border border-border bg-white p-6 shadow-2xl">
+        <h3 className="text-base font-bold text-slate-900">Dọn dẹp nhật ký Tương tác</h3>
+        <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
+          Xóa lịch sử và log hành động của máy này cũ hơn số ngày bên dưới (tính cả hôm nay, giờ Việt Nam). Dữ liệu hôm nay luôn được giữ để
+          tính giới hạn kết bạn / nhóm mỗi ngày; lượt đang chạy không bị xóa.
+        </p>
+        <div className="mt-4 flex items-center gap-2 text-xs text-slate-600">
+          Giữ lại
+          <NumberInput value={days} onChange={setDays} min={1} max={3650} className="w-20" />
+          ngày gần nhất
+        </div>
+        <div className="mt-6 flex justify-end gap-2.5">
+          <button type="button" onClick={onClose} disabled={loading} className="h-8 rounded-md border border-border bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+            Hủy bỏ
+          </button>
+          <button type="button" onClick={submit} disabled={loading} className="h-8 rounded-md bg-red-600 px-4 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50">
+            {loading ? "Đang dọn..." : "Dọn dẹp"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InteractionHistory() {
+  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [result, setResult] = useState({ key: null, total: 0, items: [] });
+  const [detailId, setDetailId] = useState(null);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Gõ tìm kiếm: chờ 400ms mới gọi API
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setFilters((f) => (f.search === search ? f : { ...f, search }));
+      setPage(1);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Mỗi tổ hợp bộ lọc / trang / lần tải lại có 1 key; kết quả chưa khớp key hiện tại nghĩa là đang tải
+  const requestKey = JSON.stringify([filters, page, reloadKey]);
+  const loading = result.key !== requestKey;
+  const data = result;
+
+  useEffect(() => {
+    let cancelled = false;
+    getFarmHistory(filters, page, PAGE_SIZE)
+      .then((res) => !cancelled && setResult({ key: requestKey, total: res.total || 0, items: res.items || [] }))
+      .catch((err) => {
+        if (cancelled) return;
+        toast.error({ key: "farm-history", title: "KHÔNG ĐỌC ĐƯỢC LỊCH SỬ", message: err.message });
+        setResult((r) => ({ ...r, key: requestKey }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filters, page, requestKey]);
+
+  const setFilter = (key) => (value) => {
+    setFilters((f) => ({ ...f, [key]: value }));
+    setPage(1);
+  };
+
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      await downloadFarmHistoryCsv(filters);
+    } catch (err) {
+      toast.error(err.message, "KHÔNG XUẤT ĐƯỢC FILE");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const totalPages = Math.max(1, Math.ceil((data.total || 0) / PAGE_SIZE));
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <button type="button" onClick={() => setCleanupOpen(true)} className="flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-medium text-slate-700 shadow-subtle hover:bg-slate-50">
+          <Eraser className="h-4 w-4" /> Dọn dẹp nhật ký
+        </button>
+        <button type="button" onClick={exportCsv} disabled={exporting} className="flex h-9 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-sm font-semibold text-emerald-700 shadow-subtle hover:bg-emerald-100 disabled:opacity-60">
+          <Download className="h-4 w-4" /> {exporting ? "Đang xuất..." : "Xuất Excel / CSV"}
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-2 rounded-2xl border border-border bg-white p-4 shadow-subtle lg:flex-row lg:items-center">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Tìm theo UID nick, tên nick..."
+            className="h-10 w-full rounded-lg border border-blue-200 bg-white pl-9 pr-3 text-sm text-slate-800 placeholder:text-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
+        </div>
+        <CustomSelect className="lg:w-44" value={filters.action} onChange={setFilter("action")} options={ACTION_OPTIONS} />
+        <CustomSelect className="lg:w-44" value={filters.status} onChange={setFilter("status")} options={STATUS_OPTIONS} />
+        <CustomSelect className="lg:w-44" value={filters.proxy} onChange={setFilter("proxy")} options={PROXY_OPTIONS} />
+        <div className="flex items-center gap-1.5 text-xs text-slate-500">
+          <input type="date" value={filters.date_from} max={filters.date_to || undefined} onChange={(e) => setFilter("date_from")(e.target.value)} className="h-9 rounded-lg border border-border px-2 text-xs text-slate-700" title="Từ ngày" />
+          <span>→</span>
+          <input type="date" value={filters.date_to} min={filters.date_from || undefined} onChange={(e) => setFilter("date_to")(e.target.value)} className="h-9 rounded-lg border border-border px-2 text-xs text-slate-700" title="Đến ngày" />
+        </div>
+      </div>
+
+      <div className="overflow-auto rounded-2xl border border-border bg-white shadow-subtle">
+        <table className="w-full text-xs">
+          <thead className="bg-[#F1F5F9] text-[11px] font-bold uppercase tracking-wide text-slate-600">
+            <tr>
+              <th className="px-4 py-3 text-left">STT</th>
+              <th className="px-4 py-3 text-left">Thời gian</th>
+              <th className="px-4 py-3 text-left">Tài khoản / UID Facebook</th>
+              <th className="px-4 py-3 text-left">Hành động tương tác</th>
+              <th className="px-4 py-3 text-left">Chi tiết kịch bản</th>
+              <th className="px-4 py-3 text-left">Proxy / IP</th>
+              <th className="px-4 py-3 text-left">Trạng thái</th>
+              <th className="px-4 py-3 text-center">Thao tác</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {data.items.map((h, idx) => {
+              const finished = formatVietnamDateTime(h.finished_at);
+              const lines = scenarioLines(h);
+              return (
+                <tr key={h.id} className="align-top hover:bg-slate-50/70">
+                  <td className="px-4 py-3.5 text-sm text-slate-500">{String((page - 1) * PAGE_SIZE + idx + 1).padStart(2, "0")}</td>
+                  <td className="whitespace-nowrap px-4 py-3.5">
+                    <div className="text-sm font-semibold text-slate-800">{finished.timeWithSeconds}</div>
+                    <div className="text-[11px] text-slate-500">{finished.date}</div>
+                    <div className="mt-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">
+                      Thời lượng {formatDuration(h.duration_seconds)}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3.5">
+                    <div className="text-sm font-semibold text-slate-800">{h.fb_name || "—"}</div>
+                    <UidCopy uid={h.fb_uid} />
+                  </td>
+                  <td className="px-4 py-3.5">
+                    <div className="flex max-w-[220px] flex-wrap gap-1">
+                      {(h.actions_summary || []).map((a, i) => (
+                        <ActionChip key={`${a.action}-${i}`} action={a.action} status={a.status} />
+                      ))}
+                      {!h.actions_summary?.length && <span className="text-slate-400">—</span>}
+                    </div>
+                  </td>
+                  <td className="max-w-[300px] px-4 py-3.5 text-slate-700">
+                    {lines.length ? (
+                      <ul className="space-y-0.5">
+                        {lines.map((line) => (
+                          <li key={line}>{line}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3.5">
+                    <div className="font-mono text-[11px] text-slate-700">{h.proxy_host || "IP máy"}</div>
+                    {h.proxy_host && (
+                      <div className="text-[10px] text-slate-400">
+                        {PROXY_MODE_LABELS[h.proxy_mode] || h.proxy_mode || ""}
+                        {h.egress_ip ? ` · ${h.egress_ip}` : ""}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-4 py-3.5">
+                    <RunStatusBadge status={h.final_status} />
+                    {h.error && (
+                      <div className="mt-1 line-clamp-2 max-w-[200px] text-[10px] text-rose-600" title={h.error}>
+                        {h.error}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-4 py-3.5 text-center">
+                    <button type="button" onClick={() => setDetailId(h.id)} className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100 hover:text-primary" title="Xem chi tiết">
+                      <Info className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+            {!data.items.length && (
+              <tr>
+                <td colSpan={8} className="px-4 py-12 text-center text-sm text-slate-400">
+                  {loading ? "Đang tải lịch sử..." : "Chưa có lượt tương tác nào khớp bộ lọc."}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm text-slate-600">
+          Hiển thị {data.items.length} / {(data.total || 0).toLocaleString("vi-VN")} phiên tương tác
+        </span>
+        <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
+      </div>
+
+      {detailId != null && <HistoryDetail id={detailId} onClose={() => setDetailId(null)} />}
+      {cleanupOpen && (
+        <CleanupDialog
+          onClose={() => setCleanupOpen(false)}
+          onDone={() => {
+            setPage(1);
+            setReloadKey((k) => k + 1);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+export default function FarmHistory() {
+  const [tab, setTab] = useState("interact");
+
+  return (
+    <div className="mx-auto max-w-[1400px] space-y-5">
+      <PageTitle
+        title="Lịch sử Đăng bài và tương tác tài khoản"
+        description="Tự động tương tác Newsfeed, xem Watch, kết bạn, tham gia nhóm và đăng bài đa kênh giữ trust profile Facebook bền vững."
+      />
+
+      <div className="inline-flex rounded-xl border border-border bg-white p-1 shadow-subtle">
+        {[
+          ["post", "Đăng Facebook"],
+          ["interact", "Tương tác tài khoản"],
+        ].map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setTab(value)}
+            className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${tab === value ? "bg-primary text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "interact" ? (
+        <InteractionHistory />
+      ) : (
+        // Lịch sử Đăng bài thuộc Tab 2 (Đăng bài viết Facebook), làm riêng
+        <div className="rounded-2xl border border-dashed border-border bg-white px-6 py-12 text-center text-sm text-slate-400">
+          Lịch sử Đăng bài viết Facebook đang được phát triển.
+        </div>
+      )}
+    </div>
+  );
+}
