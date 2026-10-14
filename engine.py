@@ -190,9 +190,12 @@ class LicenseMiddleware:
             }
             auth = headers.get("authorization")
             if not auth:
+                # EventSource cannot send custom headers; prefer the user cookie there too.
+                cookie_names = {part.strip().partition("=")[0] for part in headers.get("cookie", "").split(";")}
+                access_cookie = "fb_user_access" if headers.get("x-auth-client") == "user" or "fb_user_access" in cookie_names else "fb_access"
                 for part in headers.get("cookie", "").split(";"):
                     name, _, value = part.strip().partition("=")
-                    if name == "fb_access" and value:
+                    if name == access_cookie and value:
                         auth = f"Bearer {value}"
                         break
             try:
