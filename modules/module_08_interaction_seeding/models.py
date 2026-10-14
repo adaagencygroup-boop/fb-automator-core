@@ -23,9 +23,9 @@ DDL_STATEMENTS = [
         fb_id VARCHAR(100) NOT NULL, -- Định danh cắt từ đuôi link (username / ID), không mở link
         url TEXT NOT NULL,
         display_name VARCHAR(255), -- Display name, cut from end of link
+        created_by INT, -- users.id (người dùng sở hữu/import link)
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT unique_seeding_target UNIQUE (target_type, fb_id)
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """,
 
@@ -66,11 +66,12 @@ DDL_STATEMENTS = [
     );
     """,
 
-    # 4. Kho bình luận random của chiến dịch (tối đa 50 dòng)
+    # 4. Kho bình luận random của chiến dịch (tối đa 50 dòng) hoặc bình luận mẫu của user (campaign_id IS NULL)
     """
     CREATE TABLE IF NOT EXISTS seeding_comments (
         id SERIAL PRIMARY KEY,
-        campaign_id INT NOT NULL REFERENCES seeding_campaigns(id) ON DELETE CASCADE,
+        campaign_id INT REFERENCES seeding_campaigns(id) ON DELETE CASCADE,
+        created_by INT,
         content TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
