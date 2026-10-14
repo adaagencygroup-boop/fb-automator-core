@@ -7,6 +7,8 @@ import asyncio
 import hashlib
 import logging
 import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, Optional, Tuple
@@ -43,9 +45,31 @@ def get_machine_id() -> str:
 
 # ─────────────────────────── TÀI KHOẢN (bảng accounts của Module 02) ────────────────────────────
 
-# Owner của nick (accounts.user_id) dùng để đọc tài khoản và tìm profile Chrome (core.browser).
-# Tab 1 chưa nhận owner từ giao diện: chỉ dùng nick local (user_id NULL).
-ACCOUNT_OWNER: Optional[str] = None
+# Owner của nick = accounts.user_id = id người đang đăng nhập (Module 02 tự gán khi import, router.scoped_owner).
+# Dùng để đọc / ghi tài khoản và tìm profile Chrome (core.browser). None = nick local (user_id NULL).
+# Worker đặt owner cho luồng của mình (owner_scope), các hàm tài khoản bên dưới tự đọc khi không truyền owner.
+_current_owner: ContextVar[Optional[str]] = ContextVar("m03_account_owner", default=None)
+
+
+@contextmanager
+def owner_scope(owner: Optional[str]):
+    token = _current_owner.set(owner)
+    try:
+        yield
+    finally:
+        _current_owner.reset(token)
+
+
+def current_owner() -> Optional[str]:
+    return _current_owner.get()
+
+
+_UNSET = object()
+
+
+def _owner(owner) -> Optional[str]:
+    return _current_owner.get() if owner is _UNSET else owner
+
 
 # Module 02 lưu trạng thái chữ hoa; luồng farm dùng chữ thường như trước
 _LOGIN_STATUS_FROM_M02 = {"LOGGED_IN": "logged_in", "NOT_LOGGED": "not_logged_in", "ERROR": "failed"}
@@ -57,11 +81,11 @@ def _m02():
     return SessionLocal, AccountRepository
 
 
-def get_account(uid: str) -> Optional[Dict[str, Any]]:
+def get_account(uid: str, owner=_UNSET) -> Optional[Dict[str, Any]]:
     SessionLocal, Repo = _m02()
     with SessionLocal() as db:
         try:
-            acc = Repo.get_by_uid(db, uid, owner_username=ACCOUNT_OWNER)
+            acc = Repo.get_by_uid(db, uid, owner_username=_owner(owner))
         except ValueError:  # UID sai định dạng
             return None
         if not acc:
@@ -78,12 +102,12 @@ def get_account(uid: str) -> Optional[Dict[str, Any]]:
         }
 
 
-def get_credentials(uid: str) -> Tuple[str, Optional[str]]:
+def get_credentials(uid: str, owner=_UNSET) -> Tuple[str, Optional[str]]:
     """(mật khẩu, 2FA secret) đã giải mã; giải mã lỗi thì trả rỗng để luồng thử phiên cookie."""
     from modules.module_02_account_manager.security.encryption import decrypt_data
     SessionLocal, Repo = _m02()
     with SessionLocal() as db:
-        acc = Repo.get_by_uid(db, uid, owner_username=ACCOUNT_OWNER)
+        acc = Repo.get_by_uid(db, uid, owner_username=_owner(owner))
         if not acc:
             return "", None
         try:
@@ -97,20 +121,21 @@ def get_credentials(uid: str) -> Tuple[str, Optional[str]]:
         return password, two_fa
 
 
-def save_cookie(uid: str, cookie: str):
+def save_cookie(uid: str, cookie: str, owner=_UNSET):
     SessionLocal, Repo = _m02()
     with SessionLocal() as db:
-        Repo.update_cookies(db, uid, cookie, owner_username=ACCOUNT_OWNER)
+        Repo.update_cookies(db, uid, cookie, owner_username=_owner(owner))
 
 
-def set_login_status(uid: str, status: str, profile_name: Optional[str] = None):
+def set_login_status(uid: str, status: str, profile_name: Optional[str] = None, owner=_UNSET):
     """status: logged_in / not_logged_in / failed / checkpoint (checkpoint = ERROR + nick CHECKPOINT ở Module 02)."""
     SessionLocal, Repo = _m02()
+    owner = _owner(owner)
     with SessionLocal() as db:
         if status != "checkpoint":
-            Repo.update_login_status(db, uid, status, profile_name, owner_username=ACCOUNT_OWNER)
+            Repo.update_login_status(db, uid, status, profile_name, owner_username=owner)
             return
-        acc = Repo.update_login_status(db, uid, "failed", profile_name, owner_username=ACCOUNT_OWNER)
+        acc = Repo.update_login_status(db, uid, "failed", profile_name, owner_username=owner)
         if acc:
             acc.status = "CHECKPOINT"
             acc.status_checked_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -119,9 +144,25 @@ def set_login_status(uid: str, status: str, profile_name: Optional[str] = None):
 
 # ─────────────────────────── LICENSE / NGƯỜI DÙNG ────────────────────────────
 
-def get_owner_username() -> Optional[str]:
-    """Repo tổng chưa có đăng nhập: chưa xác định được người dùng."""
-    return None
+def owner_from_request(request) -> Optional[str]:
+    """
+    Owner của request = id người đang đăng nhập (cookie fb_access / Bearer), giống Module 02 router.scoped_owner,
+    để Tab 1 thấy đúng nick người đó đã import và mở đúng thư mục profile. Không đăng nhập thì None (nick local).
+    """
+    from fastapi import HTTPException
+    from modules.module_auth.service import bearer_user
+
+    auth_header = request.headers.get("Authorization")
+    if not ((auth_header and auth_header.strip()) or request.cookies.get("fb_access")):
+        return None
+    try:
+        user = bearer_user(auth_header, require_session=True, request=request)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Không đọc được người dùng đăng nhập: {e}")
+        return None
+    return str(user["id"]) if user and user.get("id") is not None else None
 
 
 def is_license_valid(owner: Optional[str]) -> bool:

@@ -906,10 +906,52 @@ def run_check_notifications(driver, ctl: FarmControl, report: Callable[[str], No
             _human_click(driver, random.choice(unread[:5]))
             ctl.sleep(random.uniform(4.0, 8.0))
             check_account_state(driver)
+            _leave_opened_notification(driver, ctl)
             return _result("SUCCESS", "Đã xem thông báo và mở 1 thông báo chưa đọc", 1)
 
+    _close_notif_panel(driver)
+    return _result("SUCCESS", "Đã xem danh sách thông báo")
+
+
+def _move_mouse_off(driver):
+    """Đưa chuột vào vùng nội dung để tắt dòng nhắc 'Thông báo' còn hiện dưới nút chuông."""
+    targets = _find_visible(driver, ['//div[@role="main"]'])
     try:
-        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        ActionChains(driver).move_to_element(targets[0] if targets else driver.find_element(By.TAG_NAME, "body")).perform()
     except WebDriverException:
         pass
-    return _result("SUCCESS", "Đã xem danh sách thông báo")
+
+
+def _close_notif_panel(driver):
+    """Đóng bảng thông báo và kiểm tra lại: ESC tối đa 2 lần, vẫn mở thì bấm lại nút chuông (bấm lần 2 là đóng)."""
+    for _ in range(2):
+        if not _find_visible(driver, FARM_NOTIF["panel"]):
+            break
+        try:
+            ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        except WebDriverException:
+            pass
+        time.sleep(random.uniform(0.8, 1.5))
+    if _find_visible(driver, FARM_NOTIF["panel"]):
+        bells = _find_visible(driver, FARM_NOTIF["bell_button"][:1])
+        if bells:
+            _human_click(driver, bells[0])
+            time.sleep(random.uniform(0.8, 1.5))
+    if _find_visible(driver, FARM_NOTIF["panel"]):
+        logger.warning("Check thông báo: không đóng được bảng thông báo")
+    _move_mouse_off(driver)
+
+
+def _leave_opened_notification(driver, ctl: FarmControl):
+    """
+    Thông báo vừa mở có thể là bài viết dạng cửa sổ nổi (vd bình luận) nằm đè lên trang và không tự tắt:
+    đóng cửa sổ đó; nếu đã chuyển sang trang khác (nhóm, trang cá nhân) thì quay về trang chủ.
+    """
+    for _ in range(2):
+        if not _find_visible(driver, ['//div[@role="dialog"]']):
+            break
+        _close_dialogs(driver)
+        time.sleep(random.uniform(1.0, 2.0))
+    if not _same_page(driver.current_url, FB_HOME):
+        _open(driver, ctl, FB_HOME)
+    _move_mouse_off(driver)
