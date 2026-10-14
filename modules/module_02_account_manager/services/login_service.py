@@ -30,15 +30,8 @@ def login_one(uid):
             stage = "đăng nhập"
             try:
                 result = run_login(uid, secret(account.password), secret(account.two_fa), account.cookie, account.proxy)
-                if result["success"]:
-                    if result.get("avatar_url"):
-                        broadcast("info", f"Đã đọc URL avatar {uid}: {result['avatar_url']}", uid=uid)
-                    else:
-                        broadcast("warning", f"Không đọc được URL avatar từ trang chủ: {uid}; giữ ảnh cũ nếu có", uid=uid)
-                stage = "lưu kết quả đăng nhập/URL avatar vào DB"
+                stage = "lưu kết quả đăng nhập vào DB"
                 Repo.update_login_status(db, uid, "logged_in" if result["success"] else "failed", result.get("profile_name"), avatar_url=result.get("avatar_url"))
-                if result["success"] and result.get("avatar_url"):
-                    broadcast("success", f"Đã lấy và lưu URL avatar: {uid}", uid=uid)
                 stage = "lưu cookie vào DB"
                 if result.get("cookie"):
                     Repo.update_cookies(db, uid, result["cookie"])
