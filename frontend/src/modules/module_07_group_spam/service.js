@@ -1,4 +1,5 @@
 import api from "@/services/api";
+import { API_BASE } from "@/config/constants";
 
 export function getGroupSettings() {
   return api.get("/api/groups/settings");
@@ -41,4 +42,26 @@ export function searchGroupSource(data) {
 export function getGroupPostingHistory() {
   return api.get("/api/groups/source/history");
 }
+
+export function getGroupTemplateUrl() {
+  return `${API_BASE}/api/groups/source/template`;
+}
+
+export async function downloadGroupTemplate() {
+  try {
+    const res = await api.get("/api/groups/source/template", { responseType: "blob" });
+    const blob = new Blob([res], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "mau_danh_sach_nhom_fb.txt";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    window.open(`${API_BASE}/api/groups/source/template`, "_blank");
+  }
+}
+
 

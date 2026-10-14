@@ -46,7 +46,6 @@ import {
   testGroupAiConnection,
 } from "../service";
 import {
-  GROUPS,
   INITIAL_POST,
   MOCK_ACCOUNTS,
 } from "../shared/constants";
@@ -77,7 +76,6 @@ export default function GroupPostModule() {
   const mediaInputRef = useRef(null);
 
   const [accounts, setAccounts] = useState(MOCK_ACCOUNTS);
-  const [customGroups, setCustomGroups] = useState(GROUPS);
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [selectedAccountKeys, setSelectedAccountKeys] = useState(
     MOCK_ACCOUNTS.slice(0, 4).map((account) => account.key)
@@ -95,17 +93,11 @@ export default function GroupPostModule() {
   const [restMinutes, setRestMinutes] = useState("10");
   const [maxPosts, setMaxPosts] = useState("10");
   const [groupSource, setGroupSource] = useState("file");
-  const [groupFile, setGroupFile] = useState({
-    name: "danh_sach_nhom_tiem_nang_04.txt",
-    size: 24780,
-    status: "valid",
-    dedupCount: 5,
-    invalidCount: 4,
-    validGroupsCount: 68,
-  });
-  const [groupSearch, setGroupSearch] = useState("việc làm online, tuyển dụng ctv, kinh doanh online");
+  const [groupFile, setGroupFile] = useState(null);
+  const [customGroups, setCustomGroups] = useState([]);
+  const [groupSearch, setGroupSearch] = useState("việc làm online, tuyển dụng ctv");
   const [groupFilter, setGroupFilter] = useState("");
-  const [selectedGroupKeys, setSelectedGroupKeys] = useState(GROUPS.map((group) => group.key));
+  const [selectedGroupKeys, setSelectedGroupKeys] = useState([]);
   const [mediaFiles, setMediaFiles] = useState([]);
   const [minMedia, setMinMedia] = useState("1");
   const [maxMedia, setMaxMedia] = useState("4");
