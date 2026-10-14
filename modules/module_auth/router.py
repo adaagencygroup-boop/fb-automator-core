@@ -211,6 +211,9 @@ def login(body: UserLoginBody, request: Request, response: Response):
 def refresh(request: Request, response: Response):
     refresh_token = request.cookies.get("fb_refresh", "")
     access = refresh_access_token(refresh_token)
+    admin_client = request.headers.get("x-auth-client") == "admin"
+    if admin_client and decode_token(access).get("role") not in ("admin", "ADMIN"):
+        raise HTTPException(403, "Chỉ admin mới được thao tác")
     remember_me = decode_token(refresh_token).get("remember_me", True)
     response.set_cookie(
         "fb_access",
@@ -221,7 +224,7 @@ def refresh(request: Request, response: Response):
         samesite="lax",
         path="/",
     )
-    return {"ok": True}
+    return {"ok": True, "access_token": access} if admin_client else {"ok": True}
 
 
 @auth_router.get("/me")

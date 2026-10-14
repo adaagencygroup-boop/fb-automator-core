@@ -12,7 +12,7 @@ import json
 import re
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Query
@@ -20,16 +20,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, or_
 
-from app.database.local_db import get_db, SessionLocal, FbAccount, LocalSetting, utc_now, to_vn_iso
-from app.database.seeding_models import (
+from modules.module_02_account_manager.database.connection import get_db, SessionLocal
+from modules.module_02_account_manager.database.models import Account
+from modules.module_02_account_manager.database.repository import utc_now
+from modules.module_08_interaction_seeding.be.seeding_models import (
     SeedingTarget, SeedingCampaign, SeedingCampaignTarget, SeedingComment, SeedingTask
 )
-from app.local_api.sse_broadcaster import broadcast
-from app.automation.browser_manager import (
+from modules.module_02_account_manager.services.events import broadcast
+from modules.module_02_account_manager.automation.browser_manager import (
     create_driver, safe_close_driver, close_driver_for_uid, close_scoped_active_drivers
 )
-from app.automation.seeding_flow import FacebookSeedingBot
-from app.local_api.routes import HWID
+from modules.module_08_interaction_seeding.be.seeding_flow import FacebookSeedingBot
+from modules.module_02_account_manager.services.browser_service import HWID
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/seeding", tags=["Seeding"])
@@ -92,28 +94,46 @@ def extract_fb_id(url: str, target_type: str = "") -> str:
     return hashlib.md5(clean.encode("utf-8")).hexdigest()[:32]
 
 
+VN_TZ = timezone(timedelta(hours=7))
+
+
+def to_vn_iso(dt: Optional[datetime]) -> Optional[str]:
+    """Đổi datetime UTC (naive) trong DB sang chuỗi ISO giờ Việt Nam (UTC+7)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(VN_TZ).isoformat()
+
+
+_draft_seeding_comments: List[str] = []
+
+
 def get_draft_comments(db: Session) -> List[str]:
-    """Lấy danh sách các câu bình luận nháp từ local_settings."""
-    setting = db.query(LocalSetting).filter(LocalSetting.key == "draft_seeding_comments").first()
-    if setting and setting.value:
-        try:
-            return json.loads(setting.value)
-        except Exception:
-            pass
-    # Fallback: lấy bình luận duy nhất trong seeding_comments
-    cmts = db.query(SeedingComment.content).distinct().all()
-    return [c[0] for c in cmts if c[0]]
+    """Lấy danh sách các câu bình luận từ cơ sở dữ liệu seeding_comments hoặc bộ đệm hiện tại."""
+    global _draft_seeding_comments
+    if _draft_seeding_comments:
+        return list(_draft_seeding_comments)
+    try:
+        cmts = (
+            db.query(SeedingComment.content)
+            .distinct()
+            .order_by(desc(SeedingComment.id))
+            .limit(50)
+            .all()
+        )
+        if cmts:
+            _draft_seeding_comments = [c[0] for c in cmts if c[0]]
+            return list(_draft_seeding_comments)
+    except Exception as e:
+        logger.warning(f"Lỗi lấy seeding_comments từ DB: {e}")
+    return []
 
 
 def save_draft_comments(db: Session, comments: List[str]):
-    """Lưu danh sách các câu bình luận nháp vào local_settings."""
-    setting = db.query(LocalSetting).filter(LocalSetting.key == "draft_seeding_comments").first()
-    if not setting:
-        setting = LocalSetting(key="draft_seeding_comments", value=json.dumps(comments, ensure_ascii=False))
-        db.add(setting)
-    else:
-        setting.value = json.dumps(comments, ensure_ascii=False)
-    db.commit()
+    """Cập nhật danh sách câu bình luận vào bộ nhớ đệm."""
+    global _draft_seeding_comments
+    _draft_seeding_comments = list(comments)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -358,22 +378,22 @@ async def create_seeding_campaign(req: CreateCampaignRequest, db: Session = Depe
     # 1. Lấy danh sách UID tài khoản Facebook thật từ DB (bắt buộc Live và Đã đăng nhập)
     available_accounts = []
     if req.uids and len(req.uids) > 0:
-        available_accounts = db.query(FbAccount).filter(
-            FbAccount.uid.in_(req.uids),
-            FbAccount.status == "live",
-            FbAccount.login_status == "logged_in"
+        available_accounts = db.query(Account).filter(
+            Account.uid.in_(req.uids),
+            Account.status == "LIVE",
+            Account.login_status == "LOGGED_IN"
         ).all()
         if not available_accounts:
-            available_accounts = db.query(FbAccount).filter(FbAccount.uid.in_(req.uids)).all()
+            available_accounts = db.query(Account).filter(Account.uid.in_(req.uids)).all()
     else:
-        # Lọc nghiêm ngặt: status == 'live' VÀ login_status == 'logged_in'
-        q = db.query(FbAccount).filter(
-            FbAccount.status == "live",
-            FbAccount.login_status == "logged_in"
+        # Lọc nghiêm ngặt: status == 'LIVE' VÀ login_status == 'LOGGED_IN'
+        q = db.query(Account).filter(
+            Account.status == "LIVE",
+            Account.login_status == "LOGGED_IN"
         )
         if req.owner_username:
-            q = q.filter(FbAccount.owner_username == req.owner_username)
-        available_accounts = q.order_by(FbAccount.id.asc()).limit(req.account_count).all()
+            q = q.filter(Account.user_id == req.owner_username)
+        available_accounts = q.order_by(Account.id.asc()).limit(req.account_count).all()
 
     if not available_accounts:
         raise HTTPException(
@@ -573,7 +593,7 @@ def _process_account_tasks(campaign_id: int, uid: str, task_ids: List[int], dela
         if _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested"):
             return
 
-        account_record = db.query(FbAccount).filter(FbAccount.uid == uid).first()
+        account_record = db.query(Account).filter(Account.uid == uid).first()
         if not account_record:
             logger.error(f"Account {uid} not found in DB")
             return
@@ -805,13 +825,27 @@ def _run_single_campaign(campaign_id: int):
         db.close()
 
 
+def _campaign_status(campaign_id: int) -> Optional[str]:
+    """Đọc trạng thái hiện tại của chiến dịch trong DB."""
+    db = SessionLocal()
+    try:
+        row = db.query(SeedingCampaign.status).filter(SeedingCampaign.id == campaign_id).first()
+        return row[0] if row else None
+    finally:
+        db.close()
+
+
 def _execute_campaign_runner(initial_campaign_id: int):
     """Hàm chạy nền điều phối tuần tự các chiến dịch trong cùng một batch."""
     chain = _batch_campaign_chains.get(initial_campaign_id, [initial_campaign_id])
-    for cid in chain:
+    for idx, cid in enumerate(chain):
         # Kiểm tra nếu có yêu cầu dừng toàn batch
         stop_req = any(_active_seeding_campaigns.get(c, {}).get("stop_requested", False) for c in chain)
         if stop_req:
+            break
+        # Cờ stop_requested mất khi chiến dịch trước chạy xong, nên các chiến dịch kế tiếp
+        # phải dựa vào trạng thái STOPPED mà API dừng đã ghi vào DB.
+        if idx > 0 and _campaign_status(cid) == "STOPPED":
             break
         _run_single_campaign(cid)
 
@@ -847,6 +881,30 @@ async def stop_seeding_campaign(campaign_id: int, db: Session = Depends(get_db))
 
     broadcast("warning", f"⏹ Đã dừng khẩn cấp chiến dịch #{campaign_id} và đóng toàn bộ trình duyệt.")
     return {"message": "Đã dừng chiến dịch", "campaign_id": campaign_id}
+
+
+@router.post("/stop-all")
+async def stop_all_seeding(db: Session = Depends(get_db)):
+    """Dừng khẩn cấp mọi chiến dịch seeding đang chạy trên engine này (khi giao diện không còn giữ campaign_id)."""
+    # Chỉ lấy các chiến dịch đang chạy trong tiến trình này và phần còn lại của batch của chúng,
+    # không đụng tới chiến dịch RUNNING của máy khác trên cùng DB.
+    campaign_ids = set()
+    for cid in list(_active_seeding_campaigns.keys()):
+        campaign_ids.update(_batch_campaign_chains.get(cid, [cid]))
+
+    for cid in campaign_ids:
+        if cid in _active_seeding_campaigns:
+            _active_seeding_campaigns[cid]["stop_requested"] = True
+        c = db.query(SeedingCampaign).filter(SeedingCampaign.id == cid).first()
+        if c and c.status in ("PENDING", "RUNNING"):
+            c.status = "STOPPED"
+    db.commit()
+
+    # Đóng ngay lập tức các trình duyệt đang thuộc scope seeding
+    close_scoped_active_drivers(scope="seeding", force=True)
+
+    broadcast("warning", f"⏹ Đã dừng khẩn cấp {len(campaign_ids)} chiến dịch seeding và đóng toàn bộ trình duyệt.")
+    return {"message": "Đã dừng toàn bộ chiến dịch seeding", "campaign_ids": sorted(campaign_ids)}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -978,7 +1036,7 @@ async def get_seeding_campaign_detail(campaign_id: int, db: Session = Depends(ge
     tasks = db.query(SeedingTask).filter(SeedingTask.campaign_id == campaign_id).order_by(SeedingTask.id.asc()).all()
     tasks_data = []
     for t in tasks:
-        acc = db.query(FbAccount).filter(FbAccount.uid == t.account_uid).first()
+        acc = db.query(Account).filter(Account.uid == t.account_uid).first()
         acc_name = acc.profile_name if (acc and acc.profile_name) else t.account_uid
         target = db.query(SeedingTarget).filter(SeedingTarget.id == t.target_id).first()
 
