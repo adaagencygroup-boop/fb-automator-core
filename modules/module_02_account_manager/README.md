@@ -232,7 +232,7 @@ hạn; lần đăng nhập thành công tiếp theo sẽ cập nhật lại. Mig
 cột khi khởi tạo module, không cần lấy ảnh cho toàn bộ account lúc khởi động.
 
 Áp dụng cho cả đăng nhập hàng loạt, Mở Chrome và watcher phát hiện đăng nhập
-thủ công. Log hiển thị URL đã đọc trước khi ghi DB và xác nhận sau khi commit.
+thủ công. Quá trình lấy và lưu ảnh không phát log riêng.
 
 Chạy: python -m unittest discover -s modules/module_02_account_manager/tests -t . -v
 

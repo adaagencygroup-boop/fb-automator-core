@@ -87,7 +87,8 @@ class AvatarTests(unittest.TestCase):
             return_value={"success": True, "profile_name": "Name", "avatar_url": url},
         ), patch("modules.module_02_account_manager.services.login_service.broadcast") as broadcast:
             login_one("123")
-            self.assertTrue(any("Đã lấy và lưu" in call.args[1] for call in broadcast.call_args_list))
+            self.assertTrue(any("Đăng nhập thành công" in call.args[1] for call in broadcast.call_args_list))
+            self.assertFalse(any("avatar" in call.args[1].lower() for call in broadcast.call_args_list))
         # A new session verifies commit, rather than an in-memory ORM assignment.
         with Session(engine) as db:
             with owner_scope("7"):

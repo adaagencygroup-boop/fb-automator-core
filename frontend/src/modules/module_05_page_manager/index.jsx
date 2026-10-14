@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import FanpageList from "./FanpageList";
 import { getPages, fetchPageTokens } from "./service";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,7 +16,14 @@ import {
   TableCell,
 } from "@/components/ui/table";
 
-export default function PageManagerModule() {
+export default function PageManagerModule({ subPage } = {}) {
+  if (subPage === "pages.list") {
+    return <FanpageList />;
+  }
+  return <TokenManager />;
+}
+
+function TokenManager() {
   const [pages, setPages] = useState([]);
   const [userToken, setUserToken] = useState("");
   const [loading, setLoading] = useState(false);
