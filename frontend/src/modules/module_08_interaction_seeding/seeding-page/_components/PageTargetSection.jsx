@@ -2,6 +2,8 @@
 
 import React, { useState } from "react";
 import { Link2, FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink } from "lucide-react";
+import ConfirmDialog from "@/components/ui/confirm-dialog";
+import { toast } from "@/components/ui/toast";
 import ExcelImportModal from "../../_components/ExcelImportModal";
 
 export default function PageTargetSection({
@@ -15,15 +17,94 @@ export default function PageTargetSection({
   const [textInput, setTextInput] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
 
-  const handleValidateAndAdd = () => {
+  // Dialog states
+  const [confirmAddOpen, setConfirmAddOpen] = useState(false);
+  const [pendingLines, setPendingLines] = useState([]);
+  const [isValidating, setIsValidating] = useState(false);
+
+  const [deleteTarget, setDeleteTarget] = useState({ isOpen: false, item: null, index: -1 });
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const [clearAllOpen, setClearAllOpen] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+
+  // Click "Xác thực & Thêm danh sách"
+  const handleValidateAndAddClick = () => {
     const lines = textInput
       .split("\n")
       .map((l) => l.trim())
       .filter((l) => l.length > 0);
 
-    if (lines.length === 0) return;
-    onAddTargets(lines);
-    setTextInput("");
+    if (lines.length === 0) {
+      toast.warning("Vui lòng nhập ít nhất 1 link hoặc UID Fanpage Facebook!", "CHƯA NHẬP DỮ LIỆU");
+      return;
+    }
+
+    setPendingLines(lines);
+    setConfirmAddOpen(true);
+  };
+
+  // Confirm execute add
+  const handleConfirmAdd = async () => {
+    setIsValidating(true);
+    try {
+      await onAddTargets(pendingLines);
+      setTextInput("");
+      setConfirmAddOpen(false);
+      toast.success(
+        `Đã xác thực và lưu thành công ${pendingLines.length} Page vào danh sách!`,
+        "THÊM THÀNH CÔNG"
+      );
+    } catch (e) {
+      toast.error(
+        e?.message || "Đã xảy ra lỗi khi kiểm tra và xác thực liên kết Page. Vui lòng thử lại!",
+        "LỖI XÁC THỰC"
+      );
+    } finally {
+      setIsValidating(false);
+    }
+  };
+
+  // Confirm delete single item
+  const handleConfirmDelete = async () => {
+    if (deleteTarget.index < 0) return;
+    setIsDeleting(true);
+    try {
+      await onRemoveTarget(deleteTarget.index);
+      toast.success(
+        `Đã xóa Page "${deleteTarget.item?.display_name || deleteTarget.item?.url || "mục tiêu"}" thành công!`,
+        "ĐÃ XÓA"
+      );
+      setDeleteTarget({ isOpen: false, item: null, index: -1 });
+    } catch (e) {
+      toast.error(e?.message || "Không thể xóa Page này. Vui lòng thử lại!", "LỖI XÓA");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  // Confirm clear all items
+  const handleConfirmClearAll = async () => {
+    setIsClearing(true);
+    try {
+      await onClearTargets();
+      toast.success("Đã xóa toàn bộ danh sách Page thành công!", "ĐÃ DỌN DẸP");
+      setClearAllOpen(false);
+    } catch (e) {
+      toast.error(e?.message || "Không thể dọn dẹp danh sách. Vui lòng thử lại!", "LỖI XÓA");
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  // Handle reset input textarea
+  const handleResetInput = () => {
+    if (textInput.trim().length > 0) {
+      setTextInput("");
+      toast.info("Đã làm mới khung nhập liên kết.", "LÀM MỚI");
+    } else {
+      toast.info("Khung nhập liên kết đang trống.", "THÔNG BÁO");
+    }
   };
 
   const currentCount = textInput
@@ -84,7 +165,7 @@ export default function PageTargetSection({
             <span>Mỗi dòng 1 link hoặc UID. Tự động lọc trùng & kiểm tra hợp lệ.</span>
             {currentCount > 0 && (
               <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-600 font-semibold border border-blue-200/60 ml-1">
-                Đã nhập: {currentCount} link hợp lệ
+                Đã nhập: {currentCount} link
               </span>
             )}
           </div>
@@ -92,9 +173,7 @@ export default function PageTargetSection({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                setTextInput("");
-              }}
+              onClick={handleResetInput}
               className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-100/70 text-xs font-medium transition-all"
             >
               <RotateCcw className="w-3.5 h-3.5" />
@@ -102,11 +181,11 @@ export default function PageTargetSection({
             </button>
             <button
               type="button"
-              onClick={handleValidateAndAdd}
+              onClick={handleValidateAndAddClick}
               disabled={currentCount === 0}
               className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                 currentCount > 0
-                  ? "bg-[#2563EB] text-white hover:bg-blue-700 shadow-sm shadow-blue-500/30"
+                  ? "bg-[#2563EB] text-white hover:bg-blue-700 shadow-sm shadow-blue-500/30 cursor-pointer"
                   : "bg-gray-200 text-gray-400 cursor-not-allowed"
               }`}
             >
@@ -119,51 +198,68 @@ export default function PageTargetSection({
 
       {/* Targets Table */}
       {targets.length > 0 && (
-        <div className="border border-gray-100 rounded-xl overflow-hidden mt-2">
-          <div className="max-h-60 overflow-y-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead className="bg-gray-50/80 sticky top-0 z-10 text-gray-500 font-semibold border-b border-gray-100">
-                <tr>
-                  <th className="py-2.5 px-4 w-14 text-center">STT</th>
-                  <th className="py-2.5 px-4">Tên hiển thị</th>
-                  <th className="py-2.5 px-4">Link Page</th>
-                  <th className="py-2.5 px-4 w-20 text-center">Hành động</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100 text-gray-700 font-medium">
-                {targets.map((item, idx) => (
-                  <tr key={idx} className="hover:bg-blue-50/30 transition-colors">
-                    <td className="py-2.5 px-4 text-center text-gray-400 font-mono">
-                      {idx + 1}
-                    </td>
-                    <td className="py-2.5 px-4 font-semibold text-gray-900">
-                      {item.display_name || `Page ${idx + 1}`}
-                    </td>
-                    <td className="py-2.5 px-4 font-mono text-blue-600">
-                      <a
-                        href={item.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="hover:underline flex items-center gap-1.5 truncate max-w-md"
-                      >
-                        <span className="truncate">{item.url}</span>
-                        <ExternalLink className="w-3 h-3 text-blue-400 shrink-0" />
-                      </a>
-                    </td>
-                    <td className="py-2.5 px-4 text-center">
-                      <button
-                        type="button"
-                        onClick={() => onRemoveTarget(idx)}
-                        className="p-1 rounded-lg text-rose-500 hover:bg-rose-50 transition-colors"
-                        title="Xóa link này"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
+        <div className="space-y-2 mt-2">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-xs font-bold text-gray-800">
+              Danh sách Page đã thêm:{" "}
+              <span className="text-blue-600 font-semibold">({targets.length})</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setClearAllOpen(true)}
+              className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-semibold px-2 py-1 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Xóa toàn bộ
+            </button>
+          </div>
+
+          <div className="border border-gray-100 rounded-xl overflow-hidden">
+            <div className="max-h-60 overflow-y-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead className="bg-gray-50/80 sticky top-0 z-10 text-gray-500 font-semibold border-b border-gray-100">
+                  <tr>
+                    <th className="py-2.5 px-4 w-14 text-center whitespace-nowrap">STT</th>
+                    <th className="py-2.5 px-4 whitespace-nowrap">Tên hiển thị</th>
+                    <th className="py-2.5 px-4">Link Page</th>
+                    <th className="py-2.5 px-4 w-28 min-w-[90px] text-center whitespace-nowrap">Hành động</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-gray-100 text-gray-700 font-medium">
+                  {targets.map((item, idx) => (
+                    <tr key={idx} className="hover:bg-blue-50/30 transition-colors">
+                      <td className="py-2.5 px-4 text-center text-gray-400 font-mono whitespace-nowrap">
+                        {idx + 1}
+                      </td>
+                      <td className="py-2.5 px-4 font-semibold text-gray-900">
+                        {item.display_name || `Page ${idx + 1}`}
+                      </td>
+                      <td className="py-2.5 px-4 font-mono text-blue-600">
+                        <a
+                          href={item.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="hover:underline flex items-center gap-1.5 truncate max-w-md"
+                        >
+                          <span className="truncate">{item.url}</span>
+                          <ExternalLink className="w-3 h-3 text-blue-400 shrink-0" />
+                        </a>
+                      </td>
+                      <td className="py-2.5 px-4 text-center whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget({ isOpen: true, item, index: idx })}
+                          className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 hover:text-rose-600 transition-colors cursor-pointer inline-flex items-center justify-center"
+                          title="Xóa Page này"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
@@ -176,8 +272,48 @@ export default function PageTargetSection({
         onImportTargets={(imported) => {
           if (imported.length > 0) {
             onAddTargets(imported.map((item) => item.url));
+            toast.success(`Đã nhập thành công ${imported.length} Page từ file Excel!`, "THÀNH CÔNG");
           }
         }}
+      />
+
+      {/* Confirm Dialog: Xác thực & Thêm danh sách */}
+      <ConfirmDialog
+        isOpen={confirmAddOpen}
+        onClose={() => !isValidating && setConfirmAddOpen(false)}
+        onConfirm={handleConfirmAdd}
+        title="Xác nhận thêm danh sách Page"
+        description={`Bạn có chắc chắn muốn xác thực và lưu ${pendingLines.length} Page vào danh sách seeding không?`}
+        confirmText="Xác thực & Thêm"
+        cancelText="Hủy bỏ"
+        variant="primary"
+        loading={isValidating}
+      />
+
+      {/* Confirm Dialog: Xóa 1 mục tiêu */}
+      <ConfirmDialog
+        isOpen={deleteTarget.isOpen}
+        onClose={() => !isDeleting && setDeleteTarget({ isOpen: false, item: null, index: -1 })}
+        onConfirm={handleConfirmDelete}
+        title="Xác nhận xóa Page"
+        description={`Bạn có chắc chắn muốn xóa Page "${deleteTarget.item?.display_name || deleteTarget.item?.url || ""}" khỏi danh sách không?`}
+        confirmText="Xóa ngay"
+        cancelText="Hủy bỏ"
+        variant="danger"
+        loading={isDeleting}
+      />
+
+      {/* Confirm Dialog: Xóa toàn bộ danh sách */}
+      <ConfirmDialog
+        isOpen={clearAllOpen}
+        onClose={() => !isClearing && setClearAllOpen(false)}
+        onConfirm={handleConfirmClearAll}
+        title="Xác nhận xóa toàn bộ danh sách Page"
+        description={`Bạn có chắc chắn muốn xóa toàn bộ ${targets.length} Page khỏi danh sách không? Hành động này không thể hoàn tác.`}
+        confirmText="Xóa toàn bộ"
+        cancelText="Hủy bỏ"
+        variant="danger"
+        loading={isClearing}
       />
     </div>
   );

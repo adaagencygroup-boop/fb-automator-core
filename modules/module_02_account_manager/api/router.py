@@ -17,7 +17,9 @@ router = APIRouter(prefix="/api/accounts", tags=["Module 02: Account Manager"])
 async def scoped_owner(request: Request):
     logged_in_user_id = None
     auth_header = request.headers.get("Authorization")
-    has_token = bool((auth_header and auth_header.strip()) or request.cookies.get("fb_access"))
+    user_client = request.headers.get("x-auth-client") == "user"
+    cookie_token = request.cookies.get("fb_user_access") or (None if user_client else request.cookies.get("fb_access"))
+    has_token = bool((auth_header and auth_header.strip()) or cookie_token)
     if has_token:
         try:
             from modules.module_auth.service import bearer_user
