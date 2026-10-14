@@ -538,7 +538,7 @@ def _read_profile_link_avatar(driver, uid: str, profile_data=None) -> str | None
                 if _valid_avatar_url(url):
                     return url
         except Exception:
-            logger.debug("Could not inspect profile-link avatar for UID %s", uid, exc_info=True)
+            continue
     return None
 
 
@@ -549,7 +549,6 @@ def _get_avatar_url(driver, uid: str, profile_data=None) -> str | None:
     try:
         cookie = driver.get_cookie("c_user")
         if not isinstance(cookie, dict) or cookie.get("value") != uid:
-            logger.warning("Avatar skipped for UID %s: authenticated UID does not match", uid)
             return None
         original_timeout = driver.timeouts.page_load
         driver.set_page_load_timeout(10)
@@ -617,7 +616,7 @@ def _get_avatar_url(driver, uid: str, profile_data=None) -> str | None:
         if remaining > 0:
             return WebDriverWait(driver, remaining, poll_frequency=0.25).until(read_avatar)
     except Exception:
-        logger.warning("Could not read account-menu SVG avatar for UID %s", uid, exc_info=True)
+        pass
     finally:
         if original_timeout is not None:
             try:

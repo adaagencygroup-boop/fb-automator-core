@@ -16,15 +16,9 @@ def _save_logged_in_identity(db, uid, identity):
     from ..database.repository import AccountRepository
 
     avatar_url = identity.get("avatar_url")
-    if avatar_url:
-        broadcast("info", f"Đã đọc URL avatar {uid}: {avatar_url}", uid=uid)
-    else:
-        broadcast("warning", f"Không đọc được URL avatar từ trang chủ: {uid}; giữ ảnh cũ nếu có", uid=uid)
     AccountRepository.update_login_status(
         db, uid, "logged_in", identity.get("profile_name"), avatar_url=avatar_url,
     )
-    if avatar_url:
-        broadcast("success", f"Đã lấy và lưu URL avatar: {uid}", uid=uid)
 
 
 def _watch_open_browser_login(driver, uid: str, checks: int = 150, interval: float = 2.0):
