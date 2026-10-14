@@ -22,7 +22,7 @@ export default function Header({
   const initials = user?.initials || getInitial(user?.name);
 
   return (
-    <header className="h-[74px] bg-white border-b border-border pl-8 pr-8 pt-3.5 pb-[15px] flex items-center justify-between gap-6 shrink-0 font-sans">
+    <header className={`${activeTab === "dashboard" ? "h-[60px]" : "h-[74px]"} bg-white border-b border-border pl-8 pr-8 pt-3.5 pb-[15px] flex items-center justify-between gap-6 shrink-0 font-sans`}>
       {/* Nút ẩn/hiện sidebar + Title & Subtitle */}
       <div className="flex items-center min-w-0">
         {onToggleSidebar && (
@@ -38,7 +38,7 @@ export default function Header({
             <MaskIcon src="/icons/icon_sidebar_toggle.svg" width={16} height={16} />
           </button>
         )}
-        <div className="w-[21px] h-6 shrink-0 flex items-center justify-start">
+        <div className={activeTab === "dashboard" ? "hidden" : "w-[21px] h-6 shrink-0 flex items-center justify-start"}>
           {headerIcon ? (
             <img src={headerIcon.src} alt="" width={headerIcon.width} height={headerIcon.height} className="block" />
           ) : (
@@ -48,7 +48,7 @@ export default function Header({
             )
           )}
         </div>
-        <div className="pl-3 min-w-0 flex flex-col">
+        <div className={activeTab === "dashboard" ? "hidden" : "pl-3 min-w-0 flex flex-col"}>
           <h2 className="font-sans text-lg leading-7 font-bold tracking-[-0.45px] text-sky-600 truncate">
             {title}
           </h2>

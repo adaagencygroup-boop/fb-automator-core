@@ -1,140 +1,101 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { ArrowRight, CalendarDays, CheckCircle2, Flag, Headset, RefreshCw, ShieldCheck, UserRound, XCircle } from "lucide-react";
 import { getDashboardStats } from "./service";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { SUPPORT } from "@/config/support";
+import { useSession } from "@/components/SessionContext";
+import { formatVietnamDateTime } from "@/lib/date-utils";
+import styles from "./dashboard.module.css";
+
+const percent = (count, total) => total > 0 ? Math.round(count / total * 1000) / 10 : 0;
+const display = (number) => number == null ? "—" : number;
+
+function Metric({ label, value, ratio, tone = "success", icon: Icon, showRatio = true }) {
+  return <div className={styles.metric}>
+    <div className={styles.metricLabel}>{Icon ? <Icon size={14} className={styles[tone]} /> : <span className={`${styles.dot} ${styles[tone]}`} />}{label}</div>
+    <div className={styles.metricValue}>{display(value)}{showRatio && ratio != null && <span className={styles[tone]}> ({ratio}%)</span>}</div>
+    <div className={styles.track}><span className={styles[tone]} style={{ width: `${ratio ?? 0}%` }} /></div>
+  </div>;
+}
+
+function Total({ icon: Icon, label, value, href, account = false }) {
+  return <div className={styles.total}>
+    <div className={`${styles.totalIcon} ${account ? styles.accountIcon : ""}`}><Icon size={22} fill="currentColor" strokeWidth={1.5} /></div>
+    <div><div className={styles.totalLabel}>{label}</div><div className={styles.totalValue}>{display(value)}</div><Link href={href} className={styles.detail}>Xem chi tiết <ArrowRight size={12} /></Link></div>
+  </div>;
+}
+
+function Destination({ href, children }) {
+  return <Link href={href} className={styles.destination}><span>{children}</span><ArrowRight size={15} /></Link>;
+}
 
 export default function DashboardModule() {
-  const [stats, setStats] = useState({
-    accounts: { total: 0, live: 0, die: 0 },
-    pages_total: 0,
-    posts_today: 0,
-    proxies_active: 0,
-    recent_activity: [],
-  });
-  const [loading, setLoading] = useState(false);
+  const session = useSession();
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [showRenewal, setShowRenewal] = useState(false);
 
-  const fetchStats = async () => {
+  async function fetchStats() {
     setLoading(true);
-    try {
-      const data = await getDashboardStats();
-      setStats(data);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
+    setError("");
+    try { setData(await getDashboardStats()); }
+    catch { setError("Không thể tải dữ liệu tổng quan. Vui lòng thử làm mới."); }
+    finally { setLoading(false); }
+  }
 
   useEffect(() => {
-    fetchStats();
+    let cancelled = false;
+    getDashboardStats().then((result) => { if (!cancelled) setData(result); })
+      .catch(() => { if (!cancelled) setError("Không thể tải dữ liệu tổng quan. Vui lòng thử làm mới."); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, []);
 
-  return (
-    <div className="space-y-6">
-      {/* 4 Stat Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="border-l-4 border-l-sky-500">
-          <CardHeader className="p-4 pb-1">
-            <CardTitle className="text-xs font-bold uppercase text-slate-400">
-              Tổng Tài Khoản
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4 pt-1">
-            <div className="text-3xl font-black text-sky-400">{stats.accounts?.total || 0}</div>
-            <p className="text-[11px] text-slate-500 mt-1">
-              Live: {stats.accounts?.live || 0} | Die: {stats.accounts?.die || 0}
-            </p>
-          </CardContent>
-        </Card>
+  const { accounts, pages, errors = {} } = data || {};
+  const user = session?.user;
+  const active = user?.modules_unlocked === true;
+  const available = accounts ? percent(accounts.live, accounts.total) : null;
 
-        <Card className="border-l-4 border-l-cyan-500">
-          <CardHeader className="p-4 pb-1">
-            <CardTitle className="text-xs font-bold uppercase text-slate-400">
-              Fanpage Hoạt Động
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4 pt-1">
-            <div className="text-3xl font-black text-cyan-400">{stats.pages_total || 0}</div>
-            <p className="text-[11px] text-slate-500 mt-1">Sẵn sàng tự động đăng</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-l-4 border-l-emerald-500">
-          <CardHeader className="p-4 pb-1">
-            <CardTitle className="text-xs font-bold uppercase text-slate-400">
-              Bài Đăng Hôm Nay
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4 pt-1">
-            <div className="text-3xl font-black text-emerald-400">{stats.posts_today || 0}</div>
-            <p className="text-[11px] text-slate-500 mt-1">Reels &amp; Video &amp; AI</p>
-          </CardContent>
-        </Card>
-
-        <Card className="border-l-4 border-l-amber-500">
-          <CardHeader className="p-4 pb-1">
-            <CardTitle className="text-xs font-bold uppercase text-slate-400">
-              Proxy Hoạt Động
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4 pt-1">
-            <div className="text-3xl font-black text-amber-400">{stats.proxies_active || 0}</div>
-            <p className="text-[11px] text-slate-500 mt-1">Đã kiểm tra sức khỏe</p>
-          </CardContent>
-        </Card>
+  return <div className={styles.dashboard} aria-busy={loading}>
+    <div className={styles.heading}><h1>Tổng quan FB Automation</h1><button type="button" className={styles.refresh} onClick={fetchStats} disabled={loading} aria-label="Làm mới tổng quan" title="Làm mới tổng quan"><RefreshCw size={15} className={loading ? "animate-spin" : ""} /></button></div>
+    {error && <p role="alert" className={styles.error}>{error}</p>}
+    <section className={styles.license} aria-label="Bản quyền và xác thực HWID">
+      <div className={styles.licenseInfo}><div className={styles.shield}><ShieldCheck size={27} /></div><div><h2>Bản quyền &amp; Xác thực HWID</h2><span className={`${styles.status} ${user && !active ? styles.inactive : ""}`}><span />{user ? (active ? "Đang hoạt động" : "Chưa kích hoạt") : "Đang tải bản quyền"}</span></div></div>
+      <div className={styles.expiry}><div className={styles.calendar}><CalendarDays size={19} /></div><div><div>{user?.expired_at ? <>Còn <strong>{Math.max(0, user.days_remaining ?? 0)}</strong> ngày</> : user ? (active ? "Không giới hạn" : "Chưa có bản quyền") : "—"}</div><small>{user?.expired_at ? `(Hết hạn: ${formatVietnamDateTime(user.expired_at).date})` : ""}</small></div></div>
+    </section>
+    <section className={styles.section} aria-labelledby="accounts-overview">
+      <h2 id="accounts-overview" className={styles.sectionTitle}><span>1</span>Tổng quan tài khoản Facebook</h2>
+      {errors.accounts && <p role="alert" className={styles.error}>{errors.accounts}</p>}
+      <div className={styles.overview}>
+        <Total icon={UserRound} label="TỔNG SỐ ACCOUNT" value={accounts?.total} href="/accounts" account />
+        <div className={styles.accountMetrics}>
+          <Metric label="Live" value={accounts?.live} ratio={available} showRatio={false} />
+          <Metric label="Die / Failed" value={accounts?.die} ratio={accounts ? percent(accounts.die, accounts.total) : null} tone="failure" showRatio={false} />
+          <div><div className={styles.metricLabel}>Tỷ lệ khả dụng</div><div className={styles.metricValue}>{available == null ? "—" : `${available}%`}</div></div>
+        </div>
+        <Destination href="/accounts">Đi tới Quản lý tài khoản Facebook</Destination>
       </div>
-
-      {/* Recent Activity Card */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between p-5">
-          <CardTitle>📊 Lịch Sử Đăng Bài Gần Nhất</CardTitle>
-          <Button onClick={fetchStats} disabled={loading} size="sm" variant="outline">
-            {loading ? "Đang tải..." : "🔄 Làm mới"}
-          </Button>
-        </CardHeader>
-        <CardContent className="p-5 pt-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-slate-800 text-slate-400">
-                  <th className="py-2.5 px-3">Thời Gian</th>
-                  <th className="py-2.5 px-3">Mục Tiêu</th>
-                  <th className="py-2.5 px-3">Hình Thức</th>
-                  <th className="py-2.5 px-3">Trạng Thái</th>
-                  <th className="py-2.5 px-3">Post ID</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/60">
-                {stats.recent_activity?.length > 0 ? (
-                  stats.recent_activity.map((r, i) => (
-                    <tr key={i} className="hover:bg-slate-800/30">
-                      <td className="py-2.5 px-3 text-slate-400">{r.posted_at}</td>
-                      <td className="py-2.5 px-3 font-semibold text-slate-200">
-                        {r.target_name || r.target_id}
-                      </td>
-                      <td className="py-2.5 px-3 text-sky-400">{r.post_type}</td>
-                      <td className="py-2.5 px-3">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">
-                          {r.status}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-slate-400 font-mono">{r.fb_post_id || "-"}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={5} className="py-6 text-center text-slate-500">
-                      Chưa có bài đăng nào hôm nay.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
+    </section>
+    <section className={styles.section} aria-labelledby="pages-overview">
+      <h2 id="pages-overview" className={styles.sectionTitle}><span>2</span>Tổng quan Fanpage</h2>
+      {errors.pages && <p role="alert" className={styles.error}>{errors.pages}</p>}
+      <div className={styles.overview}>
+        <Total icon={Flag} label="TỔNG SỐ FANPAGE" value={pages?.total} href="/creator/history" />
+        <div className={styles.pageMetrics}>
+          <Metric label="Đã khởi tạo thành công" value={pages?.success} ratio={pages ? percent(pages.success, pages.total) : null} icon={CheckCircle2} />
+          <Metric label="Đã khởi tạo thất bại" value={pages?.failed} ratio={pages ? percent(pages.failed, pages.total) : null} icon={XCircle} tone="failure" />
+        </div>
+        <Destination href="/creator/create">Đi tới Tạo Fanpage</Destination>
+      </div>
+      {pages?.other > 0 && <p className={styles.note}>{pages.other} kết quả đang xử lý hoặc có trạng thái khác. Tổng Fanpage tính theo lượt tạo được ghi nhận.</p>}
+    </section>
+    <footer className={styles.support}>
+      <div><Headset size={17} /><span>Cần trợ giúp kích hoạt lại tài khoản bản quyền hoặc thay đổi thiết bị HWID?</span></div>
+      <nav aria-label="Hỗ trợ bản quyền"><a href={SUPPORT.telegram.url} target="_blank" rel="noreferrer">Liên hệ Kỹ thuật viên</a><span>•</span><button type="button" onClick={() => setShowRenewal((open) => !open)} aria-expanded={showRenewal} aria-controls="dashboard-renewal">Hướng dẫn gia hạn</button></nav>
+    </footer>
+    {showRenewal && <div id="dashboard-renewal" className={styles.renewal}><h2>Hướng dẫn gia hạn bản quyền</h2><p>Liên hệ kỹ thuật viên qua <a href={SUPPORT.telegram.url} target="_blank" rel="noreferrer">Telegram {SUPPORT.telegram.display}</a> hoặc <a href={SUPPORT.zalo.url} target="_blank" rel="noreferrer">Zalo {SUPPORT.zalo.display}</a>, gửi tên tài khoản {user?.username} để được hỗ trợ gia hạn hoặc đổi thiết bị HWID.</p></div>}
+  </div>;
 }
