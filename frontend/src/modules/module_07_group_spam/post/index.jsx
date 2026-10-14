@@ -5,12 +5,8 @@ import {
   Bold,
   CalendarDays,
   Check,
-  ChevronLeft,
-  ChevronRight,
   Clock3,
   Download,
-  Eye,
-  EyeOff,
   ExternalLink,
   FileText,
   FileUp,
@@ -33,7 +29,6 @@ import {
   Users,
 } from "lucide-react";
 
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -49,10 +44,8 @@ import {
   saveGroupSettings,
   testGroupAiConnection,
 } from "../service";
-import Link from "next/link";
 import {
   GROUPS,
-  AVATAR_COLORS,
   INITIAL_POST,
 } from "../shared/constants";
 import {
@@ -60,10 +53,11 @@ import {
   Field,
   SelectField,
   CheckLabel,
-  initialsOf,
   normalizeAccount,
 } from "../shared/components";
-import GroupSourceSection from "./GroupSourceSection";
+import GroupAccountSection from "./components/GroupAccountSection";
+import GroupSettingsSection from "./components/GroupSettingsSection";
+import GroupSourceSection from "./components/GroupSourceSection";
 
 const DEFAULT_GEMINI_MODELS = [
   { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
@@ -83,7 +77,6 @@ export default function GroupPostModule() {
   const [accounts, setAccounts] = useState([]);
   const [customGroups, setCustomGroups] = useState(GROUPS);
   const [accountsLoading, setAccountsLoading] = useState(true);
-  const [accountSearch, setAccountSearch] = useState("");
   const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
   const [model, setModel] = useState("gpt-4o");
   const [apiKey, setApiKey] = useState("");
@@ -124,8 +117,6 @@ export default function GroupPostModule() {
   const [scheduleTime, setScheduleTime] = useState("08:00");
   const [runState, setRunState] = useState("idle");
   const [progress, setProgress] = useState(0);
-  const [accountPage, setAccountPage] = useState(1);
-  const [accountPageSize, setAccountPageSize] = useState(10);
   const [isGenerating, setIsGenerating] = useState(false);
 
   const loadAccounts = async () => {
@@ -173,17 +164,6 @@ export default function GroupPostModule() {
       });
     return () => { cancelled = true; };
   }, []);
-
-  const filteredAccounts = useMemo(() => {
-    const query = accountSearch.trim().toLowerCase();
-    if (!query) return accounts;
-    return accounts.filter((account) => `${account.name} ${account.uid}`.toLowerCase().includes(query));
-  }, [accountSearch, accounts]);
-
-  const paginatedAccounts = useMemo(() => {
-    const start = (accountPage - 1) * accountPageSize;
-    return filteredAccounts.slice(start, start + accountPageSize);
-  }, [filteredAccounts, accountPage, accountPageSize]);
 
   const currentGroupPool = useMemo(() => {
     if (groupSource === "file" && groupFile?.groups?.length) {
@@ -288,11 +268,6 @@ export default function GroupPostModule() {
     }
   };
 
-  const toggleAccount = (key, checked) => {
-    setSelectedAccountKeys((current) =>
-      checked ? [...new Set([...current, key])] : current.filter((item) => item !== key),
-    );
-  };
 
   const handleFiles = (files) => {
     const nextFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/") || file.type.startsWith("video/"));
@@ -385,287 +360,44 @@ export default function GroupPostModule() {
         </p>
       </div>
 
-      {/* Bước 1 */}
-      <SectionCard
-        number="1"
-        title="Chọn tài khoản / người dùng đi seeding"
-        description="Chọn danh sách tài khoản Facebook sẽ thực hiện đăng bài và tương tác"
-        aside={
-          <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
-            + Đã chọn {selectedAccounts.length}/{accounts.length} tài khoản
-          </span>
-        }
-      >
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[240px] flex-1">
-            <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-            <Input
-              value={accountSearch}
-              onChange={(event) => setAccountSearch(event.target.value)}
-              placeholder="Tìm kiếm UID, tên tài khoản Facebook..."
-              className="pl-9"
-            />
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setSelectedAccountKeys(filteredAccounts.map((account) => account.key))}
-          >
-            <Check className="mr-1.5 size-3.5" /> Chọn tất cả
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="size-8"
-            title="Đồng bộ danh sách từ Module 2"
-            onClick={() => {
-              setAccountSearch("");
-              loadAccounts();
-            }}
-          >
-            <RefreshCw className={`size-3.5 ${accountsLoading ? "animate-spin text-primary" : ""}`} />
-          </Button>
-        </div>
+      {/* Bước 1: Chọn tài khoản / người dùng đi seeding - Đã tách thành file GroupAccountSection.jsx riêng */}
+      <GroupAccountSection
+        accounts={accounts}
+        accountsLoading={accountsLoading}
+        selectedAccountKeys={selectedAccountKeys}
+        setSelectedAccountKeys={setSelectedAccountKeys}
+        onRefreshAccounts={loadAccounts}
+      />
 
-        <div className="overflow-hidden rounded-lg border border-slate-200">
-          <div className="max-h-[330px] overflow-auto">
-            <table className="w-full min-w-[650px] text-left text-[11px]">
-              <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500">
-                <tr className="border-b border-slate-200">
-                  <th className="w-12 px-4 py-3">
-                    <Checkbox
-                      checked={filteredAccounts.length > 0 && filteredAccounts.every((account) => selectedAccountKeys.includes(account.key))}
-                      onCheckedChange={(checked) => setSelectedAccountKeys(checked ? filteredAccounts.map((account) => account.key) : [])}
-                    />
-                  </th>
-                  <th className="px-3 py-3 font-semibold">Tài khoản Facebook</th>
-                  <th className="px-3 py-3 font-semibold">UID Facebook</th>
-                  <th className="px-3 py-3 font-semibold">Trạng thái</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {paginatedAccounts.map((account, index) => {
-                  const selected = selectedAccountKeys.includes(account.key);
-                  return (
-                    <tr key={account.key} className={selected ? "bg-blue-50/30" : "bg-white"}>
-                      <td className="px-4 py-2.5">
-                        <Checkbox checked={selected} onCheckedChange={(checked) => toggleAccount(account.key, checked)} />
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-2.5">
-                          <Avatar className="size-8 border-0">
-                            <AvatarFallback className={AVATAR_COLORS[index % AVATAR_COLORS.length]}>
-                              {initialsOf(account.name)}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div>
-                            <p className="font-semibold text-slate-700">{account.name}</p>
-                            <p className="text-[10px] text-slate-400">{account.friends || "Tài khoản Module 2"}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2.5 font-mono text-slate-500">{account.uid}</td>
-                      <td className="px-3 py-2.5">
-                        <span className={account.status === "LIVE" ? "font-semibold text-emerald-600" : "font-semibold text-red-500"}>
-                          ● {account.status === "LIVE" ? "Live" : account.status}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {!accountsLoading && !filteredAccounts.length && (
-                  <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center">
-                      <div className="flex flex-col items-center justify-center space-y-2">
-                        <Users className="size-8 text-slate-300" />
-                        <p className="text-xs font-semibold text-slate-600">
-                          {accounts.length === 0
-                            ? "Chưa có tài khoản Facebook nào trong Module 2 (Quản lý tài khoản)"
-                            : "Không tìm thấy tài khoản Facebook phù hợp"}
-                        </p>
-                        <p className="max-w-md text-[11px] text-slate-400">
-                          {accounts.length === 0
-                            ? "Vui lòng vào Module 2 để thêm hoặc import tài khoản Facebook, sau đó quay lại để chọn tài khoản đi seeding."
-                            : "Thử tìm kiếm với từ khóa khác hoặc bấm nút làm mới."}
-                        </p>
-                        {accounts.length === 0 ? (
-                          <div className="pt-2">
-                            <Link
-                              href="/accounts"
-                              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-primary/90"
-                            >
-                              <Plus className="size-3.5" /> Thêm tài khoản tại Module 2
-                            </Link>
-                          </div>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                )}
-                {accountsLoading && (
-                  <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center text-slate-400">
-                      Đang tải tài khoản từ Module 2...
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
 
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-[10px] text-slate-400">
-          <div className="flex items-center gap-4">
-            <span>
-              Hiển thị <strong className="text-slate-600">{Math.min(filteredAccounts.length, accountPageSize)}/{accounts.length}</strong> tài khoản
-            </span>
-            <span>
-              Dòng / trang:{" "}
-              <select
-                value={accountPageSize}
-                onChange={(e) => {
-                  setAccountPageSize(Number(e.target.value));
-                  setAccountPage(1);
-                }}
-                className="ml-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 outline-none"
-              >
-                <option value={10}>10</option>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-              </select>
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                setAccountPageSize(accounts.length || 10);
-                setAccountPage(1);
-              }}
-              className="font-semibold text-primary hover:underline"
-            >
-              Xem tất cả →
-            </button>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              disabled={accountPage <= 1}
-              onClick={() => setAccountPage((p) => Math.max(1, p - 1))}
-              className="rounded border border-slate-200 p-1.5 text-slate-400 hover:bg-slate-50 disabled:opacity-40"
-            >
-              <ChevronLeft className="size-3" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setAccountPage(1)}
-              className={`size-7 rounded font-semibold transition-colors ${accountPage === 1 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                }`}
-            >
-              1
-            </button>
-            {Math.ceil(filteredAccounts.length / accountPageSize) > 1 && (
-              <button
-                type="button"
-                onClick={() => setAccountPage(2)}
-                className={`size-7 rounded font-semibold transition-colors ${accountPage === 2 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                  }`}
-              >
-                2
-              </button>
-            )}
-            {Math.ceil(filteredAccounts.length / accountPageSize) > 2 && (
-              <button
-                type="button"
-                onClick={() => setAccountPage(3)}
-                className={`size-7 rounded font-semibold transition-colors ${accountPage === 3 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                  }`}
-              >
-                3
-              </button>
-            )}
-            <button
-              type="button"
-              disabled={accountPage >= Math.ceil(filteredAccounts.length / accountPageSize)}
-              onClick={() => setAccountPage((p) => p + 1)}
-              className="rounded border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
-            >
-              <ChevronRight className="size-3" />
-            </button>
-          </div>
-        </div>
-      </SectionCard>
-
-      {/* Bước 2 */}
-      <SectionCard number="2" title="Cấu hình API & thông số chung">
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Model AI" required>
-            <SelectField value={model} onChange={handleModelChange} disabled={settingsLoading}>
-              <optgroup label="OpenAI">
-                <option value="gpt-4o">GPT-4o</option>
-                <option value="gpt-4o-mini">GPT-4o mini</option>
-              </optgroup>
-              <optgroup label="Google AI Studio">
-                {geminiModels.map((item) => (
-                  <option key={item.id} value={item.id}>{item.name}</option>
-                ))}
-              </optgroup>
-            </SelectField>
-            <span className="block text-[10px] font-normal text-slate-400">Model đang dùng: {model}. Có thể tải danh sách thực theo quyền của API Key.</span>
-          </Field>
-          <Field label="API Key" required>
-            <div className="relative">
-              <Input
-                type={showApiKey ? "text" : "password"}
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                placeholder={savedKey?.configured ? `Đã lưu ${savedKey.hint}` : activeProvider === "openai" ? "sk-••••••••••••••••" : "AIza••••••••••••••••"}
-                className="pr-10 font-mono"
-                autoComplete="off"
-              />
-              <button
-                type="button"
-                onClick={() => setShowApiKey((current) => !current)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                aria-label={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
-                title={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
-              >
-                {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-              </button>
-            </div>
-            <span className="block text-[10px] font-normal text-slate-400">
-              {savedKey?.configured ? `Đang dùng khóa đã mã hóa trên máy (${savedKey.hint}). Nhập khóa mới để thay thế.` : "Nhập API Key hợp lệ của nhà cung cấp AI đã chọn."}
-            </span>
-          </Field>
-        </div>
-        <div className="mt-4 grid gap-4 sm:grid-cols-3">
-          <Field label="Luồng">
-            <Input type="number" min="1" max="10" value={threads} onChange={(event) => setThreads(event.target.value)} />
-          </Field>
-          <Field label="Nghỉ (phút)">
-            <Input type="number" min="0" max="1440" value={restMinutes} onChange={(event) => setRestMinutes(event.target.value)} />
-          </Field>
-          <Field label="Max bài">
-            <Input type="number" min="1" max="1000" value={maxPosts} onChange={(event) => setMaxPosts(event.target.value)} />
-          </Field>
-        </div>
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
-          <div className={`text-[11px] ${settingsFeedback?.type === "error" ? "text-red-600" : "text-emerald-600"}`}>
-            {settingsLoading ? "Đang đọc cấu hình local..." : settingsFeedback?.message || (hasApiKey ? "API Key đã được cấu hình trên máy" : "Chưa có API Key cho model này")}
-          </div>
-          <div className="flex gap-2">
-            <Button type="button" size="sm" variant="outline" disabled={Boolean(settingsAction) || settingsLoading} onClick={handleLoadGeminiModels}>
-              {settingsAction === "loading-models" ? "Đang tải model..." : "Tải model Google"}
-            </Button>
-            <Button type="button" size="sm" variant="outline" disabled={Boolean(settingsAction) || settingsLoading} onClick={handleTestApi}>
-              {settingsAction === "testing" ? "Đang kiểm tra..." : "Kiểm tra API"}
-            </Button>
-            <Button type="button" size="sm" disabled={Boolean(settingsAction) || settingsLoading || !hasApiKey} onClick={handleSaveSettings}>
-              {settingsAction === "saving" ? "Đang lưu..." : "Lưu cấu hình"}
-            </Button>
-          </div>
-        </div>
-      </SectionCard>
+      {/* Bước 2: Cấu hình API & thông số chung - Đã tách thành file GroupSettingsSection.jsx riêng */}
+      <GroupSettingsSection
+        model={model}
+        setModel={setModel}
+        apiKey={apiKey}
+        setApiKey={setApiKey}
+        showApiKey={showApiKey}
+        setShowApiKey={setShowApiKey}
+        threads={threads}
+        setThreads={setThreads}
+        restMinutes={restMinutes}
+        setRestMinutes={setRestMinutes}
+        maxPosts={maxPosts}
+        setMaxPosts={setMaxPosts}
+        geminiModels={geminiModels}
+        setGeminiModels={setGeminiModels}
+        providerStatus={providerStatus}
+        setProviderStatus={setProviderStatus}
+        settingsLoading={settingsLoading}
+        settingsAction={settingsAction}
+        setSettingsAction={setSettingsAction}
+        settingsFeedback={settingsFeedback}
+        setSettingsFeedback={setSettingsFeedback}
+        onSaveSettings={handleSaveSettings}
+        onTestApi={handleTestApi}
+        onLoadGeminiModels={handleLoadGeminiModels}
+        onModelChange={handleModelChange}
+      />
 
       {/* Bước 3: Nguồn nhóm - Đã tách thành file GroupSourceSection.jsx riêng */}
       <GroupSourceSection
