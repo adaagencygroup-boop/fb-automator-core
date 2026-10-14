@@ -104,6 +104,25 @@ class PageRepo:
         return query.order_by(CreatedPage.created_at.desc()).all()
 
     @staticmethod
+    def get_owned(db, page_id, owner_username=None):
+        query = db.query(CreatedPage).filter(CreatedPage.id == page_id)
+        if owner_username and str(owner_username).strip():
+            owner = str(owner_username).strip()
+            query = query.filter(
+                (CreatedPage.owner_username == owner) | (CreatedPage.owner_username.is_(None))
+            )
+        return query.first()
+
+    @staticmethod
+    def delete_owned(db, page_id, owner_username=None):
+        page = PageRepo.get_owned(db, page_id, owner_username)
+        if not page:
+            return False
+        db.delete(page)
+        db.commit()
+        return True
+
+    @staticmethod
     def create(db, data, owner_username=None):
         payload = dict(data)
         owner = (owner_username or payload.get("owner_username") or "").strip()

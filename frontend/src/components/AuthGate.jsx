@@ -33,6 +33,16 @@ export default function AuthGate({ children }) {
 
   const hasUser = Boolean(user);
   useEffect(() => {
+    const onRevoked = () => {
+      setUser(null);
+      setScreen("login");
+      setSessionNotice("Phiên đăng nhập đã bị thu hồi. Vui lòng đăng nhập lại.");
+    };
+    window.addEventListener("fb-session-revoked", onRevoked);
+    return () => window.removeEventListener("fb-session-revoked", onRevoked);
+  }, []);
+
+  useEffect(() => {
     window.localStorage.removeItem("fb_auth_token");
     let stopped = false;
     let timer;

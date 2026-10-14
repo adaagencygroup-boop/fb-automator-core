@@ -31,6 +31,25 @@ function warnOnce(key, message) {
 }
 
 let refreshPromise = null;
+const SESSION_EVENT = "fb-session-revoked";
+const TERMINAL_AUTH = new Set([
+  "SESSION_REVOKED",
+  "ACCOUNT_BANNED",
+  "ACCOUNT_LOCKED",
+  "ACCOUNT_PENDING",
+  "ACCOUNT_REJECTED",
+  "ACCOUNT_NOT_FOUND",
+]);
+
+function authDetail(error) {
+  const detail = error?.response?.data?.detail;
+  return typeof detail === "string" ? detail : "";
+}
+
+function notifySessionLost(code) {
+  if (typeof window === "undefined" || code !== "SESSION_REVOKED") return;
+  window.dispatchEvent(new CustomEvent(SESSION_EVENT, { detail: code }));
+}
 
 function apiError(error) {
   const detail = error.response?.data?.detail || error.response?.data?.message;
@@ -94,15 +113,28 @@ api.interceptors.response.use(
   async (error) => {
     const status = error.response?.status;
     const original = error.config;
-    const detail = error.response?.data?.detail;
-    if (status === 401 && !["SESSION_IDENTITY_CHANGED", "SESSION_REVOKED"].includes(detail) && original && !original._retry && !shouldSkipRefresh(original.url)) {
+    const detail = authDetail(error);
+    if (
+      status === 401
+      && original
+      && !original._retry
+      && !shouldSkipRefresh(original.url)
+      && !TERMINAL_AUTH.has(detail)
+      && detail !== "SESSION_IDENTITY_CHANGED"
+    ) {
       original._retry = true;
       try {
         await refreshAccess();
         return api.request(original);
       } catch (refreshError) {
+        const refreshDetail = authDetail(refreshError);
+        notifySessionLost(refreshDetail);
         return Promise.reject(apiError(refreshError));
       }
+    }
+    if (TERMINAL_AUTH.has(detail)) {
+      notifySessionLost(detail);
+      return Promise.reject(apiError(error));
     }
     const errorMsg =
       error.response?.data?.detail ||
