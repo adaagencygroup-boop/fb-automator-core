@@ -158,3 +158,32 @@ class StarUpdateInput(BaseModel):
     page_id: str
     customer_psid: str
     is_starred: bool
+
+class PushSubscriptionInput(BaseModel):
+    facebook_user_id: Optional[str] = None
+    endpoint: str
+    p256dh: Optional[str] = None
+    auth: Optional[str] = None
+
+class ReactInput(BaseModel):
+    page_id: str
+    recipient_id: str
+    reaction: str
+
+class SendAttachmentUrlInput(BaseModel):
+    page_id: str
+    recipient_id: str
+    attachment_type: str
+    url: str
+    reply_to_message_id: Optional[str] = None
+
+class CommentReplyInput(BaseModel):
+    page_id: str
+    text: Optional[str] = ""
+    attachment_url: Optional[str] = None
+
+class CommentReactInput(BaseModel):
+    page_id: str
+    reaction: str  # LIKE, LOVE, HAHA, WOW, SAD, ANGRY
+
+

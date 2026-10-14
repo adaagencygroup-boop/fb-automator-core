@@ -114,6 +114,11 @@ async def lifespan(app: FastAPI):
     print(
         f"[Local Engine] PostgreSQL production ready. Loaded {len(loaded)} backend modules."
     )
+    try:
+        from modules.module_06_omnichannel_chat.queue_worker import start_queue_worker
+        asyncio.create_task(start_queue_worker())
+    except Exception as qe:
+        print(f"[Local Engine] Queue worker note: {qe}")
     if farm_on_startup:
         try:
             with startup_step("Module 03 farm runtime"):
@@ -137,6 +142,15 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(admin_router)
 
+from modules.module_06_omnichannel_chat.routers import all_routers as module_06_routers
+for r in module_06_routers:
+    app.include_router(r)
+
+from fastapi.staticfiles import StaticFiles
+uploads_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "uploads"))
+os.makedirs(uploads_dir, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+
 _PUBLIC_API = {
     "/api/health",
     "/api/shutdown",
@@ -145,7 +159,10 @@ _PUBLIC_API = {
     "/api/v1/auth/verify-license",
     "/api/v1/auth/me",
     "/api/v1/admin/login",
+    "/api/facebook/webhook",
+    "/api/facebook/config",
 }
+
 
 
 class LicenseMiddleware:
@@ -342,6 +359,20 @@ async def fetch_pages_tokens(req: AddPageTokenRequest):
                 (p["id"], p["name"], p["access_token"], p.get("category", "")),
             )
             count += 1
+        # Tự động đồng bộ luôn sang Module 06 (Omnichannel Chat Supabase PostgreSQL)
+        try:
+            from modules.module_06_omnichannel_chat.database import SessionLocal
+            from modules.module_06_omnichannel_chat.services import FacebookSyncService
+
+            _db6 = SessionLocal()
+            try:
+                _sync = FacebookSyncService(_db6)
+                _sync.sync_by_token(req.user_token.strip(), system_user_id=1)
+            finally:
+                _db6.close()
+        except Exception as _e6:
+            print(f"[PageManager -> Module 06 Sync Note] {_e6}")
+
         await ws_manager.broadcast_log(
             "PageManager", "SUCCESS", f"Đã đồng bộ {count} Fanpage từ User Token."
         )
