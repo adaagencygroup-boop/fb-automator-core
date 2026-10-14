@@ -2,6 +2,8 @@
 
 import React, { useState } from "react";
 import { Clipboard, FileSpreadsheet, Trash2, Plus, MessageSquare } from "lucide-react";
+import ConfirmDialog from "@/components/ui/confirm-dialog";
+import { toast } from "@/components/ui/toast";
 import ExcelImportModal from "../../_components/ExcelImportModal";
 
 export default function PostCommentsManager({
@@ -15,6 +17,13 @@ export default function PostCommentsManager({
   const [singleText, setSingleText] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
 
+  // Dialog states for deleting comments
+  const [deleteComment, setDeleteComment] = useState({ isOpen: false, text: "", index: -1 });
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const [clearAllOpen, setClearAllOpen] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+
   const handlePasteClipboard = async () => {
     try {
       const text = await navigator.clipboard.readText();
@@ -24,30 +33,78 @@ export default function PostCommentsManager({
           .map((l) => l.trim())
           .filter((l) => l.length > 0);
         if (lines.length > 0) {
-          onAddBulkComments(lines);
+          await onAddBulkComments(lines);
+          toast.success(`Đã dán và thêm ${lines.length} câu bình luận từ clipboard!`, "THÀNH CÔNG");
+        } else {
+          toast.warning("Nội dung trong Clipboard không chứa dòng văn bản hợp lệ!", "CẢNH BÁO");
         }
+      } else {
+        toast.warning("Clipboard hiện tại đang trống!", "THÔNG BÁO");
       }
     } catch {
-      alert("Không thể đọc từ Clipboard. Vui lòng dán thủ công vào ô nhập.");
+      toast.error("Không thể đọc từ Clipboard. Vui lòng dán thủ công vào ô nhập.", "LỖI TRUY CẬP");
     }
   };
 
-  const handleBulkAdd = () => {
+  const handleBulkAdd = async () => {
     const lines = bulkText
       .split("\n")
       .map((l) => l.trim())
       .filter((l) => l.length > 0);
     if (lines.length > 0) {
-      onAddBulkComments(lines);
-      setBulkText("");
+      try {
+        await onAddBulkComments(lines);
+        setBulkText("");
+        toast.success(`Đã thêm ${lines.length} câu bình luận vào danh sách!`, "THÊM THÀNH CÔNG");
+      } catch (e) {
+        toast.error(e?.message || "Không thể thêm bình luận!", "LỖI");
+      }
     }
   };
 
-  const handleSingleAdd = (e) => {
+  const handleSingleAdd = async (e) => {
     e.preventDefault();
-    if (!singleText.trim()) return;
-    onAddComment(singleText.trim());
-    setSingleText("");
+    const val = singleText.trim();
+    if (!val) {
+      toast.warning("Vui lòng nhập nội dung bình luận!", "CHƯA NHẬP NỘI DUNG");
+      return;
+    }
+    try {
+      await onAddComment(val);
+      setSingleText("");
+      toast.success("Đã thêm bình luận mới vào danh sách!", "THÀNH CÔNG");
+    } catch (e) {
+      toast.error(e?.message || "Không thể thêm bình luận!", "LỖI");
+    }
+  };
+
+  // Confirm delete single comment
+  const handleConfirmDeleteComment = async () => {
+    if (deleteComment.index < 0) return;
+    setIsDeleting(true);
+    try {
+      await onRemoveComment(deleteComment.index);
+      toast.success("Đã xóa câu bình luận khỏi danh sách!", "ĐÃ XÓA");
+      setDeleteComment({ isOpen: false, text: "", index: -1 });
+    } catch (e) {
+      toast.error(e?.message || "Không thể xóa bình luận này!", "LỖI XÓA");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  // Confirm clear all comments
+  const handleConfirmClearAllComments = async () => {
+    setIsClearing(true);
+    try {
+      await onClearAllComments();
+      toast.success("Đã xóa toàn bộ danh sách bình luận thành công!", "ĐÃ DỌN DẸP");
+      setClearAllOpen(false);
+    } catch (e) {
+      toast.error(e?.message || "Không thể dọn dẹp danh sách bình luận!", "LỖI XÓA");
+    } finally {
+      setIsClearing(false);
+    }
   };
 
   return (
@@ -69,7 +126,7 @@ export default function PostCommentsManager({
             <button
               type="button"
               onClick={handlePasteClipboard}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition-all shadow-sm shadow-blue-500/20"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition-all shadow-sm shadow-blue-500/20 cursor-pointer"
             >
               <Clipboard className="w-3.5 h-3.5" />
               Dán nhanh từ clipboard
@@ -126,8 +183,8 @@ export default function PostCommentsManager({
             {comments.length > 0 && (
               <button
                 type="button"
-                onClick={onClearAllComments}
-                className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-semibold"
+                onClick={() => setClearAllOpen(true)}
+                className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-semibold px-2 py-1 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 Xóa toàn bộ
@@ -145,23 +202,24 @@ export default function PostCommentsManager({
               <table className="w-full text-left border-collapse text-xs">
                 <thead className="bg-gray-50/80 sticky top-0 z-10 text-gray-500 font-semibold border-b border-gray-100">
                   <tr>
-                    <th className="py-2 px-3 w-10 text-center">#</th>
+                    <th className="py-2 px-3 w-10 text-center whitespace-nowrap">#</th>
                     <th className="py-2 px-3">Nội dung bình luận</th>
-                    <th className="py-2 px-3 w-14 text-center">Thao tác</th>
+                    <th className="py-2 px-3 w-24 min-w-[75px] text-center whitespace-nowrap">Hành động</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 text-gray-700 font-medium">
                   {comments.map((cmt, idx) => (
                     <tr key={idx} className="hover:bg-blue-50/30 transition-colors">
-                      <td className="py-2 px-3 text-center text-gray-400 font-mono text-[11px]">
+                      <td className="py-2 px-3 text-center text-gray-400 font-mono text-[11px] whitespace-nowrap">
                         {idx + 1}
                       </td>
                       <td className="py-2 px-3 truncate max-w-xs">{cmt}</td>
-                      <td className="py-2 px-3 text-center">
+                      <td className="py-2 px-3 text-center whitespace-nowrap">
                         <button
                           type="button"
-                          onClick={() => onRemoveComment(idx)}
-                          className="p-1 rounded-md text-rose-500 hover:bg-rose-50"
+                          onClick={() => setDeleteComment({ isOpen: true, text: cmt, index: idx })}
+                          className="p-1 rounded-md text-rose-500 hover:bg-rose-50 hover:text-rose-600 transition-colors cursor-pointer inline-flex items-center justify-center"
+                          title="Xóa bình luận này"
                         >
                           <Trash2 className="w-3 h-3" />
                         </button>
@@ -184,7 +242,7 @@ export default function PostCommentsManager({
             />
             <button
               type="submit"
-              className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1 shrink-0"
+              className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1 shrink-0 cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               Thêm
@@ -201,9 +259,36 @@ export default function PostCommentsManager({
           targetType="COMMENT"
           onImportComments={(newComments) => {
             onAddBulkComments(newComments);
+            toast.success(`Đã nhập thành công ${newComments.length} bình luận từ file Excel!`, "THÀNH CÔNG");
           }}
         />
       )}
+
+      {/* Confirm Dialog: Xóa 1 bình luận */}
+      <ConfirmDialog
+        isOpen={deleteComment.isOpen}
+        onClose={() => !isDeleting && setDeleteComment({ isOpen: false, text: "", index: -1 })}
+        onConfirm={handleConfirmDeleteComment}
+        title="Xác nhận xóa bình luận"
+        description={`Bạn có chắc chắn muốn xóa bình luận "${deleteComment.text}" khỏi danh sách không?`}
+        confirmText="Xóa ngay"
+        cancelText="Hủy bỏ"
+        variant="danger"
+        loading={isDeleting}
+      />
+
+      {/* Confirm Dialog: Xóa toàn bộ bình luận */}
+      <ConfirmDialog
+        isOpen={clearAllOpen}
+        onClose={() => !isClearing && setClearAllOpen(false)}
+        onConfirm={handleConfirmClearAllComments}
+        title="Xác nhận xóa toàn bộ bình luận"
+        description={`Bạn có chắc chắn muốn xóa toàn bộ ${comments.length} bình luận trong danh sách không? Hành động này không thể hoàn tác.`}
+        confirmText="Xóa toàn bộ"
+        cancelText="Hủy bỏ"
+        variant="danger"
+        loading={isClearing}
+      />
     </div>
   );
 }

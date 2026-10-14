@@ -31,13 +31,13 @@ export default function HistoryTable({
         <table className="w-full text-left text-xs border-collapse">
           <thead className="bg-gray-50/80 text-gray-500 font-semibold border-b border-gray-100 uppercase tracking-wider text-[11px]">
             <tr>
-              <th className="py-3 px-4 w-12 text-center">#</th>
+              <th className="py-3 px-4 w-12 text-center">STT</th>
               <th className="py-3 px-4">THỜI GIAN</th>
               <th className="py-3 px-4">LOẠI</th>
               <th className="py-3 px-4">MỤC TIÊU</th>
               <th className="py-3 px-4 text-center">SỐ LƯỢNG</th>
-              <th className="py-3 px-4 text-center text-emerald-600">THÀNH CÔNG</th>
-              <th className="py-3 px-4 text-center text-rose-600">THẤT BẠI</th>
+              <th className="py-3 px-4 text-center">THÀNH CÔNG</th>
+              <th className="py-3 px-4 text-center">THẤT BẠI</th>
               <th className="py-3 px-4 text-center">TRẠNG THÁI</th>
               <th className="py-3 px-4 text-center">THAO TÁC</th>
             </tr>

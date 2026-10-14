@@ -2,6 +2,7 @@
 
 import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
 import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
+import { toast } from "@/components/ui/toast";
 import { UserCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import ProfileAccountConfig from "./_components/ProfileAccountConfig";
@@ -122,9 +123,11 @@ export default function SeedingProfilePage() {
         setSuccessMessage(
           `Đã lưu thành công ${res.targets.length} trang cá nhân vào cơ sở dữ liệu`,
         );
+        return res.targets;
       }
     } catch (e) {
-      addLog(`Lỗi lưu link: ${e.message}`, "error");
+      addLog(`Lỗi lưu link trang cá nhân: ${e.message}`, "error");
+      throw e;
     }
   };
 
@@ -133,7 +136,10 @@ export default function SeedingProfilePage() {
     if (targetToRemove) {
       try {
         await seedingApi.deleteSeedingTarget(targetToRemove.url, "PROFILE");
-      } catch (err) {}
+      } catch (err) {
+        addLog(`Lỗi xóa target: ${err.message}`, "error");
+        throw err;
+      }
     }
     setTargets((prev) => {
       const updated = prev
@@ -151,33 +157,39 @@ export default function SeedingProfilePage() {
   const handleClearTargets = async () => {
     try {
       await seedingApi.clearSeedingTargets("PROFILE");
-    } catch (err) {}
+    } catch (err) {
+      addLog(`Lỗi xóa danh sách: ${err.message}`, "error");
+      throw err;
+    }
     setTargets([]);
     setSuccessMessage(null);
   };
 
   const handleStart = async () => {
     if (targets.length === 0) {
-      alert("Vui lòng thêm ít nhất 1 trang cá nhân cần seeding!");
+      toast.warning("Vui lòng thêm ít nhất 1 trang cá nhân cần seeding!", "THIẾU MỤC TIÊU");
       return;
     }
 
     if (liveAccountsCount === 0) {
-      alert(
+      toast.error(
         "Không có tài khoản Facebook nào khả dụng! Yêu cầu tài khoản phải có trạng thái 'Đã đăng nhập' và còn 'Live'. Vui lòng kiểm tra lại trang Quản lý tài khoản.",
+        "KHÔNG CÓ TÀI KHOẢN KHẢ DỤNG"
       );
       return;
     }
 
     if (accountCount <= 0 || accountCount > liveAccountsCount) {
-      alert(
+      toast.warning(
         `Số lượng tài khoản muốn chạy (${accountCount}) không hợp lệ hoặc vượt quá số tài khoản khả dụng (${liveAccountsCount})!`,
+        "SỐ LƯỢNG KHÔNG HỢP LỆ"
       );
       return;
     }
 
     try {
       setIsRunning(true);
+      toast.info("Đang khởi tạo chiến dịch Seeding Trang cá nhân...", "BẮT ĐẦU");
       addLog(
         "Khởi tạo chiến dịch Seeding Trang cá nhân trên máy thật...",
         "info",
@@ -203,11 +215,16 @@ export default function SeedingProfilePage() {
         `Đã khởi tạo ${totalProfiles} chiến dịch riêng biệt (${campaign.total_tasks} tác vụ). Bắt đầu thực thi...`,
         "success",
       );
+      toast.success(
+        `Chiến dịch đã được khởi chạy với ${totalProfiles} Trang cá nhân!`,
+        "KHỞI CHẠY THÀNH CÔNG"
+      );
 
       await seedingApi.startSeedingCampaign(campaign.id);
     } catch (e) {
       setIsRunning(false);
       addLog(`Lỗi khởi chạy seeding: ${e.message}`, "error");
+      toast.error(e.message || "Không thể khởi chạy chiến dịch seeding!", "LỖI KHỞI CHẠY");
     }
   };
 
@@ -217,14 +234,17 @@ export default function SeedingProfilePage() {
         "Đang gửi yêu cầu dừng chiến dịch và đóng toàn bộ trình duyệt Chrome...",
         "warn",
       );
+      toast.info("Đang dừng chiến dịch seeding...", "DỪNG CHIẾN DỊCH");
       if (currentCampaignId) {
         await seedingApi.stopSeedingCampaign(currentCampaignId);
       } else {
         await seedingApi.stopAllSeeding();
       }
       addLog("Đã dừng hẳn chiến dịch seeding thành công.", "warn");
+      toast.warning("Đã dừng chiến dịch seeding.", "ĐÃ DỪNG");
     } catch (e) {
       addLog(`Lỗi khi dừng: ${e.message}`, "error");
+      toast.error(e.message || "Lỗi khi gửi yêu cầu dừng chiến dịch!", "LỖI");
     } finally {
       setIsRunning(false);
     }

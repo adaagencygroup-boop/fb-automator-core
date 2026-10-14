@@ -41,7 +41,10 @@ class TestAccountAPI(unittest.TestCase):
 
     def test_import_aliases_details_and_owner_isolation(self):
         response = self.client.post("/api/accounts/import", json={"owner_username": "alice", "accounts": [{"uid": "123", "password": "secret", "twofa_secret": "otp", "tokenhotmail": "mailtoken", "clientId": "client"}]})
-        self.assertEqual(response.json(), {"imported": 1, "errors": [], "checking": 0})
+        res_data = response.json()
+        self.assertEqual(res_data["imported"], 1)
+        self.assertEqual(res_data["errors"], [])
+        self.assertEqual(res_data["checking"], 0)
         self.assertEqual(self.save(owner="bob", password="other").status_code, 200)
         self.assertEqual(self.client.get("/api/accounts").json(), [])
         alice = self.client.get("/api/accounts", headers={"X-Owner-Username": "alice"}).json()[0]

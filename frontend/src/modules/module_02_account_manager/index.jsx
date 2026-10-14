@@ -113,7 +113,7 @@ export default function AccountManagerModule() {
     return () => clearTimeout(timer);
   }, [searchTerm]);
   const query = useMemo(() => ({ search, status: accountFilter, login_status: loginFilter }), [search, accountFilter, loginFilter]);
-  const { accounts, setAccounts, stats, total, has_more: hasMore, isInitialLoading, isLoadingMore, loadError, moreError, fetchAccounts, loadMore, retryMore } = useAccountPages(query, !isExpired, tableRef, setSelectedUids);
+  const { accounts, setAccounts, stats, total, has_more: hasMore, isInitialLoading, isRefreshing, isLoadingMore, loadError, moreError, fetchAccounts, loadMore, retryMore } = useAccountPages(query, !isExpired, tableRef, setSelectedUids);
 
   useEffect(() => {
     if (shouldAutoScrollRef.current && logListRef.current) {
@@ -193,7 +193,6 @@ export default function AccountManagerModule() {
     try {
       const res = await importAccounts(accountsToImport, false, skipExisting);
       skippedCount += res.skipped_count || 0;
-      await fetchAccounts();
       const added = res.added_count ?? res.imported ?? 0;
       const updated = res.updated_count ?? 0;
 
@@ -210,6 +209,10 @@ export default function AccountManagerModule() {
       }
 
       toast.success(msg, "NHẬP THÀNH CÔNG");
+      tableRef.current?.reset();
+      fetchAccounts(true).catch((err) => {
+        toast.warning("Không thể đồng bộ danh sách mới nhất: " + (err.message || String(err)), "CẢNH BÁO");
+      });
       return true;
     } catch (error) {
       toast.error("Không thể nhập tài khoản: " + error.message, "LỖI NHẬP FILE");
@@ -285,8 +288,13 @@ export default function AccountManagerModule() {
       } else {
         toast.success(`${successMessage}${pageMessage}`, "XÓA THÀNH CÔNG");
       }
-      if (successfulUids.length) setDeleteTarget(null);
-      await fetchAccounts();
+      if (successfulUids.length) {
+        setAccounts((prev) => prev.filter((acc) => !successfulUids.includes(acc.uid)));
+        setDeleteTarget(null);
+      }
+      fetchAccounts(false).catch((err) => {
+        toast.warning("Không thể đồng bộ danh sách mới nhất: " + (err.message || String(err)), "CẢNH BÁO");
+      });
     } catch (error) {
       toast.error("Lỗi khi xóa tài khoản: " + error.message, "LỖI XÓA");
     } finally {
@@ -349,11 +357,13 @@ export default function AccountManagerModule() {
     setIsCheckingStatus(true);
     try {
       const res = await checkAccountStatuses(selectedUids);
-      await fetchAccounts();
       toast.success(
         `Đã kiểm tra xong: ${res.live || 0} Live, ${res.die || 0} Die, ${res.inconclusive || 0} chưa kết luận được.`,
         "KIỂM TRA HOÀN TẤT"
       );
+      fetchAccounts(false).catch((err) => {
+        toast.warning("Không thể đồng bộ danh sách mới nhất: " + (err.message || String(err)), "CẢNH BÁO");
+      });
     } catch (error) {
       toast.error(
         `Không thể kiểm tra trạng thái: ${error.message || String(error)}`,
@@ -471,6 +481,7 @@ export default function AccountManagerModule() {
         total={total} hasMore={hasMore} isLoadingMore={isLoadingMore}
         moreError={moreError} onLoadMore={loadMore} onRetryMore={retryMore}
         isLoading={isInitialLoading}
+        isRefreshing={isRefreshing}
         loadError={loadError}
         onRetry={() => fetchAccounts(true)}
         accounts={accounts}
@@ -619,9 +630,31 @@ export default function AccountManagerModule() {
         isOpen={isSingleModalOpen}
         editUid={editUid}
         onClose={() => setIsSingleModalOpen(false)}
-        onSuccess={async ({ originalUid, uid }) => {
+        onSuccess={({ originalUid, uid, isEdit, savedData }) => {
           setSelectedUids((current) => Array.from(new Set(current.map((selected) => selected === originalUid ? uid : selected))));
-          await fetchAccounts();
+          if (isEdit) {
+            setAccounts((prev) =>
+              prev.map((acc) => {
+                if (acc.uid !== originalUid && acc.uid !== uid) return acc;
+                return {
+                  ...acc,
+                  uid,
+                  email: savedData?.email ? savedData.email : acc.email,
+                  proxy: savedData?.proxy ? savedData.proxy : acc.proxy,
+                };
+              })
+            );
+            toast.success(`Đã cập nhật thông tin tài khoản ${uid}.`, "CẬP NHẬT THÀNH CÔNG");
+            fetchAccounts(false).catch((err) => {
+              toast.warning("Không thể đồng bộ danh sách mới nhất: " + (err.message || String(err)), "CẢNH BÁO");
+            });
+          } else {
+            toast.success(`Đã thêm mới tài khoản ${uid} thành công.`, "THÊM THÀNH CÔNG");
+            tableRef.current?.reset();
+            fetchAccounts(true).catch((err) => {
+              toast.warning("Không thể đồng bộ danh sách mới nhất: " + (err.message || String(err)), "CẢNH BÁO");
+            });
+          }
         }}
         existingAccounts={accounts}
       />

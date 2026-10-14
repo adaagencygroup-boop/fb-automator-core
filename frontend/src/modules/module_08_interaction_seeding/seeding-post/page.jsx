@@ -2,6 +2,7 @@
 
 import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
 import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
+import { toast } from "@/components/ui/toast";
 import { FileText } from "lucide-react";
 import { useEffect, useState } from "react";
 import PostAccountConfig from "./_components/PostAccountConfig";
@@ -160,9 +161,11 @@ export default function SeedingPostPage() {
         setSuccessMessage(
           `Đã lưu thành công ${res.targets.length} bài viết vào cơ sở dữ liệu`,
         );
+        return res.targets;
       }
     } catch (e) {
-      addLog(`Lỗi lưu link: ${e.message}`, "error");
+      addLog(`Lỗi lưu link bài viết: ${e.message}`, "error");
+      throw e;
     }
   };
 
@@ -171,7 +174,10 @@ export default function SeedingPostPage() {
     if (targetToRemove) {
       try {
         await seedingApi.deleteSeedingTarget(targetToRemove.url, "POST");
-      } catch (err) {}
+      } catch (err) {
+        addLog(`Lỗi xóa target: ${err.message}`, "error");
+        throw err;
+      }
     }
     setTargets((prev) => {
       const updated = prev
@@ -189,7 +195,10 @@ export default function SeedingPostPage() {
   const handleClearTargets = async () => {
     try {
       await seedingApi.clearSeedingTargets("POST");
-    } catch (err) {}
+    } catch (err) {
+      addLog(`Lỗi xóa danh sách bài viết: ${err.message}`, "error");
+      throw err;
+    }
     setTargets([]);
     setSuccessMessage(null);
   };
@@ -201,9 +210,11 @@ export default function SeedingPostPage() {
       const res = await seedingApi.addSeedingComments([trimmed]);
       if (res && res.comments) {
         setComments(res.comments);
-        return;
+        return res.comments;
       }
-    } catch (e) {}
+    } catch (e) {
+      throw e;
+    }
     setComments((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
   };
 
@@ -214,9 +225,11 @@ export default function SeedingPostPage() {
       const res = await seedingApi.addSeedingComments(cleaned);
       if (res && res.comments) {
         setComments(res.comments);
-        return;
+        return res.comments;
       }
-    } catch (e) {}
+    } catch (e) {
+      throw e;
+    }
     setComments((prev) => Array.from(new Set([...prev, ...cleaned])));
   };
 
@@ -225,7 +238,9 @@ export default function SeedingPostPage() {
     if (cmtToRemove) {
       try {
         await seedingApi.deleteSeedingComment(cmtToRemove);
-      } catch (e) {}
+      } catch (e) {
+        throw e;
+      }
     }
     setComments((prev) => prev.filter((_, idx) => idx !== index));
   };
@@ -233,49 +248,55 @@ export default function SeedingPostPage() {
   const handleClearAllComments = async () => {
     try {
       await seedingApi.clearSeedingComments();
-    } catch (e) {}
+    } catch (e) {
+      throw e;
+    }
     setComments([]);
   };
 
   const handleStart = async () => {
     if (targets.length === 0) {
-      alert("Vui lòng thêm ít nhất 1 bài viết cần seeding!");
+      toast.warning("Vui lòng thêm ít nhất 1 bài viết cần seeding!", "THIẾU MỤC TIÊU");
       return;
     }
 
     if (!doLike && !doComment && !doShare) {
-      alert(
+      toast.warning(
         "Vui lòng chọn ít nhất 1 loại tương tác (Like, Bình luận hoặc Chia sẻ)!",
+        "CHƯA CHỌN TƯƠNG TÁC"
       );
       return;
     }
 
     if (doLike && selectedReactions.length === 0) {
-      alert("Vui lòng chọn ít nhất 1 cảm xúc Facebook!");
+      toast.warning("Vui lòng chọn ít nhất 1 cảm xúc Facebook!", "CHƯA CHỌN CẢM XÚC");
       return;
     }
 
     if (doComment && comments.length === 0) {
-      alert("Vui lòng nhập ít nhất 1 câu bình luận mẫu!");
+      toast.warning("Vui lòng nhập ít nhất 1 câu bình luận mẫu!", "THIẾU BÌNH LUẬN");
       return;
     }
 
     if (liveAccountsCount === 0) {
-      alert(
+      toast.error(
         "Không có tài khoản Facebook nào khả dụng! Yêu cầu tài khoản phải có trạng thái 'Đã đăng nhập' và còn 'Live'. Vui lòng kiểm tra lại trang Quản lý tài khoản.",
+        "KHÔNG CÓ TÀI KHOẢN KHẢ DỤNG"
       );
       return;
     }
 
     if (accountCount <= 0 || accountCount > liveAccountsCount) {
-      alert(
+      toast.warning(
         `Số lượng tài khoản muốn chạy (${accountCount}) không hợp lệ hoặc vượt quá số tài khoản khả dụng (${liveAccountsCount})!`,
+        "SỐ LƯỢNG KHÔNG HỢP LỆ"
       );
       return;
     }
 
     try {
       setIsRunning(true);
+      toast.info("Đang khởi tạo chiến dịch Seeding Bài viết...", "BẮT ĐẦU");
       addLog("Khởi tạo chiến dịch Seeding Bài viết trên máy thật...", "info");
 
       const actions = [];
@@ -305,11 +326,16 @@ export default function SeedingPostPage() {
         `Đã khởi tạo ${totalPosts} chiến dịch riêng biệt (${campaign.total_tasks} tác vụ). Bắt đầu thực thi...`,
         "success",
       );
+      toast.success(
+        `Chiến dịch đã được khởi chạy với ${totalPosts} bài viết!`,
+        "KHỞI CHẠY THÀNH CÔNG"
+      );
 
       await seedingApi.startSeedingCampaign(campaign.id);
     } catch (e) {
       setIsRunning(false);
       addLog(`Lỗi khởi chạy seeding: ${e.message}`, "error");
+      toast.error(e.message || "Không thể khởi chạy chiến dịch seeding!", "LỖI KHỞI CHẠY");
     }
   };
 
@@ -319,14 +345,17 @@ export default function SeedingPostPage() {
         "Đang gửi yêu cầu dừng chiến dịch và đóng toàn bộ trình duyệt Chrome...",
         "warn",
       );
+      toast.info("Đang dừng chiến dịch seeding...", "DỪNG CHIẾN DỊCH");
       if (currentCampaignId) {
         await seedingApi.stopSeedingCampaign(currentCampaignId);
       } else {
         await seedingApi.stopAllSeeding();
       }
       addLog("Đã dừng hẳn chiến dịch seeding thành công.", "warn");
+      toast.warning("Đã dừng chiến dịch seeding.", "ĐÃ DỪNG");
     } catch (e) {
       addLog(`Lỗi khi dừng: ${e.message}`, "error");
+      toast.error(e.message || "Lỗi khi gửi yêu cầu dừng chiến dịch!", "LỖI");
     } finally {
       setIsRunning(false);
     }
