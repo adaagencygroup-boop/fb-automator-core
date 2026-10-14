@@ -108,3 +108,9 @@ src-tauri/binaries/*.exe
 .coverage
 htmlcov/
 test-results/
+
+
+
+# private
+AGENTS.md
+.agents
