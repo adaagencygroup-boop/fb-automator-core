@@ -371,17 +371,15 @@ export default function GroupSourceSection({
         <button
           type="button"
           onClick={() => setGroupSource("search")}
-          className={`rounded-xl border p-3.5 text-left transition-colors cursor-pointer ${
-            groupSource === "search"
+          className={`rounded-xl border p-3.5 text-left transition-colors cursor-pointer ${groupSource === "search"
               ? "border-2 border-primary bg-white shadow-xs"
               : "border-slate-200 bg-white hover:border-slate-300"
-          }`}
+            }`}
         >
           <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
             <span
-              className={`flex size-3.5 items-center justify-center rounded-full border ${
-                groupSource === "search" ? "border-2 border-primary bg-white" : "border-slate-300 bg-white"
-              }`}
+              className={`flex size-3.5 items-center justify-center rounded-full border ${groupSource === "search" ? "border-2 border-primary bg-white" : "border-slate-300 bg-white"
+                }`}
             >
               {groupSource === "search" && <span className="size-1.5 rounded-full bg-primary" />}
             </span>
@@ -398,17 +396,15 @@ export default function GroupSourceSection({
         <button
           type="button"
           onClick={() => setGroupSource("file")}
-          className={`rounded-xl border p-3.5 text-left transition-colors cursor-pointer ${
-            groupSource === "file"
+          className={`rounded-xl border p-3.5 text-left transition-colors cursor-pointer ${groupSource === "file"
               ? "border-2 border-primary bg-white shadow-xs"
               : "border-slate-200 bg-white hover:border-slate-300"
-          }`}
+            }`}
         >
           <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
             <span
-              className={`flex size-3.5 items-center justify-center rounded-full border ${
-                groupSource === "file" ? "border-2 border-primary bg-white" : "border-slate-300 bg-white"
-              }`}
+              className={`flex size-3.5 items-center justify-center rounded-full border ${groupSource === "file" ? "border-2 border-primary bg-white" : "border-slate-300 bg-white"
+                }`}
             >
               {groupSource === "file" && <span className="size-1.5 rounded-full bg-primary" />}
             </span>
@@ -438,8 +434,8 @@ export default function GroupSourceSection({
             onDragOver={(event) => event.preventDefault()}
             onDrop={handleGroupFileDrop}
             className={`flex flex-col items-center justify-center rounded-xl border border-dashed px-4 py-7 text-center transition-colors ${isFileProcessing
-                ? "border-primary/40 bg-blue-50/50"
-                : "border-blue-200 bg-blue-50/20 hover:bg-blue-50/30"
+              ? "border-primary/40 bg-blue-50/50"
+              : "border-blue-200 bg-blue-50/20 hover:bg-blue-50/30"
               }`}
           >
             <div className="mb-2.5 flex size-9 items-center justify-center rounded-full bg-blue-100 text-primary">

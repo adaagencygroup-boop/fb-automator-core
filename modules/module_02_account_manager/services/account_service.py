@@ -15,6 +15,7 @@ _FANPAGE_OWNER_CONFLICT = "Không thể xóa: Fanpage của UID này chưa xác 
 
 def serialize(account, detail=False):
     result = {"id": account.id, "owner_username": account.user_id, "user_id": account.user_id, "uid": account.uid}
+    result["avatar_url"] = account.avatar_url or None
     for name in _FIELDS:
         result[name] = getattr(account, name) or ""
     for name in ("password", "two_fa", "pass_mail"):
@@ -82,6 +83,8 @@ def save_single_account(db, item):
         data["profile_path"] = str(profile_path(item.uid))
         Repo.apply_fields(account, data)
         account.uid = item.uid
+        if original != item.uid:
+            account.avatar_url = None
         db.commit()
         return account
     except Exception as exc:

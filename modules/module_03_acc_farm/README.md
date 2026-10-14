@@ -38,7 +38,7 @@ CSDL của Module 03 gồm:
 
 Tài khoản Facebook không nằm ở đây: Tab 1 đọc bảng `accounts` của Module 02 qua `adapters.py`.
 Owner của nick = id người đang đăng nhập (giống `scoped_owner` của Module 02): `/start` lấy owner từ cookie
-`fb_access` / Bearer, worker đặt `adapters.owner_scope(owner)` nên mọi lệnh đọc / ghi tài khoản và thư mục profile
+phiên (`fb_user_access`, `fb_access`) / Bearer, worker đặt `adapters.owner_scope(owner)` nên mọi lệnh đọc / ghi tài khoản và thư mục profile
 Chrome đều theo owner đó; không đăng nhập thì dùng nick local (`user_id` NULL). Cột `owner_username` của `farm_runs` /
 `farm_run_history` lưu id này. Trạng thái chữ hoa của Module 02 được đổi
 về chữ thường trong `adapters.py`; nick bị checkpoint ghi `login_status = ERROR`, `status = CHECKPOINT`.

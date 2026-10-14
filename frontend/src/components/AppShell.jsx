@@ -81,7 +81,7 @@ function Workspace({ session, children }) {
         />
 
         <main className={`flex-1 overflow-y-auto p-6 ${activeTab === "dashboard" ? "bg-[#f7f8ff]" : "bg-background"}`}>
-          {user.modules_unlocked ? (
+          {user.modules_unlocked || activeTab === "dashboard" ? (
             <SessionContext.Provider value={session}>{children}</SessionContext.Provider>
           ) : (
             <div className="mx-auto max-w-lg rounded-xl border border-border bg-white p-6 shadow-sm">

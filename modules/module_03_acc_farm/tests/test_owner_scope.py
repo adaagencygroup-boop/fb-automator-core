@@ -14,21 +14,41 @@ from modules.module_03_acc_farm import routes as farm_routes
 from modules.module_03_acc_farm.farming import flow as farming_flow
 
 
-def fake_request(cookie=None, auth=None):
+def fake_request(cookie=None, auth=None, cookie_name="fb_access", client=None):
     req = Mock()
-    req.cookies = {"fb_access": cookie} if cookie else {}
-    req.headers = {"Authorization": auth} if auth else {}
+    req.cookies = {cookie_name: cookie} if cookie else {}
+    req.headers = {}
+    if auth:
+        req.headers["Authorization"] = auth
+    if client:
+        req.headers["x-auth-client"] = client
     return req
 
 
 class OwnerFromRequestTests(unittest.TestCase):
+    def owner(self, req):
+        with patch("modules.module_auth.service.bearer_user", return_value={"id": 7, "username": "binh"}) as bearer:
+            owner = adapters.owner_from_request(req)
+        return owner, bearer
+
     def test_no_login_means_local(self):
         self.assertIsNone(adapters.owner_from_request(fake_request()))
 
     def test_logged_in_user_id_is_owner(self):
-        with patch("modules.module_auth.service.bearer_user", return_value={"id": 7, "username": "binh"}) as bearer:
-            self.assertEqual(adapters.owner_from_request(fake_request(cookie="tok")), "7")
+        owner, bearer = self.owner(fake_request(cookie="tok"))
+        self.assertEqual(owner, "7")
         self.assertTrue(bearer.call_args.kwargs["require_session"])
+
+    def test_app_user_cookie_is_owner(self):
+        # App gửi X-Auth-Client: user, phiên nằm ở cookie fb_user_access (không có fb_access)
+        owner, _ = self.owner(fake_request(cookie="tok", cookie_name="fb_user_access", client="user"))
+        self.assertEqual(owner, "7")
+
+    def test_user_client_ignores_other_cookie(self):
+        # Giống module_auth / Module 02: client user không dùng cookie fb_access của trang khác
+        owner, bearer = self.owner(fake_request(cookie="tok", cookie_name="fb_access", client="user"))
+        self.assertIsNone(owner)
+        bearer.assert_not_called()
 
     def test_revoked_session_is_rejected(self):
         with patch("modules.module_auth.service.bearer_user", side_effect=HTTPException(401, "SESSION_REVOKED")):

@@ -510,6 +510,133 @@ def _get_profile_name(driver: webdriver.Chrome) -> str:
     return ""
 
 
+def _valid_avatar_url(url) -> bool:
+    if not isinstance(url, str):
+        return False
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    return (parsed.scheme == "https" and host.endswith(".fbcdn.net")
+            and not host.startswith("static.") and "rsrc.php" not in parsed.path.lower())
+
+
+def _read_profile_link_avatar(driver, uid: str, profile_data=None) -> str | None:
+    """Read the homepage profile shortcut's SVG without following its link."""
+    from ..utils.facebook_profile_status import _points_to_uid
+
+    for anchor in driver.find_elements(By.CSS_SELECTOR, f'a[href*="profile.php"], a[href*="{uid}"]'):
+        try:
+            if not anchor.is_displayed() or not _points_to_uid(anchor.get_attribute("href") or "", uid):
+                continue
+            # This homepage shortcut contains both the displayed name and SVG.
+            text = anchor.text
+            if profile_data is not None and isinstance(text, str):
+                name = _clean_profile_name(text)
+                if name and not profile_data.get("profile_name"):
+                    profile_data["profile_name"] = name
+            for image in anchor.find_elements(By.XPATH, ".//*[local-name()='svg']//*[local-name()='image']"):
+                url = image.get_attribute("xlink:href") or image.get_attribute("href")
+                if _valid_avatar_url(url):
+                    return url
+        except Exception:
+            logger.debug("Could not inspect profile-link avatar for UID %s", uid, exc_info=True)
+    return None
+
+
+def _get_avatar_url(driver, uid: str, profile_data=None) -> str | None:
+    """Read the homepage UID shortcut SVG, falling back to the account menu."""
+    original_timeout = None
+    deadline = time.monotonic() + 10
+    try:
+        cookie = driver.get_cookie("c_user")
+        if not isinstance(cookie, dict) or cookie.get("value") != uid:
+            logger.warning("Avatar skipped for UID %s: authenticated UID does not match", uid)
+            return None
+        original_timeout = driver.timeouts.page_load
+        driver.set_page_load_timeout(10)
+        switched_profile = bool(driver.get_cookie("i_user"))
+        if switched_profile:
+            driver.delete_cookie("i_user")
+
+        def read_avatar(current):
+            if not _check_logged_in(current):
+                return False
+            page_cookie = current.get_cookie("i_user")
+            if isinstance(page_cookie, dict) and page_cookie.get("value") not in (None, "", uid):
+                return False
+            profile_avatar = _read_profile_link_avatar(current, uid, profile_data)
+            if profile_avatar:
+                return profile_avatar
+            # Facebook renders the account menu with an SVG <image xlink:href>.
+            urls = current.execute_script("""
+                const selectors = [
+                  '[aria-label="Your profile"]',
+                  '[aria-label="Account"]',
+                  '[aria-label="Trang cá nhân của bạn"]',
+                  '[aria-label="Tài khoản"]'
+                ];
+                const named = Array.from(document.querySelectorAll(selectors.join(',')))
+                  .filter(el => el.getClientRects().length)
+                  .flatMap(el => Array.from(el.querySelectorAll('svg image')));
+                // Some Facebook layouts omit the account label/role. The 36px
+                // circular SVG in the header is the account avatar, not feed media.
+                const header = Array.from(document.querySelectorAll('[role="banner"] svg image, header svg image'))
+                  .filter(el => {
+                    const svg = el.closest('svg');
+                    const rect = svg.getBoundingClientRect();
+                    return rect.width >= 35 && rect.width <= 37
+                      && rect.height >= 35 && rect.height <= 37
+                      && svg.querySelector('mask circle');
+                  });
+                const candidates = named.length ? named : [...new Set(header)];
+                const urls = candidates.map(el => el.getAttributeNS('http://www.w3.org/1999/xlink', 'href')
+                    || el.getAttribute('href') || el.getAttribute('xlink:href'));
+                const unique = [...new Set(urls.filter(Boolean))];
+                return unique.length === 1 ? unique : [];
+            """)
+            for url in urls or []:
+                if _valid_avatar_url(url):
+                    return url
+            return False
+
+        on_homepage = urlparse(driver.current_url or "").path.rstrip("/") in ("", "/home.php")
+        if not switched_profile and on_homepage:
+            avatar = read_avatar(driver)
+            if avatar:
+                return avatar
+        # Name extraction may have visited /me. Read the avatar only on home;
+        # the profile shortcut href identifies the account and is never opened.
+        driver.set_page_load_timeout(max(0.1, deadline - time.monotonic()))
+        try:
+            driver.get(FB_HOME)
+        except TimeoutException:
+            pass  # The header may already be available despite a slow feed.
+        remaining = deadline - time.monotonic()
+        avatar = read_avatar(driver)
+        if avatar:
+            return avatar
+        if remaining > 0:
+            return WebDriverWait(driver, remaining, poll_frequency=0.25).until(read_avatar)
+    except Exception:
+        logger.warning("Could not read account-menu SVG avatar for UID %s", uid, exc_info=True)
+    finally:
+        if original_timeout is not None:
+            try:
+                driver.set_page_load_timeout(original_timeout)
+            except Exception:
+                pass
+    return None
+
+
+def _get_account_identity(driver, uid: str) -> dict:
+    """Collect name and avatar together from the homepage account shortcut."""
+    identity = {"profile_name": "", "avatar_url": None}
+    identity["avatar_url"] = _get_avatar_url(driver, uid, identity)
+    # Preserve the existing name fallback only when the shortcut has no name.
+    if not identity["profile_name"]:
+        identity["profile_name"] = _get_profile_name(driver)
+    return identity
+
+
 def run_login(uid: str, password: str, two_fa: str = None, cookie: str = None, proxy: str = None) -> dict:
     """
     Thực thi toàn bộ luồng đăng nhập cho một tài khoản.
@@ -522,7 +649,7 @@ def run_login(uid: str, password: str, two_fa: str = None, cookie: str = None, p
     Returns:
         dict với keys: success (bool), profile_name (str), error (str)
     """
-    result = {"success": False, "profile_name": "", "error": ""}
+    result = {"success": False, "profile_name": "", "avatar_url": None, "error": ""}
     driver = None
 
     try:
@@ -532,14 +659,12 @@ def run_login(uid: str, password: str, two_fa: str = None, cookie: str = None, p
 
         if _check_logged_in(driver):
             result["success"] = True
-            result["profile_name"] = _get_profile_name(driver)
             return result
 
         # ── Bước 1: Thử cookie login ──
         if cookie and cookie.strip():
             if _try_cookie_login(driver, cookie):
                 _handle_post_login_popups(driver)
-                result["profile_name"] = _get_profile_name(driver)
                 if not _check_logged_in(driver):
                     result["error"] = f"Checkpoint or profile unavailable, URL: {driver.current_url}"
                     return result
@@ -609,14 +734,13 @@ def run_login(uid: str, password: str, two_fa: str = None, cookie: str = None, p
                 result["error"] = f"Login failed, URL: {current_url}"
                 return result
 
-        # ── Bước 5: Bắt Dismiss popup (nếu có) & Lấy tên profile ──
+        # ── Bước 5: Bắt Dismiss popup; identity được lấy chung ở finally ──
         _handle_post_login_popups(driver)
-        result["profile_name"] = _get_profile_name(driver)
         if not _check_logged_in(driver):
             result["error"] = f"Checkpoint or profile unavailable, URL: {driver.current_url}"
             return result
         result["success"] = True
-        logger.info(f"[{uid}] Login SUCCESS, name='{result['profile_name']}'")
+        logger.info(f"[{uid}] Login SUCCESS")
 
     except Exception as e:
         logger.exception(f"[{uid}] Unexpected error during login: {e}")
@@ -625,6 +749,14 @@ def run_login(uid: str, password: str, two_fa: str = None, cookie: str = None, p
         if driver:
             from ..automation.browser_manager import unregister_active_driver, extract_cookies_as_string, safe_close_driver
             unregister_active_driver(driver)
+            if result.get("success"):
+                try:
+                    result.update(_get_account_identity(driver, uid))
+                    if not _check_logged_in(driver):
+                        result["success"] = False
+                        result["error"] = "Checkpoint or session unavailable after identity extraction"
+                except Exception:
+                    logger.warning("Could not collect account identity for UID %s", uid, exc_info=True)
             if result.get("success"):
                 try:
                     result["cookie"] = extract_cookies_as_string(driver)

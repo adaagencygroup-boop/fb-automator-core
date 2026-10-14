@@ -15,22 +15,23 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request, Query, Header
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc, or_
+from sqlalchemy import func, desc, or_, text
 
 from modules.module_02_account_manager.database.connection import get_db, SessionLocal
 from modules.module_02_account_manager.database.models import Account
 from modules.module_02_account_manager.database.repository import utc_now
-from modules.module_08_interaction_seeding.be.seeding_models import (
+from modules.module_08_interaction_seeding.models import (
     SeedingTarget, SeedingCampaign, SeedingCampaignTarget, SeedingComment, SeedingTask
 )
-from modules.module_02_account_manager.services.events import broadcast
+from modules.module_02_account_manager.services import events as m2_events
+from modules.module_02_account_manager.context import owner_context, owner_scope
 from modules.module_02_account_manager.automation.browser_manager import (
     create_driver, safe_close_driver, close_driver_for_uid, close_scoped_active_drivers
 )
-from modules.module_08_interaction_seeding.be.seeding_flow import FacebookSeedingBot
+from modules.module_08_interaction_seeding.automation import FacebookSeedingBot
 from modules.module_02_account_manager.services.browser_service import HWID
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,95 @@ seeding_router = router
 # Global state cho việc quản lý dừng chiến dịch seeding đang chạy
 _active_seeding_campaigns = {}  # campaign_id -> {"stop_requested": bool, "running": bool}
 _batch_campaign_chains: Dict[int, List[int]] = {}  # campaign_id -> [camp1_id, camp2_id, ...]
+
+
+def broadcast(
+    level: str,
+    message: str,
+    uid: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+    owner: Optional[Any] = None
+):
+    """
+    Phát sự kiện log realtime đến luồng SSE cho đúng người dùng sở hữu chiến dịch.
+    Đảm bảo các luồng nền của Selenium bot luôn chuyển được log đến client.
+    """
+    target_owner = str(owner).strip() if owner is not None else None
+    if not target_owner:
+        try:
+            ctx_owner = owner_context.get()
+            if ctx_owner:
+                target_owner = str(ctx_owner).strip()
+        except Exception:
+            target_owner = None
+
+    now_utc = datetime.now(timezone.utc)
+    time_str = datetime.now(VN_TZ).strftime("%H:%M:%S")
+
+    payload = {
+        "time": time_str,
+        "timestamp": time_str,
+        "iso_time": now_utc.isoformat(),
+        "level": level,
+        "type": level,
+        "message": message,
+        "uid": uid,
+        **(extra or {})
+    }
+
+    try:
+        with m2_events._lock:
+            targets = tuple(m2_events._subscribers)
+
+        for loop, queue, subscriber_owner in targets:
+            if loop.is_closed():
+                continue
+
+            sub_owner_str = str(subscriber_owner).strip() if subscriber_owner is not None else None
+            # Điều kiện gửi:
+            # 1. Khớp owner giữa chiến dịch và người nghe SSE
+            # 2. Hoặc người nghe ở chế độ không đăng nhập (sub_owner_str is None)
+            # 3. Hoặc log hệ thống chung (target_owner is None)
+            should_deliver = (
+                target_owner is None or
+                sub_owner_str is None or
+                target_owner == sub_owner_str
+            )
+
+            if not should_deliver:
+                continue
+
+            def deliver(q=queue, item=payload):
+                if q.full():
+                    try:
+                        q.get_nowait()
+                    except Exception:
+                        pass
+                q.put_nowait(item)
+
+            try:
+                loop.call_soon_threadsafe(deliver)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"broadcast error: {e}")
+
+
+def get_current_user_info(
+    request: Optional[Request] = None,
+    authorization: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Xác định người dùng hiện tại từ Bearer token (Authorization header) hoặc Cookie fb_access.
+    Trả về dict thông tin user từ bảng users hoặc None nếu chưa đăng nhập.
+    """
+    try:
+        from modules.module_auth.service import bearer_user
+        return bearer_user(authorization, require_session=False, request=request)
+    except Exception as e:
+        logger.debug(f"get_current_user_info: Khong co user hop le ({e})")
+        return None
+
 
 
 # ─────────────────────────────────────────────────────────────
@@ -106,34 +196,19 @@ def to_vn_iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.astimezone(VN_TZ).isoformat()
 
 
-_draft_seeding_comments: List[str] = []
-
-
-def get_draft_comments(db: Session) -> List[str]:
-    """Lấy danh sách các câu bình luận từ cơ sở dữ liệu seeding_comments hoặc bộ đệm hiện tại."""
-    global _draft_seeding_comments
-    if _draft_seeding_comments:
-        return list(_draft_seeding_comments)
+def get_user_draft_comments(db: Session, user_id: Optional[int] = None) -> List[str]:
+    """Lấy danh sách các câu bình luận mẫu (campaign_id IS NULL) từ bảng seeding_comments theo user sở hữu."""
     try:
-        cmts = (
-            db.query(SeedingComment.content)
-            .distinct()
-            .order_by(desc(SeedingComment.id))
-            .limit(50)
-            .all()
-        )
-        if cmts:
-            _draft_seeding_comments = [c[0] for c in cmts if c[0]]
-            return list(_draft_seeding_comments)
+        q = db.query(SeedingComment.content).filter(SeedingComment.campaign_id == None)
+        if user_id is not None:
+            q = q.filter(SeedingComment.created_by == user_id)
+        else:
+            q = q.filter(SeedingComment.created_by == None)
+        rows = q.order_by(SeedingComment.id.asc()).all()
+        return [r[0] for r in rows if r[0]]
     except Exception as e:
         logger.warning(f"Lỗi lấy seeding_comments từ DB: {e}")
-    return []
-
-
-def save_draft_comments(db: Session, comments: List[str]):
-    """Cập nhật danh sách câu bình luận vào bộ nhớ đệm."""
-    global _draft_seeding_comments
-    _draft_seeding_comments = list(comments)
+        return []
 
 
 # ─────────────────────────────────────────────────────────────
@@ -174,14 +249,28 @@ class AddCommentsRequest(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────
-# 1. QUẢN LÝ MỤC TIÊU SEEDING (LƯU TRỰC TIẾP VÀO DATABASE)
+# 1. QUẢN LÝ MỤC TIÊU SEEDING (LƯU TRỰC TIẾP VÀO DATABASE PHÂN THEO NGƯỜI DÙNG)
 # ─────────────────────────────────────────────────────────────
 @router.get("/targets")
-async def list_seeding_targets(target_type: Optional[str] = None, db: Session = Depends(get_db)):
-    """Lấy danh sách các mục tiêu seeding đã lưu trong bảng seeding_targets."""
+async def list_seeding_targets(
+    target_type: Optional[str] = None,
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """Lấy danh sách các mục tiêu seeding đã lưu trong bảng seeding_targets lọc theo người dùng sở hữu."""
+    current_user = get_current_user_info(request, authorization)
     query = db.query(SeedingTarget)
     if target_type:
         query = query.filter(SeedingTarget.target_type == target_type.upper())
+
+    # Phân quyền: User thường CHỈ xem các targets do chính mình tạo/import
+    if current_user:
+        role = (current_user.get("role") or current_user.get("_role_claim") or "user").lower()
+        is_admin = role in ("admin", "superadmin", "administrator")
+        if not is_admin:
+            query = query.filter(SeedingTarget.created_by == current_user["id"])
+    
     targets = query.order_by(SeedingTarget.id.asc()).all()
     return {
         "total": len(targets),
@@ -193,6 +282,7 @@ async def list_seeding_targets(target_type: Optional[str] = None, db: Session = 
                 "fb_id": t.fb_id,
                 "display_name": t.display_name,
                 "target_type": t.target_type,
+                "created_by": t.created_by,
                 "created_at": to_vn_iso(t.created_at),
             }
             for idx, t in enumerate(targets)
@@ -201,8 +291,16 @@ async def list_seeding_targets(target_type: Optional[str] = None, db: Session = 
 
 
 @router.post("/targets/validate")
-async def validate_targets(req: ValidateTargetsRequest, db: Session = Depends(get_db)):
-    """Lọc trùng, kiểm tra định dạng và LƯU TRỰC TIẾP vào bảng seeding_targets chuẩn DBML."""
+async def validate_targets(
+    req: ValidateTargetsRequest,
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """Lọc trùng, kiểm tra định dạng và LƯU TRỰC TIẾP vào bảng seeding_targets gắn với created_by của user."""
+    current_user = get_current_user_info(request, authorization)
+    user_id = current_user.get("id") if current_user else None
+
     valid_targets = []
     seen_urls = set()
     camp_type = req.target_type.upper()
@@ -225,11 +323,16 @@ async def validate_targets(req: ValidateTargetsRequest, db: Session = Depends(ge
         else:
             display_name = f"{fb_id}"
 
-        # Kiểm tra đối tượng theo unique_seeding_target(target_type, fb_id) hoặc url
-        target_obj = db.query(SeedingTarget).filter(
+        # Kiểm tra đối tượng theo (target_type, fb_id/url, created_by) để mỗi user có mục tiêu độc lập
+        target_obj_q = db.query(SeedingTarget).filter(
             SeedingTarget.target_type == camp_type,
             or_(SeedingTarget.fb_id == fb_id, SeedingTarget.url == url)
-        ).first()
+        )
+        if user_id is not None:
+            target_obj_q = target_obj_q.filter(SeedingTarget.created_by == user_id)
+        else:
+            target_obj_q = target_obj_q.filter(SeedingTarget.created_by.is_(None))
+        target_obj = target_obj_q.first()
 
         if not target_obj:
             target_obj = SeedingTarget(
@@ -237,11 +340,11 @@ async def validate_targets(req: ValidateTargetsRequest, db: Session = Depends(ge
                 fb_id=fb_id,
                 url=url,
                 display_name=display_name,
+                created_by=user_id,
             )
             db.add(target_obj)
             db.flush()
         else:
-            # Luôn cập nhật lại display_name theo chuẩn Page / Trang cá nhân / Bài viết + fb_id
             target_obj.display_name = display_name
             if not target_obj.fb_id:
                 target_obj.fb_id = fb_id
@@ -252,14 +355,18 @@ async def validate_targets(req: ValidateTargetsRequest, db: Session = Depends(ge
             "url": target_obj.url,
             "fb_id": target_obj.fb_id,
             "display_name": target_obj.display_name or display_name,
+            "created_by": target_obj.created_by,
         })
 
     db.commit()
 
-    # Lấy toàn bộ danh sách hiện có của loại mục tiêu này trong DB để đồng bộ giao diện
-    all_current = db.query(SeedingTarget).filter(
+    # Lấy toàn bộ danh sách hiện có của user này trong DB để đồng bộ giao diện
+    all_current_q = db.query(SeedingTarget).filter(
         SeedingTarget.target_type == camp_type
-    ).order_by(SeedingTarget.id.asc()).all()
+    )
+    if user_id is not None:
+        all_current_q = all_current_q.filter(SeedingTarget.created_by == user_id)
+    all_current = all_current_q.order_by(SeedingTarget.id.asc()).all()
 
     return {
         "total": len(all_current),
@@ -270,6 +377,7 @@ async def validate_targets(req: ValidateTargetsRequest, db: Session = Depends(ge
                 "url": t.url,
                 "fb_id": t.fb_id,
                 "display_name": t.display_name,
+                "created_by": t.created_by,
             }
             for idx, t in enumerate(all_current)
         ]
@@ -280,12 +388,20 @@ async def validate_targets(req: ValidateTargetsRequest, db: Session = Depends(ge
 async def delete_target_by_url(
     url: str = Query(...),
     target_type: Optional[str] = Query(None),
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Xóa mục tiêu theo URL khỏi database."""
-    query = db.query(SeedingTarget).filter(SeedingTarget.url == url)
+    """Xóa mục tiêu theo URL khỏi database (chỉ xóa mục tiêu thuộc user sở hữu)."""
+    current_user = get_current_user_info(request, authorization)
+    query = db.query(SeedingTarget).filter(SeedingTarget.url == url.strip())
     if target_type:
         query = query.filter(SeedingTarget.target_type == target_type.upper())
+    if current_user:
+        role = (current_user.get("role") or current_user.get("_role_claim") or "user").lower()
+        if role not in ("admin", "superadmin", "administrator"):
+            query = query.filter(SeedingTarget.created_by == current_user["id"])
+
     targets = query.all()
     for t in targets:
         db.query(SeedingTask).filter(SeedingTask.target_id == t.id).delete(synchronize_session=False)
@@ -298,12 +414,20 @@ async def delete_target_by_url(
 @router.delete("/targets/clear")
 async def clear_seeding_targets(
     target_type: Optional[str] = Query(None),
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Xóa toàn bộ mục tiêu của target_type khỏi database."""
+    """Xóa toàn bộ mục tiêu của target_type thuộc về user hiện tại khỏi database."""
+    current_user = get_current_user_info(request, authorization)
     query = db.query(SeedingTarget)
     if target_type:
         query = query.filter(SeedingTarget.target_type == target_type.upper())
+    if current_user:
+        role = (current_user.get("role") or current_user.get("_role_claim") or "user").lower()
+        if role not in ("admin", "superadmin", "administrator"):
+            query = query.filter(SeedingTarget.created_by == current_user["id"])
+
     targets = query.all()
     target_ids = [t.id for t in targets]
     if target_ids:
@@ -315,13 +439,18 @@ async def clear_seeding_targets(
     return {"success": True, "deleted": len(targets)}
 
 
-# ─────────────────────────────────────────────────────────────
 # 1.1 QUẢN LÝ BÌNH LUẬN NHÁP (KHO BÌNH LUẬN)
 # ─────────────────────────────────────────────────────────────
 @router.get("/comments")
-async def list_seeding_comments(db: Session = Depends(get_db)):
-    """Lấy danh sách các câu bình luận đã lưu."""
-    drafts = get_draft_comments(db)
+async def list_seeding_comments(
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """Lấy danh sách các câu bình luận đã lưu trong Database của user hiện tại."""
+    current_user = get_current_user_info(request, authorization)
+    user_id = current_user.get("id") if current_user else None
+    drafts = get_user_draft_comments(db, user_id)
     return {
         "total": len(drafts),
         "comments": drafts
@@ -329,40 +458,87 @@ async def list_seeding_comments(db: Session = Depends(get_db)):
 
 
 @router.post("/comments/add")
-async def add_seeding_comments(req: AddCommentsRequest, db: Session = Depends(get_db)):
-    """Lưu danh sách bình luận nháp vào local_settings."""
-    current = get_draft_comments(db)
+async def add_seeding_comments(
+    req: AddCommentsRequest,
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """Lưu danh sách bình luận trực tiếp vào bảng seeding_comments (campaign_id IS NULL) cho user hiện tại."""
+    current_user = get_current_user_info(request, authorization)
+    user_id = current_user.get("id") if current_user else None
+
+    existing_comments = get_user_draft_comments(db, user_id)
+    existing_set = set(c.strip() for c in existing_comments)
+
     added = []
     for raw in req.comments:
         c = (raw or "").strip()
-        if c and c not in current:
-            current.append(c)
+        if c and c not in existing_set:
+            new_obj = SeedingComment(
+                campaign_id=None,
+                created_by=user_id,
+                content=c
+            )
+            db.add(new_obj)
+            existing_set.add(c)
             added.append(c)
-    save_draft_comments(db, current)
+
+    if added:
+        db.commit()
+
+    updated = get_user_draft_comments(db, user_id)
     return {
         "success": True,
         "added_count": len(added),
-        "total": len(current),
-        "comments": current
+        "total": len(updated),
+        "comments": updated
     }
 
 
 @router.delete("/comments/delete")
 async def delete_seeding_comment(
     content: str = Query(...),
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Xóa 1 câu bình luận nháp khỏi kho."""
-    current = get_draft_comments(db)
-    current = [c for c in current if c != content]
-    save_draft_comments(db, current)
+    """Xóa 1 câu bình luận nháp khỏi kho của user hiện tại."""
+    current_user = get_current_user_info(request, authorization)
+    user_id = current_user.get("id") if current_user else None
+
+    q = db.query(SeedingComment).filter(
+        SeedingComment.campaign_id == None,
+        SeedingComment.content == content.strip()
+    )
+    if user_id is not None:
+        q = q.filter(SeedingComment.created_by == user_id)
+    else:
+        q = q.filter(SeedingComment.created_by == None)
+
+    q.delete(synchronize_session=False)
+    db.commit()
     return {"success": True}
 
 
 @router.delete("/comments/clear")
-async def clear_seeding_comments(db: Session = Depends(get_db)):
-    """Xóa tất cả câu bình luận nháp."""
-    save_draft_comments(db, [])
+async def clear_seeding_comments(
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """Xóa tất cả câu bình luận nháp của user hiện tại."""
+    current_user = get_current_user_info(request, authorization)
+    user_id = current_user.get("id") if current_user else None
+
+    q = db.query(SeedingComment).filter(SeedingComment.campaign_id == None)
+    if user_id is not None:
+        q = q.filter(SeedingComment.created_by == user_id)
+    else:
+        q = q.filter(SeedingComment.created_by == None)
+
+    q.delete(synchronize_session=False)
+    db.commit()
     return {"success": True, "deleted": True}
 
 
@@ -370,35 +546,65 @@ async def clear_seeding_comments(db: Session = Depends(get_db)):
 # 2. TẠO CHIẾN DỊCH SEEDING & SINH TÁC VỤ THẬT
 # ─────────────────────────────────────────────────────────────
 @router.post("/campaigns/create")
-async def create_seeding_campaign(req: CreateCampaignRequest, db: Session = Depends(get_db)):
+async def create_seeding_campaign(
+    req: CreateCampaignRequest,
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
     """Tạo mới chiến dịch Seeding chuẩn DBML Module 8, liên kết tài khoản thật trong DB và tạo hàng đợi task."""
     if not req.targets:
         raise HTTPException(status_code=400, detail="Danh sách mục tiêu không được rỗng")
 
+    # Xác định người dùng tạo chiến dịch (created_by: users.id)
+    current_user = get_current_user_info(request, authorization)
+    created_by_int = None
+    if current_user and current_user.get("id"):
+        created_by_int = current_user["id"]
+    elif req.created_by is not None:
+        created_by_int = req.created_by
+    elif req.owner_username:
+        try:
+            created_by_int = int(req.owner_username)
+        except ValueError:
+            try:
+                u_row = db.execute(text("SELECT id FROM users WHERE username = :u LIMIT 1"), {"u": req.owner_username}).fetchone()
+                if u_row:
+                    created_by_int = u_row[0]
+            except Exception:
+                created_by_int = None
+
     # 1. Lấy danh sách UID tài khoản Facebook thật từ DB (bắt buộc Live và Đã đăng nhập)
-    available_accounts = []
+    # Xác định danh tính người dùng sở hữu (ID dạng chuỗi và username nếu có)
+    owner_identifiers = []
+    if created_by_int is not None:
+        owner_identifiers.append(str(created_by_int))
+    if current_user and current_user.get("username"):
+        owner_identifiers.append(str(current_user["username"]))
+    if req.owner_username:
+        owner_identifiers.append(str(req.owner_username))
+
+    owner_identifiers = list(set([str(x).strip() for x in owner_identifiers if x]))
+
+    q = db.query(Account).filter(
+        Account.status == "LIVE",
+        Account.login_status == "LOGGED_IN"
+    )
+
+    # ĐẢM BẢO CHỈ LẤY TÀI KHOẢN MÀ CHÍNH USER ĐÓ ĐÃ IMPORT VÀ SỞ HỮU
+    if owner_identifiers:
+        q = q.filter(Account.user_id.in_(owner_identifiers))
+
     if req.uids and len(req.uids) > 0:
-        available_accounts = db.query(Account).filter(
-            Account.uid.in_(req.uids),
-            Account.status == "LIVE",
-            Account.login_status == "LOGGED_IN"
-        ).all()
-        if not available_accounts:
-            available_accounts = db.query(Account).filter(Account.uid.in_(req.uids)).all()
+        q = q.filter(Account.uid.in_(req.uids))
+        available_accounts = q.all()
     else:
-        # Lọc nghiêm ngặt: status == 'LIVE' VÀ login_status == 'LOGGED_IN'
-        q = db.query(Account).filter(
-            Account.status == "LIVE",
-            Account.login_status == "LOGGED_IN"
-        )
-        if req.owner_username:
-            q = q.filter(Account.user_id == req.owner_username)
         available_accounts = q.order_by(Account.id.asc()).limit(req.account_count).all()
 
     if not available_accounts:
         raise HTTPException(
             status_code=400,
-            detail="Không có tài khoản Facebook nào khả dụng! Yêu cầu tài khoản phải có trạng thái 'Live' và 'Đã đăng nhập' (logged_in). Vui lòng vào trang Quản lý tài khoản (Accounts) để kiểm tra."
+            detail="Không có tài khoản Facebook nào khả dụng thuộc quyền sở hữu của bạn! Yêu cầu tài khoản do bạn import phải có trạng thái 'Live' và 'Đã đăng nhập' (logged_in). Vui lòng vào trang Quản lý tài khoản (Accounts) để kiểm tra."
         )
 
     account_uids = [acc.uid for acc in available_accounts]
@@ -417,14 +623,6 @@ async def create_seeding_campaign(req: CreateCampaignRequest, db: Session = Depe
     else:
         type_label = "Bài viết"
 
-    created_by_int = None
-    if req.created_by is not None:
-        created_by_int = req.created_by
-    elif req.owner_username:
-        try:
-            created_by_int = int(req.owner_username)
-        except ValueError:
-            created_by_int = None
 
     created_campaigns = []
     total_tasks_all = 0
@@ -443,11 +641,14 @@ async def create_seeding_campaign(req: CreateCampaignRequest, db: Session = Depe
         else:
             auto_display_name = f"{fb_id}"
 
-        # 1. Tìm hoặc tạo SeedingTarget tuân thủ unique_seeding_target(target_type, fb_id)
-        target = db.query(SeedingTarget).filter(
+        # 1. Tìm hoặc tạo SeedingTarget tuân thủ created_by của người dùng
+        target_q = db.query(SeedingTarget).filter(
             SeedingTarget.target_type == camp_type,
             or_(SeedingTarget.fb_id == fb_id, SeedingTarget.url == item.url)
-        ).first()
+        )
+        if created_by_int is not None:
+            target_q = target_q.filter(SeedingTarget.created_by == created_by_int)
+        target = target_q.first()
 
         if not target:
             target = SeedingTarget(
@@ -455,6 +656,7 @@ async def create_seeding_campaign(req: CreateCampaignRequest, db: Session = Depe
                 fb_id=fb_id,
                 url=item.url,
                 display_name=auto_display_name,
+                created_by=created_by_int,
             )
             db.add(target)
             db.flush()
@@ -484,16 +686,25 @@ async def create_seeding_campaign(req: CreateCampaignRequest, db: Session = Depe
         db.add(camp)
         db.flush()
 
-        # 3. Lưu kho comment nếu có cho chiến dịch này (áp dụng cho POST, campaign_id NOT NULL per DBML)
+        # 3. Lưu kho comment nếu có cho chiến dịch này (áp dụng cho POST)
         saved_comments = []
         if req.comments:
             for cmt_text in req.comments:
                 c = cmt_text.strip()
                 if c:
-                    comment_obj = SeedingComment(campaign_id=camp.id, content=c)
+                    comment_obj = SeedingComment(campaign_id=camp.id, created_by=created_by_int, content=c)
                     db.add(comment_obj)
                     saved_comments.append(comment_obj)
             db.flush()
+        elif camp_type == "POST":
+            # Fallback lấy kho comment mẫu từ database của user nếu req.comments rỗng
+            draft_cmts = get_user_draft_comments(db, created_by_int)
+            for c in draft_cmts:
+                comment_obj = SeedingComment(campaign_id=camp.id, created_by=created_by_int, content=c)
+                db.add(comment_obj)
+                saved_comments.append(comment_obj)
+            if saved_comments:
+                db.flush()
 
         # 4. Tạo SeedingCampaignTarget chuẩn DBML
         camp_target = SeedingCampaignTarget(
@@ -585,8 +796,9 @@ async def create_seeding_campaign(req: CreateCampaignRequest, db: Session = Depe
 # ─────────────────────────────────────────────────────────────
 # 3. THI HÀNH CHIẾN DỊCH BẰNG SELENIUM ĐA LUỒNG THẬT (NO MOCK)
 # ─────────────────────────────────────────────────────────────
-def _process_account_tasks(campaign_id: int, uid: str, task_ids: List[int], delay_min: int, delay_max: int):
+def _process_account_tasks(campaign_id: int, uid: str, task_ids: List[int], delay_min: int, delay_max: int, owner: Optional[str] = None):
     """Xử lý toàn bộ tác vụ của một tài khoản trên trình duyệt Chrome riêng biệt."""
+    token = owner_context.set(owner) if owner else None
     db = SessionLocal()
     driver = None
     try:
@@ -741,22 +953,33 @@ def _process_account_tasks(campaign_id: int, uid: str, task_ids: List[int], dela
                 pass
             close_driver_for_uid(uid)
         db.close()
+        if token:
+            try:
+                owner_context.reset(token)
+            except Exception:
+                pass
 
 
 def _run_single_campaign(campaign_id: int):
     """Hàm chạy nền điều phối đa luồng (ThreadPoolExecutor) cho một chiến dịch seeding."""
     db = SessionLocal()
+    tasks_by_uid: Dict[str, List[int]] = {}
+    delay_min = 30
+    delay_max = 60
+    has_tasks = False
+    camp_owner = None
     try:
         campaign = db.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).first()
         if not campaign:
             return
 
+        camp_owner = str(campaign.created_by) if campaign.created_by is not None else None
         campaign.status = "RUNNING"
         campaign.started_at = utc_now()
         db.commit()
 
         _active_seeding_campaigns[campaign_id] = {"stop_requested": False, "running": True}
-        broadcast("info", f"🚀 BẮT ĐẦU CHẠY CHIẾN DỊCH SEEDING #{campaign_id}: {campaign.target_summary}")
+        broadcast("info", f"🚀 BẮT ĐẦU CHẠY CHIẾN DỊCH SEEDING #{campaign_id}: {campaign.target_summary}", owner=camp_owner)
 
         # Lấy danh sách tasks PENDING
         tasks = db.query(SeedingTask).filter(
@@ -768,22 +991,29 @@ def _run_single_campaign(campaign_id: int):
             campaign.status = "COMPLETED"
             campaign.finished_at = utc_now()
             db.commit()
-            broadcast("info", f"Chiến dịch #{campaign_id} không có tác vụ nào cần chạy.")
+            broadcast("info", f"Chiến dịch #{campaign_id} không có tác vụ nào cần chạy.", owner=camp_owner)
             return
 
         # Nhóm tasks theo UID
-        tasks_by_uid: Dict[str, List[int]] = {}
         for t in tasks:
             tasks_by_uid.setdefault(t.account_uid, []).append(t.id)
 
-        # Số luồng chạy đồng thời
-        max_workers = 2
-        broadcast("info", f"⚙️ Điều phối tự động với {max_workers} luồng Chrome song song trên {len(tasks_by_uid)} tài khoản.")
-
+        has_tasks = True
         delay_min = campaign.delay_seconds_min or 30
         delay_max = campaign.delay_seconds_max or 60
+    finally:
+        db.close()
 
-        # Khởi chạy đa luồng thật
+    if not has_tasks or not tasks_by_uid:
+        _active_seeding_campaigns.pop(campaign_id, None)
+        return
+
+    # Số luồng chạy đồng thời
+    max_workers = 2
+    broadcast("info", f"⚙️ Điều phối tự động với {max_workers} luồng Chrome song song trên {len(tasks_by_uid)} tài khoản.", owner=camp_owner)
+
+    try:
+        # Khởi chạy đa luồng thật mà không giữ connection của DB ở luồng điều phối
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
             for uid, t_ids in tasks_by_uid.items():
@@ -795,7 +1025,8 @@ def _run_single_campaign(campaign_id: int):
                     uid=uid,
                     task_ids=t_ids,
                     delay_min=delay_min,
-                    delay_max=delay_max
+                    delay_max=delay_max,
+                    owner=camp_owner
                 )
                 futures.append(f)
 
@@ -816,13 +1047,12 @@ def _run_single_campaign(campaign_id: int):
                     camp_end.status = "COMPLETED"
                 camp_end.finished_at = utc_now()
                 db_end.commit()
-                broadcast("success", f"🎉 KẾT THÚC CHIẾN DỊCH #{campaign_id} ({camp_end.target_summary}): Thành công {camp_end.total_success}, Thất bại {camp_end.total_failed}.")
+                broadcast("success", f"🎉 KẾT THÚC CHIẾN DỊCH #{campaign_id} ({camp_end.target_summary}): Thành công {camp_end.total_success}, Thất bại {camp_end.total_failed}.", owner=camp_owner)
         finally:
             db_end.close()
 
     finally:
         _active_seeding_campaigns.pop(campaign_id, None)
-        db.close()
 
 
 def _campaign_status(campaign_id: int) -> Optional[str]:
@@ -851,11 +1081,25 @@ def _execute_campaign_runner(initial_campaign_id: int):
 
 
 @router.post("/campaigns/{campaign_id}/start")
-async def start_seeding_campaign(campaign_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def start_seeding_campaign(
+    campaign_id: int,
+    background_tasks: BackgroundTasks,
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
     """Bắt đầu chạy chiến dịch seeding trong background thread pool."""
     campaign = db.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).first()
     if not campaign:
         raise HTTPException(status_code=404, detail="Không tìm thấy chiến dịch")
+
+    # Kiểm tra phân quyền theo created_by: User thường không được start campaign của người khác
+    current_user = get_current_user_info(request, authorization)
+    if current_user:
+        role = (current_user.get("role") or current_user.get("_role_claim") or "user").lower()
+        is_admin = role in ("admin", "superadmin", "administrator")
+        if not is_admin and campaign.created_by is not None and campaign.created_by != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Bạn không có quyền điều khiển chiến dịch này")
 
     if campaign_id in _active_seeding_campaigns and _active_seeding_campaigns[campaign_id].get("running"):
         return {"message": "Chiến dịch đang chạy", "status": "RUNNING"}
@@ -865,8 +1109,25 @@ async def start_seeding_campaign(campaign_id: int, background_tasks: BackgroundT
 
 
 @router.post("/campaigns/{campaign_id}/stop")
-async def stop_seeding_campaign(campaign_id: int, db: Session = Depends(get_db)):
+async def stop_seeding_campaign(
+    campaign_id: int,
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
     """Dừng khẩn cấp toàn bộ các luồng trình duyệt Chrome đang chạy của chiến dịch và toàn bộ chuỗi kế tiếp."""
+    campaign = db.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).first()
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Không tìm thấy chiến dịch")
+
+    # Kiểm tra phân quyền theo created_by: User thường không được stop campaign của người khác
+    current_user = get_current_user_info(request, authorization)
+    if current_user:
+        role = (current_user.get("role") or current_user.get("_role_claim") or "user").lower()
+        is_admin = role in ("admin", "superadmin", "administrator")
+        if not is_admin and campaign.created_by is not None and campaign.created_by != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Bạn không có quyền dừng chiến dịch này")
+
     chain = _batch_campaign_chains.get(campaign_id, [campaign_id])
     for cid in chain:
         if cid in _active_seeding_campaigns:
@@ -884,27 +1145,47 @@ async def stop_seeding_campaign(campaign_id: int, db: Session = Depends(get_db))
 
 
 @router.post("/stop-all")
-async def stop_all_seeding(db: Session = Depends(get_db)):
+async def stop_all_seeding(
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
     """Dừng khẩn cấp mọi chiến dịch seeding đang chạy trên engine này (khi giao diện không còn giữ campaign_id)."""
-    # Chỉ lấy các chiến dịch đang chạy trong tiến trình này và phần còn lại của batch của chúng,
-    # không đụng tới chiến dịch RUNNING của máy khác trên cùng DB.
+    current_user = get_current_user_info(request, authorization)
+    is_user_limited = False
+    allowed_user_id = None
+    if current_user:
+        role = (current_user.get("role") or current_user.get("_role_claim") or "user").lower()
+        is_admin = role in ("admin", "superadmin", "administrator")
+        if not is_admin:
+            is_user_limited = True
+            allowed_user_id = current_user["id"]
+
     campaign_ids = set()
     for cid in list(_active_seeding_campaigns.keys()):
         campaign_ids.update(_batch_campaign_chains.get(cid, [cid]))
 
+    stopped_ids = []
     for cid in campaign_ids:
-        if cid in _active_seeding_campaigns:
-            _active_seeding_campaigns[cid]["stop_requested"] = True
         c = db.query(SeedingCampaign).filter(SeedingCampaign.id == cid).first()
-        if c and c.status in ("PENDING", "RUNNING"):
-            c.status = "STOPPED"
+        if c:
+            # Nếu là user thường, chỉ dừng campaign của chính user đó
+            if is_user_limited and c.created_by is not None and c.created_by != allowed_user_id:
+                continue
+            if cid in _active_seeding_campaigns:
+                _active_seeding_campaigns[cid]["stop_requested"] = True
+            if c.status in ("PENDING", "RUNNING"):
+                c.status = "STOPPED"
+            stopped_ids.append(cid)
+
     db.commit()
 
-    # Đóng ngay lập tức các trình duyệt đang thuộc scope seeding
-    close_scoped_active_drivers(scope="seeding", force=True)
+    # Đóng các trình duyệt thuộc scope seeding nếu có chiến dịch bị dừng
+    if stopped_ids:
+        close_scoped_active_drivers(scope="seeding", force=True)
 
-    broadcast("warning", f"⏹ Đã dừng khẩn cấp {len(campaign_ids)} chiến dịch seeding và đóng toàn bộ trình duyệt.")
-    return {"message": "Đã dừng toàn bộ chiến dịch seeding", "campaign_ids": sorted(campaign_ids)}
+    broadcast("warning", f"⏹ Đã dừng khẩn cấp {len(stopped_ids)} chiến dịch seeding.")
+    return {"message": "Đã dừng chiến dịch seeding", "campaign_ids": sorted(stopped_ids)}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -917,12 +1198,33 @@ async def list_seeding_campaigns(
     search: Optional[str] = Query(None, description="Tìm kiếm theo tên chiến dịch hoặc mục tiêu"),
     from_date: Optional[str] = Query(None),
     to_date: Optional[str] = Query(None),
+    user_id: Optional[int] = Query(None, description="Lọc theo created_by (dành cho Admin)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Lấy danh sách lịch sử chiến dịch seeding thật trong DB kèm bộ lọc & phân trang."""
+    """Lấy danh sách lịch sử chiến dịch seeding thật trong DB kèm bộ lọc phân quyền người dùng (created_by) & phân trang."""
     q = db.query(SeedingCampaign)
+
+    # ─── PHÂN QUYỀN HIỂN THỊ THEO CREATED_BY ───
+    # Seeding của user nào thì CHỈ hiển thị cho mỗi user đó. Admin được xem tất cả.
+    current_user = get_current_user_info(request, authorization)
+    if current_user:
+        role = (current_user.get("role") or current_user.get("_role_claim") or "user").lower()
+        is_admin = role in ("admin", "superadmin", "administrator")
+        if not is_admin:
+            # User thường: BẮT BUỘC chỉ xem chiến dịch do chính user này tạo
+            q = q.filter(SeedingCampaign.created_by == current_user["id"])
+        else:
+            # Admin: xem tất cả hoặc lọc theo user_id nếu được truyền
+            if user_id is not None:
+                q = q.filter(SeedingCampaign.created_by == user_id)
+    else:
+        # Nếu chưa đăng nhập / chế độ local test:
+        if user_id is not None:
+            q = q.filter(SeedingCampaign.created_by == user_id)
 
     if campaign_type and campaign_type.upper() not in ("ALL", "TẤT CẢ"):
         q = q.filter(SeedingCampaign.campaign_type == campaign_type.upper())
@@ -938,7 +1240,6 @@ async def list_seeding_campaigns(
 
     if search and search.strip():
         term = f"%{search.strip()}%"
-        # Tìm theo display_name / url / fb_id của SeedingTarget
         target_subquery = db.query(SeedingCampaignTarget.campaign_id).join(
             SeedingTarget, SeedingCampaignTarget.target_id == SeedingTarget.id
         ).filter(
@@ -971,6 +1272,7 @@ async def list_seeding_campaigns(
     for c in items:
         results.append({
             "id": c.id,
+            "created_by": c.created_by,
             "created_at": to_vn_iso(c.created_at),
             "created_at_display": c.created_at.strftime("%d/%m/%Y %H:%M") if c.created_at else "-",
             "name": c.target_summary,
@@ -999,7 +1301,12 @@ async def list_seeding_campaigns(
 # 5. CHI TIẾT CHIẾN DỊCH & LINK MỤC TIÊU THẬT (CHO NÚT "Chi tiết")
 # ─────────────────────────────────────────────────────────────
 @router.get("/campaigns/{campaign_id}/detail")
-async def get_seeding_campaign_detail(campaign_id: int, db: Session = Depends(get_db)):
+async def get_seeding_campaign_detail(
+    campaign_id: int,
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
     """
     Trả về chi tiết chiến dịch, LINK MỤC TIÊU VÀ DANH SÁCH CHI TIẾT CÁC TÀI KHOẢN KÈM LỖI/GHI CHÚ.
     Dùng để hiển thị Modal khi bấm nút 'Chi tiết' ở màn hình Lịch sử.
@@ -1008,105 +1315,101 @@ async def get_seeding_campaign_detail(campaign_id: int, db: Session = Depends(ge
     if not campaign:
         raise HTTPException(status_code=404, detail="Không tìm thấy chiến dịch")
 
-    # 1. Lấy các mục tiêu kèm link từ seeding_campaign_targets JOIN seeding_targets
-    camp_targets = db.query(
-        SeedingCampaignTarget, SeedingTarget
-    ).join(
-        SeedingTarget, SeedingCampaignTarget.target_id == SeedingTarget.id
-    ).filter(
-        SeedingCampaignTarget.campaign_id == campaign_id
-    ).order_by(SeedingCampaignTarget.id.asc()).all()
+    # Kiểm tra quyền truy cập theo created_by: User thường không được xem chi tiết của user khác
+    current_user = get_current_user_info(request, authorization)
+    if current_user:
+        role = (current_user.get("role") or current_user.get("_role_claim") or "user").lower()
+        is_admin = role in ("admin", "superadmin", "administrator")
+        if not is_admin and campaign.created_by is not None and campaign.created_by != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Bạn không có quyền truy cập chiến dịch này")
 
+    # 1. Lấy thông tin các mục tiêu (Targets) của chiến dịch này
     targets_data = []
-    for ct, t in camp_targets:
+    for ct in campaign.campaign_targets:
+        t = ct.target
         targets_data.append({
             "target_id": t.id,
-            "url": t.url,
-            "fb_id": t.fb_id,
-            "display_name": t.display_name or t.url,
             "target_type": t.target_type,
+            "fb_id": t.fb_id,
+            "url": t.url,
+            "display_name": t.display_name or (f"Page {t.fb_id}" if t.target_type == "PAGE" else (f"Trang cá nhân {t.fb_id}" if t.target_type == "PROFILE" else f"Bài viết {t.fb_id}")),
+            "note": ct.note,
+            "source": ct.source,
             "planned_count": ct.planned_count,
             "success_count": ct.success_count,
-            "failed_count": ct.failed_count,
-            "note": ct.note,
-            "source": ct.source
+            "failed_count": ct.failed_count
         })
 
-    # 2. Lấy danh sách chi tiết từng task của các tài khoản Facebook
-    tasks = db.query(SeedingTask).filter(SeedingTask.campaign_id == campaign_id).order_by(SeedingTask.id.asc()).all()
+    # 2. Lấy danh sách nhiệm vụ chi tiết theo từng tài khoản (Tasks)
     tasks_data = []
-    for t in tasks:
-        acc = db.query(Account).filter(Account.uid == t.account_uid).first()
-        acc_name = acc.profile_name if (acc and acc.profile_name) else t.account_uid
-        target = db.query(SeedingTarget).filter(SeedingTarget.id == t.target_id).first()
+    # Thống kê chi tiết từng loại tương tác thực tế từ tasks (Like, Love, Haha, Comment, Share...)
+    interactions_breakdown = {}
 
-        action_disp = (
-            "Follow Page" if (t.action == "FOLLOW" and campaign.campaign_type == "PAGE")
-            else ("Follow Trang cá nhân" if (t.action == "FOLLOW" and campaign.campaign_type == "PROFILE")
-            else (f"Like bài viết ({t.reaction})" if (t.action == "REACT" and t.reaction) else ("Like bài viết" if t.action == "REACT"
-            else ("Bình luận" if t.action == "COMMENT"
-            else ("Chia sẻ" if t.action == "SHARE"
-            else t.action)))))
-        )
+    # Tải danh sách tên tài khoản theo UID để hiển thị
+    task_uids = list(set(tk.account_uid for tk in campaign.tasks if tk.account_uid))
+    acc_map = {}
+    if task_uids:
+        try:
+            acc_records = db.query(Account).filter(Account.uid.in_(task_uids)).all()
+            for a in acc_records:
+                acc_map[a.uid] = a.profile_name or a.uid
+        except Exception:
+            pass
+
+    for tk in campaign.tasks:
+        acc_name = acc_map.get(tk.account_uid, "Tài khoản")
+
+        st_disp = "Chờ chạy"
+        if tk.status == "SUCCESS":
+            st_disp = "Thành công"
+        elif tk.status == "FAILED":
+            st_disp = "Thất bại"
+        elif tk.status == "RUNNING":
+            st_disp = "Đang chạy"
+
+        # Hiển thị hành động trực quan (VD: Thả cảm xúc LOVE, Bình luận...)
+        action_disp = tk.action
+        if tk.action == "REACT":
+            react_label = tk.reaction or "LIKE"
+            action_disp = f"Cảm xúc {react_label}"
+            if tk.status == "SUCCESS":
+                interactions_breakdown[react_label] = interactions_breakdown.get(react_label, 0) + 1
+        elif tk.action == "FOLLOW":
+            action_disp = "Theo dõi"
+            if tk.status == "SUCCESS":
+                interactions_breakdown["FOLLOW"] = interactions_breakdown.get("FOLLOW", 0) + 1
+        elif tk.action == "COMMENT":
+            action_disp = "Bình luận"
+            if tk.status == "SUCCESS":
+                interactions_breakdown["COMMENT"] = interactions_breakdown.get("COMMENT", 0) + 1
+        elif tk.action == "SHARE":
+            action_disp = "Chia sẻ"
+            if tk.status == "SUCCESS":
+                interactions_breakdown["SHARE"] = interactions_breakdown.get("SHARE", 0) + 1
 
         tasks_data.append({
-            "id": t.id,
-            "account_uid": t.account_uid,
+            "task_id": tk.id,
+            "account_uid": tk.account_uid,
             "account_name": acc_name,
-            "action": t.action,
+            "action": tk.action,
             "action_display": action_disp,
-            "status": t.status,
-            "status_display": "Thành công" if t.status == "SUCCESS" else ("Thất bại" if t.status == "FAILED" else ("Đang chạy" if t.status == "RUNNING" else "Chờ chạy")),
-            "error_message": t.error_message,
-            "target_url": target.url if target else None,
-            "target_name": (target.display_name or target.url) if target else None,
+            "reaction": tk.reaction,
+            "comment_content": tk.comment.content if tk.comment else None,
+            "status": tk.status,
+            "status_display": st_disp,
+            "error_message": tk.error_message,
+            "started_at": to_vn_iso(tk.started_at),
+            "finished_at": to_vn_iso(tk.finished_at),
         })
 
-    # 3. Thống kê chi tiết 3 loại tương tác bài viết (Like, Bình luận, Chia sẻ)
-    comments_list = [c.content for c in db.query(SeedingComment).filter(SeedingComment.campaign_id == campaign_id).all()]
     actions_list = [a.strip() for a in (campaign.actions or "").split(",") if a.strip()]
     reactions_list = [r.strip() for r in (campaign.reactions or "").split(",") if r.strip()]
+    comments_list = [c.content for c in campaign.comments]
 
-    react_tasks = [t for t in tasks if t.action == "REACT"]
-    comment_tasks = [t for t in tasks if t.action == "COMMENT"]
-    share_tasks = [t for t in tasks if t.action == "SHARE"]
-
-    interactions_breakdown = {
-        "react": {
-            "title": "Like bài viết",
-            "subtitle": "Tương tác bài viết này",
-            "enabled": "REACT" in actions_list,
-            "planned": len(react_tasks),
-            "success": sum(1 for t in react_tasks if t.status == "SUCCESS"),
-            "failed": sum(1 for t in react_tasks if t.status == "FAILED"),
-            "reactions": reactions_list
-        },
-        "comment": {
-            "title": "Bình luận",
-            "subtitle": "Tự động bình luận bài viết",
-            "enabled": "COMMENT" in actions_list,
-            "planned": len(comment_tasks),
-            "success": sum(1 for t in comment_tasks if t.status == "SUCCESS"),
-            "failed": sum(1 for t in comment_tasks if t.status == "FAILED"),
-            "comments_count": len(comments_list),
-            "comments": comments_list
-        },
-        "share": {
-            "title": "Chia sẻ",
-            "subtitle": "Chia sẻ về trang cá nhân",
-            "enabled": "SHARE" in actions_list,
-            "planned": len(share_tasks),
-            "success": sum(1 for t in share_tasks if t.status == "SUCCESS"),
-            "failed": sum(1 for t in share_tasks if t.status == "FAILED")
-        }
-    }
-
-    # 4. Kiểm tra xem chuỗi chiến dịch liên kết có còn tiến trình nào đang chạy không
-    chain = _batch_campaign_chains.get(campaign_id, [campaign_id])
-    is_batch_active = any(
-        _active_seeding_campaigns.get(cid, {}).get("running", False) for cid in chain
-    )
-    if not is_batch_active:
+    # Kiểm tra xem toàn bộ batch chiến dịch này có đang hoạt động hay không
+    is_batch_active = False
+    chain = _batch_campaign_chains.get(campaign.id, [campaign.id])
+    if chain:
         active_camps = db.query(SeedingCampaign).filter(
             SeedingCampaign.id.in_(chain),
             SeedingCampaign.status.in_(["RUNNING", "PENDING"])
@@ -1118,6 +1421,7 @@ async def get_seeding_campaign_detail(campaign_id: int, db: Session = Depends(ge
 
     return {
         "id": campaign.id,
+        "created_by": campaign.created_by,
         "name": primary_target_name or campaign.target_summary,
         "campaign_type": campaign.campaign_type,
         "campaign_type_display": "Page" if campaign.campaign_type == "PAGE" else ("Trang cá nhân" if campaign.campaign_type == "PROFILE" else "Bài viết"),
@@ -1144,15 +1448,38 @@ async def get_seeding_campaign_detail(campaign_id: int, db: Session = Depends(ge
 # 6. THỐNG KÊ TỔNG QUAN (4 CARD Ở MÀN HÌNH LỊCH SỬ)
 # ─────────────────────────────────────────────────────────────
 @router.get("/stats")
-async def get_seeding_stats(db: Session = Depends(get_db)):
-    """Trả về số liệu thống kê thật từ database."""
-    total_campaigns = db.query(SeedingCampaign).count()
-
-    sums = db.query(
+async def get_seeding_stats(
+    user_id: Optional[int] = Query(None, description="Lọc theo user id (Admin)"),
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+):
+    """Trả về số liệu thống kê thật từ database có phân quyền theo created_by của người dùng."""
+    current_user = get_current_user_info(request, authorization)
+    q = db.query(SeedingCampaign)
+    sums_q = db.query(
         func.coalesce(func.sum(SeedingCampaign.total_planned), 0),
         func.coalesce(func.sum(SeedingCampaign.total_success), 0),
         func.coalesce(func.sum(SeedingCampaign.total_failed), 0)
-    ).first()
+    )
+
+    if current_user:
+        role = (current_user.get("role") or current_user.get("_role_claim") or "user").lower()
+        is_admin = role in ("admin", "superadmin", "administrator")
+        if not is_admin:
+            # User thường: chỉ tính thống kê của các chiến dịch do chính user tạo
+            q = q.filter(SeedingCampaign.created_by == current_user["id"])
+            sums_q = sums_q.filter(SeedingCampaign.created_by == current_user["id"])
+        elif user_id is not None:
+            # Admin lọc theo user_id nếu được truyền
+            q = q.filter(SeedingCampaign.created_by == user_id)
+            sums_q = sums_q.filter(SeedingCampaign.created_by == user_id)
+    elif user_id is not None:
+        q = q.filter(SeedingCampaign.created_by == user_id)
+        sums_q = sums_q.filter(SeedingCampaign.created_by == user_id)
+
+    total_campaigns = q.count()
+    sums = sums_q.first()
 
     total_interactions = int(sums[0]) if sums else 0
     total_success = int(sums[1]) if sums else 0

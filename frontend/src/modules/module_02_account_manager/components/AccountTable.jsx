@@ -62,6 +62,23 @@ function ConcurrentThreadsIcon({ className = "w-4 h-4 shrink-0" }) {
 
 const avatarColors = ["#1877F2", "#0084FF", "#087A62", "#4F46E5", "#0284C7"];
 
+function AccountAvatar({ url, initial, color }) {
+  const [failedUrl, setFailedUrl] = useState(null);
+  return (
+    <span
+      className="w-7 h-7 rounded-full overflow-hidden flex items-center justify-center shrink-0 font-bold text-[11px] text-white shadow-2xs"
+      style={{ backgroundColor: color }}
+    >
+      {url && failedUrl !== url ? (
+        // The signed Facebook CDN URL is used directly without an image proxy.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img key={url} src={url} alt="" referrerPolicy="no-referrer"
+          className="w-full h-full object-cover" onError={() => setFailedUrl(url)} />
+      ) : initial}
+    </span>
+  );
+}
+
 const accountFilterOptions = [
   { value: "all", label: "Tất cả trạng thái TK" },
   { value: "live", label: "Live" },
@@ -481,12 +498,8 @@ export default function AccountTable({
                       {/* 4. Tên tài khoản */}
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <span
-                            className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 font-bold text-[11px] text-white shadow-2xs"
-                            style={{ backgroundColor: avatarColors[index % avatarColors.length] }}
-                          >
-                            {initial}
-                          </span>
+                          <AccountAvatar url={account.avatar_url} initial={initial}
+                            color={avatarColors[index % avatarColors.length]} />
                           <div className="flex flex-col justify-center min-w-0 overflow-hidden">
                             <span
                               className="font-medium text-[#1E293B] truncate text-xs sm:text-sm"

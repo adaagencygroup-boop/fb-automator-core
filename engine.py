@@ -36,8 +36,8 @@ from modules.module_02_account_manager.api.router import (
     alias_router as account_alias_router,
 )
 from modules.module_02_account_manager.api.router import router as account_router
-from modules.module_08_interaction_seeding.be.seeding_routes import seeding_router
-from modules.module_auth.router import admin_router, assert_module_access, auth_router
+from modules.module_08_interaction_seeding.routes import seeding_router
+from modules.module_auth.router import admin_router, assert_request_module_access, auth_router
 from modules.module_auth.schema import init_auth_tables
 from modules.module_auth.service import ensure_admin
 
@@ -207,7 +207,7 @@ class LicenseMiddleware:
                         auth = f"Bearer {value}"
                         break
             try:
-                assert_module_access(auth)
+                assert_request_module_access(auth, path, method)
             except HTTPException as exc:
                 body = json.dumps({"detail": exc.detail}).encode()
                 await send(
