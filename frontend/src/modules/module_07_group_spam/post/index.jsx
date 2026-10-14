@@ -63,6 +63,7 @@ import {
   initialsOf,
   normalizeAccount,
 } from "../shared/components";
+import GroupSourceSection from "./GroupSourceSection";
 
 const DEFAULT_GEMINI_MODELS = [
   { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
@@ -78,9 +79,9 @@ const DEFAULT_GEMINI_MODELS = [
 
 export default function GroupPostModule() {
   const mediaInputRef = useRef(null);
-  const groupFileInputRef = useRef(null);
 
   const [accounts, setAccounts] = useState([]);
+  const [customGroups, setCustomGroups] = useState(GROUPS);
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [accountSearch, setAccountSearch] = useState("");
   const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
@@ -184,16 +185,17 @@ export default function GroupPostModule() {
     return filteredAccounts.slice(start, start + accountPageSize);
   }, [filteredAccounts, accountPage, accountPageSize]);
 
-  const filteredGroups = useMemo(() => {
-    const query = groupFilter.trim().toLowerCase();
-    if (!query) return GROUPS;
-    return GROUPS.filter((group) => `${group.name} ${group.url}`.toLowerCase().includes(query));
-  }, [groupFilter]);
+  const currentGroupPool = useMemo(() => {
+    if (groupSource === "file" && groupFile?.groups?.length) {
+      return groupFile.groups;
+    }
+    return customGroups;
+  }, [groupSource, groupFile, customGroups]);
 
   const selectedAccounts = accounts.filter((account) => selectedAccountKeys.includes(account.key));
-  const selectedGroups = GROUPS.filter((group) => selectedGroupKeys.includes(group.key));
-  const hasGroups = groupSource === "search" ? selectedGroups.length > 0 : Boolean(groupFile);
-  const activeGroupsCount = groupSource === "file" ? (groupFile?.validGroupsCount || 68) : selectedGroups.length;
+  const selectedGroups = currentGroupPool.filter((group) => selectedGroupKeys.includes(group.key));
+  const hasGroups = selectedGroups.length > 0 || (groupSource === "file" ? Boolean(groupFile) : false);
+  const activeGroupsCount = groupSource === "file" ? (groupFile?.validGroupsCount || selectedGroups.length) : selectedGroups.length;
   const generatedCount = posts.filter((post) => post.trim()).length;
   const totalPlanned = Math.min(Number(maxPosts) || 0, activeGroupsCount * Math.max(selectedAccounts.length, 1));
   const activeProvider = model === "gemini" || model.startsWith("gemini-") ? "gemini" : "openai";
@@ -259,15 +261,22 @@ export default function GroupPostModule() {
     }
   };
 
+  // function tải model
   const handleLoadGeminiModels = async () => {
+    // 1. Bật trạng thái loading cho nút bấm
     setSettingsAction("loading-models");
+
     setSettingsFeedback(null);
     try {
       if (!apiKey.trim() && !providerStatus.gemini?.configured) {
         throw new Error("Hãy nhập Google AI Studio API Key trước khi tải model");
       }
       const result = await getGeminiModels({ api_key: apiKey.trim() || null });
+
+      // 2. Cập nhật danh sách model vào state
       setGeminiModels(result.models);
+
+      // 3. Chọn model đầu tiên nếu chưa chọn model nào
       if (!result.models.some((item) => item.id === model)) {
         setModel(result.models[0].id);
       }
@@ -285,94 +294,9 @@ export default function GroupPostModule() {
     );
   };
 
-  const toggleGroup = (key, checked) => {
-    setSelectedGroupKeys((current) =>
-      checked ? [...new Set([...current, key])] : current.filter((item) => item !== key),
-    );
-  };
-
   const handleFiles = (files) => {
     const nextFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/") || file.type.startsWith("video/"));
     setMediaFiles(nextFiles);
-  };
-
-  const processGroupFile = (file) => {
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = String(event.target?.result || "");
-      const lines = text
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line && !line.startsWith("#"));
-      const unique = Array.from(new Set(lines));
-      const validLinks = unique.filter(
-        (line) => line.includes("facebook.com") || line.includes("fb.com") || /^\d+$/.test(line)
-      );
-      const invalidCount = unique.length - validLinks.length;
-      const dedupCount = lines.length - unique.length;
-
-      setGroupFile({
-        name: file.name,
-        size: file.size,
-        status: "valid",
-        dedupCount,
-        invalidCount,
-        validGroupsCount: validLinks.length || lines.length || 1,
-      });
-
-      if (validLinks.length > 0) {
-        const fileGroups = validLinks.map((url, idx) => ({
-          id: String(idx + 1).padStart(2, "0"),
-          key: `file_group_${idx}`,
-          name: `Nhóm file #${idx + 1}`,
-          url: url.replace(/^https?:\/\//, ""),
-          frequency: "15 bài",
-          members: "—",
-        }));
-        setSelectedGroupKeys(fileGroups.map((g) => g.key));
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleGroupFileChange = (event) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      processGroupFile(file);
-    }
-  };
-
-  const handleGroupFileDrop = (event) => {
-    event.preventDefault();
-    const file = event.dataTransfer.files?.[0];
-    if (file) {
-      processGroupFile(file);
-    }
-  };
-
-  const handleDownloadTemplate = () => {
-    const templateContent = [
-      "# Danh sách link nhóm Facebook mẫu (Mỗi dòng 1 link hoặc UID nhóm)",
-      "https://www.facebook.com/groups/vieclamonline2024",
-      "https://www.facebook.com/groups/muabanonline2024",
-      "https://www.facebook.com/groups/tuyendungctvhn",
-      "https://www.facebook.com/groups/congdongmarketingvn",
-      "https://www.facebook.com/groups/khoinghiepkinhdoanh2024",
-    ].join("\n");
-    const blob = new Blob([templateContent], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "mau_danh_sach_nhom.txt";
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleRemoveGroupFile = () => {
-    setGroupFile(null);
-    if (groupFileInputRef.current) {
-      groupFileInputRef.current.value = "";
-    }
   };
 
   const generatePosts = async () => {
@@ -635,9 +559,8 @@ export default function GroupPostModule() {
             <button
               type="button"
               onClick={() => setAccountPage(1)}
-              className={`size-7 rounded font-semibold transition-colors ${
-                accountPage === 1 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-              }`}
+              className={`size-7 rounded font-semibold transition-colors ${accountPage === 1 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
             >
               1
             </button>
@@ -645,9 +568,8 @@ export default function GroupPostModule() {
               <button
                 type="button"
                 onClick={() => setAccountPage(2)}
-                className={`size-7 rounded font-semibold transition-colors ${
-                  accountPage === 2 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                }`}
+                className={`size-7 rounded font-semibold transition-colors ${accountPage === 2 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                  }`}
               >
                 2
               </button>
@@ -656,9 +578,8 @@ export default function GroupPostModule() {
               <button
                 type="button"
                 onClick={() => setAccountPage(3)}
-                className={`size-7 rounded font-semibold transition-colors ${
-                  accountPage === 3 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                }`}
+                className={`size-7 rounded font-semibold transition-colors ${accountPage === 3 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                  }`}
               >
                 3
               </button>
@@ -746,296 +667,21 @@ export default function GroupPostModule() {
         </div>
       </SectionCard>
 
-      {/* Bước 3 */}
-      <SectionCard number="3" title="Nguồn nhóm">
-        <div className="grid gap-3 md:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => setGroupSource("search")}
-            className={`rounded-xl border p-3.5 text-left transition-colors ${
-              groupSource === "search"
-                ? "border-2 border-primary bg-white shadow-xs"
-                : "border-slate-200 bg-white hover:border-slate-300"
-            }`}
-          >
-            <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
-              <span
-                className={`flex size-3.5 items-center justify-center rounded-full border ${
-                  groupSource === "search" ? "border-2 border-primary bg-white" : "border-slate-300 bg-white"
-                }`}
-              >
-                {groupSource === "search" && <span className="size-1.5 rounded-full bg-primary" />}
-              </span>
-              <Search className="size-4 text-slate-500" />
-              <span>Tìm kiếm nhóm theo từ khóa</span>
-            </div>
-            <p className="mt-1 pl-5.5 text-[10px] text-slate-400">
-              Hệ thống tự động tìm các nhóm liên quan đến từ khóa và đăng bài.
-            </p>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setGroupSource("file")}
-            className={`rounded-xl border p-3.5 text-left transition-colors ${
-              groupSource === "file"
-                ? "border-2 border-primary bg-white shadow-xs"
-                : "border-slate-200 bg-white hover:border-slate-300"
-            }`}
-          >
-            <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
-              <span
-                className={`flex size-3.5 items-center justify-center rounded-full border ${
-                  groupSource === "file" ? "border-2 border-primary bg-white" : "border-slate-300 bg-white"
-                }`}
-              >
-                {groupSource === "file" && <span className="size-1.5 rounded-full bg-primary" />}
-              </span>
-              <span className="flex size-5 items-center justify-center rounded bg-primary text-white">
-                <Link2 className="size-3" />
-              </span>
-              <span>Từ file link nhóm</span>
-            </div>
-            <p className="mt-1 pl-5.5 text-[10px] text-slate-400">
-              Đăng bài vào các nhóm trong file link. Hỗ trợ file .txt, .csv, .xlsx (mỗi dòng 1 link).
-            </p>
-          </button>
-        </div>
-
-        {groupSource === "file" ? (
-          <div className="mt-4 space-y-3">
-            <input
-              ref={groupFileInputRef}
-              type="file"
-              accept=".txt,.csv,.xlsx"
-              className="hidden"
-              onChange={handleGroupFileChange}
-            />
-
-            <div
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={handleGroupFileDrop}
-              className="flex flex-col items-center justify-center rounded-xl border border-dashed border-blue-200 bg-blue-50/20 px-4 py-8 text-center transition-colors hover:bg-blue-50/30"
-            >
-              <div className="mb-2.5 flex size-9 items-center justify-center rounded-full bg-blue-100 text-primary">
-                <FileUp className="size-4.5" />
-              </div>
-              <p className="text-xs font-medium text-slate-600">
-                Kéo thả file vào đây hoặc{" "}
-                <button
-                  type="button"
-                  onClick={() => groupFileInputRef.current?.click()}
-                  className="font-semibold text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary cursor-pointer"
-                >
-                  📂 chọn file từ máy tính
-                </button>
-              </p>
-              <button
-                type="button"
-                onClick={handleDownloadTemplate}
-                className="mt-2 inline-flex items-center gap-1.5 text-xs text-primary hover:underline cursor-pointer"
-              >
-                <Download className="size-3.5" /> Tải file mẫu (.txt / .csv)
-              </button>
-            </div>
-
-            {groupFile && (
-              <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-emerald-100 bg-emerald-50 text-emerald-600">
-                    <FileText className="size-5" />
-                  </div>
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-bold text-slate-800">{groupFile.name}</span>
-                      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
-                        <Check className="size-3 stroke-[2.5]" /> Đã kiểm tra hợp lệ
-                      </span>
-                      <span className="text-[11px] text-slate-400 font-mono">
-                        {groupFile.size ? `${(groupFile.size / 1024).toFixed(1)} KB` : "24.2 KB"}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 text-[11px] text-slate-400">
-                      Đã tự động lọc bỏ {groupFile.dedupCount ?? 5} nhóm trùng lặp &{" "}
-                      {groupFile.invalidCount ?? 4} link hỏng/lỗi
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 self-end sm:self-auto">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => groupFileInputRef.current?.click()}
-                    className="h-8 gap-1.5 border-slate-200 text-xs text-slate-600 hover:bg-slate-50"
-                  >
-                    <RotateCw className="size-3.5 text-slate-500" /> Tải lại
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleRemoveGroupFile}
-                    className="h-8 gap-1.5 border-slate-200 text-xs text-slate-600 hover:border-red-200 hover:bg-red-50 hover:text-red-600"
-                  >
-                    <Trash2 className="size-3.5 text-slate-400" /> Xóa file
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <>
-            <div className="mt-5 flex gap-2">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-                <Input
-                  value={groupSearch}
-                  onChange={(event) => setGroupSearch(event.target.value)}
-                  className="pl-9"
-                />
-              </div>
-              <Button type="button" size="sm">
-                <Search className="mr-1.5 size-3.5" /> Tìm kiếm nhóm
-              </Button>
-            </div>
-            <div className="mt-4 flex flex-wrap items-center gap-2 text-[10px]">
-              <span className="flex items-center gap-1 font-semibold text-slate-600">
-                <ListFilter className="size-3.5 text-primary" /> Bộ lọc nhóm:
-              </span>
-              <span className="rounded border border-slate-200 bg-white px-3 py-2 text-slate-500">
-                Thành viên từ: <strong className="ml-3 text-slate-700">50000</strong> TV
-              </span>
-              {["> 10K", "> 50K TV", "> 100K TV"].map((item) => (
-                <button
-                  type="button"
-                  key={item}
-                  className={`rounded border px-3 py-2 font-semibold ${
-                    item === "> 50K TV"
-                      ? "border-primary bg-primary text-white"
-                      : "border-slate-200 bg-white text-slate-500"
-                  }`}
-                >
-                  {item}
-                </button>
-              ))}
-              <SelectField className="h-8 w-auto">
-                <option>Tất cả loại nhóm</option>
-                <option>Nhóm công khai</option>
-              </SelectField>
-              <span className="rounded bg-blue-50 px-3 py-2 font-semibold text-primary">
-                <Check className="mr-1 inline size-3" />
-                Áp dụng bộ lọc
-              </span>
-              <button type="button" className="px-2 py-2 text-slate-500">
-                Đặt lại
-              </button>
-            </div>
-
-            <div className="mt-4 flex flex-wrap gap-2">
-              <div className="relative min-w-[220px] flex-1">
-                <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-                <Input
-                  value={groupFilter}
-                  onChange={(event) => setGroupFilter(event.target.value)}
-                  placeholder="Lọc nhóm trong kết quả..."
-                  className="h-8 pl-9"
-                />
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setSelectedGroupKeys(filteredGroups.map((group) => group.key))}
-              >
-                <Check className="mr-1 size-3.5" /> Chọn tất cả
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="border-red-200 text-red-500 hover:bg-red-50 hover:text-red-600"
-                onClick={() => setSelectedGroupKeys([])}
-              >
-                <Trash2 className="mr-1 size-3.5" /> Xóa nhóm đã chọn
-              </Button>
-              <Button type="button" size="sm" variant="outline" className="text-primary">
-                <Plus className="mr-1 size-3.5" /> Thêm nhóm thủ công
-              </Button>
-            </div>
-
-            <div className="my-4 flex items-center justify-between text-[10px]">
-              <span className="font-semibold text-emerald-600">● Tìm thấy 68 nhóm phù hợp</span>
-              <span className="text-slate-400">Đang hiển thị {filteredGroups.length} nhóm / trang</span>
-            </div>
-
-            <div className="overflow-hidden rounded-lg border border-slate-200">
-              <div className="overflow-auto">
-                <table className="w-full min-w-[760px] text-left text-[10px]">
-                  <thead className="bg-slate-50 text-slate-500">
-                    <tr className="border-b border-slate-200">
-                      <th className="w-10 px-3 py-3">
-                        <Checkbox
-                          checked={filteredGroups.every((group) => selectedGroupKeys.includes(group.key))}
-                          onCheckedChange={(checked) =>
-                            setSelectedGroupKeys(checked ? filteredGroups.map((group) => group.key) : [])
-                          }
-                        />
-                      </th>
-                      <th className="w-10 px-2 py-3 font-semibold">STT</th>
-                      <th className="px-3 py-3 font-semibold">Tên nhóm & Link UID</th>
-                      <th className="px-3 py-3 font-semibold">Tần suất/ngày</th>
-                      <th className="px-3 py-3 font-semibold">Thành viên</th>
-                      <th className="w-16 px-3 py-3 text-center font-semibold">Thao tác</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredGroups.map((group) => (
-                      <tr
-                        key={group.key}
-                        className={selectedGroupKeys.includes(group.key) ? "bg-blue-50/20" : "bg-white"}
-                      >
-                        <td className="px-3 py-2.5">
-                          <Checkbox
-                            checked={selectedGroupKeys.includes(group.key)}
-                            onCheckedChange={(checked) => toggleGroup(group.key, checked)}
-                          />
-                        </td>
-                        <td className="px-2 py-2.5 text-slate-400">{group.id}</td>
-                        <td className="px-3 py-2.5">
-                          <p className="font-semibold text-slate-700">{group.name}</p>
-                          <a
-                            href={`https://${group.url}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="mt-0.5 inline-flex items-center gap-1 text-primary"
-                          >
-                            {group.url}
-                            <ExternalLink className="size-2.5" />
-                          </a>
-                        </td>
-                        <td className="px-3 py-2.5 text-slate-500">{group.frequency}</td>
-                        <td className="px-3 py-2.5 font-semibold text-slate-600">
-                          {group.members} TV
-                        </td>
-                        <td className="px-3 py-2.5 text-center">
-                          <button
-                            type="button"
-                            onClick={() => toggleGroup(group.key, false)}
-                            className="text-slate-400 hover:text-red-500"
-                          >
-                            <Trash2 className="size-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </>
-        )}
-      </SectionCard>
+      {/* Bước 3: Nguồn nhóm - Đã tách thành file GroupSourceSection.jsx riêng */}
+      <GroupSourceSection
+        groupSource={groupSource}
+        setGroupSource={setGroupSource}
+        groupFile={groupFile}
+        setGroupFile={setGroupFile}
+        groupSearch={groupSearch}
+        setGroupSearch={setGroupSearch}
+        groupFilter={groupFilter}
+        setGroupFilter={setGroupFilter}
+        selectedGroupKeys={selectedGroupKeys}
+        setSelectedGroupKeys={setSelectedGroupKeys}
+        customGroups={customGroups}
+        setCustomGroups={setCustomGroups}
+      />
 
       {/* Bước 4 */}
       <SectionCard number="4" title="Chọn media (ảnh/video)">
@@ -1123,9 +769,8 @@ export default function GroupPostModule() {
                 type="button"
                 key={index}
                 onClick={() => setActivePost(index)}
-                className={`h-9 min-w-20 flex-1 text-[10px] font-semibold ${
-                  activePost === index ? "bg-primary text-white" : "text-slate-500 hover:bg-white"
-                }`}
+                className={`h-9 min-w-20 flex-1 text-[10px] font-semibold ${activePost === index ? "bg-primary text-white" : "text-slate-500 hover:bg-white"
+                  }`}
               >
                 Bài {index + 1}
               </button>

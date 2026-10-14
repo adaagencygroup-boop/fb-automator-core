@@ -1,4 +1,27 @@
-from modules.module_07_group_spam.worker import GroupSpamWorker
 from modules.module_07_group_spam.api import router
+from modules.module_07_group_spam.group_source import (
+    clean_group_url,
+    get_posted_group_keys,
+    get_sample_template,
+    parse_group_file_content,
+    search_facebook_groups,
+)
 
-__all__ = ["GroupSpamWorker", "router"]
+
+def __getattr__(name: str):
+    if name == "GroupSpamWorker":
+        from modules.module_07_group_spam.worker import GroupSpamWorker
+
+        return GroupSpamWorker
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = [
+    "GroupSpamWorker",
+    "router",
+    "clean_group_url",
+    "get_posted_group_keys",
+    "get_sample_template",
+    "parse_group_file_content",
+    "search_facebook_groups",
+]

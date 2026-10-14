@@ -23,3 +23,22 @@ export function generateGroupPosts(data) {
 export async function runGroupCampaign(data) {
   return api.post("/api/groups/campaign", data);
 }
+
+export function parseGroupFileSource(data) {
+  return api.post("/api/groups/source/parse", data);
+}
+
+export function uploadGroupSourceFile(formData) {
+  return api.post("/api/groups/source/upload", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+}
+
+export function searchGroupSource(data) {
+  return api.post("/api/groups/source/search", data);
+}
+
+export function getGroupPostingHistory() {
+  return api.get("/api/groups/source/history");
+}
+
