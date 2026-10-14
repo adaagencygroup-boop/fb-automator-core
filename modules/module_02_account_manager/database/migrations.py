@@ -81,3 +81,8 @@ def migrate(engine):
             _migrate_credentials(conn, engine)
         if 3 not in versions:
             _migrate_unowned_accounts(conn, engine)
+        if 4 not in versions:
+            columns = {column["name"] for column in inspect(conn).get_columns("accounts")}
+            if "avatar_url" not in columns:
+                conn.execute(text("ALTER TABLE accounts ADD COLUMN avatar_url TEXT"))
+            conn.execute(text("INSERT INTO account_plugin_schema(version) VALUES (4) ON CONFLICT DO NOTHING"))
