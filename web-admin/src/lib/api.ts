@@ -172,6 +172,13 @@ async function fetchApi(path: string, options?: RequestInit, allowRefresh = true
     const isSessionRevoked = /session_revoked|revoked/i.test(rawDetail);
     const skipRefresh = ["/admin/login", "/auth/refresh", "/auth/logout"].some((part) => path.includes(part));
 
+    // A late failure from an old session must not clear a newer login/refresh.
+    if (typeof window !== "undefined" && token && localStorage.getItem("admin_token") !== token &&
+        (res.status === 401 || isLocked || (res.status === 403 && path.includes("/auth/refresh")))) {
+      if (allowRefresh && !skipRefresh && localStorage.getItem("admin_token")) return fetchApi(path, options, false);
+      throw new ApiError("Phản hồi thuộc phiên đăng nhập cũ.", 409, "AUTH_SESSION_CHANGED");
+    }
+
     if (res.status === 401 && allowRefresh && !skipRefresh && !isLocked && !isSessionRevoked &&
         typeof window !== "undefined" && token && !sessionStorage.getItem("pending_logout_modal")) {
       // A concurrent request may already have renewed this token.
@@ -193,7 +200,7 @@ async function fetchApi(path: string, options?: RequestInit, allowRefresh = true
         window.location.href = `/login?error=${encodeURIComponent("Tài khoản của bạn đã bị khóa")}`;
       } else if (res.status === 401 && isSessionRevoked) {
         localStorage.removeItem("admin_token");
-        const msg = "Phiên làm việc đã hết hạn hoặc thông tin đăng nhập đã thay đổi. Vui lòng đăng nhập lại.";
+        const msg = "Phiên đã bị thu hồi: tài khoản đăng nhập ở phiên khác, đã đăng xuất hoặc thông tin bảo mật đã thay đổi. Vui lòng đăng nhập lại.";
         sessionStorage.setItem("auth_error", msg);
         window.location.href = `/login?error=${encodeURIComponent(msg)}`;
       } else if ((res.status === 401 && !path.includes("/auth/logout")) || (res.status === 403 && path.includes("/auth/refresh"))) {
@@ -256,8 +263,8 @@ export interface AdminMe {
 
 export const api = {
   refreshAdmin: refreshAdminToken,
-  adminLogin: (username: string, password: string) =>
-    fetchApi(`/api/v1/admin/login?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`, { method: "POST" }),
+  adminLogin: (username: string, password: string, rememberMe = true) =>
+    fetchApi("/api/v1/admin/login", { method: "POST", body: JSON.stringify({ username, password, remember_me: rememberMe }) }),
 
   getAdminMe: async (): Promise<AdminMe> => {
     const data: AdminMe = await fetchApi("/api/v1/admin/me");
@@ -334,7 +341,7 @@ export const api = {
     }),
 
   logout: (): Promise<{ success: boolean; message: string }> =>
-    fetchApi("/api/v1/auth/logout", { method: "POST" }),
+    fetchApi("/api/v1/auth/logout", { method: "POST", headers: { "X-Auth-Client": "admin" } }),
 
   getActivityLogs: (limit = 200): Promise<ActivityLog[]> =>
     fetchApi(`/api/v1/admin/activity-logs?limit=${limit}`),

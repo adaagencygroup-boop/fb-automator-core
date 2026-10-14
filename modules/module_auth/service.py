@@ -1,4 +1,5 @@
 """Luồng user/admin giống vps-license-server: pending -> duyệt hạn -> login + HWID -> thu hồi phiên."""
+import logging
 import math
 import os
 import re
@@ -132,6 +133,7 @@ def revoke_active_sessions(user_id: int, at=None) -> None:
 def _open_session(user, request: Optional[Request], token: str):
     now = utcnow()
     revoke_active_sessions(user["id"], now)
+    logging.getLogger("uvicorn.error").info("Auth: previous sessions revoked on login user_id=%s", user["id"])
     ua = request.headers.get("user-agent", "") if request else ""
     device, browser, os_name = detect_device(ua)
     ip_address = _client_ip(request)
@@ -402,7 +404,7 @@ def admin_login(username, password, request: Optional[Request], remember_me: boo
     if username == admin_username() and password == admin_password():
         user = ensure_admin()
         access, refresh, ip_address, device, browser, os_name = issue_browser_tokens(user, request, remember_me)
-        token = create_access_token({"sub": username, "role": "admin", "uid": user["id"], "sid": decode_token(access)["sid"], "typ": "access"})
+        token = access
         log_activity(username, "admin", "login", change_detail=f"IP: {ip_address} ({device} / {browser} / {os_name})",
                      ip_address=ip_address, user_agent=request.headers.get("user-agent", "") if request else "")
         return {
@@ -422,7 +424,7 @@ def admin_login(username, password, request: Optional[Request], remember_me: boo
         if user.get("status") not in ("approved", "ACTIVE"):
             raise HTTPException(403, "Tài khoản admin đang bị khóa hoặc chưa được duyệt")
         access, refresh, ip_address, device, browser, os_name = issue_browser_tokens(user, request, remember_me)
-        token = create_access_token({"sub": user["username"], "role": user.get("role"), "uid": user["id"], "sid": decode_token(access)["sid"], "typ": "access"})
+        token = access
         log_activity(user["username"], user.get("role"), "login",
                      change_detail=f"IP: {ip_address} ({device} / {browser} / {os_name})",
                      ip_address=ip_address, user_agent=request.headers.get("user-agent", "") if request else "")
@@ -442,7 +444,9 @@ def token_from_request(authorization: Optional[str], request: Optional[Request] 
     if authorization and authorization.startswith("Bearer "):
         return authorization[7:].strip()
     if request is not None:
-        return request.cookies.get("fb_access") or ""
+        if request.headers.get("x-auth-client") == "user":
+            return request.cookies.get("fb_user_access") or ""
+        return request.cookies.get("fb_user_access") or request.cookies.get("fb_access") or ""
     return ""
 
 
@@ -460,6 +464,10 @@ def bearer_user(authorization: Optional[str], require_session=True, request: Opt
     user = _row(username) if username else None
     if not user:
         raise HTTPException(401, "ACCOUNT_NOT_FOUND")
+    if request is not None:
+        expected_user = request.headers.get("x-auth-user-id")
+        if expected_user and str(user["id"]) != expected_user:
+            raise HTTPException(401, "SESSION_IDENTITY_CHANGED")
     if require_session:
         assert_account_status(user)
         if not session_is_active(user, token):

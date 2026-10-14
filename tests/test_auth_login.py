@@ -156,7 +156,7 @@ class LoginTests(unittest.TestCase):
             response = self.client.post("/api/v1/auth/refresh", headers={"X-Auth-Client": "admin"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["access_token"], access)
-        self.assertEqual(self.client.cookies.get("fb_access"), access)
+        self.assertEqual(self.client.cookies.get("fb_admin_access"), access)
         refresh.assert_called_once_with(token)
 
     def test_admin_refresh_rejects_user_role_without_setting_access_cookie(self):
