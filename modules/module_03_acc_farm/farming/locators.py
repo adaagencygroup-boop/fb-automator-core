@@ -82,7 +82,11 @@ FARM_NOTIF = {
         '//div[@role="navigation" or @role="banner"]//*[(@role="button" or @role="link" or self::a) and (starts-with(@aria-label, "Thông báo") or starts-with(@aria-label, "Notifications"))]',
         '//*[(@role="button" or @role="link" or self::a) and (starts-with(@aria-label, "Thông báo") or starts-with(@aria-label, "Notifications"))]',
     ],
-    # Thông báo chưa đọc: hàng có nhãn trợ năng "Chưa đọc"/"Unread" (cần kiểm chứng trên tài khoản thật)
+    # Bảng thông báo đang mở: dialog có tab Tất cả / Chưa đọc (đã kiểm chứng 2026-10-14, dạng thả xuống trên trang chủ)
+    "panel": [
+        '//div[@role="dialog"][.//*[normalize-space()="Unread" or normalize-space()="Chưa đọc"]]',
+    ],
+    # Thông báo chưa đọc: hàng có nhãn trợ năng "Chưa đọc"/"Unread" (đã khớp trên tài khoản thật 2026-10-14)
     "unread_items": [
         '//div[@role="dialog"]//div[@role="row"][.//*[normalize-space()="Chưa đọc" or normalize-space()="Unread"]]//a[@role="link"]',
         '//div[@role="dialog"]//a[@role="link"][.//*[normalize-space()="Chưa đọc" or normalize-space()="Unread"]]',

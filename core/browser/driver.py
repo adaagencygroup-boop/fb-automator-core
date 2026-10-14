@@ -105,6 +105,22 @@ def _register_bridge(key: str, bridge: ProxyBridge):
         _active_bridges[key] = bridge
 
 
+def register_active_bridge(uid: str, bridge: ProxyBridge, owner: Optional[str] = None):
+    """Đăng ký proxy bridge đang chạy cho UID."""
+    _register_bridge(profile_key(uid, owner), bridge)
+
+
+def get_active_bridge(uid: str, owner: Optional[str] = None) -> Optional[ProxyBridge]:
+    """Lấy proxy bridge đang chạy của UID nếu có."""
+    with _active_bridges_lock:
+        return _active_bridges.get(profile_key(uid, owner))
+
+
+def close_bridge_for_uid(uid: str, owner: Optional[str] = None):
+    """Đóng proxy bridge của UID nếu có."""
+    _close_bridge(profile_key(uid, owner))
+
+
 def _close_bridge(key: str):
     with _active_bridges_lock:
         bridge = _active_bridges.pop(key, None)
@@ -317,18 +333,21 @@ def open_browser(
         try:
             proxy_info = parse_proxy(str(proxy).strip())
             if proxy_info:
+                proto = proxy_info.get("protocol", "http")
+                _notify(on_log, "info", f"🌐 [{uid}] Đang kiểm tra kết nối Proxy ({proto.upper()}): {proxy_info['host']}:{proxy_info['port']}...")
                 logger.info(f"[{uid}] Pre-flight testing proxy: {proxy_info['server']} (auth={proxy_info['has_auth']})...")
                 res = test_proxy_connectivity(proxy_info, timeout=6)
                 proxy_mode = res.get("mode", "full")
                 proxy_egress_ip = res.get("egress_ip") or None
 
-                # Chrome không nhận user/pass trong --proxy-server: đi qua bridge 127.0.0.1 tự gắn Proxy-Authorization
-                if proxy_info["has_auth"]:
+                # Chrome không nhận user/pass trong --proxy-server hoặc SOCKS5: đi qua bridge 127.0.0.1
+                if proxy_info["has_auth"] or proto == "socks5":
                     bridge = ProxyBridge(
                         upstream_host=proxy_info["host"],
                         upstream_port=proxy_info["port"],
                         username=proxy_info["username"],
                         password=proxy_info["password"],
+                        protocol=proto,
                     )
                     bridge_port = bridge.start()
                     _register_bridge(key, bridge)
@@ -337,14 +356,14 @@ def open_browser(
                     options.add_argument(f"--proxy-server={proxy_info['server']}")
                 proxy_applied = True
                 ip_note = "chỉ cho phép Facebook" if proxy_mode == "facebook_only" else f"Egress IP: {proxy_egress_ip or 'OK'}"
-                _notify(on_log, "info", f"[{uid}] Sử dụng Proxy: {proxy_info['host']}:{proxy_info['port']} ({ip_note})")
+                _notify(on_log, "info", f"🌐 [{uid}] Sử dụng Proxy ({proto.upper()}): {proxy_info['host']}:{proxy_info['port']} ({ip_note})")
         except Exception as proxy_err:
             _close_bridge(key)
             if not allow_direct_fallback:
                 raise ProxyConnectionError(f"Proxy không hoạt động: {proxy_err}") from proxy_err
             # Không ghi chuỗi proxy gốc ra log vì có thể chứa user/pass
             logger.warning(f"[{uid}] Proxy không hoạt động ({proxy_err}). Chuyển sang IP gốc của máy!")
-            _notify(on_log, "warning", f"[{uid}] Proxy không hoạt động ({proxy_err}) — chuyển sang IP gốc của máy!")
+            _notify(on_log, "warning", f"⚠️ [{uid}] Proxy không hoạt động ({proxy_err}) — Tự động chuyển sang IP gốc của máy!")
             proxy_applied = False
             proxy_mode = "none"
             proxy_egress_ip = None
@@ -462,6 +481,11 @@ def load_cookies(driver, cookie_string: str):
     except Exception:
         pass
     logger.info(f"Loaded {len(cookie_string.split(';'))} cookies")
+
+
+# Alias tương thích ngược cho Module 02
+create_driver = open_browser
+
 
 
 def wait_and_find(driver, locators: list, timeout: int = 15):

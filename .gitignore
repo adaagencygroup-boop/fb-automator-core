@@ -107,3 +107,4 @@ src-tauri/binaries/*.exe
 .pytest_cache/
 .coverage
 htmlcov/
+test-results/

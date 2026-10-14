@@ -122,6 +122,7 @@ export default function AccountTable({
   tableRef, total = 0, hasMore = false, isLoadingMore = false, moreError, onLoadMore, onRetryMore,
   searchTerm, setSearchTerm, accountFilter, setAccountFilter, loginFilter, setLoginFilter,
   isLoading = false,
+  isRefreshing = false,
   loadError = null,
   onRetry,
   selectedUids = [],
@@ -321,8 +322,9 @@ export default function AccountTable({
       </div>
 
       {/* 2. Section - Data Table (Khung cuộn hiển thị 10 dòng tài khoản) */}
-      <div ref={scrollRef} className="w-full overflow-x-auto max-h-[605px] overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#4B8EFF]/60 hover:[&::-webkit-scrollbar-thumb]:bg-[#2563EB] [&::-webkit-scrollbar-thumb]:rounded-full">
-        <table aria-busy={isLoading} className="w-full table-fixed border-collapse min-w-[960px]">
+      <div className="relative w-full">
+        <div ref={scrollRef} className="w-full overflow-x-auto max-h-[605px] overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#4B8EFF]/60 hover:[&::-webkit-scrollbar-thumb]:bg-[#2563EB] [&::-webkit-scrollbar-thumb]:rounded-full">
+          <table aria-busy={isLoading || isRefreshing} className="w-full table-fixed border-collapse min-w-[960px]">
           <colgroup>
             <col className="w-[4%]" />
             <col className="w-[5%]" />
@@ -644,6 +646,15 @@ export default function AccountTable({
         {isLoadingMore && <p role="status" className="p-3 text-center text-sm text-slate-500">Đang tải thêm...</p>}
         {moreError && <div role="alert" className="p-3 text-center text-sm text-red-600">{moreError} <button type="button" onClick={onRetryMore} className="ml-2 text-blue-600 underline">Thử lại</button></div>}
       </div>
+      {isRefreshing && (
+        <div className="absolute inset-0 z-20 bg-white/45 backdrop-blur-[1px] flex items-center justify-center transition-opacity">
+          <div className="inline-flex items-center gap-2.5 px-4 py-2 rounded-xl bg-white/95 shadow-md border border-slate-200 text-xs font-semibold text-slate-700">
+            <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+            <span>Đang làm mới dữ liệu...</span>
+          </div>
+        </div>
+      )}
+    </div>
 
       {/* 3. Section - Bottom Action Bar / Concurrent Threads Controller */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 text-xs">

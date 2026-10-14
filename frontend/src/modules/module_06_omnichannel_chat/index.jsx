@@ -10,6 +10,9 @@ import {
   sendMessage,
   setConversationStarred,
   setConversationTags,
+  markConversationRead,
+  markNotificationRead,
+  reactToMessage,
 } from "./service";
 import PageList from "./components/PageList";
 import ConversationList from "./components/ConversationList";
@@ -119,6 +122,7 @@ export default function OmnichannelChatModule() {
     setActiveConversationId(id);
     // Mở hội thoại -> coi như đã xem
     updateConversation(id, { unread: false });
+    if (!isMock) markConversationRead(id).catch(() => {});
     loadMessages(id);
   };
 
@@ -160,8 +164,10 @@ export default function OmnichannelChatModule() {
     if (!isMock) setConversationTags(conversation.id, tags).catch(() => updateConversation(conversation.id, { tags: current }));
   };
 
-  const openNotification = (id) =>
+  const openNotification = (id) => {
     setNotifications((list) => list.map((n) => (n.id === id ? { ...n, unread: false } : n)));
+    if (!isMock) markNotificationRead(id).catch(() => {});
+  };
 
   return (
     <div className="h-full min-h-[520px] flex flex-col gap-2">
@@ -188,11 +194,12 @@ export default function OmnichannelChatModule() {
             messages={messagesByConversation[activeConversation.id]}
             onSend={(payload) => handleSend(activeConversation.id, payload)}
             onRetry={(message) => deliver(activeConversation.id, message)}
-            onReact={(messageId, emoji) =>
+            onReact={(messageId, emoji) => {
               setThread(activeConversation.id, (list) =>
                 list.map((m) => (m.id === messageId ? { ...m, reaction: m.reaction === emoji ? null : emoji } : m)),
-              )
-            }
+              );
+              if (!isMock) reactToMessage(activeConversation.id, messageId, emoji).catch(() => {});
+            }}
             onToggleStar={() => handleToggleStar(activeConversation)}
             onToggleTag={(tagId) => handleToggleTag(activeConversation, tagId)}
             onMarkUnread={() => {
