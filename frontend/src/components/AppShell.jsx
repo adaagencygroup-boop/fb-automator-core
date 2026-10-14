@@ -6,6 +6,7 @@ import Sidebar from "@/components/Sidebar";
 import Header from "@/components/Header";
 import ConsoleTerminal from "@/components/ConsoleTerminal";
 import AuthGate from "@/components/AuthGate";
+import { SessionContext } from "@/components/SessionContext";
 import api from "@/services/api";
 import { WS_BASE } from "@/config/constants";
 import { findNavItem, findNavItemByPath, pathOf } from "@/config/navigation";
@@ -79,9 +80,9 @@ function Workspace({ session, children }) {
           onLogout={session.logout}
         />
 
-        <main className="flex-1 overflow-y-auto p-6 bg-background">
+        <main className={`flex-1 overflow-y-auto p-6 ${activeTab === "dashboard" ? "bg-[#f7f8ff]" : "bg-background"}`}>
           {user.modules_unlocked ? (
-            children
+            <SessionContext.Provider value={session}>{children}</SessionContext.Provider>
           ) : (
             <div className="mx-auto max-w-lg rounded-xl border border-border bg-white p-6 shadow-sm">
               <h2 className="text-lg font-bold tracking-tight text-sky-600">Chưa mở được các module</h2>

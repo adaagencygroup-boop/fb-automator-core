@@ -69,11 +69,27 @@ class ProxyParserTests(unittest.TestCase):
         self.assertEqual(result["password"], "p@ssword")  # URL-decode thành công
         self.assertTrue(result["has_auth"])
 
-    def test_reject_socks_protocols(self):
-        with self.assertRaises(ProxyFormatError):
-            parse_proxy("socks5://127.0.0.1:1080")
+    def test_socks_protocols_handling(self):
+        # SOCKS4 vẫn bị từ chối
         with self.assertRaises(ProxyFormatError):
             parse_proxy("socks4://127.0.0.1:1080")
+
+        # SOCKS5 hợp lệ không auth
+        res = parse_proxy("socks5://127.0.0.1:1080")
+        self.assertIsNotNone(res)
+        self.assertEqual(res["scheme"], "socks5")
+        self.assertEqual(res["protocol"], "socks5")
+        self.assertEqual(res["host"], "127.0.0.1")
+        self.assertEqual(res["port"], 1080)
+        self.assertFalse(res["has_auth"])
+
+        # SOCKS5 hợp lệ có auth
+        res_auth = parse_proxy("socks5://user:pass@127.0.0.1:1080")
+        self.assertIsNotNone(res_auth)
+        self.assertEqual(res_auth["scheme"], "socks5")
+        self.assertEqual(res_auth["username"], "user")
+        self.assertEqual(res_auth["password"], "pass")
+        self.assertTrue(res_auth["has_auth"])
 
     def test_reject_invalid_ports(self):
         with self.assertRaises(ProxyFormatError):
@@ -207,6 +223,68 @@ class LocalProxyBridgeTests(unittest.TestCase):
         self.assertTrue(len(connect_received) > 0)
         expected_auth = base64.b64encode(b"bob:pwd999").decode("ascii")
         self.assertIn(f"Proxy-Authorization: Basic {expected_auth}", connect_received[0].decode("latin-1"))
+
+    def test_bridge_handles_socks5_upstream_tunnel(self):
+        """Kiểm tra Local Proxy Bridge đóng vai trò adapter chuyển HTTP CONNECT sang SOCKS5 upstream."""
+        socks5_received = []
+
+        mock_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        mock_server.bind(("127.0.0.1", 0))
+        mock_server.listen(1)
+        mock_port = mock_server.getsockname()[1]
+
+        def mock_socks5_server():
+            try:
+                conn, _ = mock_server.accept()
+                # 1. Handshake greeting
+                greet = conn.recv(16)
+                socks5_received.append(greet)
+                # Chấp nhận phương thức 0x02 (User/Pass)
+                conn.sendall(b"\x05\x02")
+
+                # 2. Auth subnegotiation
+                auth_pkt = conn.recv(128)
+                socks5_received.append(auth_pkt)
+                conn.sendall(b"\x01\x00")  # Success
+
+                # 3. CONNECT request
+                connect_pkt = conn.recv(128)
+                socks5_received.append(connect_pkt)
+                # Trả về thành công REP=0x00, BND.ADDR=127.0.0.1:443
+                conn.sendall(b"\x05\x00\x00\x01\x7f\x00\x00\x01\x01\xbb")
+
+                # 4. Echo dữ liệu tunnel
+                data = conn.recv(4096)
+                conn.sendall(b"SOCKS5_ECHO:" + data)
+                conn.close()
+            except Exception:
+                pass
+            finally:
+                mock_server.close()
+
+        upstream_thread = threading.Thread(target=mock_socks5_server, daemon=True)
+        upstream_thread.start()
+
+        bridge = ProxyBridge("127.0.0.1", mock_port, "socksuser", "sockspass", protocol="socks5")
+        bridge_port = bridge.start()
+
+        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client.connect(("127.0.0.1", bridge_port))
+        # Chrome gửi CONNECT HTTP
+        client.sendall(b"CONNECT www.facebook.com:443 HTTP/1.1\r\nHost: www.facebook.com:443\r\n\r\n")
+
+        tunnel_resp = client.recv(4096)
+        self.assertIn(b"200 Connection Established", tunnel_resp)
+
+        # Gửi payload qua tunnel
+        client.sendall(b"HELLOSOCKS5")
+        echo_resp = client.recv(4096)
+        client.close()
+        bridge.close()
+        upstream_thread.join(timeout=2.0)
+
+        self.assertEqual(echo_resp, b"SOCKS5_ECHO:HELLOSOCKS5")
+        self.assertTrue(len(socks5_received) >= 3)
 
 
 class BridgeLifecycleTests(unittest.TestCase):

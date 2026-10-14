@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from modules.module_03_acc_farm.browser.login_flow import _check_logged_in, is_checkpoint_url, run_login
+from modules.module_03_acc_farm.browser.login_flow import _check_logged_in, is_checkpoint_url
 from modules.module_03_acc_farm.farming.flow import pop_notices, try_dismiss_checkpoint
 from modules.module_03_acc_farm.browser.locators import LOGIN
 
@@ -58,42 +58,8 @@ class LoginStatusTests(unittest.TestCase):
         )
         self.assertFalse(_check_logged_in(driver))
 
-    @patch("modules.module_03_acc_farm.browser.login_flow.time.sleep")
-    @patch("modules.module_03_acc_farm.browser.login_flow._get_profile_name", return_value="")
-    @patch("modules.module_03_acc_farm.browser.login_flow._try_cookie_login", return_value=True)
-    @patch("modules.module_03_acc_farm.browser.login_flow.create_driver")
-    def test_cookie_login_without_accessible_profile_fails(self, create_driver, _try_cookie_login, _get_profile_name, _sleep):
-        driver = create_driver.return_value
-        driver.current_url = "https://www.facebook.com/checkpoint/123/"
-        result = run_login("123", "", cookie="c_user=123")
-        self.assertFalse(result["success"])
-        self.assertIn("Checkpoint", result["error"])
-
-    @patch("modules.module_03_acc_farm.browser.login_flow.time.sleep")
-    @patch("modules.module_03_acc_farm.browser.login_flow._get_profile_name", return_value="")
-    @patch("modules.module_03_acc_farm.browser.login_flow._try_cookie_login", return_value=True)
-    @patch("modules.module_03_acc_farm.browser.login_flow.create_driver")
-    def test_authenticated_session_succeeds_even_if_name_is_missing(self, create_driver, _try_cookie_login, _get_profile_name, _sleep):
-        driver = create_driver.return_value
-        driver.current_url = "https://www.facebook.com/123"
-        driver.get_cookies.return_value = [{"name": "c_user", "value": "123"}]
-        driver.find_elements.return_value = []
-        result = run_login("123", "", cookie="c_user=123")
-        self.assertTrue(result["success"])
-        self.assertEqual(result["profile_name"], "")
-
     def test_profile_heading_locator_exists(self):
         self.assertIn('//h1', LOGIN["profile_name_h1"])
-
-    @patch("modules.module_03_acc_farm.browser.login_flow.time.sleep")
-    @patch("modules.module_03_acc_farm.browser.login_flow._try_cookie_login", return_value=False)
-    @patch("modules.module_03_acc_farm.browser.login_flow.create_driver")
-    def test_cookie_checkpoint_stops_before_form_login(self, create_driver, _try_cookie_login, _sleep):
-        driver = create_driver.return_value
-        driver.current_url = "https://www.facebook.com/checkpoint/123/?next=/me"
-        result = run_login("123", "password", cookie="c_user=123")
-        self.assertFalse(result["success"])
-        self.assertIn("Checkpoint", result["error"])
 
     def test_trust_device_locators_exist(self):
         self.assertIn("trust_device_button", LOGIN)

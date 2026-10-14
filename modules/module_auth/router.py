@@ -2,15 +2,19 @@
 import asyncio
 import json
 import os
+from queue import Empty
+import time
 from typing import List, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from modules.module_auth.security import ACCESS_TOKEN_MINUTES, REFRESH_TOKEN_DAYS
+from modules.module_auth.security import decode_token
 
 from modules.module_auth.hwid import get_hwid
+from modules.module_auth.notification_events import subscribe, unsubscribe
 from modules.module_auth.service import (
     admin_login,
     approve_user,
@@ -18,6 +22,7 @@ from modules.module_auth.service import (
     bearer_user,
     change_password,
     create_user_admin,
+    create_registration_ticket,
     dashboard_stats,
     delete_notification,
     delete_notifications,
@@ -29,12 +34,15 @@ from modules.module_auth.service import (
     list_admins,
     list_notifications,
     list_users,
+    login_user,
     logout_token,
     mark_all_notifications,
     mark_notification,
     public_user,
+    pending_login_ticket,
     refresh_access_token,
     register_user,
+    registration_status,
     reject_user,
     require_admin,
     reset_hwid,
@@ -58,6 +66,10 @@ class LicenseBody(BaseModel):
     username: str
     password: str
     hwid: Optional[str] = ""
+
+
+class UserLoginBody(LicenseBody):
+    remember_me: bool = False
 
 
 class LoginBody(BaseModel):
@@ -111,12 +123,13 @@ def _secure_cookie() -> bool:
     return os.environ.get("COOKIE_SECURE", "").lower() in ("1", "true", "yes")
 
 
-def set_auth_cookies(response: Response, access: str, refresh: str) -> None:
+def set_auth_cookies(response: Response, access: str, refresh: str, remember_me: bool = True) -> None:
+    response.delete_cookie("fb_registration", path="/api/v1/auth")
     secure = _secure_cookie()
     response.set_cookie(
         "fb_access",
         access,
-        max_age=ACCESS_TOKEN_MINUTES * 60,
+        max_age=ACCESS_TOKEN_MINUTES * 60 if remember_me else None,
         httponly=True,
         secure=secure,
         samesite="lax",
@@ -125,7 +138,7 @@ def set_auth_cookies(response: Response, access: str, refresh: str) -> None:
     response.set_cookie(
         "fb_refresh",
         refresh,
-        max_age=REFRESH_TOKEN_DAYS * 24 * 60 * 60,
+        max_age=REFRESH_TOKEN_DAYS * 24 * 60 * 60 if remember_me else None,
         httponly=True,
         secure=secure,
         samesite="lax",
@@ -136,6 +149,13 @@ def set_auth_cookies(response: Response, access: str, refresh: str) -> None:
 def clear_auth_cookies(response: Response) -> None:
     response.delete_cookie("fb_access", path="/")
     response.delete_cookie("fb_refresh", path="/api/v1/auth")
+    response.delete_cookie("fb_registration", path="/api/v1/auth")
+
+
+def set_registration_cookie(response: Response, ticket: str):
+    clear_auth_cookies(response)
+    response.set_cookie("fb_registration", ticket, max_age=86400, httponly=True,
+                        secure=_secure_cookie(), samesite="lax", path="/api/v1/auth")
 
 
 @auth_router.get("/hwid")
@@ -144,8 +164,25 @@ def read_hwid():
 
 
 @auth_router.post("/register", status_code=201)
-def register(body: RegisterBody):
-    return register_user(body.username, body.password, body.contact_info, body.hwid)
+def register(body: RegisterBody, response: Response):
+    hwid = get_hwid()
+    data = register_user(body.username, body.password, body.contact_info, hwid)
+    set_registration_cookie(response, create_registration_ticket(body.username.strip(), data["user_id"], hwid))
+    return data
+
+
+@auth_router.get("/registration-status")
+def read_registration_status(request: Request):
+    hwid = get_hwid()
+    for name in ("fb_refresh", "fb_registration"):
+        ticket = request.cookies.get(name)
+        if ticket:
+            try:
+                return registration_status(ticket, hwid, allow_refresh=name == "fb_refresh")
+            except HTTPException as error:
+                if error.status_code != 401:
+                    raise
+    raise HTTPException(401, "Phiên kiểm tra đăng ký đã hết hạn. Vui lòng đăng nhập lại.")
 
 
 @auth_router.post("/verify-license")
@@ -155,19 +192,39 @@ def verify(body: LicenseBody, request: Request, response: Response):
     return data
 
 
+@auth_router.post("/login")
+def login(body: UserLoginBody, request: Request, response: Response):
+    hwid = get_hwid()
+    try:
+        data = login_user(body.username, body.password, hwid, request, body.remember_me)
+    except HTTPException as error:
+        if error.detail not in ("ACCOUNT_PENDING", "ACCOUNT_BANNED", "ACCOUNT_LOCKED", "ERR_HWID_MISMATCH"):
+            raise
+        result = JSONResponse(status_code=error.status_code, content={"detail": error.detail})
+        set_registration_cookie(result, pending_login_ticket(body.username, hwid))
+        return result
+    set_auth_cookies(response, data.pop("access_token"), data.pop("refresh_token"), body.remember_me)
+    return data
+
+
 @auth_router.post("/refresh")
 def refresh(request: Request, response: Response):
-    access = refresh_access_token(request.cookies.get("fb_refresh", ""))
+    refresh_token = request.cookies.get("fb_refresh", "")
+    access = refresh_access_token(refresh_token)
+    admin_client = request.headers.get("x-auth-client") == "admin"
+    if admin_client and decode_token(access).get("role") not in ("admin", "ADMIN"):
+        raise HTTPException(403, "Chỉ admin mới được thao tác")
+    remember_me = decode_token(refresh_token).get("remember_me", True)
     response.set_cookie(
         "fb_access",
         access,
-        max_age=ACCESS_TOKEN_MINUTES * 60,
+        max_age=ACCESS_TOKEN_MINUTES * 60 if remember_me else None,
         httponly=True,
         secure=_secure_cookie(),
         samesite="lax",
         path="/",
     )
-    return {"ok": True}
+    return {"ok": True, "access_token": access} if admin_client else {"ok": True}
 
 
 @auth_router.get("/me")
@@ -316,14 +373,38 @@ async def hwid_reset(user_id: int, request: Request):
 
 
 @admin_router.get("/notifications/stream")
-async def notification_stream():
-    """EventSource của web-admin không gửi Bearer. Giữ kết nối và báo connected."""
+async def notification_stream(request: Request):
+    """Cookie-authenticated SSE; registration events are sent only after commit."""
+    def validate_stream_user():
+        refresh = request.cookies.get("fb_refresh")
+        authorization = request.headers.get("authorization")
+        if refresh and not authorization:
+            authorization = f"Bearer {refresh_access_token(refresh)}"
+        user = bearer_user(authorization, request=request)
+        if user.get("role") not in ("admin", "ADMIN"):
+            raise HTTPException(403, "Chỉ admin mới được thao tác")
+
+    await asyncio.to_thread(validate_stream_user)
 
     async def events():
-        yield f"data: {json.dumps({'type': 'connected'})}\n\n"
-        while True:
-            await asyncio.sleep(25)
-            yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+        queue = subscribe()
+        heartbeat_at = time.monotonic()
+        try:
+            yield f"data: {json.dumps({'type': 'connected'})}\n\n"
+            while not await request.is_disconnected():
+                if time.monotonic() - heartbeat_at >= 25:
+                    try:
+                        await asyncio.to_thread(validate_stream_user)
+                    except HTTPException:
+                        break
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                    heartbeat_at = time.monotonic()
+                try:
+                    yield f"data: {json.dumps(queue.get_nowait())}\n\n"
+                except Empty:
+                    await asyncio.sleep(0.5)
+        finally:
+            unsubscribe(queue)
 
     return StreamingResponse(
         events(),

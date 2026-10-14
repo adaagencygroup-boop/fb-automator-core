@@ -45,6 +45,10 @@ data/module_02_account_manager/
 logs/
 logs/*.txt
 logs/*.log
+logs/login-*.png
+logs/register-*.png
+logs/pending-*.png
+logs/locked-*.png
 logs/*.log.*
 *.log
 npm-debug.log*

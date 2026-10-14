@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, LogOut, Info, AlertCircle, X, Loader2 } from "lucide-react";
+import { AlertTriangle, Info, AlertCircle, X, Loader2 } from "lucide-react";
 import { Button } from "./button";
 
 const variantStyles = {
@@ -46,6 +46,11 @@ export default function ConfirmDialog({
   cancelText = "Hủy bỏ",
   variant = "danger",
   loading = false,
+  secondaryText,
+  onSecondaryConfirm,
+  confirmDisabled = false,
+  hideConfirm = false,
+  loadingAction = "confirm",
   icon,
 }) {
   const dialogRef = useRef(null);
@@ -79,7 +84,10 @@ export default function ConfirmDialog({
     >
       <div
         ref={dialogRef}
-        className="relative w-full max-w-[440px] rounded-2xl p-6 shadow-2xl border border-border bg-white text-card-foreground animate-in zoom-in-95 duration-200"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
+        className={`relative w-full ${secondaryText ? "max-w-[560px]" : "max-w-[440px]"} rounded-2xl p-6 shadow-2xl border border-border bg-white text-card-foreground animate-in zoom-in-95 duration-200`}
       >
         {!loading && (
           <button
@@ -100,7 +108,7 @@ export default function ConfirmDialog({
           </div>
 
           <div className="min-w-0 flex-1 pr-6">
-            <h3 className="text-base font-bold text-slate-900 leading-snug">
+            <h3 id="confirm-dialog-title" className="text-base font-bold text-slate-900 leading-snug">
               {title}
             </h3>
             <p className="mt-1.5 text-xs text-slate-500 leading-relaxed break-words">
@@ -109,7 +117,7 @@ export default function ConfirmDialog({
           </div>
         </div>
 
-        <div className="mt-6 flex items-center justify-end gap-2.5">
+        <div className="mt-6 flex flex-wrap items-center justify-end gap-2.5">
           <Button
             type="button"
             variant="outline"
@@ -120,15 +128,29 @@ export default function ConfirmDialog({
             {cancelText}
           </Button>
 
-          <button
+          {secondaryText && !hideConfirm && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onSecondaryConfirm}
+              disabled={loading || confirmDisabled}
+              className="h-auto min-h-8 whitespace-normal text-center"
+            >
+              {loading && loadingAction === "secondary" && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {secondaryText}
+            </Button>
+          )}
+
+          {!hideConfirm && <button
             type="button"
             onClick={onConfirm}
-            disabled={loading}
-            className={`inline-flex items-center justify-center gap-1.5 h-8 rounded-md px-4 text-xs font-semibold shadow-sm transition-all active:scale-[0.98] disabled:opacity-50 ${style.confirmBtn}`}
+            disabled={loading || confirmDisabled}
+            className={`inline-flex items-center justify-center gap-1.5 min-h-8 rounded-md px-4 py-1.5 text-xs font-semibold shadow-sm transition-all active:scale-[0.98] disabled:opacity-50 ${style.confirmBtn}`}
           >
-            {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            {loading && loadingAction === "confirm" && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
             <span>{confirmText}</span>
-          </button>
+          </button>}
         </div>
       </div>
     </div>

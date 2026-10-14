@@ -52,11 +52,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       router.push("/login");
       return;
     }
+    let stopped = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
     // Fetch thông tin admin hiện tại
     const loadMe = () => {
+      if (stopped) return;
       api.getAdminMe()
         .then((data) => {
+          if (stopped) return;
           if (data.status === "banned" || data.status === "locked" || data.status === "rejected") {
             localStorage.removeItem("admin_token");
             sessionStorage.setItem("auth_error", "Tài khoản của bạn đã bị khóa");
@@ -66,11 +70,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           setAdminInfo(data);
         })
         .catch((err: any) => {
+          if (stopped) return;
           if (sessionStorage.getItem("pending_logout_modal")) {
             return;
           }
           const rawMsg = err?.message || "";
-          const isHardAuthError = /bị khóa|banned|locked|account_banned|session_revoked|invalid.*token|hết hạn|không hợp lệ|unauthorized/i.test(rawMsg);
+          const isHardAuthError = err?.status === 401 || (err?.status === 403 && /bị khóa|banned|locked/i.test(rawMsg));
           if (isHardAuthError) {
             localStorage.removeItem("admin_token");
             const msg = /bị khóa|banned|locked/i.test(rawMsg)
@@ -80,7 +85,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             window.location.href = `/login?error=${encodeURIComponent(msg)}`;
           } else {
             console.warn("[DashboardLayout] Temporary loadMe error, retrying in 2.5s:", err);
-            setTimeout(() => {
+            retryTimer = setTimeout(() => {
               if (!adminInfoRef.current) {
                 loadMe();
               }
@@ -90,6 +95,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     };
 
     loadMe();
+    const refreshInterval = setInterval(() => {
+      if (stopped || !localStorage.getItem("admin_token") || sessionStorage.getItem("pending_logout_modal")) return;
+      api.refreshAdmin().catch((error) => console.warn("[DashboardLayout] Admin refresh failed:", error));
+    }, 10 * 60 * 1000);
     window.addEventListener("admin_updated", loadMe);
 
     // Đồng bộ trạng thái khi có tab khác cùng trình duyệt đăng nhập tài khoản khác hoặc đăng xuất
@@ -109,7 +118,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     const VPS_BASE = getVpsBase();
     let es: EventSource | null = null;
     try {
-      es = new EventSource(`${VPS_BASE}/api/v1/admin/notifications/stream`);
+      es = new EventSource(`${VPS_BASE}/api/v1/admin/notifications/stream`, { withCredentials: true });
       es.onmessage = (event) => {
         try {
           if (sessionStorage.getItem("pending_logout_modal")) return;
@@ -129,6 +138,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
 
     return () => {
+      stopped = true;
+      clearInterval(refreshInterval);
+      clearTimeout(retryTimer);
       window.removeEventListener("admin_updated", loadMe);
       window.removeEventListener("storage", handleStorageChange);
       if (es) es.close();

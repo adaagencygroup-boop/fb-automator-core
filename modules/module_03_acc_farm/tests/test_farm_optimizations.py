@@ -28,9 +28,9 @@ class WorkerPartialProgressTests(unittest.TestCase):
                 patch.object(farm_routes.adapters, "get_account", return_value=dict(ACCOUNT)), \
                 patch.object(farm_routes.adapters, "get_credentials", return_value=("", None)), \
                 patch.object(farm_routes.random, "uniform", return_value=0), \
-                patch("modules.module_03_acc_farm.browser.manager.create_driver", return_value=driver), \
-                patch("modules.module_03_acc_farm.browser.manager.get_profile_lock", return_value=threading.Lock()), \
-                patch("modules.module_03_acc_farm.browser.manager.extract_cookies_as_string", return_value=""), \
+                patch("core.browser.open_browser", return_value=driver), \
+                patch("core.browser.get_profile_lock", return_value=threading.Lock()), \
+                patch("core.browser.extract_cookies_as_string", return_value=""), \
                 patch("modules.module_03_acc_farm.browser.login_flow.ensure_logged_in", return_value={"success": True}):
             farm_routes._farm_worker("100", 1, farm_routes.FarmScenarioConfig(enabled_add_friends=True), None)
         return logs, updates
@@ -97,9 +97,9 @@ class StopKeepsPartialProgressTests(unittest.TestCase):
                 patch.object(farm_routes.adapters, "get_account", return_value=dict(ACCOUNT)), \
                 patch.object(farm_routes.adapters, "get_credentials", return_value=("", None)), \
                 patch.object(farm_routes.random, "uniform", return_value=0), \
-                patch("modules.module_03_acc_farm.browser.manager.create_driver", return_value=driver), \
-                patch("modules.module_03_acc_farm.browser.manager.get_profile_lock", return_value=threading.Lock()), \
-                patch("modules.module_03_acc_farm.browser.manager.extract_cookies_as_string", return_value=""), \
+                patch("core.browser.open_browser", return_value=driver), \
+                patch("core.browser.get_profile_lock", return_value=threading.Lock()), \
+                patch("core.browser.extract_cookies_as_string", return_value=""), \
                 patch("modules.module_03_acc_farm.browser.login_flow.ensure_logged_in", return_value={"success": True}):
             farm_routes._farm_worker("100", 1, farm_routes.FarmScenarioConfig(enabled_newsfeed=True), None)
         result = logs[0][2]
@@ -238,7 +238,7 @@ class OpenReuseTests(unittest.TestCase):
 
 
 class EnsureLoggedInTests(unittest.TestCase):
-    @patch("modules.module_03_acc_farm.browser.manager.extract_cookies_as_string", return_value="")
+    @patch.object(login_flow, "extract_cookies_as_string", return_value="")
     @patch.object(login_flow, "ensure_personal_profile")
     @patch.object(login_flow, "human_sleep")
     @patch.object(login_flow, "_try_cookie_login")
@@ -282,8 +282,8 @@ class GroupDialogLocatorTests(unittest.TestCase):
 
 class ChromedriverPathTests(unittest.TestCase):
     def setUp(self):
-        from modules.module_03_acc_farm.browser import manager
-        self.bm = manager
+        from core.browser import driver
+        self.bm = driver
         self.bm._reset_chromedriver_path()
 
     def tearDown(self):
