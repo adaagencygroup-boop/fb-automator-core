@@ -12,12 +12,27 @@ HWID = None  # Credentials use the existing Module 2 key derivation.
 _open_browser_pending = set()
 _open_browser_pending_lock = threading.Lock()
 
+def _save_logged_in_identity(db, uid, identity):
+    from ..database.repository import AccountRepository
+
+    avatar_url = identity.get("avatar_url")
+    if avatar_url:
+        broadcast("info", f"Đã đọc URL avatar {uid}: {avatar_url}", uid=uid)
+    else:
+        broadcast("warning", f"Không đọc được URL avatar từ trang chủ: {uid}; giữ ảnh cũ nếu có", uid=uid)
+    AccountRepository.update_login_status(
+        db, uid, "logged_in", identity.get("profile_name"), avatar_url=avatar_url,
+    )
+    if avatar_url:
+        broadcast("success", f"Đã lấy và lưu URL avatar: {uid}", uid=uid)
+
+
 def _watch_open_browser_login(driver, uid: str, checks: int = 150, interval: float = 2.0):
     """
     Theo dõi trong nền khi người dùng tự đăng nhập thủ công trên Chrome live.
     checks=150 * 2.0s = 300 giây (5 phút). Tự động lưu cookies và cập nhật login_status.
     """
-    from ..automation.login_flow import _check_logged_in, _get_profile_name, is_checkpoint_url
+    from ..automation.login_flow import _check_logged_in, _get_account_identity, is_checkpoint_url
     from ..automation.browser_manager import extract_cookies_as_string
     from ..database.connection import SessionLocal
     from ..database.repository import AccountRepository as AccountRepo
@@ -50,12 +65,13 @@ def _watch_open_browser_login(driver, uid: str, checks: int = 150, interval: flo
                 continue
 
             # Đã phát hiện c_user đăng nhập thành công
-            profile_name = _get_profile_name(driver)
+            identity = _get_account_identity(driver, uid)
+            profile_name = identity.get("profile_name", "")
             c_str = extract_cookies_as_string(driver)
 
             db = SessionLocal()
             try:
-                AccountRepo.update_login_status(db, uid, "logged_in", profile_name)
+                _save_logged_in_identity(db, uid, identity)
                 if c_str and "c_user" in c_str:
                     AccountRepo.update_cookies(db, uid, c_str)
                     logger.info(f"[{uid}] Live watcher: Đã đồng bộ cookie vào DB ({len(c_str)} ký tự)")
@@ -100,7 +116,7 @@ def _open_live_browser_worker(uid: str):
         human_sleep(2.0, 3.0)
 
         # Nếu chưa login, thực hiện auto-login nếu có mật khẩu/cookie
-        from ..automation.login_flow import _check_logged_in, _try_cookie_login, _is_2fa_required, _handle_2fa, _handle_post_login_popups, is_checkpoint_url, _get_profile_name
+        from ..automation.login_flow import _check_logged_in, _try_cookie_login, _is_2fa_required, _handle_2fa, _handle_post_login_popups, is_checkpoint_url, _get_account_identity
         from ..automation.locators import LOGIN
         from ..automation.browser_manager import wait_and_find, human_type
 
@@ -150,8 +166,9 @@ def _open_live_browser_worker(uid: str):
             _handle_post_login_popups(driver)
 
         if _check_logged_in(driver):
-            profile_name = _get_profile_name(driver)
-            AccountRepo.update_login_status(db, uid, "logged_in", profile_name)
+            identity = _get_account_identity(driver, uid)
+            profile_name = identity.get("profile_name", "")
+            _save_logged_in_identity(db, uid, identity)
             from ..automation.browser_manager import extract_cookies_as_string
             c_str = extract_cookies_as_string(driver)
             if c_str and "c_user" in c_str:
