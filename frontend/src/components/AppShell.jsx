@@ -80,8 +80,8 @@ function Workspace({ session, children }) {
           onLogout={session.logout}
         />
 
-        <main className={`flex-1 overflow-y-auto p-6 ${activeTab === "dashboard" ? "bg-[#f7f8ff]" : "bg-background"}`}>
-          {user.modules_unlocked || activeTab === "dashboard" ? (
+        <main className={`flex-1 overflow-y-auto p-6 ${["dashboard", "profile"].includes(activeTab) ? "bg-[#f7f8ff]" : "bg-background"}`}>
+          {user.modules_unlocked || ["dashboard", "profile"].includes(activeTab) ? (
             <SessionContext.Provider value={session}>{children}</SessionContext.Provider>
           ) : (
             <div className="mx-auto max-w-lg rounded-xl border border-border bg-white p-6 shadow-sm">

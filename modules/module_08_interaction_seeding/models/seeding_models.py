@@ -22,6 +22,7 @@ class SeedingTarget(Base):
     fb_id = Column(String(100), nullable=False)        # UID / Page ID / Post ID sau khi xác thực link
     url = Column(Text, nullable=False)
     display_name = Column(String(255), nullable=True)  # Cột "Tên hiển thị" (Page / Trang cá nhân / Bài viết + fb_id)
+    created_by = Column(Integer, nullable=True)        # users.id (người dùng sở hữu/import link)
     created_at = Column(DateTime, default=utc_now)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
@@ -30,7 +31,7 @@ class SeedingTarget(Base):
     tasks = relationship("SeedingTask", back_populates="target", cascade="all, delete-orphan")
 
     __table_args__ = (
-        UniqueConstraint("target_type", "fb_id", name="unique_seeding_target"),
+        Index("uq_seeding_targets_user", "target_type", "fb_id", "created_by", unique=True),
     )
 
 
@@ -98,17 +99,22 @@ class SeedingCampaignTarget(Base):
     )
 
 
-# 4. Kho bình luận random của chiến dịch (tối đa 50 dòng)
+# 4. Kho bình luận random của chiến dịch (tối đa 50 dòng) hoặc kho bình luận mẫu của user (campaign_id IS NULL)
 class SeedingComment(Base):
     __tablename__ = "seeding_comments"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    campaign_id = Column(Integer, ForeignKey("seeding_campaigns.id", ondelete="CASCADE"), nullable=False)
+    campaign_id = Column(Integer, ForeignKey("seeding_campaigns.id", ondelete="CASCADE"), nullable=True)
+    created_by = Column(Integer, nullable=True)                      # users.id (người dùng sở hữu/import comment)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=utc_now)
 
     # Relationships
     campaign = relationship("SeedingCampaign", back_populates="comments")
+
+    __table_args__ = (
+        Index("idx_seeding_comments_user", "created_by", "campaign_id"),
+    )
 
 
 # 5. Tác vụ nguyên tử: 1 tài khoản x 1 hành động x 1 mục tiêu
