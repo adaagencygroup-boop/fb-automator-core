@@ -747,27 +747,62 @@ class ProxyBridge:
             self._safe_close(client_sock)
 
     def _relay_bidirectional(self, s1: socket.socket, s2: socket.socket):
-        """Relay luồng dữ liệu 2 chiều giữa 2 socket sử dụng select."""
+        """Relay có bộ đệm giới hạn, giữ dữ liệu khi bên nhận chưa sẵn sàng."""
         s1.setblocking(False)
         s2.setblocking(False)
         sockets = [s1, s2]
+        peers = {s1: s2, s2: s1}
+        pending = {s1: bytearray(), s2: bytearray()}
+        read_closed = set()
+        write_closed = set()
+        max_pending = 256 * 1024
 
         while self._running:
             try:
-                rlist, _, xlist = select.select(sockets, [], sockets, 60.0)
-                if xlist or not rlist:
-                    break
+                # Chỉ chuyển EOF sau khi đã gửi hết dữ liệu đang chờ. Nửa kết
+                # nối còn lại vẫn được đọc để nhận phản hồi sau khi upload xong.
+                for source in read_closed:
+                    destination = peers[source]
+                    if not pending[destination] and destination not in write_closed:
+                        destination.shutdown(socket.SHUT_WR)
+                        write_closed.add(destination)
+                if len(read_closed) == 2 and not any(pending.values()):
+                    return
+
+                # Ngừng đọc một chiều khi bộ đệm đầy, nhưng vẫn phục vụ chiều
+                # ngược lại. Không tích toàn bộ video vào RAM khi proxy chậm.
+                readers = [s for s in sockets
+                           if s not in read_closed and len(pending[peers[s]]) < max_pending]
+                writers = [s for s in sockets if pending[s]]
+                rlist, wlist, xlist = select.select(readers, writers, sockets, 60.0)
+                if xlist or not (rlist or wlist):
+                    return
 
                 for s in rlist:
-                    other = s2 if s is s1 else s1
-                    data = s.recv(32768)
+                    destination = peers[s]
+                    try:
+                        data = s.recv(min(32768, max_pending - len(pending[destination])))
+                    except (BlockingIOError, InterruptedError):
+                        continue
                     if not data:
+                        read_closed.add(s)
+                    else:
+                        pending[destination].extend(data)
+
+                for s in wlist:
+                    try:
+                        sent = s.send(pending[s])
+                    except (BlockingIOError, InterruptedError):
+                        continue
+                    if not sent:
                         return
-                    other.sendall(data)
-            except (socket.error, OSError):
-                break
-            except Exception:
-                break
+                    del pending[s][:sent]
+            except InterruptedError:
+                continue
+            except (OSError, ValueError) as exc:
+                if self._running:
+                    logger.debug("[ProxyBridge:%s] Relay stopped: %s", self.port, exc)
+                return
 
     def _safe_close(self, sock: socket.socket):
         self._untrack_socket(sock)
