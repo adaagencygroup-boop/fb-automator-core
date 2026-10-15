@@ -95,6 +95,47 @@ class TestPagination(unittest.TestCase):
         self.assertEqual(found, {"uids": ["1001"]})
         self.assertEqual(self.client.post("/api/accounts/existing-uids", json={"owner_username": "bob", "uids": ["1001"]}).json(), {"uids": []})
 
+    def test_farm_accounts_use_live_or_logged_in_before_pagination(self):
+        expected = set()
+        with self.sessions() as db:
+            for index in range(35):
+                kind = index % 5
+                uid = str(3000 + index)
+                db.add(Account(
+                    uid=uid, user_id="alice", profile_name="Farm " + str(index),
+                    status="NEW" if kind == 1 else "DIE" if kind == 2 else "LIVE",
+                    login_status="LOGGED_IN" if kind in (1, 4) else "ERROR",
+                    status_checked_at=datetime.now() if kind in (0, 2, 4) else None,
+                    proxy="192.0.2.44:1234" if index == 0 else None,
+                ))
+                if kind in (0, 1, 4):
+                    expected.add(uid)
+            db.add(Account(uid="9999", user_id="bob", status="LIVE", status_checked_at=datetime.now()))
+            db.commit()
+
+        found, sizes, cursor = [], [], None
+        while True:
+            params = {"active_only": True}
+            if cursor is not None:
+                params["cursor"] = cursor
+            response = self.page(**params)
+            self.assertEqual(response.status_code, 200)
+            result = response.json()
+            self.assertEqual(result["total"], 21)
+            sizes.append(len(result["accounts"]))
+            found.extend(row["uid"] for row in result["accounts"])
+            self.assertTrue(all(row["status"] == "live" or row["login_status"] == "logged_in" for row in result["accounts"]))
+            if not result["has_more"]:
+                break
+            cursor = result["next_cursor"]
+        self.assertEqual(sizes, [10, 10, 1])
+        self.assertEqual(set(found), expected)
+        self.assertEqual(len(found), len(set(found)))
+        proxy_search = self.page(active_only=True, search="192.0.2.44").json()
+        self.assertEqual([row["uid"] for row in proxy_search["accounts"]], ["3000"])
+        self.assertEqual(self.page(active_only=True, search="Farm 2").json()["total"], 6)
+        self.assertEqual(self.page().json()["total"], 35)
+
     def test_duplicate_outside_first_page_and_defaults(self):
         self.add(11)
         self.assertNotIn("1000", [row["uid"] for row in self.page().json()["accounts"]])

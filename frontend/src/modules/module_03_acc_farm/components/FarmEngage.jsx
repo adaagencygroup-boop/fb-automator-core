@@ -6,7 +6,6 @@ import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
 import { HARD_MAX_THREADS } from "../constants";
 import {
-  getAccounts,
   getFarmSettings,
   getFarmStatus,
   pauseFarm,
@@ -20,6 +19,7 @@ import LogConsole from "./LogConsole";
 import ProgressMonitor from "./ProgressMonitor";
 import ScenarioConfig, { DEFAULT_CONFIG, GROUP_KEYWORD_MAX_LEN, toPayload } from "./ScenarioConfig";
 import { NumberInput, PageTitle } from "./parts";
+import { useFarmAccounts } from "../hooks/useFarmAccounts";
 
 const CONFIG_KEY = "m03.farm.config";
 const THREADS_KEY = "m03.farm.threads";
@@ -51,8 +51,8 @@ function settingsToConfig(settings) {
 }
 
 export default function FarmEngage() {
-  const [accounts, setAccounts] = useState([]);
-  const [accountsLoading, setAccountsLoading] = useState(true);
+  const accountPages = useFarmAccounts();
+  const { knownAccounts, reload: loadAccounts } = accountPages;
   const [selected, setSelected] = useState(() => new Set());
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [threads, setThreads] = useState("5");
@@ -62,17 +62,6 @@ export default function FarmEngage() {
   const wasRunning = useRef(false);
 
   const running = Boolean(status?.running);
-
-  const loadAccounts = useCallback(async () => {
-    setAccountsLoading(true);
-    try {
-      setAccounts(await getAccounts());
-    } catch (err) {
-      toast.error(err.message, "KHÔNG TẢI ĐƯỢC TÀI KHOẢN");
-    } finally {
-      setAccountsLoading(false);
-    }
-  }, []);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -88,7 +77,7 @@ export default function FarmEngage() {
     (async () => {
       const saved = readSaved(CONFIG_KEY);
       const savedThreads = readSaved(THREADS_KEY);
-      const [settings] = await Promise.allSettled([getFarmSettings(), loadAccounts(), loadStatus()]);
+      const [settings] = await Promise.allSettled([getFarmSettings(), loadStatus()]);
       if (cancelled) return;
       setConfig({
         ...DEFAULT_CONFIG,
@@ -100,7 +89,7 @@ export default function FarmEngage() {
     return () => {
       cancelled = true;
     };
-  }, [loadAccounts, loadStatus]);
+  }, [loadStatus]);
 
   // Đang chạy thì hỏi trạng thái định kỳ; vừa chạy xong thì tải lại tài khoản (trạng thái nick có thể đã đổi)
   useEffect(() => {
@@ -128,12 +117,11 @@ export default function FarmEngage() {
 
   const sessionAccounts = useMemo(() => {
     if (!running) return [];
-    const byUid = new Map(accounts.map((a) => [a.uid, a]));
-    return (status?.accounts || []).map((a) => byUid.get(a.uid) || { uid: a.uid, profile_name: a.name });
-  }, [running, status, accounts]);
+    return (status?.accounts || []).map((a) => knownAccounts[a.uid] || { uid: a.uid, profile_name: a.name });
+  }, [running, status, knownAccounts]);
 
   const validate = () => {
-    const uids = accounts.filter((a) => selected.has(a.uid) && isEligible(a)).map((a) => a.uid);
+    const uids = Object.values(knownAccounts).filter((a) => selected.has(a.uid) && isEligible(a)).map((a) => a.uid);
     if (!uids.length) return "Vui lòng chọn ít nhất 1 tài khoản Live + Đã đăng nhập.";
     const enabled = ["enabled_newsfeed", "enabled_watch", "enabled_add_friends", "enabled_join_groups", "enabled_check_notif"];
     if (!enabled.some((k) => config[k])) return "Kịch bản tương tác đang trống. Vui lòng chọn ít nhất 1 hành động.";
@@ -208,8 +196,17 @@ export default function FarmEngage() {
       />
 
       <AccountPicker
-        accounts={running ? sessionAccounts : accounts}
-        loading={accountsLoading}
+        accounts={running ? sessionAccounts : accountPages.accounts}
+        knownAccounts={knownAccounts}
+        total={accountPages.total}
+        search={accountPages.search}
+        onSearchChange={accountPages.changeSearch}
+        loading={accountPages.loading}
+        loadingMore={accountPages.loadingMore}
+        loadError={accountPages.loadError}
+        moreError={accountPages.moreError}
+        hasMore={accountPages.hasMore}
+        onLoadMore={accountPages.loadMore}
         selected={selected}
         onSelectedChange={setSelected}
         onRefresh={loadAccounts}
