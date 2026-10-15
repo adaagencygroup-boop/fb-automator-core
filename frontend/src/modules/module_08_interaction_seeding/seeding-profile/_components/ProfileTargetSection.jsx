@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Link2, FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink } from "lucide-react";
+import { FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink } from "lucide-react";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { toast } from "@/components/ui/toast";
 import ExcelImportModal from "../../_components/ExcelImportModal";
@@ -13,7 +13,6 @@ export default function ProfileTargetSection({
   onClearTargets,
   successMessage,
 }) {
-  const [activeTab, setActiveTab] = useState("manual");
   const [textInput, setTextInput] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
 
@@ -115,34 +114,20 @@ export default function ProfileTargetSection({
   return (
     <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-6 space-y-5">
       {/* Step Header */}
-      <div className="flex items-center gap-3">
-        <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
-          1
-        </span>
-        <h2 className="text-base font-bold text-gray-900">
-          Thêm Trang cá nhân cần seeding
-        </h2>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex items-center gap-2 border-b border-gray-100 pb-3">
-        <button
-          type="button"
-          onClick={() => setActiveTab("manual")}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all ${
-            activeTab === "manual"
-              ? "bg-[#2563EB] text-white shadow-sm shadow-blue-500/20"
-              : "bg-gray-100/80 text-gray-600 hover:bg-gray-200/70"
-          }`}
-        >
-          <Link2 className="w-3.5 h-3.5" />
-          Nhập link trang cá nhân
-        </button>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
+            1
+          </span>
+          <h2 className="text-base font-bold text-gray-900">
+            Thêm Trang cá nhân cần seeding
+          </h2>
+        </div>
 
         <button
           type="button"
           onClick={() => setIsExcelModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-emerald-50 hover:bg-emerald-100/80 text-emerald-700 border border-emerald-200/70 transition-all shadow-sm active:scale-95 cursor-pointer"
+          className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-50 hover:bg-emerald-100/80 text-emerald-700 border border-emerald-200/70 transition-all shadow-sm active:scale-95 cursor-pointer shrink-0"
         >
           <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
           Import từ file (Excel)
