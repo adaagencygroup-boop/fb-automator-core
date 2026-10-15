@@ -80,13 +80,20 @@ async def list_accounts(db: Session = Depends(get_db)):
     return [accounts.serialize(a) for a in Repo.get_all(db)]
 
 @router.get("/page")
-async def page_accounts(limit: int = Query(10, ge=1), cursor: int | None = Query(None, ge=1), search: str = "", status: str = "all", login_status: str = "all", db: Session = Depends(get_db)):
-    from sqlalchemy import or_, func
+async def page_accounts(limit: int = Query(10, ge=1), cursor: int | None = Query(None, ge=1), search: str = "", status: str = "all", login_status: str = "all", active_only: bool = False, db: Session = Depends(get_db)):
+    from sqlalchemy import and_, or_, func
     from ..database.models import Account
     query = Repo.query(db)
+    if active_only:
+        # Match the farm picker: a checked LIVE profile OR a logged-in session.
+        query = query.filter(or_(
+            and_(Account.status == "LIVE", Account.status_checked_at.isnot(None)),
+            Account.login_status == "LOGGED_IN",
+        ))
     if search.strip():
         pattern = "%" + search.strip().lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        query = query.filter(or_(*(func.lower(column).like(pattern, escape="\\") for column in (Account.uid, Account.profile_name, Account.email))))
+        columns = (Account.uid, Account.profile_name, Account.proxy) if active_only else (Account.uid, Account.profile_name, Account.email)
+        query = query.filter(or_(*(func.lower(column).like(pattern, escape="\\") for column in columns)))
     if status not in ("all", "live", "die") or login_status not in ("all", "logged_in", "failed", "not_logged_in"):
         raise HTTPException(422, "Invalid status filter")
     if status != "all":
