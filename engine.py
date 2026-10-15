@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import sys
+from urllib.parse import unquote
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -169,6 +170,7 @@ _PUBLIC_API = {
     "/api/v1/admin/login",
     "/api/facebook/webhook",
     "/api/facebook/config",
+    "/api/groups/source/template",
 }
 
 
@@ -195,16 +197,22 @@ class LicenseMiddleware:
                 key.decode("latin1").lower(): value.decode("latin1")
                 for key, value in scope.get("headers") or []
             }
-            auth = headers.get("authorization")
+            auth = (headers.get("authorization") or "").strip()
             if not auth:
-                # EventSource cannot send custom headers; prefer the user cookie there too.
-                cookie_names = {part.strip().partition("=")[0] for part in headers.get("cookie", "").split(";")}
-                access_cookie = "fb_user_access" if headers.get("x-auth-client") == "user" or "fb_user_access" in cookie_names else "fb_access"
-                for part in headers.get("cookie", "").split(";"):
+                cookie_header = headers.get("cookie") or ""
+                cookie_names = {part.strip().partition("=")[0] for part in cookie_header.split(";")}
+                access_cookie = (
+                    "fb_user_access"
+                    if headers.get("x-auth-client") == "user" or "fb_user_access" in cookie_names
+                    else "fb_access"
+                )
+                token = ""
+                for part in cookie_header.split(";"):
                     name, _, value = part.strip().partition("=")
                     if name == access_cookie and value:
-                        auth = f"Bearer {value}"
-                        break
+                        token = unquote(value.strip().strip('"'))
+                if token:
+                    auth = f"Bearer {token}"
             try:
                 assert_request_module_access(auth, path, method)
             except HTTPException as exc:

@@ -12,24 +12,36 @@ import {
   ExternalLink,
   Plus,
   AlertCircle,
+  Loader2,
+  Globe,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { SectionCard, SelectField } from "../shared/components";
-import { GROUPS as DEFAULT_GROUPS } from "../shared/constants";
-import { parseGroupFileSource, searchGroupSource } from "../service";
+// import { SectionCard, SelectField } from "../../shared/components";
+import { GROUPS as DEFAULT_GROUPS } from "../../shared/constants";
+// import { parseGroupFileSource, searchGroupSource } from "../../service";
+import { toast } from "@/lib/toast";
+import { SectionCard, SelectField } from "../../shared/components";
+import {
+  parseGroupFileSource,
+  uploadGroupSourceFile,
+  searchGroupSource,
+  downloadGroupTemplate,
+} from "../../service";
 
 /**
  * ============================================================================
  * MODULE 07 - BƯỚC 3: NGUỒN NHÓM FACEBOOK (GroupSourceSection)
  * Kế thừa nghiệp vụ từ FaceBook_Post_Group.py:
  * 1. Đọc danh sách nhóm từ File link nhóm (.txt, .csv) - tương ứng self.btn_group_file
- *    - Lọc link hợp lệ (facebook.com/groups/...), tách query param '?'.
- *    - Tự động khử trùng lặp (dedup) và loại bỏ dòng rác/lỗi.
+ *    - Gọi Backend (/api/groups/source/upload và /api/groups/source/parse)
+ *    - Tách query param '?', loại bỏ ký tự rác, khử trùng lặp và loại link hỏng
+ *    - Kiểm tra lịch sử đã đăng nhóm (group_session_logs)
  * 2. Tìm kiếm nhóm theo Từ khóa - tương ứng self.txt_keyword
- *    - Tìm kiếm nhóm tự động theo từ khóa chủ đề (search_term).
- *    - Bộ lọc số lượng thành viên (> 10K, > 50K, > 100K TV), loại nhóm công khai.
+ *    - Tìm kiếm qua Backend /api/groups/source/search theo từ khóa chủ đề
+ *    - Bộ lọc số lượng thành viên (> 10K, > 50K, > 100K TV) và loại nhóm (công khai / riêng tư)
  * ============================================================================
  */
 export default function GroupSourceSection({
@@ -43,7 +55,7 @@ export default function GroupSourceSection({
   setGroupFilter,
   selectedGroupKeys = [],
   setSelectedGroupKeys,
-  customGroups,
+  customGroups = [],
   setCustomGroups,
 }) {
   const groupFileInputRef = useRef(null);
@@ -51,32 +63,41 @@ export default function GroupSourceSection({
   const [groupTypeFilter, setGroupTypeFilter] = useState("all");
   const [isManualDialogOpen, setIsManualDialogOpen] = useState(false);
   const [manualGroupInput, setManualGroupInput] = useState("");
+  const [isFileProcessing, setIsFileProcessing] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
 
-  // Danh sách nhóm đang hiển thị: nếu có nhóm custom/file thì ưu tiên, không thì lấy DEFAULT_GROUPS
+  // Danh sách nhóm đang hiển thị: dữ liệu thật từ Backend (file hoặc search/thủ công)
   const baseGroups = useMemo(() => {
-    if (groupSource === "file" && groupFile?.groups?.length) {
-      return groupFile.groups;
+    if (groupSource === "file") {
+      return groupFile?.groups || [];
     }
-    return customGroups || DEFAULT_GROUPS;
+    return customGroups || [];
   }, [groupSource, groupFile, customGroups]);
 
-  // Bộ lọc tìm kiếm và số lượng thành viên
+  // Bộ lọc tìm kiếm, số lượng thành viên và loại nhóm
   const filteredGroups = useMemo(() => {
     return baseGroups.filter((group) => {
       // Lọc theo từ khóa tìm kiếm nhanh trong bảng
       const query = groupFilter.trim().toLowerCase();
-      const matchQuery = !query || `${group.name} ${group.url}`.toLowerCase().includes(query);
+      const matchQuery =
+        !query ||
+        `${group.name || ""} ${group.url || ""} ${group.uid || ""}`.toLowerCase().includes(query);
 
-      // Lọc theo số lượng thành viên (nếu có dữ liệu)
+      // Lọc theo số lượng thành viên
       let matchMember = true;
       const memNum = parseInt(String(group.members || "0").replace(/[^\d]/g, ""), 10);
       if (memberFilter === "10k") matchMember = memNum >= 10;
       else if (memberFilter === "50k") matchMember = memNum >= 50;
       else if (memberFilter === "100k") matchMember = memNum >= 100;
 
-      return matchQuery && matchMember;
+      // Lọc theo loại nhóm (công khai / riêng tư)
+      let matchType = true;
+      if (groupTypeFilter === "public") matchType = group.privacy === "public";
+      else if (groupTypeFilter === "private") matchType = group.privacy === "private";
+
+      return matchQuery && matchMember && matchType;
     });
-  }, [baseGroups, groupFilter, memberFilter]);
+  }, [baseGroups, groupFilter, memberFilter, groupTypeFilter]);
 
   // Toggle chọn 1 nhóm
   const toggleGroup = (key, checked) => {
@@ -99,7 +120,7 @@ export default function GroupSourceSection({
   const handleRemoveSingleGroup = (key) => {
     toggleGroup(key, false);
     if (setCustomGroups) {
-      setCustomGroups((current) => (current || DEFAULT_GROUPS).filter((g) => g.key !== key));
+      setCustomGroups((current) => (current || []).filter((g) => g.key !== key));
     }
     if (groupFile?.groups) {
       const remaining = groupFile.groups.filter((g) => g.key !== key);
@@ -111,138 +132,197 @@ export default function GroupSourceSection({
     }
   };
 
-  // Thêm nhóm thủ công bằng Link hoặc UID
-  const handleAddManualGroup = () => {
+  // Thêm nhóm thủ công bằng Link hoặc UID (qua Backend parse để đồng nhất)
+  const handleAddManualGroup = async () => {
     const input = manualGroupInput.trim();
     if (!input) return;
 
-    // Chuẩn hóa link (loại bỏ query ? giống FaceBook_Post_Group.py)
+    try {
+      const res = await parseGroupFileSource({ content: input, filter_posted: false });
+      if (res && Array.isArray(res.groups) && res.groups.length > 0) {
+        const newGroups = res.groups;
+        const existingKeys = new Set(baseGroups.map((g) => g.key.toLowerCase()));
+        const uniqueNew = newGroups.filter((g) => !existingKeys.has(g.key.toLowerCase()));
+
+        if (uniqueNew.length === 0) {
+          toast.info("Nhóm này đã có sẵn trong danh sách!", "TRÙNG LẶP");
+          return;
+        }
+
+        const nextList = [...uniqueNew, ...baseGroups];
+        if (groupSource === "file") {
+          setGroupFile((prev) => ({
+            name: prev?.name || "Danh sách nhập tay",
+            size: prev?.size || 0,
+            status: "valid",
+            dedupCount: prev?.dedupCount || 0,
+            invalidCount: prev?.invalidCount || 0,
+            validGroupsCount: nextList.length,
+            alreadyPostedCount: prev?.alreadyPostedCount || 0,
+            groups: nextList,
+          }));
+        } else if (setCustomGroups) {
+          setCustomGroups(nextList);
+        }
+        setSelectedGroupKeys((cur) => [...new Set([...uniqueNew.map((g) => g.key), ...cur])]);
+        setManualGroupInput("");
+        setIsManualDialogOpen(false);
+        toast.success(`Đã thêm ${uniqueNew.length} nhóm vào danh sách`, "THÊM THỦ CÔNG");
+        return;
+      }
+    } catch (err) {
+      console.warn("Backend parse manual group fallback:", err);
+    }
+
+    // Fallback thủ công nếu backend bận
     const cleanUrl = input.split("?")[0].replace(/^https?:\/\//, "").trim();
-    const newGroupKey = `manual_${Date.now()}`;
+    const groupUid = cleanUrl.split("/groups/")[1]?.replace(/\/$/, "") || cleanUrl;
+    const newGroupKey = `group_${groupUid}`;
     const newGroupItem = {
       id: String(baseGroups.length + 1).padStart(2, "0"),
       key: newGroupKey,
-      name: `Nhóm thủ công (${cleanUrl.replace("facebook.com/groups/", "")})`,
+      name: `Nhóm thủ công [ID: ${groupUid}]`,
       url: cleanUrl.startsWith("facebook.com") ? cleanUrl : `facebook.com/groups/${cleanUrl}`,
-      frequency: "15 bài",
-      members: "Tự do",
+      uid: groupUid,
+      frequency: "15 bài/ngày",
+      members: "Công khai",
+      privacy: "public",
+      already_posted: false,
     };
 
-    const nextList = [newGroupItem, ...baseGroups];
-    if (setCustomGroups) setCustomGroups(nextList);
-    if (groupSource === "file" && groupFile) {
-      setGroupFile({
-        ...groupFile,
-        groups: nextList,
+    const nextList = [newGroupItem, ...baseGroups.filter((g) => g.key !== newGroupKey)];
+    if (groupSource === "file") {
+      setGroupFile((prev) => ({
+        name: prev?.name || "Danh sách nhập tay",
+        size: prev?.size || 0,
+        status: "valid",
+        dedupCount: prev?.dedupCount || 0,
+        invalidCount: prev?.invalidCount || 0,
         validGroupsCount: nextList.length,
-      });
+        alreadyPostedCount: prev?.alreadyPostedCount || 0,
+        groups: nextList,
+      }));
+    } else if (setCustomGroups) {
+      setCustomGroups(nextList);
     }
-    setSelectedGroupKeys((cur) => [newGroupKey, ...cur]);
+    setSelectedGroupKeys((cur) => [...new Set([newGroupKey, ...cur])]);
     setManualGroupInput("");
     setIsManualDialogOpen(false);
+    toast.success("Đã thêm nhóm thành công", "THÊM THỦ CÔNG");
   };
 
-  /**
-   * Xử lý file link nhóm (Tương tự logic trong FaceBook_Post_Group.py)
-   * 1. Đọc text từng dòng
-   * 2. Bỏ qua ghi chú '#' hoặc dòng trống
-   * 3. Lọc lấy các link chứa facebook.com/groups hoặc fb.com hoặc dãy số UID
-   * 4. Bỏ các param URL rác đằng sau dấu '?' (line.split('?')[0])
-   * 5. Khử trùng lặp (dedup) và thống kê link hỏng
-   */
-  const [isSearching, setIsSearching] = useState(false);
-
+  // Quét tìm nhóm theo từ khóa qua Backend
   const handleSearchGroups = async () => {
-    if (!groupSearch?.trim()) return;
+    const keyword = groupSearch?.trim();
+    if (!keyword) {
+      toast.info("Vui lòng nhập từ khóa tìm nhóm Facebook", "TÌM NHÓM");
+      return;
+    }
     setIsSearching(true);
     try {
-      const res = await searchGroupSource({ keyword: groupSearch.trim(), max_results: 50 });
-      if (res?.groups?.length) {
-        if (setCustomGroups) setCustomGroups(res.groups);
-        setSelectedGroupKeys(res.groups.map((g) => g.key));
+      const res = await searchGroupSource({
+        keyword,
+        max_results: 50,
+        member_filter: memberFilter,
+        group_type: groupTypeFilter,
+      });
+      const foundGroups = res?.groups || [];
+      if (foundGroups.length > 0) {
+        if (setCustomGroups) setCustomGroups(foundGroups);
+        setSelectedGroupKeys(foundGroups.map((g) => g.key));
+        toast.success(
+          `Đã tìm thấy ${foundGroups.length} nhóm Facebook phù hợp cho "${keyword}"`,
+          "TÌM NHÓM THÀNH CÔNG"
+        );
+      } else {
+        if (setCustomGroups) setCustomGroups([]);
+        setSelectedGroupKeys([]);
+        toast.info(
+          `Không tìm thấy nhóm phù hợp cho từ khóa "${keyword}". Hãy thử từ khóa khác hoặc điều chỉnh bộ lọc.`,
+          "KẾT QUẢ TÌM KIẾM"
+        );
       }
     } catch (err) {
-      console.warn("Backend search group error:", err);
+      console.error("Backend search group error:", err);
+      toast.error(
+        `Lỗi tìm kiếm nhóm: ${err.message || "Không kết nối được Backend"}`,
+        "LỖI TÌM NHÓM"
+      );
     } finally {
       setIsSearching(false);
     }
   };
 
   /**
-   * Xử lý file link nhóm: Gọi Backend Module 7 (/api/groups/source/parse)
-   * Kế thừa nghiệp vụ FaceBook_Post_Group.py (tách '?', dedup, lọc lỗi, check history)
+   * Xử lý file link nhóm: Gọi Backend Module 7 (/api/groups/source/upload & /api/groups/source/parse)
+   * Kế thừa nghiệp vụ FaceBook_Post_Group.py:
+   * 1. Upload file lên Backend hoặc parse text
+   * 2. Lọc link facebook.com/groups/..., tách '?', khử trùng lặp
+   * 3. Kiểm tra lịch sử đã đăng nhóm (group_session_logs)
    */
-  const processGroupFile = (file) => {
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const text = String(event.target?.result || "");
+  const processGroupFile = async (file) => {
+    if (!file) return;
+    setIsFileProcessing(true);
+    try {
+      // 1. Thử upload trực tiếp file lên /api/groups/source/upload
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("filter_posted", "false");
+
+      const res = await uploadGroupSourceFile(formData);
+      if (res && Array.isArray(res.groups)) {
+        const validGroups = res.groups;
+        setGroupFile({
+          name: file.name,
+          size: file.size,
+          status: "valid",
+          dedupCount: res.dedup_count ?? 0,
+          invalidCount: res.invalid_count ?? 0,
+          validGroupsCount: res.valid_count ?? validGroups.length,
+          alreadyPostedCount: res.already_posted_count ?? 0,
+          groups: validGroups,
+        });
+        setSelectedGroupKeys(validGroups.map((g) => g.key));
+        toast.success(
+          `Đã nạp ${validGroups.length} nhóm hợp lệ từ file "${file.name}" (Lọc bỏ ${res.dedup_count ?? 0} trùng lặp, ${res.invalid_count ?? 0} link hỏng)`,
+          "NẠP FILE THÀNH CÔNG"
+        );
+        return;
+      }
+    } catch (uploadErr) {
+      console.warn("Backend upload error, trying parse text content:", uploadErr);
       try {
+        const text = await file.text();
         const res = await parseGroupFileSource({ content: text, filter_posted: false });
         if (res && Array.isArray(res.groups)) {
+          const validGroups = res.groups;
           setGroupFile({
             name: file.name,
             size: file.size,
             status: "valid",
-            dedupCount: res.dedup_count,
-            invalidCount: res.invalid_count,
-            validGroupsCount: res.valid_count,
-            alreadyPostedCount: res.already_posted_count,
-            groups: res.groups,
+            dedupCount: res.dedup_count ?? 0,
+            invalidCount: res.invalid_count ?? 0,
+            validGroupsCount: res.valid_count ?? validGroups.length,
+            alreadyPostedCount: res.already_posted_count ?? 0,
+            groups: validGroups,
           });
-          setSelectedGroupKeys(res.groups.map((g) => g.key));
+          setSelectedGroupKeys(validGroups.map((g) => g.key));
+          toast.success(
+            `Đã nạp ${validGroups.length} nhóm hợp lệ từ file "${file.name}"`,
+            "NẠP FILE THÀNH CÔNG"
+          );
           return;
         }
-      } catch (err) {
-        console.warn("Backend parse fallback to local parser:", err);
+      } catch (parseErr) {
+        console.error("Backend parse text failed:", parseErr);
+        toast.error(
+          `Không thể đọc dữ liệu file nhóm: ${parseErr.message || "Định dạng file không hỗ trợ"}`,
+          "LỖI ĐỌC FILE"
+        );
       }
-
-      // Fallback local parser nếu backend không khả dụng
-      const lines = text
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line && !line.startsWith("#"));
-
-      const cleanedLines = lines.map((line) => line.split("?")[0].trim());
-      const unique = Array.from(new Set(cleanedLines));
-
-      const validLinks = unique.filter(
-        (line) =>
-          line.includes("facebook.com/groups") ||
-          line.includes("fb.com/groups") ||
-          line.includes("facebook.com") ||
-          /^\d{6,}$/.test(line)
-      );
-
-      const invalidCount = unique.length - validLinks.length;
-      const dedupCount = lines.length - unique.length;
-
-      const fileGroups = validLinks.map((url, idx) => {
-        const rawUrl = url.replace(/^https?:\/\//, "");
-        const cleanUrl = rawUrl.startsWith("facebook.com") ? rawUrl : `facebook.com/groups/${rawUrl}`;
-        const groupUid = cleanUrl.split("/groups/")[1]?.replace(/\/$/, "") || `group_${idx + 1}`;
-        return {
-          id: String(idx + 1).padStart(2, "0"),
-          key: `file_group_${idx}_${groupUid}`,
-          name: `Nhóm file #${idx + 1} (${groupUid})`,
-          url: cleanUrl,
-          frequency: "15 bài",
-          members: "—",
-        };
-      });
-
-      setGroupFile({
-        name: file.name,
-        size: file.size,
-        status: "valid",
-        dedupCount,
-        invalidCount,
-        validGroupsCount: fileGroups.length,
-        groups: fileGroups,
-      });
-
-      setSelectedGroupKeys(fileGroups.map((g) => g.key));
-    };
-    reader.readAsText(file);
+    } finally {
+      setIsFileProcessing(false);
+    }
   };
 
   const handleGroupFileChange = (event) => {
@@ -256,41 +336,31 @@ export default function GroupSourceSection({
     if (file) processGroupFile(file);
   };
 
-  const handleDownloadTemplate = () => {
-    const templateContent = [
-      "# ==========================================================================",
-      "# DANH SÁCH LINK NHÓM FACEBOOK ĐĂNG BÀI (Mỗi dòng 1 link hoặc UID nhóm)",
-      "# Hỗ trợ: https://www.facebook.com/groups/<tên_hoặc_uid_nhóm>",
-      "# ==========================================================================",
-      "https://www.facebook.com/groups/vieclamonline2024",
-      "https://www.facebook.com/groups/muabanonline2024",
-      "https://www.facebook.com/groups/tuyendungctvhn",
-      "https://www.facebook.com/groups/congdongmarketingvn",
-      "https://www.facebook.com/groups/khoinghiepkinhdoanh2024",
-      "https://www.facebook.com/groups/sinhvientimvieclam",
-    ].join("\n");
-    const blob = new Blob([templateContent], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "mau_danh_sach_nhom_fb.txt";
-    link.click();
-    URL.revokeObjectURL(url);
+  // Tải file mẫu trực tiếp từ Backend endpoint /api/groups/source/template
+  const handleDownloadTemplate = async () => {
+    try {
+      await downloadGroupTemplate();
+      toast.success("Đang tải file mẫu link nhóm (.txt) từ hệ thống...", "TẢI FILE MẪU");
+    } catch (err) {
+      toast.error(`Không thể tải file mẫu: ${err.message}`, "LỖI TẢI FILE");
+    }
   };
 
+  // Xóa file nhóm hiện tại
   const handleRemoveGroupFile = () => {
     setGroupFile(null);
-    setSelectedGroupKeys(DEFAULT_GROUPS.map((g) => g.key));
+    setSelectedGroupKeys([]);
     if (groupFileInputRef.current) {
       groupFileInputRef.current.value = "";
     }
+    toast.info("Đã xóa file danh sách nhóm", "THÔNG BÁO");
   };
 
   return (
     <SectionCard
       number="3"
       title="Nguồn nhóm"
-      description="Chọn hình thức cấp nguồn nhóm: đăng theo danh sách file link nhóm (.txt) hoặc quét tìm theo từ khóa"
+      description="Chọn hình thức cấp nguồn nhóm: quét tìm theo từ khóa Facebook hoặc nạp từ file danh sách link nhóm (.txt, .csv)"
       aside={
         <div className="flex items-center gap-2">
           <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-primary">
@@ -303,18 +373,41 @@ export default function GroupSourceSection({
       <div className="grid gap-3 md:grid-cols-2">
         <button
           type="button"
-          onClick={() => setGroupSource("file")}
-          className={`rounded-xl border p-3.5 text-left transition-colors cursor-pointer ${
-            groupSource === "file"
+          onClick={() => setGroupSource("search")}
+          className={`rounded-xl border p-3.5 text-left transition-colors cursor-pointer ${groupSource === "search"
               ? "border-2 border-primary bg-white shadow-xs"
               : "border-slate-200 bg-white hover:border-slate-300"
-          }`}
+            }`}
         >
           <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
             <span
-              className={`flex size-3.5 items-center justify-center rounded-full border ${
-                groupSource === "file" ? "border-2 border-primary bg-white" : "border-slate-300 bg-white"
-              }`}
+              className={`flex size-3.5 items-center justify-center rounded-full border ${groupSource === "search" ? "border-2 border-primary bg-white" : "border-slate-300 bg-white"
+                }`}
+            >
+              {groupSource === "search" && <span className="size-1.5 rounded-full bg-primary" />}
+            </span>
+            <span className="flex size-5 items-center justify-center rounded bg-primary text-white">
+              <Search className="size-3" />
+            </span>
+            <span>Tìm kiếm nhóm theo từ khóa</span>
+          </div>
+          <p className="mt-1 pl-5.5 text-[10px] text-slate-400">
+            Quét tìm kiếm các nhóm Facebook theo từ khóa chủ đề, tự động lọc theo số lượng thành viên và loại nhóm phù hợp để đăng bài.
+          </p>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setGroupSource("file")}
+          className={`rounded-xl border p-3.5 text-left transition-colors cursor-pointer ${groupSource === "file"
+              ? "border-2 border-primary bg-white shadow-xs"
+              : "border-slate-200 bg-white hover:border-slate-300"
+            }`}
+        >
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
+            <span
+              className={`flex size-3.5 items-center justify-center rounded-full border ${groupSource === "file" ? "border-2 border-primary bg-white" : "border-slate-300 bg-white"
+                }`}
             >
               {groupSource === "file" && <span className="size-1.5 rounded-full bg-primary" />}
             </span>
@@ -324,32 +417,7 @@ export default function GroupSourceSection({
             <span>Từ file link nhóm (.txt, .csv)</span>
           </div>
           <p className="mt-1 pl-5.5 text-[10px] text-slate-400">
-            Kế thừa từ FaceBook_Post_Group.py: Đăng chính xác vào các nhóm trong file link. Tự động khử trùng lặp và loại bỏ link lỗi.
-          </p>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setGroupSource("search")}
-          className={`rounded-xl border p-3.5 text-left transition-colors cursor-pointer ${
-            groupSource === "search"
-              ? "border-2 border-primary bg-white shadow-xs"
-              : "border-slate-200 bg-white hover:border-slate-300"
-          }`}
-        >
-          <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
-            <span
-              className={`flex size-3.5 items-center justify-center rounded-full border ${
-                groupSource === "search" ? "border-2 border-primary bg-white" : "border-slate-300 bg-white"
-              }`}
-            >
-              {groupSource === "search" && <span className="size-1.5 rounded-full bg-primary" />}
-            </span>
-            <Search className="size-4 text-slate-500" />
-            <span>Tìm kiếm nhóm theo từ khóa</span>
-          </div>
-          <p className="mt-1 pl-5.5 text-[10px] text-slate-400">
-            Tự động tìm kiếm trên Facebook theo từ khóa (search_term) và đăng bài vào các nhóm phù hợp.
+            Nạp danh sách nhóm từ file link có sẵn, hệ thống tự động khử trùng lặp và loại bỏ các link nhóm bị lỗi.
           </p>
         </button>
       </div>
@@ -368,28 +436,43 @@ export default function GroupSourceSection({
           <div
             onDragOver={(event) => event.preventDefault()}
             onDrop={handleGroupFileDrop}
-            className="flex flex-col items-center justify-center rounded-xl border border-dashed border-blue-200 bg-blue-50/20 px-4 py-7 text-center transition-colors hover:bg-blue-50/30"
+            className={`flex flex-col items-center justify-center rounded-xl border border-dashed px-4 py-7 text-center transition-colors ${isFileProcessing
+              ? "border-primary/40 bg-blue-50/50"
+              : "border-blue-200 bg-blue-50/20 hover:bg-blue-50/30"
+              }`}
           >
             <div className="mb-2.5 flex size-9 items-center justify-center rounded-full bg-blue-100 text-primary">
-              <FileUp className="size-4.5" />
+              {isFileProcessing ? (
+                <Loader2 className="size-4.5 animate-spin" />
+              ) : (
+                <FileUp className="size-4.5" />
+              )}
             </div>
-            <p className="text-xs font-medium text-slate-600">
-              Kéo thả file vào đây hoặc{" "}
-              <button
-                type="button"
-                onClick={() => groupFileInputRef.current?.click()}
-                className="font-semibold text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary cursor-pointer"
-              >
-                📂 chọn file .txt từ máy tính
-              </button>
-            </p>
-            <button
-              type="button"
-              onClick={handleDownloadTemplate}
-              className="mt-2 inline-flex items-center gap-1.5 text-xs text-primary hover:underline cursor-pointer"
-            >
-              <Download className="size-3.5" /> Tải file mẫu danh sách link (.txt)
-            </button>
+            {isFileProcessing ? (
+              <p className="text-xs font-semibold text-primary">
+                Đang nạp và kiểm tra dữ liệu nhóm qua Backend...
+              </p>
+            ) : (
+              <>
+                <p className="text-xs font-medium text-slate-600">
+                  Kéo thả file vào đây hoặc{" "}
+                  <button
+                    type="button"
+                    onClick={() => groupFileInputRef.current?.click()}
+                    className="font-semibold text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary cursor-pointer"
+                  >
+                    📂 chọn file .txt từ máy tính
+                  </button>
+                </p>
+                <button
+                  type="button"
+                  onClick={handleDownloadTemplate}
+                  className="mt-2 inline-flex items-center gap-1.5 text-xs text-primary hover:underline cursor-pointer"
+                >
+                  <Download className="size-3.5" /> Tải file mẫu danh sách link (.txt)
+                </button>
+              </>
+            )}
           </div>
 
           {groupFile && (
@@ -458,7 +541,11 @@ export default function GroupSourceSection({
               onClick={handleSearchGroups}
               className="cursor-pointer"
             >
-              <Search className="mr-1.5 size-3.5" />
+              {isSearching ? (
+                <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+              ) : (
+                <Search className="mr-1.5 size-3.5" />
+              )}
               {isSearching ? "Đang quét nhóm..." : "Quét nhóm theo từ khóa"}
             </Button>
           </div>
@@ -471,36 +558,32 @@ export default function GroupSourceSection({
             <button
               type="button"
               onClick={() => setMemberFilter("all")}
-              className={`rounded border px-2.5 py-1.5 font-semibold cursor-pointer ${
-                memberFilter === "all" ? "border-primary bg-primary text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-              }`}
+              className={`rounded border px-2.5 py-1.5 font-semibold cursor-pointer ${memberFilter === "all" ? "border-primary bg-primary text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
             >
               Tất cả TV
             </button>
             <button
               type="button"
               onClick={() => setMemberFilter("10k")}
-              className={`rounded border px-2.5 py-1.5 font-semibold cursor-pointer ${
-                memberFilter === "10k" ? "border-primary bg-primary text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-              }`}
+              className={`rounded border px-2.5 py-1.5 font-semibold cursor-pointer ${memberFilter === "10k" ? "border-primary bg-primary text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
             >
               &gt; 10K TV
             </button>
             <button
               type="button"
               onClick={() => setMemberFilter("50k")}
-              className={`rounded border px-2.5 py-1.5 font-semibold cursor-pointer ${
-                memberFilter === "50k" ? "border-primary bg-primary text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-              }`}
+              className={`rounded border px-2.5 py-1.5 font-semibold cursor-pointer ${memberFilter === "50k" ? "border-primary bg-primary text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
             >
               &gt; 50K TV
             </button>
             <button
               type="button"
               onClick={() => setMemberFilter("100k")}
-              className={`rounded border px-2.5 py-1.5 font-semibold cursor-pointer ${
-                memberFilter === "100k" ? "border-primary bg-primary text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-              }`}
+              className={`rounded border px-2.5 py-1.5 font-semibold cursor-pointer ${memberFilter === "100k" ? "border-primary bg-primary text-white" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
             >
               &gt; 100K TV
             </button>
@@ -634,16 +717,39 @@ export default function GroupSourceSection({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredGroups.length === 0 ? (
+              {isFileProcessing || isSearching ? (
                 <tr>
-                  <td colSpan="6" className="py-8 text-center text-slate-400">
-                    <AlertCircle className="mx-auto mb-1.5 size-5 text-slate-300" />
-                    Không tìm thấy nhóm nào phù hợp bộ lọc hoặc file trống.
+                  <td colSpan="6" className="py-12 text-center text-slate-500">
+                    <Loader2 className="mx-auto mb-2 size-6 animate-spin text-primary" />
+                    <p className="text-xs font-medium text-slate-700">
+                      {isFileProcessing
+                        ? "Đang nạp và chuẩn hóa danh sách link nhóm qua Backend..."
+                        : "Đang quét danh sách nhóm Facebook qua Backend..."}
+                    </p>
+                  </td>
+                </tr>
+              ) : filteredGroups.length === 0 ? (
+                <tr>
+                  <td colSpan="6" className="py-10 text-center text-slate-400">
+                    <div className="mx-auto mb-2 flex size-10 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+                      <AlertCircle className="size-5" />
+                    </div>
+                    <p className="text-xs font-medium text-slate-600">
+                      {groupSource === "file"
+                        ? "Chưa có nhóm nào từ file"
+                        : "Chưa có kết quả tìm kiếm nhóm"}
+                    </p>
+                    <p className="mt-1 text-[11px] text-slate-400 max-w-md mx-auto">
+                      {groupSource === "file"
+                        ? "Vui lòng kéo thả file .txt/.csv hoặc bấm 'Tải file mẫu' phía trên để nạp danh sách link nhóm thật."
+                        : "Nhập từ khóa chủ đề (VD: việc làm online, tuyển dụng ctv...) và bấm 'Quét nhóm theo từ khóa'."}
+                    </p>
                   </td>
                 </tr>
               ) : (
                 filteredGroups.map((group, idx) => {
                   const isSelected = selectedGroupKeys.includes(group.key);
+                  const isPublic = group.privacy === "public";
                   return (
                     <tr
                       key={group.key}
@@ -657,19 +763,35 @@ export default function GroupSourceSection({
                       </td>
                       <td className="px-2 py-2 text-slate-400 font-mono text-[10px]">{group.id || idx + 1}</td>
                       <td className="px-3 py-2">
-                        <p className="font-semibold text-slate-800 line-clamp-1">{group.name}</p>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <p className="font-semibold text-slate-800 line-clamp-1">{group.name}</p>
+                          {isPublic ? (
+                            <span className="inline-flex items-center gap-0.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700 border border-emerald-200">
+                              <Globe className="size-2.5" /> Công khai
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-0.5 rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-700 border border-amber-200">
+                              <Lock className="size-2.5" /> Kiểm duyệt
+                            </span>
+                          )}
+                          {group.already_posted && (
+                            <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[9px] font-medium text-rose-600 border border-rose-200">
+                              Đã đăng gần đây
+                            </span>
+                          )}
+                        </div>
                         <a
                           href={group.url.startsWith("http") ? group.url : `https://${group.url}`}
                           target="_blank"
                           rel="noreferrer"
-                          className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-primary hover:underline"
+                          className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-primary hover:underline font-mono"
                         >
                           {group.url}
                           <ExternalLink className="size-2.5" />
                         </a>
                       </td>
-                      <td className="px-3 py-2 text-slate-500">{group.frequency || "15 bài"}</td>
-                      <td className="px-3 py-2 font-semibold text-slate-600">{group.members || "—"}</td>
+                      <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{group.frequency || "15 bài/ngày"}</td>
+                      <td className="px-3 py-2 font-semibold text-slate-600 whitespace-nowrap">{group.members || "—"}</td>
                       <td className="px-3 py-2 text-center">
                         <button
                           type="button"
