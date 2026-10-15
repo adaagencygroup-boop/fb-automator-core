@@ -196,6 +196,37 @@ def to_vn_iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.astimezone(VN_TZ).isoformat()
 
 
+def share_range_per_post(total: int, parts: int) -> tuple:
+    """Khoảng số lượt chia sẻ mỗi bài: ±20% quanh mức chia đều (vd 50 lượt / 4 bài -> 10..15).
+    Dùng số nguyên để tránh sai số float. Frontend (PostSummaryCards.jsx) hiển thị cùng công thức."""
+    if parts <= 1:
+        return (total, total)
+    return ((4 * total) // (5 * parts), -(-6 * total // (5 * parts)))
+
+
+def _split_share_accounts(uids: List[str], post_count: int) -> List[List[str]]:
+    """Chia các nick cho các bài để chia sẻ: tổng lượt chia sẻ = số nick, mỗi nick chỉ share 1 bài.
+    Bắt đầu chia đều rồi dịch ngẫu nhiên từng lượt giữa các bài, giữ mỗi bài trong share_range_per_post."""
+    if post_count <= 0:
+        return []
+    total = len(uids)
+    sizes = [total // post_count + (1 if i < total % post_count else 0) for i in range(post_count)]
+    if post_count > 1:
+        lo, hi = share_range_per_post(total, post_count)
+        for _ in range(total * 2):
+            a, b = random.sample(range(post_count), 2)
+            if sizes[a] - 1 >= lo and sizes[b] + 1 <= hi:
+                sizes[a] -= 1
+                sizes[b] += 1
+    shuffled = list(uids)
+    random.shuffle(shuffled)
+    groups, start = [], 0
+    for size in sizes:
+        groups.append(shuffled[start:start + size])
+        start += size
+    return groups
+
+
 def get_user_draft_comments(db: Session, user_id: Optional[int] = None) -> List[str]:
     """Lấy danh sách các câu bình luận mẫu (campaign_id IS NULL) từ bảng seeding_comments theo user sở hữu."""
     try:
@@ -628,6 +659,14 @@ async def create_seeding_campaign(
     total_tasks_all = 0
     reactions_pool = req.reactions or ["LIKE"]
 
+    # Phân bổ lượt cho chiến dịch Bài viết:
+    # - Cảm xúc: mọi nick trên mỗi bài.
+    # - Bình luận: random 1 nửa số nick trên mỗi bài (vd 50 nick -> 25 bình luận mỗi bài).
+    # - Chia sẻ: tổng = số nick, chia ngẫu nhiên cho các bài (vd 50 nick / 4 bài -> mỗi bài 10..15).
+    post_actions = {a.upper().strip() for a in (req.actions or [])} if camp_type == "POST" else set()
+    comment_quota = max(1, actual_account_count // 2)
+    share_groups = _split_share_accounts(used_uids, len(req.targets)) if "SHARE" in post_actions else []
+
     for idx, item in enumerate(req.targets):
         fb_id = item.fb_id or extract_fb_id(item.url, camp_type)
 
@@ -686,25 +725,14 @@ async def create_seeding_campaign(
         db.add(camp)
         db.flush()
 
-        # 3. Lưu kho comment nếu có cho chiến dịch này (áp dụng cho POST)
-        saved_comments = []
-        if req.comments:
-            for cmt_text in req.comments:
-                c = cmt_text.strip()
-                if c:
-                    comment_obj = SeedingComment(campaign_id=camp.id, created_by=created_by_int, content=c)
-                    db.add(comment_obj)
-                    saved_comments.append(comment_obj)
-            db.flush()
-        elif camp_type == "POST":
+        # 3. Chuẩn bị kho comment để random (chỉ khi chiến dịch POST có chọn COMMENT).
+        # Chưa lưu vào DB: chỉ câu nào được random trúng cho task mới được lưu ở bước 5.
+        comment_texts = []
+        if "COMMENT" in post_actions:
             # Fallback lấy kho comment mẫu từ database của user nếu req.comments rỗng
-            draft_cmts = get_user_draft_comments(db, created_by_int)
-            for c in draft_cmts:
-                comment_obj = SeedingComment(campaign_id=camp.id, created_by=created_by_int, content=c)
-                db.add(comment_obj)
-                saved_comments.append(comment_obj)
-            if saved_comments:
-                db.flush()
+            src = req.comments or get_user_draft_comments(db, created_by_int)
+            comment_texts = [t.strip() for t in src if t and t.strip()]
+        saved_comment_by_text = {}
 
         # 4. Tạo SeedingCampaignTarget chuẩn DBML
         camp_target = SeedingCampaignTarget(
@@ -731,9 +759,27 @@ async def create_seeding_campaign(
         else:
             actions_list = ["FOLLOW"]
 
+        # Nick được giao bình luận / chia sẻ ở bài này. Bình luận ưu tiên nick chưa bình luận bài này.
+        comment_uids = set()
+        if "COMMENT" in post_actions:
+            done_comment_uids = {u for (u,) in db.query(SeedingTask.account_uid).filter(
+                SeedingTask.target_id == target.id,
+                SeedingTask.action == "COMMENT",
+                SeedingTask.status.in_(["PENDING", "RUNNING", "SUCCESS"])
+            ).all()}
+            eligible_uids = [u for u in used_uids if u not in done_comment_uids]
+            comment_uids = set(random.sample(eligible_uids, min(comment_quota, len(eligible_uids))))
+        share_uids = set(share_groups[idx]) if share_groups else set()
+        planned_uids = set()
+
         for uid in used_uids:
             for action_name in actions_list:
                 act = action_name.upper().strip()
+
+                if act == "COMMENT" and uid not in comment_uids:
+                    continue
+                if act == "SHARE" and uid not in share_uids:
+                    continue
 
                 # Kiểm tra PARTIAL INDEX uq_seeding_tasks_once:
                 # Mỗi tài khoản chỉ thực hiện 1 lần mỗi hành động trên 1 mục tiêu (Follow/Like lần 2 = bỏ Follow/Like)
@@ -751,8 +797,14 @@ async def create_seeding_campaign(
                     assigned_reaction = random.choice(reactions_pool)
 
                 assigned_comment_id = None
-                if act == "COMMENT" and saved_comments:
-                    chosen_comment = random.choice(saved_comments)
+                if act == "COMMENT" and comment_texts:
+                    chosen_text = random.choice(comment_texts)
+                    chosen_comment = saved_comment_by_text.get(chosen_text)
+                    if chosen_comment is None:
+                        chosen_comment = SeedingComment(campaign_id=camp.id, created_by=created_by_int, content=chosen_text)
+                        db.add(chosen_comment)
+                        db.flush()  # để có chosen_comment.id
+                        saved_comment_by_text[chosen_text] = chosen_comment
                     assigned_comment_id = chosen_comment.id
 
                 task = SeedingTask(
@@ -767,7 +819,12 @@ async def create_seeding_campaign(
                     attempts=0
                 )
                 db.add(task)
+                planned_uids.add(uid)
                 total_tasks_all += 1
+
+        # Số lượng = số nick thực sự có tác vụ ở bài này (mỗi nick = 1 lượt, giống cách đếm thành công / thất bại)
+        camp.total_planned = len(planned_uids)
+        camp_target.planned_count = len(planned_uids)
 
         created_campaigns.append(camp)
 

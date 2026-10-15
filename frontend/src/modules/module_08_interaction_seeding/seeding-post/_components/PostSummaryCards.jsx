@@ -15,14 +15,21 @@ export default function PostSummaryCards({
 }) {
   const targetCount = targets.length;
 
-  // Estimation counts
+  // Phân bổ dự kiến (cùng quy tắc với backend create_seeding_campaign):
+  // cảm xúc = mọi nick trên mỗi bài, bình luận = random 1 nửa số nick trên mỗi bài,
+  // chia sẻ = tổng bằng số nick, chia ngẫu nhiên cho các bài trong khoảng ±20% mức chia đều.
   const reactPerPost = doLike ? accountCount : 0;
-  const commentPerPost = doComment ? accountCount : 0;
-  const sharePerPost = doShare ? accountCount : 0;
+  const halfAccounts = accountCount > 0 ? Math.max(1, Math.floor(accountCount / 2)) : 0;
+  const commentPerPost = doComment ? halfAccounts : 0;
+
+  // Giống share_range_per_post() ở backend (vd 50 nick / 4 bài -> 10–15)
+  const shareMin = targetCount <= 1 ? accountCount : Math.floor((4 * accountCount) / (5 * targetCount));
+  const shareMax = targetCount <= 1 ? accountCount : Math.ceil((6 * accountCount) / (5 * targetCount));
+  const sharePerPostLabel = !doShare ? 0 : shareMin === shareMax ? shareMin : `${shareMin}–${shareMax}`;
 
   const totalReacts = targetCount * reactPerPost;
   const totalComments = targetCount * commentPerPost;
-  const totalShares = targetCount * sharePerPost;
+  const totalShares = doShare && targetCount > 0 ? accountCount : 0;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -138,7 +145,7 @@ export default function PostSummaryCards({
                       </td>
                       <td className="py-2 px-2 font-semibold">{doLike ? reactPerPost : 0}</td>
                       <td className="py-2 px-2 font-semibold">{commentPerPost}</td>
-                      <td className="py-2 px-2 font-semibold">{sharePerPost}</td>
+                      <td className="py-2 px-2 font-semibold">{sharePerPostLabel}</td>
                     </tr>
                   ))
                 )}
@@ -196,7 +203,9 @@ export default function PostSummaryCards({
                 <span className="text-blue-600 font-medium">
                   tự động random phân bổ
                 </span>{" "}
-                50 cảm xúc thì 25 bình luận, và 50 chia cho số bài viết cần chia sẻ ví dụ 50:4
+                mỗi bài {accountCount} cảm xúc và {halfAccounts} bình luận (1 nửa số tài khoản);{" "}
+                {accountCount} lượt chia sẻ chia cho {targetCount || 1} bài
+                {targetCount > 1 ? ` (mỗi bài ${shareMin}–${shareMax} lượt)` : ""}.
               </p>
             </div>
 
