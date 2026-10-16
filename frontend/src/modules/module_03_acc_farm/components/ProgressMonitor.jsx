@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, AlertTriangle, PauseCircle } from "lucide-react";
+import { Activity, PauseCircle } from "lucide-react";
 import { ACTION_FULL_LABELS, MONITOR_STATUSES, RUN_STATUS } from "../constants";
 import { ActionChip, RunStatusBadge, formatDuration } from "./parts";
 
@@ -30,36 +30,6 @@ function useNow(active) {
 function elapsed(acc, now) {
   if (!acc.started_at) return "—";
   return formatDuration((acc.finished_at || now) - acc.started_at);
-}
-
-function CheckpointAlerts({ alerts }) {
-  if (!alerts?.length) return null;
-  return (
-    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-      <div className="mb-1.5 flex items-center gap-2 font-bold">
-        <AlertTriangle className="h-4 w-4" />
-        Cảnh báo checkpoint nặng trên máy này ({alerts.length} nick)
-      </div>
-      <p className="mb-2 text-amber-700">
-        Facebook có thể đang khóa theo cụm thiết bị. Cân nhắc giảm số nick chạy cùng lúc hoặc dừng phiên.
-      </p>
-      <ul className="space-y-1">
-        {alerts.map((a) => (
-          <li key={`${a.uid}-${a.source}`} className="flex flex-wrap gap-x-2">
-            <span className="font-mono font-semibold">{a.uid}</span>
-            {a.name && <span>({a.name})</span>}
-            <span className="text-amber-600">
-              {a.source === "session" ? "trong phiên này" : "trong 72 giờ qua"}
-              {a.at ? ` · ${new Date(a.at * 1000).toLocaleString("vi-VN", { hour12: false })}` : ""}
-            </span>
-            <span className="w-full truncate text-[11px] text-amber-700" title={a.error}>
-              {a.error}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
 }
 
 export default function ProgressMonitor({ status }) {
@@ -106,8 +76,6 @@ export default function ProgressMonitor({ status }) {
           </div>
         ))}
       </div>
-
-      <CheckpointAlerts alerts={status?.checkpoint_alerts} />
 
       <div className="overflow-auto rounded-xl border border-border bg-white shadow-subtle">
         <table className="w-full text-xs">
