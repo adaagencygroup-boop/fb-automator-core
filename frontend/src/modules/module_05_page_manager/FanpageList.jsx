@@ -22,6 +22,8 @@ import {
   Globe,
   Monitor,
   Loader2,
+  Search,
+  Info,
 } from "lucide-react";
 import {
   Dialog,
@@ -255,10 +257,13 @@ export default function FanpageList() {
   const [selectedAccUid, setSelectedAccUid] = useState("");
   const [customToken, setCustomToken] = useState("");
   const [showCustomToken, setShowCustomToken] = useState(false);
-  const [syncing, setSyncing] = useState(false);
+  const [syncing, setSyncing] = useState(null); // UID đang quét hoặc null
   const [oauthLoading, setOauthLoading] = useState(false);
-  const [profileOauthLoading, setProfileOauthLoading] = useState(false);
+  const [profileOauthLoading, setProfileOauthLoading] = useState(null); // UID đang cấp token hoặc null
   const [showLiveBrowser, setShowLiveBrowser] = useState(false);
+  const [accQuery, setAccQuery] = useState("");
+  const [accStatusFilter, setAccStatusFilter] = useState("all");
+  const [accLoginFilter, setAccLoginFilter] = useState("all");
 
   const load = async () => {
     setLoading(true);
@@ -320,24 +325,47 @@ export default function FanpageList() {
       loadAccounts();
       setCustomToken("");
       setShowCustomToken(false);
+      setAccQuery("");
+      setAccStatusFilter("all");
+      setAccLoginFilter("all");
     }
   }, [adding]);
 
-  const handleSyncPages = async (e) => {
-    if (e) e.preventDefault();
-    if (!selectedAccUid) {
+  // Bộ lọc tài khoản trong bảng
+  const filteredAccounts = useMemo(() => {
+    const q = accQuery.trim().toLowerCase();
+    return accountList.filter((acc) => {
+      const isLive = acc.status === "active";
+      if (accStatusFilter === "live" && !isLive) return false;
+      if (accStatusFilter === "die" && isLive) return false;
+
+      const isLoggedIn = acc.login_status === "logged_in";
+      if (accLoginFilter === "logged_in" && !isLoggedIn) return false;
+      if (accLoginFilter === "not_logged_in" && isLoggedIn) return false;
+
+      if (!q) return true;
+      return (
+        (acc.profile_name && acc.profile_name.toLowerCase().includes(q)) ||
+        (acc.uid && String(acc.uid).includes(q))
+      );
+    });
+  }, [accountList, accQuery, accStatusFilter, accLoginFilter]);
+
+  const handleSyncPages = async (targetUid) => {
+    const uid = targetUid || selectedAccUid;
+    if (!uid) {
       toast.error("Vui lòng chọn tài khoản Facebook để quét Fanpage.");
       return;
     }
-    setSyncing(true);
+    setSyncing(uid);
     try {
       const res = await syncPagesByAccount({
-        account_uid: selectedAccUid,
+        account_uid: uid,
         custom_token: customToken.trim() || undefined,
       });
       if (res?.success) {
         toast.success(res.message || `Đã nạp thành công ${res.count} Fanpage!`);
-        setAdding(false);
+        await loadAccounts();
         await load();
       } else {
         toast.error(res?.detail || res?.message || "Quét Fanpage thất bại.");
@@ -345,26 +373,27 @@ export default function FanpageList() {
     } catch (error) {
       toast.error(error.message || "Không thể kết nối đến máy chủ để quét Fanpage.");
     } finally {
-      setSyncing(false);
+      setSyncing(null);
     }
   };
 
   // Luồng 1: OAuth qua Chrome Profile của nick Clone
-  const handleProfileOAuth = async () => {
-    if (!selectedAccUid) {
+  const handleProfileOAuth = async (targetUid) => {
+    const uid = targetUid || selectedAccUid;
+    if (!uid) {
       toast.error("Vui lòng chọn tài khoản Facebook để cấp Token.");
       return;
     }
-    setProfileOauthLoading(true);
+    setProfileOauthLoading(uid);
     try {
-      toast.info(`Đang mở profile Chrome của nick ${selectedAccUid} để cấp Token mới từ Meta...`);
+      toast.info(`Đang mở profile Chrome của nick ${uid} để cấp Token mới từ Meta...`);
       const res = await oauthByProfile({
-        account_uid: selectedAccUid,
+        account_uid: uid,
         headless: !showLiveBrowser,
       });
       if (res?.success) {
         toast.success(res.message || `Đã cấp Token mới và nạp ${res.count} Fanpage!`);
-        setAdding(false);
+        await loadAccounts();
         await load();
       } else {
         toast.error(res?.detail || res?.message || "Cấp Token qua Chrome Profile thất bại.");
@@ -372,7 +401,7 @@ export default function FanpageList() {
     } catch (error) {
       toast.error(error.message || "Không thể kết nối máy chủ để thực hiện OAuth.");
     } finally {
-      setProfileOauthLoading(false);
+      setProfileOauthLoading(null);
     }
   };
 
@@ -650,231 +679,281 @@ export default function FanpageList() {
       </section>
 
       <Dialog open={adding} onOpenChange={setAdding}>
-        <DialogContent className="max-w-[540px] p-6 rounded-2xl bg-white shadow-2xl">
+        <DialogContent className="max-w-5xl w-full p-6 rounded-2xl bg-white shadow-2xl overflow-hidden">
           <DialogHeader className="pb-3 border-b border-slate-100">
-            <DialogTitle className="text-lg font-bold text-slate-800 flex items-center gap-2">
-              <span className="p-1.5 rounded-lg bg-blue-50 text-[#1877F2]">
-                <Layers className="w-5 h-5" />
-              </span>
-              Thêm & Nạp Fanpage vào hệ thống
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500 pt-1">
-              Chọn tài khoản Facebook quản lý để quét và tự động nạp toàn bộ Fanpage kèm Token vĩnh viễn (Never Expire).
+            <div className="flex items-center justify-between">
+              <DialogTitle className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <span className="p-1.5 rounded-lg bg-blue-50 text-[#1877F2]">
+                  <Layers className="w-5 h-5" />
+                </span>
+                Thêm & Nạp Fanpage vào hệ thống
+              </DialogTitle>
+            </div>
+            <DialogDescription className="text-xs text-slate-500 pt-0.5">
+              Cấp Token và quét Fanpage tự động qua dàn nick Clone (cột bên trái) hoặc Đăng nhập trực tiếp trên trình duyệt (cột bên phải).
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 pt-2">
-            {/* LỰA CHỌN 1: QUÉT & CẤP TOKEN QUA CHROME PROFILE CHO NICK CLONE */}
-            <div className="rounded-xl border border-slate-200/90 bg-slate-50/60 p-4 space-y-3">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 pt-2">
+            {/* CỘT TRÁI (7 COLS): BẢNG DANH SÁCH TÀI KHOẢN CLONE */}
+            <div className="lg:col-span-7 flex flex-col rounded-xl border border-slate-200/90 bg-slate-50/50 p-3.5 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
                   <span className="flex size-4 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white font-bold">1</span>
-                  Quét & Cấp Token cho Nick Clone (Qua Profile Chrome)
+                  Dàn nick Clone ({filteredAccounts.length}/{accountList.length})
                 </span>
-                {loadingAccounts ? (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-400" />
-                ) : null}
+                <label className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] text-slate-600 font-medium hover:text-slate-800">
+                  <input
+                    type="checkbox"
+                    checked={showLiveBrowser}
+                    onChange={(e) => setShowLiveBrowser(e.target.checked)}
+                    className="rounded border-slate-300 text-[#1877F2] focus:ring-[#1877F2] w-3.5 h-3.5"
+                  />
+                  <Monitor className="w-3.5 h-3.5 text-slate-400" />
+                  Mở Chrome Live
+                </label>
               </div>
 
-              {accountList.length === 0 && !loadingAccounts ? (
-                <div className="rounded-lg bg-amber-50/80 border border-amber-200/60 p-3 text-xs text-amber-800">
-                  Bạn chưa có tài khoản Facebook nào trong hệ thống. Hãy thêm tài khoản ở Lựa chọn 3 bên dưới.
+              {/* BỘ LỌC VÀ TÌM KIẾM TÀI KHOẢN */}
+              <div className="grid grid-cols-12 gap-2">
+                <div className="col-span-6 relative">
+                  <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={accQuery}
+                    onChange={(e) => setAccQuery(e.target.value)}
+                    placeholder="Tìm tên hoặc UID nick..."
+                    className="w-full h-8 pl-8 pr-2 text-xs rounded-lg border border-slate-200 bg-white placeholder:text-slate-400 outline-none focus:border-[#1877F2]"
+                  />
                 </div>
-              ) : (
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">
-                      Chọn tài khoản Facebook clone / quản lý
-                    </label>
-                    <select
-                      value={selectedAccUid}
-                      onChange={(e) => setSelectedAccUid(e.target.value)}
-                      className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-800 outline-none focus:border-[#1877F2] focus:ring-1 focus:ring-[#1877F2]"
-                    >
-                      {accountList.map((acc) => (
-                        <option key={acc.uid} value={acc.uid}>
-                          {acc.profile_name || "Tài khoản FB"} (UID: {acc.uid}) {acc.token ? "• [Token LIVE]" : "• [Chưa có Token]"}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {selectedAcc ? (
-                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-white border border-slate-200 text-xs">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <PhotoAvatar
-                          src={selectedAcc.avatar_url || facebookPictureUrl(selectedAcc.uid)}
-                          seed={selectedAcc.profile_name || selectedAcc.uid}
-                          name={selectedAcc.profile_name || selectedAcc.uid}
-                          size={32}
-                        />
-                        <div className="min-w-0">
-                          <p className="font-bold text-slate-800 truncate">{selectedAcc.profile_name || "Tài khoản Facebook"}</p>
-                          <p className="text-[11px] text-slate-500 font-mono">UID: {selectedAcc.uid}</p>
-                        </div>
-                      </div>
-                      <div>
-                        {hasLiveToken ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <ShieldCheck className="w-3 h-3" /> Token LIVE
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                            <ShieldAlert className="w-3 h-3" /> Chưa có Token
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {/* Tùy chọn hiển thị trình duyệt Chrome */}
-                  <label className="flex items-center gap-2 cursor-pointer select-none text-[11px] text-slate-600 pt-0.5">
-                    <input
-                      type="checkbox"
-                      checked={showLiveBrowser}
-                      onChange={(e) => setShowLiveBrowser(e.target.checked)}
-                      className="rounded border-slate-300 text-[#1877F2] focus:ring-[#1877F2] w-3.5 h-3.5"
-                    />
-                    <Monitor className="w-3.5 h-3.5 text-slate-400" />
-                    Hiển thị cửa sổ Chrome Live (bật nếu cần quan sát hoặc nick yêu cầu xác minh)
-                  </label>
-
-                  {/* Nút chính: Cấp Token mới qua Chrome Profile */}
-                  <button
-                    type="button"
-                    onClick={handleProfileOAuth}
-                    disabled={profileOauthLoading || syncing || !selectedAccUid}
-                    className="w-full h-10 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 font-bold text-white text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-60"
+                <div className="col-span-3">
+                  <select
+                    value={accStatusFilter}
+                    onChange={(e) => setAccStatusFilter(e.target.value)}
+                    className="w-full h-8 px-2 text-[11px] font-medium rounded-lg border border-slate-200 bg-white text-slate-700 outline-none focus:border-[#1877F2]"
                   >
-                    {profileOauthLoading ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Đang mở Profile & cấp Token từ Meta...
-                      </>
-                    ) : (
-                      <>
-                        <Zap className="w-4 h-4 text-amber-300 fill-amber-300" />
-                        ⚡ Cấp lại Token qua Profile Chrome & Quét Fanpage
-                      </>
-                    )}
-                  </button>
+                    <option value="all">Mọi trạng thái</option>
+                    <option value="live">● Nick Sống (Live)</option>
+                    <option value="die">✕ Bị Checkpoint</option>
+                  </select>
+                </div>
+                <div className="col-span-3">
+                  <select
+                    value={accLoginFilter}
+                    onChange={(e) => setAccLoginFilter(e.target.value)}
+                    className="w-full h-8 px-2 text-[11px] font-medium rounded-lg border border-slate-200 bg-white text-slate-700 outline-none focus:border-[#1877F2]"
+                  >
+                    <option value="all">Mọi đăng nhập</option>
+                    <option value="logged_in">● Đã login</option>
+                    <option value="not_logged_in">○ Chưa login</option>
+                  </select>
+                </div>
+              </div>
 
-                  {/* Nút phụ: Quét bằng token hiện có (nếu còn live) */}
-                  {hasLiveToken ? (
-                    <button
-                      type="button"
-                      onClick={handleSyncPages}
-                      disabled={syncing || profileOauthLoading || !selectedAccUid}
-                      className="w-full h-9 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 font-semibold text-slate-700 text-xs flex items-center justify-center gap-1.5 transition-all disabled:opacity-60"
-                    >
-                      {syncing ? (
-                        <>
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-400" />
-                          Đang quét Fanpage...
-                        </>
+              {/* BẢNG TÀI KHOẢN GỌN GÀNG, CUỘN MƯỢT TỐI ĐA 370PX */}
+              <div className="rounded-lg border border-slate-200 bg-white overflow-hidden shadow-2xs">
+                <div className="max-h-[350px] overflow-y-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead className="sticky top-0 bg-slate-100/90 backdrop-blur-xs text-[10.5px] uppercase font-bold text-slate-500 border-b border-slate-200 z-10">
+                      <tr>
+                        <th className="py-2 px-3">Tài khoản</th>
+                        <th className="py-2 px-2 text-center">TT Nick</th>
+                        <th className="py-2 px-2 text-center">Đăng nhập</th>
+                        <th className="py-2 px-2 text-center">Token</th>
+                        <th className="py-2 px-2.5 text-right">Hành động</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {loadingAccounts ? (
+                        <tr>
+                          <td colSpan={5} className="py-8 text-center text-slate-400">
+                            <RefreshCw className="w-4 h-4 animate-spin mx-auto mb-1 text-slate-400" />
+                            Đang tải danh sách tài khoản...
+                          </td>
+                        </tr>
+                      ) : filteredAccounts.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="py-8 text-center text-slate-400">
+                            Không tìm thấy tài khoản nào phù hợp bộ lọc.
+                          </td>
+                        </tr>
                       ) : (
-                        <>
-                          <Sparkles className="w-3.5 h-3.5 text-blue-500" />
-                          Quét nhanh bằng Token hiện có
-                        </>
-                      )}
-                    </button>
-                  ) : null}
+                        filteredAccounts.map((acc) => {
+                          const hasToken = Boolean(acc.token && acc.token.trim().length > 10);
+                          const isLive = acc.status === "active";
+                          const isLoggedIn = acc.login_status === "logged_in";
+                          const isProcessing = profileOauthLoading === acc.uid || syncing === acc.uid;
 
-                  {/* Toggle ô nhập token thủ công */}
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setShowCustomToken(!showCustomToken)}
-                      className="text-[11px] text-[#1877F2] hover:underline flex items-center gap-1 font-medium"
-                    >
-                      <Key className="w-3 h-3" />
-                      {showCustomToken ? "Ẩn ô nhập Access Token" : "Cập nhật / Dán Access Token thủ công"}
-                    </button>
-                    {showCustomToken ? (
-                      <div className="mt-2 space-y-2">
-                        <input
-                          type="text"
-                          value={customToken}
-                          onChange={(e) => setCustomToken(e.target.value)}
-                          placeholder="Dán User Access Token (EAA...) vào đây..."
-                          className="w-full h-9 px-3 rounded-lg border border-slate-200 bg-white text-xs font-mono text-slate-700 outline-none focus:border-[#1877F2]"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleSyncPages}
-                          disabled={syncing || !customToken.trim()}
-                          className="w-full h-8 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold flex items-center justify-center gap-1.5"
-                        >
-                          Lưu Token & Quét Fanpage
-                        </button>
-                      </div>
-                    ) : null}
+                          return (
+                            <tr key={acc.uid} className="hover:bg-slate-50/80 transition-colors">
+                              <td className="py-2 px-3">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <PhotoAvatar
+                                    src={acc.avatar_url || facebookPictureUrl(acc.uid)}
+                                    seed={acc.profile_name || acc.uid}
+                                    name={acc.profile_name || acc.uid}
+                                    size={26}
+                                  />
+                                  <div className="min-w-0">
+                                    <p className="font-semibold text-slate-800 truncate max-w-[130px]" title={acc.profile_name || acc.uid}>
+                                      {acc.profile_name || "Tài khoản FB"}
+                                    </p>
+                                    <p className="text-[10px] text-slate-400 font-mono truncate">{acc.uid}</p>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="py-2 px-2 text-center whitespace-nowrap">
+                                {isLive ? (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    Live
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                                    Check
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2 px-2 text-center whitespace-nowrap">
+                                {isLoggedIn ? (
+                                  <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50/70 px-1.5 py-0.5 rounded">
+                                    Đã login
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                                    Chưa
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2 px-2 text-center whitespace-nowrap">
+                                {hasToken ? (
+                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full">
+                                    <ShieldCheck className="w-2.5 h-2.5 text-blue-600" /> LIVE
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full">
+                                    Chưa có
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2 px-2.5 text-right whitespace-nowrap">
+                                <div className="flex items-center justify-end gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleProfileOAuth(acc.uid)}
+                                    disabled={isProcessing}
+                                    className="h-7 px-2 rounded-md bg-blue-600 hover:bg-blue-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
+                                    title="Mở Chrome Profile của nick này để tự động cấp Token và nạp Fanpage"
+                                  >
+                                    {profileOauthLoading === acc.uid ? (
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                    ) : (
+                                      <Zap className="w-3 h-3 text-amber-300 fill-amber-300" />
+                                    )}
+                                    {hasToken ? "Cấp lại" : "Cấp Token"}
+                                  </button>
+
+                                  {hasToken ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSyncPages(acc.uid)}
+                                      disabled={isProcessing}
+                                      className="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 font-medium text-[10.5px] text-slate-700 flex items-center gap-1 transition-all disabled:opacity-50"
+                                      title="Quét Fanpage bằng Token hiện có"
+                                    >
+                                      {syncing === acc.uid ? (
+                                        <RefreshCw className="w-3 h-3 animate-spin text-slate-400" />
+                                      ) : (
+                                        <Sparkles className="w-3 h-3 text-blue-500" />
+                                      )}
+                                      Quét
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            {/* CỘT PHẢI (5 COLS): ĐĂNG NHẬP TRÌNH DUYỆT CHÍNH + HƯỚNG DẪN + THÊM NICK */}
+            <div className="lg:col-span-5 flex flex-col space-y-3 justify-between">
+              {/* KHỐI ĐĂNG NHẬP OAUTH TRÊN TRÌNH DUYỆT NÀY */}
+              <div className="rounded-xl border border-blue-200/80 bg-gradient-to-b from-blue-50/70 to-white p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-blue-900 uppercase tracking-wide flex items-center gap-1.5">
+                    <span className="flex size-4 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white font-bold">2</span>
+                    Đăng nhập trên trình duyệt này
+                  </span>
+                  <span className="text-[10px] font-semibold text-blue-600 bg-blue-100/70 px-2 py-0.5 rounded-full">
+                    OAuth Meta
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Dành cho tài khoản Facebook cá nhân hoặc nick quản trị viên đang mở trên trình duyệt hiện tại. Meta sẽ tự động cấp Token dài hạn và nạp Fanpage.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleWebOAuthLogin}
+                  disabled={oauthLoading}
+                  className="w-full h-11 rounded-xl bg-[#1877F2] hover:bg-blue-600 font-bold text-white text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-60"
+                >
+                  {oauthLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Đang kết nối Facebook OAuth...
+                    </>
+                  ) : (
+                    <>
+                      <Globe className="w-4 h-4" />
+                      🔗 Đăng nhập Facebook (OAuth)
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* KHỐI THÔNG TIN CƠ CHẾ TOKEN VĨNH VIỄN */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5 space-y-1.5 text-xs">
+                <div className="flex items-center gap-1.5 font-bold text-slate-700">
+                  <Info className="w-4 h-4 text-blue-600 shrink-0" />
+                  Cơ chế Token vĩnh viễn (Never Expire)
+                </div>
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  Hệ thống tự động chuyển đổi User Token sang Long-lived token và gọi Meta API lấy Page Token vĩnh viễn không hết hạn (trừ phi đổi mật khẩu Facebook hoặc hủy quyền App).
+                </p>
+              </div>
+
+              {/* KHỐI THÊM NICK MỚI */}
+              <div className="rounded-xl border border-dashed border-slate-300 p-3 bg-white hover:bg-slate-50/80 transition-colors flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                    <UserPlus className="w-4 h-4" />
+                  </span>
+                  <div>
+                    <p className="text-xs font-bold text-slate-800">Thêm tài khoản Facebook mới</p>
+                    <p className="text-[10.5px] text-slate-500">Nạp thêm nick via/clone vào hệ thống</p>
                   </div>
                 </div>
-              )}
-            </div>
-
-            {/* LỰA CHỌN 2: ĐĂNG NHẬP FACEBOOK OAUTH TRÊN TRÌNH DUYỆT CHÍNH */}
-            <div className="rounded-xl border border-blue-200/70 bg-blue-50/40 p-4 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-blue-900 uppercase tracking-wide flex items-center gap-1.5">
-                  <span className="flex size-4 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white font-bold">2</span>
-                  Đăng nhập Facebook (OAuth chuẩn Meta)
-                </span>
-                <span className="text-[10px] font-semibold text-blue-600 bg-blue-100/70 px-2 py-0.5 rounded-full">
-                  1-Click
-                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdding(false);
+                    router.push("/accounts");
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 flex items-center gap-1 shrink-0 transition-colors"
+                >
+                  Mở Quản lý Acc
+                  <ExternalLink className="w-3 h-3 text-slate-400" />
+                </button>
               </div>
-              <p className="text-[11px] text-slate-600">
-                Dành cho nick Facebook cá nhân / quản trị viên đang mở sẵn trên trình duyệt này. Meta sẽ tự cấp Token mới mà không cần copy/paste.
-              </p>
-              <button
-                type="button"
-                onClick={handleWebOAuthLogin}
-                disabled={oauthLoading}
-                className="w-full h-10 rounded-xl bg-[#1877F2] hover:bg-blue-600 font-bold text-white text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-60"
-              >
-                {oauthLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Đang mở Facebook OAuth...
-                  </>
-                ) : (
-                  <>
-                    <Globe className="w-4 h-4" />
-                    🔗 Đăng nhập Facebook (OAuth) cấp Token tự động
-                  </>
-                )}
-              </button>
-            </div>
-
-            {/* LỰA CHỌN 3: THÊM TÀI KHOẢN MỚI */}
-            <div className="rounded-xl border border-dashed border-slate-300 p-3.5 bg-white hover:bg-slate-50/60 transition-colors flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
-                  <UserPlus className="w-4 h-4" />
-                </span>
-                <div>
-                  <p className="text-xs font-bold text-slate-800">Thêm tài khoản Facebook mới</p>
-                  <p className="text-[11px] text-slate-500">Chuyển sang Module 02 để nạp thêm nick vào hệ thống</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setAdding(false);
-                  router.push("/accounts");
-                }}
-                className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 flex items-center gap-1.5 shrink-0 transition-colors"
-              >
-                Mở Quản lý Acc
-                <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
-              </button>
             </div>
           </div>
 
-          <DialogFooter className="pt-4 border-t border-slate-100 mt-2">
+          <DialogFooter className="pt-3 border-t border-slate-100 mt-2">
             <button
               type="button"
               onClick={() => setAdding(false)}
