@@ -38,6 +38,7 @@ import {
   saveCreatorSetting,
   startPageCreation,
   stopPageCreation,
+  testCreatorGeminiKey,
 } from "./service";
 
 const TEMPLATE = [
@@ -54,9 +55,11 @@ const COUNTRIES = [
 ];
 
 const MODELS = [
-  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Tốc độ cao — Khuyến nghị)" },
-  { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash (Tốc độ cao — Khuyến nghị)" },
+  { value: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Tốc độ cao — Khuyến nghị)" },
+  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+  { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
   { value: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite" },
+  { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash" },
 ];
 
 const DELIMITERS = [
@@ -911,7 +914,7 @@ function CreateView() {
   const [countryCode, setCountryCode] = useState("+84");
   const [geminiKey, setGeminiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
-  const [geminiModel, setGeminiModel] = useState("gemini-2.5-flash");
+  const [geminiModel, setGeminiModel] = useState("gemini-3.8-flash");
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState(false);
   const [task, setTask] = useState(null);
@@ -1107,10 +1110,13 @@ function CreateView() {
     }
     setTestingKey(true);
     try {
-      await saveCreatorSetting("gemini_api_key", key);
-      toast.success("Đã lưu Gemini API key cho lần tạo page tiếp theo.", "TẠO PAGE");
+      const result = await testCreatorGeminiKey({
+        api_key: key,
+        model_name: geminiModel,
+      });
+      toast.success(result.message || "Gemini key dùng được.", "TẠO PAGE");
     } catch (err) {
-      toast.error(err.message || "Không lưu được key", "TẠO PAGE");
+      toast.error(err.message || "Key không dùng được.", "TẠO PAGE");
     } finally {
       setTestingKey(false);
     }

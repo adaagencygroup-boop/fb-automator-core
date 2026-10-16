@@ -8,6 +8,10 @@ export function saveCreatorSetting(key, value) {
   return api.post("/api/creator/settings", { key, value });
 }
 
+export function testCreatorGeminiKey(payload) {
+  return api.post("/api/creator/gemini/test-key", payload);
+}
+
 export function startPageCreation(payload) {
   return api.post("/api/creator/tasks/start", payload);
 }

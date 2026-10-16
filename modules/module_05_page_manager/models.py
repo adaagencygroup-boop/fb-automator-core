@@ -8,6 +8,8 @@ downloaded_videos ID đã tải thành công, chống trùng. object_path là đ
 download_logs    Nhật ký từng lần tải, gồm cả lần thất bại.
 page_jobs        Một lần bấm Kích hoạt (AI, REEL, TIKTOK, YOUTUBE).
 page_job_items   Trạng thái của từng Page trong job đó.
+ai_page_scans    Lần đếm page gần nhất của từng nick, còn sau khi tắt app.
+ai_managed_pages Từng fanpage đếm được, để không phải đăng nhập lại.
 """
 import json
 
@@ -119,6 +121,28 @@ DDL_STATEMENTS = [
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS ai_page_scans (
+        owner_username VARCHAR(100) NOT NULL DEFAULT '',
+        account_uid VARCHAR(100) NOT NULL,
+        page_count INT NOT NULL DEFAULT 0,
+        scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (owner_username, account_uid)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ai_managed_pages (
+        id SERIAL PRIMARY KEY,
+        owner_username VARCHAR(100) NOT NULL DEFAULT '',
+        account_uid VARCHAR(100) NOT NULL,
+        page_key VARCHAR(200) NOT NULL,
+        page_name VARCHAR(255) NOT NULL,
+        page_url TEXT,
+        category VARCHAR(200) DEFAULT '',
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_ai_managed_page UNIQUE (owner_username, account_uid, page_key)
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS posting_schedules (
         id SERIAL PRIMARY KEY,
         page_id VARCHAR(100),
@@ -157,6 +181,7 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_download_logs_source_page ON download_logs (source, page_id)",
     "CREATE INDEX IF NOT EXISTS idx_page_jobs_type_status ON page_jobs (job_type, status)",
     "CREATE INDEX IF NOT EXISTS idx_page_job_items_job ON page_job_items (job_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ai_managed_pages_owner_uid ON ai_managed_pages (owner_username, account_uid)",
 ]
 
 

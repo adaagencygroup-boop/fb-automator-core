@@ -244,6 +244,7 @@ export default function PostCommentsManager({
           isOpen={isExcelModalOpen}
           onClose={() => setIsExcelModalOpen(false)}
           targetType="COMMENT"
+          existingComments={comments}
           onImportComments={(newComments) => {
             onAddBulkComments(newComments);
             toast.success(`Đã nhập thành công ${newComments.length} bình luận từ file Excel!`, "THÀNH CÔNG");

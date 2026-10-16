@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import AiPost from "./AiPost";
 import FanpageList from "./FanpageList";
 import ReelsPoster from "./ReelsPoster";
 import { getPages, fetchPageTokens } from "./service";
@@ -23,6 +24,9 @@ export default function PageManagerModule({ subPage } = {}) {
   }
   if (subPage === "pages.reels") {
     return <ReelsPoster />;
+  }
+  if (subPage === "pages.ai_post") {
+    return <AiPost />;
   }
   return <TokenManager />;
 }

@@ -18,6 +18,60 @@ logger = logging.getLogger(__name__)
 
 PROFILE_ACCESS_URL = "https://web.facebook.com/settings/?tab=profile_access"
 
+_RESULT_NOISE = {
+    "bạn bè", "friend", "friends", "người dùng facebook", "facebook user",
+    "trang cá nhân", "profile", "thêm", "add", "đã thêm", "added",
+    "công khai", "public", "người lạ",
+}
+
+
+def clean_admin_display_name(text: str, uid: str = "") -> str:
+    """Lấy dòng tên người từ kết quả tìm UID, bỏ nhãn vai trò và chính UID."""
+    target = (uid or "").strip()
+    for raw in (text or "").replace("\r", "\n").split("\n"):
+        line = " ".join(raw.split()).strip().strip(",")
+        if len(line) < 2 or len(line) > 150:
+            continue
+        if target and line == target:
+            continue
+        if line.isdigit():
+            continue
+        lowered = line.lower()
+        if lowered in _RESULT_NOISE:
+            continue
+        if lowered.endswith(" bạn chung") or lowered.endswith(" mutual friends"):
+            continue
+        return line
+    return ""
+
+
+def read_admin_display_name(element, uid: str = "") -> str:
+    """Đọc tên hiện trên thẻ kết quả tìm admin, trước khi click chọn."""
+    chunks = []
+    try:
+        for attr in ("aria-label", "title"):
+            value = element.get_attribute(attr) or ""
+            if value:
+                chunks.append(value)
+    except Exception:
+        pass
+    try:
+        for span in element.find_elements(By.XPATH, ".//span")[:8]:
+            value = span.text or ""
+            if value.strip():
+                chunks.append(value)
+    except Exception:
+        pass
+    try:
+        chunks.append(element.text or "")
+    except Exception:
+        pass
+    for chunk in chunks:
+        name = clean_admin_display_name(chunk, uid)
+        if name:
+            return name
+    return ""
+
 
 def _post_welcome_content(driver: webdriver.Chrome, post_content: str, image_path: str = None) -> bool:
     """
@@ -112,7 +166,7 @@ def run_share_admin(
     Returns:
         dict: success (bool), error (str), page_url (str)
     """
-    result = {"success": False, "error": "", "page_url": ""}
+    result = {"success": False, "error": "", "page_url": "", "admin_name": ""}
 
     try:
         clean_target = (target_admin_uid or "").strip()
@@ -169,8 +223,12 @@ def run_share_admin(
         human_type(search_input, target_admin_uid)
         human_sleep(3.0, 4.5)
 
-        # ── Bước 5: Click kết quả đầu tiên ──
+        # ── Bước 5: Đọc tên trên kết quả, rồi mới click ──
         first_result = wait_and_find(driver, SHARE_ADMIN["first_search_result"], timeout=20)
+        admin_name = read_admin_display_name(first_result, clean_target)
+        if admin_name:
+            result["admin_name"] = admin_name
+            logger.info(f"Admin display name for UID {clean_target}: {admin_name}")
         try:
             first_result.click()
         except Exception:

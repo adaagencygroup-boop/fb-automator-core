@@ -152,11 +152,169 @@ def get_current_user_info(
 # ─────────────────────────────────────────────────────────────
 # HELPER FUNCTIONS (TRÍCH XUẤT FB_ID & QUẢN LÝ COMMENT NHÁP)
 # ─────────────────────────────────────────────────────────────
+TRACKING_PARAMS = {
+    "mibextid", "ref", "rc", "rdid", "epa", "notif_t", "notif_id",
+    "locale", "set", "type", "__tn__", "__cft__", "fref", "sfnsn",
+    "fbclid", "utm_source", "utm_medium", "utm_campaign", "paipv", "eav",
+    "comment_tracking", "feed_referrer", "acontext"
+}
+
+
+def clean_tracking_params(url: str) -> str:
+    """Loại bỏ các query parameter tracking của Facebook như mibextid, ref, locale..."""
+    if not url or "?" not in url:
+        return url.rstrip("/")
+    base, query = url.split("?", 1)
+    base = base.rstrip("/")
+    parts = query.split("&")
+    kept = []
+    for p in parts:
+        if not p:
+            continue
+        k = p.split("=")[0].lower()
+        if k not in TRACKING_PARAMS and not k.startswith("utm_"):
+            kept.append(p)
+    if kept:
+        return f"{base}?{'&'.join(kept)}"
+    return base
+
+
+def normalize_target_url(raw_url: str, target_type: str = "") -> str:
+    """Tự động chuẩn hóa link hoặc UID / Share post token:
+    - Nếu target_type là POST hoặc chuỗi là token share post (vd: 18NvrpA3BJ) -> https://web.facebook.com/share/p/{token}
+    - Nếu link là facebook.com/{token} trong POST -> tự động chuyển sang https://web.facebook.com/share/p/{token}
+    - Nếu có tiền tố share/(p|r|v)/... -> https://web.facebook.com/share/...
+    - Nếu nhập UID cho PAGE / PROFILE -> https://web.facebook.com/{uid}
+    - Loại bỏ tham số tracking rác (?mibextid=..., ?ref=...)
+    """
+    if not raw_url:
+        return ""
+    val = raw_url.strip()
+    if not val:
+        return ""
+
+    t_type = (target_type or "").upper()
+
+    # 1. Kiểm tra nếu là dạng share link có domain hoặc không domain
+    m_share = re.match(
+        r"^(?:(?:https?://)?(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)/)?share/(p|r|v)/([a-zA-Z0-9_\-]+)",
+        val,
+        re.IGNORECASE,
+    )
+    if m_share:
+        return f"https://web.facebook.com/share/{m_share.group(1)}/{m_share.group(2)}"
+
+    m_short_p = re.match(
+        r"^(?:(?:https?://)?(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)/)?(p|r|v)/([a-zA-Z0-9_\-]+)",
+        val,
+        re.IGNORECASE,
+    )
+    if m_short_p and not val.lower().startswith("http"):
+        return f"https://web.facebook.com/share/{m_short_p.group(1)}/{m_short_p.group(2)}"
+
+    # 2. Đã có protocol http:// hoặc https://
+    if re.match(r"^https?://", val, re.IGNORECASE):
+        # Nếu trong POST seeding mà link lại là https://web.facebook.com/18NvrpA3BJ (chỉ có slug token, thiếu /share/p/)
+        if t_type == "POST":
+            m_single_slug = re.match(
+                r"^https?://(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)/([a-zA-Z0-9_\-]{6,30})/?$",
+                val,
+                re.IGNORECASE,
+            )
+            if m_single_slug:
+                slug = m_single_slug.group(1)
+                system_slugs = {
+                    "watch",
+                    "groups",
+                    "pages",
+                    "photo",
+                    "events",
+                    "gaming",
+                    "marketplace",
+                    "reel",
+                    "reels",
+                }
+                if slug.lower() not in system_slugs:
+                    return f"https://web.facebook.com/share/p/{slug}"
+
+        cleaned = clean_tracking_params(val)
+        # Chuẩn hóa host về web.facebook.com
+        cleaned = re.sub(
+            r"^https?://(?:(?:www\.|m\.)?facebook\.com|fb\.com)",
+            "https://web.facebook.com",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        return cleaned
+
+    # 3. Chứa domain Facebook nhưng thiếu protocol
+    if re.match(r"^(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.watch|fb\.com)", val, re.IGNORECASE):
+        full_url = f"https://{val.lstrip('/')}"
+        if t_type == "POST":
+            m_single_slug = re.match(
+                r"^https?://(?:(?:www\.|web\.|m\.)?facebook\.com|fb\.com)/([a-zA-Z0-9_\-]{6,30})/?$",
+                full_url,
+                re.IGNORECASE,
+            )
+            if m_single_slug:
+                slug = m_single_slug.group(1)
+                system_slugs = {
+                    "watch",
+                    "groups",
+                    "pages",
+                    "photo",
+                    "events",
+                    "gaming",
+                    "marketplace",
+                    "reel",
+                    "reels",
+                }
+                if slug.lower() not in system_slugs:
+                    return f"https://web.facebook.com/share/p/{slug}"
+
+        cleaned = clean_tracking_params(full_url)
+        cleaned = re.sub(
+            r"^https?://(?:(?:www\.|m\.)?facebook\.com|fb\.com)",
+            "https://web.facebook.com",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        return cleaned
+
+    clean = val.lstrip("/").rstrip("/")
+
+    # 4. Khi nhập trực tiếp token hoặc UID không có domain:
+    # Nếu là POST seeding:
+    if t_type == "POST":
+        # Dạng UID_PostID (vd: 100089123456_987654321) -> giữ dạng https://web.facebook.com/{clean}
+        if re.match(r"^\d+_\d+$", clean):
+            return f"https://web.facebook.com/{clean}"
+        # Mã share post như 18NvrpA3BJ hoặc id bài viết thông thường
+        return f"https://web.facebook.com/share/p/{clean}"
+
+    # Tự động phát hiện share token (chứa cả chữ và số, độ dài 8-25 ký tự)
+    if (
+        re.match(r"^[a-zA-Z0-9]{8,25}$", clean)
+        and any(c.isalpha() for c in clean)
+        and any(c.isdigit() for c in clean)
+    ):
+        if t_type in ("", "POST"):
+            return f"https://web.facebook.com/share/p/{clean}"
+
+    # 5. Mặc định cho PAGE / PROFILE hoặc UID số thuần
+    return f"https://web.facebook.com/{clean}"
+
+
 def extract_fb_id(url: str, target_type: str = "") -> str:
     """Trích xuất UID / Page ID / Post ID sau khi xác thực link (chuẩn DBML: fb_id varchar(100) not null)."""
     if not url:
         return "unknown"
     clean = url.strip()
+
+    # Share link Facebook: /share/(?:p|r|v)/([a-zA-Z0-9_\-]+)
+    m = re.search(r"/share/(?:p|r|v)/([a-zA-Z0-9_\-]+)", clean)
+    if m:
+        return m.group(1)
 
     # 1. Post ID từ permalink: story_fbid=(\d+) hoặc fbid=(\d+)
     m = re.search(r"[?&](?:story_fbid|fbid)=(\d+)", clean)
@@ -369,15 +527,22 @@ async def validate_targets(
 
     valid_targets = []
     seen_urls = set()
+    seen_fb_ids = set()
     camp_type = req.target_type.upper()
 
     for idx, raw_url in enumerate(req.urls):
-        url = (raw_url or "").strip()
-        if not url or url in seen_urls:
+        url = normalize_target_url(raw_url, camp_type)
+        if not url:
             continue
-        seen_urls.add(url)
 
         fb_id = extract_fb_id(url, camp_type)
+
+        # Lọc trùng lặp qua cả URL chuẩn hóa và fb_id cốt lõi
+        if url in seen_urls or (fb_id and fb_id != "unknown" and fb_id in seen_fb_ids):
+            continue
+        seen_urls.add(url)
+        if fb_id and fb_id != "unknown":
+            seen_fb_ids.add(fb_id)
 
         # Trích xuất display_name chuẩn: Page / Trang cá nhân / Bài viết + fb_id
         if camp_type == "PAGE":
@@ -1014,9 +1179,10 @@ def _process_account_tasks(
         task_objs = db.query(SeedingTask).filter(SeedingTask.id.in_(task_ids)).all()
         task_objs.sort(key=lambda t: action_priority.get(t.action, 99))
         sorted_task_ids = [t.id for t in task_objs]
+        task_by_id = {t.id: t for t in task_objs}
 
         account_has_failure = False
-        for tid in sorted_task_ids:
+        for idx, tid in enumerate(sorted_task_ids):
             if _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested"):
                 broadcast("warning", f"[{uid}] Dừng tác vụ do có yêu cầu hủy.")
                 account_has_failure = True
@@ -1097,13 +1263,18 @@ def _process_account_tasks(
 
             db.commit()
 
-            # Delay an toàn nếu còn tác vụ tiếp theo của tài khoản này
-            if tid != sorted_task_ids[-1]:
-                delay_s = random.randint(delay_min, delay_max)
-                broadcast(
-                    "info", f"[{uid}] Nghỉ an toàn {delay_s}s trước tác vụ tiếp theo..."
-                )
-                time.sleep(delay_s)
+            # Còn tác vụ tiếp theo: cùng bài viết thì làm tiếp ngay trên trang đang mở (chỉ nghỉ ngắn như người thật);
+            # sang bài viết khác mới nghỉ an toàn delay_min..delay_max giây.
+            if idx < len(sorted_task_ids) - 1:
+                next_task = task_by_id.get(sorted_task_ids[idx + 1])
+                if next_task and next_task.target_id == ut.target_id:
+                    time.sleep(random.uniform(2.0, 4.0))
+                else:
+                    delay_s = random.randint(delay_min, delay_max)
+                    broadcast(
+                        "info", f"[{uid}] Nghỉ an toàn {delay_s}s trước tác vụ tiếp theo..."
+                    )
+                    time.sleep(delay_s)
             else:
                 # Đã hoàn thành toàn bộ tác vụ của nick, nghỉ 1.5s rồi đóng trình duyệt an toàn
                 time.sleep(1.5)
@@ -1286,10 +1457,39 @@ def _campaign_status(campaign_id: int) -> str | None:
         db.close()
 
 
+def _rest_before_next_post(chain: list[int], next_cid: int) -> bool:
+    """Nghỉ delay_seconds_min..max giây (cấu hình của chiến dịch) trước khi sang bài viết tiếp theo trong lô,
+    vì trong cùng 1 bài viết các nick chỉ nghỉ ngắn giữa Like / Bình luận / Chia sẻ.
+    Kiểm tra yêu cầu dừng trong lúc nghỉ. Trả về False nếu lô bị dừng."""
+    db = SessionLocal()
+    try:
+        camp = db.query(SeedingCampaign).filter(SeedingCampaign.id == next_cid).first()
+        if not camp or camp.campaign_type != "POST":
+            return True
+        lo = camp.delay_seconds_min or 30
+        hi = camp.delay_seconds_max or 60
+        owner = str(camp.created_by) if camp.created_by is not None else None
+    finally:
+        db.close()
+
+    delay_s = random.randint(min(lo, hi), max(lo, hi))
+    broadcast("info", f"⏳ Nghỉ an toàn {delay_s}s trước khi sang bài viết tiếp theo...", owner=owner)
+    for sec in range(delay_s):
+        if any(_active_seeding_campaigns.get(c, {}).get("stop_requested", False) for c in chain):
+            return False
+        # Trạng thái STOPPED trong DB (do API dừng ghi) thì đọc thưa hơn để đỡ tốn kết nối DB
+        if sec % 5 == 0 and _campaign_status(next_cid) == "STOPPED":
+            return False
+        time.sleep(1)
+    return True
+
+
 def _execute_campaign_runner(initial_campaign_id: int):
     """Hàm chạy nền điều phối tuần tự các chiến dịch trong cùng một batch."""
     chain = _batch_campaign_chains.get(initial_campaign_id, [initial_campaign_id])
     for idx, cid in enumerate(chain):
+        if idx > 0 and not _rest_before_next_post(chain, cid):
+            break
         # Kiểm tra nếu có yêu cầu dừng toàn batch
         stop_req = any(
             _active_seeding_campaigns.get(c, {}).get("stop_requested", False)

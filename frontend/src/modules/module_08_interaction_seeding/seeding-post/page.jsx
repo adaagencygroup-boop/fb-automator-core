@@ -1,6 +1,7 @@
 "use client";
 
 import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
+import { normalizeTargetUrl } from "@/modules/module_08_interaction_seeding/validation";
 import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
 import { toast } from "@/components/ui/toast";
 import { FileText } from "lucide-react";
@@ -163,7 +164,8 @@ export default function SeedingPostPage() {
 
   const handleAddTargets = async (rawUrls) => {
     try {
-      const res = await seedingApi.validateSeedingTargets("POST", rawUrls);
+      const normalizedUrls = (rawUrls || []).map((u) => normalizeTargetUrl(u, "POST"));
+      const res = await seedingApi.validateSeedingTargets("POST", normalizedUrls);
       if (res && res.targets) {
         setTargets(res.targets);
         setSuccessMessage(
