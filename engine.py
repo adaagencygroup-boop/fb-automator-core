@@ -359,6 +359,11 @@ app.include_router(creator_router)
 
 
 # ==================== MODULE 5: PAGE MANAGER & POSTING ====================
+from modules.module_05_page_manager.routes import router as ai_post_router
+
+app.include_router(ai_post_router)
+
+
 @app.get("/api/pages")
 def get_pages():
     return {"pages": db.fetch_all("SELECT * FROM pages ORDER BY id DESC")}

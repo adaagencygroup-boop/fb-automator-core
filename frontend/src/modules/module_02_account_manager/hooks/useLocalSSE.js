@@ -47,8 +47,11 @@ export function translateLogMessage(rawMsg) {
   if (rawMsg.includes("ERR_INTERNET_DISCONNECTED") || /internet disconnected/i.test(rawMsg)) {
     return "❌ Mất kết nối mạng Internet. Vui lòng kiểm tra lại kết nối mạng!";
   }
-  if (rawMsg.includes("SessionNotCreatedException") || /session not created/i.test(rawMsg)) {
-    return "❌ Không thể khởi động trình duyệt Chrome (xung đột phiên bản hoặc trình duyệt đang mở sẵn).";
+  if (/only supports Chrome version/i.test(rawMsg) || /version of ChromeDriver/i.test(rawMsg)) {
+    return "❌ ChromeDriver không khớp phiên bản Chrome đang cài. Cập nhật Chrome rồi mở lại nick.";
+  }
+  if (rawMsg.includes("SessionNotCreatedException") || /session not created/i.test(rawMsg) || /chrome instance exited/i.test(rawMsg)) {
+    return "❌ Chrome của nick này vẫn đang chạy hoặc profile bị khóa. Đóng cửa sổ Chrome của nick rồi đăng nhập lại.";
   }
   if (
     /ResourceExhausted/i.test(rawMsg) ||

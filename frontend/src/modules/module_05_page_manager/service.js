@@ -19,3 +19,31 @@ export async function addManualPage(payload) {
 export async function deleteManagedPage(pageId) {
   return api.delete(`/api/creator/pages/${pageId}`);
 }
+
+export async function getAiAccounts() {
+  return api.get("/api/pages/ai/accounts");
+}
+
+export async function loginAiAccount(uid) {
+  return api.post("/api/pages/ai/login", { uid });
+}
+
+export async function openAiPage(uid, pageId) {
+  return api.post("/api/pages/ai/open-page", { uid, page_id: pageId });
+}
+
+export async function testAiKeys(payload) {
+  return api.post("/api/pages/ai/test-key", payload);
+}
+
+export async function startAiPost(payload) {
+  return api.post("/api/pages/ai/start", payload);
+}
+
+export async function stopAiPost() {
+  return api.post("/api/pages/ai/stop");
+}
+
+export async function getAiPostStatus() {
+  return api.get("/api/pages/ai/status");
+}

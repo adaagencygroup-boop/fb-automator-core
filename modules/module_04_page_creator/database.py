@@ -27,6 +27,7 @@ class CreatedPage(Base):
     owner_username = Column(String(100), nullable=True, index=True)
     creator_fb_uid = Column(String(50), nullable=False)
     shared_admin_uid = Column(String(50), nullable=False, default="")
+    shared_admin_name = Column(String(150), nullable=False, default="")
     page_name = Column(String(255), nullable=False)
     page_category = Column(String(100), nullable=True)
     page_url = Column(Text, nullable=True)
@@ -49,6 +50,7 @@ _ADDITIVE_COLUMNS = {
         "owner_username": "VARCHAR(100)",
         "creator_fb_uid": "VARCHAR(50)",
         "shared_admin_uid": "VARCHAR(50) DEFAULT ''",
+        "shared_admin_name": "VARCHAR(150) DEFAULT ''",
         "page_name": "VARCHAR(255)",
         "page_category": "VARCHAR(100)",
         "page_url": "TEXT",
@@ -129,11 +131,30 @@ class PageRepo:
         if owner:
             payload["owner_username"] = owner
         payload.setdefault("shared_admin_uid", "")
+        payload.setdefault("shared_admin_name", "")
         page = CreatedPage(**payload)
         db.add(page)
         db.commit()
         db.refresh(page)
         return page
+
+    @staticmethod
+    def remember_admin_name(db, admin_uid, admin_name):
+        """Ghi tên admin vừa đọc được cho mọi page đang trỏ tới UID này mà chưa có tên."""
+        uid = (admin_uid or "").strip()
+        name = (admin_name or "").strip()
+        if not uid or not name:
+            return 0
+        updated = (
+            db.query(CreatedPage)
+            .filter(
+                CreatedPage.shared_admin_uid == uid,
+                (CreatedPage.shared_admin_name.is_(None)) | (CreatedPage.shared_admin_name == ""),
+            )
+            .update({CreatedPage.shared_admin_name: name[:150]}, synchronize_session=False)
+        )
+        db.commit()
+        return updated
 
 
 def _setting_owner():

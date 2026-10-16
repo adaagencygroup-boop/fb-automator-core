@@ -145,6 +145,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
 
     db = SessionLocal()
     driver = None
+    admin_name = ""
     try:
         if stop_task_requested:
             return {"success": False, "reason": "stopped"}
@@ -167,7 +168,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
 
         # ── Bước AI: Gọi Gemini ──
         gemini_key = SettingRepo.get(db, "gemini_api_key")
-        gemini_model = SettingRepo.get(db, "gemini_model") or "gemini-2.5-flash"
+        gemini_model = SettingRepo.get(db, "gemini_model") or "gemini-3.8-flash"
         ai_data = {}
         if gemini_key and not stop_task_requested:
             try:
@@ -382,6 +383,11 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
             image_path=post_img_path or avatar_path or cover_path,
             creator_uid=uid,
         )
+        admin_name = (admin_result.get("admin_name") or "").strip()
+        if not admin_name and is_same_uid and account is not None:
+            admin_name = (account.profile_name or "").strip()
+        if admin_name:
+            PageRepo.remember_admin_name(db, target_admin_uid, admin_name)
 
         if not final_url_so_far and admin_result.get("page_url"):
             final_url_so_far = clean_facebook_page_url(admin_result["page_url"])
@@ -418,6 +424,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
             "owner_username": owner,
             "creator_fb_uid": uid,
             "shared_admin_uid": target_admin_uid,
+            "shared_admin_name": admin_name,
             "page_name": page_name,
             "page_category": category,
             "page_url": final_url_so_far,
@@ -444,6 +451,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
                     "owner_username": owner,
                     "creator_fb_uid": uid,
                     "shared_admin_uid": target_admin_uid,
+                    "shared_admin_name": admin_name,
                     "page_name": page_name,
                     "status": "FAILED",
                     "log_detail": str(e),
@@ -837,7 +845,7 @@ def _managed_row(page, names):
         "status": page.status,
         "creator_fb_uid": page.creator_fb_uid,
         "manager_uid": manager,
-        "manager_name": names.get(manager, ""),
+        "manager_name": names.get(manager) or (page.shared_admin_name or ""),
         "manager_avatar_url": facebook_picture_url(manager),
         "created_at": to_vn_iso(page.created_at),
     }
@@ -895,6 +903,61 @@ def delete_managed_page(page_id: int, db: Session = Depends(get_db)):
     if not PageRepo.delete_owned(db, page_id, owner_username=owner):
         raise HTTPException(status_code=404, detail="Không tìm thấy fanpage.")
     return {"success": True}
+
+
+class GeminiTestBody(BaseModel):
+    api_key: str
+    model_name: str = "gemini-3.8-flash"
+
+
+def _provider_message(response) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        return f"HTTP {response.status_code}"
+    detail = body.get("error", body) if isinstance(body, dict) else body
+    if isinstance(detail, dict):
+        return str(detail.get("message") or detail.get("status") or f"HTTP {response.status_code}")
+    return str(detail or f"HTTP {response.status_code}")
+
+
+@router.post("/gemini/test-key")
+def test_gemini_key(body: GeminiTestBody, db: Session = Depends(get_db)):
+    """Gọi Gemini thật để kiểm tra key + model; chỉ lưu khi dùng được."""
+    import httpx
+
+    from modules.module_04_page_creator.database import SettingRepo
+    from modules.module_05_page_manager.vi_messages import suggested_replacement, vi_gemini_message
+
+    api_key = (body.api_key or "").strip()
+    model = (body.model_name or "gemini-3.8-flash").strip()
+    if len(api_key) < 20:
+        raise HTTPException(status_code=400, detail="Gemini API key quá ngắn hoặc đang để trống.")
+    try:
+        response = httpx.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            json={"contents": [{"parts": [{"text": "Reply with OK"}]}]},
+            timeout=30,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=400, detail="Không kết nối được Gemini.") from exc
+    if response.status_code != 200:
+        message = _provider_message(response)
+        replacement = suggested_replacement(message)
+        if replacement:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model {model} không còn cho key này. Hãy chọn {replacement}.",
+            )
+        raise HTTPException(status_code=400, detail=vi_gemini_message(message))
+    SettingRepo.set(db, "gemini_api_key", api_key)
+    SettingRepo.set(db, "gemini_model", model)
+    return {
+        "gemini": "ok",
+        "model": model,
+        "message": f"Gemini key dùng được với {model}. Đã lưu cho lần tạo page tiếp theo.",
+    }
 
 
 @router.get("/settings")

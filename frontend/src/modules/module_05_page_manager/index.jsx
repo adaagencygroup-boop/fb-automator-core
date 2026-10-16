@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import AiPost from "./AiPost";
 import FanpageList from "./FanpageList";
 import { getPages, fetchPageTokens } from "./service";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -19,6 +20,9 @@ import {
 export default function PageManagerModule({ subPage } = {}) {
   if (subPage === "pages.list") {
     return <FanpageList />;
+  }
+  if (subPage === "pages.ai_post") {
+    return <AiPost />;
   }
   return <TokenManager />;
 }
