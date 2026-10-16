@@ -61,7 +61,7 @@ export default function HistoryTable({
                       {(currentPage - 1) * pageSize + idx + 1}
                     </td>
 
-                    <td className="py-3 px-4 font-mono text-gray-600 text-[11px]">
+                    <td className="py-3 px-4 font-mono text-gray-600 text-[11px] whitespace-nowrap">
                       {c.created_at_display || c.created_at}
                     </td>
 

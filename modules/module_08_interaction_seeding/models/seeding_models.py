@@ -4,13 +4,22 @@ ORM Models cho Module 8: Interaction Seeding (Seeding Page, Seeding Profile, See
 Tuân thủ chuẩn DBML Module 8 (fb_automator_seeding).
 Tương thích SQLite & PostgreSQL, hỗ trợ partial index và cascade delete.
 """
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, ForeignKey, Index, UniqueConstraint, text
 )
 from sqlalchemy.orm import relationship
 
 from modules.module_02_account_manager.database.connection import Base
-from modules.module_02_account_manager.database.repository import utc_now
+
+VN_TZ = timezone(timedelta(hours=7))
+
+
+def vn_now() -> datetime:
+    """Giờ Việt Nam (UTC+7) hiện tại, dạng naive để lưu vào cột TIMESTAMP của các bảng seeding_*.
+    Riêng Module 8 lưu giờ Việt Nam; các module khác vẫn lưu UTC (utc_now của Module 2)."""
+    return datetime.now(VN_TZ).replace(tzinfo=None)
 
 
 # 1. Đối tượng được seeding (Page / Trang cá nhân / Bài viết), dùng chung giữa các chiến dịch
@@ -23,8 +32,8 @@ class SeedingTarget(Base):
     url = Column(Text, nullable=False)
     display_name = Column(String(255), nullable=True)  # Cột "Tên hiển thị" (Page / Trang cá nhân / Bài viết + fb_id)
     created_by = Column(Integer, nullable=True)        # users.id (người dùng sở hữu/import link)
-    created_at = Column(DateTime, default=utc_now)
-    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at = Column(DateTime, default=vn_now)
+    updated_at = Column(DateTime, default=vn_now, onupdate=vn_now)
 
     # Relationships
     campaign_targets = relationship("SeedingCampaignTarget", back_populates="target", cascade="all, delete-orphan")
@@ -53,8 +62,8 @@ class SeedingCampaign(Base):
     created_by = Column(Integer, nullable=True)             # users.id (bảng core) - tham chiếu logic, không có FK
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=utc_now)
-    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
+    created_at = Column(DateTime, default=vn_now)
+    updated_at = Column(DateTime, default=vn_now, onupdate=vn_now)
 
     # Relationships
     campaign_targets = relationship("SeedingCampaignTarget", back_populates="campaign", cascade="all, delete-orphan")
@@ -107,7 +116,7 @@ class SeedingComment(Base):
     campaign_id = Column(Integer, ForeignKey("seeding_campaigns.id", ondelete="CASCADE"), nullable=True)
     created_by = Column(Integer, nullable=True)                      # users.id (người dùng sở hữu/import comment)
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=utc_now)
+    created_at = Column(DateTime, default=vn_now)
 
     # Relationships
     campaign = relationship("SeedingCampaign", back_populates="comments")
@@ -132,10 +141,10 @@ class SeedingTask(Base):
     status = Column(String(20), default="PENDING")          # 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED'
     attempts = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
-    scheduled_at = Column(DateTime, default=utc_now)        # Thời điểm sớm nhất được phép chạy (giãn cách)
+    scheduled_at = Column(DateTime, default=vn_now)        # Thời điểm sớm nhất được phép chạy (giãn cách)
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=utc_now)
+    created_at = Column(DateTime, default=vn_now)
 
     # Relationships
     campaign = relationship("SeedingCampaign", back_populates="tasks")
