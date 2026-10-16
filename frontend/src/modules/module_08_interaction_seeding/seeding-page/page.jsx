@@ -1,6 +1,7 @@
 "use client";
 
 import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
+import { normalizeTargetUrl } from "@/modules/module_08_interaction_seeding/validation";
 import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
 import { toast } from "@/components/ui/toast";
 import { Send } from "lucide-react";
@@ -125,7 +126,8 @@ export default function SeedingPageMain() {
 
   const handleAddTargets = async (rawUrls) => {
     try {
-      const res = await seedingApi.validateSeedingTargets("PAGE", rawUrls);
+      const normalizedUrls = (rawUrls || []).map((u) => normalizeTargetUrl(u, "PAGE"));
+      const res = await seedingApi.validateSeedingTargets("PAGE", normalizedUrls);
       if (res && res.targets) {
         setTargets(res.targets);
         setSuccessMessage(
@@ -268,7 +270,7 @@ export default function SeedingPageMain() {
               Seeding Page
             </h1>
             <p className="text-xs text-slate-500 mt-1 font-normal">
-              Tăng Follow và Like Fanpage tự động bằng Chrome profiles thực tế.
+              Tăng Follow Trang cá nhân cho nhiều tài khoản cá nhân Facebook.
             </p>
           </div>
         </div>

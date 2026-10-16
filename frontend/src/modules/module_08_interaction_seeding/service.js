@@ -119,4 +119,7 @@ export async function startSeeding(data) {
   return seedingApi.createSeedingCampaign(data);
 }
 
+// Re-export toàn bộ các hàm validation & chuẩn hóa URL từ validation.js để đảm bảo tương thích ngược 100%
+export * from "./validation";
+
 export default seedingApi;
