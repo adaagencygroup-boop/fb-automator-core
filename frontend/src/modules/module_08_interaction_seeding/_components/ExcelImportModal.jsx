@@ -101,14 +101,12 @@ export default function ExcelImportModal({
           ["Link Fanpage hoặc Page ID"],
           ["https://www.facebook.com/cuahangabc"],
           ["https://www.facebook.com/dulichvietnam"],
-          ["100089234567890"],
         ];
       } else if (targetType === "PROFILE") {
         sampleData = [
           ["Link Trang cá nhân hoặc UID"],
           ["https://www.facebook.com/leminhanh"],
           ["https://www.facebook.com/tranquocbao"],
-          ["100012345678910"],
         ];
       } else if (targetType === "POST") {
         sampleData = [
@@ -131,7 +129,6 @@ export default function ExcelImportModal({
           ["Link Facebook hoặc UID"],
           ["https://www.facebook.com/100089234567890/posts/1234567890"],
           ["https://www.facebook.com/cuahangabc"],
-          ["100012345678910"],
         ];
       }
 

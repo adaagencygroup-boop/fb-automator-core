@@ -45,7 +45,7 @@ export default function Header({
   const initials = user?.initials || getInitial(user?.name);
 
   return (
-    <header className={`${activeTab === "dashboard" ? "h-[60px]" : "h-[74px]"} bg-white border-b border-border pl-8 pr-8 pt-3.5 pb-[15px] flex items-center justify-between gap-6 shrink-0 font-sans`}>
+    <header className={`${activeTab === "dashboard" ? "h-[60px]" : "h-[69.8px]"} bg-white border-b border-border pl-8 pr-8 pt-3.5 pb-[15px] flex items-center justify-between gap-6 shrink-0 font-sans`}>
       {/* Nút ẩn/hiện sidebar + Title & Subtitle */}
       <div className="flex items-center min-w-0">
         {onToggleSidebar && (

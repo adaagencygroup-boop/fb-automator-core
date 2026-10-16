@@ -23,7 +23,7 @@ export default function PostAccountConfig({
         {/* Header */}
         <div className="flex items-center gap-3">
           <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
-            4
+            {doComment ? "4" : "3"}
           </span>
           <h2 className="text-base font-bold text-gray-900">
             Số lượng tài khoản sử dụng
@@ -60,7 +60,7 @@ export default function PostAccountConfig({
           {/* Total Account Pills */}
           <div className="flex items-center gap-2 text-xs">
             <span
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium border w-full justify-center ${
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-medium border w-full justify-start ${
                 liveAccounts > 0
                   ? "bg-emerald-50 text-emerald-700 border-emerald-200/60"
                   : "bg-amber-50 text-amber-700 border-amber-200/60"
@@ -104,7 +104,7 @@ export default function PostAccountConfig({
         {/* Header */}
         <div className="flex items-center gap-3">
           <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
-            5
+            {doComment ? "5" : "4"}
           </span>
           <h2 className="text-base font-bold text-gray-900">
             Thiết lập thời gian
@@ -119,28 +119,34 @@ export default function PostAccountConfig({
               <span>Thời gian nghỉ giữa 2 lần tương tác (giây)</span>
             </label>
             <div className="flex items-center gap-3">
-              <div className="flex-1 relative">
+              <div className="flex-1 flex items-center gap-2">
                 <input
                   type="number"
                   min={1}
                   value={minDelay}
-                  onChange={(e) => onMinDelayChange(Number(e.target.value) || 1)}
-                  className="w-full text-center text-sm font-semibold py-2 px-3 rounded-xl border border-gray-200 bg-gray-50/50 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-gray-800"
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    onMinDelayChange(val === "" ? "" : Math.max(1, Number(val)));
+                  }}
+                  className="w-full text-center text-sm font-bold py-1.5 px-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-gray-800 bg-white"
                   placeholder="30"
                 />
-                <span className="absolute right-3 top-2.5 text-[11px] text-gray-400 font-medium">giây</span>
               </div>
+
               <span className="text-gray-400 font-bold">-</span>
-              <div className="flex-1 relative">
+
+              <div className="flex-1 flex items-center gap-2">
                 <input
                   type="number"
-                  min={minDelay}
+                  min={minDelay || 1}
                   value={maxDelay}
-                  onChange={(e) => onMaxDelayChange(Number(e.target.value) || minDelay)}
-                  className="w-full text-center text-sm font-semibold py-2 px-3 rounded-xl border border-gray-200 bg-gray-50/50 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-gray-800"
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    onMaxDelayChange(val === "" ? "" : Math.max(Number(minDelay || 1), Number(val)));
+                  }}
+                  className="w-full text-center text-sm font-bold py-1.5 px-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-gray-800 bg-white"
                   placeholder="60"
                 />
-                <span className="absolute right-3 top-2.5 text-[11px] text-gray-400 font-medium">giây</span>
               </div>
             </div>
           </div>
