@@ -67,8 +67,8 @@ function pageSubtitle(item) {
 
 function matchesStatus(item, status) {
   if (status === "ALL") return true;
-  if (status === "SUCCESS") return item.status === "SUCCESS";
-  return item.status !== "SUCCESS";
+  if (status === "SUCCESS") return item.status === "SUCCESS" || item.status === "ACTIVE";
+  return item.status !== "SUCCESS" && item.status !== "ACTIVE";
 }
 
 function StatCard({ label, value, loading, icon, iconClass, cardClass, labelClass, valueClass = "text-[#0F172A]" }) {
@@ -166,6 +166,19 @@ function RowMenu({ item, onCopy, onDelete }) {
             <Copy className="h-3.5 w-3.5 text-[#94A3B8]" />
             Sao chép UID
           </button>
+          {item.page_id ? (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-medium text-[#334155] hover:bg-slate-50"
+              onClick={() => {
+                onCopy(item.page_id, "Page ID");
+                setOpen(false);
+              }}
+            >
+              <Copy className="h-3.5 w-3.5 text-[#94A3B8]" />
+              Sao chép Page ID
+            </button>
+          ) : null}
           {item.page_url ? (
             <button
               type="button"
@@ -225,7 +238,7 @@ export default function FanpageList() {
   }, []);
 
   const stats = useMemo(() => {
-    const success = pages.filter((item) => item.status === "SUCCESS").length;
+    const success = pages.filter((item) => item.status === "SUCCESS" || item.status === "ACTIVE").length;
     return { total: pages.length, success, failed: pages.length - success };
   }, [pages]);
 
@@ -234,7 +247,7 @@ export default function FanpageList() {
     return pages.filter((item) => {
       if (!matchesStatus(item, status)) return false;
       if (!keyword) return true;
-      return [item.page_name, item.manager_name, item.manager_uid, item.page_category]
+      return [item.page_name, item.page_id, item.manager_name, item.manager_uid, item.page_category]
         .some((field) => String(field || "").toLowerCase().includes(keyword));
     });
   }, [pages, query, status]);
@@ -416,7 +429,10 @@ export default function FanpageList() {
                             ) : (
                               <p className="truncate text-[13px] font-bold leading-4 text-[#1E293B]">{item.page_name || "—"}</p>
                             )}
-                            <p className="text-[11px] leading-4 text-[#94A3B8]">{pageSubtitle(item)}</p>
+                            <p className="text-[11px] leading-4 text-[#94A3B8] flex items-center">
+                              {item.page_id ? <span className="font-mono text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded mr-1.5 font-medium">{item.page_id}</span> : null}
+                              <span>{pageSubtitle(item)}</span>
+                            </p>
                           </div>
                         </div>
                       </td>

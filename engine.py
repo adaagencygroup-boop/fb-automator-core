@@ -363,6 +363,9 @@ app.include_router(creator_router)
 from modules.module_05_page_manager.routes_reels import router as reels_router
 app.include_router(reels_router, prefix="/api")
 
+from modules.module_05_page_manager.routes_pages import router as page_manager_router
+app.include_router(page_manager_router, prefix="/api")
+
 from modules.module_05_page_manager.routes import router as ai_post_router
 app.include_router(ai_post_router)
 
