@@ -8,6 +8,7 @@ Hỗ trợ:
 - Cơ chế Exponential Backoff & Retry tự động reset file pointers
 """
 import os
+import re
 import time
 import requests
 from typing import Optional, Dict, Any, List
@@ -205,6 +206,23 @@ class FacebookGraphClient:
 
         return token
 
+    def get_user_profile(self, access_token: str) -> Dict[str, Any]:
+        """Lấy thông tin tài khoản (id, name, picture) từ /me."""
+        token = (access_token or "").strip()
+        if not token:
+            raise ValueError("Access Token không được để trống")
+        url = f"{GRAPH_BASE_URL}/me"
+        res = self.session.get(url, params={"fields": "id,name,picture.type(large)", "access_token": token}, timeout=15)
+        data = res.json()
+        if "error" in data:
+            err = data.get("error", {})
+            err_code = err.get("code")
+            msg = err.get("message", "Lỗi lấy thông tin cá nhân Facebook")
+            if err_code in (190, 102):
+                raise RuntimeError(f"Access Token đã hết hạn hoặc không hợp lệ (Mã {err_code}): {msg}")
+            raise RuntimeError(f"Lỗi Meta Graph API ({err_code}): {msg}")
+        return data
+
     def fetch_managed_pages(self, user_access_token: str) -> List[Dict[str, Any]]:
         """
         Lấy toàn bộ danh sách Fanpage và Page Access Token từ User Token.
@@ -238,9 +256,13 @@ class FacebookGraphClient:
                 break
 
             if "error" in data:
-                err_msg = data.get("error", {}).get("message", "Lỗi lấy danh sách trang từ Facebook")
-                print(f"[Fetch Pages Error] {err_msg}")
-                break
+                err_obj = data.get("error", {})
+                err_msg = err_obj.get("message", "Lỗi lấy danh sách trang từ Facebook")
+                err_code = err_obj.get("code")
+                print(f"[Fetch Pages Error] {err_msg} (code: {err_code})")
+                if err_code in (190, 102):
+                    raise RuntimeError(f"Token Facebook đã hết hạn hoặc bị thu hồi (Mã {err_code}): {err_msg}")
+                raise RuntimeError(f"Lỗi Meta Graph API ({err_code}): {err_msg}")
 
             items = data.get("data", [])
             for item in items:
@@ -261,5 +283,15 @@ class FacebookGraphClient:
             next_url = paging.get("next")
 
         return pages
+
+
+def extract_token_from_text(text: str) -> Optional[str]:
+    """Trích xuất access_token từ URL hash hoặc chuỗi query."""
+    if not text:
+        return None
+    match = re.search(r"access_token=([^&]+)", text)
+    if match:
+        return match.group(1)
+    return None
 
 fb_client = FacebookGraphClient()

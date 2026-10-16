@@ -18,6 +18,10 @@ import {
   ShieldAlert,
   Sparkles,
   Layers,
+  Zap,
+  Globe,
+  Monitor,
+  Loader2,
 } from "lucide-react";
 import {
   Dialog,
@@ -32,7 +36,14 @@ import Pagination from "@/components/ui/pagination";
 import { MaskIcon } from "@/components/icons";
 import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
-import { deleteManagedPage, getManagedPages, syncPagesByAccount } from "./service";
+import {
+  deleteManagedPage,
+  getManagedPages,
+  syncPagesByAccount,
+  getOAuthConfig,
+  syncPagesByToken,
+  oauthByProfile,
+} from "./service";
 
 const PAGE_SIZE = 10;
 const STATUS_OPTIONS = [
@@ -245,6 +256,9 @@ export default function FanpageList() {
   const [customToken, setCustomToken] = useState("");
   const [showCustomToken, setShowCustomToken] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState(false);
+  const [profileOauthLoading, setProfileOauthLoading] = useState(false);
+  const [showLiveBrowser, setShowLiveBrowser] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -260,6 +274,28 @@ export default function FanpageList() {
 
   useEffect(() => {
     load();
+
+    // Bắt token tự động khi Facebook OAuth redirect quay lại URL kèm #access_token=...
+    if (typeof window !== "undefined" && window.location.hash.includes("access_token=")) {
+      const hashParams = new URLSearchParams(window.location.hash.substring(1));
+      const token = hashParams.get("access_token");
+      if (token) {
+        window.history.replaceState(null, "", window.location.pathname);
+        toast.info("Đang đồng bộ Fanpage từ tài khoản Facebook vừa đăng nhập...");
+        syncPagesByToken({ access_token: token })
+          .then((res) => {
+            if (res?.success) {
+              toast.success(res.message || `Đã đồng bộ thành công ${res.count} Fanpage!`);
+              load();
+            } else {
+              toast.error(res?.detail || res?.message || "Không thể đồng bộ Fanpage từ Facebook.");
+            }
+          })
+          .catch((err) => {
+            toast.error(err.message || "Lỗi kết nối khi đồng bộ Fanpage.");
+          });
+      }
+    }
   }, []);
 
   // Tải danh sách tài khoản Facebook thuộc sở hữu của User hiện tại khi mở modal Thêm Page
@@ -310,6 +346,53 @@ export default function FanpageList() {
       toast.error(error.message || "Không thể kết nối đến máy chủ để quét Fanpage.");
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // Luồng 1: OAuth qua Chrome Profile của nick Clone
+  const handleProfileOAuth = async () => {
+    if (!selectedAccUid) {
+      toast.error("Vui lòng chọn tài khoản Facebook để cấp Token.");
+      return;
+    }
+    setProfileOauthLoading(true);
+    try {
+      toast.info(`Đang mở profile Chrome của nick ${selectedAccUid} để cấp Token mới từ Meta...`);
+      const res = await oauthByProfile({
+        account_uid: selectedAccUid,
+        headless: !showLiveBrowser,
+      });
+      if (res?.success) {
+        toast.success(res.message || `Đã cấp Token mới và nạp ${res.count} Fanpage!`);
+        setAdding(false);
+        await load();
+      } else {
+        toast.error(res?.detail || res?.message || "Cấp Token qua Chrome Profile thất bại.");
+      }
+    } catch (error) {
+      toast.error(error.message || "Không thể kết nối máy chủ để thực hiện OAuth.");
+    } finally {
+      setProfileOauthLoading(false);
+    }
+  };
+
+  // Luồng 2: OAuth trực tiếp trên Web Dashboard
+  const handleWebOAuthLogin = async () => {
+    try {
+      setOauthLoading(true);
+      const conf = await getOAuthConfig();
+      if (!conf?.configured || !conf?.app_id) {
+        toast.error("Chưa cấu hình FACEBOOK_APP_ID trong file .env. Vui lòng cấu hình App ID của Meta trước.");
+        return;
+      }
+      const redirectUri = window.location.origin + window.location.pathname;
+      const scope = "pages_show_list,pages_manage_posts,pages_read_engagement";
+      const authUrl = `https://www.facebook.com/${conf.api_version || "v19.0"}/dialog/oauth?client_id=${conf.app_id}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&response_type=token`;
+      window.location.href = authUrl;
+    } catch (err) {
+      toast.error("Không thể lấy cấu hình OAuth: " + err.message);
+    } finally {
+      setOauthLoading(false);
     }
   };
 
@@ -580,13 +663,13 @@ export default function FanpageList() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 pt-3">
-            {/* LỰA CHỌN 1: QUÉT TỪ TÀI KHOẢN CÓ SẴN */}
-            <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 p-4 space-y-3">
+          <div className="space-y-4 pt-2">
+            {/* LỰA CHỌN 1: QUÉT & CẤP TOKEN QUA CHROME PROFILE CHO NICK CLONE */}
+            <div className="rounded-xl border border-slate-200/90 bg-slate-50/60 p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
                   <span className="flex size-4 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white font-bold">1</span>
-                  Quét Fanpage từ tài khoản có sẵn
+                  Quét & Cấp Token cho Nick Clone (Qua Profile Chrome)
                 </span>
                 {loadingAccounts ? (
                   <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-400" />
@@ -595,13 +678,13 @@ export default function FanpageList() {
 
               {accountList.length === 0 && !loadingAccounts ? (
                 <div className="rounded-lg bg-amber-50/80 border border-amber-200/60 p-3 text-xs text-amber-800">
-                  Bạn chưa có tài khoản Facebook nào trong hệ thống. Hãy thêm tài khoản ở Lựa chọn 2 bên dưới.
+                  Bạn chưa có tài khoản Facebook nào trong hệ thống. Hãy thêm tài khoản ở Lựa chọn 3 bên dưới.
                 </div>
               ) : (
                 <div className="space-y-3">
                   <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1">
-                      Chọn tài khoản Facebook quản lý
+                      Chọn tài khoản Facebook clone / quản lý
                     </label>
                     <select
                       value={selectedAccUid}
@@ -644,18 +727,72 @@ export default function FanpageList() {
                     </div>
                   ) : null}
 
+                  {/* Tùy chọn hiển thị trình duyệt Chrome */}
+                  <label className="flex items-center gap-2 cursor-pointer select-none text-[11px] text-slate-600 pt-0.5">
+                    <input
+                      type="checkbox"
+                      checked={showLiveBrowser}
+                      onChange={(e) => setShowLiveBrowser(e.target.checked)}
+                      className="rounded border-slate-300 text-[#1877F2] focus:ring-[#1877F2] w-3.5 h-3.5"
+                    />
+                    <Monitor className="w-3.5 h-3.5 text-slate-400" />
+                    Hiển thị cửa sổ Chrome Live (bật nếu cần quan sát hoặc nick yêu cầu xác minh)
+                  </label>
+
+                  {/* Nút chính: Cấp Token mới qua Chrome Profile */}
+                  <button
+                    type="button"
+                    onClick={handleProfileOAuth}
+                    disabled={profileOauthLoading || syncing || !selectedAccUid}
+                    className="w-full h-10 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 font-bold text-white text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-60"
+                  >
+                    {profileOauthLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Đang mở Profile & cấp Token từ Meta...
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="w-4 h-4 text-amber-300 fill-amber-300" />
+                        ⚡ Cấp lại Token qua Profile Chrome & Quét Fanpage
+                      </>
+                    )}
+                  </button>
+
+                  {/* Nút phụ: Quét bằng token hiện có (nếu còn live) */}
+                  {hasLiveToken ? (
+                    <button
+                      type="button"
+                      onClick={handleSyncPages}
+                      disabled={syncing || profileOauthLoading || !selectedAccUid}
+                      className="w-full h-9 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 font-semibold text-slate-700 text-xs flex items-center justify-center gap-1.5 transition-all disabled:opacity-60"
+                    >
+                      {syncing ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-400" />
+                          Đang quét Fanpage...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5 text-blue-500" />
+                          Quét nhanh bằng Token hiện có
+                        </>
+                      )}
+                    </button>
+                  ) : null}
+
                   {/* Toggle ô nhập token thủ công */}
-                  <div>
+                  <div className="pt-1">
                     <button
                       type="button"
                       onClick={() => setShowCustomToken(!showCustomToken)}
                       className="text-[11px] text-[#1877F2] hover:underline flex items-center gap-1 font-medium"
                     >
                       <Key className="w-3 h-3" />
-                      {showCustomToken ? "Ẩn ô nhập Access Token" : "Cập nhật / Dán Access Token mới cho nick này"}
+                      {showCustomToken ? "Ẩn ô nhập Access Token" : "Cập nhật / Dán Access Token thủ công"}
                     </button>
                     {showCustomToken ? (
-                      <div className="mt-2">
+                      <div className="mt-2 space-y-2">
                         <input
                           type="text"
                           value={customToken}
@@ -663,44 +800,64 @@ export default function FanpageList() {
                           placeholder="Dán User Access Token (EAA...) vào đây..."
                           className="w-full h-9 px-3 rounded-lg border border-slate-200 bg-white text-xs font-mono text-slate-700 outline-none focus:border-[#1877F2]"
                         />
-                        <p className="text-[10.5px] text-slate-400 mt-1">
-                          Hệ thống sẽ tự động dùng token này để quét Fanpage và lưu lại cho tài khoản.
-                        </p>
+                        <button
+                          type="button"
+                          onClick={handleSyncPages}
+                          disabled={syncing || !customToken.trim()}
+                          className="w-full h-8 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold flex items-center justify-center gap-1.5"
+                        >
+                          Lưu Token & Quét Fanpage
+                        </button>
                       </div>
                     ) : null}
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={handleSyncPages}
-                    disabled={syncing || !selectedAccUid}
-                    className="w-full h-10 rounded-xl bg-[#1877F2] hover:bg-blue-600 font-bold text-white text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-60"
-                  >
-                    {syncing ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        Đang quét & nạp Fanpage...
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-4 h-4" />
-                        Quét & Nạp tất cả Fanpage
-                      </>
-                    )}
-                  </button>
                 </div>
               )}
             </div>
 
-            {/* LỰA CHỌN 2: THÊM TÀI KHOẢN MỚI */}
-            <div className="rounded-xl border border-dashed border-slate-300 p-4 bg-white hover:bg-slate-50/60 transition-colors flex items-center justify-between">
+            {/* LỰA CHỌN 2: ĐĂNG NHẬP FACEBOOK OAUTH TRÊN TRÌNH DUYỆT CHÍNH */}
+            <div className="rounded-xl border border-blue-200/70 bg-blue-50/40 p-4 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-blue-900 uppercase tracking-wide flex items-center gap-1.5">
+                  <span className="flex size-4 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white font-bold">2</span>
+                  Đăng nhập Facebook (OAuth chuẩn Meta)
+                </span>
+                <span className="text-[10px] font-semibold text-blue-600 bg-blue-100/70 px-2 py-0.5 rounded-full">
+                  1-Click
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-600">
+                Dành cho nick Facebook cá nhân / quản trị viên đang mở sẵn trên trình duyệt này. Meta sẽ tự cấp Token mới mà không cần copy/paste.
+              </p>
+              <button
+                type="button"
+                onClick={handleWebOAuthLogin}
+                disabled={oauthLoading}
+                className="w-full h-10 rounded-xl bg-[#1877F2] hover:bg-blue-600 font-bold text-white text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-60"
+              >
+                {oauthLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Đang mở Facebook OAuth...
+                  </>
+                ) : (
+                  <>
+                    <Globe className="w-4 h-4" />
+                    🔗 Đăng nhập Facebook (OAuth) cấp Token tự động
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* LỰA CHỌN 3: THÊM TÀI KHOẢN MỚI */}
+            <div className="rounded-xl border border-dashed border-slate-300 p-3.5 bg-white hover:bg-slate-50/60 transition-colors flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-[#1877F2]">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
                   <UserPlus className="w-4 h-4" />
                 </span>
                 <div>
                   <p className="text-xs font-bold text-slate-800">Thêm tài khoản Facebook mới</p>
-                  <p className="text-[11px] text-slate-500">Chuyển sang Module 02 để đăng nhập thêm nick vào hệ thống</p>
+                  <p className="text-[11px] text-slate-500">Chuyển sang Module 02 để nạp thêm nick vào hệ thống</p>
                 </div>
               </div>
               <button

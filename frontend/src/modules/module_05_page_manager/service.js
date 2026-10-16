@@ -16,6 +16,18 @@ export async function syncPagesByAccount(payload) {
   return api.post("/api/pages/sync-by-account", payload);
 }
 
+export async function getOAuthConfig() {
+  return api.get("/api/pages/oauth-config");
+}
+
+export async function syncPagesByToken(payload) {
+  return api.post("/api/pages/sync-by-token", payload);
+}
+
+export async function oauthByProfile(payload) {
+  return api.post("/api/pages/oauth-by-profile", payload);
+}
+
 export async function addManualPage(payload) {
   return api.post("/api/pages/manual", payload);
 }
