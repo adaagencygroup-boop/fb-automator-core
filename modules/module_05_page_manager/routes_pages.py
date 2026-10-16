@@ -2,75 +2,68 @@
 """
 File: modules/module_05_page_manager/routes_pages.py
 FastAPI router cho tính năng Quản lý Danh sách Fanpage (Module 05).
-Chuẩn hóa đọc và ghi trực tiếp từ bảng `pages` của hệ thống (kết hợp bảng `accounts`).
+Chuẩn hóa đọc và ghi trực tiếp từ bảng `pages` của hệ thống (kết hợp bảng `accounts`),
+áp dụng phân quyền chặt chẽ theo `user_id` của phiên đăng nhập hiện tại.
 """
 import re
 import time
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends, Request
 
 from core.database.connection import db
+from core.facebook.fb_graph_client import fb_client
+from modules.module_02_account_manager.api.router import scoped_owner
+from modules.module_02_account_manager.context import owner_context
 
-router = APIRouter(prefix="/pages", tags=["Module 05 Fanpage Manager"])
-
-
-def extract_page_id(url_or_id: Optional[str]) -> str:
-    """
-    Trích xuất page_id từ URL Facebook hoặc chuỗi nhập vào.
-    Hỗ trợ:
-      - 'https://www.facebook.com/profile.php?id=61595040344257' -> '61595040344257'
-      - 'https://www.facebook.com/1126925703844118' -> '1126925703844118'
-      - 'https://facebook.com/CheckInVN/' -> 'CheckInVN'
-      - '61595040344257' -> '61595040344257'
-    """
-    raw = (url_or_id or "").strip()
-    if not raw:
-        return ""
-    if re.match(r"^\d{4,25}$", raw):
-        return raw
-
-    # URL query parameter ?id=...
-    match_query = re.search(r"[?&]id=(\d+)", raw)
-    if match_query:
-        return match_query.group(1)
-
-    # URL path /profile.php?id=... hoặc /{slug}
-    match_path = re.search(r"facebook\.com/(?:pages/[^/]+/)?([^/?#]+)", raw)
-    if match_path:
-        slug = match_path.group(1).strip()
-        if slug.lower() not in ("profile.php", "pages", "people", "groups", "watch", "reel"):
-            return slug
-
-    return ""
+router = APIRouter(
+    prefix="/pages",
+    tags=["Module 05 Fanpage Manager"],
+    dependencies=[Depends(scoped_owner)]
+)
 
 
-class ManualPageBody(BaseModel):
-    page_name: str
-    page_url: Optional[str] = ""
-    manager_uid: Optional[str] = ""
-    category: Optional[str] = "Fanpage Facebook"
-    access_token: Optional[str] = ""
+def get_current_owner(request: Optional[Request] = None) -> Optional[str]:
+    """Lấy user_id của tài khoản hệ thống đang đăng nhập."""
+    owner = owner_context.get()
+    if owner:
+        return str(owner).strip()
+    if request:
+        auth_user = request.headers.get("x-auth-user-id") or request.headers.get("x-user-id")
+        if auth_user:
+            return str(auth_user).strip()
+    return None
+
+
+class SyncByAccountBody(BaseModel):
+    account_uid: str
+    custom_token: Optional[str] = ""
 
 
 @router.get("/managed")
-def get_managed_pages():
+def get_managed_pages(request: Request):
     """
-    Lấy danh sách tất cả Fanpage trong hệ thống từ bảng `pages`,
-    kết nối với bảng `accounts` để lấy thông tin Nick quản trị.
+    Lấy danh sách Fanpage từ bảng `pages` thuộc sở hữu của User ID đang đăng nhập,
+    kết nối với bảng `accounts` của chính User đó để lấy thông tin Nick quản trị.
     """
+    owner = get_current_owner(request)
+    if not owner:
+        return {"pages": []}
+
     try:
         pages_raw = db.fetch_all(
-            "SELECT id, page_id, page_name, category, status, account_uid, reels_folder, created_at FROM pages ORDER BY id DESC"
+            "SELECT id, page_id, page_name, category, status, account_uid, reels_folder, created_at FROM pages WHERE user_id = %s ORDER BY id DESC",
+            (owner,)
         )
     except Exception as e:
         pages_raw = []
 
-    # Lấy thông tin tài khoản Facebook từ bảng accounts (khử trùng lặp theo UID)
+    # Lấy thông tin tài khoản Facebook từ bảng accounts của chính User đó
     acc_map = {}
     try:
         accounts_raw = db.fetch_all(
-            "SELECT uid, profile_name, avatar_url, status, login_status FROM accounts ORDER BY id DESC"
+            "SELECT uid, profile_name, avatar_url, status, login_status FROM accounts WHERE user_id = %s ORDER BY id DESC",
+            (owner,)
         )
         for acc in accounts_raw:
             uid_str = str(acc.get("uid") or "").strip()
@@ -117,69 +110,109 @@ def get_managed_pages():
         return {"pages": [], "error": str(e)}
 
 
-@router.post("/manual")
-def add_manual_page(body: ManualPageBody):
+@router.post("/sync-by-account")
+def sync_by_account(body: SyncByAccountBody, request: Request):
     """
-    Thêm Fanpage thủ công vào bảng `pages`.
-    Tự động trích xuất Page ID từ link và liên kết Token từ tài khoản nếu có.
+    Quét và nạp tất cả Fanpage từ một nick Facebook thuộc sở hữu của User hiện tại:
+    1. Lấy token của nick Facebook (hoặc custom_token nếu người dùng dán).
+    2. Nâng cấp token sang Long-lived User Token (nếu có App ID/Secret).
+    3. Gọi Meta Graph API /me/accounts để lấy danh sách Page kèm Permanent Page Access Token.
+    4. UPSERT vào bảng `pages` với `user_id = current_user_id` và `account_uid = selected_uid`.
     """
-    name = (body.page_name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Tên fanpage không được để trống.")
+    owner = get_current_owner(request)
+    if not owner:
+        raise HTTPException(status_code=401, detail="Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.")
 
-    page_id = extract_page_id(body.page_url) or extract_page_id(body.page_name)
-    if not page_id:
-        page_id = f"manual_{int(time.time())}"
+    acc_uid = (body.account_uid or "").strip()
+    if not acc_uid:
+        raise HTTPException(status_code=400, detail="Vui lòng chọn tài khoản Facebook để quét Fanpage.")
 
-    manager_uid = (body.manager_uid or "").strip()
-    access_token = (body.access_token or "").strip()
+    # Tìm tài khoản trong bảng accounts thuộc sở hữu của user_id hiện tại
+    acc = db.fetch_one(
+        "SELECT uid, profile_name, token, status FROM accounts WHERE uid = %s AND user_id = %s",
+        (acc_uid, owner)
+    )
 
-    # Nếu không nhập access_token, tìm token của nick quản lý trong bảng accounts
-    if not access_token and manager_uid:
+    token = (body.custom_token or "").strip()
+    if not token and acc and acc.get("token"):
+        token = str(acc["token"]).strip()
+
+    if not token:
+        name_str = acc.get("profile_name") if acc else acc_uid
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tài khoản '{name_str}' chưa có Access Token. Vui lòng nhập Access Token hoặc đăng nhập lại nick này."
+        )
+
+    # Gọi Graph API quét tất cả Fanpage
+    try:
+        pages = fb_client.fetch_managed_pages(token)
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=f"Lỗi khi kết nối Facebook Graph API: {ex}")
+
+    if not pages:
+        return {
+            "success": True,
+            "count": 0,
+            "message": "Không tìm thấy Fanpage nào được quản lý bởi tài khoản này."
+        }
+
+    synced_count = 0
+    for p in pages:
+        pid = str(p.get("id"))
+        pname = p.get("name") or f"Page {pid}"
+        ptoken = p.get("access_token") or ""
+        pcat = p.get("category") or "Fanpage Facebook"
+
+        sql = """
+        INSERT INTO pages (page_id, page_name, access_token, category, account_uid, user_id, status)
+        VALUES (%s, %s, %s, %s, %s, %s, 'ACTIVE')
+        ON CONFLICT (page_id) DO UPDATE SET
+            page_name = EXCLUDED.page_name,
+            access_token = CASE WHEN EXCLUDED.access_token != '' THEN EXCLUDED.access_token ELSE pages.access_token END,
+            category = EXCLUDED.category,
+            account_uid = EXCLUDED.account_uid,
+            user_id = EXCLUDED.user_id,
+            status = 'ACTIVE'
+        """
+        db.execute(sql, (pid, pname, ptoken, pcat, acc_uid, owner))
+        synced_count += 1
+
+    # Nếu người dùng nhập custom_token thì cập nhật luôn token cho tài khoản Facebook trong bảng accounts
+    if body.custom_token and acc:
         try:
-            acc = db.fetch_one("SELECT token FROM accounts WHERE uid = %s", (manager_uid,))
-            if acc and acc.get("token"):
-                access_token = acc["token"].strip()
+            db.execute("UPDATE accounts SET token = %s WHERE uid = %s AND user_id = %s", (token, acc_uid, owner))
         except Exception:
             pass
 
-    try:
-        sql = """
-        INSERT INTO pages (page_id, page_name, account_uid, access_token, category, status)
-        VALUES (%s, %s, %s, %s, %s, 'ACTIVE')
-        ON CONFLICT (page_id) DO UPDATE SET
-            page_name = EXCLUDED.page_name,
-            account_uid = EXCLUDED.account_uid,
-            access_token = CASE WHEN EXCLUDED.access_token != '' THEN EXCLUDED.access_token ELSE pages.access_token END,
-            category = EXCLUDED.category,
-            status = 'ACTIVE'
-        RETURNING id
-        """
-        row = db.fetch_one(
-            sql,
-            (page_id, name, manager_uid, access_token, body.category or "Fanpage Facebook")
-        )
-        return {
-            "success": True,
-            "id": row["id"] if row else None,
-            "page_id": page_id,
-            "page_name": name,
-            "account_uid": manager_uid
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Lỗi khi thêm fanpage: {e}")
+    return {
+        "success": True,
+        "count": synced_count,
+        "message": f"Đã quét và nạp thành công {synced_count} Fanpage kèm Token vĩnh viễn!",
+        "pages": pages
+    }
 
 
 @router.delete("/{page_identifier}")
-def delete_managed_page(page_identifier: str):
+def delete_managed_page(page_identifier: str, request: Request):
     """
-    Xóa Fanpage khỏi bảng `pages`. Hỗ trợ xóa theo ID (số) hoặc page_id (chuỗi).
+    Xóa Fanpage khỏi bảng `pages`, có ràng buộc chặt chẽ theo `user_id` của người dùng hiện tại.
     """
+    owner = get_current_owner(request)
+    if not owner:
+        raise HTTPException(status_code=401, detail="Phiên đăng nhập không hợp lệ.")
+
     try:
         if page_identifier.isdigit() and len(page_identifier) < 10:
-            db.execute("DELETE FROM pages WHERE id = %s OR page_id = %s", (int(page_identifier), page_identifier))
+            db.execute(
+                "DELETE FROM pages WHERE (id = %s OR page_id = %s) AND user_id = %s",
+                (int(page_identifier), page_identifier, owner)
+            )
         else:
-            db.execute("DELETE FROM pages WHERE page_id = %s", (page_identifier,))
+            db.execute(
+                "DELETE FROM pages WHERE page_id = %s AND user_id = %s",
+                (page_identifier, owner)
+            )
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Lỗi xóa fanpage: {e}")

@@ -12,6 +12,10 @@ export async function getManagedPages() {
   return api.get("/api/pages/managed");
 }
 
+export async function syncPagesByAccount(payload) {
+  return api.post("/api/pages/sync-by-account", payload);
+}
+
 export async function addManualPage(payload) {
   return api.post("/api/pages/manual", payload);
 }

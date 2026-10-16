@@ -8,16 +8,34 @@ import asyncio
 import queue
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request, Depends
 from fastapi.responses import StreamingResponse
 
 from core.database.connection import db
+from modules.module_02_account_manager.api.router import scoped_owner
+from modules.module_02_account_manager.context import owner_context
 from modules.module_05_page_manager.reels_service import (
     scan_root_directory, auto_match_folders
 )
 from modules.module_05_page_manager.reels_runner import reels_runner
 
-router = APIRouter(prefix="/pages/reels", tags=["Module 05 Reels"])
+router = APIRouter(
+    prefix="/pages/reels",
+    tags=["Module 05 Reels"],
+    dependencies=[Depends(scoped_owner)]
+)
+
+
+def get_current_owner(request: Optional[Request] = None) -> Optional[str]:
+    """Lấy user_id của tài khoản hệ thống đang đăng nhập."""
+    owner = owner_context.get()
+    if owner:
+        return str(owner).strip()
+    if request:
+        auth_user = request.headers.get("x-auth-user-id") or request.headers.get("x-user-id")
+        if auth_user:
+            return str(auth_user).strip()
+    return None
 
 
 class ScanFoldersRequest(BaseModel):
@@ -42,23 +60,30 @@ class StartJobRequest(BaseModel):
 
 
 @router.get("/accounts-pages")
-def get_accounts_and_pages():
+def get_accounts_and_pages(request: Request):
     """
     Lấy danh sách tài khoản kèm Fanpage con của tài khoản đó.
+    Chỉ trả về các tài khoản và Fanpage thuộc sở hữu của User ID đang đăng nhập.
     Gom nhóm Fanpage theo account_uid để render bảng Figma.
     """
+    owner = get_current_owner(request)
+    if not owner:
+        return {"success": True, "accounts": []}
+
     try:
         pages_raw = db.fetch_all(
-            "SELECT id, page_id, page_name, account_uid, access_token, category, status, reels_folder FROM pages ORDER BY id DESC"
+            "SELECT id, page_id, page_name, account_uid, access_token, category, status, reels_folder FROM pages WHERE user_id = %s ORDER BY id DESC",
+            (owner,)
         )
     except Exception as e:
         pages_raw = []
 
-    # Lấy thông tin tài khoản Facebook từ bảng accounts (Module 02) nếu có
+    # Lấy thông tin tài khoản Facebook từ bảng accounts của chính User đó
     acc_map = {}
     try:
         accounts_raw = db.fetch_all(
-            "SELECT uid, profile_name, avatar_url, status, login_status FROM accounts"
+            "SELECT uid, profile_name, avatar_url, status, login_status FROM accounts WHERE user_id = %s ORDER BY id DESC",
+            (owner,)
         )
         for acc in accounts_raw:
             acc_map[str(acc["uid"])] = acc

@@ -168,20 +168,98 @@ class FacebookGraphClient:
                 err = res_json.get("error", {}).get("message", "Lỗi đăng video dài")
                 return {"success": False, "error": err}
 
+    def exchange_token(self, short_lived_token: str) -> str:
+        """
+        Nâng cấp Short-lived User Token thành Long-lived User Token (60 ngày) qua Facebook OAuth.
+        Khi gọi /me/accounts bằng Long-lived token này, Meta sẽ cấp Page Token VĨNH VIỄN.
+        Fallback an toàn nếu chưa cấu hình FACEBOOK_APP_ID / SECRET.
+        """
+        token = (short_lived_token or "").strip()
+        if not token:
+            return ""
+
+        app_id = os.getenv("FACEBOOK_APP_ID", "").strip()
+        app_secret = os.getenv("FACEBOOK_APP_SECRET", "").strip()
+        api_ver = os.getenv("FACEBOOK_GRAPH_API_VERSION", GRAPH_API_VERSION)
+
+        if not app_id or not app_secret:
+            return token
+
+        url = f"https://graph.facebook.com/{api_ver}/oauth/access_token"
+        params = {
+            "grant_type": "fb_exchange_token",
+            "client_id": app_id,
+            "client_secret": app_secret,
+            "fb_exchange_token": token,
+        }
+
+        try:
+            res = self.session.get(url, params=params, timeout=15)
+            data = res.json()
+            if "access_token" in data:
+                return data["access_token"]
+            if "error" in data:
+                print(f"[Facebook Exchange Warning] {data['error'].get('message')}. Giữ nguyên token gốc.")
+        except Exception as e:
+            print(f"[Facebook Exchange Network Warning] {e}. Giữ nguyên token gốc.")
+
+        return token
+
     def fetch_managed_pages(self, user_access_token: str) -> List[Dict[str, Any]]:
-        """Lấy toàn bộ danh sách Fanpage và Page Access Token vĩnh viễn từ User Token"""
-        url = f"{GRAPH_BASE_URL}/me/accounts?limit=200&access_token={user_access_token}"
-        res = self.request_with_retry("GET", url)
-        data = res.json()
+        """
+        Lấy toàn bộ danh sách Fanpage và Page Access Token từ User Token.
+        Hỗ trợ phân trang tự động (paging.next) và trích xuất avatar picture.
+        """
+        token = (user_access_token or "").strip()
+        if not token:
+            return []
+
+        # Tự động exchange sang token dài hạn nếu có thể
+        long_lived_token = self.exchange_token(token)
+
         pages = []
-        if "data" in data:
-            for item in data["data"]:
+        next_url = f"{GRAPH_BASE_URL}/me/accounts"
+        next_params = {
+            "fields": "id,name,access_token,category,picture.type(large)",
+            "access_token": long_lived_token,
+            "limit": "200"
+        }
+
+        while next_url:
+            try:
+                if next_params:
+                    res = self.session.get(next_url, params=next_params, timeout=20)
+                    next_params = None
+                else:
+                    res = self.session.get(next_url, timeout=20)
+                data = res.json()
+            except Exception as e:
+                print(f"[Fetch Pages Warning] Lỗi kết nối khi quét pages: {e}")
+                break
+
+            if "error" in data:
+                err_msg = data.get("error", {}).get("message", "Lỗi lấy danh sách trang từ Facebook")
+                print(f"[Fetch Pages Error] {err_msg}")
+                break
+
+            items = data.get("data", [])
+            for item in items:
+                avatar_url = ""
+                pic = item.get("picture")
+                if isinstance(pic, dict) and "data" in pic:
+                    avatar_url = pic["data"].get("url") or ""
+
                 pages.append({
-                    "id": item.get("id"),
-                    "name": item.get("name"),
-                    "access_token": item.get("access_token"),
-                    "category": item.get("category", "")
+                    "id": str(item.get("id")),
+                    "name": item.get("name") or f"Page {item.get('id')}",
+                    "access_token": item.get("access_token") or "",
+                    "category": item.get("category", "") or "Fanpage Facebook",
+                    "avatar_url": avatar_url
                 })
+
+            paging = data.get("paging", {})
+            next_url = paging.get("next")
+
         return pages
 
 fb_client = FacebookGraphClient()

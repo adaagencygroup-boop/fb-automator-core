@@ -1,7 +1,24 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, Copy, Eye, Filter, MoreVertical, RefreshCw, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  AlertCircle,
+  Check,
+  Copy,
+  Eye,
+  Filter,
+  MoreVertical,
+  RefreshCw,
+  Trash2,
+  UserPlus,
+  Key,
+  ExternalLink,
+  ShieldCheck,
+  ShieldAlert,
+  Sparkles,
+  Layers,
+} from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -14,7 +31,8 @@ import CustomSelect from "@/components/ui/custom-select";
 import Pagination from "@/components/ui/pagination";
 import { MaskIcon } from "@/components/icons";
 import { toast } from "@/lib/toast";
-import { addManualPage, deleteManagedPage, getManagedPages } from "./service";
+import { getAccounts } from "@/modules/module_02_account_manager/service";
+import { deleteManagedPage, getManagedPages, syncPagesByAccount } from "./service";
 
 const PAGE_SIZE = 10;
 const STATUS_OPTIONS = [
@@ -210,16 +228,23 @@ function RowMenu({ item, onCopy, onDelete }) {
 }
 
 export default function FanpageList() {
+  const router = useRouter();
   const [pages, setPages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("ALL");
   const [page, setPage] = useState(1);
   const [adding, setAdding] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ page_name: "", page_url: "", manager_uid: "" });
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
+
+  // States cho modal Quét & Thêm Fanpage từ Nick Facebook
+  const [accountList, setAccountList] = useState([]);
+  const [loadingAccounts, setLoadingAccounts] = useState(false);
+  const [selectedAccUid, setSelectedAccUid] = useState("");
+  const [customToken, setCustomToken] = useState("");
+  const [showCustomToken, setShowCustomToken] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -236,6 +261,57 @@ export default function FanpageList() {
   useEffect(() => {
     load();
   }, []);
+
+  // Tải danh sách tài khoản Facebook thuộc sở hữu của User hiện tại khi mở modal Thêm Page
+  const loadAccounts = async () => {
+    setLoadingAccounts(true);
+    try {
+      const data = await getAccounts();
+      const list = Array.isArray(data) ? data : (data?.accounts || []);
+      setAccountList(list);
+      if (list.length > 0) {
+        setSelectedAccUid((prev) => prev || list[0].uid);
+      }
+    } catch (e) {
+      console.warn("Lỗi tải danh sách tài khoản:", e);
+    } finally {
+      setLoadingAccounts(false);
+    }
+  };
+
+  useEffect(() => {
+    if (adding) {
+      loadAccounts();
+      setCustomToken("");
+      setShowCustomToken(false);
+    }
+  }, [adding]);
+
+  const handleSyncPages = async (e) => {
+    if (e) e.preventDefault();
+    if (!selectedAccUid) {
+      toast.error("Vui lòng chọn tài khoản Facebook để quét Fanpage.");
+      return;
+    }
+    setSyncing(true);
+    try {
+      const res = await syncPagesByAccount({
+        account_uid: selectedAccUid,
+        custom_token: customToken.trim() || undefined,
+      });
+      if (res?.success) {
+        toast.success(res.message || `Đã nạp thành công ${res.count} Fanpage!`);
+        setAdding(false);
+        await load();
+      } else {
+        toast.error(res?.detail || res?.message || "Quét Fanpage thất bại.");
+      }
+    } catch (error) {
+      toast.error(error.message || "Không thể kết nối đến máy chủ để quét Fanpage.");
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const stats = useMemo(() => {
     const success = pages.filter((item) => item.status === "SUCCESS" || item.status === "ACTIVE").length;
@@ -273,21 +349,11 @@ export default function FanpageList() {
     }
   };
 
-  const submitManual = async (event) => {
-    event.preventDefault();
-    setSaving(true);
-    try {
-      await addManualPage(form);
-      toast.success("Đã thêm fanpage vào danh sách.");
-      setAdding(false);
-      setForm({ page_name: "", page_url: "", manager_uid: "" });
-      await load();
-    } catch (error) {
-      toast.error(error.message || "Không thêm được fanpage.");
-    } finally {
-      setSaving(false);
-    }
-  };
+  const selectedAcc = useMemo(() => {
+    return accountList.find((a) => String(a.uid) === String(selectedAccUid)) || null;
+  }, [accountList, selectedAccUid]);
+
+  const hasLiveToken = Boolean(selectedAcc?.token && selectedAcc.token.trim().length > 10);
 
   const confirmDelete = async () => {
     if (!pendingDelete) return;
@@ -501,58 +567,165 @@ export default function FanpageList() {
       </section>
 
       <Dialog open={adding} onOpenChange={setAdding}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Thêm fanpage</DialogTitle>
-            <DialogDescription>Ghi page đã có vào danh sách. Không tạo page mới trên Facebook.</DialogDescription>
+        <DialogContent className="max-w-[540px] p-6 rounded-2xl bg-white shadow-2xl">
+          <DialogHeader className="pb-3 border-b border-slate-100">
+            <DialogTitle className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <span className="p-1.5 rounded-lg bg-blue-50 text-[#1877F2]">
+                <Layers className="w-5 h-5" />
+              </span>
+              Thêm & Nạp Fanpage vào hệ thống
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500 pt-1">
+              Chọn tài khoản Facebook quản lý để quét và tự động nạp toàn bộ Fanpage kèm Token vĩnh viễn (Never Expire).
+            </DialogDescription>
           </DialogHeader>
-          <form className="space-y-3" onSubmit={submitManual}>
-            <label className="block text-sm font-semibold text-slate-700">
-              Tên fanpage
-              <input
-                required
-                value={form.page_name}
-                onChange={(event) => setForm((current) => ({ ...current, page_name: event.target.value }))}
-                className="mt-1 h-10 w-full rounded-xl border border-slate-200 px-3 text-sm font-normal outline-none focus:border-[#2563EB]"
-              />
-            </label>
-            <label className="block text-sm font-semibold text-slate-700">
-              Link fanpage
-              <input
-                value={form.page_url}
-                onChange={(event) => setForm((current) => ({ ...current, page_url: event.target.value }))}
-                placeholder="https://www.facebook.com/..."
-                className="mt-1 h-10 w-full rounded-xl border border-slate-200 px-3 text-sm font-normal outline-none focus:border-[#2563EB]"
-              />
-            </label>
-            <label className="block text-sm font-semibold text-slate-700">
-              UID tài khoản quản lý
-              <input
-                required
-                inputMode="numeric"
-                value={form.manager_uid}
-                onChange={(event) => setForm((current) => ({ ...current, manager_uid: event.target.value }))}
-                placeholder="1000..."
-                className="mt-1 h-10 w-full rounded-xl border border-slate-200 px-3 font-mono text-sm font-normal outline-none focus:border-[#2563EB]"
-              />
-            </label>
-            <DialogFooter>
+
+          <div className="space-y-4 pt-3">
+            {/* LỰA CHỌN 1: QUÉT TỪ TÀI KHOẢN CÓ SẴN */}
+            <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
+                  <span className="flex size-4 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white font-bold">1</span>
+                  Quét Fanpage từ tài khoản có sẵn
+                </span>
+                {loadingAccounts ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-400" />
+                ) : null}
+              </div>
+
+              {accountList.length === 0 && !loadingAccounts ? (
+                <div className="rounded-lg bg-amber-50/80 border border-amber-200/60 p-3 text-xs text-amber-800">
+                  Bạn chưa có tài khoản Facebook nào trong hệ thống. Hãy thêm tài khoản ở Lựa chọn 2 bên dưới.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">
+                      Chọn tài khoản Facebook quản lý
+                    </label>
+                    <select
+                      value={selectedAccUid}
+                      onChange={(e) => setSelectedAccUid(e.target.value)}
+                      className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-800 outline-none focus:border-[#1877F2] focus:ring-1 focus:ring-[#1877F2]"
+                    >
+                      {accountList.map((acc) => (
+                        <option key={acc.uid} value={acc.uid}>
+                          {acc.profile_name || "Tài khoản FB"} (UID: {acc.uid}) {acc.token ? "• [Token LIVE]" : "• [Chưa có Token]"}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {selectedAcc ? (
+                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-white border border-slate-200 text-xs">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <PhotoAvatar
+                          src={selectedAcc.avatar_url || facebookPictureUrl(selectedAcc.uid)}
+                          seed={selectedAcc.profile_name || selectedAcc.uid}
+                          name={selectedAcc.profile_name || selectedAcc.uid}
+                          size={32}
+                        />
+                        <div className="min-w-0">
+                          <p className="font-bold text-slate-800 truncate">{selectedAcc.profile_name || "Tài khoản Facebook"}</p>
+                          <p className="text-[11px] text-slate-500 font-mono">UID: {selectedAcc.uid}</p>
+                        </div>
+                      </div>
+                      <div>
+                        {hasLiveToken ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <ShieldCheck className="w-3 h-3" /> Token LIVE
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                            <ShieldAlert className="w-3 h-3" /> Chưa có Token
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* Toggle ô nhập token thủ công */}
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setShowCustomToken(!showCustomToken)}
+                      className="text-[11px] text-[#1877F2] hover:underline flex items-center gap-1 font-medium"
+                    >
+                      <Key className="w-3 h-3" />
+                      {showCustomToken ? "Ẩn ô nhập Access Token" : "Cập nhật / Dán Access Token mới cho nick này"}
+                    </button>
+                    {showCustomToken ? (
+                      <div className="mt-2">
+                        <input
+                          type="text"
+                          value={customToken}
+                          onChange={(e) => setCustomToken(e.target.value)}
+                          placeholder="Dán User Access Token (EAA...) vào đây..."
+                          className="w-full h-9 px-3 rounded-lg border border-slate-200 bg-white text-xs font-mono text-slate-700 outline-none focus:border-[#1877F2]"
+                        />
+                        <p className="text-[10.5px] text-slate-400 mt-1">
+                          Hệ thống sẽ tự động dùng token này để quét Fanpage và lưu lại cho tài khoản.
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSyncPages}
+                    disabled={syncing || !selectedAccUid}
+                    className="w-full h-10 rounded-xl bg-[#1877F2] hover:bg-blue-600 font-bold text-white text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-60"
+                  >
+                    {syncing ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        Đang quét & nạp Fanpage...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-4 h-4" />
+                        Quét & Nạp tất cả Fanpage
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* LỰA CHỌN 2: THÊM TÀI KHOẢN MỚI */}
+            <div className="rounded-xl border border-dashed border-slate-300 p-4 bg-white hover:bg-slate-50/60 transition-colors flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-[#1877F2]">
+                  <UserPlus className="w-4 h-4" />
+                </span>
+                <div>
+                  <p className="text-xs font-bold text-slate-800">Thêm tài khoản Facebook mới</p>
+                  <p className="text-[11px] text-slate-500">Chuyển sang Module 02 để đăng nhập thêm nick vào hệ thống</p>
+                </div>
+              </div>
               <button
                 type="button"
-                onClick={() => setAdding(false)}
-                className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-600"
+                onClick={() => {
+                  setAdding(false);
+                  router.push("/accounts");
+                }}
+                className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 flex items-center gap-1.5 shrink-0 transition-colors"
               >
-                Hủy
+                Mở Quản lý Acc
+                <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
               </button>
-              <button
-                type="submit"
-                disabled={saving}
-                className="h-10 rounded-xl bg-[#2563EB] px-4 text-sm font-bold text-white disabled:opacity-60"
-              >
-                {saving ? "Đang lưu..." : "Lưu"}
-              </button>
-            </DialogFooter>
-          </form>
+            </div>
+          </div>
+
+          <DialogFooter className="pt-4 border-t border-slate-100 mt-2">
+            <button
+              type="button"
+              onClick={() => setAdding(false)}
+              className="h-9 rounded-lg border border-slate-200 px-4 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              Đóng
+            </button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
