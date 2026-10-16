@@ -171,6 +171,7 @@ _PUBLIC_API = {
     "/api/facebook/webhook",
     "/api/facebook/config",
     "/api/groups/source/template",
+    "/api/pages/reels/logs/stream",
 }
 
 
@@ -359,6 +360,9 @@ app.include_router(creator_router)
 
 
 # ==================== MODULE 5: PAGE MANAGER & POSTING ====================
+from modules.module_05_page_manager.routes_reels import router as reels_router
+app.include_router(reels_router, prefix="/api")
+
 @app.get("/api/pages")
 def get_pages():
     return {"pages": db.fetch_all("SELECT * FROM pages ORDER BY id DESC")}

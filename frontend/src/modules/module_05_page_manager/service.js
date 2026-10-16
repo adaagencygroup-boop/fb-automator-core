@@ -19,3 +19,28 @@ export async function addManualPage(payload) {
 export async function deleteManagedPage(pageId) {
   return api.delete(`/api/creator/pages/${pageId}`);
 }
+
+// ================= MODULE 05: ĐĂNG REELS =================
+export async function getReelsAccountsPages() {
+  return api.get("/api/pages/reels/accounts-pages");
+}
+
+export async function scanReelsFolders(rootDir) {
+  return api.post("/api/pages/reels/scan-folders", { root_dir: rootDir });
+}
+
+export async function startReelsJob(payload) {
+  return api.post("/api/pages/reels/start", payload);
+}
+
+export async function stopReelsJob() {
+  return api.post("/api/pages/reels/stop");
+}
+
+export async function getReelsStatus() {
+  return api.get("/api/pages/reels/status");
+}
+
+export async function clearReelsLogs() {
+  return api.post("/api/pages/reels/clear-logs");
+}
