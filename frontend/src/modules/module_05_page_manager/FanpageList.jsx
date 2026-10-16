@@ -679,7 +679,7 @@ export default function FanpageList() {
       </section>
 
       <Dialog open={adding} onOpenChange={setAdding}>
-        <DialogContent className="max-w-5xl w-full p-6 rounded-2xl bg-white shadow-2xl overflow-hidden">
+        <DialogContent className="max-w-5xl w-full p-6 rounded-2xl bg-white shadow-2xl">
           <DialogHeader className="pb-3 border-b border-slate-100">
             <div className="flex items-center justify-between">
               <DialogTitle className="text-lg font-bold text-slate-800 flex items-center gap-2">
