@@ -28,6 +28,22 @@ class PostSeedingFlow:
     def __init__(self, bot: BaseFacebookBot):
         self.bot = bot
         self.driver = bot.driver
+        # Bài viết đang mở: (link gốc, URL thật sau khi Facebook chuyển hướng)
+        self._opened_post = None
+
+    def _open_post(self, target_url: str, callback=None, wait=(4.5, 6.5)):
+        """Mở bài viết nếu trình duyệt chưa ở đúng bài đó.
+        Link /share/p/... bị Facebook chuyển sang URL khác, nên phải nhớ URL thật sau khi mở.
+        Nếu không, bình luận / chia sẻ sau khi thả cảm xúc sẽ tưởng là chưa mở và tải lại bài viết."""
+        current = (self.driver.current_url or "").split("#")[0]
+        target_clean = target_url.split("?")[0].rstrip("/")
+        if current and (target_clean in current or self._opened_post == (target_url, current)):
+            return
+        if callback:
+            callback(f"🌐 Mở bài viết: {target_url}")
+        self.driver.get(target_url)
+        self.bot.random_sleep(*wait)
+        self._opened_post = (target_url, (self.driver.current_url or "").split("#")[0])
 
     # ─────────────────────────────────────────────────────────────
     # 1. ACTION: REACT (LIKE / THẢ CẢM XÚC BÀI VIẾT)
@@ -65,13 +81,7 @@ class PostSeedingFlow:
             target_labels = r_info["labels"]
             emoji = r_info["emoji"]
 
-            if callback:
-                callback(f"🌐 Mở bài viết: {target_url}")
-            current_url = self.driver.current_url or ""
-            target_clean = target_url.split("?")[0].rstrip("/")
-            if not current_url or target_clean not in current_url:
-                self.driver.get(target_url)
-                self.bot.random_sleep(4.5, 6.5)
+            self._open_post(target_url, callback, wait=(4.5, 6.5))
 
             if "login" in (self.driver.current_url or "").lower():
                 return False, "Chưa đăng nhập Facebook"
@@ -376,13 +386,7 @@ class PostSeedingFlow:
             if callback:
                 callback("✍ Chuẩn bị bình luận bài viết...")
 
-            current_url = self.driver.current_url or ""
-            target_clean = target_url.split("?")[0].rstrip("/")
-            if not current_url or target_clean not in current_url:
-                if callback:
-                    callback(f"🌐 Mở bài viết: {target_url}")
-                self.driver.get(target_url)
-                self.bot.random_sleep(3.5, 6.0)
+            self._open_post(target_url, callback, wait=(3.5, 6.0))
 
             if "login" in (self.driver.current_url or "").lower():
                 return False, "Chưa đăng nhập Facebook hoặc phiên đăng nhập hết hạn"
@@ -615,13 +619,7 @@ class PostSeedingFlow:
             if callback:
                 callback("🔄 Chuẩn bị chia sẻ bài viết...")
 
-            current_url = self.driver.current_url or ""
-            target_clean = target_url.split("?")[0].rstrip("/")
-            if not current_url or target_clean not in current_url:
-                if callback:
-                    callback(f"🌐 Mở bài viết: {target_url}")
-                self.driver.get(target_url)
-                self.bot.random_sleep(4.0, 6.0)
+            self._open_post(target_url, callback, wait=(4.0, 6.0))
 
             if "login" in (self.driver.current_url or "").lower():
                 return False, "Chưa đăng nhập Facebook hoặc phiên đăng nhập hết hạn"
