@@ -382,6 +382,30 @@ def to_vn_iso(dt: datetime | None) -> str | None:
     return dt.astimezone(VN_TZ).isoformat()
 
 
+def to_vn(dt: datetime | None) -> datetime | None:
+    """Đổi datetime UTC (naive) trong DB sang giờ Việt Nam (UTC+7)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(VN_TZ)
+
+
+def to_vn_display(dt: datetime | None) -> str:
+    """Chuỗi 'dd/mm/YYYY HH:MM' theo giờ Việt Nam, '-' nếu không có giá trị."""
+    vn = to_vn(dt)
+    return vn.strftime("%d/%m/%Y %H:%M") if vn else "-"
+
+
+def vn_date_to_utc(date_str: str, end_of_day: bool = False) -> datetime:
+    """Ngày 'YYYY-MM-DD' theo giờ Việt Nam -> mốc UTC (naive) để so với cột trong DB.
+    end_of_day=True trả về 00:00 của ngày hôm sau (dùng với phép <)."""
+    d = datetime.strptime(date_str[:10], "%Y-%m-%d").replace(tzinfo=VN_TZ)
+    if end_of_day:
+        d += timedelta(days=1)
+    return d.astimezone(UTC).replace(tzinfo=None)
+
+
 def share_range_per_post(total: int, parts: int) -> tuple:
     """Khoảng số lượt chia sẻ mỗi bài: ±20% quanh mức chia đều (vd 50 lượt / 4 bài -> 10..15).
     Dùng số nguyên để tránh sai số float. Frontend (PostSummaryCards.jsx) hiển thị cùng công thức."""
@@ -1722,18 +1746,17 @@ async def list_seeding_campaigns(
         )
         q = q.filter(SeedingCampaign.id.in_(target_subquery))
 
+    # from_date / to_date là ngày theo giờ Việt Nam ('YYYY-MM-DD'), lấy trọn ngày to_date
     if from_date:
         try:
-            dt_from = datetime.fromisoformat(from_date.replace("Z", "+00:00"))
-            q = q.filter(SeedingCampaign.created_at >= dt_from)
-        except Exception:
+            q = q.filter(SeedingCampaign.created_at >= vn_date_to_utc(from_date))
+        except ValueError:
             pass
 
     if to_date:
         try:
-            dt_to = datetime.fromisoformat(to_date.replace("Z", "+00:00"))
-            q = q.filter(SeedingCampaign.created_at <= dt_to)
-        except Exception:
+            q = q.filter(SeedingCampaign.created_at < vn_date_to_utc(to_date, end_of_day=True))
+        except ValueError:
             pass
 
     total = q.count()
@@ -1751,9 +1774,7 @@ async def list_seeding_campaigns(
                 "id": c.id,
                 "created_by": c.created_by,
                 "created_at": to_vn_iso(c.created_at),
-                "created_at_display": c.created_at.strftime("%d/%m/%Y %H:%M")
-                if c.created_at
-                else "-",
+                "created_at_display": to_vn_display(c.created_at),
                 "name": c.target_summary,
                 "campaign_type": c.campaign_type,
                 "campaign_type_display": "Page"
@@ -1978,9 +1999,7 @@ async def get_seeding_campaign_detail(
             )
         ),
         "is_batch_active": is_batch_active,
-        "created_at_display": campaign.created_at.strftime("%d/%m/%Y %H:%M")
-        if campaign.created_at
-        else "-",
+        "created_at_display": to_vn_display(campaign.created_at),
         "total_planned": campaign.total_planned,
         "total_success": campaign.total_success,
         "total_failed": campaign.total_failed,
