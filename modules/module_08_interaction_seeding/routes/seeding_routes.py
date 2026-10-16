@@ -36,7 +36,7 @@ from modules.module_02_account_manager.automation.browser_manager import (
 from modules.module_02_account_manager.context import owner_context
 from modules.module_02_account_manager.database.connection import SessionLocal, get_db
 from modules.module_02_account_manager.database.models import Account
-from modules.module_02_account_manager.database.repository import utc_now
+from modules.module_08_interaction_seeding.models.seeding_models import vn_now
 from modules.module_02_account_manager.services import events as m2_events
 from modules.module_02_account_manager.services.browser_service import HWID
 from modules.module_08_interaction_seeding.automation import FacebookSeedingBot
@@ -374,36 +374,33 @@ VN_TZ = timezone(timedelta(hours=7))
 
 
 def to_vn_iso(dt: datetime | None) -> str | None:
-    """Đổi datetime UTC (naive) trong DB sang chuỗi ISO giờ Việt Nam (UTC+7)."""
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt.astimezone(VN_TZ).isoformat()
+    """Đổi datetime trong DB (đã là giờ Việt Nam, naive - xem vn_now) sang chuỗi ISO có múi giờ +07:00."""
+    vn = to_vn(dt)
+    return vn.isoformat() if vn else None
 
 
 def to_vn(dt: datetime | None) -> datetime | None:
-    """Đổi datetime UTC (naive) trong DB sang giờ Việt Nam (UTC+7)."""
+    """Gắn múi giờ Việt Nam (UTC+7) cho datetime trong DB. Các bảng seeding_* lưu sẵn giờ Việt Nam (naive)."""
     if dt is None:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
+        return dt.replace(tzinfo=VN_TZ)
     return dt.astimezone(VN_TZ)
 
 
 def to_vn_display(dt: datetime | None) -> str:
-    """Chuỗi 'dd/mm/YYYY HH:MM' theo giờ Việt Nam, '-' nếu không có giá trị."""
+    """Chuỗi 'dd/mm/YYYY HH:MM:SS (UTC+7)' theo giờ Việt Nam, '-' nếu không có giá trị."""
     vn = to_vn(dt)
-    return vn.strftime("%d/%m/%Y %H:%M") if vn else "-"
+    return vn.strftime("%d/%m/%Y %H:%M:%S (UTC+7)") if vn else "-"
 
 
-def vn_date_to_utc(date_str: str, end_of_day: bool = False) -> datetime:
-    """Ngày 'YYYY-MM-DD' theo giờ Việt Nam -> mốc UTC (naive) để so với cột trong DB.
+def vn_date_bound(date_str: str, end_of_day: bool = False) -> datetime:
+    """Ngày 'YYYY-MM-DD' -> mốc 00:00 giờ Việt Nam (naive) để so với cột trong DB (đã lưu giờ Việt Nam).
     end_of_day=True trả về 00:00 của ngày hôm sau (dùng với phép <)."""
-    d = datetime.strptime(date_str[:10], "%Y-%m-%d").replace(tzinfo=VN_TZ)
+    d = datetime.strptime(date_str[:10], "%Y-%m-%d")
     if end_of_day:
         d += timedelta(days=1)
-    return d.astimezone(UTC).replace(tzinfo=None)
+    return d
 
 
 def share_range_per_post(total: int, parts: int) -> tuple:
@@ -976,7 +973,7 @@ async def create_seeding_campaign(
             total_success=0,
             total_failed=0,
             created_by=created_by_int,
-            created_at=utc_now(),
+            created_at=vn_now(),
         )
         db.add(camp)
         db.flush()
@@ -1170,7 +1167,7 @@ def _process_account_tasks(
                     if t and t.status == "PENDING":
                         t.status = "FAILED"
                         t.error_message = "Không thể đăng nhập Facebook"
-                        t.finished_at = utc_now()
+                        t.finished_at = vn_now()
                         camp_tar = (
                             db.query(SeedingCampaignTarget)
                             .filter(SeedingCampaignTarget.id == t.campaign_target_id)
@@ -1223,7 +1220,7 @@ def _process_account_tasks(
                 continue
 
             ut.status = "RUNNING"
-            ut.started_at = utc_now()
+            ut.started_at = vn_now()
             db.commit()
 
             success = False
@@ -1275,7 +1272,7 @@ def _process_account_tasks(
                     target.url, callback=lambda m: broadcast("info", f"[{uid}] {m}")
                 )
 
-            ut.finished_at = utc_now()
+            ut.finished_at = vn_now()
             ut.error_message = msg
             if success:
                 ut.status = "SUCCESS"
@@ -1360,7 +1357,7 @@ def _run_single_campaign(campaign_id: int):
             str(campaign.created_by) if campaign.created_by is not None else None
         )
         campaign.status = "RUNNING"
-        campaign.started_at = utc_now()
+        campaign.started_at = vn_now()
         db.commit()
 
         _active_seeding_campaigns[campaign_id] = {
@@ -1385,7 +1382,7 @@ def _run_single_campaign(campaign_id: int):
 
         if not tasks:
             campaign.status = "COMPLETED"
-            campaign.finished_at = utc_now()
+            campaign.finished_at = vn_now()
             db.commit()
             broadcast(
                 "info",
@@ -1453,7 +1450,7 @@ def _run_single_campaign(campaign_id: int):
                     camp_end.status = "STOPPED"
                 else:
                     camp_end.status = "COMPLETED"
-                camp_end.finished_at = utc_now()
+                camp_end.finished_at = vn_now()
                 db_end.commit()
                 broadcast(
                     "success",
@@ -1749,13 +1746,13 @@ async def list_seeding_campaigns(
     # from_date / to_date là ngày theo giờ Việt Nam ('YYYY-MM-DD'), lấy trọn ngày to_date
     if from_date:
         try:
-            q = q.filter(SeedingCampaign.created_at >= vn_date_to_utc(from_date))
+            q = q.filter(SeedingCampaign.created_at >= vn_date_bound(from_date))
         except ValueError:
             pass
 
     if to_date:
         try:
-            q = q.filter(SeedingCampaign.created_at < vn_date_to_utc(to_date, end_of_day=True))
+            q = q.filter(SeedingCampaign.created_at < vn_date_bound(to_date, end_of_day=True))
         except ValueError:
             pass
 
