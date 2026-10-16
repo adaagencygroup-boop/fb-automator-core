@@ -9,6 +9,8 @@ import os
 import re
 import time
 from typing import Optional, List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import requests
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Depends, Request
 
@@ -47,7 +49,11 @@ class SyncByTokenBody(BaseModel):
 
 class OAuthByProfileBody(BaseModel):
     account_uid: str
-    headless: bool = True
+    headless: bool = False
+
+
+class VerifyTokensBody(BaseModel):
+    account_uids: Optional[List[str]] = None
 
 
 @router.get("/managed")
@@ -386,7 +392,7 @@ def oauth_by_profile(body: OAuthByProfileBody, request: Request):
         driver.get(oauth_url)
 
         start_time = time.time()
-        while time.time() - start_time < 25:
+        while time.time() - start_time < 60:
             curr_url = driver.current_url or ""
 
             if "login_success.html" in curr_url and "access_token=" in curr_url:
@@ -473,4 +479,86 @@ def oauth_by_profile(body: OAuthByProfileBody, request: Request):
         "token": long_lived_token,
         "message": f"Đã cấp mới Token và nạp thành công {synced_count} Fanpage từ nick {acc_uid}!",
         "pages": pages
+    }
+
+
+@router.post("/tokens/verify")
+def verify_tokens(body: VerifyTokensBody, request: Request):
+    """
+    Kiểm tra thực tế trạng thái sống/chết (Live Check) của User Token qua Meta Graph API.
+    Gọi song song /me bằng ThreadPoolExecutor.
+    """
+    owner = get_current_owner(request)
+    if not owner:
+        raise HTTPException(status_code=401, detail="Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.")
+
+    target_uids = body.account_uids or []
+    if target_uids:
+        placeholders = ",".join(["%s"] * len(target_uids))
+        query = f"SELECT uid, profile_name, token FROM accounts WHERE user_id = %s AND uid IN ({placeholders})"
+        params = [owner] + [str(u).strip() for u in target_uids]
+    else:
+        query = "SELECT uid, profile_name, token FROM accounts WHERE user_id = %s"
+        params = [owner]
+
+    rows = db.fetch_all(query, tuple(params))
+    results = {}
+
+    def _check_single(uid: str, name: str, token: str):
+        token_str = (token or "").strip()
+        if not token_str:
+            return uid, {"status": "NONE", "message": "Chưa có Token"}
+
+        try:
+            url = "https://graph.facebook.com/v20.0/me"
+            resp = requests.get(
+                url,
+                params={"fields": "id,name", "access_token": token_str},
+                timeout=7
+            )
+            data = resp.json()
+            if resp.status_code == 200 and "id" in data:
+                return uid, {
+                    "status": "LIVE",
+                    "meta_id": data.get("id"),
+                    "meta_name": data.get("name"),
+                    "message": "Token còn sống (LIVE)"
+                }
+            else:
+                err = data.get("error", {})
+                code = err.get("code")
+                msg = err.get("message", "Token không hợp lệ hoặc đã hết hạn")
+                return uid, {
+                    "status": "EXPIRED",
+                    "code": code,
+                    "message": f"Hết hạn ({code}): {msg}"
+                }
+        except Exception as exc:
+            return uid, {
+                "status": "ERROR",
+                "message": f"Lỗi kết nối Facebook: {str(exc)}"
+            }
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [
+            executor.submit(
+                _check_single,
+                str(r.get("uid") or "").strip(),
+                r.get("profile_name") or "",
+                r.get("token") or ""
+            )
+            for r in rows
+            if str(r.get("uid") or "").strip()
+        ]
+        for f in as_completed(futures):
+            try:
+                uid, res = f.result()
+                results[uid] = res
+            except Exception:
+                pass
+
+    return {
+        "success": True,
+        "results": results,
+        "checked_count": len(results)
     }

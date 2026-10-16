@@ -32,6 +32,10 @@ export async function addManualPage(payload) {
   return api.post("/api/pages/manual", payload);
 }
 
+export async function verifyTokens(payload = {}) {
+  return api.post("/api/pages/tokens/verify", payload);
+}
+
 export async function deleteManagedPage(pageId) {
   return api.delete(`/api/pages/${pageId}`);
 }

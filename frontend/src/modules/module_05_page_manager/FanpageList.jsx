@@ -45,6 +45,7 @@ import {
   getOAuthConfig,
   syncPagesByToken,
   oauthByProfile,
+  verifyTokens,
 } from "./service";
 
 const PAGE_SIZE = 10;
@@ -260,7 +261,8 @@ export default function FanpageList() {
   const [syncing, setSyncing] = useState(null); // UID đang quét hoặc null
   const [oauthLoading, setOauthLoading] = useState(false);
   const [profileOauthLoading, setProfileOauthLoading] = useState(null); // UID đang cấp token hoặc null
-  const [showLiveBrowser, setShowLiveBrowser] = useState(false);
+  const [tokenStatusMap, setTokenStatusMap] = useState({}); // { [uid]: "LIVE" | "EXPIRED" | "NONE" | "CHECKING" }
+  const [verifyingTokens, setVerifyingTokens] = useState(false);
   const [accQuery, setAccQuery] = useState("");
   const [accStatusFilter, setAccStatusFilter] = useState("all");
   const [accLoginFilter, setAccLoginFilter] = useState("all");
@@ -303,6 +305,59 @@ export default function FanpageList() {
     }
   }, []);
 
+  // Kiểm tra trạng thái sống/chết thực tế của Token qua Meta Graph API
+  const handleVerifyTokens = async (targetUids = null) => {
+    const uidsToCheck = targetUids && targetUids.length > 0
+      ? targetUids
+      : accountList.filter((a) => a.token && a.token.trim().length > 10).map((a) => a.uid);
+
+    if (uidsToCheck.length === 0) {
+      if (!targetUids) toast.info("Không có tài khoản nào có Token để kiểm tra.");
+      return;
+    }
+
+    setVerifyingTokens(true);
+    setTokenStatusMap((prev) => {
+      const next = { ...prev };
+      uidsToCheck.forEach((u) => {
+        next[u] = "CHECKING";
+      });
+      return next;
+    });
+
+    try {
+      const res = await verifyTokens({ account_uids: uidsToCheck });
+      if (res?.success && res?.results) {
+        setTokenStatusMap((prev) => {
+          const next = { ...prev };
+          Object.entries(res.results).forEach(([uid, info]) => {
+            next[uid] = info.status;
+          });
+          return next;
+        });
+        const liveCount = Object.values(res.results).filter((r) => r.status === "LIVE").length;
+        const expiredCount = Object.values(res.results).filter((r) => r.status === "EXPIRED").length;
+        if (targetUids) {
+          if (expiredCount > 0) {
+            toast.warn(`Token nick ${targetUids.join(", ")} đã HẾT HẠN hoặc bị thu hồi!`);
+          } else {
+            toast.success(`Token nick ${targetUids.join(", ")} còn sống (LIVE)!`);
+          }
+        } else {
+          if (expiredCount > 0) {
+            toast.warn(`Check xong: ${liveCount} token LIVE, ${expiredCount} token HẾT HẠN!`);
+          } else if (liveCount > 0) {
+            toast.success(`Toàn bộ ${liveCount} token đều hoạt động tốt (LIVE)!`);
+          }
+        }
+      }
+    } catch (err) {
+      toast.error("Lỗi kiểm tra Token Meta: " + (err.message || "Không gọi được API"));
+    } finally {
+      setVerifyingTokens(false);
+    }
+  };
+
   // Tải danh sách tài khoản Facebook thuộc sở hữu của User hiện tại khi mở modal Thêm Page
   const loadAccounts = async () => {
     setLoadingAccounts(true);
@@ -312,6 +367,11 @@ export default function FanpageList() {
       setAccountList(list);
       if (list.length > 0) {
         setSelectedAccUid((prev) => prev || list[0].uid);
+        // Tự động kiểm tra sống/chết (Live Check) qua Meta API cho các nick có token
+        const withTokens = list.filter((a) => a.token && a.token.trim().length > 10).map((a) => a.uid);
+        if (withTokens.length > 0) {
+          handleVerifyTokens(withTokens);
+        }
       }
     } catch (e) {
       console.warn("Lỗi tải danh sách tài khoản:", e);
@@ -377,7 +437,7 @@ export default function FanpageList() {
     }
   };
 
-  // Luồng 1: OAuth qua Chrome Profile của nick Clone
+  // Luồng 1: OAuth qua Chrome Profile của nick Clone (luôn mở Chrome trực tiếp có giao diện)
   const handleProfileOAuth = async (targetUid) => {
     const uid = targetUid || selectedAccUid;
     if (!uid) {
@@ -389,10 +449,11 @@ export default function FanpageList() {
       toast.info(`Đang mở profile Chrome của nick ${uid} để cấp Token mới từ Meta...`);
       const res = await oauthByProfile({
         account_uid: uid,
-        headless: !showLiveBrowser,
+        headless: false,
       });
       if (res?.success) {
         toast.success(res.message || `Đã cấp Token mới và nạp ${res.count} Fanpage!`);
+        setTokenStatusMap((prev) => ({ ...prev, [uid]: "LIVE" }));
         await loadAccounts();
         await load();
       } else {
@@ -702,16 +763,16 @@ export default function FanpageList() {
                   <span className="flex size-4 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white font-bold">1</span>
                   Dàn nick Clone ({filteredAccounts.length}/{accountList.length})
                 </span>
-                <label className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] text-slate-600 font-medium hover:text-slate-800">
-                  <input
-                    type="checkbox"
-                    checked={showLiveBrowser}
-                    onChange={(e) => setShowLiveBrowser(e.target.checked)}
-                    className="rounded border-slate-300 text-[#1877F2] focus:ring-[#1877F2] w-3.5 h-3.5"
-                  />
-                  <Monitor className="w-3.5 h-3.5 text-slate-400" />
-                  Mở Chrome Live
-                </label>
+                <button
+                  type="button"
+                  onClick={() => handleVerifyTokens()}
+                  disabled={verifyingTokens}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50 transition-colors shadow-2xs"
+                  title="Kiểm tra trạng thái sống/chết thực tế của toàn bộ Token qua Meta Graph API"
+                >
+                  <RefreshCw className={`w-3 h-3 ${verifyingTokens ? "animate-spin text-blue-600" : "text-blue-500"}`} />
+                  {verifyingTokens ? "Đang check Token..." : "Check Live Token"}
+                </button>
               </div>
 
               {/* BỘ LỌC VÀ TÌM KIẾM TÀI KHOẢN */}
@@ -779,7 +840,12 @@ export default function FanpageList() {
                         </tr>
                       ) : (
                         filteredAccounts.map((acc) => {
-                          const hasToken = Boolean(acc.token && acc.token.trim().length > 10);
+                          const rawHasToken = Boolean(acc.token && acc.token.trim().length > 10);
+                          const tokenStatus = tokenStatusMap[acc.uid];
+                          const isCheckingToken = tokenStatus === "CHECKING";
+                          const isLiveToken = tokenStatus === "LIVE";
+                          const isExpiredToken = tokenStatus === "EXPIRED";
+
                           const isLive = acc.status === "active";
                           const isLoggedIn = acc.login_status === "logged_in";
                           const isProcessing = profileOauthLoading === acc.uid || syncing === acc.uid;
@@ -825,10 +891,27 @@ export default function FanpageList() {
                                 )}
                               </td>
                               <td className="py-2 px-2 text-center whitespace-nowrap">
-                                {hasToken ? (
-                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full">
-                                    <ShieldCheck className="w-2.5 h-2.5 text-blue-600" /> LIVE
+                                {isCheckingToken ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                                    <Loader2 className="w-2.5 h-2.5 animate-spin text-blue-500" /> Check...
                                   </span>
+                                ) : isLiveToken ? (
+                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full shadow-2xs" title="Token Meta đang hoạt động tốt">
+                                    <ShieldCheck className="w-2.5 h-2.5 text-emerald-600" /> LIVE
+                                  </span>
+                                ) : isExpiredToken ? (
+                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full shadow-2xs" title="Token đã hết hạn hoặc bị Meta thu hồi">
+                                    <ShieldAlert className="w-2.5 h-2.5 text-rose-600" /> HẾT HẠN
+                                  </span>
+                                ) : rawHasToken ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleVerifyTokens([acc.uid])}
+                                    className="inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full hover:bg-blue-100 transition-colors"
+                                    title="Bấm để kiểm tra token này"
+                                  >
+                                    <RefreshCw className="w-2.5 h-2.5 text-blue-500" /> Chưa check
+                                  </button>
                                 ) : (
                                   <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full">
                                     Chưa có
@@ -837,28 +920,45 @@ export default function FanpageList() {
                               </td>
                               <td className="py-2 px-2.5 text-right whitespace-nowrap">
                                 <div className="flex items-center justify-end gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleProfileOAuth(acc.uid)}
-                                    disabled={isProcessing}
-                                    className="h-7 px-2 rounded-md bg-blue-600 hover:bg-blue-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
-                                    title="Mở Chrome Profile của nick này để tự động cấp Token và nạp Fanpage"
-                                  >
-                                    {profileOauthLoading === acc.uid ? (
-                                      <Loader2 className="w-3 h-3 animate-spin" />
-                                    ) : (
-                                      <Zap className="w-3 h-3 text-amber-300 fill-amber-300" />
-                                    )}
-                                    {hasToken ? "Cấp lại" : "Cấp Token"}
-                                  </button>
+                                  {isExpiredToken ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleProfileOAuth(acc.uid)}
+                                      disabled={isProcessing}
+                                      className="h-7 px-2.5 rounded-md bg-amber-600 hover:bg-amber-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
+                                      title="Token đã hết hạn. Mở Chrome Profile để cấp lại Token mới!"
+                                    >
+                                      {profileOauthLoading === acc.uid ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <Zap className="w-3 h-3 text-amber-200 fill-amber-200" />
+                                      )}
+                                      Cấp lại Token
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleProfileOAuth(acc.uid)}
+                                      disabled={isProcessing}
+                                      className="h-7 px-2 rounded-md bg-blue-600 hover:bg-blue-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
+                                      title="Mở Chrome Profile của nick này để tự động cấp Token và nạp Fanpage"
+                                    >
+                                      {profileOauthLoading === acc.uid ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <Zap className="w-3 h-3 text-amber-300 fill-amber-300" />
+                                      )}
+                                      {isLiveToken ? "Cấp lại" : "Cấp Token"}
+                                    </button>
+                                  )}
 
-                                  {hasToken ? (
+                                  {isLiveToken ? (
                                     <button
                                       type="button"
                                       onClick={() => handleSyncPages(acc.uid)}
                                       disabled={isProcessing}
                                       className="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 font-medium text-[10.5px] text-slate-700 flex items-center gap-1 transition-all disabled:opacity-50"
-                                      title="Quét Fanpage bằng Token hiện có"
+                                      title="Quét Fanpage bằng Token LIVE"
                                     >
                                       {syncing === acc.uid ? (
                                         <RefreshCw className="w-3 h-3 animate-spin text-slate-400" />
