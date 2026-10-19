@@ -72,6 +72,127 @@ export default function OmnichannelChatModule() {
     };
   }, []);
 
+  // Lắng nghe sự kiện Realtime (Tin nhắn & Thông báo mới) từ WebSocket Backend
+  useEffect(() => {
+    let ws = null;
+    let timer = null;
+    let destroyed = false;
+
+    const connectWs = () => {
+      if (destroyed) return;
+      try {
+        const host = typeof window !== "undefined" ? window.location.hostname : "127.0.0.1";
+        const proto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
+        ws = new WebSocket(`${proto}//${host}:28129/api/facebook/ws/all`);
+
+        ws.onopen = () => {
+          timer = setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "ping" }));
+            }
+          }, 25000);
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const payload = JSON.parse(event.data);
+            if (payload.type === "message" && payload.data) {
+              const msgData = payload.data;
+              const convId = `${msgData.page_id}_${msgData.sender_id}`;
+              const incomingMsg = {
+                id: String(msgData.id || msgData.facebook_message_id),
+                direction: msgData.direction === "outbound" ? "out" : "in",
+                text: msgData.text || "",
+                createdAt: msgData.created_at || new Date().toISOString(),
+              };
+
+              // Thêm tin nhắn mới vào cuộc hội thoại
+              setMessagesByConversation((all) => {
+                const currentList = all[convId] || [];
+                if (currentList.some((m) => m.id === incomingMsg.id)) return all;
+                return { ...all, [convId]: [...currentList, incomingMsg] };
+              });
+
+              // Cập nhật thẻ hội thoại ở sidebar
+              setConversations((list) => {
+                const exists = list.some((c) => c.id === convId);
+                const isCurrentActive = activeConversationId === convId;
+                const snippet = msgData.text || "[Hình ảnh/Tệp đính kèm]";
+                const lastMsgText = msgData.direction === "outbound" ? `Bạn: ${snippet}` : snippet;
+
+                if (exists) {
+                  const target = list.find((c) => c.id === convId);
+                  const rest = list.filter((c) => c.id !== convId);
+                  const updated = {
+                    ...target,
+                    lastMessage: lastMsgText,
+                    updatedAt: incomingMsg.createdAt,
+                    unread: isCurrentActive ? false : msgData.direction === "inbound",
+                    replied: msgData.direction === "outbound",
+                  };
+                  return [updated, ...rest];
+                } else {
+                  const newConv = {
+                    id: convId,
+                    pageId: String(msgData.page_id),
+                    senderId: String(msgData.sender_id),
+                    customer: String(msgData.sender_id),
+                    customerName: msgData.sender_name || `KH: ${String(msgData.sender_id).slice(0, 8)}`,
+                    avatar: msgData.avatar_url || null,
+                    lastMessage: lastMsgText,
+                    updatedAt: incomingMsg.createdAt,
+                    unread: !isCurrentActive && msgData.direction === "inbound",
+                    replied: msgData.direction === "outbound",
+                    tags: [],
+                    starred: false,
+                  };
+                  return [newConv, ...list];
+                }
+              });
+            } else if (payload.type === "notification" && payload.data) {
+              const notifData = payload.data;
+              const incomingNotif = {
+                id: String(notifData.id || notifData.facebook_notification_id),
+                actor: notifData.from_user_name || "Khách hàng",
+                text: notifData.title || "",
+                createdAt: notifData.created_time || new Date().toISOString(),
+                unread: Boolean(notifData.unread),
+                replied: false,
+                pageId: String(notifData.page_id),
+                type: notifData.notification_type === "comment" ? "comment" : "interaction",
+                link: notifData.link || "",
+              };
+              setNotifications((prev) => [incomingNotif, ...prev.filter((n) => n.id !== incomingNotif.id)]);
+            }
+          } catch (err) {
+            console.error("[WS Message Error]", err);
+          }
+        };
+
+        ws.onclose = () => {
+          clearInterval(timer);
+          if (!destroyed) {
+            setTimeout(connectWs, 3000);
+          }
+        };
+
+        ws.onerror = () => {
+          if (ws) ws.close();
+        };
+      } catch (e) {
+        console.warn("[WS Connect Error]", e);
+      }
+    };
+
+    connectWs();
+
+    return () => {
+      destroyed = true;
+      clearInterval(timer);
+      if (ws) ws.close();
+    };
+  }, [activeConversationId]);
+
   const handleReset = async () => {
     setResetting(true);
     await resyncChatData();
@@ -111,12 +232,38 @@ export default function OmnichannelChatModule() {
     setThread(conversationId, (list) => list.map((m) => (m.id === messageId ? { ...m, ...patch } : m)));
 
   const loadMessages = (id) => {
-    if (messagesByConversation[id] || loadingMessages.current.has(id)) return;
+    if (loadingMessages.current.has(id)) return;
     loadingMessages.current.add(id);
     getMessages(id)
-      .then((res) => setMessagesByConversation((all) => ({ ...all, [id]: res.messages || [] })))
+      .then((res) => {
+        if (res?.messages) {
+          setMessagesByConversation((all) => ({ ...all, [id]: res.messages }));
+        }
+      })
       .finally(() => loadingMessages.current.delete(id));
   };
+
+  // Đồng bộ định kỳ tin nhắn của hội thoại đang mở (fallback 3s)
+  useEffect(() => {
+    if (!activeConversationId) return;
+    const interval = setInterval(() => {
+      getMessages(activeConversationId).then((res) => {
+        if (res?.messages && res.messages.length > 0) {
+          setMessagesByConversation((all) => {
+            const current = all[activeConversationId] || [];
+            if (
+              current.length !== res.messages.length ||
+              current[current.length - 1]?.id !== res.messages[res.messages.length - 1]?.id
+            ) {
+              return { ...all, [activeConversationId]: res.messages };
+            }
+            return all;
+          });
+        }
+      });
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [activeConversationId]);
 
   const selectConversation = (id) => {
     setActiveConversationId(id);

@@ -48,6 +48,16 @@ class FacebookSyncService:
 
             token = page.page_access_token
 
+            # 0. Tự động liên kết Webhook (subscribed_apps) cho Fanpage này với Facebook App
+            try:
+                sub_url = f"https://graph.facebook.com/{FACEBOOK_API_VERSION}/{page_id}/subscribed_apps"
+                requests.post(sub_url, params={
+                    "subscribed_fields": "messages,messaging_postbacks,feed",
+                    "access_token": token
+                }, timeout=10)
+            except Exception as sub_err:
+                print(f"[Subscribed Apps Warning] Page {page_id}: {sub_err}")
+
             # 1. Fetch Conversations & Messages
             conv_next_url = f"https://graph.facebook.com/{FACEBOOK_API_VERSION}/{page_id}/conversations"
             conv_params = {
@@ -224,10 +234,19 @@ class FacebookSyncService:
                     print(f"[Historical Conv Sync Error] {e}")
                     break
 
-            # 2. Fetch Feed Comments
+            # 2. Fetch Feed Posts, Comments, and Interactions
+            REACT_MAP = {
+                "like": "thích",
+                "love": "yêu thích",
+                "haha": "haha",
+                "wow": "wow",
+                "sad": "buồn",
+                "angry": "phẫn nộ",
+                "care": "thương thương",
+            }
             feed_url = f"https://graph.facebook.com/{FACEBOOK_API_VERSION}/{page_id}/feed"
             feed_params = {
-                "fields": "comments{id,message,created_time,from}",
+                "fields": "id,message,created_time,permalink_url,shares,reactions.summary(total_count){id,name,type},comments{id,message,created_time,from}",
                 "access_token": token,
                 "limit": "25"
             }
@@ -235,7 +254,24 @@ class FacebookSyncService:
                 resp = requests.get(feed_url, params=feed_params, timeout=20)
                 if resp.status_code == 200:
                     feed_data = resp.json().get("data", [])
+                    two_weeks_ago = datetime.utcnow() - timedelta(days=14)
+                    page_name = page.page_name if page and page.page_name else "Trang Facebook"
+
                     for post in feed_data:
+                        post_id = post.get("id")
+                        post_time_str = post.get("created_time")
+                        try:
+                            p_dt = datetime.fromisoformat(post_time_str.replace("Z", "+00:00"))
+                        except Exception:
+                            p_dt = datetime.utcnow()
+
+                        p_dt_naive = p_dt.replace(tzinfo=None) if hasattr(p_dt, "tzinfo") and p_dt.tzinfo else p_dt
+                        if p_dt_naive < two_weeks_ago:
+                            continue
+
+                        post_link = post.get("permalink_url") or f"https://facebook.com/{post_id}"
+
+                        # A. Comments
                         comments_data = post.get("comments", {}).get("data", [])
                         for comment in comments_data:
                             c_id = comment.get("id")
@@ -251,7 +287,6 @@ class FacebookSyncService:
                             except Exception:
                                 dt = datetime.utcnow()
 
-                            two_weeks_ago = datetime.utcnow() - timedelta(days=14)
                             dt_naive = dt.replace(tzinfo=None) if hasattr(dt, "tzinfo") and dt.tzinfo else dt
                             if dt_naive < two_weeks_ago:
                                 continue
@@ -268,13 +303,113 @@ class FacebookSyncService:
                                         link=link,
                                         created_time=dt,
                                         unread=False,
-                                        is_replied=False
+                                        is_replied=False,
+                                        from_user_name=c_from,
+                                        notification_type="comment"
                                     )
                                     db.add(notif)
                                     db.commit()
                             except Exception as notif_err:
                                 db.rollback()
                                 print(f"[Historical Notif Save Warning] {c_id}: {notif_err}")
+
+                        # B. Post Reactions (Interactions)
+                        reactions_obj = post.get("reactions", {})
+                        react_data = reactions_obj.get("data", [])
+                        total_reacts = reactions_obj.get("summary", {}).get("total_count", 0)
+
+                        if react_data:
+                            for r in react_data:
+                                r_id = f"react_{post_id}_{r.get('id')}"
+                                r_name = r.get("name", "Người dùng")
+                                r_type = str(r.get("type", "LIKE")).lower()
+                                react_vn = REACT_MAP.get(r_type, "thích")
+                                r_title = f"đã bày tỏ cảm xúc “{react_vn}”"
+
+                                try:
+                                    if not notif_repo.get_by_fb_notification_id(r_id):
+                                        notif = Notification(
+                                            facebook_notification_id=r_id,
+                                            page_id=page_id,
+                                            title=r_title,
+                                            link=post_link,
+                                            created_time=p_dt,
+                                            unread=True,
+                                            is_replied=False,
+                                            from_user_name=r_name,
+                                            notification_type="interaction"
+                                        )
+                                        db.add(notif)
+                                        db.commit()
+                                except Exception:
+                                    db.rollback()
+                        elif total_reacts > 0:
+                            # Aggregate reaction count when FB privacy restricts individual user lists
+                            r_sum_id = f"react_sum_{post_id}"
+                            r_title = f"đã nhận được {total_reacts} lượt bày tỏ cảm xúc"
+                            try:
+                                if not notif_repo.get_by_fb_notification_id(r_sum_id):
+                                    notif = Notification(
+                                        facebook_notification_id=r_sum_id,
+                                        page_id=page_id,
+                                        title=r_title,
+                                        link=post_link,
+                                        created_time=p_dt,
+                                        unread=True,
+                                        is_replied=False,
+                                        from_user_name="Người theo dõi",
+                                        notification_type="interaction"
+                                    )
+                                    db.add(notif)
+                                    db.commit()
+                            except Exception:
+                                db.rollback()
+
+                        # C. Shares
+                        shares_cnt = post.get("shares", {}).get("count", 0)
+                        if shares_cnt > 0:
+                            s_id = f"share_{post_id}"
+                            s_title = f"đã chia sẻ bài viết ({shares_cnt} lượt chia sẻ)"
+                            try:
+                                if not notif_repo.get_by_fb_notification_id(s_id):
+                                    notif = Notification(
+                                        facebook_notification_id=s_id,
+                                        page_id=page_id,
+                                        title=s_title,
+                                        link=post_link,
+                                        created_time=p_dt,
+                                        unread=True,
+                                        is_replied=False,
+                                        from_user_name="Người dùng",
+                                        notification_type="interaction"
+                                    )
+                                    db.add(notif)
+                                    db.commit()
+                            except Exception:
+                                db.rollback()
+
+                        # D. Post creation interaction
+                        post_notif_id = f"post_created_{post_id}"
+                        p_msg = (post.get("message") or "").strip()
+                        snippet = f": “{p_msg[:45]}...”" if p_msg else ""
+                        p_title = f"đã đăng một bài viết mới{snippet}"
+                        try:
+                            if not notif_repo.get_by_fb_notification_id(post_notif_id):
+                                notif = Notification(
+                                    facebook_notification_id=post_notif_id,
+                                    page_id=page_id,
+                                    title=p_title,
+                                    link=post_link,
+                                    created_time=p_dt,
+                                    unread=False,
+                                    is_replied=True,
+                                    from_user_name=page_name,
+                                    notification_type="interaction"
+                                )
+                                db.add(notif)
+                                db.commit()
+                        except Exception:
+                            db.rollback()
             except Exception as e:
                 db.rollback()
                 print(f"[Historical Feed Sync Warning] Page {page_id}: {e}")
