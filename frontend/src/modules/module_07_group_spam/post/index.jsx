@@ -35,6 +35,8 @@ import {
   generateGroupPosts,
   getGeminiModels,
   getGroupSettings,
+  deleteGroupApiKey,
+  saveGroupApiKey,
   runGroupCampaign,
   saveGroupSettings,
   testGroupAiConnection,
@@ -237,6 +239,46 @@ export default function GroupPostModule() {
     }
   };
 
+  const handleSaveApiKey = async (key, keyId) => {
+    setSettingsAction("saving-key");
+    setSettingsFeedback(null);
+    try {
+      const result = await saveGroupApiKey({ model, api_key: key, key_id: keyId || null });
+      setProviderStatus(result.providers || {});
+      setApiKey("");
+      setShowApiKey(false);
+      setSettingsFeedback({ type: "success", message: keyId ? "Đã cập nhật API Key" : "Đã thêm API Key" });
+      toast.success(keyId ? "Đã cập nhật API Key." : "Đã thêm API Key.", "LƯU API KEY THÀNH CÔNG");
+      return true;
+    } catch (error) {
+      setSettingsFeedback({ type: "error", title: "Lỗi lưu API Key", message: error.message || "Không thể lưu API Key" });
+      return false;
+    } finally {
+      setSettingsAction("");
+    }
+  };
+
+  const handleDeleteApiKey = async (keyId) => {
+    setSettingsAction("deleting-key");
+    setSettingsFeedback(null);
+    try {
+      const result = await deleteGroupApiKey(model, keyId);
+      setProviderStatus(result.providers || {});
+      const provider = model === "gemini" || model.startsWith("gemini-") ? "gemini" : "openai";
+      if (!result.providers?.[provider]?.configured) setIsSettingsLocked(false);
+      setApiKey("");
+      setShowApiKey(false);
+      setSettingsFeedback({ type: "success", message: "Đã xóa API Key đã chọn; các khóa khác vẫn được giữ nguyên" });
+      toast.success("Đã xóa riêng API Key này.", "ĐÃ XÓA API KEY");
+      return true;
+    } catch (error) {
+      setSettingsFeedback({ type: "error", title: "Lỗi xóa API Key", message: error.message || "Không thể xóa API Key" });
+      return false;
+    } finally {
+      setSettingsAction("");
+    }
+  };
+
   const handleTestApi = async () => {
     setSettingsAction("testing");
     setSettingsFeedback(null);
@@ -407,6 +449,8 @@ export default function GroupPostModule() {
         settingsFeedback={settingsFeedback}
         setSettingsFeedback={setSettingsFeedback}
         onSaveSettings={handleSaveSettings}
+        onSaveApiKey={handleSaveApiKey}
+        onDeleteApiKey={handleDeleteApiKey}
         onTestApi={handleTestApi}
         onLoadGeminiModels={handleLoadGeminiModels}
         onModelChange={handleModelChange}

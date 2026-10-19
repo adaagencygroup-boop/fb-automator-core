@@ -9,6 +9,14 @@ export function saveGroupSettings(data) {
   return api.put("/api/groups/settings", data);
 }
 
+export function saveGroupApiKey(data) {
+  return api.post("/api/groups/settings/keys", data);
+}
+
+export function deleteGroupApiKey(model, keyId) {
+  return api.delete(`/api/groups/settings/keys/${encodeURIComponent(keyId)}`, { data: { model } });
+}
+
 export function testGroupAiConnection(data) {
   return api.post("/api/groups/settings/test", data);
 }

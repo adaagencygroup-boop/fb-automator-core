@@ -49,6 +49,8 @@ export default function GroupSettingsSection({
   settingsFeedback = null,
   setSettingsFeedback,
   onSaveSettings,
+  onSaveApiKey,
+  onDeleteApiKey,
   onTestApi,
   onLoadGeminiModels,
   onModelChange,
@@ -67,6 +69,9 @@ export default function GroupSettingsSection({
   };
 
   const [errorDialog, setErrorDialog] = useState(null);
+  const [editingKeyId, setEditingKeyId] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const providerKeys = savedKey?.keys || [];
 
   // Tự động mở Modal Dialog khi có lỗi
   useEffect(() => {
@@ -249,21 +254,15 @@ export default function GroupSettingsSection({
                 type={showApiKey ? "text" : "password"}
                 value={apiKey}
                 onChange={(event) => setApiKey(event.target.value)}
-                disabled={settingsLoading || locked}
+                disabled={settingsLoading || Boolean(settingsAction)}
                 title="Khóa API bí mật của nhà cung cấp AI"
-                placeholder={
-                  savedKey?.configured
-                    ? `Đã lưu ${savedKey.hint}`
-                    : activeProvider === "openai"
-                      ? "sk-••••••••••••••••"
-                      : "AIza••••••••••••••••"
-                }
+                placeholder={editingKeyId ? "Nhập API Key mới để thay thế khóa này" : savedKey?.configured ? `Đang dùng ${savedKey.hint}` : activeProvider === "openai" ? "sk-••••••••••••••••" : "AIza••••••••••••••••"}
                 className="pr-10 font-mono disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                 autoComplete="off"
               />
               <button
                 type="button"
-                disabled={settingsLoading || locked}
+                disabled={settingsLoading || Boolean(settingsAction)}
                 onClick={() => setShowApiKey((current) => !current)}
                 className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
                 aria-label={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
@@ -274,12 +273,49 @@ export default function GroupSettingsSection({
             </div>
           </Tooltip>
           <span className="block text-[10px] font-normal text-slate-400">
-            {savedKey?.configured
-              ? `Đang dùng khóa đã mã hóa trên máy (${savedKey.hint}). Nhập khóa mới để thay thế.`
+            {savedKey?.stored && !savedKey?.configured
+              ? "API Key cũ không giải mã được. Hãy thêm khóa mới hoặc xóa khóa lỗi bên dưới."
               : "Nhập API Key hợp lệ của nhà cung cấp AI đã chọn."}
           </span>
         </Field>
       </div>
+
+      <div className="mt-2 space-y-2">
+        {providerKeys.map((item) => {
+          const active = savedKey?.active_key_id === item.id;
+          return (
+            <div key={item.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 py-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className={`size-2 shrink-0 rounded-full ${active ? "bg-emerald-500" : "bg-slate-300"}`} />
+                <div className="min-w-0">
+                  <span className="block truncate text-[11px] font-semibold text-slate-700">
+                    {activeProvider === "gemini" ? "Google · Gemini" : "OpenAI · GPT"}
+                  </span>
+                  <span className="block truncate font-mono text-xs text-slate-500">
+                    {item.configured ? item.hint : "API Key không đọc được"}{active ? " · Đang dùng" : ""}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button type="button" size="sm" variant="ghost" disabled={Boolean(settingsAction)} onClick={() => { setEditingKeyId(item.id); setApiKey(""); setShowApiKey(false); }} className="h-7 px-2 text-[11px]">Chỉnh sửa</Button>
+                <Button type="button" size="sm" variant="ghost" disabled={Boolean(settingsAction)} onClick={() => setDeleteTarget(item)} className="h-7 px-2 text-[11px] text-red-600 hover:bg-red-50">Xóa</Button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {apiKey.trim() && (
+        <div className="mt-2 flex items-center gap-2">
+          <Button type="button" size="sm" disabled={Boolean(settingsAction) || settingsLoading} onClick={async () => {
+            const saved = await onSaveApiKey?.(apiKey.trim(), editingKeyId);
+            if (saved) setEditingKeyId(null);
+          }} className="text-xs">
+            {settingsAction === "saving-key" ? "Đang lưu..." : editingKeyId ? "Lưu API Key" : "Thêm API Key"}
+          </Button>
+          {editingKeyId && <Button type="button" size="sm" variant="ghost" disabled={Boolean(settingsAction)} onClick={() => { setEditingKeyId(null); setApiKey(""); }} className="text-xs">Hủy sửa</Button>}
+        </div>
+      )}
 
       <div className="mt-4 grid gap-4 sm:grid-cols-3">
         <Field label="Luồng">
@@ -337,6 +373,8 @@ export default function GroupSettingsSection({
             ? "Đang đọc cấu hình local..."
             : settingsFeedback?.type === "success"
               ? settingsFeedback.message
+              : savedKey?.stored && !savedKey?.configured && !apiKey.trim()
+                ? "API Key đã lưu không giải mã được. Hãy xóa khóa cũ rồi nhập lại."
               : locked
                 ? "Cấu hình đã được lưu an toàn trên máy này. Bấm Chỉnh sửa nếu muốn thay đổi."
                 : hasApiKey
@@ -345,16 +383,18 @@ export default function GroupSettingsSection({
         </div>
         <div className="flex gap-2">
           {locked ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setLocked(false)}
-              className="cursor-pointer text-xs flex items-center gap-1.5 border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-medium shadow-2xs"
-            >
-              <Edit3 className="size-3.5 text-slate-600" />
-              Chỉnh sửa
-            </Button>
+            <>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setLocked(false)}
+                className="cursor-pointer text-xs flex items-center gap-1.5 border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-medium shadow-2xs"
+              >
+                <Edit3 className="size-3.5 text-slate-600" />
+                Chỉnh sửa
+              </Button>
+            </>
           ) : (
             <>
               <Button
@@ -390,6 +430,39 @@ export default function GroupSettingsSection({
           )}
         </div>
       </div>
+
+      <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent className="max-w-md rounded-2xl border-slate-200 bg-white p-6 shadow-2xl">
+          <DialogHeader>
+            <DialogTitle>Xóa API Key này?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm leading-relaxed text-slate-600">
+            Chỉ khóa {deleteTarget?.hint || "này"} sẽ bị xóa. Các API Key khác vẫn được giữ nguyên.
+          </p>
+          <DialogFooter className="mt-4">
+            <Button type="button" variant="outline" onClick={() => setDeleteTarget(null)} disabled={settingsAction === "deleting-key"}>
+              Hủy
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={settingsAction === "deleting-key"}
+              onClick={async () => {
+                const deleted = await onDeleteApiKey?.(deleteTarget?.id);
+                if (deleted) {
+                  if (editingKeyId === deleteTarget?.id) {
+                    setEditingKeyId(null);
+                    setApiKey("");
+                  }
+                  setDeleteTarget(null);
+                }
+              }}
+            >
+              {settingsAction === "deleting-key" ? "Đang xóa..." : "Xóa API Key này"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Modal Dialog Popup báo lỗi */}
       <Dialog open={Boolean(errorDialog)} onOpenChange={(open) => !open && handleCloseError()}>

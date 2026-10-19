@@ -61,6 +61,28 @@ class ModelListInput(BaseModel):
     api_key: str | None = Field(default=None, max_length=512)
 
 
+class ApiKeyInput(BaseModel):
+    model: str
+    api_key: str | None = Field(default=None, max_length=512)
+    key_id: str | None = None
+
+    @field_validator("model")
+    @classmethod
+    def supported_model(cls, value: str) -> str:
+        model_spec(value)
+        return value
+
+
+class DeleteApiKeyInput(BaseModel):
+    model: str
+
+    @field_validator("model")
+    @classmethod
+    def supported_model(cls, value: str) -> str:
+        model_spec(value)
+        return value
+
+
 def _resolved_key(model: str, supplied_key: str | None) -> str:
     key = group_settings.get_api_key(model, supplied_key)
     if not key:
@@ -87,6 +109,33 @@ async def save_settings(item: SettingsInput):
         )
     except OSError as exc:
         raise HTTPException(500, "Không thể lưu cấu hình Module 7 trên máy") from exc
+
+
+@router.post("/settings/keys")
+async def save_api_key(item: ApiKeyInput):
+    if not item.api_key or not item.api_key.strip():
+        raise HTTPException(422, "API Key không được để trống")
+    try:
+        return await asyncio.to_thread(
+            group_settings.save_api_key,
+            model=item.model,
+            api_key=item.api_key,
+            key_id=item.key_id,
+        )
+    except OSError as exc:
+        raise HTTPException(500, "Không thể lưu API Key trên máy") from exc
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.delete("/settings/keys/{key_id}")
+async def delete_api_key(key_id: str, item: DeleteApiKeyInput):
+    try:
+        return await asyncio.to_thread(group_settings.delete_api_key, model=item.model, key_id=key_id)
+    except OSError as exc:
+        raise HTTPException(500, "Không thể xóa API Key đã lưu trên máy") from exc
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.post("/settings/test")
