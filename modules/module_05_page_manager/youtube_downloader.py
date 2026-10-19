@@ -4,7 +4,6 @@ File: core/youtube_downloader.py
 """
 import os
 import time
-import sqlite3
 import datetime
 import threading
 import re
@@ -16,7 +15,6 @@ import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="duckduckgo_search")
 warnings.filterwarnings("ignore", message=".*renamed to.*")
 
-DB_FILE = "videos.db"
 db_lock = threading.Lock()
 
 def get_ffmpeg_path():
@@ -75,27 +73,6 @@ def build_ydl_base_opts(cookie_file="", cookie_browser="", is_download=False, ou
 
     return opts
 
-def init_db():
-    with db_lock:
-        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-        return conn
-
-def video_exists(conn, table, vid):
-    with db_lock:
-        try:
-            cur = conn.cursor()
-            cur.execute(f"SELECT 1 FROM {table} WHERE id = ?", (vid,))
-            return cur.fetchone() is not None
-        except sqlite3.OperationalError:
-            return False
-
-def insert_video(conn, table, vid, caption, link):
-    with db_lock:
-        cur = conn.cursor()
-        cur.execute(f"INSERT OR IGNORE INTO {table} (id, caption, link, downloaded_at) VALUES (?,?,?,?)",
-                    (vid, caption, link, datetime.datetime.now().isoformat()))
-        conn.commit()
-
 def get_next_folder_number(page_dir):
     if not os.path.exists(page_dir):
         return 1
@@ -127,10 +104,13 @@ class YouTubeBulkDownloader(QThread):
     page_status_signal = pyqtSignal(int, str)  # index, status text
     finished_signal = pyqtSignal()
 
-    def __init__(self, pages_list, download_folder, cookie_browser="", cookie_file="", delay_seconds=2, max_videos_per_page=5, max_workers=5, parent=None):
+    def __init__(self, pages_list, download_folder, cookie_browser="", cookie_file="", delay_seconds=2, max_videos_per_page=5, max_workers=5, parent=None, owner=None):
         super().__init__(parent)
-        self.pages_list = pages_list
-        self.download_folder = download_folder
+        from modules.module_02_account_manager.context import owner_context
+        from modules.module_05_page_manager.owned_data import require_owner, pages_for, download_root
+        self.owner = require_owner(owner or owner_context.get())
+        self.pages_list = pages_for(self.owner, [str(page.get("page_id") or page.get("id")) for page in pages_list])
+        self.download_folder = download_root(download_folder, self.owner)
         self.cookie_browser = cookie_browser.strip()
         self.cookie_file = cookie_file.strip()
         self.delay_seconds = float(delay_seconds)
@@ -142,7 +122,7 @@ class YouTubeBulkDownloader(QThread):
         self.is_running = False
 
     def run(self):
-        conn = init_db()
+        from modules.module_05_page_manager.owned_data import video_exists, record_download
         self.log_signal.emit("=========================================================")
         self.log_signal.emit(f" BẮT ĐẦU TẢI YOUTUBE SHORTS SONG SONG ({self.max_workers} LUỒNG) ")
         self.log_signal.emit("=========================================================")
@@ -186,20 +166,7 @@ class YouTubeBulkDownloader(QThread):
                 self.page_status_signal.emit(idx, "Lỗi ID")
                 return
 
-            table = f"tbl_youtube_{page_id}"
-            
-            # Tạo bảng an toàn đồng bộ
-            with db_lock:
-                cur = conn.cursor()
-                cur.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {table} (
-                        id TEXT PRIMARY KEY,
-                        caption TEXT,
-                        link TEXT,
-                        downloaded_at TEXT
-                    )
-                """)
-                conn.commit()
+
 
             # Phát hiện xem người dùng nhập link video đơn, link kênh hay là từ khóa
             youtube_search = page.get("youtube_search") or page_name
@@ -338,7 +305,7 @@ class YouTubeBulkDownloader(QThread):
                 vid = match.group(1)
 
                 # Kiểm tra xem video đã từng được tải chưa (chỉ áp dụng khi không phải link video đơn)
-                if not is_single_video and video_exists(conn, table, vid):
+                if not is_single_video and video_exists(self.owner, page_id, "YOUTUBE", vid):
                     continue
 
                 title = item.get("title") or "no_title"
@@ -435,12 +402,13 @@ class YouTubeBulkDownloader(QThread):
                         f.write(facebook_caption.strip())
 
                     # Ghi nhận lịch sử tải
-                    insert_video(conn, table, vid, title, link)
+                    record_download(self.owner, page_id, "YOUTUBE", vid, title, link, video_path)
                     downloaded_this_page += 1
                     self.log_signal.emit(f"[SUCCESS] [{page_name}] Đã tải xong video YouTube Shorts số {downloaded_this_page}: {vid}")
                     self.page_status_signal.emit(idx, f"Đã tải {downloaded_this_page}/{self.max_videos_per_page}")
 
                 except Exception as e:
+                    record_download(self.owner, page_id, "YOUTUBE", vid, title, link, video_path, success=False)
                     if os.path.exists(video_path):
                         try: os.remove(video_path)
                         except Exception: pass
@@ -485,7 +453,6 @@ class YouTubeBulkDownloader(QThread):
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             list(executor.map(download_page_videos, tasks))
 
-        conn.close()
         self.log_signal.emit("\n[FINISHED] Tiến trình tải video YouTube Shorts hàng loạt kết thúc.")
         self.finished_signal.emit()
 

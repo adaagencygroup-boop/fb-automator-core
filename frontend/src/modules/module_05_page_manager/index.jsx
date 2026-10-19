@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import AiPost from "./AiPost";
 import FanpageList from "./FanpageList";
+import ReelsPoster from "./ReelsPoster";
 import { getPages, fetchPageTokens } from "./service";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,9 @@ import {
 export default function PageManagerModule({ subPage } = {}) {
   if (subPage === "pages.list") {
     return <FanpageList />;
+  }
+  if (subPage === "pages.reels") {
+    return <ReelsPoster />;
   }
   if (subPage === "pages.ai_post") {
     return <AiPost />;

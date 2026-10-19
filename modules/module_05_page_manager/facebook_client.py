@@ -124,9 +124,10 @@ def upload_reel_to_facebook(page_name, page_id, page_token, video_path, message,
         res3 = response3.json()
         
         if res3.get('success') or 'video_id' in res3:
-            log_func(f"[SUCCESS] Đã đăng Reels thành công lên Page: {page_name}! Video ID: {video_id}")
+            reel_url = f"https://www.facebook.com/reel/{video_id}"
+            log_func(f"[SUCCESS] Đã đăng Reels thành công lên Page: {page_name}! Link bài viết: {reel_url}")
             save_posted_func(page_name, video_id)
-            return True
+            return reel_url
         else:
             error_msg = res3.get('error', {}).get('message', 'Không rõ nguyên nhân')
             log_func(f"[ERROR] Hoàn tất Reels thất bại: {error_msg}")
