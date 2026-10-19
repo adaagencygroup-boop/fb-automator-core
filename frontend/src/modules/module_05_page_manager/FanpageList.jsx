@@ -391,13 +391,14 @@ export default function FanpageList() {
     }
   }, [adding]);
 
-  // Bộ lọc tài khoản trong bảng
+  // Bộ lọc tài khoản trong bảng (đồng bộ chuẩn live/die theo module 02 account)
   const filteredAccounts = useMemo(() => {
     const q = accQuery.trim().toLowerCase();
     return accountList.filter((acc) => {
-      const isLive = acc.status === "active";
-      if (accStatusFilter === "live" && !isLive) return false;
-      if (accStatusFilter === "die" && isLive) return false;
+      const st = (acc.status || "").toLowerCase();
+      if (accStatusFilter === "live" && st !== "live") return false;
+      if (accStatusFilter === "die" && st !== "die") return false;
+      if (accStatusFilter === "uncheck" && (st === "live" || st === "die")) return false;
 
       const isLoggedIn = acc.login_status === "logged_in";
       if (accLoginFilter === "logged_in" && !isLoggedIn) return false;
@@ -794,8 +795,9 @@ export default function FanpageList() {
                     className="w-full h-8 px-2 text-[11px] font-medium rounded-lg border border-slate-200 bg-white text-slate-700 outline-none focus:border-[#1877F2]"
                   >
                     <option value="all">Mọi trạng thái</option>
-                    <option value="live">● Nick Sống (Live)</option>
-                    <option value="die">✕ Bị Checkpoint</option>
+                    <option value="live">● Nick Live</option>
+                    <option value="die">✕ Nick Die</option>
+                    <option value="uncheck">○ Chưa check (--)</option>
                   </select>
                 </div>
                 <div className="col-span-3">
@@ -846,7 +848,6 @@ export default function FanpageList() {
                           const isLiveToken = tokenStatus === "LIVE";
                           const isExpiredToken = tokenStatus === "EXPIRED";
 
-                          const isLive = acc.status === "active";
                           const isLoggedIn = acc.login_status === "logged_in";
                           const isProcessing = profileOauthLoading === acc.uid || syncing === acc.uid;
 
@@ -869,23 +870,34 @@ export default function FanpageList() {
                                 </div>
                               </td>
                               <td className="py-2 px-2 text-center whitespace-nowrap">
-                                {isLive ? (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                {acc.status === "live" ? (
+                                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-semibold bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857]">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
                                     Live
                                   </span>
-                                ) : (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
-                                    Check
+                                ) : acc.status === "die" ? (
+                                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-semibold bg-[#FFF1F2] border border-[#FECDD3] text-[#BE123C]">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-[#F43F5E]" />
+                                    Die
                                   </span>
+                                ) : (
+                                  <span className="text-[#94A3B8] text-[11px] font-medium">--</span>
                                 )}
                               </td>
                               <td className="py-2 px-2 text-center whitespace-nowrap">
-                                {isLoggedIn ? (
-                                  <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50/70 px-1.5 py-0.5 rounded">
+                                {acc.login_status === "logged_in" ? (
+                                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-semibold bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857]">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
                                     Đã login
                                   </span>
+                                ) : acc.login_status === "failed" ? (
+                                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-semibold bg-[#FFF1F2] border border-[#FECDD3] text-[#BE123C]">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-[#F43F5E]" />
+                                    Lỗi login
+                                  </span>
                                 ) : (
-                                  <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-medium bg-[#F1F5F9] border border-[#E2E8F0] text-[#64748B]">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8]" />
                                     Chưa
                                   </span>
                                 )}
