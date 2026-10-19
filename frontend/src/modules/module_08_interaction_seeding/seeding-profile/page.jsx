@@ -99,6 +99,13 @@ export default function SeedingProfilePage() {
               `Chiến dịch hoàn tất với trạng thái: ${detail.status_display || status}.`,
               status === "COMPLETED" ? "success" : "warn",
             );
+            // Tải lại danh sách trang cá nhân chưa chạy để loại bỏ các link đã hoàn tất
+            seedingApi
+              .getSeedingTargets("PROFILE")
+              .then((res) => {
+                setTargets(res?.targets || []);
+              })
+              .catch(() => {});
           }
         }
       } catch (err) {
@@ -114,8 +121,8 @@ export default function SeedingProfilePage() {
     seedingApi
       .getSeedingTargets("PROFILE")
       .then((res) => {
+        setTargets(res?.targets || []);
         if (res && res.targets && res.targets.length > 0) {
-          setTargets(res.targets);
           setSuccessMessage(
             `Đã tải ${res.targets.length} trang cá nhân từ cơ sở dữ liệu`,
           );

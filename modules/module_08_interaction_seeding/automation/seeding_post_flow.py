@@ -136,8 +136,8 @@ class PostSeedingFlow:
             already_reacted = self.driver.execute_script(js_is_reacted)
             if already_reacted:
                 if callback:
-                    callback(f"✓ Bài viết này đã được '{vn_name}' từ trước (tránh bấm lại để không bị hủy).")
-                return True, f"Đã {vn_name} từ trước"
+                    callback(f"⚠️ Bài viết này đã được '{vn_name}' từ trước (tránh bấm lại để không bị hủy).")
+                return False, f"Tài khoản đã bày tỏ cảm xúc '{vn_name}' cho bài viết này từ trước"
 
             if callback:
                 callback(f"{emoji} Đang thực hiện thả cảm xúc '{vn_name}' vào bài viết...")
