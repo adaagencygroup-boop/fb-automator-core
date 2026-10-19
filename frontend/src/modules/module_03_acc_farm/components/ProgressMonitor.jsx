@@ -65,7 +65,7 @@ export default function ProgressMonitor({ status }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
         {MONITOR_STATUSES.map((key) => (
           <div key={key} className="rounded-xl border border-border bg-white px-3.5 py-3 shadow-subtle">
             <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wide text-slate-500">
