@@ -19,7 +19,8 @@ import {
   Info,
   FolderCheck,
   FolderX,
-  RotateCcw
+  RotateCcw,
+  Check
 } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import {

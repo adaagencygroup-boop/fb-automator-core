@@ -86,7 +86,7 @@ def get_managed_pages(request: Request):
 
     try:
         pages_raw = db.fetch_all(
-            "SELECT id, page_id, page_name, category, status, account_uid, reels_folder, created_at, token_metadata, web_connection_id FROM pages WHERE user_id = %s ORDER BY id DESC",
+            "SELECT id, page_id, page_name, category, status, account_uid, reels_folder, created_at, token_metadata, web_connection_id, tiktok_keyword, tiktok_url, youtube_keyword, youtube_url FROM pages WHERE user_id = %s ORDER BY id DESC",
             (owner,)
         )
     except Exception as e:
@@ -146,7 +146,11 @@ def get_managed_pages(request: Request):
                 "manager_avatar_url": mgr_avatar,
                 "reels_folder": r.get("reels_folder") or "",
                 "created_at": str(r.get("created_at") or ""),
-                "token_metadata": r.get("token_metadata") or {}
+                "token_metadata": r.get("token_metadata") or {},
+                "tiktok_keyword": r.get("tiktok_keyword") or "",
+                "tiktok_url": r.get("tiktok_url") or "",
+                "youtube_keyword": r.get("youtube_keyword") or "",
+                "youtube_url": r.get("youtube_url") or ""
             })
 
         return {"pages": pages}

@@ -89,11 +89,15 @@ export default function CampaignDetailModal({
   const pageUrl =
     data.primary_target_url ||
     (data.targets && data.targets.length > 0 ? data.targets[0].url : "") ||
+    (data.tasks && data.tasks.length > 0 ? data.tasks[0].target_url : "") ||
     "";
   const pageName =
     data.primary_target_name ||
     (data.targets && data.targets.length > 0
       ? data.targets[0].display_name
+      : "") ||
+    (data.tasks && data.tasks.length > 0
+      ? data.tasks[0].display_name
       : "") ||
     data.target_summary ||
     data.name;

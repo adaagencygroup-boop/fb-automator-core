@@ -377,6 +377,8 @@ app.include_router(oauth_callback_router)
 
 from modules.module_05_page_manager.routes import router as ai_post_router
 app.include_router(ai_post_router)
+from modules.module_05_page_manager.routes_download import router as download_router
+app.include_router(download_router, prefix="/api")
 
 @app.get("/api/pages", dependencies=[Depends(scoped_owner)])
 def get_pages(request: Request):

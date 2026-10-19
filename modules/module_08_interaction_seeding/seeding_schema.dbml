@@ -102,7 +102,6 @@ Table seeding_tasks {
   reaction varchar(10) [note: 'Chỉ dùng cho REACT']
   comment_id integer
   status varchar(20) [default: 'PENDING', note: 'PENDING | RUNNING | SUCCESS | FAILED | SKIPPED']
-  attempts integer [default: 0]
   error_message text
   scheduled_at timestamp [default: `CURRENT_TIMESTAMP`, note: 'Thời điểm sớm nhất được phép chạy (giãn cách)']
   started_at timestamp
