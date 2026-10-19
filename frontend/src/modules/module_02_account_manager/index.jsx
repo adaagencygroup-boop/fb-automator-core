@@ -11,6 +11,8 @@ import {
   openLiveBrowser,
 } from "./service";
 import { useAccountPages } from "./hooks/useAccountPages";
+import useAccountRealtime from "./hooks/useAccountRealtime";
+import { isAccountBusy } from "./utils/account-realtime.mjs";
 import { useLocalSSE } from "./hooks/useLocalSSE";
 import AccountTable from "./components/AccountTable";
 import DynamicImportModal from "./components/DynamicImportModal";
@@ -89,9 +91,7 @@ export default function AccountManagerModule() {
   const [isSingleModalOpen, setIsSingleModalOpen] = useState(false);
   const [editUid, setEditUid] = useState(null);
   const [customThreads, setCustomThreads] = useState(null);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
-  const [openingBrowserUids, setOpeningBrowserUids] = useState(new Set());
   const [isLogExpanded, setIsLogExpanded] = useState(false);
   const [expandedLog, setExpandedLog] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -113,7 +113,12 @@ export default function AccountManagerModule() {
     return () => clearTimeout(timer);
   }, [searchTerm]);
   const query = useMemo(() => ({ search, status: accountFilter, login_status: loginFilter }), [search, accountFilter, loginFilter]);
-  const { accounts, setAccounts, stats, total, has_more: hasMore, isInitialLoading, isRefreshing, isLoadingMore, loadError, moreError, fetchAccounts, loadMore, retryMore } = useAccountPages(query, !isExpired, tableRef, setSelectedUids);
+  const { accounts, setAccounts, stats, total, has_more: hasMore, isInitialLoading, isRefreshing, isLoadingMore, loadError, moreError, fetchAccounts, loadMore, retryMore, applyAccountPatches, requestRefresh } = useAccountPages(query, !isExpired, tableRef, setSelectedUids);
+  const realtime = useAccountRealtime({
+    enabled: !isExpired, applyAccountPatches, requestRefresh,
+    onUnknown: () => toast.warning("Không xác định được kết quả thao tác. Đã yêu cầu đồng bộ dữ liệu mới nhất.", "ĐỒNG BỘ"),
+  });
+  const isLoggingIn = realtime.loggingIn;
 
   useEffect(() => {
     if (shouldAutoScrollRef.current && logListRef.current) {
@@ -136,53 +141,35 @@ export default function AccountManagerModule() {
       const rawMsg = String(data.message || "");
       const message = rawMsg.toLocaleLowerCase("vi-VN");
 
-      if (rawMsg.includes("Trình duyệt nick") || rawMsg.includes("Không thể mở trình duyệt cho")) {
-        setOpeningBrowserUids((prev) => {
-          const next = new Set(prev);
-          for (const uid of Array.from(next)) {
-            if (rawMsg.includes(uid)) next.delete(uid);
-          }
-          return next;
-        });
-      }
-      if (rawMsg.includes("Hoàn tất đăng nhập tất cả tài khoản!")) {
-        setIsLoggingIn(false);
-      }
-      if (
+      if (!data.operation_id && (
         rawMsg.includes("Đăng nhập thành công") ||
         rawMsg.includes("Đăng nhập thất bại") ||
         rawMsg.includes("Đăng nhập lỗi (checkpoint)") ||
         rawMsg.includes("Hoàn tất đăng nhập") ||
         rawMsg.includes("Trình duyệt nick") ||
         rawMsg.includes("Không xác nhận được profile")
-      ) {
-        fetchAccounts();
+      )) {
+        requestRefresh();
       }
 
       const importCheckUpdated =
         message.includes("đã kiểm tra live/die sau import") ||
         message.includes("hoàn tất kiểm tra sau import") ||
         message.includes("kiểm tra live/die sau import bị gián đoạn");
-      if (data.event !== "account_statuses_updated" && !importCheckUpdated && data.type !== "connected") {
+      if (data.event !== "account_statuses_updated" && !importCheckUpdated) {
         return;
       }
 
       const statuses = data.statuses;
-      if (statuses) {
-        setAccounts((currentAccounts) =>
-          currentAccounts.map((account) => {
-            const status = statuses[account.uid];
-            return status === "live" || status === "die" ? { ...account, status } : account;
-          })
-        );
-      }
-
-      fetchAccounts();
+      if (statuses) applyAccountPatches(Object.entries(statuses)
+        .filter(([, status]) => status === "live" || status === "die")
+        .map(([uid, status]) => ({ uid, changes: { status } })));
+      requestRefresh();
     };
 
     window.addEventListener("local_engine_event", handleLocalEngineEvent);
     return () => window.removeEventListener("local_engine_event", handleLocalEngineEvent);
-  }, [isExpired, fetchAccounts, setAccounts]);
+  }, [isExpired, requestRefresh, applyAccountPatches]);
 
   const handleOpenEdit = (uid) => {
     setEditUid(uid);
@@ -304,40 +291,32 @@ export default function AccountManagerModule() {
   };
 
   const handleOpenBrowser = async (uid) => {
-    if (openingBrowserUids.has(uid)) return;
-    setOpeningBrowserUids((prev) => new Set(prev).add(uid));
+    if (isAccountBusy(realtime.progress[uid])) return;
+    if (!realtime.begin("browser", [uid])) return;
     try {
       toast.info(`Đang kích hoạt trình duyệt cho ${uid}...`, "Mở trình duyệt");
-      await openLiveBrowser(uid);
-      setTimeout(() => {
-        setOpeningBrowserUids((prev) => {
-          if (!prev.has(uid)) return prev;
-          const next = new Set(prev);
-          next.delete(uid);
-          return next;
-        });
-      }, 10000);
+      const result = await openLiveBrowser(uid);
+      realtime.watch(result.operation_id, "browser", [uid]);
     } catch (error) {
       toast.warning(error.message || `Không thể mở trình duyệt cho ${uid}`, "Trình duyệt");
-      setOpeningBrowserUids((prev) => {
-        const next = new Set(prev);
-        next.delete(uid);
-        return next;
-      });
+      realtime.fail([uid]);
     }
   };
 
   const handleLogin = async () => {
-    const uids = selectedUids;
-    if (!uids.length) return;
-    setIsLoggingIn(true);
+    const uids = [...selectedUids];
+    if (!uids.length || isLoggingIn) return;
+    if (!realtime.begin("login", uids)) {
+      toast.warning("Có tài khoản đang được xử lý. Hãy đợi hoặc bỏ chọn tài khoản đó.", "ĐĂNG NHẬP");
+      return;
+    }
     try {
-      await loginAccounts(uids, effectiveThreads);
+      const result = await loginAccounts(uids, effectiveThreads);
+      realtime.watch(result.operation_id, "login", uids);
       toast.info(`Bắt đầu đăng nhập ${uids.length} tài khoản với ${effectiveThreads} luồng...`, "ĐĂNG NHẬP");
-      setTimeout(() => setIsLoggingIn(false), 120000);
     } catch (error) {
       toast.error("Không thể bắt đầu đăng nhập: " + error.message, "LỖI ĐĂNG NHẬP");
-      setIsLoggingIn(false);
+      realtime.fail(uids);
     }
   };
 
@@ -499,7 +478,7 @@ export default function AccountManagerModule() {
         onBulkDelete={handleBulkDelete}
         onRefresh={handleCheckStatus}
         isCheckingStatus={isCheckingStatus}
-        openingBrowserUids={openingBrowserUids}
+        accountProgress={realtime.progress}
         effectiveThreads={effectiveThreads}
         setCustomThreads={setCustomThreads}
         maxThreads={maxThreads}

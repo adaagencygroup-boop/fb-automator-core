@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import { createPortal } from "react-dom";
 const Dialog = ({ open, onOpenChange, children }) => {
   const [mounted, setMounted] = React.useState(false);
+
   React.useEffect(() => {
     setMounted(true);
     const handleKeyDown = (e) => {
@@ -13,20 +14,34 @@ const Dialog = ({ open, onOpenChange, children }) => {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onOpenChange]);
+
+  React.useEffect(() => {
+    if (open) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      return () => {
+        document.body.style.overflow = originalOverflow;
+      };
+    }
+  }, [open]);
+
   if (!open || !mounted || typeof document === "undefined") return null;
+
   const content = (
     <div
-      className="fixed inset-0 z-[99999] flex items-center justify-center p-3 sm:p-5 select-none bg-slate-900/60 backdrop-blur-sm overflow-y-auto"
+      className="fixed inset-0 z-[99999] flex items-center justify-center p-3 sm:p-5 select-none bg-slate-900/60 backdrop-blur-sm overflow-hidden"
       onClick={(e) => {
         if (e.target === e.currentTarget) onOpenChange?.(false);
       }}
     >
-      {React.Children.map(children, (child) => {
-        if (React.isValidElement(child)) {
-          return React.cloneElement(child, { onClose: () => onOpenChange?.(false) });
-        }
-        return child;
-      })}
+      <div className="relative z-50 w-full flex items-center justify-center max-h-full">
+        {React.Children.map(children, (child) => {
+          if (React.isValidElement(child)) {
+            return React.cloneElement(child, { onClose: () => onOpenChange?.(false) });
+          }
+          return child;
+        })}
+      </div>
     </div>
   );
   return createPortal(content, document.body);
@@ -36,7 +51,7 @@ const DialogContent = React.forwardRef(({ className, children, onClose, ...props
     ref={ref}
     onClick={(e) => e.stopPropagation()}
     className={cn(
-      "relative w-full max-w-lg rounded-2xl border border-border bg-card text-card-foreground p-6 shadow-2xl transition-all duration-200 animate-in zoom-in-95 my-auto select-text",
+      "relative w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl border border-border bg-card text-card-foreground p-6 shadow-2xl transition-all duration-200 animate-in zoom-in-95 select-text",
       className
     )}
     {...props}

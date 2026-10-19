@@ -125,17 +125,21 @@ def main():
             popup.get_by_role("button", name="Chấp nhận đăng nhập").click()
         expect(page.get_by_text("Đã kết nối: Facebook Test", exact=True)).to_be_visible()
         expect(page.get_by_text("Thêm & Nạp Fanpage vào hệ thống", exact=True)).to_be_visible()
+        assert state["verify_calls"] == 0, "Verification must wait for accounts without blocking OAuth"
         state["delay_accounts"] = False
         for pending_route, pending_headers in state["account_requests"]:
             pending_route.fulfill(headers=pending_headers, content_type="application/json", body=json.dumps({"accounts": [{"uid": "123", "profile_name": "Account UX", "has_token": True}]}))
         expect(page.get_by_text("Account UX", exact=True)).to_be_visible()
         expect(page.get_by_role("button", name="Quét", exact=True)).to_be_visible()
-        assert state["verify_calls"] == 0, "Opening modal should not call Meta token verification"
+        expect(page.get_by_role("button", name="LIVE", exact=True)).to_be_visible()
+        assert state["verify_calls"] == 1, "Opening modal should verify uncached account tokens once"
         search = page.get_by_placeholder("Tìm tên hoặc UID nick...")
         search.fill("Account UX")
         page.get_by_role("button", name="Đóng", exact=True).click()
         page.get_by_role("button", name="+ Thêm page", exact=True).click()
         expect(search).to_have_value("Account UX")
+        expect(page.get_by_role("button", name="LIVE", exact=True)).to_be_visible()
+        assert state["verify_calls"] == 1, "Reopening must reuse the fresh token cache"
         expect(page.get_by_text("Account UX", exact=True)).to_be_visible()
 
         page.get_by_text("Đã kết nối: Facebook Test", exact=True).click()
@@ -206,7 +210,7 @@ def main():
         assert not errors, errors
         context.close()
         browser.close()
-    print("PASS: slow accounts, no automatic token checks, callback confirmation/reload/cancel, popup close, lost opener, retained filters, resync, switch failure, blocked popup and reload/cancel")
+    print("PASS: slow accounts, automatic token checks after accounts load, cached reopen, callback confirmation/reload/cancel, popup close, lost opener, retained filters, resync, switch failure, blocked popup and reload/cancel")
 
 
 if __name__ == "__main__":

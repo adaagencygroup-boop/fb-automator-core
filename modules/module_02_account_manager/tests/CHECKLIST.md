@@ -32,6 +32,6 @@ Mỗi dòng là nhóm ca có dữ liệu, bước và kết quả mong đợi. T
 | E07 | Browser; checkbox, drag hai chiều/Ctrl/Cmd, append khi kéo | Chọn và kiểm tra bộ đếm | Chỉ loaded rows; số chọn đúng | Bị chặn môi trường; unit FE04 đạt, DOM chưa kiểm chứng |
 | E08 | Browser; anchor, insert trước anchor, xoá/filter anchor | Refresh | Giữ dòng trên cùng; fallback hợp lý nếu mất anchor | Bị chặn môi trường; unit chỉ xác nhận gọi restore, chưa chứng minh DOM |
 | E09 | Browser; modal thật, UID ngoài trang đầu và lỗi từng phần | Add/import/edit/delete, validation, confirm | Không duplicate; counts/stats đúng; skip/overwrite đúng | Bị chặn môi trường; chưa có automation modal |
-| E10 | Browser; mock automation thành công/lỗi/timeout/SSE | Login/Chrome/status/cookie/proxy, click lặp, đổi owner | UI đúng, chống lặp; cách ly owner | Bị chặn môi trường; chưa có automation UI; BE mocks đã chạy |
+| E10 | Browser; mock Chrome và batch login, burst 100 sự kiện | Cập nhật dòng, giữ selection, kiểm tra số GET và bảng không bị che | Phản hồi tức thì, không refresh theo từng sự kiện | Có test realtime UI; chưa chạy được vì môi trường chặn khởi chạy trình duyệt. Các ca cookie/proxy/đổi owner trên DOM chưa được bổ sung |
 
-E04–E10 cần bổ sung browser automation khi chạy được app/Playwright. Chúng không được tính là test tự động đã hoàn tất. Kết nối Facebook/Chrome/proxy thật không thuộc checklist này.
+E04–E09 và các nhánh E10 còn thiếu cần bổ sung browser automation khi chạy được app/Playwright. Các ca trình duyệt chưa chạy không được tính là đã đạt. Kết nối Facebook/Chrome/proxy thật không thuộc checklist này.

@@ -88,6 +88,17 @@ class AccountRepository:
         return account
 
     @staticmethod
+    def update_identity(db, uid, profile_name=None, avatar_url=None):
+        account = AccountRepository.get_by_uid(db, uid)
+        if account:
+            if profile_name:
+                account.profile_name = profile_name
+            if avatar_url:
+                account.avatar_url = avatar_url
+            db.commit()
+        return account
+
+    @staticmethod
     def update_cookies(db, uid, cookie_str, owner_username=_UNSET):
         account = AccountRepository.get_by_uid(db, uid, owner_username)
         if account and cookie_str and cookie_str.strip():
