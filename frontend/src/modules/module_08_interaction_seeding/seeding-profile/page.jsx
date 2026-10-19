@@ -1,9 +1,9 @@
 "use client";
 
+import { toast } from "@/components/ui/toast";
+import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
 import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
 import { normalizeTargetUrl } from "@/modules/module_08_interaction_seeding/validation";
-import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
-import { toast } from "@/components/ui/toast";
 import { UserCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import ProfileAccountConfig from "./_components/ProfileAccountConfig";
@@ -133,8 +133,13 @@ export default function SeedingProfilePage() {
 
   const handleAddTargets = async (rawUrls) => {
     try {
-      const normalizedUrls = (rawUrls || []).map((u) => normalizeTargetUrl(u, "PROFILE"));
-      const res = await seedingApi.validateSeedingTargets("PROFILE", normalizedUrls);
+      const normalizedUrls = (rawUrls || []).map((u) =>
+        normalizeTargetUrl(u, "PROFILE"),
+      );
+      const res = await seedingApi.validateSeedingTargets(
+        "PROFILE",
+        normalizedUrls,
+      );
       if (res && res.targets) {
         setTargets(res.targets);
         setSuccessMessage(
@@ -184,14 +189,17 @@ export default function SeedingProfilePage() {
 
   const handleStart = async () => {
     if (targets.length === 0) {
-      toast.warning("Vui lòng thêm ít nhất 1 trang cá nhân cần seeding!", "THIẾU MỤC TIÊU");
+      toast.warning(
+        "Vui lòng thêm ít nhất 1 trang cá nhân cần seeding!",
+        "THIẾU MỤC TIÊU",
+      );
       return;
     }
 
     if (liveAccountsCount === 0) {
       toast.error(
         "Không có tài khoản Facebook nào khả dụng! Yêu cầu tài khoản phải có trạng thái 'Đã đăng nhập' và còn 'Live'. Vui lòng kiểm tra lại trang Quản lý tài khoản.",
-        "KHÔNG CÓ TÀI KHOẢN KHẢ DỤNG"
+        "KHÔNG CÓ TÀI KHOẢN KHẢ DỤNG",
       );
       return;
     }
@@ -199,14 +207,17 @@ export default function SeedingProfilePage() {
     if (accountCount <= 0 || accountCount > liveAccountsCount) {
       toast.warning(
         `Số lượng tài khoản muốn chạy (${accountCount}) không hợp lệ hoặc vượt quá số tài khoản khả dụng (${liveAccountsCount})!`,
-        "SỐ LƯỢNG KHÔNG HỢP LỆ"
+        "SỐ LƯỢNG KHÔNG HỢP LỆ",
       );
       return;
     }
 
     try {
       setIsRunning(true);
-      toast.info("Đang khởi tạo chiến dịch Seeding Trang cá nhân...", "BẮT ĐẦU");
+      toast.info(
+        "Đang khởi tạo chiến dịch Seeding Trang cá nhân...",
+        "BẮT ĐẦU",
+      );
       addLog(
         "Khởi tạo chiến dịch Seeding Trang cá nhân trên máy thật...",
         "info",
@@ -222,8 +233,8 @@ export default function SeedingProfilePage() {
         })),
         account_count: accountCount,
         threads: 1,
-        min_delay_sec: delayMin,
-        max_delay_sec: delayMax,
+        delay_seconds_min: delayMin,
+        delay_seconds_max: delayMax,
       });
 
       setCurrentCampaignId(campaign.id);
@@ -234,14 +245,17 @@ export default function SeedingProfilePage() {
       );
       toast.success(
         `Chiến dịch đã được khởi chạy với ${totalProfiles} Trang cá nhân!`,
-        "KHỞI CHẠY THÀNH CÔNG"
+        "KHỞI CHẠY THÀNH CÔNG",
       );
 
       await seedingApi.startSeedingCampaign(campaign.id);
     } catch (e) {
       setIsRunning(false);
       addLog(`Lỗi khởi chạy seeding: ${e.message}`, "error");
-      toast.error(e.message || "Không thể khởi chạy chiến dịch seeding!", "LỖI KHỞI CHẠY");
+      toast.error(
+        e.message || "Không thể khởi chạy chiến dịch seeding!",
+        "LỖI KHỞI CHẠY",
+      );
     }
   };
 
@@ -280,7 +294,8 @@ export default function SeedingProfilePage() {
               Seeding Trang cá nhân
             </h1>
             <p className="text-xs text-slate-500 mt-1 font-normal">
-              Tăng Follow và Like Trang cá nhân cho nhiều tài khoản cá nhân Facebook.
+              Tăng Follow và Like Trang cá nhân cho nhiều tài khoản cá nhân
+              Facebook.
             </p>
           </div>
         </div>

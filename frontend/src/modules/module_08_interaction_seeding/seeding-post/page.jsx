@@ -1,9 +1,9 @@
 "use client";
 
+import { toast } from "@/components/ui/toast";
+import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
 import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
 import { normalizeTargetUrl } from "@/modules/module_08_interaction_seeding/validation";
-import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
-import { toast } from "@/components/ui/toast";
 import { FileText } from "lucide-react";
 import { useEffect, useState } from "react";
 import PostAccountConfig from "./_components/PostAccountConfig";
@@ -165,8 +165,13 @@ export default function SeedingPostPage() {
 
   const handleAddTargets = async (rawUrls) => {
     try {
-      const normalizedUrls = (rawUrls || []).map((u) => normalizeTargetUrl(u, "POST"));
-      const res = await seedingApi.validateSeedingTargets("POST", normalizedUrls);
+      const normalizedUrls = (rawUrls || []).map((u) =>
+        normalizeTargetUrl(u, "POST"),
+      );
+      const res = await seedingApi.validateSeedingTargets(
+        "POST",
+        normalizedUrls,
+      );
       if (res && res.targets) {
         setTargets(res.targets);
         setSuccessMessage(
@@ -267,32 +272,41 @@ export default function SeedingPostPage() {
 
   const handleStart = async () => {
     if (targets.length === 0) {
-      toast.warning("Vui lòng thêm ít nhất 1 bài viết cần seeding!", "THIẾU MỤC TIÊU");
+      toast.warning(
+        "Vui lòng thêm ít nhất 1 bài viết cần seeding!",
+        "THIẾU MỤC TIÊU",
+      );
       return;
     }
 
     if (!doLike && !doComment && !doShare) {
       toast.warning(
         "Vui lòng chọn ít nhất 1 loại tương tác (Like, Bình luận hoặc Chia sẻ)!",
-        "CHƯA CHỌN TƯƠNG TÁC"
+        "CHƯA CHỌN TƯƠNG TÁC",
       );
       return;
     }
 
     if (doLike && selectedReactions.length === 0) {
-      toast.warning("Vui lòng chọn ít nhất 1 cảm xúc Facebook!", "CHƯA CHỌN CẢM XÚC");
+      toast.warning(
+        "Vui lòng chọn ít nhất 1 cảm xúc Facebook!",
+        "CHƯA CHỌN CẢM XÚC",
+      );
       return;
     }
 
     if (doComment && comments.length === 0) {
-      toast.warning("Vui lòng nhập ít nhất 1 câu bình luận mẫu!", "THIẾU BÌNH LUẬN");
+      toast.warning(
+        "Vui lòng nhập ít nhất 1 câu bình luận mẫu!",
+        "THIẾU BÌNH LUẬN",
+      );
       return;
     }
 
     if (liveAccountsCount === 0) {
       toast.error(
         "Không có tài khoản Facebook nào khả dụng! Yêu cầu tài khoản phải có trạng thái 'Đã đăng nhập' và còn 'Live'. Vui lòng kiểm tra lại trang Quản lý tài khoản.",
-        "KHÔNG CÓ TÀI KHOẢN KHẢ DỤNG"
+        "KHÔNG CÓ TÀI KHOẢN KHẢ DỤNG",
       );
       return;
     }
@@ -300,7 +314,7 @@ export default function SeedingPostPage() {
     if (accountCount <= 0 || accountCount > liveAccountsCount) {
       toast.warning(
         `Số lượng tài khoản muốn chạy (${accountCount}) không hợp lệ hoặc vượt quá số tài khoản khả dụng (${liveAccountsCount})!`,
-        "SỐ LƯỢNG KHÔNG HỢP LỆ"
+        "SỐ LƯỢNG KHÔNG HỢP LỆ",
       );
       return;
     }
@@ -327,8 +341,8 @@ export default function SeedingPostPage() {
         })),
         account_count: accountCount,
         threads: 1,
-        min_delay_sec: delayMin,
-        max_delay_sec: delayMax,
+        delay_seconds_min: delayMin,
+        delay_seconds_max: delayMax,
       });
 
       setCurrentCampaignId(campaign.id);
@@ -339,14 +353,17 @@ export default function SeedingPostPage() {
       );
       toast.success(
         `Chiến dịch đã được khởi chạy với ${totalPosts} bài viết!`,
-        "KHỞI CHẠY THÀNH CÔNG"
+        "KHỞI CHẠY THÀNH CÔNG",
       );
 
       await seedingApi.startSeedingCampaign(campaign.id);
     } catch (e) {
       setIsRunning(false);
       addLog(`Lỗi khởi chạy seeding: ${e.message}`, "error");
-      toast.error(e.message || "Không thể khởi chạy chiến dịch seeding!", "LỖI KHỞI CHẠY");
+      toast.error(
+        e.message || "Không thể khởi chạy chiến dịch seeding!",
+        "LỖI KHỞI CHẠY",
+      );
     }
   };
 

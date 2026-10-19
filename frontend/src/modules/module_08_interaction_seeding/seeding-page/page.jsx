@@ -1,9 +1,9 @@
 "use client";
 
+import { toast } from "@/components/ui/toast";
+import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
 import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
 import { normalizeTargetUrl } from "@/modules/module_08_interaction_seeding/validation";
-import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
-import { toast } from "@/components/ui/toast";
 import { Send } from "lucide-react";
 import { useEffect, useState } from "react";
 import PageAccountConfig from "./_components/PageAccountConfig";
@@ -133,8 +133,13 @@ export default function SeedingPageMain() {
 
   const handleAddTargets = async (rawUrls) => {
     try {
-      const normalizedUrls = (rawUrls || []).map((u) => normalizeTargetUrl(u, "PAGE"));
-      const res = await seedingApi.validateSeedingTargets("PAGE", normalizedUrls);
+      const normalizedUrls = (rawUrls || []).map((u) =>
+        normalizeTargetUrl(u, "PAGE"),
+      );
+      const res = await seedingApi.validateSeedingTargets(
+        "PAGE",
+        normalizedUrls,
+      );
       if (res && res.targets) {
         setTargets(res.targets);
         setSuccessMessage(
@@ -184,14 +189,17 @@ export default function SeedingPageMain() {
 
   const handleStart = async () => {
     if (targets.length === 0) {
-      toast.warning("Vui lòng thêm ít nhất 1 page cần seeding!", "THIẾU MỤC TIÊU");
+      toast.warning(
+        "Vui lòng thêm ít nhất 1 page cần seeding!",
+        "THIẾU MỤC TIÊU",
+      );
       return;
     }
 
     if (liveAccountsCount === 0) {
       toast.error(
         "Không có tài khoản Facebook nào khả dụng! Yêu cầu tài khoản phải có trạng thái 'Đã đăng nhập' và còn 'Live'. Vui lòng kiểm tra lại trang Quản lý tài khoản.",
-        "KHÔNG CÓ TÀI KHOẢN KHẢ DỤNG"
+        "KHÔNG CÓ TÀI KHOẢN KHẢ DỤNG",
       );
       return;
     }
@@ -199,7 +207,7 @@ export default function SeedingPageMain() {
     if (accountCount <= 0 || accountCount > liveAccountsCount) {
       toast.warning(
         `Số lượng tài khoản muốn chạy (${accountCount}) không hợp lệ hoặc vượt quá số tài khoản khả dụng (${liveAccountsCount})!`,
-        "SỐ LƯỢNG KHÔNG HỢP LỆ"
+        "SỐ LƯỢNG KHÔNG HỢP LỆ",
       );
       return;
     }
@@ -219,8 +227,8 @@ export default function SeedingPageMain() {
         })),
         account_count: accountCount,
         threads: 1,
-        min_delay_sec: delayMin,
-        max_delay_sec: delayMax,
+        delay_seconds_min: delayMin,
+        delay_seconds_max: delayMax,
       });
 
       setCurrentCampaignId(campaign.id);
@@ -231,14 +239,17 @@ export default function SeedingPageMain() {
       );
       toast.success(
         `Chiến dịch đã được khởi chạy với ${totalPages} Page!`,
-        "KHỞI CHẠY THÀNH CÔNG"
+        "KHỞI CHẠY THÀNH CÔNG",
       );
 
       await seedingApi.startSeedingCampaign(campaign.id);
     } catch (e) {
       setIsRunning(false);
       addLog(`Lỗi khởi chạy seeding: ${e.message}`, "error");
-      toast.error(e.message || "Không thể khởi chạy chiến dịch seeding!", "LỖI KHỞI CHẠY");
+      toast.error(
+        e.message || "Không thể khởi chạy chiến dịch seeding!",
+        "LỖI KHỞI CHẠY",
+      );
     }
   };
 
