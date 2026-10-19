@@ -87,13 +87,76 @@ class ReelsTaskRunner:
         """Xóa toàn bộ console log hiện có."""
         self.logs.clear()
 
+    def _normalize_schedule_times(self, times: List[str]) -> List[str]:
+        """Chuẩn hóa danh sách giờ sang định dạng HH:MM 2 chữ số (VD: 9:00 -> 09:00)."""
+        normalized = []
+        for t in times:
+            t_str = str(t).strip()
+            if ":" in t_str:
+                parts = t_str.split(":")
+                try:
+                    h = int(parts[0])
+                    m = int(parts[1])
+                    if 0 <= h <= 23 and 0 <= m <= 59:
+                        normalized.append(f"{h:02d}:{m:02d}")
+                except ValueError:
+                    pass
+        return sorted(list(set(normalized)))
+
+    def _get_next_slot(self, schedule_times: List[str]) -> Optional[Dict[str, Any]]:
+        """Tính toán khung giờ hẹn tiếp theo và số phút còn lại."""
+        if not schedule_times:
+            return None
+        now = datetime.datetime.now()
+        current_minutes = now.hour * 60 + now.minute
+
+        for t in schedule_times:
+            parts = t.split(":")
+            slot_min = int(parts[0]) * 60 + int(parts[1])
+            if slot_min > current_minutes:
+                return {
+                    "time": t,
+                    "diff_minutes": slot_min - current_minutes,
+                    "is_tomorrow": False
+                }
+
+        # Nếu đã qua hết các giờ trong ngày, lấy giờ đầu tiên ngày mai
+        first_t = schedule_times[0]
+        parts = first_t.split(":")
+        slot_min = int(parts[0]) * 60 + int(parts[1])
+        diff = (1440 - current_minutes) + slot_min
+        return {
+            "time": first_t,
+            "diff_minutes": diff,
+            "is_tomorrow": True
+        }
+
+    def _log_next_slot(self, schedule_times: List[str]):
+        """Ghi log thông tin khung giờ đăng sắp tới và thời gian chờ."""
+        next_slot = self._get_next_slot(schedule_times)
+        if next_slot:
+            t = next_slot["time"]
+            diff = next_slot["diff_minutes"]
+            day_str = " (ngày mai)" if next_slot["is_tomorrow"] else ""
+            hours = diff // 60
+            mins = diff % 60
+            time_left_str = f"{hours} giờ {mins} phút" if hours > 0 else f"{mins} phút"
+            self.log(
+                f"[SCHEDULER] ⏳ Khung giờ đăng tiếp theo: {t}{day_str} (còn khoảng {time_left_str}). Hệ thống đang sẵn sàng ở chế độ chờ.",
+                "INFO"
+            )
+
     def get_status(self) -> Dict[str, Any]:
         """Lấy trạng thái hiện tại của runner và tóm tắt tiến trình."""
+        schedule_enabled = bool(self.config.get("schedule_enabled", False))
+        schedule_times = self.config.get("schedule_times", [])
+        next_slot = self._get_next_slot(schedule_times) if (self.is_running and schedule_enabled) else None
         return {
             "is_running": self.is_running,
             "status": self.status,
             "stats": self.stats,
-            "recent_logs": list(self.logs)[-50:]
+            "recent_logs": list(self.logs)[-50:],
+            "next_slot": next_slot
         }
 
     def start_job(self, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -171,9 +234,23 @@ class ReelsTaskRunner:
                 self.is_running = False
             else:
                 # Chế độ chạy theo lịch hẹn giờ (Scheduler Mode)
+                # Chuẩn hóa toàn bộ khung giờ sang định dạng 2 chữ số HH:MM (VD: 9:00 -> 09:00)
+                schedule_times = self._normalize_schedule_times(schedule_times)
+                self.config["schedule_times"] = schedule_times
+
+                if not schedule_times:
+                    self.log("[SCHEDULER ERROR] Không có khung giờ hẹn hợp lệ nào. Kết thúc luồng.", "ERROR")
+                    self.status = "COMPLETED"
+                    self.is_running = False
+                    return
+
                 self.log(f"Chế độ: Hẹn giờ đăng hàng ngày theo các khung giờ: {', '.join(schedule_times)}", "INFO")
                 executed_slots = set()
                 last_checked_date = datetime.date.today()
+
+                # Ghi log khung giờ gần nhất
+                self._log_next_slot(schedule_times)
+                last_wait_log_time = time.time()
 
                 while self.is_running:
                     now = datetime.datetime.now()
@@ -187,7 +264,14 @@ class ReelsTaskRunner:
                         self.log(f"\n[SCHEDULER] >>> Đến khung giờ đăng Reels hẹn trước: {current_time_str} <<<", "INFO")
                         executed_slots.add(current_time_str)
                         self._execute_reels_phase(pages, root_dir, sleep_min, sleep_max)
-                        self.log(f"[SCHEDULER] Kết thúc lượt đăng lúc {current_time_str}. Tiếp tục chờ khung giờ tiếp theo...", "INFO")
+                        self.log(f"[SCHEDULER] Hoàn tất lượt đăng lúc {current_time_str}. Tiếp tục chờ khung giờ tiếp theo...", "INFO")
+                        self._log_next_slot(schedule_times)
+                        last_wait_log_time = time.time()
+
+                    # Định kỳ mỗi 30 phút nhắc lại trạng thái chờ nếu chưa tới giờ
+                    if time.time() - last_wait_log_time >= 1800:
+                        self._log_next_slot(schedule_times)
+                        last_wait_log_time = time.time()
 
                     # Sleep 10s kiểm tra dừng
                     for _ in range(10):
