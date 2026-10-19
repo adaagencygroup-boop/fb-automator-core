@@ -136,7 +136,7 @@ export default function ExcelImportModal({
             const res = await seedingApi.getSeedingComments();
             if (active) setDbItems(res?.comments || []);
           } else {
-            const res = await seedingApi.getSeedingTargets(targetType);
+            const res = await seedingApi.getSeedingTargets(targetType, true);
             if (active) setDbItems(res?.targets || []);
           }
         } catch {
@@ -274,7 +274,7 @@ export default function ExcelImportModal({
           const res = await seedingApi.getSeedingComments();
           latestDbItems = res?.comments || [];
         } else {
-          const res = await seedingApi.getSeedingTargets(targetType);
+          const res = await seedingApi.getSeedingTargets(targetType, true);
           latestDbItems = res?.targets || [];
         }
       } catch (e) {

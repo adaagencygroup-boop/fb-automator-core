@@ -28,9 +28,9 @@ class AccountDeletionTests(unittest.TestCase):
         )
         Base.metadata.create_all(self.engine)
         self.db = Session(self.engine, expire_on_commit=False)
-        self.db.execute(text("CREATE TABLE pages (id INTEGER PRIMARY KEY, account_uid VARCHAR(100), page_id VARCHAR(100))"))
+        self.db.execute(text("CREATE TABLE pages (id INTEGER PRIMARY KEY, account_uid VARCHAR(100), page_id VARCHAR(100), user_id VARCHAR(100))"))
         self.db.add_all([Account(uid="123", user_id="alice"), Account(uid="456", user_id="alice"), Account(uid="789", user_id="bob")])
-        self.db.execute(text("INSERT INTO pages VALUES (1,'123','page1'),(2,'123','page2'),(3,'456','page3'),(4,'789','page4'),(5,NULL,'orphan')"))
+        self.db.execute(text("INSERT INTO pages VALUES (1,'123','page1','alice'),(2,'123','page2','alice'),(3,'456','page3','alice'),(4,'789','page4','bob'),(5,NULL,'orphan',NULL)"))
         self.db.commit()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -104,7 +104,7 @@ class AccountDeletionTests(unittest.TestCase):
         self.db.execute(text("DELETE FROM pages WHERE account_uid='123'"))
         self.db.commit()
         self.assertEqual(accounts.delete_preview(self.db, ["123"])["pages_total"], 0)
-        self.db.execute(text("INSERT INTO pages VALUES (6,'123','new-page')"))
+        self.db.execute(text("INSERT INTO pages VALUES (6,'123','new-page','alice')"))
         self.db.commit()
         self.assertEqual(accounts.delete_account(self.db, "123")["pages_unlinked"], 1)
         self.assertIsNone(self.pages()[6])
@@ -145,18 +145,18 @@ class AccountDeletionTests(unittest.TestCase):
         with patch.object(browser_manager, "_active_drivers", {driver: {"uid": "123", "owner": "bob"}}):
             self.assertTrue(accounts.delete_account(self.db, "123")["deleted"])
 
-    def test_shared_uid_pages_block_preview_and_both_delete_modes(self):
+    def test_shared_uid_and_page_are_independent_between_owners(self):
         self.db.add(Account(uid="123", user_id="bob"))
+        self.db.execute(text("INSERT INTO pages VALUES (6,'123','page1','bob'), (7,'123','unknown',NULL)"))
         self.db.commit()
-        with self.assertRaises(HTTPException) as caught:
-            accounts.delete_preview(self.db, ["123"])
-        self.assertEqual(caught.exception.status_code, 409)
-        for delete_pages in (False, True):
-            with self.subTest(delete_pages=delete_pages), self.assertRaises(HTTPException):
-                accounts.delete_account(self.db, "123", delete_pages=delete_pages)
-        self.assert_account_kept()
-        self.assertEqual(self.pages()[1], "123")
-        self.assertTrue(self.profile.exists())
+        self.assertEqual(accounts.delete_preview(self.db, ["123"])["pages_total"], 2)
+        result = accounts.delete_account(self.db, "123", delete_pages=True)
+        self.assertEqual(result["pages_deleted"], 2)
+        self.assertEqual(self.pages()[6], "123")
+        self.assertEqual(self.pages()[7], "123")
+        with owner_scope("bob"):
+            self.assertIsNotNone(Repo.get_by_uid(self.db, "123"))
+            self.assertEqual(accounts.delete_preview(self.db, ["123"])["pages_total"], 1)
 
     def test_database_failure_rolls_back_account_and_pages(self):
         for delete_pages in (False, True):

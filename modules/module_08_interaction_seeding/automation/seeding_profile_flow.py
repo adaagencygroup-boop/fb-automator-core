@@ -63,8 +63,8 @@ class ProfileSeedingFlow:
                 reason = already_check.get("reason", "đang theo dõi")
                 msg = f"{acc_label} đã follow trang cá nhân này rồi ({reason})"
                 if callback:
-                    callback(f"ℹ️ {msg}")
-                return True, msg
+                    callback(f"⚠️ {msg}")
+                return False, msg
 
             # ─── BƯỚC 1: TÌM NÚT THEO DÕI (FOLLOW) NGOÀI HEADER TRANG CÁ NHÂN ───
             if callback:
@@ -111,8 +111,8 @@ class ProfileSeedingFlow:
                         pass
                     msg = f"{acc_label} đã follow trang cá nhân này rồi"
                     if callback:
-                        callback(f"ℹ️ {msg}")
-                    return True, msg
+                        callback(f"⚠️ {msg}")
+                    return False, msg
 
                 if menu_follow_item:
                     if callback:

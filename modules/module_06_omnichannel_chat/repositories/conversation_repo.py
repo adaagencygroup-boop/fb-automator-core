@@ -21,17 +21,19 @@ class ConversationRepository:
         customer_name: Optional[str] = None,
         customer_avatar: Optional[str] = None,
         last_message: Optional[str] = None,
+        last_message_at: Optional[datetime] = None,
         is_read: bool = False,
         is_replied: bool = False
     ) -> Conversation:
         """Tạo hoặc cập nhật nhanh trạng thái danh bạ hội thoại (Tải Sidebar mượt gấp 100 lần)."""
         conv = self.get_conversation(page_id, customer_psid)
-        now = datetime.utcnow()
+        msg_time = last_message_at or datetime.utcnow()
         if conv:
             if customer_name: conv.customer_name = customer_name
             if customer_avatar: conv.customer_avatar = customer_avatar
             if last_message: conv.last_message = last_message
-            conv.last_message_at = now
+            if not conv.last_message_at or (last_message_at and last_message_at > conv.last_message_at):
+                conv.last_message_at = msg_time
             conv.is_read = is_read
             conv.is_replied = is_replied
         else:
@@ -41,7 +43,7 @@ class ConversationRepository:
                 customer_name=customer_name,
                 customer_avatar=customer_avatar,
                 last_message=last_message,
-                last_message_at=now,
+                last_message_at=msg_time,
                 is_read=is_read,
                 is_replied=is_replied
             )

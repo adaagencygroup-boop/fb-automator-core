@@ -9,19 +9,20 @@ from datetime import datetime, timedelta
 
 import httpx
 
-from modules.module_02_account_manager.context import owner_scope
+from modules.module_02_account_manager.context import owner_scope, owner_context
 from modules.module_04_page_creator.automation.facebook_urls import facebook_picture_id
 
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 _lock = threading.Lock()
-_state = {
-    "running": False,
-    "stop": False,
-    "logs": [],
-    "started_at": None,
-    "finished_at": None,
-    "accounts": {},
-}
+_states = {}
+
+
+def _state_for(owner=None):
+    key = owner if owner is not None else owner_context.get()
+    return _states.setdefault(key, {
+        "running": False, "stop": False, "logs": [],
+        "started_at": None, "finished_at": None, "accounts": {},
+    })
 
 
 def parse_schedule_times(raw: str) -> list[str]:
@@ -39,19 +40,19 @@ def parse_schedule_times(raw: str) -> list[str]:
 def snapshot():
     with _lock:
         return {
-            "running": _state["running"],
-            "started_at": _state["started_at"],
-            "finished_at": _state["finished_at"],
-            "logs": list(_state["logs"][-40:]),
-            "accounts": dict(_state["accounts"]),
+            "running": _state_for()["running"],
+            "started_at": _state_for()["started_at"],
+            "finished_at": _state_for()["finished_at"],
+            "logs": list(_state_for()["logs"][-40:]),
+            "accounts": dict(_state_for()["accounts"]),
         }
 
 
 def request_stop():
     with _lock:
-        if not _state["running"]:
+        if not _state_for()["running"]:
             return False
-        _state["stop"] = True
+        _state_for()["stop"] = True
     _progress("Luồng", "Đã nhận lệnh dừng. Bài đang đăng sẽ xong rồi dừng.")
     return True
 
@@ -59,8 +60,8 @@ def request_stop():
 def _log(message):
     line = f"{datetime.now().strftime('%H:%M:%S')} {message}"
     with _lock:
-        _state["logs"].append(line)
-        del _state["logs"][:-80]
+        _state_for()["logs"].append(line)
+        del _state_for()["logs"][:-80]
     try:
         from modules.module_02_account_manager.services.events import broadcast
         broadcast("info", message)
@@ -118,7 +119,7 @@ def _wait_countdown(slot: str, remain: int) -> None:
     """Cập nhật dòng chờ hẹn giờ (đếm ngược), không spam thêm dòng mới."""
     line = f"{datetime.now().strftime('%H:%M:%S')} Hẹn giờ - Chờ đến {slot} (còn {_format_remain(remain)})"
     with _lock:
-        logs = _state["logs"]
+        logs = _state_for()["logs"]
         if logs and "Hẹn giờ - Chờ đến " in logs[-1]:
             logs[-1] = line
         else:
@@ -128,14 +129,14 @@ def _wait_countdown(slot: str, remain: int) -> None:
 
 def _stopped():
     with _lock:
-        return _state["stop"]
+        return _state_for()["stop"]
 
 
 def _set_account(uid, **fields):
     with _lock:
-        current = dict(_state["accounts"].get(uid) or {})
+        current = dict(_state_for()["accounts"].get(uid) or {})
         current.update(fields)
-        _state["accounts"][uid] = current
+        _state_for()["accounts"][uid] = current
 
 
 def pages_of(db, uid, owner):
@@ -240,9 +241,10 @@ def _record(page, uid, caption, ok, error=""):
         from core.database.connection import db
         db.execute(
             """INSERT INTO posting_history
-               (page_id, account_uid, post_type, title, caption, post_url, status, error_message)
-               VALUES (?, ?, 'AI', ?, ?, ?, ?, ?)""",
+               (user_id, page_id, account_uid, post_type, title, caption, post_url, status, error_message)
+               VALUES (?, ?, ?, 'AI', ?, ?, ?, ?, ?)""",
             (
+                owner_context.get(),
                 page.get("graph_id") or str(page["id"]),
                 uid,
                 page["name"],
@@ -366,10 +368,12 @@ def _due(times, fired):
 
 
 def start_job(owner, config, grouped):
+    if not owner:
+        raise ValueError("Thiếu owner cho tác vụ AI.")
     with _lock:
-        if _state["running"]:
+        if _state_for(owner)["running"]:
             raise RuntimeError("Đang có luồng đăng bài.")
-        _state.update(running=True, stop=False, logs=[], started_at=datetime.now().isoformat(), finished_at=None, accounts={
+        _state_for(owner).update(running=True, stop=False, logs=[], started_at=datetime.now().isoformat(), finished_at=None, accounts={
             uid: {"status": "PENDING", "page_count": len(pages), "message": "Chờ đăng nhập"}
             for uid, pages in grouped.items()
         })
@@ -397,10 +401,10 @@ def start_job(owner, config, grouped):
                 _progress("Luồng", "Đã kết thúc")
         finally:
             with _lock:
-                _state["running"] = False
-                _state["finished_at"] = datetime.now().isoformat()
-                if _state["stop"]:
-                    for uid, item in _state["accounts"].items():
+                _state_for(owner)["running"] = False
+                _state_for(owner)["finished_at"] = datetime.now().isoformat()
+                if _state_for(owner)["stop"]:
+                    for uid, item in _state_for(owner)["accounts"].items():
                         if item.get("status") in {"PENDING", "RUNNING"}:
                             item["status"] = "STOPPED"
 

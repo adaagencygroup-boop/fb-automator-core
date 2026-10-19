@@ -14,7 +14,8 @@ from urllib.parse import unquote
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Depends
+from modules.module_02_account_manager.api.router import scoped_owner
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -171,6 +172,8 @@ _PUBLIC_API = {
     "/api/facebook/webhook",
     "/api/facebook/config",
     "/api/groups/source/template",
+    "/oauth/meta/callback",
+    "/api/pages/web-oauth/callback-submit",
 }
 
 
@@ -306,25 +309,29 @@ def get_recent_logs(limit: int = 50):
 
 
 # ==================== MODULE 1: DASHBOARD ====================
-@app.get("/api/dashboard/stats")
+@app.get("/api/dashboard/stats", dependencies=[Depends(scoped_owner)])
 def get_dashboard_stats():
+    from modules.module_02_account_manager.context import owner_context
+    owner = owner_context.get()
+    if not owner:
+        raise HTTPException(401, "Phiên đăng nhập không hợp lệ.")
     try:
-        acc_total = db.fetch_one("SELECT COUNT(*) as c FROM accounts")["c"]
+        acc_total = db.fetch_one("SELECT COUNT(*) as c FROM accounts WHERE user_id = %s", (owner,))["c"]
         acc_live = db.fetch_one(
-            "SELECT COUNT(*) as c FROM accounts WHERE status = 'LIVE'"
+            "SELECT COUNT(*) as c FROM accounts WHERE status = 'LIVE' AND user_id = %s", (owner,)
         )["c"]
         acc_die = db.fetch_one(
-            "SELECT COUNT(*) as c FROM accounts WHERE status = 'DIE'"
+            "SELECT COUNT(*) as c FROM accounts WHERE status = 'DIE' AND user_id = %s", (owner,)
         )["c"]
-        pages_total = db.fetch_one("SELECT COUNT(*) as c FROM pages")["c"]
+        pages_total = db.fetch_one("SELECT COUNT(*) as c FROM pages WHERE user_id = %s", (owner,))["c"]
         posts_today = db.fetch_one(
-            "SELECT COUNT(*) as c FROM posting_history WHERE date(posted_at) = date('now')"
+            "SELECT COUNT(*) as c FROM posting_history WHERE user_id = %s AND date(posted_at) = CURRENT_DATE", (owner,)
         )["c"]
         proxies_active = db.fetch_one(
             "SELECT COUNT(*) as c FROM proxies WHERE status = 'ACTIVE'"
         )["c"]
         recent_posts = db.fetch_all(
-            "SELECT * FROM posting_history ORDER BY id DESC LIMIT 10"
+            "SELECT * FROM posting_history WHERE user_id = %s ORDER BY id DESC LIMIT 10", (owner,)
         )
         return {
             "accounts": {"total": acc_total, "live": acc_live, "die": acc_die},
@@ -359,53 +366,34 @@ app.include_router(creator_router)
 
 
 # ==================== MODULE 5: PAGE MANAGER & POSTING ====================
-from modules.module_05_page_manager.routes import router as ai_post_router
+from modules.module_05_page_manager.routes_reels import router as reels_router
+app.include_router(reels_router, prefix="/api")
 
+from modules.module_05_page_manager.routes_pages import router as page_manager_router
+app.include_router(page_manager_router, prefix="/api")
+
+from modules.module_05_page_manager.routes_oauth_callback import router as oauth_callback_router
+app.include_router(oauth_callback_router)
+
+from modules.module_05_page_manager.routes import router as ai_post_router
 app.include_router(ai_post_router)
 
-
-@app.get("/api/pages")
-def get_pages():
-    return {"pages": db.fetch_all("SELECT * FROM pages ORDER BY id DESC")}
+@app.get("/api/pages", dependencies=[Depends(scoped_owner)])
+def get_pages(request: Request):
+    from modules.module_05_page_manager.routes_pages import get_managed_pages
+    return get_managed_pages(request)
 
 
 class AddPageTokenRequest(BaseModel):
     user_token: str
+    account_uid: str
 
 
-@app.post("/api/pages/fetch-tokens")
-async def fetch_pages_tokens(req: AddPageTokenRequest):
-    try:
-        pages = fb_client.fetch_managed_pages(req.user_token.strip())
-        count = 0
-        for p in pages:
-            db.execute(
-                """INSERT OR REPLACE INTO pages 
-                (page_id, page_name, access_token, category, auto_ai_enabled, auto_reels_enabled, status)
-                VALUES (?, ?, ?, ?, 1, 1, 'ACTIVE')""",
-                (p["id"], p["name"], p["access_token"], p.get("category", "")),
-            )
-            count += 1
-        # Tự động đồng bộ luôn sang Module 06 (Omnichannel Chat Supabase PostgreSQL)
-        try:
-            from modules.module_06_omnichannel_chat.database import SessionLocal
-            from modules.module_06_omnichannel_chat.services import FacebookSyncService
+@app.post("/api/pages/fetch-tokens", status_code=202, dependencies=[Depends(scoped_owner)])
+def fetch_pages_tokens(req: AddPageTokenRequest, request: Request):
+    from modules.module_05_page_manager.routes_pages import start_sync, require_owner
+    return start_sync(require_owner(request), req.account_uid.strip(), req.user_token.strip())
 
-            _db6 = SessionLocal()
-            try:
-                _sync = FacebookSyncService(_db6)
-                _sync.sync_by_token(req.user_token.strip(), system_user_id=1)
-            finally:
-                _db6.close()
-        except Exception as _e6:
-            print(f"[PageManager -> Module 06 Sync Note] {_e6}")
-
-        await ws_manager.broadcast_log(
-            "PageManager", "SUCCESS", f"Đã đồng bộ {count} Fanpage từ User Token."
-        )
-        return {"success": True, "count": count}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ==================== MODULE 9: SETTINGS & PROXIES ====================

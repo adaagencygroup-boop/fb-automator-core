@@ -52,7 +52,10 @@ export default function HistoryTable({
             ) : (
               campaigns.map((c, idx) => {
                 const isCompleted = c.status === "COMPLETED";
-                const isFailed = c.status === "FAILED";
+                const isFailed =
+                  c.status === "FAILED" ||
+                  c.status === "STOPPED" ||
+                  (c.status_display || "").toLowerCase().includes("không hoàn thành");
                 const isRunning = c.status === "RUNNING";
 
                 return (
@@ -61,7 +64,7 @@ export default function HistoryTable({
                       {(currentPage - 1) * pageSize + idx + 1}
                     </td>
 
-                    <td className="py-3 px-4 font-mono text-gray-600 text-[11px]">
+                    <td className="py-3 px-4 font-mono text-gray-600 text-[11px] whitespace-nowrap">
                       {c.created_at_display || c.created_at}
                     </td>
 
@@ -128,7 +131,7 @@ export default function HistoryTable({
                           isCompleted
                             ? "bg-emerald-50 text-emerald-700 border border-emerald-200/60"
                             : isFailed
-                            ? "bg-amber-50 text-amber-700 border border-amber-200/60"
+                            ? "bg-rose-50 text-rose-700 border border-rose-200/60"
                             : isRunning
                             ? "bg-blue-50 text-blue-700 border border-blue-200/60 animate-pulse"
                             : "bg-gray-100 text-gray-700"

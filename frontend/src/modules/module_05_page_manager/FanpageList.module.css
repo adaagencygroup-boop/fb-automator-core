@@ -1,0 +1,83 @@
+.accountTable {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.accountTable th,
+.accountTable td {
+  white-space: nowrap;
+}
+
+.accountTable td > span,
+.accountTable td > button {
+  max-width: 100%;
+  flex-wrap: nowrap;
+  justify-content: center;
+}
+
+.accountTable td button {
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding-inline: 0.375rem;
+}
+
+.accountTable svg {
+  flex-shrink: 0;
+}
+
+.accountTable td:last-child {
+  padding-inline: 0.25rem;
+}
+
+.accountTable td:last-child > div {
+  flex-wrap: nowrap;
+}
+
+.accountTable td > span {
+  gap: 0.25rem;
+  padding-inline: 0.25rem;
+}
+
+.nickColumn { width: 60px; }
+.loginColumn { width: 84px; }
+.tokenColumn { width: 105px; }
+.actionsColumn { width: 152px; }
+
+@media (max-width: 639px) {
+  .nickColumn { width: 28px; }
+  .loginColumn { width: 30px; }
+  .tokenColumn { width: 38px; }
+  .actionsColumn { width: 64px; }
+
+  .accountTable th,
+  .accountTable td {
+    padding-inline: 0.125rem;
+  }
+
+  .accountTable th {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 8px;
+  }
+
+  .accountTable td:first-child > div > :first-child {
+    display: none;
+  }
+
+  .accountTable td[data-label] > span,
+  .accountTable td button {
+    gap: 0;
+    font-size: 0;
+    padding-inline: 0.25rem;
+  }
+
+  .accountTable td button {
+    min-width: 24px;
+    min-height: 28px;
+  }
+
+  .accountTable td[data-label] > span:not(:has(svg, span))::after {
+    content: "—";
+    font-size: 10px;
+  }
+}

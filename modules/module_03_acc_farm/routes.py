@@ -486,6 +486,8 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
     error_msg = None
     save_cookie = True
     cookie_saved = False
+    # Bị chặn kết bạn / tham gia nhóm vẫn tính Hoàn thành: chỉ ghi ở ô hành động và log
+    blocked_labels = []
 
     try:
         account = adapters.get_account(uid)
@@ -600,7 +602,7 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
             level = {"SUCCESS": "success", "BLOCKED": "warning", "SKIPPED": "warning"}.get(result["status"], "error")
             _emit(level, f"{label}: {result.get('details', '')}", uid, slot)
             if result["status"] == "BLOCKED":
-                final_status = "BLOCKED"
+                blocked_labels.append(label)
 
     except FarmStopped:
         final_status = "STOPPED"
@@ -641,10 +643,10 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
         profile_lock.release()
         _hist(uid, cookie_saved=cookie_saved, light_checkpoint=pop_light_checkpoint())
 
+    blocked_note = f" (Facebook chặn: {', '.join(blocked_labels)})" if blocked_labels else ""
     summary = {
-        "COMPLETED": ("success", "Hoàn thành toàn bộ kịch bản, "
+        "COMPLETED": ("success", f"Hoàn thành toàn bộ kịch bản{blocked_note}, "
                       + ("đã lưu cookie mới và đóng trình duyệt" if cookie_saved else "đóng trình duyệt (không có cookie mới để lưu)")),
-        "BLOCKED": ("warning", "Hoàn thành nhưng có tính năng bị Facebook chặn"),
         "STOPPED": ("warning", "Đã dừng theo yêu cầu"),
         "DIE": ("error", f"Tài khoản cần xác minh / mất phiên: {error_msg}"),
         "FAILED": ("error", f"Lỗi hệ thống: {error_msg}"),

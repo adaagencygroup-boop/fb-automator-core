@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from typing import List, Optional
-from modules.module_06_omnichannel_chat.models import Page
+from modules.module_06_omnichannel_chat.models import Page, Account
 from modules.module_06_omnichannel_chat.schemas import PageCreate
 
 class PageRepository:
@@ -8,8 +9,8 @@ class PageRepository:
         self.db = db
 
     def get_by_page_id(self, page_id: str) -> Optional[Page]:
-        """Fetch page metadata using Facebook's page_id."""
-        return self.db.query(Page).filter(Page.page_id == page_id).first()
+        """Fetch page metadata directly from v_pages using Facebook's page_id."""
+        return self.db.query(Page).filter(Page.page_id == str(page_id)).first()
 
     def get_pages_by_facebook_user_id(self, facebook_user_id: str) -> List[Page]:
         """Fetch all pages associated with a specific Facebook User ID."""
