@@ -1140,26 +1140,23 @@ def _process_account_tasks(
                     "error",
                     f"[{uid}] ❌ Không thể đăng nhập Facebook. Đánh dấu thất bại các tác vụ của nick này.",
                 )
+                failed_any = False
                 for tid in task_ids:
                     t = db.query(SeedingTask).filter(SeedingTask.id == tid).first()
                     if t and t.status == "PENDING":
                         t.status = "FAILED"
                         t.error_message = "Không thể đăng nhập Facebook"
                         t.finished_at = utc_now()
-                        camp_tar = (
-                            db.query(SeedingCampaignTarget)
-                            .filter(SeedingCampaignTarget.id == t.campaign_target_id)
-                            .first()
-                        )
-                        if camp_tar:
-                            camp_tar.failed_count += 1
-                        camp = (
-                            db.query(SeedingCampaign)
-                            .filter(SeedingCampaign.id == campaign_id)
-                            .first()
-                        )
-                        if camp:
-                            camp.total_failed += 1
+                        failed_any = True
+                if failed_any:
+                    # Mỗi nick = 1 lượt (giống cách đếm ở cuối hàm), cộng bằng UPDATE trong DB để không mất lượt
+                    db.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).update(
+                        {SeedingCampaign.total_failed: SeedingCampaign.total_failed + 1}, synchronize_session=False
+                    )
+                    db.query(SeedingCampaignTarget).filter(SeedingCampaignTarget.campaign_id == campaign_id).update(
+                        {SeedingCampaignTarget.failed_count: SeedingCampaignTarget.failed_count + 1},
+                        synchronize_session=False,
+                    )
                 db.commit()
                 return
         else:
@@ -1278,25 +1275,20 @@ def _process_account_tasks(
                 # Đã hoàn thành toàn bộ tác vụ của nick, nghỉ 1.5s rồi đóng trình duyệt an toàn
                 time.sleep(1.5)
 
-        # Cập nhật kết quả số tài khoản thành công / thất bại cho chiến dịch (mỗi nick = 1 lượt)
-        camp = (
-            db.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).first()
+        # Cập nhật kết quả số tài khoản thành công / thất bại cho chiến dịch (mỗi nick = 1 lượt).
+        # Cộng bằng 1 câu UPDATE trong DB (cột = cột + 1), không đọc lên rồi cộng trong Python:
+        # 2 nick chạy song song (2 luồng) cùng đọc total_failed = 0 rồi cùng ghi 1 -> mất 1 lượt.
+        camp_col = SeedingCampaign.total_success if not account_has_failure else SeedingCampaign.total_failed
+        tar_col = (
+            SeedingCampaignTarget.success_count if not account_has_failure else SeedingCampaignTarget.failed_count
         )
-        camp_tar = (
-            db.query(SeedingCampaignTarget)
-            .filter(SeedingCampaignTarget.campaign_id == campaign_id)
-            .first()
+        db.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).update(
+            {camp_col: camp_col + 1}, synchronize_session=False
         )
-        if camp:
-            if not account_has_failure:
-                camp.total_success += 1
-                if camp_tar:
-                    camp_tar.success_count += 1
-            else:
-                camp.total_failed += 1
-                if camp_tar:
-                    camp_tar.failed_count += 1
-            db.commit()
+        db.query(SeedingCampaignTarget).filter(SeedingCampaignTarget.campaign_id == campaign_id).update(
+            {tar_col: tar_col + 1}, synchronize_session=False
+        )
+        db.commit()
 
     except Exception as e:
         logger.error(f"Error in _process_account_tasks for {uid}: {e}")
