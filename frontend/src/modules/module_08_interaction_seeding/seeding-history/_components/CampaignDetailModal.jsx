@@ -106,9 +106,6 @@ export default function CampaignDetailModal({
   };
 
   const tasks = data.tasks || [];
-  const alreadyFollowedTasks = tasks.filter((t) =>
-    (t.error_message || "").toLowerCase().includes("đã follow")
-  );
   const failedTasks = tasks.filter((t) => t.status === "FAILED");
 
   // Thống kê 3 mục tương tác bài viết (Like, Bình luận, Chia sẻ)
@@ -198,9 +195,35 @@ export default function CampaignDetailModal({
             <>
               {/* Quick Metrics */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="p-3.5 rounded-xl bg-gray-50 border border-gray-100 space-y-1">
-                  <span className="text-gray-400 font-medium">Trạng thái</span>
-                  <p className="text-sm font-bold text-gray-800">
+                <div
+                  className={`p-3.5 rounded-xl border space-y-1 ${
+                    data.status === "COMPLETED"
+                      ? "bg-emerald-50/60 border-emerald-100 text-emerald-900"
+                      : data.status === "FAILED" ||
+                        data.status === "STOPPED" ||
+                        (data.status_display || "").toLowerCase().includes("không hoàn thành")
+                      ? "bg-rose-50/60 border-rose-100 text-rose-900"
+                      : data.status === "RUNNING"
+                      ? "bg-blue-50/60 border-blue-100 text-blue-900"
+                      : "bg-gray-50 border-gray-100 text-gray-800"
+                  }`}
+                >
+                  <span
+                    className={`font-medium ${
+                      data.status === "COMPLETED"
+                        ? "text-emerald-600"
+                        : data.status === "FAILED" ||
+                          data.status === "STOPPED" ||
+                          (data.status_display || "").toLowerCase().includes("không hoàn thành")
+                        ? "text-rose-600"
+                        : data.status === "RUNNING"
+                        ? "text-blue-600"
+                        : "text-gray-400"
+                    }`}
+                  >
+                    Trạng thái
+                  </span>
+                  <p className="text-sm font-bold">
                     {data.status_display || data.status}
                   </p>
                 </div>
@@ -369,45 +392,28 @@ export default function CampaignDetailModal({
               )}
 
               {/* SECTION: DANH SÁCH LƯU Ý & THÔNG BÁO LỖI (NẾU CÓ) */}
-              {(alreadyFollowedTasks.length > 0 || failedTasks.length > 0) && (
-                <div className="p-4 rounded-xl border border-amber-200/90 bg-amber-50/50 space-y-2.5">
-                  <div className="flex items-center gap-2 text-amber-900 font-bold text-xs">
-                    <AlertTriangle className="w-4 h-4 text-amber-600" />
+              {failedTasks.length > 0 && (
+                <div className="p-4 rounded-xl border border-rose-200/80 bg-rose-50/50 space-y-2.5">
+                  <div className="flex items-center gap-2 text-rose-900 font-bold text-xs">
+                    <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
                     <span>
-                      Danh sách thông báo & lỗi ({alreadyFollowedTasks.length + failedTasks.length} tài khoản):
+                      Danh sách lỗi & không thành công ({failedTasks.length} tài khoản):
                     </span>
                   </div>
 
                   <div className="space-y-1.5 pl-1 text-xs">
-                    {alreadyFollowedTasks.map((t) => (
+                    {failedTasks.map((t, idx) => (
                       <div
-                        key={`already-${t.id}`}
-                        className="flex items-start gap-2 text-blue-900 bg-white/80 px-3 py-1.5 rounded-lg border border-blue-200/60"
+                        key={`failed-${t.id || t.task_id || t.account_uid || idx}`}
+                        className="flex items-start gap-2 px-3 py-1.5 rounded-lg border border-rose-200/70 bg-white/90 text-rose-900"
                       >
-                        <Info className="w-3.5 h-3.5 text-blue-600 shrink-0 mt-0.5" />
+                        <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
                         <div>
                           <strong>{t.account_name || t.account_uid}:</strong>{" "}
-                          <span>
-                            {t.error_message || `Đã follow ${targetTypeLabel.toLowerCase()} này rồi`}
-                          </span>
+                          <span>{t.error_message || "Không thể hoàn thành tác vụ"}</span>
                         </div>
                       </div>
                     ))}
-
-                    {failedTasks
-                      .filter((t) => !alreadyFollowedTasks.includes(t))
-                      .map((t) => (
-                        <div
-                          key={`failed-${t.id}`}
-                          className="flex items-start gap-2 text-rose-900 bg-white/80 px-3 py-1.5 rounded-lg border border-rose-200/60"
-                        >
-                          <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
-                          <div>
-                            <strong>{t.account_name || t.account_uid}:</strong>{" "}
-                            <span>{t.error_message || "Không thể hoàn thành tác vụ"}</span>
-                          </div>
-                        </div>
-                      ))}
                   </div>
                 </div>
               )}
@@ -440,10 +446,9 @@ export default function CampaignDetailModal({
                         tasks.map((t, idx) => {
                           const isSuccess = t.status === "SUCCESS";
                           const isFailed = t.status === "FAILED";
-                          const isAlready = (t.error_message || "").toLowerCase().includes("đã follow");
 
                           return (
-                            <tr key={t.id || idx} className="hover:bg-gray-50/80 transition-colors">
+                            <tr key={t.id || t.task_id || idx} className="hover:bg-gray-50/80 transition-colors">
                               <td className="py-2.5 px-3 text-center text-gray-400 font-medium">
                                 {idx + 1}
                               </td>
@@ -479,18 +484,13 @@ export default function CampaignDetailModal({
 
                               <td className="py-2.5 px-3">
                                 {t.error_message ? (
-                                  isAlready ? (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200/80 font-medium text-[11px]">
-                                      <Info className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                                      {t.error_message}
-                                    </span>
-                                  ) : isFailed ? (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-50 text-rose-800 border border-rose-200/80 font-medium text-[11px]">
+                                  isFailed ? (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-rose-50 text-rose-700 border border-rose-200/70 font-medium text-[11px]">
                                       <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
                                       {t.error_message}
                                     </span>
                                   ) : (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-medium text-[11px]">
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200/70 font-medium text-[11px]">
                                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                                       {t.error_message}
                                     </span>

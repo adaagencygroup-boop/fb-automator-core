@@ -29,9 +29,10 @@ export const RUN_STATUS = {
 };
 
 // Thứ tự thẻ đếm ở Giám sát tiến trình
-export const MONITOR_STATUSES = ["RUNNING", "PAUSED", "PENDING", "COMPLETED", "BLOCKED", "FAILED", "DIE", "STOPPED"];
+export const MONITOR_STATUSES = ["RUNNING", "PAUSED", "PENDING", "COMPLETED", "FAILED", "DIE", "STOPPED"];
 
-export const FINAL_STATUSES = ["COMPLETED", "BLOCKED", "STOPPED", "FAILED", "DIE"];
+// BLOCKED không còn là trạng thái cuối mới; RUN_STATUS vẫn giữ nhãn để hiện các dòng lịch sử cũ
+export const FINAL_STATUSES = ["COMPLETED", "STOPPED", "FAILED", "DIE"];
 
 // Kết quả từng hành động (farm_interaction_logs.status / actions trong status)
 export const ACTION_STATUS = {

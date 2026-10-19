@@ -63,8 +63,8 @@ class PageSeedingFlow:
                 reason = already_check.get("reason", "đang theo dõi")
                 msg = f"{acc_label} đã follow page này rồi ({reason})"
                 if callback:
-                    callback(f"ℹ️ {msg}")
-                return True, msg
+                    callback(f"⚠️ {msg}")
+                return False, msg
 
             # ─── BƯỚC 1: TÌM NÚT FOLLOW / LIKE TRỰC TIẾP TRÊN HEADER ───
             if callback:
@@ -119,8 +119,8 @@ class PageSeedingFlow:
                         pass
                     msg = f"{acc_label} đã follow page này rồi"
                     if callback:
-                        callback(f"ℹ️ {msg}")
-                    return True, msg
+                        callback(f"⚠️ {msg}")
+                    return False, msg
 
                 menu_follow = menu_scan.get("followItem") if menu_scan else None
                 menu_like = menu_scan.get("likeItem") if menu_scan else None

@@ -1,8 +1,9 @@
 import os
 import shutil
 import time
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from typing import List, Optional
 from modules.module_06_omnichannel_chat.database import get_db
 from modules.module_06_omnichannel_chat.schemas import (
@@ -21,6 +22,7 @@ from modules.module_06_omnichannel_chat.repositories import (
 )
 from modules.module_06_omnichannel_chat.services import FacebookSyncService, FacebookAuthError, FacebookAPIError
 from modules.module_06_omnichannel_chat.auth import get_current_user_optional
+from modules.module_06_omnichannel_chat.routers.pages import resolve_current_user_id
 from modules.module_06_omnichannel_chat.models import Message, Page, Account, SystemUser, Conversation, Customer
 
 router = APIRouter(prefix="/api/facebook", tags=["Messages"])
@@ -47,17 +49,45 @@ def get_messages(
 
 @router.get("/conversations")
 def get_conversations(
+    request: Request,
+    page_id: Optional[str] = None,
     facebook_user_id: Optional[str] = None,
+    user_id: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: Optional[SystemUser] = Depends(get_current_user_optional)
 ):
-    page_query = db.query(Page)
-    if current_user and current_user.role != "admin":
-        page_query = page_query.join(Account, Page.facebook_user_id == Account.facebook_user_id).filter(Account.system_user_id == current_user.id)
+    logged_in_uid = (user_id or "").strip() or resolve_current_user_id(request, current_user)
+
+    params = {}
+    where_clauses = []
+
+    if logged_in_uid:
+        where_clauses.append("(CAST(a.user_id AS VARCHAR) = :user_id OR CAST(va.system_user_id AS VARCHAR) = :user_id)")
+        params["user_id"] = str(logged_in_uid)
+
     if facebook_user_id:
-        page_query = page_query.filter(Page.facebook_user_id == facebook_user_id)
-    pages = page_query.all()
-    page_dict = {p.page_id: p for p in pages}
+        where_clauses.append("p.facebook_user_id = :fb_uid")
+        params["fb_uid"] = str(facebook_user_id)
+
+    if page_id:
+        where_clauses.append("p.page_id = :page_id")
+        params["page_id"] = str(page_id)
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    sql = text(f"""
+        SELECT DISTINCT p.page_id, p.page_name, p.facebook_user_id
+        FROM v_pages p
+        LEFT JOIN v_accounts va ON p.facebook_user_id = va.facebook_user_id
+        LEFT JOIN accounts a ON (
+            p.facebook_user_id = a.uid 
+            OR va.user_access_token = a.token
+            OR va.facebook_user_id = a.uid
+            OR (va.name IS NOT NULL AND va.name != '' AND va.name = a.profile_name)
+        )
+        {where_sql}
+    """)
+    page_rows = db.execute(sql, params).mappings().all()
+    page_dict = {str(r["page_id"]): r["page_name"] for r in page_rows}
     page_ids = list(page_dict.keys())
 
     if not page_ids:
@@ -68,11 +98,11 @@ def get_conversations(
     if db_convs:
         results = []
         for c in db_convs:
-            page = page_dict.get(c.page_id)
+            p_name = page_dict.get(str(c.page_id)) or "Trang Facebook"
             results.append({
                 "page_id": c.page_id,
-                "page_name": page.page_name if page else "Trang Facebook",
-                "avatar_url": c.customer_avatar or (page.avatar_url if page else None),
+                "page_name": p_name,
+                "avatar_url": c.customer_avatar or f"https://graph.facebook.com/v19.0/{c.page_id}/picture?type=large",
                 "sender_id": c.customer_psid,
                 "customer_name": c.customer_name or f"Khách hàng {c.customer_psid[:8]}",
                 "last_message": c.last_message,
@@ -96,11 +126,11 @@ def get_conversations(
     for msg in all_messages:
         key = f"{msg.page_id}_{msg.sender_id}"
         if key not in conv_map:
-            page = page_dict.get(msg.page_id)
+            p_name = page_dict.get(str(msg.page_id)) or "Trang Facebook"
             conv_map[key] = {
                 "page_id": msg.page_id,
-                "page_name": page.page_name if page else "Trang Facebook",
-                "avatar_url": page.avatar_url if page else None,
+                "page_name": p_name,
+                "avatar_url": f"https://graph.facebook.com/v19.0/{msg.page_id}/picture?type=large",
                 "sender_id": msg.sender_id,
                 "customer_name": f"Khách hàng {msg.sender_id[:8]}",
                 "last_message": msg.text,

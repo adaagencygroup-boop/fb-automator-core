@@ -29,8 +29,24 @@ function avatarColor(name = "") {
 
 const initialOf = (name = "") => (name.trim()[0] || "?").toUpperCase();
 
-/** "10/8/2026, 3:43:27 PM" như Figma */
-const formatDateTime = (iso) => new Date(iso).toLocaleString("en-US");
+/** Định dạng thời gian theo múi giờ Việt Nam (UTC+7) chuẩn xác */
+const formatDateTime = (iso) => {
+  if (!iso) return "";
+  let dateStr = String(iso).trim();
+  if (!dateStr.endsWith("Z") && !dateStr.includes("+") && !dateStr.includes("-", 11)) {
+    dateStr += "Z";
+  }
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? iso : d.toLocaleString("vi-VN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour12: false
+  });
+};
 
 function SubTabs({ type, onTypeChange, counts }) {
   return (

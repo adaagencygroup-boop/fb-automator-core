@@ -14,9 +14,11 @@ export const seedingApi = {
     return await api.post("/api/seeding/targets/validate", { target_type: targetType, urls });
   },
 
-  getSeedingTargets: async (targetType) => {
+  getSeedingTargets: async (targetType, includeCompleted = false) => {
     try {
-      const params = targetType ? { target_type: targetType } : {};
+      const params = {};
+      if (targetType) params.target_type = targetType;
+      if (includeCompleted) params.include_completed = true;
       const res = await api.get("/api/seeding/targets", { params });
       return res || { total: 0, targets: [] };
     } catch {

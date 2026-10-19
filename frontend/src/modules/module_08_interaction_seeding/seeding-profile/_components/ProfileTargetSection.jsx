@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink, Copy, AlertCircle } from "lucide-react";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { toast } from "@/components/ui/toast";
 import ExcelImportModal from "../../_components/ExcelImportModal";
+import { seedingApi } from "../../service";
 import {
   normalizeTargetUrl,
   parseInputTargetsStats,
@@ -23,6 +24,25 @@ export default function ProfileTargetSection({
 }) {
   const [textInput, setTextInput] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
+  const [dbHistoryTargets, setDbHistoryTargets] = useState([]);
+
+  // Tải danh sách toàn bộ mục tiêu trong DB (bao gồm cả các link đã chạy) để kiểm tra trùng lặp thời gian thực
+  useEffect(() => {
+    let active = true;
+    seedingApi
+      .getSeedingTargets("PROFILE", true)
+      .then((res) => {
+        if (active) setDbHistoryTargets(res?.targets || []);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [targets]);
+
+  const allKnownTargets = useMemo(() => {
+    return [...dbHistoryTargets, ...(targets || [])];
+  }, [dbHistoryTargets, targets]);
 
   // Dialog states
   const [confirmAddOpen, setConfirmAddOpen] = useState(false);
@@ -39,7 +59,7 @@ export default function ProfileTargetSection({
   const hasAccents = hasVietnameseTones(textInput);
 
   // Thống kê liên tục tình trạng link nhập vào (tổng, hợp lệ, trùng lặp, lỗi định dạng)
-  const stats = parseInputTargetsStats(textInput, targets, "PROFILE");
+  const stats = parseInputTargetsStats(textInput, allKnownTargets, "PROFILE");
 
   // Tổng hợp danh sách các vấn đề để hiển thị thành 1 message cảnh báo duy nhất
   const issues = [];
@@ -120,7 +140,7 @@ export default function ProfileTargetSection({
 
     // Nếu chỉ có lỗi trùng lặp (không có lỗi định dạng hay có dấu)
     if (stats.invalidCount === 0 && stats.duplicateCount > 0 && !hasAccents) {
-      const cleaned = removeDuplicateTargets(text, targets, "PROFILE");
+      const cleaned = removeDuplicateTargets(text, allKnownTargets, "PROFILE");
       setTextInput(cleaned);
       toast.success(`Đã loại bỏ ${stats.duplicateCount} liên kết bị trùng lặp!`, "ĐÃ LỌC TRÙNG");
       return;
@@ -141,7 +161,7 @@ export default function ProfileTargetSection({
     // Nếu có dòng không hợp lệ hoặc kết hợp nhiều lỗi:
     let cleaned = removeInvalidTargets(text, "PROFILE");
     if (stats.duplicateCount > 0) {
-      cleaned = removeDuplicateTargets(cleaned, targets, "PROFILE");
+      cleaned = removeDuplicateTargets(cleaned, allKnownTargets, "PROFILE");
     }
 
     setTextInput(cleaned);
@@ -308,7 +328,7 @@ export default function ProfileTargetSection({
                 {issues.length === 1 && hasAccents
                   ? "Phát hiện nội dung có chứa dấu tiếng Việt. Vui lòng chỉ nhập liên kết hoặc UID không dấu!"
                   : issues.length === 1 && stats.duplicateCount > 0
-                  ? `Phát hiện có ${stats.duplicateCount} liên kết bị trùng lặp (trong ô nhập hoặc đã có trong danh sách).`
+                  ? `Phát hiện có ${stats.duplicateCount} liên kết bị trùng lặp (trong ô nhập hoặc đã có trong cơ sở dữ liệu).`
                   : issues.length === 1 && stats.invalidCount > 0
                   ? `Phát hiện có ${stats.invalidCount} dòng liên kết không hợp lệ hoặc sai định dạng.`
                   : `Phát hiện nội dung chưa hợp lệ: ${issues.join(" • ")}.`}
@@ -460,7 +480,7 @@ export default function ProfileTargetSection({
           isOpen={isExcelModalOpen}
           onClose={() => setIsExcelModalOpen(false)}
           targetType="PROFILE"
-          existingTargets={targets}
+          existingTargets={allKnownTargets}
           onImportTargets={(imported) => {
             if (imported.length > 0) {
               onAddTargets(imported.map((item) => item.url));
@@ -502,7 +522,7 @@ export default function ProfileTargetSection({
         onClose={() => !isClearing && setClearAllOpen(false)}
         onConfirm={handleConfirmClearAll}
         title="Xác nhận xóa toàn bộ danh sách Trang cá nhân"
-        description={`Bạn có chắc chắn muốn xóa toàn bộ ${targets.length} Trang cá nhân khỏi danh sách không? Hành động này không thể hoàn tác.`}
+        description={`Bạn có chắc chắn muốn xóa toàn bộ ${targets.length} Trang cá nhân chưa chạy khỏi danh sách không? Các Trang cá nhân đã chạy trong lịch sử vẫn sẽ được bảo toàn.`}
         confirmText="Xóa toàn bộ"
         cancelText="Hủy bỏ"
         variant="danger"

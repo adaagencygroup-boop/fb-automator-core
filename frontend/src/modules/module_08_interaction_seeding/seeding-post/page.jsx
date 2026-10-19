@@ -112,6 +112,13 @@ export default function SeedingPostPage() {
               `Chiến dịch hoàn tất với trạng thái: ${detail.status_display || status}.`,
               status === "COMPLETED" ? "success" : "warn",
             );
+            // Tải lại danh sách bài viết chưa chạy để loại bỏ các link đã hoàn tất
+            seedingApi
+              .getSeedingTargets("POST")
+              .then((res) => {
+                setTargets(res?.targets || []);
+              })
+              .catch(() => {});
           }
         }
       } catch (err) {
@@ -127,8 +134,8 @@ export default function SeedingPostPage() {
     seedingApi
       .getSeedingTargets("POST")
       .then((res) => {
+        setTargets(res?.targets || []);
         if (res && res.targets && res.targets.length > 0) {
-          setTargets(res.targets);
           setSuccessMessage(
             `Đã tải ${res.targets.length} bài viết từ cơ sở dữ liệu`,
           );
