@@ -17,7 +17,7 @@ from modules.module_02_account_manager.context import owner_context
 from modules.module_05_page_manager.reels_service import (
     scan_root_directory, auto_match_folders
 )
-from modules.module_05_page_manager.reels_runner import reels_runner
+from modules.module_05_page_manager.reels_runner import ReelsTaskRunner
 
 router = APIRouter(
     prefix="/pages/reels",
@@ -38,15 +38,26 @@ def get_current_owner(request: Optional[Request] = None) -> Optional[str]:
     return None
 
 
+def require_owner():
+    owner = owner_context.get()
+    if not owner:
+        raise HTTPException(401, "Phiên đăng nhập không hợp lệ.")
+    return str(owner)
+
+
+def current_runner():
+    return ReelsTaskRunner(require_owner())
+
+
 class ScanFoldersRequest(BaseModel):
     root_dir: str
 
 
 class PageTargetConfig(BaseModel):
     page_id: str
-    page_name: str
+    page_name: str = ""
     account_uid: Optional[str] = None
-    access_token: str
+    access_token: str = ""
     folder_name: Optional[str] = ""
 
 
@@ -72,7 +83,7 @@ def get_accounts_and_pages(request: Request):
 
     try:
         pages_raw = db.fetch_all(
-            "SELECT id, page_id, page_name, account_uid, access_token, category, status, reels_folder FROM pages WHERE user_id = %s ORDER BY id DESC",
+            "SELECT id, page_id, page_name, account_uid, category, status, reels_folder, web_connection_id FROM pages WHERE user_id = %s ORDER BY id DESC",
             (owner,)
         )
     except Exception as e:
@@ -91,18 +102,25 @@ def get_accounts_and_pages(request: Request):
         pass
 
     # Gom nhóm theo account_uid
+    web_map = {str(row["id"]): row for row in db.fetch_all(
+        "SELECT id, facebook_name FROM meta_web_connections WHERE user_id = %s", (owner,)
+    )}
     grouped: Dict[str, Dict[str, Any]] = {}
     for p in pages_raw:
         uid = str(p.get("account_uid") or "").strip()
-        group_key = uid if uid else "unknown"
+        web_info = web_map.get(str(p.get("web_connection_id")))
+        group_key = f"web:{p['web_connection_id']}" if web_info else uid or "unknown"
 
         if group_key not in grouped:
             acc_info = acc_map.get(uid, {})
             grouped[group_key] = {
-                "account_uid": uid if uid else "Chưa gán",
-                "account_name": acc_info.get("profile_name") or (f"Tài khoản {uid}" if uid else "Chưa gán tài khoản"),
+                "group_key": group_key,
+                "manager_kind": "web" if web_info else "account",
+                "web_connection_id": p.get("web_connection_id"),
+                "account_uid": uid if uid else None,
+                "account_name": web_info["facebook_name"] if web_info else acc_info.get("profile_name") or (f"Tài khoản {uid}" if uid else "Chưa gán tài khoản"),
                 "avatar_url": acc_info.get("avatar_url") or "",
-                "login_status": acc_info.get("login_status") or "LOGGED_IN",
+                "login_status": "CONNECTED" if web_info else acc_info.get("login_status") or "LOGGED_IN",
                 "pages": []
             }
 
@@ -111,7 +129,6 @@ def get_accounts_and_pages(request: Request):
             "page_id": str(p.get("page_id")),
             "page_name": p.get("page_name") or f"Page {p.get('page_id')}",
             "category": p.get("category") or "",
-            "access_token": p.get("access_token") or "",
             "status": p.get("status") or "ACTIVE",
             "reels_folder": p.get("reels_folder") or "",
         })
@@ -120,6 +137,7 @@ def get_accounts_and_pages(request: Request):
     for uid, acc in acc_map.items():
         if uid not in grouped:
             grouped[uid] = {
+                "group_key": uid,
                 "account_uid": uid,
                 "account_name": acc.get("profile_name") or f"Tài khoản {uid}",
                 "avatar_url": acc.get("avatar_url") or "",
@@ -145,7 +163,7 @@ def scan_folders(req: ScanFoldersRequest):
 
     # Lấy danh sách toàn bộ page hiện có để tự động đối chiếu
     try:
-        pages_raw = db.fetch_all("SELECT page_id, page_name FROM pages")
+        pages_raw = db.fetch_all("SELECT page_id, page_name FROM pages WHERE user_id = %s", (require_owner(),))
     except Exception:
         pages_raw = []
 
@@ -161,8 +179,21 @@ def scan_folders(req: ScanFoldersRequest):
 @router.post("/start")
 def start_reels_job(req: StartJobRequest):
     """Kích hoạt tiến trình đăng Reels."""
+    owner = require_owner()
     payload = req.model_dump()
-    res = reels_runner.start_job(payload)
+    selected = []
+    seen = set()
+    for target in req.pages_config:
+        if target.page_id in seen:
+            continue
+        seen.add(target.page_id)
+        page = db.fetch_one("SELECT page_id, page_name, account_uid, reels_folder FROM pages WHERE user_id = %s AND page_id = %s", (owner, target.page_id))
+        if not page:
+            raise HTTPException(404, "Page không thuộc owner hiện tại.")
+        # Only folder selection is supplied by the caller; credentials stay in the DB.
+        selected.append({**page, "folder_name": target.folder_name or page.get("reels_folder") or page["page_name"]})
+    payload["pages_config"] = selected
+    res = current_runner().start_job(payload)
     if not res.get("success"):
         raise HTTPException(status_code=400, detail=res.get("error"))
     return res
@@ -171,19 +202,19 @@ def start_reels_job(req: StartJobRequest):
 @router.post("/stop")
 def stop_reels_job():
     """Dừng tiến trình đăng Reels."""
-    return reels_runner.stop_job()
+    return current_runner().stop_job()
 
 
 @router.get("/status")
 def get_reels_status():
     """Lấy trạng thái và thống kê tiến trình đăng."""
-    return reels_runner.get_status()
+    return current_runner().get_status()
 
 
 @router.post("/clear-logs")
 def clear_logs():
     """Xóa danh sách console log."""
-    reels_runner.clear_logs()
+    current_runner().clear_logs()
     return {"success": True}
 
 
@@ -192,17 +223,18 @@ async def stream_logs():
     """
     SSE endpoint stream console log thời gian thực về frontend.
     """
+    runner = current_runner()
     q: queue.Queue = queue.Queue()
 
     def on_log(entry):
         q.put(entry)
 
-    reels_runner.subscribe(on_log)
+    runner.subscribe(on_log)
 
     async def event_generator():
         try:
             # Gửi các log gần nhất lúc mới kết nối
-            status = reels_runner.get_status()
+            status = runner.get_status()
             for log_item in status.get("recent_logs", []):
                 yield f"data: {json.dumps(log_item, ensure_ascii=False)}\n\n"
 
@@ -218,7 +250,7 @@ async def stream_logs():
         except asyncio.CancelledError:
             pass
         finally:
-            reels_runner.unsubscribe(on_log)
+            runner.unsubscribe(on_log)
 
     return StreamingResponse(
         event_generator(),

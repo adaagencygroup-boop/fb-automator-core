@@ -237,7 +237,7 @@ export default function ReelsPoster() {
         });
         setSelectedPageIds(allPageIds);
         if (data.accounts.length > 0) {
-          setExpandedAccounts(new Set([data.accounts[0]?.account_uid]));
+          setExpandedAccounts(new Set([(data.accounts[0]?.group_key || data.accounts[0]?.account_uid)]));
         }
       }
     } catch (err) {
@@ -695,7 +695,7 @@ export default function ReelsPoster() {
   const allPages = useMemo(() => {
     const list = [];
     accounts.forEach((acc) => {
-      if (selectedAccountUid !== "ALL" && acc.account_uid !== selectedAccountUid) {
+      if (selectedAccountUid !== "ALL" && (acc.group_key || acc.account_uid) !== selectedAccountUid) {
         return;
       }
       (acc.pages || []).forEach((p) => {
@@ -1083,7 +1083,7 @@ export default function ReelsPoster() {
                 >
                   <option value="ALL">Tất cả tài khoản ({accounts.length})</option>
                   {accounts.map((acc) => (
-                    <option key={acc.account_uid} value={acc.account_uid}>
+                    <option key={acc.group_key || acc.account_uid} value={acc.group_key || acc.account_uid}>
                       {acc.account_name} ({acc.pages?.length || 0} Page)
                     </option>
                   ))}

@@ -20,6 +20,8 @@ const SHOW_SYSTEM_LOG = false;
  * Trang đang mở được xác định từ URL (src/config/navigation.js -> pathOf).
  */
 export default function AppShell({ children }) {
+  const pathname = usePathname();
+  if (pathname.replace(/\/$/, "") === "/oauth/meta/callback") return children;
   return <AuthGate>{(session) => <Workspace session={session}>{children}</Workspace>}</AuthGate>;
 }
 

@@ -4,7 +4,6 @@ File: core/tiktok_downloader.py
 """
 import os
 import time
-import sqlite3
 import datetime
 import requests
 import re
@@ -21,7 +20,6 @@ except ImportError:
     c_requests = None
     HAS_CURL_CFFI = False
 
-DB_FILE = "videos.db"
 db_lock = threading.Lock()
 
 # Lock toàn cục để giới hạn tần suất gọi API TikWM (tránh lỗi Free Api Limit)
@@ -583,27 +581,6 @@ def get_video_detail_ssstik(tiktok_url, log_func=None):
         log(f"[ssstik] Lỗi: {str(e)}")
     return None, ""
 
-def init_db():
-    with db_lock:
-        conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-        return conn
-
-def video_exists(conn, table, vid):
-    with db_lock:
-        try:
-            cur = conn.cursor()
-            cur.execute(f"SELECT 1 FROM {table} WHERE id = ?", (vid,))
-            return cur.fetchone() is not None
-        except sqlite3.OperationalError:
-            return False
-
-def insert_video(conn, table, vid, caption, link):
-    with db_lock:
-        cur = conn.cursor()
-        cur.execute(f"INSERT OR IGNORE INTO {table} (id, caption, link, downloaded_at) VALUES (?,?,?,?)",
-                    (vid, caption, link, datetime.datetime.now().isoformat()))
-        conn.commit()
-
 def get_next_folder_number(page_dir):
     if not os.path.exists(page_dir):
         return 1
@@ -637,10 +614,13 @@ class TikTokBulkDownloader(QThread):
     page_status_signal = pyqtSignal(int, str)  # index, status text
     finished_signal = pyqtSignal()
 
-    def __init__(self, pages_list, download_folder, delay_seconds=2, max_videos_per_page=5, max_workers=5, parent=None):
+    def __init__(self, pages_list, download_folder, delay_seconds=2, max_videos_per_page=5, max_workers=5, parent=None, owner=None):
         super().__init__(parent)
-        self.pages_list = pages_list
-        self.download_folder = download_folder
+        from modules.module_02_account_manager.context import owner_context
+        from modules.module_05_page_manager.owned_data import require_owner, pages_for, download_root
+        self.owner = require_owner(owner or owner_context.get())
+        self.pages_list = pages_for(self.owner, [str(page.get("page_id") or page.get("id")) for page in pages_list])
+        self.download_folder = download_root(download_folder, self.owner)
         self.delay_seconds = float(delay_seconds)
         self.max_videos_per_page = int(max_videos_per_page)
         self.max_workers = int(max_workers)
@@ -650,7 +630,7 @@ class TikTokBulkDownloader(QThread):
         self.is_running = False
 
     def run(self):
-        conn = init_db()
+        from modules.module_05_page_manager.owned_data import video_exists, record_download
         self.log_signal.emit("=========================================================")
         self.log_signal.emit(f" BẮT ĐẦU TẢI VIDEO TIKTOK SONG SONG ({self.max_workers} LUỒNG) ")
         if HAS_CURL_CFFI:
@@ -682,20 +662,7 @@ class TikTokBulkDownloader(QThread):
                 self.page_status_signal.emit(idx, "Lỗi ID")
                 return
 
-            table = f"tbl_{page_id}"
-            
-            # Tạo bảng an toàn đồng bộ
-            with db_lock:
-                cur = conn.cursor()
-                cur.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {table} (
-                        id TEXT PRIMARY KEY,
-                        caption TEXT,
-                        link TEXT,
-                        downloaded_at TEXT
-                    )
-                """)
-                conn.commit()
+
 
             self.log_signal.emit(f"[*] [{page_name}] Bắt đầu quét video từ khóa: '{page_name}'")
             self.page_status_signal.emit(idx, "Đang quét...")
@@ -739,7 +706,7 @@ class TikTokBulkDownloader(QThread):
                     link = f"https://www.tiktok.com/@{author}/video/{vid}"
                     urlebird_url = item.get("urlebird_url")
 
-                    if video_exists(conn, table, vid):
+                    if video_exists(self.owner, page_id, "TIKTOK", vid):
                         continue
 
                     # Gọi API chi tiết để lấy link tải không logo
@@ -899,11 +866,12 @@ class TikTokBulkDownloader(QThread):
                         with open(caption_path, "w", encoding="utf-8") as f:
                             f.write(facebook_caption.strip())
 
-                        insert_video(conn, table, vid, raw_caption, link)
+                        record_download(self.owner, page_id, "TIKTOK", vid, raw_caption, link, video_path)
                         downloaded_this_page += 1
                         self.log_signal.emit(f"[SUCCESS] [{page_name}] Đã tải xong video số {downloaded_this_page}: {vid}")
                         self.page_status_signal.emit(idx, f"Đã tải {downloaded_this_page}/{self.max_videos_per_page}")
                     else:
+                        record_download(self.owner, page_id, "TIKTOK", vid, raw_caption, link, video_path, success=False)
                         self.log_signal.emit(f"[ERROR] [{page_name}] Không thể tải video {vid}.")
                         if os.path.exists(video_path):
                             try: os.remove(video_path)
@@ -929,6 +897,5 @@ class TikTokBulkDownloader(QThread):
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             list(executor.map(download_page_videos, tasks))
 
-        conn.close()
         self.log_signal.emit("\n[FINISHED] Tiến trình tải video TikTok hàng loạt kết thúc.")
         self.finished_signal.emit()

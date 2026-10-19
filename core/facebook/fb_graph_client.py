@@ -13,9 +13,13 @@ import time
 import requests
 from typing import Optional, Dict, Any, List
 
-GRAPH_API_VERSION = "v20.0"
+from modules.module_05_page_manager.meta_config import GRAPH_API_VERSION, REQUIRED_SCOPES, credentials
 GRAPH_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 GRAPH_VIDEO_URL = f"https://graph-video.facebook.com/{GRAPH_API_VERSION}"
+
+class MetaAPIError(RuntimeError):
+    """Safe API error without response bodies, request URLs or credentials."""
+
 
 class FacebookGraphClient:
     def __init__(self, timeout: int = 60):
@@ -169,120 +173,91 @@ class FacebookGraphClient:
                 err = res_json.get("error", {}).get("message", "Lỗi đăng video dài")
                 return {"success": False, "error": err}
 
-    def exchange_token(self, short_lived_token: str) -> str:
-        """
-        Nâng cấp Short-lived User Token thành Long-lived User Token (60 ngày) qua Facebook OAuth.
-        Khi gọi /me/accounts bằng Long-lived token này, Meta sẽ cấp Page Token VĨNH VIỄN.
-        Fallback an toàn nếu chưa cấu hình FACEBOOK_APP_ID / SECRET.
-        """
-        token = (short_lived_token or "").strip()
-        if not token:
-            return ""
-
-        app_id = os.getenv("FACEBOOK_APP_ID", "").strip()
-        app_secret = os.getenv("FACEBOOK_APP_SECRET", "").strip()
-        api_ver = os.getenv("FACEBOOK_GRAPH_API_VERSION", GRAPH_API_VERSION)
-
-        if not app_id or not app_secret:
-            return token
-
-        url = f"https://graph.facebook.com/{api_ver}/oauth/access_token"
-        params = {
-            "grant_type": "fb_exchange_token",
-            "client_id": app_id,
-            "client_secret": app_secret,
-            "fb_exchange_token": token,
-        }
-
+    def _get_json(self, path, params):
         try:
-            res = self.session.get(url, params=params, timeout=15)
-            data = res.json()
-            if "access_token" in data:
-                return data["access_token"]
-            if "error" in data:
-                print(f"[Facebook Exchange Warning] {data['error'].get('message')}. Giữ nguyên token gốc.")
-        except Exception as e:
-            print(f"[Facebook Exchange Network Warning] {e}. Giữ nguyên token gốc.")
+            response = self.session.get(f"{GRAPH_BASE_URL}/{path}", params=params, timeout=20)
+            data = response.json()
+        except Exception:
+            raise MetaAPIError("Không kết nối được Meta Graph API.") from None
+        if response.status_code != 200 or not isinstance(data, dict) or "error" in data:
+            code = data.get("error", {}).get("code") if isinstance(data, dict) else None
+            raise MetaAPIError(f"Meta Graph API từ chối yêu cầu (mã {code}).")
+        return data
 
-        return token
+    def exchange_token(self, short_lived_token: str) -> str:
+        app_id, secret = credentials()
+        if not short_lived_token:
+            raise ValueError("Thiếu Access Token.")
+        data = self._get_json("oauth/access_token", {
+            "grant_type": "fb_exchange_token", "client_id": app_id,
+            "client_secret": secret, "fb_exchange_token": short_lived_token,
+        })
+        if not data.get("access_token"):
+            raise MetaAPIError("Meta không trả về token dài hạn.")
+        return data["access_token"]
+
+    def inspect_token(self, token, *, user=True):
+        app_id, secret = credentials()
+        data = self._get_json("debug_token", {
+            "input_token": token, "access_token": f"{app_id}|{secret}",
+        }).get("data") or {}
+        if data.get("is_valid") is not True:
+            raise ValueError("Token hết hạn hoặc đã bị thu hồi.")
+        if str(data.get("app_id")) != app_id:
+            raise ValueError("Token thuộc App ID khác.")
+        for field in ("expires_at", "data_access_expires_at"):
+            expiry = data.get(field)
+            if expiry is not None and (not isinstance(expiry, (int, float)) or (expiry != 0 and expiry <= time.time())):
+                raise ValueError("Token hoặc quyền truy cập dữ liệu đã hết hạn.")
+        if user:
+            if data.get("type") != "USER" or not data.get("user_id"):
+                raise ValueError("Cần User Access Token hợp lệ.")
+            missing = REQUIRED_SCOPES - set(data.get("scopes") or [])
+            if missing:
+                raise ValueError("Thiếu quyền: " + ", ".join(sorted(missing)))
+        elif data.get("type") != "PAGE":
+            raise ValueError("Meta không xác nhận Page Access Token.")
+        return {key: data[key] for key in (
+            "app_id", "user_id", "type", "scopes", "granular_scopes", "issued_at",
+            "expires_at", "data_access_expires_at", "is_valid",
+        ) if key in data}
 
     def get_user_profile(self, access_token: str) -> Dict[str, Any]:
-        """Lấy thông tin tài khoản (id, name, picture) từ /me."""
-        token = (access_token or "").strip()
-        if not token:
-            raise ValueError("Access Token không được để trống")
-        url = f"{GRAPH_BASE_URL}/me"
-        res = self.session.get(url, params={"fields": "id,name,picture.type(large)", "access_token": token}, timeout=15)
-        data = res.json()
-        if "error" in data:
-            err = data.get("error", {})
-            err_code = err.get("code")
-            msg = err.get("message", "Lỗi lấy thông tin cá nhân Facebook")
-            if err_code in (190, 102):
-                raise RuntimeError(f"Access Token đã hết hạn hoặc không hợp lệ (Mã {err_code}): {msg}")
-            raise RuntimeError(f"Lỗi Meta Graph API ({err_code}): {msg}")
+        data = self._get_json("me", {"fields": "id,name,picture.type(large)", "access_token": access_token})
+        if not data.get("id") or not data.get("name"):
+            raise ValueError("Meta không trả về danh tính Facebook đầy đủ.")
         return data
 
     def fetch_managed_pages(self, user_access_token: str) -> List[Dict[str, Any]]:
-        """
-        Lấy toàn bộ danh sách Fanpage và Page Access Token từ User Token.
-        Hỗ trợ phân trang tự động (paging.next) và trích xuất avatar picture.
-        """
-        token = (user_access_token or "").strip()
-        if not token:
-            return []
-
-        # Tự động exchange sang token dài hạn nếu có thể
-        long_lived_token = self.exchange_token(token)
-
-        pages = []
-        next_url = f"{GRAPH_BASE_URL}/me/accounts"
-        next_params = {
-            "fields": "id,name,access_token,category,picture.type(large)",
-            "access_token": long_lived_token,
-            "limit": "200"
-        }
-
-        while next_url:
-            try:
-                if next_params:
-                    res = self.session.get(next_url, params=next_params, timeout=20)
-                    next_params = None
-                else:
-                    res = self.session.get(next_url, timeout=20)
-                data = res.json()
-            except Exception as e:
-                print(f"[Fetch Pages Warning] Lỗi kết nối khi quét pages: {e}")
-                break
-
-            if "error" in data:
-                err_obj = data.get("error", {})
-                err_msg = err_obj.get("message", "Lỗi lấy danh sách trang từ Facebook")
-                err_code = err_obj.get("code")
-                print(f"[Fetch Pages Error] {err_msg} (code: {err_code})")
-                if err_code in (190, 102):
-                    raise RuntimeError(f"Token Facebook đã hết hạn hoặc bị thu hồi (Mã {err_code}): {err_msg}")
-                raise RuntimeError(f"Lỗi Meta Graph API ({err_code}): {err_msg}")
-
-            items = data.get("data", [])
-            for item in items:
-                avatar_url = ""
-                pic = item.get("picture")
-                if isinstance(pic, dict) and "data" in pic:
-                    avatar_url = pic["data"].get("url") or ""
-
-                pages.append({
-                    "id": str(item.get("id")),
-                    "name": item.get("name") or f"Page {item.get('id')}",
-                    "access_token": item.get("access_token") or "",
-                    "category": item.get("category", "") or "Fanpage Facebook",
-                    "avatar_url": avatar_url
-                })
-
-            paging = data.get("paging", {})
-            next_url = paging.get("next")
-
-        return pages
+        if not user_access_token:
+            raise ValueError("Thiếu User Access Token.")
+        pages, seen, cursors = [], set(), set()
+        params = {"fields": "id,name,access_token,category,picture.type(large)",
+                  "access_token": user_access_token, "limit": "200"}
+        while True:
+            data = self._get_json("me/accounts", params)
+            if not isinstance(data.get("data"), list):
+                raise ValueError("Danh sách Page không hợp lệ.")
+            for item in data["data"]:
+                if not isinstance(item, dict) or any(not item.get(key) for key in ("id", "name", "access_token")):
+                    raise ValueError("Page thiếu ID, tên hoặc Access Token; chưa lưu dữ liệu.")
+                pid = str(item["id"]).strip()
+                if not pid or not isinstance(item["name"], str) or not item["name"].strip() or not isinstance(item["access_token"], str) or not item["access_token"].strip():
+                    raise ValueError("Dữ liệu Page không hợp lệ; chưa lưu dữ liệu.")
+                if pid not in seen:
+                    seen.add(pid)
+                    pages.append({"id": pid, "name": item["name"], "access_token": item["access_token"],
+                                  "category": item.get("category") or "Fanpage Facebook"})
+            paging = data.get("paging") or {}
+            if not paging.get("next"):
+                return pages
+            # Keep credentials on graph.facebook.com, even if paging.next is malformed.
+            from urllib.parse import urlsplit, parse_qs
+            next_url = urlsplit(paging["next"])
+            if next_url.scheme != "https" or next_url.hostname != "graph.facebook.com" or next_url.port not in (None, 443) or next_url.username or next_url.password or not next_url.path.endswith("/me/accounts") or paging["next"] in cursors:
+                raise ValueError("Phân trang Meta không hợp lệ hoặc bị lặp.")
+            cursors.add(paging["next"])
+            params = {**params, **{key: values[-1] for key, values in parse_qs(next_url.query).items()}, "access_token": user_access_token}
 
 
 def extract_token_from_text(text: str) -> Optional[str]:

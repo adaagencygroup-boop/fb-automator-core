@@ -37,13 +37,20 @@ import CustomSelect from "@/components/ui/custom-select";
 import Pagination from "@/components/ui/pagination";
 import { MaskIcon } from "@/components/icons";
 import { toast } from "@/lib/toast";
-import { getAccounts } from "@/modules/module_02_account_manager/service";
+import { getSessionUserId } from "@/services/sessionIdentity.mjs";
+import { useSession } from "@/components/SessionContext";
+import { tokenExpiryLabel } from "./tokenExpiry.mjs";
+import { cachedTokenStatuses, readTokenCache, tokenCacheKey, tokenStorage, TOKEN_CACHE_TTL_MS } from "./tokenStatusCache.mjs";
+import useWebFacebookConnection from "./useWebFacebookConnection";
+import useSyncAccounts from "./useSyncAccounts";
+import { WebConnectionButton } from "./WebFacebookConnection";
+import styles from "./FanpageList.module.css";
+import PageAccountFilter from "./PageAccountFilter";
+import { ALL_ACCOUNTS, matchesPageAccount, pageAccountOptions } from "./pageAccountFilter.mjs";
 import {
   deleteManagedPage,
   getManagedPages,
   syncPagesByAccount,
-  getOAuthConfig,
-  syncPagesByToken,
   oauthByProfile,
   verifyTokens,
 } from "./service";
@@ -138,13 +145,8 @@ function InitialsAvatar({ seed, name, size = 36 }) {
 }
 
 function PhotoAvatar({ src, seed, name, size = 36 }) {
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    setFailed(false);
-  }, [src]);
-
-  if (src && !failed) {
+  const [failedSrc, setFailedSrc] = useState(null);
+  if (src && failedSrc !== src) {
     return (
       <img
         src={src}
@@ -152,7 +154,7 @@ function PhotoAvatar({ src, seed, name, size = 36 }) {
         width={size}
         height={size}
         referrerPolicy="no-referrer"
-        onError={() => setFailed(true)}
+        onError={() => setFailedSrc(src)}
         className="shrink-0 rounded-full border border-[#E2E8F0] object-cover"
         style={{ width: size, height: size }}
       />
@@ -242,154 +244,204 @@ function RowMenu({ item, onCopy, onDelete }) {
 }
 
 export default function FanpageList() {
+  const session = useSession();
+  const owner = String(session?.user?.id || getSessionUserId() || "");
+  return <OwnedFanpageList key={owner} owner={owner} />;
+}
+
+function OwnedFanpageList({ owner }) {
   const router = useRouter();
   const [pages, setPages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("ALL");
+  const [accountFilter, setAccountFilter] = useState(ALL_ACCOUNTS);
   const [page, setPage] = useState(1);
   const [adding, setAdding] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
   // States cho modal Quét & Thêm Fanpage từ Nick Facebook
-  const [accountList, setAccountList] = useState([]);
-  const [loadingAccounts, setLoadingAccounts] = useState(false);
-  const [selectedAccUid, setSelectedAccUid] = useState("");
+  const { accounts: accountList, loading: loadingAccounts, loaded: accountsLoaded, error: accountsError, load: loadAccounts } = useSyncAccounts();
+  const alive = useRef(false);
+  const pagesRevision = useRef(0);
+  const verifyingUids = useRef(new Set());
+  const tokenRevision = useRef({});
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const selectedAccUid = accountList[0]?.uid || "";
   const [customToken, setCustomToken] = useState("");
   const [showCustomToken, setShowCustomToken] = useState(false);
-  const [syncing, setSyncing] = useState(null); // UID đang quét hoặc null
-  const [oauthLoading, setOauthLoading] = useState(false);
-  const [profileOauthLoading, setProfileOauthLoading] = useState(null); // UID đang cấp token hoặc null
-  const [tokenStatusMap, setTokenStatusMap] = useState({}); // { [uid]: "LIVE" | "EXPIRED" | "NONE" | "CHECKING" }
+  const [accountJobs, setAccountJobs] = useState({});
+  const activeAccounts = useRef(new Set());
+  const [tokenStatusMap, setTokenStatusMap] = useState(() => {
+    return cachedTokenStatuses(tokenStorage(), owner);
+  });
   const [verifyingTokens, setVerifyingTokens] = useState(false);
   const [accQuery, setAccQuery] = useState("");
   const [accStatusFilter, setAccStatusFilter] = useState("all");
   const [accLoginFilter, setAccLoginFilter] = useState("all");
 
   const load = async () => {
-    setLoading(true);
+    const request = ++pagesRevision.current;
     try {
       const data = await getManagedPages();
-      setPages(Array.isArray(data?.pages) ? data.pages : []);
+      if (alive.current && pagesRevision.current === request) setPages(Array.isArray(data?.pages) ? data.pages : []);
     } catch (error) {
-      toast.error(error.message || "Không tải được danh sách fanpage.");
+      if (alive.current && pagesRevision.current === request) toast.error(error.message || "Không tải được danh sách fanpage.");
     } finally {
-      setLoading(false);
+      if (alive.current && pagesRevision.current === request) setLoading(false);
     }
   };
 
   useEffect(() => {
-    load();
-
-    // Bắt token tự động khi Facebook OAuth redirect quay lại URL kèm #access_token=...
-    if (typeof window !== "undefined" && window.location.hash.includes("access_token=")) {
-      const hashParams = new URLSearchParams(window.location.hash.substring(1));
-      const token = hashParams.get("access_token");
-      if (token) {
-        window.history.replaceState(null, "", window.location.pathname);
-        toast.info("Đang đồng bộ Fanpage từ tài khoản Facebook vừa đăng nhập...");
-        syncPagesByToken({ access_token: token })
-          .then((res) => {
-            if (res?.success) {
-              toast.success(res.message || `Đã đồng bộ thành công ${res.count} Fanpage!`);
-              load();
-            } else {
-              toast.error(res?.detail || res?.message || "Không thể đồng bộ Fanpage từ Facebook.");
-            }
-          })
-          .catch((err) => {
-            toast.error(err.message || "Lỗi kết nối khi đồng bộ Fanpage.");
-          });
-      }
-    }
+    const request = ++pagesRevision.current;
+    getManagedPages().then((data) => {
+      if (alive.current && pagesRevision.current === request) setPages(Array.isArray(data?.pages) ? data.pages : []);
+    }).catch((failure) => {
+      if (alive.current && pagesRevision.current === request) toast.error(failure.message || "Không tải được danh sách fanpage.");
+    }).finally(() => { if (alive.current && pagesRevision.current === request) setLoading(false); });
   }, []);
 
-  // Kiểm tra trạng thái sống/chết thực tế của Token qua Meta Graph API
-  const handleVerifyTokens = async (targetUids = null) => {
-    const uidsToCheck = targetUids && targetUids.length > 0
+  // Kiểm tra trạng thái sống/chết thực tế của Token qua Meta Graph API (hỗ trợ Cache TTL 15 phút)
+  const handleVerifyTokens = async (targetUids = null, force = false) => {
+    const cacheKey = tokenCacheKey(owner);
+    const allUids = targetUids && targetUids.length > 0
       ? targetUids
-      : accountList.filter((a) => a.token && a.token.trim().length > 10).map((a) => a.uid);
+      : accountList.filter((a) => a.has_token).map((a) => a.uid);
 
-    if (uidsToCheck.length === 0) {
+    if (allUids.length === 0) {
       if (!targetUids) toast.info("Không có tài khoản nào có Token để kiểm tra.");
       return;
     }
 
+    // Đọc cache từ localStorage
+    let cache = readTokenCache(tokenStorage(), owner);
+
+    const now = Date.now();
+    const uidsToCall = [];
+
+    // Nếu không force: phục hồi các token còn hạn cache (TTL 15 phút)
+    if (!force) {
+      const cachedStatusUpdates = {};
+      allUids.forEach((uid) => {
+        const item = cache[uid];
+        if (item && item.status && (now - item.timestamp < TOKEN_CACHE_TTL_MS)) {
+          cachedStatusUpdates[uid] = item.status;
+        } else {
+          uidsToCall.push(uid);
+        }
+      });
+
+      if (Object.keys(cachedStatusUpdates).length > 0) {
+        setTokenStatusMap((prev) => ({ ...prev, ...cachedStatusUpdates }));
+      }
+
+      if (uidsToCall.length === 0) {
+        if (targetUids && targetUids.length === 1) {
+          toast.info("Đã khôi phục trạng thái token từ bộ nhớ đệm (15 phút). Bấm nút để check lại.");
+        }
+        return;
+      }
+    } else {
+      uidsToCall.push(...allUids);
+    }
+
+    const requested = [...new Set(uidsToCall)].filter((uid) => !verifyingUids.current.has(uid));
+    if (!requested.length) return;
+    const versions = Object.fromEntries(requested.map((uid) => [uid, tokenRevision.current[uid]]));
+    const currentUids = () => requested.filter((uid) => tokenRevision.current[uid] === versions[uid]);
+    requested.forEach((uid) => verifyingUids.current.add(uid));
     setVerifyingTokens(true);
     setTokenStatusMap((prev) => {
       const next = { ...prev };
-      uidsToCheck.forEach((u) => {
+      requested.forEach((u) => {
         next[u] = "CHECKING";
       });
       return next;
     });
 
     try {
-      const res = await verifyTokens({ account_uids: uidsToCheck });
+      const res = await verifyTokens({ account_uids: requested });
+      if (!alive.current) return;
+      if (!res?.success || !res?.results) throw new Error("Máy chủ không trả kết quả kiểm tra token.");
       if (res?.success && res?.results) {
-        setTokenStatusMap((prev) => {
-          const next = { ...prev };
-          Object.entries(res.results).forEach(([uid, info]) => {
-            next[uid] = info.status;
-          });
-          return next;
+        const fresh = currentUids();
+        if (!fresh.length) return;
+        const results = Object.fromEntries(Object.entries(res.results).filter(([uid]) => fresh.includes(uid)));
+        const newStatus = Object.fromEntries(fresh.map((uid) => [uid, "ERROR"]));
+        cache = readTokenCache(tokenStorage(), owner);
+        Object.entries(results).forEach(([uid, info]) => {
+          newStatus[uid] = info.status;
+          cache[uid] = {
+            status: info.status,
+            timestamp: Date.now(),
+            message: info.message || "",
+          };
         });
-        const liveCount = Object.values(res.results).filter((r) => r.status === "LIVE").length;
-        const expiredCount = Object.values(res.results).filter((r) => r.status === "EXPIRED").length;
-        if (targetUids) {
-          if (expiredCount > 0) {
-            toast.warn(`Token nick ${targetUids.join(", ")} đã HẾT HẠN hoặc bị thu hồi!`);
-          } else {
-            toast.success(`Token nick ${targetUids.join(", ")} còn sống (LIVE)!`);
+
+        try {
+          tokenStorage().setItem(cacheKey, JSON.stringify(cache));
+        } catch {}
+
+        setTokenStatusMap((prev) => ({ ...prev, ...newStatus }));
+
+        const liveCount = Object.values(results).filter((r) => r.status === "LIVE").length;
+        const expiredCount = Object.values(results).filter((r) => r.status === "EXPIRED").length;
+        const rateLimitCount = Object.values(results).filter((r) => r.status === "RATE_LIMITED").length;
+
+        if (targetUids && targetUids.length === 1) {
+          const singleStatus = results[targetUids[0]]?.status;
+          if (singleStatus === "LIVE") {
+            toast.success(`Token nick ${targetUids[0]} còn sống (LIVE)!`);
+          } else if (singleStatus === "RATE_LIMITED") {
+            toast.warning(`Meta đang tạm giới hạn tốc độ (Rate Limit) với nick ${targetUids[0]}!`);
+          } else if (singleStatus === "EXPIRED") {
+            toast.warning(`Token nick ${targetUids[0]} đã HẾT HẠN hoặc bị thu hồi!`);
+          } else if (singleStatus === "ERROR") {
+            toast.error(results[targetUids[0]]?.message || "Không thể xác thực token với Meta.");
           }
         } else {
-          if (expiredCount > 0) {
-            toast.warn(`Check xong: ${liveCount} token LIVE, ${expiredCount} token HẾT HẠN!`);
+          let summaryMsg = `Check xong: ${liveCount} LIVE`;
+          if (expiredCount > 0) summaryMsg += `, ${expiredCount} HẾT HẠN`;
+          if (rateLimitCount > 0) summaryMsg += `, ${rateLimitCount} RATE LIMIT`;
+
+          if (expiredCount > 0 || rateLimitCount > 0) {
+            toast.warning(summaryMsg);
           } else if (liveCount > 0) {
-            toast.success(`Toàn bộ ${liveCount} token đều hoạt động tốt (LIVE)!`);
+            toast.success(summaryMsg + " (Hoạt động tốt)!");
           }
         }
       }
     } catch (err) {
-      toast.error("Lỗi kiểm tra Token Meta: " + (err.message || "Không gọi được API"));
-    } finally {
-      setVerifyingTokens(false);
-    }
-  };
-
-  // Tải danh sách tài khoản Facebook thuộc sở hữu của User hiện tại khi mở modal Thêm Page
-  const loadAccounts = async () => {
-    setLoadingAccounts(true);
-    try {
-      const data = await getAccounts();
-      const list = Array.isArray(data) ? data : (data?.accounts || []);
-      setAccountList(list);
-      if (list.length > 0) {
-        setSelectedAccUid((prev) => prev || list[0].uid);
-        // Tự động kiểm tra sống/chết (Live Check) qua Meta API cho các nick có token
-        const withTokens = list.filter((a) => a.token && a.token.trim().length > 10).map((a) => a.uid);
-        if (withTokens.length > 0) {
-          handleVerifyTokens(withTokens);
-        }
+      if (alive.current) {
+        setTokenStatusMap((prev) => ({ ...prev, ...Object.fromEntries(currentUids().map((uid) => [uid, "ERROR"])) }));
+        toast.error("Lỗi kiểm tra Token Meta: " + (err.message || "Không gọi được API"));
       }
-    } catch (e) {
-      console.warn("Lỗi tải danh sách tài khoản:", e);
     } finally {
-      setLoadingAccounts(false);
+      requested.forEach((uid) => verifyingUids.current.delete(uid));
+      if (alive.current) setVerifyingTokens(verifyingUids.current.size > 0);
     }
   };
 
   useEffect(() => {
-    if (adding) {
-      loadAccounts();
-      setCustomToken("");
-      setShowCustomToken(false);
-      setAccQuery("");
-      setAccStatusFilter("all");
-      setAccLoginFilter("all");
-    }
-  }, [adding]);
+    if (adding) loadAccounts();
+  }, [adding, loadAccounts]);
+
+  function changeAdding(open) {
+    setAdding(open);
+    if (open) setTokenStatusMap((prev) => ({ ...cachedTokenStatuses(tokenStorage(), owner), ...Object.fromEntries(Object.entries(prev).filter(([uid]) => verifyingUids.current.has(uid))) }));
+    if (!open) { setCustomToken(""); setShowCustomToken(false); }
+  }
+
+  function rememberLive(uid) {
+    tokenRevision.current[uid] = (tokenRevision.current[uid] || 0) + 1;
+    setTokenStatusMap((prev) => ({ ...prev, [uid]: "LIVE" }));
+    try {
+      const cache = readTokenCache(tokenStorage(), owner);
+      cache[uid] = { status: "LIVE", timestamp: Date.now() };
+      tokenStorage().setItem(tokenCacheKey(owner), JSON.stringify(cache));
+    } catch { /* Optional status cache. */ }
+  }
 
   // Bộ lọc tài khoản trong bảng (đồng bộ chuẩn live/die theo module 02 account)
   const filteredAccounts = useMemo(() => {
@@ -418,23 +470,31 @@ export default function FanpageList() {
       toast.error("Vui lòng chọn tài khoản Facebook để quét Fanpage.");
       return;
     }
-    setSyncing(uid);
+    if (activeAccounts.current.has(uid)) return;
+    activeAccounts.current.add(uid);
+    setAccountJobs((prev) => ({ ...prev, [uid]: { kind: "sync", message: "Đang tạo tác vụ…" } }));
     try {
       const res = await syncPagesByAccount({
         account_uid: uid,
         custom_token: customToken.trim() || undefined,
-      });
+      }, (job) => { if (alive.current) setAccountJobs((prev) => ({ ...prev, [uid]: { kind: "sync", message: job.message || job.status } })); });
+      if (!alive.current) return;
       if (res?.success) {
+        rememberLive(uid);
         toast.success(res.message || `Đã nạp thành công ${res.count} Fanpage!`);
-        await loadAccounts();
-        await load();
+        loadAccounts(true);
+        load(true);
       } else {
         toast.error(res?.detail || res?.message || "Quét Fanpage thất bại.");
       }
     } catch (error) {
+      if (!alive.current) return;
       toast.error(error.message || "Không thể kết nối đến máy chủ để quét Fanpage.");
     } finally {
-      setSyncing(null);
+      activeAccounts.current.delete(uid);
+      if (alive.current) {
+        setAccountJobs((prev) => { const next = { ...prev }; delete next[uid]; return next; });
+      }
     }
   };
 
@@ -445,70 +505,65 @@ export default function FanpageList() {
       toast.error("Vui lòng chọn tài khoản Facebook để cấp Token.");
       return;
     }
-    setProfileOauthLoading(uid);
+    if (activeAccounts.current.has(uid)) return;
+    activeAccounts.current.add(uid);
+    setAccountJobs((prev) => ({ ...prev, [uid]: { kind: "oauth", message: "Đang tạo tác vụ…" } }));
     try {
       toast.info(`Đang mở profile Chrome của nick ${uid} để cấp Token mới từ Meta...`);
       const res = await oauthByProfile({
         account_uid: uid,
         headless: false,
-      });
+      }, (job) => { if (alive.current) setAccountJobs((prev) => ({ ...prev, [uid]: { kind: "oauth", message: job.message || job.status } })); });
+      if (!alive.current) return;
       if (res?.success) {
         toast.success(res.message || `Đã cấp Token mới và nạp ${res.count} Fanpage!`);
-        setTokenStatusMap((prev) => ({ ...prev, [uid]: "LIVE" }));
-        await loadAccounts();
-        await load();
+        rememberLive(uid);
+        loadAccounts(true);
+        load(true);
       } else {
         toast.error(res?.detail || res?.message || "Cấp Token qua Chrome Profile thất bại.");
       }
     } catch (error) {
+      if (!alive.current) return;
       toast.error(error.message || "Không thể kết nối máy chủ để thực hiện OAuth.");
     } finally {
-      setProfileOauthLoading(null);
+      activeAccounts.current.delete(uid);
+      if (alive.current) {
+        setAccountJobs((prev) => { const next = { ...prev }; delete next[uid]; return next; });
+      }
     }
   };
 
-  // Luồng 2: OAuth trực tiếp trên Web Dashboard
-  const handleWebOAuthLogin = async () => {
-    try {
-      setOauthLoading(true);
-      const conf = await getOAuthConfig();
-      if (!conf?.configured || !conf?.app_id) {
-        toast.error("Chưa cấu hình FACEBOOK_APP_ID trong file .env. Vui lòng cấu hình App ID của Meta trước.");
-        return;
-      }
-      const redirectUri = window.location.origin + window.location.pathname;
-      const scope = "pages_show_list,pages_manage_posts,pages_read_engagement";
-      const authUrl = `https://www.facebook.com/${conf.api_version || "v19.0"}/dialog/oauth?client_id=${conf.app_id}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&response_type=token`;
-      window.location.href = authUrl;
-    } catch (err) {
-      toast.error("Không thể lấy cấu hình OAuth: " + err.message);
-    } finally {
-      setOauthLoading(false);
-    }
-  };
+  const webConnection = useWebFacebookConnection(() => {
+    load(true);
+    loadAccounts(true);
+  });
 
   const stats = useMemo(() => {
     const success = pages.filter((item) => item.status === "SUCCESS" || item.status === "ACTIVE").length;
     return { total: pages.length, success, failed: pages.length - success };
   }, [pages]);
 
+  const managerOptions = useMemo(() => pageAccountOptions(pages), [pages]);
+  if (accountFilter !== ALL_ACCOUNTS && !managerOptions.some((option) => option.value === accountFilter)) {
+    setAccountFilter(ALL_ACCOUNTS);
+    setPage(1);
+  }
+
   const filtered = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     return pages.filter((item) => {
+      if (!matchesPageAccount(item, accountFilter)) return false;
       if (!matchesStatus(item, status)) return false;
       if (!keyword) return true;
       return [item.page_name, item.page_id, item.manager_name, item.manager_uid, item.page_category]
         .some((field) => String(field || "").toLowerCase().includes(keyword));
     });
-  }, [pages, query, status]);
+  }, [pages, query, status, accountFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const rows = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
-
-  useEffect(() => {
-    setPage(1);
-  }, [query, status]);
 
   const copyText = async (value, label) => {
     if (!value) {
@@ -527,7 +582,7 @@ export default function FanpageList() {
     return accountList.find((a) => String(a.uid) === String(selectedAccUid)) || null;
   }, [accountList, selectedAccUid]);
 
-  const hasLiveToken = Boolean(selectedAcc?.token && selectedAcc.token.trim().length > 10);
+  const hasLiveToken = Boolean(selectedAcc?.has_token);
 
   const confirmDelete = async () => {
     if (!pendingDelete) return;
@@ -589,23 +644,25 @@ export default function FanpageList() {
           />
           <input
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => { setQuery(event.target.value); setPage(1); }}
             placeholder="Tìm kiếm Page theo tên..."
             className="h-[38px] w-full rounded-lg border border-[#CBD5E1] bg-white pl-[37px] pr-3 text-xs text-[#1E293B] outline-none placeholder:text-[#94A3B8] focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/15"
           />
         </label>
         <CustomSelect
           value={status}
-          onChange={setStatus}
+          onChange={(value) => { setStatus(value); setPage(1); }}
           options={STATUS_OPTIONS}
           prefixIcon={<Filter className="h-3 w-3" />}
           className="w-[180px] shrink-0"
           buttonClassName="h-[34px] rounded-lg border-[#CBD5E1] text-xs font-medium text-[#334155] shadow-none"
         />
+        <PageAccountFilter value={accountFilter} options={managerOptions}
+          onChange={(value) => { setAccountFilter(value); setPage(1); }} />
         <div className="ml-auto flex items-center gap-3">
           <button
             type="button"
-            onClick={() => setAdding(true)}
+            onClick={() => changeAdding(true)}
             className="inline-flex h-[34px] w-[134px] items-center justify-center rounded-lg bg-[#2563EB] text-[12px] font-bold uppercase tracking-[0.3px] text-white shadow-[0px_1px_1px_rgba(0,0,0,0.05)] hover:bg-blue-700"
           >
             + Thêm page
@@ -673,6 +730,7 @@ export default function FanpageList() {
                               {item.page_id ? <span className="font-mono text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded mr-1.5 font-medium">{item.page_id}</span> : null}
                               <span>{pageSubtitle(item)}</span>
                             </p>
+                            <p className="text-[10.5px] leading-4 text-slate-500">{tokenExpiryLabel(item.token_metadata)}</p>
                           </div>
                         </div>
                       </td>
@@ -689,7 +747,7 @@ export default function FanpageList() {
                               {item.manager_name || "Chưa có tên"}
                             </p>
                             <p className="text-[10.5px] leading-4 text-[#94A3B8]">
-                              UID: {item.manager_uid || "—"}
+                              {item.manager_kind === "web" ? "OAuth trình duyệt" : `UID: ${item.manager_uid || "—"}`}
                             </p>
                           </div>
                         </div>
@@ -740,8 +798,8 @@ export default function FanpageList() {
         ) : null}
       </section>
 
-      <Dialog open={adding} onOpenChange={setAdding}>
-        <DialogContent className="max-w-5xl w-full p-6 rounded-2xl bg-white shadow-2xl">
+      <Dialog open={adding} onOpenChange={changeAdding}>
+        <DialogContent className="max-w-6xl w-full min-w-0 p-4 sm:p-6 rounded-2xl bg-white shadow-2xl">
           <DialogHeader className="pb-3 border-b border-slate-100">
             <div className="flex items-center justify-between">
               <DialogTitle className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -756,10 +814,10 @@ export default function FanpageList() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 pt-2">
-            {/* CỘT TRÁI (7 COLS): BẢNG DANH SÁCH TÀI KHOẢN CLONE */}
-            <div className="lg:col-span-7 flex flex-col rounded-xl border border-slate-200/90 bg-slate-50/50 p-3.5 space-y-3">
-              <div className="flex items-center justify-between">
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)] gap-5 pt-2">
+            {/* BẢNG DANH SÁCH TÀI KHOẢN */}
+            <div className="min-w-0 flex flex-col rounded-xl border border-slate-200/90 bg-slate-50/50 p-3.5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
                   <span className="flex size-4 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white font-bold">1</span>
                   Dàn nick Clone ({filteredAccounts.length}/{accountList.length})
@@ -776,9 +834,11 @@ export default function FanpageList() {
                 </button>
               </div>
 
+              {loadingAccounts && accountsLoaded && <p role="status" className="text-xs text-slate-500">Đang làm mới danh sách…</p>}
+              {accountsError && <div role="alert" className="text-xs text-red-600">{accountsError} <button type="button" disabled={loadingAccounts} onClick={() => loadAccounts(true)} className="underline disabled:opacity-50">Thử lại</button></div>}
               {/* BỘ LỌC VÀ TÌM KIẾM TÀI KHOẢN */}
               <div className="grid grid-cols-12 gap-2">
-                <div className="col-span-6 relative">
+                <div className="col-span-12 sm:col-span-6 min-w-0 relative">
                   <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
                     type="text"
@@ -788,7 +848,7 @@ export default function FanpageList() {
                     className="w-full h-8 pl-8 pr-2 text-xs rounded-lg border border-slate-200 bg-white placeholder:text-slate-400 outline-none focus:border-[#1877F2]"
                   />
                 </div>
-                <div className="col-span-3">
+                <div className="col-span-6 sm:col-span-3 min-w-0">
                   <select
                     value={accStatusFilter}
                     onChange={(e) => setAccStatusFilter(e.target.value)}
@@ -800,7 +860,7 @@ export default function FanpageList() {
                     <option value="uncheck">○ Chưa check (--)</option>
                   </select>
                 </div>
-                <div className="col-span-3">
+                <div className="col-span-6 sm:col-span-3 min-w-0">
                   <select
                     value={accLoginFilter}
                     onChange={(e) => setAccLoginFilter(e.target.value)}
@@ -814,42 +874,52 @@ export default function FanpageList() {
               </div>
 
               {/* BẢNG TÀI KHOẢN GỌN GÀNG, CUỘN MƯỢT TỐI ĐA 370PX */}
-              <div className="rounded-lg border border-slate-200 bg-white overflow-hidden shadow-2xs">
-                <div className="max-h-[350px] overflow-y-auto">
-                  <table className="w-full text-left border-collapse text-xs">
+              <div className="min-w-0 max-w-full rounded-lg border border-slate-200 bg-white overflow-hidden shadow-2xs">
+                <div className="max-h-[350px] overflow-x-hidden overflow-y-auto">
+                  <table aria-label="Tài khoản Facebook" className={`${styles.accountTable} text-left border-collapse text-xs`}>
+                    <colgroup><col /><col className={styles.nickColumn} /><col className={styles.loginColumn} /><col className={styles.tokenColumn} /><col className={styles.actionsColumn} /></colgroup>
                     <thead className="sticky top-0 bg-slate-100/90 backdrop-blur-xs text-[10.5px] uppercase font-bold text-slate-500 border-b border-slate-200 z-10">
                       <tr>
                         <th className="py-2 px-3">Tài khoản</th>
                         <th className="py-2 px-2 text-center">TT Nick</th>
                         <th className="py-2 px-2 text-center">Đăng nhập</th>
-                        <th className="py-2 px-2 text-center">Token</th>
+                        <th className="py-2 px-2 text-center">
+                          <div className="inline-flex items-center gap-1 justify-center">
+                            <span>Token</span>
+                            <button
+                              type="button"
+                              onClick={() => handleVerifyTokens(null, true)}
+                              disabled={verifyingTokens}
+                              title="Bỏ qua cache và kiểm tra lại toàn bộ Token (Force Refresh)"
+                              className="p-0.5 rounded text-slate-400 hover:text-blue-600 hover:bg-slate-200 transition-colors disabled:opacity-40"
+                            >
+                              <RefreshCw className={`w-2.5 h-2.5 ${verifyingTokens ? "animate-spin text-blue-500" : ""}`} />
+                            </button>
+                          </div>
+                        </th>
                         <th className="py-2 px-2.5 text-right">Hành động</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {loadingAccounts ? (
-                        <tr>
-                          <td colSpan={5} className="py-8 text-center text-slate-400">
-                            <RefreshCw className="w-4 h-4 animate-spin mx-auto mb-1 text-slate-400" />
-                            Đang tải danh sách tài khoản...
-                          </td>
-                        </tr>
+                      {loadingAccounts && !accountsLoaded ? (
+                        [0, 1, 2].map((row) => <tr key={row} aria-label="Đang tải tài khoản"><td colSpan={5} className="p-3"><div className="h-8 animate-pulse rounded bg-slate-100" /></td></tr>)
                       ) : filteredAccounts.length === 0 ? (
                         <tr>
                           <td colSpan={5} className="py-8 text-center text-slate-400">
-                            Không tìm thấy tài khoản nào phù hợp bộ lọc.
+                            {accountsError ? "Danh sách tài khoản chưa tải được." : "Không tìm thấy tài khoản nào phù hợp bộ lọc."}
                           </td>
                         </tr>
                       ) : (
                         filteredAccounts.map((acc) => {
-                          const rawHasToken = Boolean(acc.token && acc.token.trim().length > 10);
-                          const tokenStatus = tokenStatusMap[acc.uid];
+                          const rawHasToken = Boolean(acc.has_token);
+                          const tokenStatus = rawHasToken ? tokenStatusMap[acc.uid] : undefined;
                           const isCheckingToken = tokenStatus === "CHECKING";
                           const isLiveToken = tokenStatus === "LIVE";
                           const isExpiredToken = tokenStatus === "EXPIRED";
+                          const isRateLimitedToken = tokenStatus === "RATE_LIMITED";
 
                           const isLoggedIn = acc.login_status === "logged_in";
-                          const isProcessing = profileOauthLoading === acc.uid || syncing === acc.uid;
+                          const isProcessing = Boolean(accountJobs[acc.uid]);
 
                           return (
                             <tr key={acc.uid} className="hover:bg-slate-50/80 transition-colors">
@@ -865,11 +935,11 @@ export default function FanpageList() {
                                     <p className="font-semibold text-slate-800 truncate max-w-[130px]" title={acc.profile_name || acc.uid}>
                                       {acc.profile_name || "Tài khoản FB"}
                                     </p>
-                                    <p className="text-[10px] text-slate-400 font-mono truncate">{acc.uid}</p>
+                                    <p className="text-[10px] text-slate-400 font-mono truncate" title={String(acc.uid)}>{acc.uid}</p>
                                   </div>
                                 </div>
                               </td>
-                              <td className="py-2 px-2 text-center whitespace-nowrap">
+                              <td data-label="TT Nick" title={acc.status === "live" ? "Nick Live" : acc.status === "die" ? "Nick Die" : "Nick chưa kiểm tra"} className="py-2 px-2 text-center">
                                 {acc.status === "live" ? (
                                   <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-semibold bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857]">
                                     <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
@@ -884,7 +954,7 @@ export default function FanpageList() {
                                   <span className="text-[#94A3B8] text-[11px] font-medium">--</span>
                                 )}
                               </td>
-                              <td className="py-2 px-2 text-center whitespace-nowrap">
+                              <td data-label="Đăng nhập" title={acc.login_status === "logged_in" ? "Đã đăng nhập" : acc.login_status === "failed" ? "Lỗi đăng nhập" : "Chưa đăng nhập"} className="py-2 px-2 text-center">
                                 {acc.login_status === "logged_in" ? (
                                   <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-semibold bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857]">
                                     <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
@@ -902,36 +972,55 @@ export default function FanpageList() {
                                   </span>
                                 )}
                               </td>
-                              <td className="py-2 px-2 text-center whitespace-nowrap">
+                              <td data-label="Token" className="py-2 px-2 text-center">
                                 {isCheckingToken ? (
                                   <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
                                     <Loader2 className="w-2.5 h-2.5 animate-spin text-blue-500" /> Check...
                                   </span>
+                                ) : isRateLimitedToken ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleVerifyTokens([acc.uid], true)}
+                                    className="inline-flex items-center gap-0.5 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full shadow-2xs hover:bg-amber-100 transition-colors cursor-pointer"
+                                    title="Meta đang tạm giới hạn tốc độ (Rate Limit). Bấm để kiểm tra lại ngay."
+                                  >
+                                    <AlertCircle className="w-2.5 h-2.5 text-amber-600" /> Rate Limit
+                                  </button>
                                 ) : isLiveToken ? (
-                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full shadow-2xs" title="Token Meta đang hoạt động tốt">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleVerifyTokens([acc.uid], true)}
+                                    className="inline-flex items-center gap-0.5 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full shadow-2xs hover:bg-emerald-100 transition-colors cursor-pointer"
+                                    title="Token Meta đang hoạt động tốt (LIVE). Bấm để check lại."
+                                  >
                                     <ShieldCheck className="w-2.5 h-2.5 text-emerald-600" /> LIVE
-                                  </span>
+                                  </button>
                                 ) : isExpiredToken ? (
-                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full shadow-2xs" title="Token đã hết hạn hoặc bị Meta thu hồi">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleVerifyTokens([acc.uid], true)}
+                                    className="inline-flex items-center gap-0.5 text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full shadow-2xs hover:bg-rose-100 transition-colors cursor-pointer"
+                                    title="Token đã hết hạn hoặc bị Meta thu hồi. Bấm để check lại."
+                                  >
                                     <ShieldAlert className="w-2.5 h-2.5 text-rose-600" /> HẾT HẠN
-                                  </span>
+                                  </button>
                                 ) : rawHasToken ? (
                                   <button
                                     type="button"
-                                    onClick={() => handleVerifyTokens([acc.uid])}
-                                    className="inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full hover:bg-blue-100 transition-colors"
+                                    onClick={() => handleVerifyTokens([acc.uid], true)}
+                                    className="inline-flex items-center gap-0.5 text-[10px] font-medium text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded-full hover:bg-blue-100 transition-colors cursor-pointer"
                                     title="Bấm để kiểm tra token này"
                                   >
-                                    <RefreshCw className="w-2.5 h-2.5 text-blue-500" /> Chưa check
+                                    <RefreshCw className="w-2.5 h-2.5 text-blue-500" /> {tokenStatus === "ERROR" ? "Lỗi kiểm tra" : "Chưa kiểm tra"}
                                   </button>
                                 ) : (
-                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full">
+                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-slate-400 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded-full">
                                     Chưa có
                                   </span>
                                 )}
                               </td>
-                              <td className="py-2 px-2.5 text-right whitespace-nowrap">
-                                <div className="flex items-center justify-end gap-1">
+                              <td data-label="Hành động" className="py-2 px-2.5 text-right">
+                                <div className="flex min-w-0 flex-nowrap items-center justify-end gap-1">
                                   {isExpiredToken ? (
                                     <button
                                       type="button"
@@ -940,12 +1029,12 @@ export default function FanpageList() {
                                       className="h-7 px-2.5 rounded-md bg-amber-600 hover:bg-amber-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
                                       title="Token đã hết hạn. Mở Chrome Profile để cấp lại Token mới!"
                                     >
-                                      {profileOauthLoading === acc.uid ? (
+                                      {accountJobs[acc.uid]?.kind === "oauth" ? (
                                         <Loader2 className="w-3 h-3 animate-spin" />
                                       ) : (
                                         <Zap className="w-3 h-3 text-amber-200 fill-amber-200" />
                                       )}
-                                      Cấp lại Token
+                                      Cấp lại
                                     </button>
                                   ) : (
                                     <button
@@ -955,7 +1044,7 @@ export default function FanpageList() {
                                       className="h-7 px-2 rounded-md bg-blue-600 hover:bg-blue-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
                                       title="Mở Chrome Profile của nick này để tự động cấp Token và nạp Fanpage"
                                     >
-                                      {profileOauthLoading === acc.uid ? (
+                                      {accountJobs[acc.uid]?.kind === "oauth" ? (
                                         <Loader2 className="w-3 h-3 animate-spin" />
                                       ) : (
                                         <Zap className="w-3 h-3 text-amber-300 fill-amber-300" />
@@ -964,15 +1053,15 @@ export default function FanpageList() {
                                     </button>
                                   )}
 
-                                  {isLiveToken ? (
+                                  {rawHasToken ? (
                                     <button
                                       type="button"
                                       onClick={() => handleSyncPages(acc.uid)}
                                       disabled={isProcessing}
                                       className="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 font-medium text-[10.5px] text-slate-700 flex items-center gap-1 transition-all disabled:opacity-50"
-                                      title="Quét Fanpage bằng Token LIVE"
+                                      title="Quét bằng token đã lưu; hệ thống xác thực trước khi đồng bộ"
                                     >
-                                      {syncing === acc.uid ? (
+                                      {accountJobs[acc.uid]?.kind === "sync" ? (
                                         <RefreshCw className="w-3 h-3 animate-spin text-slate-400" />
                                       ) : (
                                         <Sparkles className="w-3 h-3 text-blue-500" />
@@ -992,74 +1081,53 @@ export default function FanpageList() {
               </div>
             </div>
 
-            {/* CỘT PHẢI (5 COLS): ĐĂNG NHẬP TRÌNH DUYỆT CHÍNH + HƯỚNG DẪN + THÊM NICK */}
-            <div className="lg:col-span-5 flex flex-col space-y-3 justify-between">
+            {/* ĐĂNG NHẬP TRÌNH DUYỆT + HƯỚNG DẪN + THÊM NICK */}
+            <div className="min-w-0 flex flex-col gap-3 [overflow-wrap:anywhere]">
               {/* KHỐI ĐĂNG NHẬP OAUTH TRÊN TRÌNH DUYỆT NÀY */}
-              <div className="rounded-xl border border-blue-200/80 bg-gradient-to-b from-blue-50/70 to-white p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-blue-900 uppercase tracking-wide flex items-center gap-1.5">
-                    <span className="flex size-4 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white font-bold">2</span>
-                    Đăng nhập trên trình duyệt này
-                  </span>
-                  <span className="text-[10px] font-semibold text-blue-600 bg-blue-100/70 px-2 py-0.5 rounded-full">
-                    OAuth Meta
-                  </span>
-                </div>
+              <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-3.5 space-y-3">
+                <h3 className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                  <Globe className="w-4 h-4 shrink-0 text-slate-500" />
+                  Kết nối Facebook
+                </h3>
                 <p className="text-xs text-slate-600 leading-relaxed">
-                  Dành cho tài khoản Facebook cá nhân hoặc nick quản trị viên đang mở trên trình duyệt hiện tại. Meta sẽ tự động cấp Token dài hạn và nạp Fanpage.
+                  Kết nối tài khoản Facebook để thêm các Page bạn quản lý.
                 </p>
-                <button
-                  type="button"
-                  onClick={handleWebOAuthLogin}
-                  disabled={oauthLoading}
-                  className="w-full h-11 rounded-xl bg-[#1877F2] hover:bg-blue-600 font-bold text-white text-xs flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-60"
-                >
-                  {oauthLoading ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Đang kết nối Facebook OAuth...
-                    </>
-                  ) : (
-                    <>
-                      <Globe className="w-4 h-4" />
-                      🔗 Đăng nhập Facebook (OAuth)
-                    </>
-                  )}
-                </button>
+                <WebConnectionButton controller={webConnection} />
               </div>
 
-              {/* KHỐI THÔNG TIN CƠ CHẾ TOKEN VĨNH VIỄN */}
-              <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5 space-y-1.5 text-xs">
-                <div className="flex items-center gap-1.5 font-bold text-slate-700">
-                  <Info className="w-4 h-4 text-blue-600 shrink-0" />
-                  Cơ chế Token vĩnh viễn (Never Expire)
-                </div>
-                <p className="text-[11px] text-slate-500 leading-relaxed">
-                  Hệ thống tự động chuyển đổi User Token sang Long-lived token và gọi Meta API lấy Page Token vĩnh viễn không hết hạn (trừ phi đổi mật khẩu Facebook hoặc hủy quyền App).
+              {/* Thời hạn token được xác thực bởi Meta */}
+              <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-3.5 space-y-3 text-xs">
+                <h3 className="flex items-center gap-1.5 font-bold text-slate-800">
+                  <Info className="w-4 h-4 text-slate-500 shrink-0" />
+                  Thời hạn và quyền truy cập
+                </h3>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Thời hạn và quyền truy cập token được cập nhật từ Meta.
                 </p>
+                {Object.keys(accountJobs).length > 0 && (
+                  <div className="space-y-2 border-t border-slate-100 pt-3 text-xs text-slate-600">
+                    {Object.entries(accountJobs).map(([uid, job]) => <p key={uid} role="status">{uid}: {job.message}</p>)}
+                  </div>
+                )}
               </div>
 
               {/* KHỐI THÊM NICK MỚI */}
-              <div className="rounded-xl border border-dashed border-slate-300 p-3 bg-white hover:bg-slate-50/80 transition-colors flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
-                    <UserPlus className="w-4 h-4" />
-                  </span>
-                  <div>
-                    <p className="text-xs font-bold text-slate-800">Thêm tài khoản Facebook mới</p>
-                    <p className="text-[10.5px] text-slate-500">Nạp thêm nick via/clone vào hệ thống</p>
-                  </div>
-                </div>
+              <div className="min-w-0 rounded-xl border border-slate-200 bg-white p-3.5 space-y-3">
+                <h3 className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                  <UserPlus className="w-4 h-4 shrink-0 text-slate-500" />
+                  Quản lý tài khoản
+                </h3>
+                <p className="text-xs text-slate-600 leading-relaxed">Thêm và quản lý tài khoản Facebook.</p>
                 <button
                   type="button"
                   onClick={() => {
-                    setAdding(false);
+                    changeAdding(false);
                     router.push("/accounts");
                   }}
-                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 flex items-center gap-1 shrink-0 transition-colors"
+                  className="w-full min-h-11 px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 flex items-center justify-center gap-2 transition-colors"
                 >
-                  Mở Quản lý Acc
-                  <ExternalLink className="w-3 h-3 text-slate-400" />
+                  Quản lý tài khoản
+                  <ExternalLink className="w-3 h-3 shrink-0 text-slate-400" />
                 </button>
               </div>
             </div>
@@ -1068,7 +1136,7 @@ export default function FanpageList() {
           <DialogFooter className="pt-3 border-t border-slate-100 mt-2">
             <button
               type="button"
-              onClick={() => setAdding(false)}
+              onClick={() => changeAdding(false)}
               className="h-9 rounded-lg border border-slate-200 px-4 text-xs font-semibold text-slate-600 hover:bg-slate-50"
             >
               Đóng
@@ -1076,6 +1144,7 @@ export default function FanpageList() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
 
       <Dialog open={Boolean(pendingDelete)} onOpenChange={(open) => !open && setPendingDelete(null)}>
         <DialogContent>

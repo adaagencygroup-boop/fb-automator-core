@@ -5,6 +5,7 @@ Quản lý background worker thực thi đăng video Reels (Immediate & Schedule
 kèm hàng đợi SSE cho real-time console log.
 """
 import os
+import re
 import time
 import random
 import threading
@@ -16,20 +17,25 @@ from core.database.connection import db
 from modules.module_05_page_manager.facebook_client import upload_reel_to_facebook
 from modules.module_05_page_manager.reels_service import get_next_reel_video
 
-FB_GRAPH_VERSION = "v19.0"
+from .meta_config import GRAPH_API_VERSION as FB_GRAPH_VERSION
+from modules.module_02_account_manager.context import owner_scope, owner_context
 
 class ReelsTaskRunner:
-    _instance = None
+    _instances = {}
     _lock = threading.Lock()
 
-    def __new__(cls):
+    def __new__(cls, owner=None):
+        owner = owner if owner is not None else owner_context.get()
         with cls._lock:
-            if cls._instance is None:
-                cls._instance = super(ReelsTaskRunner, cls).__new__(cls)
-                cls._instance._init_runner()
-        return cls._instance
+            if owner not in cls._instances:
+                instance = super().__new__(cls)
+                instance.owner = owner
+                instance._init_runner()
+                cls._instances[owner] = instance
+            return cls._instances[owner]
 
     def _init_runner(self):
+        self._start_lock = threading.Lock()
         self.is_running = False
         self.status = "IDLE"  # IDLE, RUNNING, STOPPED, COMPLETED
         self.thread: Optional[threading.Thread] = None
@@ -91,8 +97,14 @@ class ReelsTaskRunner:
         }
 
     def start_job(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        with self._start_lock:
+            return self._start_job(config)
+
+    def _start_job(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Bắt đầu tiến trình đăng Reels trong luồng nền."""
-        if self.is_running:
+        if not self.owner:
+            return {"success": False, "error": "Thiếu owner cho tác vụ Reels."}
+        if self.is_running or (self.thread and self.thread.is_alive()):
             return {"success": False, "error": "Một tiến trình đang chạy dở. Vui lòng dừng hoặc chờ kết thúc."}
 
         pages_config = config.get("pages_config", [])
@@ -122,7 +134,10 @@ class ReelsTaskRunner:
         self.log(f">>> BẮT ĐẦU TIẾN TRÌNH ĐĂNG VIDEO REELS ({len(pages_config)} Fanpage đã chọn) <<<", "INFO")
         self.log(f"Thư mục gốc video: {root_dir}", "INFO")
 
-        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        def run_owned():
+            with owner_scope(self.owner):
+                self._run_loop()
+        self.thread = threading.Thread(target=run_owned, daemon=True)
         self.thread.start()
         return {"success": True, "message": "Đã kích hoạt luồng đăng Reels thành công."}
 
@@ -197,9 +212,19 @@ class ReelsTaskRunner:
 
             p_id = str(page.get("page_id") or page.get("id"))
             p_name = page.get("page_name") or page.get("name") or f"Page {p_id}"
-            p_token = page.get("access_token", "").strip()
+            stored = db.fetch_one(
+                "SELECT page_name, access_token, account_uid FROM pages WHERE user_id = %s AND page_id = %s",
+                (self.owner, p_id),
+            )
+            if not stored:
+                self.log(f"Page {p_id} không còn thuộc owner của tác vụ.", "ERROR")
+                self.stats["failed"] += 1
+                self.stats["processed"] += 1
+                continue
+            p_name = stored["page_name"]
+            p_token = (stored.get("access_token") or "").strip()
             folder_name = page.get("folder_name", "").strip()
-            acc_uid = page.get("account_uid", "")
+            acc_uid = stored.get("account_uid")
 
             self.stats["current_page"] = p_name
             self.log(f"\n[{idx + 1}/{len(pages)}] Bắt đầu xử lý Reels cho Page: {p_name} (ID: {p_id})", "INFO")
@@ -221,8 +246,8 @@ class ReelsTaskRunner:
             last_index = 0
             try:
                 prog = db.fetch_one(
-                    "SELECT last_folder_index FROM posting_progress WHERE page_id = ? AND post_type = 'REEL'",
-                    (p_id,)
+                    "SELECT last_folder_index FROM posting_progress WHERE user_id = ? AND page_id = ? AND post_type = 'REEL'",
+                    (self.owner, p_id,)
                 )
                 if prog and prog.get("last_folder_index"):
                     last_index = int(prog["last_folder_index"])
@@ -254,6 +279,8 @@ class ReelsTaskRunner:
             error_detail = ""
             try:
                 def local_logger(msg):
+                    msg = str(msg).replace(p_token, "[REDACTED]")
+                    msg = re.sub(r"(?i)(access_token|client_secret)=([^&\s]+)", r"\1=[REDACTED]", msg)
                     self.log(msg, "INFO" if "[SUCCESS]" not in msg and "[ERROR]" not in msg else ("SUCCESS" if "[SUCCESS]" in msg else "ERROR"))
 
                 success = upload_reel_to_facebook(
@@ -267,8 +294,8 @@ class ReelsTaskRunner:
                     save_posted_func=lambda pn, pid: None
                 )
             except Exception as e:
-                error_detail = str(e)
-                self.log(f"[ERROR] Ngoại lệ khi đăng video lên {p_name}: {e}", "ERROR")
+                error_detail = "Không thể đăng video qua Facebook Graph API."
+                self.log(f"[ERROR] {p_name}: {error_detail}", "ERROR")
 
             # 4. Cập nhật kết quả vào database
             self.stats["processed"] += 1
@@ -297,30 +324,30 @@ class ReelsTaskRunner:
         try:
             db.execute(
                 """
-                INSERT INTO posting_progress (page_id, post_type, last_folder_index, last_video_id, updated_at)
-                VALUES (?, 'REEL', ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT (page_id, post_type)
+                INSERT INTO posting_progress (user_id, page_id, post_type, last_folder_index, last_video_id, updated_at)
+                VALUES (?, ?, 'REEL', ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id, page_id, post_type)
                 DO UPDATE SET last_folder_index = EXCLUDED.last_folder_index,
                               last_video_id = EXCLUDED.last_video_id,
                               updated_at = CURRENT_TIMESTAMP
                 """,
-                (page_id, folder_number, video_id)
+                (self.owner, page_id, folder_number, video_id)
             )
         except Exception as e:
-            self.log(f"[DB Warning] Không thể cập nhật tiến trình vào DB: {e}", "WARNING")
+            self.log("[DB Warning] Không thể cập nhật tiến trình vào DB.", "WARNING")
 
     def _save_history(self, page_id: str, account_uid: str, caption: str, media_path: str, status: str, error_msg: Optional[str], reel_url: Optional[str] = None):
         """Lưu kết quả đăng bài vào bảng posting_history."""
         try:
             db.execute(
                 """
-                INSERT INTO posting_history (page_id, account_uid, post_type, caption, media_path, status, error_message, post_url, posted_at)
-                VALUES (?, ?, 'REEL', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO posting_history (user_id, page_id, account_uid, post_type, caption, media_path, status, error_message, post_url, posted_at)
+                VALUES (?, ?, ?, 'REEL', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """,
-                (page_id, account_uid or None, caption or "", media_path, status, error_msg, reel_url)
+                (self.owner, page_id, account_uid or None, caption or "", media_path, status, error_msg, reel_url)
             )
         except Exception as e:
-            self.log(f"[DB Warning] Không thể ghi lịch sử bài đăng: {e}", "WARNING")
+            self.log("[DB Warning] Không thể ghi lịch sử bài đăng.", "WARNING")
 
 
 reels_runner = ReelsTaskRunner()
