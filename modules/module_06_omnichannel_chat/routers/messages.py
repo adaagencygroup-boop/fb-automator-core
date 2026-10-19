@@ -78,7 +78,12 @@ def get_conversations(
         SELECT DISTINCT p.page_id, p.page_name, p.facebook_user_id
         FROM v_pages p
         LEFT JOIN v_accounts va ON p.facebook_user_id = va.facebook_user_id
-        LEFT JOIN accounts a ON (p.facebook_user_id = a.uid OR va.user_access_token = a.token)
+        LEFT JOIN accounts a ON (
+            p.facebook_user_id = a.uid 
+            OR va.user_access_token = a.token
+            OR va.facebook_user_id = a.uid
+            OR (va.name IS NOT NULL AND va.name != '' AND va.name = a.profile_name)
+        )
         {where_sql}
     """)
     page_rows = db.execute(sql, params).mappings().all()

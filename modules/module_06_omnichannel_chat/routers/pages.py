@@ -79,6 +79,7 @@ def get_local_pages(
 
             now = time.time()
             sync_service = FacebookSyncService(db)
+            sys_uid = int(logged_in_uid) if (logged_in_uid and str(logged_in_uid).isdigit()) else 1
             for acc in user_accs:
                 acc_uid = str(acc["uid"])
                 acc_token = acc["token"]
@@ -86,7 +87,7 @@ def get_local_pages(
                 if now - _last_synced_accounts.get(acc_uid, 0) > 300:
                     _last_synced_accounts[acc_uid] = now
                     try:
-                        sync_service.sync_by_token(acc_token, system_user_id=1)
+                        sync_service.sync_by_token(acc_token, system_user_id=sys_uid)
                     except Exception as tok_err:
                         print(f"[Warning] Auto-sync token error for acc {acc_uid}: {tok_err}")
         except Exception as e:
@@ -109,7 +110,12 @@ def get_local_pages(
         SELECT DISTINCT p.id, p.page_id, p.page_name, p.page_access_token, p.avatar_url, p.status, p.facebook_user_id
         FROM v_pages p
         LEFT JOIN v_accounts va ON p.facebook_user_id = va.facebook_user_id
-        LEFT JOIN accounts a ON (p.facebook_user_id = a.uid OR va.user_access_token = a.token)
+        LEFT JOIN accounts a ON (
+            p.facebook_user_id = a.uid 
+            OR va.user_access_token = a.token
+            OR va.facebook_user_id = a.uid
+            OR (va.name IS NOT NULL AND va.name != '' AND va.name = a.profile_name)
+        )
         {where_sql}
         ORDER BY p.id DESC
     """)
