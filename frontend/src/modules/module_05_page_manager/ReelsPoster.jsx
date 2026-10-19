@@ -88,6 +88,8 @@ export default function ReelsPoster() {
 
   // Runner & Console logs states
   const [isRunning, setIsRunning] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [runnerStatus, setRunnerStatus] = useState("IDLE");
   const [runnerNextSlot, setRunnerNextSlot] = useState(null);
   const [currentTimeMinutes, setCurrentTimeMinutes] = useState(() => {
@@ -667,6 +669,7 @@ export default function ReelsPoster() {
       setSelectedPageIds(next);
     }
 
+    setIsStarting(true);
     try {
       const payload = {
         root_dir: rootDir.trim(),
@@ -713,29 +716,45 @@ export default function ReelsPoster() {
           message: `Lỗi kết nối khi bắt đầu: ${errMsg}`
         }
       ]);
+    } finally {
+      setIsStarting(false);
     }
   };
 
-  // Dừng luồng qua Backend API
+  // Dừng luồng qua Backend API kèm xác nhận dừng hoàn tất
   const handleStop = async () => {
+    setIsStopping(true);
     try {
       const res = await stopReelsJob();
       if (res?.success) {
-        toast.info("Đã gửi yêu cầu dừng tiến trình đăng Reels.", "DỪNG LUỒNG");
+        toast.info("Đã gửi yêu cầu dừng tiến trình đăng Reels. Đang đợi luồng kết thúc an toàn...", "DỪNG LUỒNG");
+      }
+      setLogs((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString("vi-VN"),
+          level: "WARNING",
+          message: "Đang gửi tín hiệu dừng tiến trình đăng theo yêu cầu của người dùng... Vui lòng đợi hoàn tất."
+        }
+      ]);
+
+      // Kiểm tra trạng thái Backend cho đến khi thread dừng hẳn (thử tối đa 10 lần x 500ms = 5s)
+      for (let i = 0; i < 10; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const st = await getReelsStatus();
+        if (st && !st.is_running) {
+          setIsRunning(false);
+          setRunnerStatus(st.status || "STOPPED");
+          break;
+        }
       }
     } catch (e) {
       console.warn("Lỗi khi dừng luồng:", e);
+    } finally {
+      setIsRunning(false);
+      setRunnerStatus("STOPPED");
+      setIsStopping(false);
     }
-    setIsRunning(false);
-    setRunnerStatus("STOPPED");
-    setLogs((prev) => [
-      ...prev,
-      {
-        timestamp: new Date().toLocaleTimeString("vi-VN"),
-        level: "WARNING",
-        message: "Đã gửi tín hiệu dừng tiến trình đăng theo yêu cầu của người dùng."
-      }
-    ]);
   };
 
   // Xóa console log
@@ -1130,29 +1149,51 @@ export default function ReelsPoster() {
           <div className="grid grid-cols-2 gap-3 pt-2">
             <button
               type="button"
-              disabled={isRunning}
+              disabled={isRunning || isStarting || isStopping}
               onClick={handleStart}
               className={`py-2.5 px-4 rounded-lg font-bold text-[12px] tracking-wider uppercase flex items-center justify-center gap-2 shadow-sm transition-all ${
-                isRunning
+                isStarting
+                  ? "bg-blue-600 text-white cursor-wait opacity-90 shadow-none"
+                  : isRunning || isStopping
                   ? "bg-slate-300 text-slate-500 cursor-not-allowed"
                   : "bg-[#2563EB] text-white hover:bg-blue-700 active:scale-[0.98]"
               }`}
             >
-              <Play className="w-3.5 h-3.5 fill-current" />
-              KÍCH HOẠT
+              {isStarting ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>ĐANG KÍCH HOẠT...</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>KÍCH HOẠT</span>
+                </>
+              )}
             </button>
             <button
               type="button"
-              disabled={!isRunning}
+              disabled={!isRunning || isStarting || isStopping}
               onClick={handleStop}
               className={`py-2.5 px-4 rounded-lg font-bold text-[12px] tracking-wider uppercase flex items-center justify-center gap-2 shadow-sm transition-all ${
-                !isRunning
+                isStopping
+                  ? "bg-rose-600 text-white cursor-wait opacity-90 shadow-none"
+                  : !isRunning || isStarting
                   ? "bg-slate-200 text-slate-400 cursor-not-allowed"
                   : "bg-[#F43F5E] text-white hover:bg-rose-600 active:scale-[0.98]"
               }`}
             >
-              <Square className="w-3.5 h-3.5 fill-current" />
-              DỪNG LUỒNG
+              {isStopping ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>ĐANG DỪNG...</span>
+                </>
+              ) : (
+                <>
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>DỪNG LUỒNG</span>
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -1424,8 +1465,12 @@ export default function ReelsPoster() {
 
             {/* Trạng thái hoạt động */}
             <span
-              className={`ml-2 px-2 py-0.5 text-[10px] font-semibold rounded-full uppercase tracking-wider ${
-                isRunning
+              className={`ml-2 px-2.5 py-0.5 text-[10px] font-semibold rounded-full uppercase tracking-wider flex items-center gap-1.5 ${
+                isStarting
+                  ? "bg-blue-100 text-blue-700 animate-pulse"
+                  : isStopping
+                  ? "bg-rose-100 text-rose-700 animate-pulse"
+                  : isRunning
                   ? "bg-blue-100 text-blue-700 animate-pulse"
                   : runnerStatus === "COMPLETED"
                   ? "bg-emerald-100 text-emerald-700"
@@ -1434,7 +1479,16 @@ export default function ReelsPoster() {
                   : "bg-slate-100 text-slate-600"
               }`}
             >
-              {isRunning ? "● Đang chạy" : runnerStatus}
+              {(isStarting || isStopping) && <RefreshCw className="w-2.5 h-2.5 animate-spin" />}
+              <span>
+                {isStarting
+                  ? "Đang kích hoạt..."
+                  : isStopping
+                  ? "Đang dừng..."
+                  : isRunning
+                  ? "● Đang chạy"
+                  : runnerStatus}
+              </span>
             </span>
           </div>
 
