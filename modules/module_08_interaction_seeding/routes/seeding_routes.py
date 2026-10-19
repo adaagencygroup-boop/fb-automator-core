@@ -1063,7 +1063,6 @@ async def create_seeding_campaign(
                     reaction=assigned_reaction,
                     comment_id=assigned_comment_id,
                     status="PENDING",
-                    attempts=0,
                 )
                 db.add(task)
                 planned_uids.add(uid)

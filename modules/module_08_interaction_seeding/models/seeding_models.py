@@ -130,7 +130,6 @@ class SeedingTask(Base):
     reaction = Column(String(10), nullable=True)            # 'LIKE,LOVE,CARE,HAHA,WOW,SAD,ANGRY' (chỉ cho REACT)
     comment_id = Column(Integer, ForeignKey("seeding_comments.id", ondelete="SET NULL"), nullable=True)
     status = Column(String(20), default="PENDING")          # 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED'
-    attempts = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
     scheduled_at = Column(DateTime, default=utc_now)        # Thời điểm sớm nhất được phép chạy (giãn cách)
     started_at = Column(DateTime, nullable=True)
