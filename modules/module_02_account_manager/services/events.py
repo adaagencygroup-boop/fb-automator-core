@@ -10,8 +10,10 @@ _lock = threading.Lock()
 _UNSET = object()
 
 def broadcast(level, message, uid=None, extra=None):
+    from .operations import current_operation
     owner = owner_context.get()
-    payload = {"time": datetime.now(timezone.utc).isoformat(), "level": level, "message": message, "uid": uid, **(extra or {})}
+    payload = {"time": datetime.now(timezone.utc).isoformat(), "level": level, "message": message, "uid": uid,
+               "operation_id": current_operation.get(), **(extra or {})}
     with _lock:
         targets = tuple(_subscribers)
     for loop, queue, subscriber_owner in targets:

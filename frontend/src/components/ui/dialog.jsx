@@ -5,17 +5,27 @@ import { cn } from "@/lib/utils";
 import { X } from "lucide-react";
 
 const Dialog = ({ open, onOpenChange, children }) => {
+  React.useEffect(() => {
+    if (open) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      return () => {
+        document.body.style.overflow = originalOverflow;
+      };
+    }
+  }, [open]);
+
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-hidden">
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm transition-opacity"
         onClick={() => onOpenChange?.(false)}
       />
       {/* Dialog container */}
-      <div className="relative z-50 w-full flex items-center justify-center my-auto">
+      <div className="relative z-50 w-full flex items-center justify-center max-h-full">
         {React.Children.map(children, (child) => {
           if (React.isValidElement(child)) {
             return React.cloneElement(child, { onClose: () => onOpenChange?.(false) });
