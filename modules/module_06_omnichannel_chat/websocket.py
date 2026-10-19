@@ -37,12 +37,22 @@ class ConnectionManager:
             pass
 
     async def send_personal_message(self, message: dict, facebook_user_id: str):
+        targets = set()
         if facebook_user_id in self.active_connections:
-            for connection in self.active_connections[facebook_user_id]:
-                try:
-                    await connection.send_json(message)
-                except Exception as e:
-                    print(f"[WebSocket] Error sending message: {str(e)}")
+            targets.update(self.active_connections[facebook_user_id])
+        if "all" in self.active_connections:
+            targets.update(self.active_connections["all"])
+
+        # If no target connection found, fallback to broadcast to all clients
+        if not targets:
+            await self.broadcast(message)
+            return
+
+        for connection in targets:
+            try:
+                await connection.send_json(message)
+            except Exception as e:
+                print(f"[WebSocket] Error sending message: {str(e)}")
 
     async def broadcast_to_user(self, facebook_user_id: str, message: dict):
         await self.send_personal_message(message, facebook_user_id)
