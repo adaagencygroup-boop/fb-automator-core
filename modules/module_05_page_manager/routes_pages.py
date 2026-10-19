@@ -174,6 +174,7 @@ def _web_call(fn, owner, *args):
 
 class WebOAuthStartBody(BaseModel):
     reason: Literal["connect", "switch"] = "connect"
+    open_browser: bool = False
 
 
 class WebOAuthCompleteBody(BaseModel):
@@ -184,7 +185,14 @@ class WebOAuthCompleteBody(BaseModel):
 
 @router.post("/web-oauth/start", status_code=202)
 def web_oauth_start(body: WebOAuthStartBody, request: Request):
-    return _web_call(meta_web.start, require_owner(request), body.reason)
+    res = _web_call(meta_web.start, require_owner(request), body.reason)
+    if body.open_browser and isinstance(res, dict) and res.get("authorization_url"):
+        import webbrowser
+        try:
+            webbrowser.open(res["authorization_url"])
+        except Exception:
+            pass
+    return res
 
 
 @router.post("/web-oauth/complete", status_code=202)

@@ -172,6 +172,8 @@ _PUBLIC_API = {
     "/api/facebook/webhook",
     "/api/facebook/config",
     "/api/groups/source/template",
+    "/oauth/meta/callback",
+    "/api/pages/web-oauth/callback-submit",
 }
 
 
@@ -369,6 +371,9 @@ app.include_router(reels_router, prefix="/api")
 
 from modules.module_05_page_manager.routes_pages import router as page_manager_router
 app.include_router(page_manager_router, prefix="/api")
+
+from modules.module_05_page_manager.routes_oauth_callback import router as oauth_callback_router
+app.include_router(oauth_callback_router)
 
 from modules.module_05_page_manager.routes import router as ai_post_router
 app.include_router(ai_post_router)

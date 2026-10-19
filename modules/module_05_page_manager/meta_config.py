@@ -17,9 +17,11 @@ def credentials():
 
 
 def callback_url():
-    from urllib.parse import urlsplit
+    from urllib.parse import urlsplit, urlunsplit
     url = os.getenv("FACEBOOK_OAUTH_CALLBACK_URL", "").strip()
+    if not url:
+        url = "http://localhost:28129/oauth/meta/callback"
     parts = urlsplit(url)
     if parts.scheme not in {"http", "https"} or not parts.netloc or parts.path.rstrip("/") != "/oauth/meta/callback" or parts.query or parts.fragment:
         raise ValueError("FACEBOOK_OAUTH_CALLBACK_URL phải trỏ tới /oauth/meta/callback (không có query/fragment).")
-    return url
+    return urlunsplit((parts.scheme, parts.netloc, "/oauth/meta/callback", "", ""))

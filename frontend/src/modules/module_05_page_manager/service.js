@@ -118,7 +118,7 @@ export async function getSyncAccounts() {
 }
 
 export const getWebConnection = () => api.get("/api/pages/web-connection");
-export const startWebPopupOAuth = (reason = "connect") => api.post("/api/pages/web-oauth/start", { reason });
+export const startWebPopupOAuth = (reason = "connect", openBrowser = false) => api.post("/api/pages/web-oauth/start", { reason, open_browser: openBrowser });
 export const completeWebPopupOAuth = (payload) => api.post("/api/pages/web-oauth/complete", payload);
 export const getSyncJob = (id) => api.get(`/api/pages/sync-jobs/${id}`);
 export const confirmSyncJob = (id, accept) => api.post(`/api/pages/sync-jobs/${id}/confirm`, { accept });

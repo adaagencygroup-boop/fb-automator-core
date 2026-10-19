@@ -60,11 +60,29 @@ export function announcePopupAttempt(owner) {
 }
 
 export async function openOAuthPopup(browser, start, owner, reason = "connect") {
+  const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
+  if (isTauri) {
+    // Trong môi trường Desktop App (.exe): Yêu cầu Backend mở trực tiếp trình duyệt Chrome/Edge ngoài máy
+    const attempt = await start(reason, true);
+    return { attempt, popup: null };
+  }
+
   // Must run synchronously in the click handler, before the first await.
-  const popup = browser.open("about:blank", `meta-oauth-${Date.now()}`, "popup=yes,width=600,height=760,resizable=yes,scrollbars=yes");
-  if (!popup) throw new Error("Trình duyệt đã chặn popup. Hãy cho phép cửa sổ bật lên rồi thử lại.");
+  let popup = null;
+  try {
+    popup = browser.open("about:blank", `meta-oauth-${Date.now()}`, "popup=yes,width=600,height=760,resizable=yes,scrollbars=yes");
+  } catch { /* Popup might be restricted */ }
+
   try {
     const attempt = await start(reason);
+    if (!popup) {
+      // Fallback: nếu popup bị chặn, thử mở tab mới hoặc điều hướng
+      try { popup = browser.open(attempt.authorization_url, "_blank"); } catch { /* Ignore */ }
+      if (!popup) {
+        throw new Error("Trình duyệt đã chặn cửa sổ bật lên. Hãy cho phép popup rồi thử lại.");
+      }
+      return { attempt, popup };
+    }
     const context = popupAttemptContext(attempt, owner, safeReturnPath(browser.location.href, browser.location.origin), reason);
     // Only attempt identifiers are stored, never access tokens or Meta callback fragments.
     let stored = false;
@@ -72,7 +90,9 @@ export async function openOAuthPopup(browser, start, owner, reason = "connect") 
     popup.location.replace(reason === "switch" && stored ? new URL(switchPreparationPath(attempt.state), browser.location.origin).href : attempt.authorization_url);
     return { attempt, popup };
   } catch (error) {
-    try { popup.close(); } catch { /* The browser may have detached the popup. */ }
+    if (popup) {
+      try { popup.close(); } catch { /* The browser may have detached the popup. */ }
+    }
     throw error;
   }
 }

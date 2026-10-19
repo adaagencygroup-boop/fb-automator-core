@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from tests import test_module05_meta as fixtures
 from modules.module_05_page_manager import meta_web as web, meta_sync as sync
+from modules.module_05_page_manager.routes_oauth_callback import router as callback_router
 
 
 class WebPopupTests(unittest.TestCase):
@@ -14,6 +15,7 @@ class WebPopupTests(unittest.TestCase):
 
     def setUp(self):
         fixtures.SyncTests.setUp(self)
+        self.client.app.include_router(callback_router)
         item = patch.object(web, "db", self.db)
         item.start()
         self.addCleanup(item.stop)
@@ -192,3 +194,27 @@ class WebPopupTests(unittest.TestCase):
                     group = response.json()["accounts"][0]
                     self.assertEqual(group["group_key"], "web:1")
                     self.assertIsNone(group["account_uid"])
+
+    def test_oauth_callback_page_renders_html_with_title_and_script(self):
+        res = self.client.get("/oauth/meta/callback")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("Facebook Automator Pro", res.text)
+        self.assertIn("callback-submit", res.text)
+
+    def test_oauth_callback_submit_completes_job_with_valid_state(self):
+        attempt = self.start("a")
+        res = self.client.post("/api/pages/web-oauth/callback-submit", json={
+            "state": attempt["state"],
+            "access_token": "raw-secret",
+        })
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.json()["success"])
+        result = self.wait("a", attempt["job_id"], ("SUCCEEDED", "FAILED"))
+        self.assertEqual(result["status"], "SUCCEEDED", result)
+
+    def test_oauth_callback_submit_with_invalid_state_returns_400(self):
+        res = self.client.post("/api/pages/web-oauth/callback-submit", json={
+            "state": "invalid_or_expired_state",
+            "access_token": "raw-secret",
+        })
+        self.assertEqual(res.status_code, 400)
