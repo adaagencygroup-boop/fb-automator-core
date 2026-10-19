@@ -154,12 +154,6 @@ export default function SeedingPostPage() {
 
   const handleDoLikeChange = (val) => {
     setDoLike(val);
-    if (val) {
-      // Khi chọn Like bài viết thì mặc định tích chọn cảm xúc Like (LIKE / Thích)
-      setSelectedReactions((prev) =>
-        prev.includes("LIKE") ? prev : ["LIKE", ...prev],
-      );
-    }
   };
 
   const handleAddTargets = async (rawUrls) => {
