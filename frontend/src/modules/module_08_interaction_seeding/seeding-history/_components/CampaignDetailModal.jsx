@@ -106,27 +106,49 @@ export default function CampaignDetailModal({
   };
 
   const tasks = data.tasks || [];
-  const alreadyFollowedTasks = tasks.filter((t) =>
-    (t.error_message || "").toLowerCase().includes("đã follow")
-  );
   const failedTasks = tasks.filter((t) => t.status === "FAILED");
 
   // Thống kê 3 mục tương tác bài viết (Like, Bình luận, Chia sẻ)
   const breakdown = data.interactions_breakdown;
-  const actionsList = Array.isArray(data.actions) ? data.actions : [];
+  const actionsList = Array.isArray(data.actions)
+    ? data.actions.map((a) => String(a).toUpperCase().trim())
+    : typeof data.actions === "string"
+    ? data.actions.split(",").map((a) => a.toUpperCase().trim())
+    : [];
 
-  const reactTasks = tasks.filter((t) => t.action === "REACT");
-  const commentTasks = tasks.filter((t) => t.action === "COMMENT");
-  const shareTasks = tasks.filter((t) => t.action === "SHARE");
+  const reactTasks = tasks.filter((t) => t.action?.toUpperCase() === "REACT");
+  const commentTasks = tasks.filter((t) => t.action?.toUpperCase() === "COMMENT");
+  const shareTasks = tasks.filter((t) => t.action?.toUpperCase() === "SHARE");
 
-  const hasLike = breakdown ? breakdown.react?.enabled : actionsList.some((a) => a.toUpperCase() === "REACT");
-  const hasComment = breakdown ? breakdown.comment?.enabled : actionsList.some((a) => a.toUpperCase() === "COMMENT");
-  const hasShare = breakdown ? breakdown.share?.enabled : actionsList.some((a) => a.toUpperCase() === "SHARE");
+  // Kiểm tra Like / Cảm xúc
+  const hasLike =
+    actionsList.includes("REACT") ||
+    actionsList.includes("LIKE") ||
+    reactTasks.length > 0 ||
+    Boolean(breakdown?.react?.enabled) ||
+    Boolean(
+      breakdown &&
+        typeof breakdown === "object" &&
+        Object.keys(breakdown).some((k) =>
+          ["LIKE", "LOVE", "CARE", "HAHA", "WOW", "SAD", "ANGRY"].includes(
+            k.toUpperCase()
+          )
+        )
+    );
 
-  const likeSuccess = reactTasks.filter((t) => t.status === "SUCCESS").length;
-  const commentSuccess = commentTasks.filter((t) => t.status === "SUCCESS").length;
-  const shareSuccess = shareTasks.filter((t) => t.status === "SUCCESS").length;
-  const reactionsList = data.reactions || breakdown?.react?.reactions || [];
+  // Kiểm tra Bình luận
+  const hasComment =
+    actionsList.includes("COMMENT") ||
+    commentTasks.length > 0 ||
+    Boolean(breakdown?.comment?.enabled) ||
+    Boolean(breakdown && (breakdown["COMMENT"] > 0 || breakdown?.comment));
+
+  // Kiểm tra Chia sẻ
+  const hasShare =
+    actionsList.includes("SHARE") ||
+    shareTasks.length > 0 ||
+    Boolean(breakdown?.share?.enabled) ||
+    Boolean(breakdown && (breakdown["SHARE"] > 0 || breakdown?.share));
 
   if (!isOpen || !mounted) return null;
 
@@ -173,9 +195,35 @@ export default function CampaignDetailModal({
             <>
               {/* Quick Metrics */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="p-3.5 rounded-xl bg-gray-50 border border-gray-100 space-y-1">
-                  <span className="text-gray-400 font-medium">Trạng thái</span>
-                  <p className="text-sm font-bold text-gray-800">
+                <div
+                  className={`p-3.5 rounded-xl border space-y-1 ${
+                    data.status === "COMPLETED"
+                      ? "bg-emerald-50/60 border-emerald-100 text-emerald-900"
+                      : data.status === "FAILED" ||
+                        data.status === "STOPPED" ||
+                        (data.status_display || "").toLowerCase().includes("không hoàn thành")
+                      ? "bg-rose-50/60 border-rose-100 text-rose-900"
+                      : data.status === "RUNNING"
+                      ? "bg-blue-50/60 border-blue-100 text-blue-900"
+                      : "bg-gray-50 border-gray-100 text-gray-800"
+                  }`}
+                >
+                  <span
+                    className={`font-medium ${
+                      data.status === "COMPLETED"
+                        ? "text-emerald-600"
+                        : data.status === "FAILED" ||
+                          data.status === "STOPPED" ||
+                          (data.status_display || "").toLowerCase().includes("không hoàn thành")
+                        ? "text-rose-600"
+                        : data.status === "RUNNING"
+                        ? "text-blue-600"
+                        : "text-gray-400"
+                    }`}
+                  >
+                    Trạng thái
+                  </span>
+                  <p className="text-sm font-bold">
                     {data.status_display || data.status}
                   </p>
                 </div>
@@ -252,195 +300,120 @@ export default function CampaignDetailModal({
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
                     {/* Mục 1: Like bài viết */}
                     <div
-                      className={`relative flex flex-col justify-between p-4 rounded-xl border transition-all ${
+                      className={`relative flex items-center gap-3.5 p-4 rounded-xl border transition-all ${
                         hasLike
                           ? "border-blue-500 bg-blue-50/50 shadow-sm shadow-blue-500/10"
                           : "border-gray-200 bg-gray-50/40 opacity-70"
                       }`}
                     >
-                      <div className="flex items-start gap-3">
-                        <div
-                          className={`w-9 h-9 rounded-lg flex items-center justify-center text-white shrink-0 ${
-                            hasLike ? "bg-blue-600 shadow-sm" : "bg-gray-400"
-                          }`}
-                        >
-                          <ThumbsUp className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <h4 className="text-xs font-bold text-gray-900">Like bài viết</h4>
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                hasLike ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-600"
-                              }`}
-                            >
-                              {hasLike ? "Đã chọn" : "Không chọn"}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-gray-500 mt-0.5">Tương tác bài viết này</p>
-                        </div>
+                      <div
+                        className={`w-9 h-9 rounded-lg flex items-center justify-center text-white shrink-0 ${
+                          hasLike ? "bg-blue-600 shadow-sm" : "bg-gray-400"
+                        }`}
+                      >
+                        <ThumbsUp className="w-4 h-4" />
                       </div>
-
-                      {hasLike && (
-                        <div className="mt-3 pt-3 border-t border-blue-200/60 space-y-1.5 text-[11px]">
-                          <div className="flex justify-between items-center">
-                            <span className="text-gray-500">Tiến độ Like:</span>
-                            <span className="font-bold text-gray-800">
-                              <span className="text-emerald-600">{likeSuccess}</span> / {data.account_count} tài khoản
-                            </span>
-                          </div>
-                          {reactionsList.length > 0 && (
-                            <div className="flex items-center gap-1 flex-wrap pt-0.5">
-                              <span className="text-gray-400 text-[10px]">Cảm xúc:</span>
-                              {reactionsList.map((r, i) => (
-                                <span
-                                  key={i}
-                                  className="px-1.5 py-0.5 rounded bg-white border border-blue-200 text-blue-700 text-[10px] font-bold shadow-xs"
-                                >
-                                  {r}
-                                </span>
-                              ))}
-                            </div>
-                          )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-xs font-bold text-gray-900">Like bài viết</h4>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              hasLike ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-600"
+                            }`}
+                          >
+                            {hasLike ? "Đã chọn" : "Không chọn"}
+                          </span>
                         </div>
-                      )}
+                        <p className="text-[11px] text-gray-500 mt-0.5">Tương tác bài viết này</p>
+                      </div>
                     </div>
 
                     {/* Mục 2: Bình luận */}
                     <div
-                      className={`relative flex flex-col justify-between p-4 rounded-xl border transition-all ${
+                      className={`relative flex items-center gap-3.5 p-4 rounded-xl border transition-all ${
                         hasComment
                           ? "border-blue-500 bg-blue-50/50 shadow-sm shadow-blue-500/10"
                           : "border-gray-200 bg-gray-50/40 opacity-70"
                       }`}
                     >
-                      <div className="flex items-start gap-3">
-                        <div
-                          className={`w-9 h-9 rounded-lg flex items-center justify-center text-white shrink-0 ${
-                            hasComment ? "bg-blue-600 shadow-sm" : "bg-gray-400"
-                          }`}
-                        >
-                          <MessageCircle className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <h4 className="text-xs font-bold text-gray-900">Bình luận</h4>
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                hasComment ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-600"
-                              }`}
-                            >
-                              {hasComment ? "Đã chọn" : "Không chọn"}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-gray-500 mt-0.5">Tự động bình luận bài viết</p>
-                        </div>
+                      <div
+                        className={`w-9 h-9 rounded-lg flex items-center justify-center text-white shrink-0 ${
+                          hasComment ? "bg-blue-600 shadow-sm" : "bg-gray-400"
+                        }`}
+                      >
+                        <MessageCircle className="w-4 h-4" />
                       </div>
-
-                      {hasComment && (
-                        <div className="mt-3 pt-3 border-t border-blue-200/60 space-y-1.5 text-[11px]">
-                          <div className="flex justify-between items-center">
-                            <span className="text-gray-500">Tiến độ Comment:</span>
-                            <span className="font-bold text-gray-800">
-                              <span className="text-emerald-600">{commentSuccess}</span> / {data.account_count} tài khoản
-                            </span>
-                          </div>
-                          {data.comments && data.comments.length > 0 && (
-                            <p className="text-[10px] text-gray-500 truncate" title={data.comments.join(" | ")}>
-                              Kho mẫu: {data.comments.length} câu bình luận
-                            </p>
-                          )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-xs font-bold text-gray-900">Bình luận</h4>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              hasComment ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-600"
+                            }`}
+                          >
+                            {hasComment ? "Đã chọn" : "Không chọn"}
+                          </span>
                         </div>
-                      )}
+                        <p className="text-[11px] text-gray-500 mt-0.5">Tự động bình luận bài viết</p>
+                      </div>
                     </div>
 
                     {/* Mục 3: Chia sẻ */}
                     <div
-                      className={`relative flex flex-col justify-between p-4 rounded-xl border transition-all ${
+                      className={`relative flex items-center gap-3.5 p-4 rounded-xl border transition-all ${
                         hasShare
                           ? "border-blue-500 bg-blue-50/50 shadow-sm shadow-blue-500/10"
                           : "border-gray-200 bg-gray-50/40 opacity-70"
                       }`}
                     >
-                      <div className="flex items-start gap-3">
-                        <div
-                          className={`w-9 h-9 rounded-lg flex items-center justify-center text-white shrink-0 ${
-                            hasShare ? "bg-blue-600 shadow-sm" : "bg-gray-400"
-                          }`}
-                        >
-                          <Share2 className="w-4 h-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <h4 className="text-xs font-bold text-gray-900">Chia sẻ</h4>
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                hasShare ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-600"
-                              }`}
-                            >
-                              {hasShare ? "Đã chọn" : "Không chọn"}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-gray-500 mt-0.5">Chia sẻ về trang cá nhân</p>
-                        </div>
+                      <div
+                        className={`w-9 h-9 rounded-lg flex items-center justify-center text-white shrink-0 ${
+                          hasShare ? "bg-blue-600 shadow-sm" : "bg-gray-400"
+                        }`}
+                      >
+                        <Share2 className="w-4 h-4" />
                       </div>
-
-                      {hasShare && (
-                        <div className="mt-3 pt-3 border-t border-blue-200/60 space-y-1.5 text-[11px]">
-                          <div className="flex justify-between items-center">
-                            <span className="text-gray-500">Tiến độ Share:</span>
-                            <span className="font-bold text-gray-800">
-                              <span className="text-emerald-600">{shareSuccess}</span> / {data.account_count} tài khoản
-                            </span>
-                          </div>
-                          <p className="text-[10px] text-purple-600 font-medium">Chia sẻ lên trang cá nhân</p>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-xs font-bold text-gray-900">Chia sẻ</h4>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              hasShare ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-600"
+                            }`}
+                          >
+                            {hasShare ? "Đã chọn" : "Không chọn"}
+                          </span>
                         </div>
-                      )}
+                        <p className="text-[11px] text-gray-500 mt-0.5">Chia sẻ về trang cá nhân</p>
+                      </div>
                     </div>
                   </div>
                 </div>
               )}
 
               {/* SECTION: DANH SÁCH LƯU Ý & THÔNG BÁO LỖI (NẾU CÓ) */}
-              {(alreadyFollowedTasks.length > 0 || failedTasks.length > 0) && (
-                <div className="p-4 rounded-xl border border-amber-200/90 bg-amber-50/50 space-y-2.5">
-                  <div className="flex items-center gap-2 text-amber-900 font-bold text-xs">
-                    <AlertTriangle className="w-4 h-4 text-amber-600" />
+              {failedTasks.length > 0 && (
+                <div className="p-4 rounded-xl border border-rose-200/80 bg-rose-50/50 space-y-2.5">
+                  <div className="flex items-center gap-2 text-rose-900 font-bold text-xs">
+                    <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
                     <span>
-                      Danh sách thông báo & lỗi ({alreadyFollowedTasks.length + failedTasks.length} tài khoản):
+                      Danh sách lỗi & không thành công ({failedTasks.length} tài khoản):
                     </span>
                   </div>
 
                   <div className="space-y-1.5 pl-1 text-xs">
-                    {alreadyFollowedTasks.map((t) => (
+                    {failedTasks.map((t, idx) => (
                       <div
-                        key={`already-${t.id}`}
-                        className="flex items-start gap-2 text-blue-900 bg-white/80 px-3 py-1.5 rounded-lg border border-blue-200/60"
+                        key={`failed-${t.id || t.task_id || t.account_uid || idx}`}
+                        className="flex items-start gap-2 px-3 py-1.5 rounded-lg border border-rose-200/70 bg-white/90 text-rose-900"
                       >
-                        <Info className="w-3.5 h-3.5 text-blue-600 shrink-0 mt-0.5" />
+                        <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
                         <div>
                           <strong>{t.account_name || t.account_uid}:</strong>{" "}
-                          <span>
-                            {t.error_message || `Đã follow ${targetTypeLabel.toLowerCase()} này rồi`}
-                          </span>
+                          <span>{t.error_message || "Không thể hoàn thành tác vụ"}</span>
                         </div>
                       </div>
                     ))}
-
-                    {failedTasks
-                      .filter((t) => !alreadyFollowedTasks.includes(t))
-                      .map((t) => (
-                        <div
-                          key={`failed-${t.id}`}
-                          className="flex items-start gap-2 text-rose-900 bg-white/80 px-3 py-1.5 rounded-lg border border-rose-200/60"
-                        >
-                          <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
-                          <div>
-                            <strong>{t.account_name || t.account_uid}:</strong>{" "}
-                            <span>{t.error_message || "Không thể hoàn thành tác vụ"}</span>
-                          </div>
-                        </div>
-                      ))}
                   </div>
                 </div>
               )}
@@ -473,10 +446,9 @@ export default function CampaignDetailModal({
                         tasks.map((t, idx) => {
                           const isSuccess = t.status === "SUCCESS";
                           const isFailed = t.status === "FAILED";
-                          const isAlready = (t.error_message || "").toLowerCase().includes("đã follow");
 
                           return (
-                            <tr key={t.id || idx} className="hover:bg-gray-50/80 transition-colors">
+                            <tr key={t.id || t.task_id || idx} className="hover:bg-gray-50/80 transition-colors">
                               <td className="py-2.5 px-3 text-center text-gray-400 font-medium">
                                 {idx + 1}
                               </td>
@@ -512,18 +484,13 @@ export default function CampaignDetailModal({
 
                               <td className="py-2.5 px-3">
                                 {t.error_message ? (
-                                  isAlready ? (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200/80 font-medium text-[11px]">
-                                      <Info className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                                      {t.error_message}
-                                    </span>
-                                  ) : isFailed ? (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-50 text-rose-800 border border-rose-200/80 font-medium text-[11px]">
+                                  isFailed ? (
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-rose-50 text-rose-700 border border-rose-200/70 font-medium text-[11px]">
                                       <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
                                       {t.error_message}
                                     </span>
                                   ) : (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200/80 font-medium text-[11px]">
+                                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200/70 font-medium text-[11px]">
                                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                                       {t.error_message}
                                     </span>

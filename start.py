@@ -259,7 +259,7 @@ def run_project(self_test_only: bool = False, open_browser: bool = True):
             return False
 
         print("\n[2/3] Giao dien user Next.js (Port 3000)...")
-        frontend_proc = spawn([npm_cmd(), "run", "dev", "--", "-H", "127.0.0.1", "-p", "3000"], FRONTEND_DIR, "frontend.log")
+        frontend_proc = spawn([npm_cmd(), "run", "dev", "--", "-H", "127.0.0.1", "-p", "3000", "--webpack"], FRONTEND_DIR, "frontend.log")
         if wait_for_url(FRONTEND_URL, timeout=60, proc=frontend_proc, service_name="User UI"):
             print("  [OK] User UI: http://127.0.0.1:3000")
         else:
@@ -268,13 +268,12 @@ def run_project(self_test_only: bool = False, open_browser: bool = True):
             return False
 
         print("\n[3/3] Giao dien admin Next.js (Port 3010)...")
-        admin_proc = spawn([npm_cmd(), "run", "dev"], ADMIN_DIR, "admin.log")
+        admin_proc = spawn([npm_cmd(), "run", "dev", "--", "--webpack"], ADMIN_DIR, "admin.log")
         if wait_for_url(ADMIN_URL, timeout=60, proc=admin_proc, service_name="Admin UI"):
             print("  [OK] Admin UI: http://127.0.0.1:3010")
         else:
             print("  [ERROR] Admin UI khong phan hoi sau 60 giay.")
             tail_log("admin.log")
-            return False
             return False
 
         print("\n" + "=" * 70)

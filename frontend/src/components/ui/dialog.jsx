@@ -8,14 +8,14 @@ const Dialog = ({ open, onOpenChange, children }) => {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm transition-opacity"
         onClick={() => onOpenChange?.(false)}
       />
       {/* Dialog container */}
-      <div className="relative z-50 w-full max-w-lg p-4">
+      <div className="relative z-50 w-full flex items-center justify-center my-auto">
         {React.Children.map(children, (child) => {
           if (React.isValidElement(child)) {
             return React.cloneElement(child, { onClose: () => onOpenChange?.(false) });
@@ -31,7 +31,7 @@ const DialogContent = React.forwardRef(({ className, children, onClose, ...props
   <div
     ref={ref}
     className={cn(
-      "relative w-full rounded-xl border border-border bg-white p-6 shadow-xl transition-all duration-200 animate-in fade-in zoom-in-95",
+      "relative w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-xl border border-border bg-white p-6 shadow-xl transition-all duration-200 animate-in fade-in zoom-in-95",
       className
     )}
     {...props}

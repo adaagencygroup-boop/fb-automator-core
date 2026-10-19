@@ -11,7 +11,6 @@ from ..utils.profile_storage import delete_profiles_by_uid
 from .events import broadcast
 
 _FIELDS = ("cookie", "token", "email", "mail_recovery", "token_hotmail", "client_id", "proxy", "profile_name")
-_FANPAGE_OWNER_CONFLICT = "Không thể xóa: Fanpage của UID này chưa xác định được chủ sở hữu giữa nhiều người dùng"
 
 def serialize(account, detail=False):
     result = {"id": account.id, "owner_username": account.user_id, "user_id": account.user_id, "uid": account.uid}
@@ -131,24 +130,13 @@ def import_accounts(db, items, skip_existing=False):
         "errors": errors,
     }, list(dict.fromkeys(uids))
 
-def require_unambiguous_fanpage_owner(db, uid):
-    require_account(db, uid)
-    owners = db.query(Account.user_id).filter(Account.uid == uid).all()
-    if any(owner != owner_context.get() for (owner,) in owners):
-        raise HTTPException(409, _FANPAGE_OWNER_CONFLICT)
-
-
 def delete_preview(db, uids):
     owned_uids = {
         uid for (uid,) in Repo.query(db).with_entities(Account.uid).filter(Account.uid.in_(uids)).all()
     }
     if any(uid not in owned_uids for uid in uids):
         raise HTTPException(404, "Account not found")
-    counts = Pages.counts(db, uids)
-    if counts:
-        owners = db.query(Account.user_id).filter(Account.uid.in_(list(counts))).all()
-        if any(owner != owner_context.get() for (owner,) in owners):
-            raise HTTPException(409, _FANPAGE_OWNER_CONFLICT)
+    counts = Pages.counts(db, uids, owner_context.get())
     return {"page_counts": {uid: counts.get(uid, 0) for uid in uids}, "pages_total": sum(counts.values())}
 
 
@@ -169,16 +157,14 @@ def delete_account(db, uid, delete_pages=False):
             except Exception:
                 pass
         exists = Repo.get_by_uid(db, uid) is not None
-        page_ids = Pages.related_ids(db, uid)
-        if page_ids:
-            require_unambiguous_fanpage_owner(db, uid)
+        page_ids = Pages.related_ids(db, uid, owner_context.get())
         try:
             removed = delete_profiles_by_uid(uid)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from exc
-        affected_pages = Pages.remove_links(db, page_ids, delete_pages)
+        affected_pages = Pages.remove_links(db, page_ids, owner_context.get(), delete_pages)
         deleted = Repo.delete(db, uid, commit=False) if exists else False
         if not deleted and not removed:
             raise HTTPException(404, "Account not found")

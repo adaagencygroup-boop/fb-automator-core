@@ -196,23 +196,17 @@ def init_models():
     db.execute("UPDATE downloaded_videos SET source = 'TIKTOK' WHERE source IS NULL")
     db.execute("ALTER TABLE downloaded_videos ALTER COLUMN source SET NOT NULL")
     db.execute("UPDATE downloaded_videos SET object_path = link WHERE object_path IS NULL AND link IS NOT NULL")
-    db.execute(
-        """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM pg_constraint WHERE conname = 'unique_page_source_video'
-            ) THEN
-                ALTER TABLE downloaded_videos DROP CONSTRAINT IF EXISTS unique_page_video;
-                ALTER TABLE downloaded_videos
-                    ADD CONSTRAINT unique_page_source_video UNIQUE (page_id, source, video_id);
-            END IF;
-        END $$;
-        """
-    )
 
-    _migrate_pages_data()
-    _migrate_posting_progress()
+
+    db.execute("CREATE TABLE IF NOT EXISTS module5_migrations (version TEXT PRIMARY KEY)")
+    migrated = db.fetch_one("SELECT version FROM module5_migrations WHERE version = 'meta_owner_v1'")
+    if not migrated:
+        _migrate_pages_data()
+        _migrate_posting_progress()
+    from .meta_migration import migrate_meta_owners
+    migrate_meta_owners()
+    from .meta_web_migration import migrate_meta_web
+    migrate_meta_web()
 
 
 def _migrate_pages_data():
