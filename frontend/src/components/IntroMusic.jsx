@@ -3,38 +3,61 @@
 import { useEffect, useRef } from "react";
 
 const SRC = "/music/king-cong.mp4";
-export const INTRO_MUSIC_FLAG = "fb_intro_music_played";
 
-/** Phát nhạc chào mỗi lần vào app (một lần / phiên tab). */
+/** Phát nhạc chào mỗi lần vào app — luôn autoplay, không khóa theo phiên. */
 export default function IntroMusic() {
   const audioRef = useRef(null);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (sessionStorage.getItem(INTRO_MUSIC_FLAG) === "1") return;
-
     const el = audioRef.current;
     if (!el) return;
 
-    let finished = false;
-    const markPlayed = () => {
-      if (finished) return;
-      finished = true;
-      sessionStorage.setItem(INTRO_MUSIC_FLAG, "1");
+    let started = false;
+    let cancelled = false;
+
+    const start = async () => {
+      if (cancelled || started) return;
+      try {
+        el.volume = 0.85;
+        el.currentTime = 0;
+        // Chrome thường chặn autoplay có tiếng: unmute sau khi play muted.
+        el.muted = true;
+        await el.play();
+        el.muted = false;
+        started = true;
+      } catch {
+        try {
+          el.muted = false;
+          await el.play();
+          started = true;
+        } catch {
+          /* chờ gesture người dùng */
+        }
+      }
     };
 
-    const tryPlay = () => {
-      el.volume = 0.75;
-      return el.play().then(markPlayed).catch(() => {});
+    const onInteract = () => {
+      if (started && !el.paused) return;
+      started = false;
+      void start();
     };
 
-    tryPlay();
-    // Trình duyệt có thể chặn autoplay khi khôi phục phiên — phát lại ở lần bấm/phím đầu.
-    window.addEventListener("pointerdown", tryPlay);
-    window.addEventListener("keydown", tryPlay);
+    void start();
+    // Retry ngắn nếu media chưa sẵn sàng lần đầu.
+    const t1 = window.setTimeout(() => void start(), 300);
+    const t2 = window.setTimeout(() => void start(), 1200);
+
+    window.addEventListener("pointerdown", onInteract, true);
+    window.addEventListener("keydown", onInteract, true);
+    window.addEventListener("touchstart", onInteract, true);
+
     return () => {
-      window.removeEventListener("pointerdown", tryPlay);
-      window.removeEventListener("keydown", tryPlay);
+      cancelled = true;
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      window.removeEventListener("pointerdown", onInteract, true);
+      window.removeEventListener("keydown", onInteract, true);
+      window.removeEventListener("touchstart", onInteract, true);
       try {
         el.pause();
       } catch {
@@ -43,5 +66,5 @@ export default function IntroMusic() {
     };
   }, []);
 
-  return <audio ref={audioRef} src={SRC} preload="auto" playsInline />;
+  return <audio ref={audioRef} src={SRC} preload="auto" autoPlay playsInline />;
 }
