@@ -19,7 +19,8 @@ import {
   Info,
   FolderCheck,
   FolderX,
-  RotateCcw
+  RotateCcw,
+  Check
 } from "lucide-react";
 import {
   getReelsAccountsPages,
@@ -87,13 +88,29 @@ export default function ReelsPoster() {
 
   // Runner & Console logs states
   const [isRunning, setIsRunning] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [runnerStatus, setRunnerStatus] = useState("IDLE");
+  const [runnerNextSlot, setRunnerNextSlot] = useState(null);
+  const [currentTimeMinutes, setCurrentTimeMinutes] = useState(() => {
+    const d = new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  });
   const [stats, setStats] = useState({ total_pages: 0, processed: 0, success: 0, failed: 0, current_page: "" });
   const [logs, setLogs] = useState([]);
   const logBoxRef = useRef(null);
   const eventSourceRef = useRef(null);
   const folderInputRef = useRef(null);
   const isInitializedRef = useRef(false);
+
+  // Cập nhật phút hiện tại định kỳ để hiển thị đếm ngược chính xác
+  useEffect(() => {
+    const ticker = setInterval(() => {
+      const d = new Date();
+      setCurrentTimeMinutes(d.getHours() * 60 + d.getMinutes());
+    }, 15000);
+    return () => clearInterval(ticker);
+  }, []);
 
   // 1. Khôi phục cấu hình đã lưu từ localStorage khi khởi chạy
   useEffect(() => {
@@ -380,6 +397,7 @@ export default function ReelsPoster() {
         setIsRunning(st.is_running);
         setRunnerStatus(st.status);
         if (st.stats) setStats(st.stats);
+        if (st.next_slot !== undefined) setRunnerNextSlot(st.next_slot);
         if (Array.isArray(st.recent_logs) && st.recent_logs.length > 0) {
           setLogs((prev) => {
             const existingKeys = new Set(prev.map((l) => `${l.timestamp}_${l.message}`));
@@ -440,19 +458,76 @@ export default function ReelsPoster() {
     }
   }, [logs]);
 
-  // Thêm khung giờ hẹn
-  const handleAddTime = () => {
-    const val = newTimeInput.trim();
-    if (/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(val)) {
-      if (!scheduleTimes.includes(val)) {
-        setScheduleTimes([...scheduleTimes, val].sort());
+  // Thêm khung giờ hẹn (tự động chuẩn hóa 2 chữ số HH:MM)
+  const handleAddTime = (customVal) => {
+    const val = (customVal !== undefined ? customVal : newTimeInput || "09:00").trim();
+    if (!val) return;
+    const match = val.match(/^([01]?[0-9]|2[0-3]):([0-5][0-9])$/);
+    if (match) {
+      const h = match[1].padStart(2, "0");
+      const m = match[2];
+      const normalized = `${h}:${m}`;
+      if (!scheduleTimes.includes(normalized)) {
+        setScheduleTimes([...scheduleTimes, normalized].sort());
       }
       setNewTimeInput("");
       setShowAddTime(false);
     } else {
-      alert("Định dạng giờ không hợp lệ. Vui lòng nhập dạng HH:MM (Ví dụ: 14:30)");
+      alert("Định dạng giờ không hợp lệ. Vui lòng chọn dạng HH:MM (Ví dụ: 09:30 hoặc 18:00)");
     }
   };
+
+  // Thêm nhanh khung giờ gợi ý
+  const handleAddPreset = (timePreset) => {
+    if (!scheduleTimes.includes(timePreset)) {
+      setScheduleTimes([...scheduleTimes, timePreset].sort());
+    }
+  };
+
+  // Tính toán khung giờ hẹn gần nhất tiếp theo
+  const getNextScheduledInfo = () => {
+    if (!scheduleEnabled || scheduleTimes.length === 0) return null;
+    const now = new Date();
+    const currentM = now.getHours() * 60 + now.getMinutes();
+
+    let nextSlot = null;
+    let minDiff = Infinity;
+
+    for (const t of scheduleTimes) {
+      if (!t || !t.includes(":")) continue;
+      const [h, m] = t.split(":").map(Number);
+      const slotMin = h * 60 + m;
+      if (slotMin > currentM) {
+        const diff = slotMin - currentM;
+        if (diff < minDiff) {
+          minDiff = diff;
+          nextSlot = { time: t, diffMinutes: diff, isTomorrow: false };
+        }
+      }
+    }
+
+    if (!nextSlot && scheduleTimes.length > 0) {
+      const sorted = [...scheduleTimes].sort();
+      if (sorted[0] && sorted[0].includes(":")) {
+        const [h, m] = sorted[0].split(":").map(Number);
+        const slotMin = h * 60 + m;
+        const diff = 1440 - currentM + slotMin;
+        nextSlot = { time: sorted[0], diffMinutes: diff, isTomorrow: true };
+      }
+    }
+
+    return nextSlot;
+  };
+
+  const formatTimeRemaining = (mins) => {
+    if (!mins || mins <= 0) return "dưới 1 phút";
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    if (h > 0) return `${h} giờ ${m} phút`;
+    return `${m} phút`;
+  };
+
+  const nextSlotInfo = runnerNextSlot || getNextScheduledInfo();
 
   // Xóa khung giờ hẹn
   const handleRemoveTime = (timeToRemove) => {
@@ -594,6 +669,7 @@ export default function ReelsPoster() {
       setSelectedPageIds(next);
     }
 
+    setIsStarting(true);
     try {
       const payload = {
         root_dir: rootDir.trim(),
@@ -640,29 +716,45 @@ export default function ReelsPoster() {
           message: `Lỗi kết nối khi bắt đầu: ${errMsg}`
         }
       ]);
+    } finally {
+      setIsStarting(false);
     }
   };
 
-  // Dừng luồng qua Backend API
+  // Dừng luồng qua Backend API kèm xác nhận dừng hoàn tất
   const handleStop = async () => {
+    setIsStopping(true);
     try {
       const res = await stopReelsJob();
       if (res?.success) {
-        toast.info("Đã gửi yêu cầu dừng tiến trình đăng Reels.", "DỪNG LUỒNG");
+        toast.info("Đã gửi yêu cầu dừng tiến trình đăng Reels. Đang đợi luồng kết thúc an toàn...", "DỪNG LUỒNG");
+      }
+      setLogs((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString("vi-VN"),
+          level: "WARNING",
+          message: "Đang gửi tín hiệu dừng tiến trình đăng theo yêu cầu của người dùng... Vui lòng đợi hoàn tất."
+        }
+      ]);
+
+      // Kiểm tra trạng thái Backend cho đến khi thread dừng hẳn (thử tối đa 10 lần x 500ms = 5s)
+      for (let i = 0; i < 10; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const st = await getReelsStatus();
+        if (st && !st.is_running) {
+          setIsRunning(false);
+          setRunnerStatus(st.status || "STOPPED");
+          break;
+        }
       }
     } catch (e) {
       console.warn("Lỗi khi dừng luồng:", e);
+    } finally {
+      setIsRunning(false);
+      setRunnerStatus("STOPPED");
+      setIsStopping(false);
     }
-    setIsRunning(false);
-    setRunnerStatus("STOPPED");
-    setLogs((prev) => [
-      ...prev,
-      {
-        timestamp: new Date().toLocaleTimeString("vi-VN"),
-        level: "WARNING",
-        message: "Đã gửi tín hiệu dừng tiến trình đăng theo yêu cầu của người dùng."
-      }
-    ]);
   };
 
   // Xóa console log
@@ -914,8 +1006,50 @@ export default function ReelsPoster() {
               </div>
             </div>
 
-            {/* Time Badges */}
-            <div className="flex flex-wrap items-center gap-2 pt-1">
+            {/* Khung giờ vàng gợi ý */}
+            {scheduleEnabled && (
+              <div className="flex flex-col gap-1.5 pt-0.5">
+                <div className="text-[11px] text-slate-500 flex items-center justify-between">
+                  <span>Khung giờ vàng gợi ý:</span>
+                  <span className="text-[10px] text-slate-400">Định dạng 24h</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {[
+                    { label: "08:00", time: "08:00" },
+                    { label: "11:30", time: "11:30" },
+                    { label: "18:00", time: "18:00" },
+                    { label: "20:30", time: "20:30" },
+                  ].map((preset) => {
+                    const isAdded = scheduleTimes.includes(preset.time);
+                    return (
+                      <button
+                        key={preset.time}
+                        type="button"
+                        onClick={() => {
+                          if (isAdded) {
+                            handleRemoveTime(preset.time);
+                          } else {
+                            handleAddPreset(preset.time);
+                          }
+                        }}
+                        className={`px-2 py-0.5 text-[11px] rounded-md border transition-all flex items-center gap-1 ${
+                          isAdded
+                            ? "bg-blue-50 border-blue-300 text-[#1877F2] font-semibold shadow-2xs"
+                            : "bg-white border-[#E2E8F0] text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                        }`}
+                        title={isAdded ? "Nhấn để xóa giờ này" : "Nhấn để thêm vào lịch"}
+                      >
+                        {isAdded ? <Check className="w-3 h-3 text-[#1877F2]" /> : <span>+</span>}
+                        <span>{preset.time}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Time Badges & Input */}
+            <div className={`flex flex-wrap items-center gap-2 pt-1 ${!scheduleEnabled ? "opacity-50 pointer-events-none" : ""}`}>
               {scheduleTimes.map((t) => (
                 <div
                   key={t}
@@ -927,6 +1061,7 @@ export default function ReelsPoster() {
                     type="button"
                     onClick={() => handleRemoveTime(t)}
                     className="hover:text-red-500 text-[#94A3B8] ml-0.5"
+                    title="Xóa giờ này"
                   >
                     <X className="w-3 h-3" />
                   </button>
@@ -934,40 +1069,51 @@ export default function ReelsPoster() {
               ))}
 
               {showAddTime ? (
-                <div className="inline-flex items-center gap-1">
+                <div className="inline-flex items-center gap-1 bg-white p-1 border border-blue-300 rounded-md shadow-xs">
                   <input
-                    type="text"
-                    value={newTimeInput}
+                    type="time"
+                    value={newTimeInput || "09:00"}
                     onChange={(e) => setNewTimeInput(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleAddTime()}
-                    placeholder="HH:MM"
-                    className="w-16 px-2 py-0.5 text-[12px] border border-[#BFDBFE] rounded bg-white text-center"
+                    className="px-1.5 py-0.5 text-[12px] border border-slate-200 rounded bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
                     autoFocus
                   />
                   <button
-                    onClick={handleAddTime}
-                    className="px-2 py-0.5 bg-[#2563EB] text-white rounded text-[11px] font-bold"
+                    type="button"
+                    onClick={() => handleAddTime()}
+                    className="px-2 py-0.5 bg-[#2563EB] hover:bg-blue-700 text-white rounded text-[11px] font-bold transition-colors"
                   >
-                    OK
+                    Thêm
                   </button>
                   <button
+                    type="button"
                     onClick={() => setShowAddTime(false)}
-                    className="p-1 text-[#94A3B8] hover:text-red-500"
+                    className="p-1 text-[#94A3B8] hover:text-red-500 rounded"
+                    title="Hủy"
                   >
-                    <X className="w-3 h-3" />
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ) : (
                 <button
                   type="button"
-                  onClick={() => setShowAddTime(true)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#EFF6FF] border border-[#BFDBFE] rounded-md text-[12px] font-medium text-[#2563EB] hover:bg-blue-100"
+                  onClick={() => {
+                    if (!newTimeInput) setNewTimeInput("09:00");
+                    setShowAddTime(true);
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#EFF6FF] border border-[#BFDBFE] rounded-md text-[12px] font-medium text-[#2563EB] hover:bg-blue-100 transition-colors"
                 >
                   <Plus className="w-3 h-3" />
-                  Thêm giờ
+                  Thêm giờ khác
                 </button>
               )}
             </div>
+
+            {scheduleEnabled && (
+              <p className="text-[11px] text-slate-400 italic">
+                *Hệ thống tự động quét và đăng bài khi máy tính chạy đến đúng các khung giờ trên.
+              </p>
+            )}
           </div>
 
           {/* Field 4: Giãn cách đăng ngẫu nhiên */}
@@ -1003,29 +1149,51 @@ export default function ReelsPoster() {
           <div className="grid grid-cols-2 gap-3 pt-2">
             <button
               type="button"
-              disabled={isRunning}
+              disabled={isRunning || isStarting || isStopping}
               onClick={handleStart}
               className={`py-2.5 px-4 rounded-lg font-bold text-[12px] tracking-wider uppercase flex items-center justify-center gap-2 shadow-sm transition-all ${
-                isRunning
+                isStarting
+                  ? "bg-blue-600 text-white cursor-wait opacity-90 shadow-none"
+                  : isRunning || isStopping
                   ? "bg-slate-300 text-slate-500 cursor-not-allowed"
                   : "bg-[#2563EB] text-white hover:bg-blue-700 active:scale-[0.98]"
               }`}
             >
-              <Play className="w-3.5 h-3.5 fill-current" />
-              KÍCH HOẠT
+              {isStarting ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span className="text-[10px] ">ĐANG KÍCH HOẠT...</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>KÍCH HOẠT</span>
+                </>
+              )}
             </button>
             <button
               type="button"
-              disabled={!isRunning}
+              disabled={!isRunning || isStarting || isStopping}
               onClick={handleStop}
               className={`py-2.5 px-4 rounded-lg font-bold text-[12px] tracking-wider uppercase flex items-center justify-center gap-2 shadow-sm transition-all ${
-                !isRunning
+                isStopping
+                  ? "bg-rose-600 text-white cursor-wait opacity-90 shadow-none"
+                  : !isRunning || isStarting
                   ? "bg-slate-200 text-slate-400 cursor-not-allowed"
                   : "bg-[#F43F5E] text-white hover:bg-rose-600 active:scale-[0.98]"
               }`}
             >
-              <Square className="w-3.5 h-3.5 fill-current" />
-              DỪNG LUỒNG
+              {isStopping ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>ĐANG DỪNG...</span>
+                </>
+              ) : (
+                <>
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>DỪNG LUỒNG</span>
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -1297,8 +1465,12 @@ export default function ReelsPoster() {
 
             {/* Trạng thái hoạt động */}
             <span
-              className={`ml-2 px-2 py-0.5 text-[10px] font-semibold rounded-full uppercase tracking-wider ${
-                isRunning
+              className={`ml-2 px-2.5 py-0.5 text-[10px] font-semibold rounded-full uppercase tracking-wider flex items-center gap-1.5 ${
+                isStarting
+                  ? "bg-blue-100 text-blue-700 animate-pulse"
+                  : isStopping
+                  ? "bg-rose-100 text-rose-700 animate-pulse"
+                  : isRunning
                   ? "bg-blue-100 text-blue-700 animate-pulse"
                   : runnerStatus === "COMPLETED"
                   ? "bg-emerald-100 text-emerald-700"
@@ -1307,7 +1479,16 @@ export default function ReelsPoster() {
                   : "bg-slate-100 text-slate-600"
               }`}
             >
-              {isRunning ? "● Đang chạy" : runnerStatus}
+              {(isStarting || isStopping) && <RefreshCw className="w-2.5 h-2.5 animate-spin" />}
+              <span>
+                {isStarting
+                  ? "Đang kích hoạt..."
+                  : isStopping
+                  ? "Đang dừng..."
+                  : isRunning
+                  ? "● Đang chạy"
+                  : runnerStatus}
+              </span>
             </span>
           </div>
 
@@ -1334,6 +1515,29 @@ export default function ReelsPoster() {
             </button>
           </div>
         </div>
+
+        {/* Live waiting countdown banner when scheduler is running */}
+        {isRunning && scheduleEnabled && nextSlotInfo && (
+          <div className="px-3.5 py-2.5 bg-blue-50/90 border border-blue-200 rounded-lg flex items-center justify-between text-[12px] text-blue-900 shadow-2xs">
+            <div className="flex items-center gap-2.5">
+              <span className="relative flex h-2.5 w-2.5 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#2563EB]"></span>
+              </span>
+              <div>
+                <span className="font-semibold text-blue-950">Chế độ hẹn giờ: </span>
+                <span className="text-blue-900">
+                  Khung giờ đăng tiếp theo là <strong className="font-mono text-[13px] bg-blue-100/80 px-1.5 py-0.5 rounded text-blue-950">{nextSlotInfo.time}</strong>
+                  {nextSlotInfo.isTomorrow ? " (ngày mai)" : ""} — còn <strong className="text-blue-950">{formatTimeRemaining(nextSlotInfo.diffMinutes)}</strong> nữa.
+                </span>
+              </div>
+            </div>
+            <div className="text-[11px] text-blue-700 font-medium bg-blue-100/70 px-2.5 py-1 rounded-md border border-blue-200/60 shrink-0 flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-[#2563EB]" />
+              <span>Đang ở trạng thái chờ tự động...</span>
+            </div>
+          </div>
+        )}
 
         {/* Console Log Box */}
         <div
