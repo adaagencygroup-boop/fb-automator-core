@@ -45,7 +45,7 @@ import useWebFacebookConnection from "./useWebFacebookConnection";
 import useSyncAccounts from "./useSyncAccounts";
 import { WebConnectionButton } from "./WebFacebookConnection";
 import styles from "./FanpageList.module.css";
-import PageAccountFilter from "./PageAccountFilter";
+import PageAccountFilter from "./PageAccountFilter.jsx";
 import { ALL_ACCOUNTS, matchesPageAccount, pageAccountOptions } from "./pageAccountFilter.mjs";
 import {
   deleteManagedPage,
