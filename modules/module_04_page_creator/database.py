@@ -66,6 +66,27 @@ _ADDITIVE_COLUMNS = {
 }
 
 
+def _ensure_index(engine, sql: str, attempts: int = 3) -> None:
+    """Tạo index riêng từng câu; lỗi kết nối thì thử lại, không làm chết startup."""
+    import time
+
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError, OperationalError
+
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(sql))
+            return
+        except (OperationalError, DBAPIError) as exc:
+            last_error = exc
+            if attempt < attempts:
+                time.sleep(attempt)
+                continue
+    print(f"[Module 04] Bỏ qua tạo index (không chặn startup): {last_error}")
+
+
 def ensure_schema():
     """Tạo bảng nếu chưa có, rồi thêm cột còn thiếu. Không xóa dữ liệu cũ."""
     from sqlalchemy import inspect, text
@@ -85,12 +106,15 @@ def ensure_schema():
                 if name not in existing:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {kind}"))
                     added.append(f"{table}.{name}")
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_created_pages_owner_username ON created_pages (owner_username)"
-        ))
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_creator_settings_owner_username ON creator_settings (owner_username)"
-        ))
+    # Index tách riêng: pooler/Supabase đôi khi cắt kết nối giữa CREATE INDEX
+    _ensure_index(
+        engine,
+        "CREATE INDEX IF NOT EXISTS ix_created_pages_owner_username ON created_pages (owner_username)",
+    )
+    _ensure_index(
+        engine,
+        "CREATE INDEX IF NOT EXISTS ix_creator_settings_owner_username ON creator_settings (owner_username)",
+    )
     return added
 
 

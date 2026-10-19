@@ -158,6 +158,11 @@ export default function AuthGate({ children }) {
     setUser(null);
     localStorage.removeItem("pending_username");
     localStorage.removeItem("locked_username");
+    try {
+      sessionStorage.removeItem("fb_intro_music_played");
+    } catch {
+      /* bỏ qua */
+    }
     setScreen("login");
   }
 
