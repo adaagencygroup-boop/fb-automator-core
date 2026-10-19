@@ -69,11 +69,10 @@ const DEFAULT_GEMINI_MODELS = [
 export default function GroupPostModule() {
   const mediaInputRef = useRef(null);
 
-  const [accounts, setAccounts] = useState(MOCK_ACCOUNTS);
+  const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
-  const [selectedAccountKeys, setSelectedAccountKeys] = useState(
-    MOCK_ACCOUNTS.slice(0, 4).map((account) => account.key)
-  );
+  const [accountsError, setAccountsError] = useState("");
+  const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
   const [model, setModel] = useState("gpt-4o");
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
@@ -112,15 +111,22 @@ export default function GroupPostModule() {
 
   const loadAccounts = async () => {
     setAccountsLoading(true);
+    setAccountsError("");
     try {
-      setAccounts(MOCK_ACCOUNTS);
+      const data = await getAccounts();
+      // Module 7 only allows accounts whose status has been checked and is LIVE.
+      const liveAccounts = data
+        .filter((account) => String(account.status || "").toUpperCase() === "LIVE")
+        .map(normalizeAccount);
+      setAccounts(liveAccounts);
       setSelectedAccountKeys((current) =>
-        current.length ? current : MOCK_ACCOUNTS.slice(0, 4).map((account) => account.key)
+        current.filter((key) => liveAccounts.some((account) => account.key === key))
       );
     } catch (err) {
       console.warn("Lỗi nạp tài khoản:", err);
-      setAccounts(MOCK_ACCOUNTS);
-      setSelectedAccountKeys(MOCK_ACCOUNTS.slice(0, 4).map((account) => account.key));
+      setAccounts([]);
+      setSelectedAccountKeys([]);
+      setAccountsError(err.message || "Không thể tải tài khoản từ Module 2");
     } finally {
       setAccountsLoading(false);
     }
@@ -371,6 +377,7 @@ export default function GroupPostModule() {
       <GroupAccountSection
         accounts={accounts}
         accountsLoading={accountsLoading}
+        accountsError={accountsError}
         selectedAccountKeys={selectedAccountKeys}
         setSelectedAccountKeys={setSelectedAccountKeys}
         onRefreshAccounts={loadAccounts}

@@ -20,7 +20,7 @@ import { attachDragSelection } from "../../shared/drag-selection";
  * ============================================================================
  * MODULE 07 - BƯỚC 1: CHỌN TÀI KHOẢN / NGƯỜI DÙNG ĐI SEEDING (GroupAccountSection)
  * Kế thừa nghiệp vụ từ FaceBook_Post_Group.py:
- * 1. Quản lý & nạp danh sách tài khoản Facebook (từ Module 2 hoặc 20 tài khoản clone tĩnh để test)
+ * 1. Nạp danh sách tài khoản Facebook đủ điều kiện từ Module 2
  * 2. Tìm kiếm nhanh tài khoản theo UID, Tên người dùng
  * 3. Chọn tất cả / Bỏ chọn từng tài khoản
  * 4. Cuộn trực tiếp không phân trang, hiển thị đầy đủ tài khoản
@@ -30,12 +30,12 @@ import { attachDragSelection } from "../../shared/drag-selection";
 export default function GroupAccountSection({
   accounts = [],
   accountsLoading = false,
+  accountsError = "",
   selectedAccountKeys = [],
   setSelectedAccountKeys,
   onRefreshAccounts,
 }) {
-  // Gán trực tiếp danh sách tĩnh MOCK_ACCOUNTS (20 tài khoản) từ constants.js để test nhiều tài khoản
-  const effectiveAccounts = MOCK_ACCOUNTS;
+  const effectiveAccounts = accounts;
 
   const [accountSearch, setAccountSearch] = useState("");
 
@@ -210,16 +210,20 @@ export default function GroupAccountSection({
                     <div className="flex flex-col items-center justify-center space-y-2">
                       <Users className="size-8 text-slate-300" />
                       <p className="text-xs font-semibold text-slate-600">
-                        {accounts.length === 0
-                          ? "Chưa có tài khoản Facebook nào trong Module 2 (Quản lý tài khoản)"
+                        {accountsError
+                          ? "Không thể tải danh sách tài khoản Facebook"
+                          : accounts.length === 0
+                          ? "Chưa có tài khoản Live nào trong Module 2 (Quản lý tài khoản)"
                           : "Không tìm thấy tài khoản Facebook phù hợp"}
                       </p>
                       <p className="max-w-md text-[11px] text-slate-400">
-                        {accounts.length === 0
-                          ? "Vui lòng vào Module 2 để thêm hoặc import tài khoản Facebook, sau đó quay lại để chọn tài khoản đi seeding."
+                        {accountsError
+                          ? accountsError
+                          : accounts.length === 0
+                          ? "Vui lòng kiểm tra hoặc import tài khoản trong Module 2, sau đó tải lại danh sách. Chỉ tài khoản đã xác minh trạng thái Live mới được chọn."
                           : "Thử tìm kiếm với từ khóa khác hoặc bấm nút làm mới."}
                       </p>
-                      {accounts.length === 0 ? (
+                      {accounts.length === 0 && !accountsError ? (
                         <div className="pt-2">
                           <Link
                             href="/accounts"
