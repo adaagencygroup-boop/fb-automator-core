@@ -1162,7 +1162,7 @@ export default function ReelsPoster() {
               {isStarting ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>ĐANG KÍCH HOẠT...</span>
+                  <span className="text-[10px] ">ĐANG KÍCH HOẠT...</span>
                 </>
               ) : (
                 <>
