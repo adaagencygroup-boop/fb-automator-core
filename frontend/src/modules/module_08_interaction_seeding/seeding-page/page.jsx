@@ -233,8 +233,8 @@ export default function SeedingPageMain() {
         })),
         account_count: accountCount,
         threads: 1,
-        min_delay_sec: delayMin,
-        max_delay_sec: delayMax,
+        delay_seconds_min: delayMin,
+        delay_seconds_max: delayMax,
       });
 
       setCurrentCampaignId(campaign.id);
