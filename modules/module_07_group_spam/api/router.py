@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
@@ -134,7 +134,7 @@ class SearchGroupInput(BaseModel):
     member_filter: str = Field(default="all")
     group_type: str = Field(default="all")
     frequency_filter: str = Field(default="all")
-    account_uid: Optional[str] = None
+    account_uid: str | None = None
 
 
 class CampaignInput(BaseModel):

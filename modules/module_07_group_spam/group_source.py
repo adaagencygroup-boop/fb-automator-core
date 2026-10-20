@@ -14,9 +14,13 @@ Kế thừa & chuẩn hóa nghiệp vụ từ FaceBook_Post_Group.py:
 """
 from __future__ import annotations
 
+import logging
 import re
+import time
 import urllib.parse
 from typing import Any, Dict, List, Optional, Set
+
+logger = logging.getLogger(__name__)
 
 
 def clean_group_url(raw_url: str) -> str:
@@ -553,61 +557,256 @@ REAL_FACEBOOK_GROUPS: List[Dict[str, Any]] = [
 ]
 
 
+def get_scraping_account(account_uid: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Lấy thông tin tài khoản dùng để cào dữ liệu nhóm thật:
+    - Nếu có account_uid truyền vào, ưu tiên lấy tài khoản đó.
+    - Nếu không có, tự động lấy tài khoản đầu tiên trong CSDL (ưu tiên có cookie và status != 'DIE').
+    """
+    try:
+        from core.database.connection import db
+
+        if account_uid and str(account_uid).strip():
+            acc = db.fetch_one(
+                "SELECT id, uid, user_id, cookie, proxy, profile_name, status FROM accounts WHERE uid = %s LIMIT 1",
+                (str(account_uid).strip(),),
+            )
+            if acc:
+                return acc
+        # Ưu tiên tài khoản đầu tiên có cookie hợp lệ và trạng thái LIVE/NEW
+        acc = db.fetch_one(
+            "SELECT id, uid, user_id, cookie, proxy, profile_name, status FROM accounts WHERE cookie IS NOT NULL AND status != 'DIE' ORDER BY id ASC LIMIT 1"
+        )
+        if acc:
+            return acc
+        # Fallback bất kỳ tài khoản đầu tiên nào trong DB
+        return db.fetch_one(
+            "SELECT id, uid, user_id, cookie, proxy, profile_name, status FROM accounts ORDER BY id ASC LIMIT 1"
+        )
+    except Exception as e:
+        logger.warning(f"Lỗi khi truy vấn tài khoản cào nhóm từ CSDL: {e}")
+        return None
+
+
 def search_facebook_via_browser(
     keyword: str,
     account_uid: Optional[str] = None,
     max_results: int = 50,
 ) -> List[Dict[str, Any]]:
     """
-    Quét trực tiếp nhóm Facebook bằng trình duyệt Chrome (kế thừa từ FaceBook_Post_Group.py:905-918).
-    Nếu có account_uid và Chrome đang mở, truy cập facebook.com/groups/search/groups/?q=...
+    Quét trực tiếp nhóm Facebook bằng tài khoản thật qua Chrome.
+    - Tìm tài khoản chỉ định hoặc tài khoản đầu tiên trong CSDL.
+    - Tận dụng Chrome đang mở nếu có; nếu chưa mở thì tự khởi động Chrome với cookie & profile của nick.
+    - Điều hướng tới https://www.facebook.com/groups/search/groups/?q=...
+    - Tự động cuộn trang và bóc tách thông tin nhóm thật: Tên, Link, UID, Quyền riêng tư, Số thành viên, Tần suất bài viết.
     """
-    if not account_uid:
+    clean_keyword = keyword.strip()
+    if not clean_keyword:
         return []
+
+    account = get_scraping_account(account_uid)
+    if not account:
+        logger.warning("Không tìm thấy tài khoản Facebook nào trong CSDL để cào dữ liệu nhóm.")
+        return []
+
+    target_uid = str(account.get("uid") or "").strip()
+    if not target_uid:
+        return []
+
+    owner = account.get("user_id")
+    cookie_str = account.get("cookie") or ""
+    proxy = account.get("proxy")
+
+    driver = None
+    created_new_driver = False
+    lock = None
+    acquired_lock = False
+
     try:
-        from core.browser import get_active_drivers
+        from core.browser import get_active_drivers, get_profile_lock, load_cookies, open_browser
 
-        drivers = get_active_drivers(account_uid)
-        if not drivers:
-            return []
+        active_drivers = get_active_drivers(target_uid, owner=owner)
+        if active_drivers:
+            driver = active_drivers[0]
+            logger.info(f"[{target_uid}] Tận dụng trình duyệt Chrome đang mở để cào nhóm.")
+        else:
+            lock = get_profile_lock(target_uid, owner=owner)
+            acquired_lock = lock.acquire(timeout=8)
+            if not acquired_lock:
+                logger.warning(f"[{target_uid}] Profile đang bị khóa bởi tiến trình khác.")
+                return []
 
-        driver = drivers[0]
-        search_term = urllib.parse.quote(keyword.strip())
-        driver.get(f"https://www.facebook.com/groups/search/groups/?q={search_term}")
-        import time
-        from selenium.webdriver.common.by import By
+            logger.info(f"[{target_uid}] Khởi động Chrome để cào dữ liệu nhóm cho từ khóa '{clean_keyword}'...")
+            driver = open_browser(
+                uid=target_uid,
+                owner=owner,
+                proxy=proxy,
+                scope="group_scraper",
+                headless=True,
+                verify_egress=False,
+                allow_direct_fallback=True,
+            )
+            created_new_driver = True
 
-        time.sleep(3)
-        for _ in range(2):
+            if cookie_str:
+                load_cookies(driver, cookie_str)
+
+        # Điều hướng tìm kiếm nhóm trên Facebook
+        search_term = urllib.parse.quote(clean_keyword)
+        search_url = f"https://www.facebook.com/groups/search/groups/?q={search_term}"
+        logger.info(f"[{target_uid}] Truy cập: {search_url}")
+        driver.get(search_url)
+        time.sleep(4)
+
+        # Cuộn trang từ 2-4 lần để nạp thêm kết quả
+        scroll_count = min(4, max(2, (max_results // 10)))
+        for _ in range(scroll_count):
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(2)
 
-        links = driver.find_elements(By.TAG_NAME, "a")
-        group_links = []
-        for a in links:
-            h = a.get_attribute("href")
-            if h and "/groups/" in h and 25 < len(h) < 160:
-                if not any(bad in h for bad in ["/user/", "/my_groups/", "/permalink/", "/posts/", "/hashtag/"]):
-                    clean = clean_group_url(h)
-                    if clean not in [g["url"] for g in group_links]:
-                        uid = extract_group_identifier(clean)
-                        title = a.text.strip() or f"Nhóm Facebook [ID: {uid}]"
-                        group_links.append({
-                            "id": f"{len(group_links) + 1:02d}",
-                            "key": f"group_{uid}",
-                            "name": title,
-                            "url": clean,
-                            "uid": uid,
-                            "frequency": "15 bài/ngày",
-                            "members": "50K",
-                            "privacy": "public",
-                            "already_posted": False,
-                        })
-            if len(group_links) >= max_results:
+        # Trích xuất dữ liệu thẻ nhóm bằng JavaScript DOM Inspector
+        js_extract_script = """
+        const results = [];
+        const seen = new Set();
+        const anchors = Array.from(document.querySelectorAll('a[href*="/groups/"]'));
+        
+        for (const a of anchors) {
+            const rawHref = a.getAttribute('href') || a.href || '';
+            if (!rawHref.includes('/groups/')) continue;
+            
+            // Lọc các URL không phải link trang chủ nhóm
+            const badPatterns = ['/user/', '/my_groups/', '/permalink/', '/posts/', '/hashtag/', '/events/', '/media/', '/about/'];
+            if (badPatterns.some(bad => rawHref.includes(bad))) continue;
+            
+            let fullHref = a.href || rawHref;
+            try {
+                const u = new URL(fullHref, window.location.origin);
+                fullHref = u.origin + u.pathname;
+            } catch(e) {
+                fullHref = fullHref.split('?')[0];
+            }
+            fullHref = fullHref.replace(/\\/+$/, '');
+            
+            // Loại bỏ các đường dẫn hệ thống
+            if (fullHref.endsWith('/groups') || fullHref.endsWith('/groups/feed') || fullHref.endsWith('/groups/discover') || fullHref.endsWith('/groups/create')) {
+                continue;
+            }
+            
+            if (seen.has(fullHref)) continue;
+            
+            // Tìm container chứa thông tin thẻ nhóm
+            let container = a;
+            for (let i = 0; i < 6; i++) {
+                if (container.parentElement && container.parentElement !== document.body) {
+                    container = container.parentElement;
+                    const text = container.innerText || '';
+                    if (text.includes('thành viên') || text.includes('members') || text.includes('bài viết') || text.includes('posts')) {
+                        break;
+                    }
+                }
+            }
+            
+            const cardText = container.innerText || a.innerText || '';
+            const lines = cardText.split('\\n').map(l => l.trim()).filter(Boolean);
+            
+            let name = a.innerText.trim();
+            if (!name || name.length < 2) {
+                name = lines.length > 0 ? lines[0] : '';
+            }
+            
+            let privacy = 'public';
+            let members = '50K';
+            let frequency = '15 bài viết/ngày';
+            
+            for (const line of lines) {
+                const lower = line.toLowerCase();
+                if (lower.includes('riêng tư') || lower.includes('private')) {
+                    privacy = 'private';
+                }
+                if (lower.includes('công khai') || lower.includes('public')) {
+                    privacy = 'public';
+                }
+                // Tìm số thành viên (vd: 120K thành viên, 50 nghìn thành viên, 1.2M members)
+                const memMatch = line.match(/([\\d]+([.,][\\d]+)?\\s*(k|triệu|nghìn|tr|m)?)\\s*(thành viên|members)/i);
+                if (memMatch) {
+                    members = memMatch[1].toUpperCase().replace('NGHÌN', 'K').replace('TRIỆU', 'M').replace(/\\s+/g, '') + (memMatch[1].match(/[a-zA-Z]/) ? '' : ' thành viên');
+                }
+                // Tìm tần suất bài đăng
+                const freqMatch = line.match(/([\\d]+\\+?\\s*(bài|bài viết|posts)?\\s*(\\/|\\s*a\\s*|\\s*mỗi\\s*|\\s*trên\\s*)(ngày|day|tuần|week))/i);
+                if (freqMatch) {
+                    frequency = freqMatch[0];
+                }
+            }
+            
+            seen.add(fullHref);
+            results.push({
+                url: fullHref,
+                name: name || 'Nhóm Facebook',
+                privacy: privacy,
+                members: members,
+                frequency: frequency
+            });
+        }
+        return results;
+        """
+
+        raw_items = driver.execute_script(js_extract_script) or []
+        logger.info(f"[{target_uid}] Trích xuất được {len(raw_items)} nhóm Facebook thật từ DOM.")
+
+        posted_set = get_posted_group_keys()
+        parsed_groups: List[Dict[str, Any]] = []
+
+        for idx, item in enumerate(raw_items, 1):
+            clean_url = clean_group_url(item["url"])
+            uid = extract_group_identifier(clean_url)
+            group_key = f"group_{uid}"
+            is_already_posted = (group_key.lower() in posted_set) or (clean_url.lower() in posted_set)
+
+            # Tính toán mem_num float để phục vụ lọc nếu cần
+            mem_raw = item.get("members", "50K")
+            mem_k = 50.0
+            mem_digits = re.search(r"([\d]+([.,][\d]+)?)", str(mem_raw))
+            if mem_digits:
+                val = float(mem_digits.group(1).replace(",", "."))
+                if "M" in str(mem_raw).upper():
+                    mem_k = val * 1000
+                elif "K" in str(mem_raw).upper():
+                    mem_k = val
+                else:
+                    mem_k = val / 1000 if val > 100 else val
+
+            grp_dict = {
+                "id": f"{len(parsed_groups) + 1:02d}",
+                "key": group_key,
+                "name": item.get("name") or f"Nhóm Facebook [ID: {uid}]",
+                "url": clean_url,
+                "uid": uid,
+                "frequency": item.get("frequency") or "15 bài viết/ngày",
+                "members": f"{mem_k:.1f}K" if mem_k else mem_raw,
+                "privacy": item.get("privacy") or "public",
+                "already_posted": is_already_posted,
+                "mem_num": mem_k,
+            }
+            parsed_groups.append(grp_dict)
+            if len(parsed_groups) >= max_results:
                 break
-        return group_links
-    except Exception:
+
+        return parsed_groups
+
+    except Exception as e:
+        logger.error(f"Lỗi khi cào nhóm Facebook thật qua trình duyệt: {e}")
         return []
+    finally:
+        if created_new_driver and driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        if acquired_lock and lock:
+            try:
+                lock.release()
+            except Exception:
+                pass
 
 
 def search_facebook_groups(
@@ -621,18 +820,56 @@ def search_facebook_groups(
     """
     Tìm kiếm nhóm Facebook thật theo từ khóa và bộ lọc.
     Kế thừa nghiệp vụ từ FaceBook_Post_Group.py:905-918.
-    Tích hợp kiểm tra lịch sử đã đăng trong cơ sở dữ liệu PostgreSQL.
+    Ưu tiên cào dữ liệu thật từ Facebook bằng tài khoản đầu tiên (hoặc tài khoản chỉ định).
+    Tự động lọc theo quyền riêng tư, số lượng thành viên, tần suất bài đăng và lịch sử đã đăng.
     """
     clean_keyword = keyword.strip()
     if not clean_keyword:
         return []
 
-    # 1. Thử quét trực tiếp qua Chrome nếu tài khoản đang mở
-    browser_results = search_facebook_via_browser(clean_keyword, account_uid, max_results)
+    # 1. Cào trực tiếp nhóm Facebook thật bằng trình duyệt Chrome qua tài khoản đầu tiên / chỉ định
+    browser_results = search_facebook_via_browser(clean_keyword, account_uid, max_results * 2)
     if browser_results:
-        return browser_results
+        filtered: List[Dict[str, Any]] = []
+        for grp in browser_results:
+            mem_num = grp.get("mem_num", 50.0)
+            privacy = grp.get("privacy", "public")
+            freq = grp.get("frequency", "")
 
-    # 2. Tìm kiếm nhóm Facebook thật từ kho dữ liệu nhóm đã chuẩn hóa
+            # Áp dụng bộ lọc số lượng thành viên
+            if member_filter == "10k" and mem_num < 10:
+                continue
+            if member_filter == "50k" and mem_num < 50:
+                continue
+            if member_filter == "100k" and mem_num < 100:
+                continue
+
+            # Áp dụng bộ lọc loại nhóm
+            if group_type == "public" and privacy != "public":
+                continue
+            if group_type == "private" and privacy != "private":
+                continue
+
+            # Áp dụng bộ lọc tần suất bài viết
+            if frequency_filter and frequency_filter != "all":
+                freq_match = re.search(r"(\d+)", freq)
+                freq_val = int(freq_match.group(1)) if freq_match else 0
+                filter_match = re.search(r"(\d+)", str(frequency_filter))
+                if filter_match:
+                    target_freq = int(filter_match.group(1))
+                    if freq_val < target_freq:
+                        continue
+
+            filtered.append(grp)
+            if len(filtered) >= max_results:
+                break
+
+        if filtered:
+            for idx, item in enumerate(filtered, 1):
+                item["id"] = f"{idx:02d}"
+            return filtered
+
+    # 2. Dự phòng: Tìm kiếm nhóm Facebook từ kho dữ liệu nhóm đã chuẩn hóa (nếu cào trực tiếp không có kết quả)
     posted_set = get_posted_group_keys()
     norm_kw = remove_accents(clean_keyword)
     kw_tokens = [t.strip() for t in re.split(r"[,;\s]+", norm_kw) if len(t.strip()) >= 2]
