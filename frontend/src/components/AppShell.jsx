@@ -35,6 +35,47 @@ function Workspace({ session, children }) {
   const [logs, setLogs] = useState([]);
   const [sidebarOpen, setSidebarOpen] = usePersistentBoolean("fb-automator.sidebar-open", true);
 
+  // Lắng nghe sự kiện Deep Link trong môi trường Desktop Tauri
+  useEffect(() => {
+    let unlisten;
+    let active = true;
+
+    async function initDeepLink() {
+      if (typeof window === "undefined") return;
+      if (!window.__TAURI__ && !window.__TAURI_INTERNALS__) return;
+
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        if (!active) return;
+        unlisten = await listen("deep-link://new-url", (event) => {
+          const urls = event.payload;
+          if (Array.isArray(urls) && urls.length > 0) {
+            const rawUrl = urls[0];
+            console.log("[Tauri DeepLink] Incoming URL:", rawUrl);
+            if (rawUrl.includes("oauth")) {
+              const urlParts = rawUrl.split("://")[1] || "";
+              const hashIdx = urlParts.indexOf("#");
+              const qIdx = urlParts.indexOf("?");
+              const splitIdx = hashIdx !== -1 ? hashIdx : qIdx;
+              const routePath = splitIdx !== -1 ? urlParts.substring(0, splitIdx) : urlParts;
+              const params = splitIdx !== -1 ? urlParts.substring(splitIdx) : "";
+              const finalPath = "/" + (routePath.startsWith("/") ? routePath.slice(1) : routePath) + params;
+              router.push(finalPath);
+            }
+          }
+        });
+      } catch (err) {
+        console.warn("[Tauri DeepLink] Could not attach listener:", err);
+      }
+    }
+
+    initDeepLink();
+    return () => {
+      active = false;
+      if (typeof unlisten === "function") unlisten();
+    };
+  }, [router]);
+
   useEffect(() => {
     // Kiểm tra Engine
     api
@@ -68,37 +109,18 @@ function Workspace({ session, children }) {
     <div className="flex h-screen w-screen bg-background text-foreground antialiased overflow-hidden">
       <IntroMusic />
       <Sidebar activeTab={activeTab} open={sidebarOpen} />
-
-      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-        <Header
-          activeTab={activeTab}
-          user={{
-            name: user.username,
-            initials: String(user.username || "?").slice(0, 2).toUpperCase(),
-          }}
-          onProfileClick={() => goTo("profile")}
-          sidebarOpen={sidebarOpen}
-          onToggleSidebar={() => setSidebarOpen((v) => !v)}
-          isAdmin={session.isAdmin}
-          adminUrl={session.adminUrl}
-          onLogout={session.logout}
-        />
-
-        <main className={`flex-1 overflow-y-auto p-6 ${["dashboard", "profile"].includes(activeTab) ? "bg-[#f7f8ff]" : "bg-background"}`}>
-          {user.modules_unlocked || ["dashboard", "profile"].includes(activeTab) ? (
-            <SessionContext.Provider value={session}>{children}</SessionContext.Provider>
-          ) : (
-            <div className="mx-auto max-w-lg rounded-xl border border-border bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-bold tracking-tight text-sky-600">Chưa mở được các module</h2>
-              <p className="mt-2 text-sm leading-5 text-slate-500">
-                Tài khoản {user.username} đang ở trạng thái {user.status}. Cần admin duyệt hoặc gia hạn thì mới vào được 9
-                module.
-              </p>
-            </div>
-          )}
-        </main>
-
-        {SHOW_SYSTEM_LOG && <ConsoleTerminal logs={logs} engineOnline={engineOnline} />}
+      <div className="flex-1 flex flex-col min-w-0 bg-background overflow-hidden">
+        <SessionContext.Provider value={session}>
+          <Header
+            activeTab={activeTab}
+            engineOnline={engineOnline}
+            user={user}
+            sidebarOpen={sidebarOpen}
+            onToggleSidebar={() => setSidebarOpen((prev) => !prev)}
+          />
+        </SessionContext.Provider>
+        <main className="flex-1 overflow-y-auto p-6 bg-muted/20">{children}</main>
+        {SHOW_SYSTEM_LOG && <ConsoleTerminal logs={logs} />}
       </div>
     </div>
   );

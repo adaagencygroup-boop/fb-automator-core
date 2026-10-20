@@ -1,6 +1,6 @@
 """
 Script Build Python Sidecar Binary cho Tauri
-Tự động gọi PyInstaller và sao chép vào src-tauri/binaries theo đúng target triple của Windows:
+Tu dong goi PyInstaller va sao chep vao src-tauri/binaries theo dung target triple cua Windows:
 src-tauri/binaries/local_engine-x86_64-pc-windows-msvc.exe
 """
 import os
@@ -9,45 +9,55 @@ import subprocess
 import shutil
 from pathlib import Path
 
+# Ensure UTF-8 output in Windows consoles
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 TAURI_BIN_DIR = BASE_DIR / "src-tauri" / "binaries"
 
 def build_sidecar():
     print("=" * 70)
-    print("🚀 BẮT ĐẦU ĐÓNG GÓI PYTHON LOCAL ENGINE (SIDECAR BINARY)")
+    print(">> BAT DAU DONG GOI PYTHON LOCAL ENGINE (SIDECAR BINARY)")
     print("=" * 70)
 
     spec_file = BASE_DIR / "build_engine.spec"
     if not spec_file.exists():
-        print(f"❌ Không tìm thấy {spec_file}!")
-        return
+        print(f"[ERROR] Khong tim thay {spec_file}!")
+        return False
 
-    # Chạy PyInstaller
+    # Chay PyInstaller
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", str(spec_file)]
-    print(f"⚡ Đang thực thi: {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=str(BASE_DIR))
+    print(f">> Dang thuc thi: {' '.join(cmd)}")
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    result = subprocess.run(cmd, cwd=str(BASE_DIR), env=env)
 
     if result.returncode != 0:
-        print("❌ Lỗi khi đóng gói local_engine!")
-        return
+        print("[ERROR] Loi khi dong goi local_engine!")
+        return False
 
     built_exe = BASE_DIR / "dist" / "local_engine.exe"
     if not built_exe.exists():
-        print(f"❌ Không tìm thấy file đã build tại: {built_exe}")
-        return
+        print(f"[ERROR] Khong tim thay file da build tai: {built_exe}")
+        return False
 
-    # Tạo thư mục src-tauri/binaries nếu chưa có
+    # Tao thu muc src-tauri/binaries neu chua co
     TAURI_BIN_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Tauri quy định tên binary sidecar theo target triple: <name>-<target-triple>.exe
+    # Tauri quy dinh ten binary sidecar theo target triple: <name>-<target-triple>.exe
     target_triple_exe = TAURI_BIN_DIR / "local_engine-x86_64-pc-windows-msvc.exe"
     shutil.copy2(built_exe, target_triple_exe)
 
     print("\n" + "=" * 70)
-    print("🎉 BUILD SIDECAR HOÀN TẤT THÀNH CÔNG!")
-    print(f"📂 Đã sao chép vào: {target_triple_exe}")
-    print("👉 Bây giờ bạn có thể chạy `cargo tauri build` hoặc `npm run tauri build`!")
+    print(">> BUILD SIDECAR HOAN TAT THANH CONG!")
+    print(f">> Da sao chep vao: {target_triple_exe}")
+    print(">> Bay gio ban co the chay `cargo tauri build` hoac `npm run tauri build`!")
     print("=" * 70)
+    return True
 
 if __name__ == "__main__":
-    build_sidecar()
+    success = build_sidecar()
+    if not success:
+        sys.exit(1)

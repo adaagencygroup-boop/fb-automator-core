@@ -42,6 +42,7 @@ hidden_imports = [
     "core.media.image_search",
     "core.network",
     "core.network.proxy_manager",
+    "core.browser",
     "modules",
     "sqlite3",
     "psycopg2",
@@ -53,16 +54,29 @@ hidden_imports = [
     "duckduckgo_search",
     "google.genai",
     "google.generativeai",
+    "selenium",
+    "selenium.webdriver",
+    "webdriver_manager",
+    "curl_cffi",
+    "pyotp",
+    "jwt",
+    "bcrypt",
+    "dotenv",
+    "PyQt5",
+    "PyQt5.QtCore",
 ]
 
 try:
-    hidden_imports += collect_submodules("modules.module_02_account_manager")
+    hidden_imports += collect_submodules("modules")
+    hidden_imports += collect_submodules("core")
+    hidden_imports += collect_submodules("selenium")
+    hidden_imports += collect_submodules("webdriver_manager")
     hidden_imports += collect_submodules("sqlalchemy.dialects.sqlite")
     hidden_imports += collect_submodules("sqlalchemy.dialects.postgresql")
     hidden_imports += collect_submodules("yt_dlp")
     hidden_imports += collect_submodules("duckduckgo_search")
-except Exception:
-    pass
+except Exception as e:
+    print(f"Warning collecting submodules: {e}")
 
 datas = [
     (os.path.join(PROJECT_DIR, "config"), "config"),
@@ -83,7 +97,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "scipy", "notebook", "jupyter", "PyQt5"],
+    excludes=["tkinter", "matplotlib", "scipy", "notebook", "jupyter"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

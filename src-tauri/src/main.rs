@@ -2,10 +2,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
+#[allow(dead_code)]
 struct SidecarState {
     child: Arc<Mutex<Option<CommandChild>>>,
 }
@@ -14,12 +15,47 @@ fn main() {
     let sidecar_child: Arc<Mutex<Option<CommandChild>>> = Arc::new(Mutex::new(None));
     let child_clone = Arc::clone(&sidecar_child);
 
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+    let mut builder = tauri::Builder::default();
+
+    // Deep link forwarding via single instance: focus existing window and forward URL
+    builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        println!("🚀 [Tauri] App instance triggered with args: {:?}", argv);
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.show();
+            let _ = w.unminimize();
+            let _ = w.set_focus();
+        }
+
+        // If launched via deep-link protocol (e.g. fbautomator://oauth/callback#...)
+        let deep_links: Vec<String> = argv
+            .into_iter()
+            .filter(|arg| arg.starts_with("fbautomator://"))
+            .collect();
+
+        if !deep_links.is_empty() {
+            println!("🔗 [Tauri] Forwarding deep link to frontend: {:?}", deep_links);
+            let _ = app.emit("deep-link://new-url", deep_links);
+        }
+    }));
+
+    // Register deep-link plugin
+    builder = builder.plugin(tauri_plugin_deep_link::init());
+
+    // Register shell plugin
+    builder = builder.plugin(tauri_plugin_shell::init());
+
+    let app = builder
         .manage(SidecarState {
             child: sidecar_child,
         })
         .setup(move |app| {
+            // Register deep-link protocol scheme on Windows
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let _ = app.deep_link().register_all();
+            }
+
             // Khởi động Sidecar local_engine tại port 28129
             println!("🚀 [Tauri] Spawning Python Sidecar: local_engine on port 28129...");
 
