@@ -71,14 +71,17 @@ class BatchStateTests(SeedingTestCase):
         self.add_accounts(1)
         ids = self.create("POST", ["https://web.facebook.com/share/p/AAAA1111", "https://web.facebook.com/share/p/BBBB2222"],
                           actions=["REACT"], reactions=["LIKE"], account_count=1)["campaign_ids"]
-        active = lambda t: self.api("GET", "/campaigns/active", params={"campaign_type": t})["campaign_id"]  # noqa: E731
-        self.assertEqual(active("POST"), ids[0])
-        self.assertIsNone(active("PAGE"))
+        active = lambda **p: self.api("GET", "/campaigns/active", params=p)  # noqa: E731
+        self.assertIsNone(active()["campaign_id"])          # mới tạo, chưa bấm chạy -> chưa tính là đang chạy
+        R._running_batches[ids[0]] = ids                    # bộ chạy lô đang chạy lô này
+        self.assertEqual(active(), {"campaign_id": ids[0], "campaign_type": "POST", "name": "Bài viết AAAA1111"})
+        self.assertEqual(active(campaign_type="POST")["campaign_id"], ids[0])
+        self.assertIsNone(active(campaign_type="PAGE")["campaign_id"])
         self.campaign(ids[0]).status = "COMPLETED"
         self.db.commit()
-        self.assertEqual(active("POST"), ids[1])
+        self.assertEqual(active()["campaign_id"], ids[1])   # bài 1 xong, bài 2 đang chờ / đang nghỉ
         self.user = {"id": 99, "username": "other", "role": "user"}
-        self.assertIsNone(active("POST"))
-        R._batch_campaign_chains.clear()   # engine khởi động lại: chiến dịch kẹt RUNNING/PENDING không tính
+        self.assertIsNone(active()["campaign_id"])          # lô của người khác
         self.user = {"id": 7, "username": "tester", "role": "user"}
-        self.assertIsNone(active("POST"))
+        R._running_batches.clear()                          # bộ chạy lô đã xong / engine khởi động lại
+        self.assertIsNone(active()["campaign_id"])
