@@ -70,16 +70,9 @@ export default function GroupCommentModule() {
   const [threads, setThreads] = useState("2");
   const [restMinutes, setRestMinutes] = useState("10");
   const [maxComments, setMaxComments] = useState("20");
-  const [groupSource, setGroupSource] = useState("file");
-  const [groupFile, setGroupFile] = useState({
-    name: "danh_sach_link_comment_01.txt",
-    size: 18944,
-    status: "valid",
-    dedupCount: 4,
-    invalidCount: 2,
-    validGroupsCount: 50,
-  });
-  const [groupSearch, setGroupSearch] = useState("việc làm online, tuyển dụng ctv, kinh doanh online");
+  const [groupSource, setGroupSource] = useState("search");
+  const [groupFile, setGroupFile] = useState(null);
+  const [groupSearch, setGroupSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
   const [selectedGroupKeys, setSelectedGroupKeys] = useState(GROUPS.map((group) => group.key));
   const [mediaFiles, setMediaFiles] = useState([]);

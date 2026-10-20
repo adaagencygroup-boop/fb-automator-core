@@ -591,6 +591,14 @@ export default function GroupSourceSection({
               <Input
                 value={groupSearch}
                 onChange={(event) => setGroupSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    if (!isSearching) {
+                      handleSearchGroups();
+                    }
+                  }
+                }}
                 placeholder="Nhập từ khóa tìm nhóm (VD: việc làm online, tuyển dụng ctv, mẹ bỉm sữa...)"
                 className="pl-9"
               />
@@ -598,7 +606,7 @@ export default function GroupSourceSection({
             <Button
               type="button"
               size="sm"
-              disabled={isSearching || !groupSearch.trim()}
+              disabled={isSearching}
               onClick={handleSearchGroups}
               className="cursor-pointer"
             >

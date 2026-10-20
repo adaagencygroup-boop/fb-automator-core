@@ -75,7 +75,9 @@ def is_valid_group_entry(line: str) -> bool:
     """Kiểm tra 1 dòng có phải là link nhóm hoặc UID nhóm hợp lệ."""
     if not line:
         return False
-    lower = line.lower()
+    lower = line.lower().strip()
+    if any(bad in lower for bad in ["/groups/search", "/groups/feed", "/groups/discover", "/groups/create"]):
+        return False
     if "facebook.com/groups/" in lower or "fb.com/groups/" in lower:
         return True
     if "facebook.com" in lower and ("/groups" in lower or "/permalink" in lower):
@@ -674,8 +676,13 @@ def search_facebook_via_browser(
             const rawHref = a.getAttribute('href') || a.href || '';
             if (!rawHref.includes('/groups/')) continue;
             
-            // Lọc các URL không phải link trang chủ nhóm
-            const badPatterns = ['/user/', '/my_groups/', '/permalink/', '/posts/', '/hashtag/', '/events/', '/media/', '/about/'];
+            // Lọc các URL không phải link trang chủ nhóm (loại bỏ các tab tìm kiếm /groups/search)
+            const badPatterns = [
+                '/search/', '/groups/search', '/user/', '/my_groups/', '/your_groups/',
+                '/permalink/', '/posts/', '/hashtag/', '/events/', '/media/', '/about/',
+                '/members/', '/files/', '/photos/', '/videos/', '/buy_sell_discussion/',
+                '/edit/', '/member-requests/', '/categories/', '/feed/', '/discover/', '/joins/'
+            ];
             if (badPatterns.some(bad => rawHref.includes(bad))) continue;
             
             let fullHref = a.href || rawHref;
@@ -687,10 +694,26 @@ def search_facebook_via_browser(
             }
             fullHref = fullHref.replace(/\\/+$/, '');
             
-            // Loại bỏ các đường dẫn hệ thống
-            if (fullHref.endsWith('/groups') || fullHref.endsWith('/groups/feed') || fullHref.endsWith('/groups/discover') || fullHref.endsWith('/groups/create')) {
+            // Loại bỏ các đường dẫn hệ thống và tab menu Facebook
+            if (
+                fullHref.endsWith('/groups') ||
+                fullHref.endsWith('/groups/feed') ||
+                fullHref.endsWith('/groups/discover') ||
+                fullHref.endsWith('/groups/create') ||
+                fullHref.includes('/search/')
+            ) {
                 continue;
             }
+
+            // Kiểm tra slug nhóm hợp lệ
+            const groupParts = fullHref.split('/groups/')[1] ? fullHref.split('/groups/')[1].split('/') : [];
+            const groupSlug = (groupParts[0] || '').toLowerCase().trim();
+            const systemSlugs = [
+                'search', 'feed', 'discover', 'create', 'joins', 'notifications',
+                'categories', 'explore', 'manage', 'my_groups', 'your_groups',
+                'groups_home', 'group_posts'
+            ];
+            if (!groupSlug || systemSlugs.includes(groupSlug)) continue;
             
             if (seen.has(fullHref)) continue;
             
@@ -713,6 +736,11 @@ def search_facebook_via_browser(
             if (!name || name.length < 2) {
                 name = lines.length > 0 ? lines[0] : '';
             }
+
+            // Bỏ qua các nhãn menu của Facebook (ví dụ: Tất cả, Bài viết trong nhóm)
+            const rawName = (name || '').trim().toLowerCase();
+            const menuNames = ['tất cả', 'bài viết trong nhóm', 'nhóm', 'bài viết', 'mọi người', 'trang', 'ảnh', 'video', 'tìm kiếm'];
+            if (menuNames.includes(rawName)) continue;
             
             let privacy = 'public';
             let members = '50K';
@@ -753,12 +781,29 @@ def search_facebook_via_browser(
         raw_items = driver.execute_script(js_extract_script) or []
         logger.info(f"[{target_uid}] Trích xuất được {len(raw_items)} nhóm Facebook thật từ DOM.")
 
+        SYSTEM_GROUP_SLUGS = {
+            "search", "feed", "discover", "create", "joins", "notifications",
+            "categories", "explore", "manage", "my_groups", "your_groups",
+            "groups_home", "group_posts", "about", "members", "media", "events"
+        }
+        FORBIDDEN_NAMES = {
+            "tất cả", "bài viết trong nhóm", "nhóm", "bài viết", "mọi người", "trang", "ảnh", "video", "tìm kiếm"
+        }
+
         posted_set = get_posted_group_keys()
         parsed_groups: List[Dict[str, Any]] = []
 
         for idx, item in enumerate(raw_items, 1):
             clean_url = clean_group_url(item["url"])
             uid = extract_group_identifier(clean_url)
+            name = (item.get("name") or "").strip()
+
+            # Bỏ qua các URL điều hướng, tab tìm kiếm của Facebook
+            if not uid or uid.lower() in SYSTEM_GROUP_SLUGS or "/search" in clean_url.lower():
+                continue
+            if name.lower() in FORBIDDEN_NAMES:
+                continue
+
             group_key = f"group_{uid}"
             is_already_posted = (group_key.lower() in posted_set) or (clean_url.lower() in posted_set)
 
@@ -778,7 +823,7 @@ def search_facebook_via_browser(
             grp_dict = {
                 "id": f"{len(parsed_groups) + 1:02d}",
                 "key": group_key,
-                "name": item.get("name") or f"Nhóm Facebook [ID: {uid}]",
+                "name": name or f"Nhóm Facebook [ID: {uid}]",
                 "url": clean_url,
                 "uid": uid,
                 "frequency": item.get("frequency") or "15 bài viết/ngày",

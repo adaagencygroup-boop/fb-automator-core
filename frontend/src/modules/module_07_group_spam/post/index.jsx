@@ -83,10 +83,10 @@ export default function GroupPostModule() {
   const [threads, setThreads] = useState("2");
   const [restMinutes, setRestMinutes] = useState("10");
   const [maxPosts, setMaxPosts] = useState("10");
-  const [groupSource, setGroupSource] = useState("file");
+  const [groupSource, setGroupSource] = useState("search");
   const [groupFile, setGroupFile] = useState(null);
   const [customGroups, setCustomGroups] = useState([]);
-  const [groupSearch, setGroupSearch] = useState("việc làm online, tuyển dụng ctv");
+  const [groupSearch, setGroupSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
   const [selectedGroupKeys, setSelectedGroupKeys] = useState([]);
   const [mediaFiles, setMediaFiles] = useState([]);
@@ -516,9 +516,8 @@ export default function GroupPostModule() {
                 type="button"
                 key={index}
                 onClick={() => setActivePost(index)}
-                className={`h-9 min-w-20 flex-1 text-[10px] font-semibold ${
-                  activePost === index ? "bg-primary text-white" : "text-slate-500 hover:bg-white"
-                }`}
+                className={`h-9 min-w-20 flex-1 text-[10px] font-semibold ${activePost === index ? "bg-primary text-white" : "text-slate-500 hover:bg-white"
+                  }`}
               >
                 Bài {index + 1}
               </button>
