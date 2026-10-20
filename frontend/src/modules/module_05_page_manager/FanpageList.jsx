@@ -830,7 +830,7 @@ function OwnedFanpageList({ owner }) {
               </DialogTitle>
             </div>
             <DialogDescription className="text-xs text-slate-500 pt-0.5">
-              Cấp Token và quét Fanpage tự động qua dàn nick Clone (cột bên trái) hoặc Đăng nhập trực tiếp trên trình duyệt (cột bên phải).
+              Cấp Token và quét Fanpage tự động qua danh sách tài khoản (cột bên trái) hoặc Đăng nhập trực tiếp trên trình duyệt (cột bên phải).
             </DialogDescription>
           </DialogHeader>
 
@@ -840,7 +840,7 @@ function OwnedFanpageList({ owner }) {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
                   <span className="flex size-4 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white font-bold">1</span>
-                  Dàn nick Clone ({filteredAccounts.length}/{accountList.length})
+                  Danh sách tài khoản ({filteredAccounts.length}/{accountList.length})
                 </span>
                 <button
                   type="button"
@@ -940,6 +940,7 @@ function OwnedFanpageList({ owner }) {
 
                           const isLoggedIn = acc.login_status === "logged_in";
                           const isProcessing = Boolean(accountJobs[acc.uid]);
+                          const isActionDisabled = isProcessing || verifyingTokens || isCheckingToken;
 
                           return (
                             <tr key={acc.uid} className="hover:bg-slate-50/80 transition-colors">
@@ -1045,7 +1046,7 @@ function OwnedFanpageList({ owner }) {
                                     <button
                                       type="button"
                                       onClick={() => handleProfileOAuth(acc.uid)}
-                                      disabled={isProcessing}
+                                      disabled={isActionDisabled}
                                       className="h-7 px-2.5 rounded-md bg-amber-600 hover:bg-amber-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
                                       title="Token đã hết hạn. Mở Chrome Profile để cấp lại Token mới!"
                                     >
@@ -1060,7 +1061,7 @@ function OwnedFanpageList({ owner }) {
                                     <button
                                       type="button"
                                       onClick={() => handleProfileOAuth(acc.uid)}
-                                      disabled={isProcessing}
+                                      disabled={isActionDisabled}
                                       className="h-7 px-2 rounded-md bg-blue-600 hover:bg-blue-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
                                       title="Mở Chrome Profile của nick này để tự động cấp Token và nạp Fanpage"
                                     >
@@ -1069,16 +1070,17 @@ function OwnedFanpageList({ owner }) {
                                       ) : (
                                         <Zap className="w-3 h-3 text-amber-300 fill-amber-300" />
                                       )}
-                                      {isLiveToken ? "Cấp lại" : "Cấp Token"}
+                                      {rawHasToken ? "Cấp lại" : "Cấp Token"}
                                     </button>
                                   )}
 
-                                  {rawHasToken ? (
+                                  {/* Token chết/hết hạn thì không quét. Chỉ quét khi token LIVE hoặc có token chưa check */}
+                                  {rawHasToken && !isExpiredToken ? (
                                     <button
                                       type="button"
                                       onClick={() => handleSyncPages(acc.uid)}
-                                      disabled={isProcessing}
-                                      className="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 font-medium text-[10.5px] text-slate-700 flex items-center gap-1 transition-all disabled:opacity-50"
+                                      disabled={isActionDisabled}
+                                      className="h-7 px-2.5 rounded-md border border-slate-200 bg-white hover:bg-slate-50 font-medium text-[10.5px] text-slate-700 flex items-center gap-1 transition-all disabled:opacity-50"
                                       title="Quét bằng token đã lưu; hệ thống xác thực trước khi đồng bộ"
                                     >
                                       {accountJobs[acc.uid]?.kind === "sync" ? (

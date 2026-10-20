@@ -3,8 +3,9 @@ import { useState, useRef, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
-import { Settings, FolderOpen, Search, Trash2, HelpCircle, Play, Square, Terminal, Video, Flag, AlertTriangle, AlertCircle, Edit3, ExternalLink, Maximize2, Lock } from "lucide-react";
+import { Settings, FolderOpen, Search, Trash2, HelpCircle, Play, Square, Terminal, Video, Flag, AlertTriangle, AlertCircle, Edit3, ExternalLink, Maximize2, Lock, CheckCircle2, Loader2 } from "lucide-react";
 import { startYouTubeDownloadJob, getJobStatus, stopJob, selectFolder, clearPageVideos, clearAllVideos, updatePageKeywords, getYoutubeConfig, saveYoutubeConfig, checkFolderData } from "../service";
 import Pagination from "@/components/ui/pagination";
 import PageVideosModal from "./PageVideosModal";
@@ -29,6 +30,7 @@ function toTitleCase(str) {
     .replace(/\bTiktok\b/gi, "TikTok")
     .replace(/\bYoutube\b/gi, "YouTube");
 }
+let globalYouTubeInitDone = false;
 export default function YouTubeDownloadTab({ pages = [], loading = false, onPageUpdate }) {
   const saveTimerMapRef = useRef({});
   const [downloadFolder, setDownloadFolder] = useState(() => {
@@ -88,9 +90,16 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
       return [msg, ...prev];
     });
   };
+  const [isConfigLoading, setIsConfigLoading] = useState(() => !globalYouTubeInitDone);
   useEffect(() => {
     let active = true;
     const init = async () => {
+      if (globalYouTubeInitDone) {
+        setIsConfigLoading(false);
+        return;
+      }
+      setIsConfigLoading(true);
+      addLog(`[${getUtc7Time()}] Đang Nạp Cấu Hình & Kiểm Tra Thư Mục YouTube Shorts...`);
       try {
         const cfg = await getYoutubeConfig();
         let targetFolder = downloadFolder;
@@ -118,6 +127,8 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
       finally {
         if (active) {
           isConfigLoadedRef.current = true;
+          setIsConfigLoading(false);
+          globalYouTubeInitDone = true;
         }
       }
     };
@@ -315,6 +326,7 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
   });
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   const paginatedItems = filteredItems.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const isReadyToStart = Boolean(!isConfigLoading && downloadFolder && downloadFolder.trim());
   const handleClearPageVideos = async (it) => {
     const pageName = it.page_name || "Fanpage";
     if (!window.confirm(`Bạn Có Chắc Chắn Muốn Xóa Toàn Bộ Video YouTube Đã Tải Của Fanpage "${pageName}" Khỏi Ổ Đĩa Không?`)) {
@@ -428,6 +440,10 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
     addLog(`[${getUtc7Time()}] Đã Gửi Lệnh Dừng Tải Cho Fanpage "${it.page_name}".`);
   };
   const handleStart = async () => {
+    if (isConfigLoading) {
+      alert("Hệ Thống Đang Nạp Cấu Hình. Vui Lòng Đợi Trong Giây Lát!");
+      return;
+    }
     if (!downloadFolder || !downloadFolder.trim()) {
       setFolderError(true);
       alert("Vui Lòng Chọn Hoặc Nhập Thư Mục Lưu Video Trước Khi Kích Hoạt!");
@@ -559,47 +575,70 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
           <CardTitle className="text-xs font-normal text-foreground flex items-center gap-2">
             <Settings className="w-4 h-4 text-blue-600" /> Cấu Hình Tải Video YouTube Shorts
           </CardTitle>
+          <div className="flex items-center gap-2">
+            {isConfigLoading ? (
+              <Badge variant="outline" className="bg-blue-500/10 text-blue-600 border-blue-300 dark:border-blue-800 text-[11px] font-normal gap-1 px-2.5 py-0.5">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                <span>Đang Tải Cấu Hình...</span>
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="bg-slate-500/10 text-slate-600 border-slate-300 dark:border-zinc-700 dark:text-zinc-400 text-[11px] font-normal gap-1 px-2.5 py-0.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-slate-500" />
+                <span>Đã Nạp Cấu Hình</span>
+              </Badge>
+            )}
+          </div>
         </CardHeader>
-        <CardContent className="p-4">
-          <div className="flex flex-col lg:flex-row items-start lg:items-end gap-3 text-xs">
-            <div className="space-y-1 flex-1 w-full min-w-0">
-              <div className="flex items-center gap-1 font-normal text-foreground">
-                <span>Thư Mục Lưu Tổng</span>
-                <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" title="Đường Dẫn Thư Mục Lưu Video Tải Về Trên Ổ Đĩa." />
-              </div>
-              <div className="flex gap-2">
-                <input ref={folderInputRef} type="file" webkitdirectory="" directory="" className="hidden" onChange={handleFolderFileChange} />
-                <Input value={downloadFolder} readOnly={hasDownloadedData} onClick={() => { if (hasDownloadedData) alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!"); }} onChange={(e) => { if (hasDownloadedData) { alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!"); return; } setDownloadFolder(e.target.value); if (e.target.value.trim()) setFolderError(false); }} placeholder="Chưa Chọn Thư Mục Lưu Video (Bắt Buộc)..." className={`h-8 text-xs font-normal font-mono ${hasDownloadedData ? "cursor-not-allowed" : ""} ${folderError || !downloadFolder.trim() ? "border-amber-400 focus-visible:border-amber-500" : ""}`} />
-                <Button variant="outline" size="sm" type="button" onClick={handleSelectFolder} className="h-8 shrink-0 text-xs font-normal gap-1">
-                  <FolderOpen className="w-3.5 h-3.5 text-blue-600" /> Chọn Thư Mục
-                </Button>
-              </div>
-              {(!downloadFolder || !downloadFolder.trim()) && (
-                <p className="text-[11px] font-normal text-amber-600 dark:text-amber-400 flex items-center gap-1 pt-0.5">
-                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-500" /> Chưa Chọn Thư Mục Lưu Video (Bắt Buộc). Bấm &quot;Chọn Thư Mục&quot; Hoặc Nhập Đường Dẫn Lưu Video.
-                </p>
-              )}
-            </div>
-            <div className="space-y-1 shrink-0">
-              <div className="flex items-center gap-1 font-normal text-foreground">
-                <span>Số Video Cần Tải Mỗi Lần</span>
-                <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" title="Số Lượng Video Mới Cần Tải Cho Mỗi Fanpage Trong Đợt Kích Hoạt Này." />
-              </div>
+        <CardContent className="p-4 space-y-3">
+          {isConfigLoading && (
+            <div className="flex items-center justify-between p-2.5 rounded-lg border text-xs font-normal border-blue-200 bg-blue-50/60 dark:border-blue-900/40 dark:bg-blue-950/20 text-blue-700 dark:text-blue-300">
               <div className="flex items-center gap-2">
-                <Input type="number" min={1} value={maxVideos} onChange={(e) => setMaxVideos(Number(e.target.value))} className="h-8 text-xs font-normal font-mono w-20 shrink-0" />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  type="button"
-                  onClick={handleDeleteAllVideos}
-                  disabled={isDeletingAll}
-                  className="h-8 px-2.5 text-xs font-normal text-rose-600 border-rose-200 hover:bg-rose-50 dark:border-rose-900/60 dark:hover:bg-rose-950/40 gap-1 shadow-none shrink-0"
-                  title="Xóa Toàn Bộ Video Đã Tải Khỏi Ổ Đĩa & Cơ Sở Dữ Liệu"
-                >
-                  <Trash2 className="w-3.5 h-3.5 shrink-0" /> Xóa Tất Cả Video
-                </Button>
+                <Loader2 className="w-4 h-4 animate-spin shrink-0 text-blue-600" />
+                <span>Đang Nạp Cấu Hình Tải Video YouTube Shorts Từ Hệ Thống... Vui Lòng Đợi Trong Giây Lát.</span>
               </div>
             </div>
+          )}
+          <div className="space-y-1.5">
+            <div className="flex flex-col lg:flex-row items-start gap-3 text-xs">
+              <div className="space-y-1 flex-1 w-full min-w-0">
+                <div className="flex items-center gap-1 font-normal text-foreground">
+                  <span>Thư Mục Lưu Tổng</span>
+                  <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" title="Đường Dẫn Thư Mục Lưu Video Tải Về Trên Ổ Đĩa." />
+                </div>
+                <div className="flex gap-2">
+                  <input ref={folderInputRef} type="file" webkitdirectory="" directory="" className="hidden" onChange={handleFolderFileChange} />
+                  <Input value={downloadFolder} readOnly={hasDownloadedData} onClick={() => { if (hasDownloadedData) alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!"); }} onChange={(e) => { if (hasDownloadedData) { alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!"); return; } setDownloadFolder(e.target.value); if (e.target.value.trim()) setFolderError(false); }} placeholder="Chưa Chọn Thư Mục Lưu Video (Bắt Buộc)..." className={`h-8 text-xs font-normal font-mono ${hasDownloadedData ? "cursor-not-allowed" : ""} ${folderError || !downloadFolder.trim() ? "border-amber-400 focus-visible:border-amber-500" : ""}`} />
+                  <Button variant="outline" size="sm" type="button" onClick={handleSelectFolder} className="h-8 shrink-0 text-xs font-normal gap-1">
+                    <FolderOpen className="w-3.5 h-3.5 text-blue-600" /> Chọn Thư Mục
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-1 shrink-0">
+                <div className="flex items-center gap-1 font-normal text-foreground">
+                  <span>Số Video Cần Tải Mỗi Lần</span>
+                  <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" title="Số Lượng Video Mới Cần Tải Cho Mỗi Fanpage Trong Đợt Kích Hoạt Này." />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input type="number" min={1} value={maxVideos} onChange={(e) => setMaxVideos(Number(e.target.value))} className="h-8 text-xs font-normal font-mono w-20 shrink-0" />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    onClick={handleDeleteAllVideos}
+                    disabled={isDeletingAll}
+                    className="h-8 px-2.5 text-xs font-normal text-rose-600 border-rose-200 hover:bg-rose-50 dark:border-rose-900/60 dark:hover:bg-rose-950/40 gap-1 shadow-none shrink-0"
+                    title="Xóa Toàn Bộ Video Đã Tải Khỏi Ổ Đĩa & Cơ Sở Dữ Liệu"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 shrink-0" /> Xóa Tất Cả Video
+                  </Button>
+                </div>
+              </div>
+            </div>
+            {(!downloadFolder || !downloadFolder.trim()) && (
+              <p className="text-[11px] font-normal text-amber-600 dark:text-amber-400 flex items-center gap-1 pt-0.5">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-500" /> Chưa Chọn Thư Mục Lưu Video (Bắt Buộc). Bấm &quot;Chọn Thư Mục&quot; Hoặc Nhập Đường Dẫn Lưu Video.
+              </p>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -779,7 +818,7 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
                                   <Square className="w-3 h-3 fill-current" /> Dừng
                                 </Button>
                               ) : (
-                                <Button size="sm" variant="outline" onClick={() => handleStartItem(it)} disabled={isRunning} className="h-7 px-2 text-[11px] font-normal text-blue-600 border-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/40 gap-1 shadow-none disabled:opacity-40" title="Kích Hoạt Tải Riêng Fanpage Này">
+                                <Button size="sm" variant="outline" onClick={() => handleStartItem(it)} disabled={isRunning || !isReadyToStart} className="h-7 px-2 text-[11px] font-normal text-blue-600 border-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/40 gap-1 shadow-none disabled:opacity-40" title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (!downloadFolder || !downloadFolder.trim()) ? "Vui Lòng Cài Đặt Thư Mục Lưu Video Trước Khi Kích Hoạt!" : "Kích Hoạt Tải Riêng Fanpage Này"}>
                                   <Play className="w-3 h-3 fill-current" /> Kích Hoạt
                                 </Button>
                               )}
@@ -811,13 +850,25 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
                   <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} />
                 </div>
               )}
-              <div className="flex items-center gap-3 pt-3 border-t border-border">
-                <Button variant="outline" className="flex-1 font-normal text-xs h-9 text-blue-600 border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-900/60 dark:text-blue-400 dark:hover:bg-blue-950/40 gap-2 shadow-none disabled:opacity-40" disabled={isRunning || items.length === 0} onClick={handleStart}>
-                  <Play className="w-3.5 h-3.5 fill-current" /> Kích Hoạt Tất Cả
-                </Button>
-                <Button variant="outline" className="flex-1 font-normal text-xs h-9 text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700 dark:border-rose-900/60 dark:text-rose-400 dark:hover:bg-rose-950/40 gap-2 shadow-none disabled:opacity-40" disabled={!isRunning} onClick={handleStop}>
-                  <Square className="w-3.5 h-3.5 fill-current" /> Dừng Tất Cả
-                </Button>
+              <div className="space-y-2 pt-3 border-t border-border">
+                {!isReadyToStart && (
+                  <div className="flex items-center gap-1.5 text-[11px] font-normal text-amber-600 dark:text-amber-400">
+                    <Lock className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+                    <span>
+                      {isConfigLoading
+                        ? "Nút Kích Hoạt Đang Bị Khóa Vì Hệ Thống Đang Nạp Cấu Hình."
+                        : "Nút Kích Hoạt Đang Bị Khóa Vì Chưa Cài Đặt Thư Mục Lưu Video (Bắt Buộc Chọn Thư Mục Lưu)."}
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-center gap-3">
+                  <Button variant="outline" className="flex-1 font-normal text-xs h-9 text-blue-600 border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-900/60 dark:text-blue-400 dark:hover:bg-blue-950/40 gap-2 shadow-none disabled:opacity-40" disabled={isRunning || items.length === 0 || !isReadyToStart} onClick={handleStart} title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (!downloadFolder || !downloadFolder.trim()) ? "Vui Lòng Cài Đặt Thư Mục Lưu Video Trước Khi Kích Hoạt!" : items.length === 0 ? "Chưa Có Fanpage Nào Để Kích Hoạt" : "Kích Hoạt Tải Hàng Loạt Cho Tất Cả Fanpage"}>
+                    <Play className="w-3.5 h-3.5 fill-current" /> Kích Hoạt Tất Cả
+                  </Button>
+                  <Button variant="outline" className="flex-1 font-normal text-xs h-9 text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700 dark:border-rose-900/60 dark:text-rose-400 dark:hover:bg-rose-950/40 gap-2 shadow-none disabled:opacity-40" disabled={!isRunning} onClick={handleStop}>
+                    <Square className="w-3.5 h-3.5 fill-current" /> Dừng Tất Cả
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>

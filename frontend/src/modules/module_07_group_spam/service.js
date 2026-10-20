@@ -64,4 +64,14 @@ export async function downloadGroupTemplate() {
   }
 }
 
+export function uploadGroupMedia(formData) {
+  return api.post("/api/groups/media/upload", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+}
+
+export function getGroupMediaList() {
+  return api.get("/api/groups/media/list");
+}
+
 

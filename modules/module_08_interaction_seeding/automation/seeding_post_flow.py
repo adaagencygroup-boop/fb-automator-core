@@ -132,6 +132,11 @@ class PostSeedingFlow:
                 return false;
             """
 
+            # Với LIKE: nhãn "Thích/Like" trùng với nhãn nút Like khi CHƯA thích, nên dùng phép kiểm tra riêng
+            # (chỉ tin aria / chữ có màu), không dùng js_is_reacted (dễ tưởng nhầm là đã thích rồi bỏ qua, không bấm).
+            if clean_reaction == "LIKE":
+                js_is_reacted = PostLocators.JS_IS_LIKE_BUTTON_LIKED
+
             # 2. Kiểm tra xem bài viết đã được đúng cảm xúc này từ trước chưa
             already_reacted = self.driver.execute_script(js_is_reacted)
             if already_reacted:
@@ -142,61 +147,23 @@ class PostSeedingFlow:
             if callback:
                 callback(f"{emoji} Đang thực hiện thả cảm xúc '{vn_name}' vào bài viết...")
 
-            # 3. Phân nhánh: Nếu chỉ là LIKE thông thường, click trực tiếp nút Like
+            # 3. Phân nhánh: Nếu chỉ là LIKE thông thường, click trực tiếp nút Like.
+            # Nút Like bật/tắt (bấm 2 cái = thích rồi bỏ thích), nên chỉ bấm trực tiếp ĐÚNG 1 LẦN rồi kiểm tra nút đã đổi chưa.
+            # Không thấy đổi thì không bấm nút này nữa mà chuyển sang chọn "Thích" trong khay cảm xúc (không bị bật/tắt).
             if clean_reaction == "LIKE":
-                clicked_direct = self.driver.execute_script("""
-                    const modal = document.querySelector('div[role="dialog"]');
-                    const root = modal || document;
-
-                    const marker = root.querySelector('div[data-ad-rendering-role="like_button"]');
-                    let target = null;
-                    if (marker) {
-                        target = marker.closest('div[role="button"]') || marker.closest('div.x1i10hfl');
-                        if (!target && marker.parentElement && marker.parentElement.parentElement) {
-                            target = marker.parentElement.parentElement.querySelector('div[role="button"], div.x1i10hfl');
-                        }
-                    }
-                    if (!target) {
-                        const ariaBtns = Array.from(root.querySelectorAll('div[role="button"], div.x1i10hfl, div[tabindex="0"]')).filter(el => {
-                            if (el.closest('ul') || el.closest('form')) return false;
-                            const a = (el.getAttribute('aria-label') || '').toLowerCase().trim();
-                            return a === 'like' || a === 'thích' || a === 'react' || a === 'thích bài viết';
-                        });
-                        if (ariaBtns.length > 0) target = ariaBtns[0];
-                    }
-                    if (!target && marker && marker.parentElement) target = marker.parentElement;
-
-                    if (!target) return false;
-
-                    try {
-                        const r = target.getBoundingClientRect();
-                        if (r.top < 0 || r.bottom > window.innerHeight) {
-                            target.scrollIntoView({ behavior: 'instant', block: 'center' });
-                        }
-                    } catch(e){}
-
-                    const rect = target.getBoundingClientRect();
-                    const x = rect.left + rect.width / 2;
-                    const y = rect.top + rect.height / 2;
-                    const hit = document.elementFromPoint(x, y) || target;
-                    hit.focus();
-
-                    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(type => {
-                        const isPointer = type.startsWith('pointer');
-                        const evt = isPointer
-                            ? new PointerEvent(type, { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1 })
-                            : new MouseEvent(type, { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, button: 0, buttons: 1 });
-                        hit.dispatchEvent(evt);
-                    });
-                    try { hit.click(); } catch(e){}
-                    return true;
-                """)
-
-                self.bot.random_sleep(2.0, 3.0)
-                if self.driver.execute_script(js_is_reacted):
+                self.driver.execute_script(
+                    "window.__seedLikeSigBefore = (() => {" + PostLocators.JS_LIKE_BUTTON_SIGNATURE + "})();"
+                )
+                liked, how = self._click_until(
+                    PostLocators.JS_FIND_LIKE_BUTTON, PostLocators.JS_LIKE_CLICK_TOOK_EFFECT,
+                    methods=("chuột thật",),
+                )
+                if liked:
                     if callback:
-                        callback(f"✓ Đã bấm {vn_name} bài viết thành công!")
+                        callback(f"✓ Đã bấm {vn_name} bài viết thành công (bằng {how})!")
                     return True, f"Thành công ({vn_name})"
+                # Bấm trực tiếp không có tác dụng -> thử cách mở khay cảm xúc bên dưới
+                js_is_reacted = PostLocators.JS_LIKE_CLICK_TOOK_EFFECT
 
             # 4. Thả cảm xúc nâng cao (Hover bật Reactions Dock)
             if callback:
@@ -360,6 +327,11 @@ class PostSeedingFlow:
                 if callback:
                     callback(f"✓ Đã thả cảm xúc {vn_name} ({clean_reaction}) bài viết thành công!")
                 return True, f"Thành công ({vn_name})"
+
+            if clean_reaction == "LIKE":
+                # LIKE kiểm tra được chắc chắn (nút Like có đổi hay không), không đổi thì báo thất bại thật.
+                # Không gọi callback ở đây: routes đã ghi log lỗi từ thông báo trả về (tránh in 2 lần).
+                return False, "Đã bấm Thích nhưng nút Like không đổi trạng thái (bài chưa được thích)"
 
             if callback:
                 callback(f"✓ Đã bấm thả cảm xúc {vn_name} ({clean_reaction}) vào bài viết!")
@@ -585,11 +557,12 @@ class PostSeedingFlow:
             ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
             time.sleep(0.8)
 
-    def _click_until(self, find_js: str, ok_js: str) -> tuple[bool, str]:
+    def _click_until(self, find_js: str, ok_js: str,
+                     methods=("chuột thật", "JS click", "click mạnh")) -> tuple[bool, str]:
         """Bấm phần tử do find_js tìm được rồi đợi ok_js trả về true (tối đa 3 giây).
         Mỗi lần chỉ bấm 1 kiểu (chuột thật -> JS click -> click mạnh): bấm dồn nhiều lần như perform_robust_click
         có thể mở rồi lại đóng menu, hoặc bấm trúng nút khác sau khi giao diện đã đổi."""
-        for how in ("chuột thật", "JS click", "click mạnh"):
+        for how in methods:
             target = self.driver.execute_script(find_js)
             if not target:
                 return False, "không tìm thấy phần tử cần bấm"
@@ -607,7 +580,7 @@ class PostSeedingFlow:
                 time.sleep(0.5)
                 if self.driver.execute_script(ok_js):
                     return True, how
-        return False, "đã thử 3 cách bấm nhưng không có tác dụng"
+        return False, f"đã thử {len(methods)} cách bấm nhưng không có tác dụng"
 
     def execute_share(
         self,

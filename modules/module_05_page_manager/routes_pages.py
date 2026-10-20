@@ -245,9 +245,11 @@ def delete_managed_page(page_identifier: str, request: Request):
     """
     Xóa Fanpage khỏi bảng `pages`, có ràng buộc chặt chẽ theo `user_id` của người dùng hiện tại.
     """
+    if page_identifier in ("all-videos", "bulk-keywords", "managed", "oauth-config", "check-folder"):
+      raise HTTPException(status_code=404, detail="Không Tìm Thấy Trang")
     owner = get_current_owner(request)
     if not owner:
-        raise HTTPException(status_code=401, detail="Phiên đăng nhập không hợp lệ.")
+      raise HTTPException(status_code=401, detail="Phiên Đăng Nhập Không Hợp Lệ.")
 
     try:
         if page_identifier.isdigit() and len(page_identifier) < 10:

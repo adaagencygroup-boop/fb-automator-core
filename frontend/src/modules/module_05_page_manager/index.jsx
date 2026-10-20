@@ -98,7 +98,7 @@ export default function PageManagerModule({ subPage } = {}) {
           { id: "pages.ai_post", label: "Đăng Bài AI" },
           { id: "pages.reels", label: "Đăng Video Reels" },
           { id: "pages.tiktok", label: "Tải Video TikTok" },
-          { id: "pages.youtube", label: "Tải YouTube Shorts" },
+          { id: "pages.youtube", label: "Tải Video YouTube" },
           { id: "pages.history", label: "Lịch Sử / Nhật Ký" },
         ].map((tab) => (
           <button key={tab.id} type="button" onClick={() => setCurrentTab(tab.id)} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${currentTab === tab.id ? "bg-primary text-white shadow-subtle" : "text-muted-foreground hover:text-foreground"}`}>

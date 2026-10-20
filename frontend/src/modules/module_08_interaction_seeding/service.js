@@ -1,5 +1,8 @@
 import api from "@/services/api";
 
+// Tên hiển thị của từng loại seeding (dùng khi báo lô đang chạy ở trang khác)
+export const SEEDING_TYPE_LABELS = { POST: "Bài viết", PAGE: "Page", PROFILE: "Trang cá nhân" };
+
 export const seedingApi = {
   getAccounts: async () => {
     try {
@@ -108,11 +111,13 @@ export const seedingApi = {
   },
 
   // Lô seeding đang chạy của user theo loại trang (PAGE | PROFILE | POST), không có thì campaign_id = null
+  // Không truyền campaignType: lô đang chạy của mọi loại trang (mỗi lúc chỉ chạy 1 lô seeding)
   getActiveSeedingCampaign: async (campaignType) => {
     try {
-      return await api.get("/api/seeding/campaigns/active", { params: { campaign_type: campaignType } });
+      const params = campaignType ? { campaign_type: campaignType } : {};
+      return await api.get("/api/seeding/campaigns/active", { params });
     } catch {
-      return { campaign_id: null };
+      return { campaign_id: null, campaign_type: null };
     }
   },
 

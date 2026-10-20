@@ -1,6 +1,6 @@
 "use client";
 
-import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
+import { seedingApi, SEEDING_TYPE_LABELS } from "@/modules/module_08_interaction_seeding/service";
 import { normalizeTargetUrl } from "@/modules/module_08_interaction_seeding/validation";
 import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
 import { toast } from "@/components/ui/toast";
@@ -90,18 +90,35 @@ export default function SeedingPostPage() {
     }),
   ];
 
-  // Khi mở lại trang (ví dụ chuyển sang trang khác rồi quay lại) mà lô seeding của trang này vẫn đang chạy
-  // thì khôi phục trạng thái đang chạy: ẩn nút Bắt đầu, hiện nút Dừng và tiếp tục theo dõi tới khi xong.
+  // Lô seeding đang chạy trên máy (mọi loại trang), kiểm tra khi mở trang và mỗi 3 giây. Mỗi lúc chỉ chạy 1 lô:
+  // - Lô của trang này: khôi phục trạng thái đang chạy (ẩn nút Bắt đầu, hiện nút Dừng) khi chuyển trang rồi quay lại.
+  // - Lô của trang khác (otherRunning): khoá nút Bắt đầu, nút Dừng dừng lô đó.
+  const [otherRunning, setOtherRunning] = useState(null);
   useEffect(() => {
-    seedingApi
-      .getActiveSeedingCampaign("POST")
-      .then((res) => {
-        if (res?.campaign_id) {
-          setCurrentCampaignId(res.campaign_id);
-          setIsRunning(true);
-        }
-      })
-      .catch(() => {});
+    let cancelled = false;
+    const checkActive = () =>
+      seedingApi
+        .getActiveSeedingCampaign()
+        .then((res) => {
+          if (cancelled) return;
+          if (res?.campaign_id && res.campaign_type === "POST") {
+            setOtherRunning(null);
+            setCurrentCampaignId(res.campaign_id);
+            setIsRunning(true);
+          } else if (res?.campaign_id) {
+            const typeLabel = SEEDING_TYPE_LABELS[res.campaign_type] || res.campaign_type;
+            setOtherRunning({ id: res.campaign_id, label: `${typeLabel} #${res.campaign_id}` });
+          } else {
+            setOtherRunning(null);
+          }
+        })
+        .catch(() => {});
+    checkActive();
+    const timer = setInterval(checkActive, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, []);
 
   // Poll campaign status while running
@@ -280,6 +297,14 @@ export default function SeedingPostPage() {
   };
 
   const handleStart = async () => {
+    if (otherRunning) {
+      toast.warning(
+        `Đang chạy seeding ${otherRunning.label}. Hãy dừng lô đó trước khi bắt đầu seeding mới.`,
+        "ĐANG CÓ SEEDING CHẠY",
+      );
+      return;
+    }
+
     if (targets.length === 0) {
       toast.warning("Vui lòng thêm ít nhất 1 bài viết cần seeding!", "THIẾU MỤC TIÊU");
       return;
@@ -341,8 +366,8 @@ export default function SeedingPostPage() {
         })),
         account_count: accountCount,
         threads: 1,
-        min_delay_sec: delayMin,
-        max_delay_sec: delayMax,
+        delay_seconds_min: delayMin,
+        delay_seconds_max: delayMax,
       });
 
       setCurrentCampaignId(campaign.id);
@@ -361,6 +386,17 @@ export default function SeedingPostPage() {
       setIsRunning(false);
       addLog(`Lỗi khởi chạy seeding: ${e.message}`, "error");
       toast.error(e.message || "Không thể khởi chạy chiến dịch seeding!", "LỖI KHỞI CHẠY");
+    }
+  };
+
+  const handleStopOther = async (other) => {
+    try {
+      await seedingApi.stopSeedingCampaign(other.id);
+      setOtherRunning(null);
+      addLog(`Đã dừng seeding ${other.label} (đang chạy ở trang khác).`, "warn");
+      toast.warning(`Đã dừng seeding ${other.label}.`, "ĐÃ DỪNG");
+    } catch (e) {
+      toast.error(e.message || "Lỗi khi gửi yêu cầu dừng chiến dịch!", "LỖI");
     }
   };
 
@@ -476,6 +512,8 @@ export default function SeedingPostPage() {
         onStart={handleStart}
         onStop={handleStop}
         disabled={targets.length === 0}
+        otherRunning={otherRunning}
+        onStopOther={handleStopOther}
       />
     </div>
   );

@@ -57,6 +57,9 @@ _active_seeding_campaigns = {}  # campaign_id -> {"stop_requested": bool, "runni
 _batch_campaign_chains: dict[
     int, list[int]
 ] = {}  # campaign_id -> [camp1_id, camp2_id, ...]
+# Lô đang được bộ chạy lô (_execute_campaign_runner) chạy thật: campaign đầu lô -> chuỗi chiến dịch.
+# Mỗi lúc mỗi user chỉ được chạy 1 lô seeding (mọi loại trang) vì các lô dùng chung nick / Chrome profile.
+_running_batches: dict[int, list[int]] = {}
 
 
 def broadcast(
@@ -316,8 +319,9 @@ def extract_fb_id(url: str, target_type: str = "") -> str:
     if m:
         return m.group(1)
 
-    # 1. Post ID từ permalink: story_fbid=(\d+) hoặc fbid=(\d+)
-    m = re.search(r"[?&](?:story_fbid|fbid)=(\d+)", clean)
+    # 1. Post ID từ permalink: story_fbid / fbid là số hoặc chuỗi pfbid... (link kiểu mới).
+    #    Phải lấy trước [?&]id= vì id= trong permalink là ID của Page, không phải của bài viết.
+    m = re.search(r"[?&](?:story_fbid|fbid)=([A-Za-z0-9]+)", clean)
     if m:
         return m.group(1)
 
@@ -405,10 +409,14 @@ def vn_date_bound(date_str: str, end_of_day: bool = False) -> datetime:
 
 def share_range_per_post(total: int, parts: int) -> tuple:
     """Khoảng số lượt chia sẻ mỗi bài: ±20% quanh mức chia đều (vd 50 lượt / 4 bài -> 10..15).
+    Mỗi bài luôn có ít nhất 1 lượt: đủ nick thì tối thiểu 1, ít nick hơn số bài thì mỗi bài đúng 1 lượt
+    (bài không được chia sẽ được giao thêm cho nick đang share ít nhất, xem create_seeding_campaign).
     Dùng số nguyên để tránh sai số float. Frontend (PostSummaryCards.jsx) hiển thị cùng công thức."""
     if parts <= 1:
         return (total, total)
-    return ((4 * total) // (5 * parts), -(-6 * total // (5 * parts)))
+    if total < parts:
+        return (1, 1)
+    return (max(1, (4 * total) // (5 * parts)), -(-6 * total // (5 * parts)))
 
 
 def _split_share_accounts(uids: list[str], post_count: int) -> list[list[str]]:
@@ -905,6 +913,12 @@ async def create_seeding_campaign(
                     created_by_int = u_row[0]
             except Exception:
                 created_by_int = None
+
+    # Mỗi lúc chỉ chạy 1 lô seeding (mọi loại trang): các lô dùng chung nick / Chrome profile
+    running = _find_running_campaign(db, created_by_int)
+    if running:
+        raise HTTPException(status_code=409, detail=_running_conflict_detail(running))
+
     if req.campaign_type.upper() == "POST":
         chosen_actions = {a.upper().strip() for a in (req.actions or [])}
         if "REACT" in chosen_actions and not any(
@@ -986,6 +1000,14 @@ async def create_seeding_campaign(
         if "SHARE" in post_actions
         else []
     )
+    share_load = {u: 0 for u in used_uids}   # số bài mỗi nick đang được giao share
+    for group in share_groups:
+        for u in group:
+            share_load[u] += 1
+
+    # Thời gian nghỉ: không âm, nhập ngược (vd 20 - 10) thì đảo lại cho đúng thứ tự
+    delay_min = max(0, min(req.delay_seconds_min, req.delay_seconds_max))
+    delay_max = max(0, req.delay_seconds_min, req.delay_seconds_max)
 
     for idx, item in enumerate(req.targets):
         fb_id = item.fb_id or extract_fb_id(item.url, camp_type)
@@ -1035,8 +1057,8 @@ async def create_seeding_campaign(
             actions=actions_str,
             reactions=",".join(req.reactions) if req.reactions else None,
             account_count=actual_account_count,
-            delay_seconds_min=req.delay_seconds_min,
-            delay_seconds_max=req.delay_seconds_max,
+            delay_seconds_min=delay_min,
+            delay_seconds_max=delay_max,
             status="PENDING",
             total_planned=actual_account_count,
             total_success=0,
@@ -1106,8 +1128,13 @@ async def create_seeding_campaign(
                 comment_uids = set(used_uids)
 
         share_uids = set(share_groups[idx]) if share_groups else set()
-        if "SHARE" in post_actions and not share_uids:
-            share_uids = set(used_uids)
+        if "SHARE" in post_actions and not share_uids and used_uids:
+            # Ít nick hơn số bài: bài không được chia lượt nào vẫn có đúng 1 nick share (nick đang share ít nhất),
+            # không để cả loạt nick cùng share 1 bài.
+            least = min(share_load.values())
+            pick = random.choice([u for u, n in share_load.items() if n == least])
+            share_load[pick] += 1
+            share_uids = {pick}
 
         planned_uids = set()
         uids_with_pending = set()
@@ -1156,7 +1183,6 @@ async def create_seeding_campaign(
                         reaction=None,
                         comment_id=None,
                         status="FAILED",
-                        attempts=0,
                         error_message=f"Tài khoản đã {act_label} {type_text} này rồi",
                         started_at=vn_now(),
                         finished_at=vn_now(),
@@ -1286,6 +1312,8 @@ def _process_account_tasks(
     owner: str | None = None,
 ):
     """Xử lý toàn bộ tác vụ của một tài khoản trên trình duyệt Chrome riêng biệt."""
+    # Thời gian nghỉ lưu từ trước có thể bị ngược / âm: random.randint(20, 10) sẽ lỗi và làm sập luồng của nick
+    delay_min, delay_max = sorted((max(0, delay_min or 0), max(0, delay_max or 0)))
     token = owner_context.set(owner) if owner else None
     db = SessionLocal()
     driver = None
@@ -1331,7 +1359,7 @@ def _process_account_tasks(
                     if t and t.status == "PENDING":
                         t.status = "FAILED"
                         t.error_message = "Không thể đăng nhập Facebook"
-                        t.finished_at = utc_now()
+                        t.finished_at = vn_now()
                         failed_any = True
                 if failed_any:
                     # Mỗi nick = 1 lượt (giống cách đếm ở cuối hàm), cộng bằng UPDATE trong DB để không mất lượt
@@ -1655,8 +1683,9 @@ def _run_single_campaign(campaign_id: int):
             tasks_by_uid.setdefault(t.account_uid, []).append(t.id)
 
         has_tasks = True
-        delay_min = campaign.delay_seconds_min or 30
-        delay_max = campaign.delay_seconds_max or 60
+        # Dùng `is None` thay vì `or`: nghỉ 0 giây là giá trị hợp lệ, không được biến thành 30
+        delay_min = 30 if campaign.delay_seconds_min is None else campaign.delay_seconds_min
+        delay_max = 60 if campaign.delay_seconds_max is None else campaign.delay_seconds_max
     finally:
         db.close()
 
@@ -1763,13 +1792,14 @@ def _rest_before_next_post(chain: list[int], next_cid: int) -> bool:
         camp = db.query(SeedingCampaign).filter(SeedingCampaign.id == next_cid).first()
         if not camp or camp.campaign_type != "POST":
             return True
-        lo = camp.delay_seconds_min or 30
-        hi = camp.delay_seconds_max or 60
+        lo = 30 if camp.delay_seconds_min is None else camp.delay_seconds_min
+        hi = 60 if camp.delay_seconds_max is None else camp.delay_seconds_max
         owner = str(camp.created_by) if camp.created_by is not None else None
     finally:
         db.close()
 
-    delay_s = random.randint(min(lo, hi), max(lo, hi))
+    lo, hi = sorted((max(0, lo), max(0, hi)))
+    delay_s = random.randint(lo, hi)
     broadcast("info", f"⏳ Nghỉ an toàn {delay_s}s trước khi sang bài viết tiếp theo...", owner=owner)
     for sec in range(delay_s):
         if any(_active_seeding_campaigns.get(c, {}).get("stop_requested", False) for c in chain):
@@ -1781,42 +1811,73 @@ def _rest_before_next_post(chain: list[int], next_cid: int) -> bool:
     return True
 
 
+SEEDING_TYPE_LABELS = {"POST": "Bài viết", "PAGE": "Page", "PROFILE": "Trang cá nhân"}
+
+
+def _find_running_campaign(db: Session, user_id: int | None, campaign_type: str | None = None):
+    """Chiến dịch đang chạy (hoặc đang chờ tới lượt) trong các lô mà engine này đang chạy, của user, có thể lọc loại trang.
+    Chỉ xét lô đang chạy thật (_running_batches): chiến dịch bị kẹt RUNNING / PENDING từ lần chạy trước (engine đã tắt
+    giữa chừng) hoặc mới tạo mà chưa chạy thì không tính."""
+    ids = [cid for chain in list(_running_batches.values()) for cid in chain]
+    if not ids:
+        return None
+    q = db.query(SeedingCampaign).filter(
+        SeedingCampaign.id.in_(ids), SeedingCampaign.status.in_(["RUNNING", "PENDING"])
+    )
+    if campaign_type:
+        q = q.filter(SeedingCampaign.campaign_type == campaign_type.upper())
+    if user_id is not None:
+        q = q.filter(SeedingCampaign.created_by == user_id)
+    return q.order_by(SeedingCampaign.id.asc()).first()
+
+
+def _running_conflict_detail(camp: SeedingCampaign) -> str:
+    label = SEEDING_TYPE_LABELS.get(camp.campaign_type, camp.campaign_type)
+    return f"Đang chạy seeding {label} #{camp.id}. Hãy dừng lô đó trước khi bắt đầu seeding mới."
+
+
 def _execute_campaign_runner(initial_campaign_id: int):
     """Hàm chạy nền điều phối tuần tự các chiến dịch trong cùng một batch."""
     chain = _batch_campaign_chains.get(initial_campaign_id, [initial_campaign_id])
-    for idx, cid in enumerate(chain):
-        if idx > 0 and not _rest_before_next_post(chain, cid):
-            break
-        # Kiểm tra nếu có yêu cầu dừng toàn batch
+    # Đánh dấu lô đang chạy: khoá không cho bắt đầu lô seeding khác cùng lúc (xem _find_running_campaign)
+    _running_batches[initial_campaign_id] = chain
+    try:
+        for idx, cid in enumerate(chain):
+            if idx > 0 and not _rest_before_next_post(chain, cid):
+                break
+            # Kiểm tra nếu có yêu cầu dừng toàn batch
+            stop_req = any(
+                _active_seeding_campaigns.get(c, {}).get("stop_requested", False)
+                for c in chain
+            )
+            if stop_req:
+                break
+            # Cờ stop_requested mất khi chiến dịch trước chạy xong, nên các chiến dịch kế tiếp
+            # phải dựa vào trạng thái STOPPED mà API dừng đã ghi vào DB.
+            if idx > 0 and _campaign_status(cid) == "STOPPED":
+                break
+            _run_single_campaign(cid)
+
+        # Nếu chuỗi bị dừng dở chừng, đảm bảo mọi chiến dịch còn lại trong chuỗi được hoàn tất trạng thái FAILED/STOPPED
         stop_req = any(
             _active_seeding_campaigns.get(c, {}).get("stop_requested", False)
             for c in chain
         )
         if stop_req:
-            break
-        # Cờ stop_requested mất khi chiến dịch trước chạy xong, nên các chiến dịch kế tiếp
-        # phải dựa vào trạng thái STOPPED mà API dừng đã ghi vào DB.
-        if idx > 0 and _campaign_status(cid) == "STOPPED":
-            break
-        _run_single_campaign(cid)
+            db_cleanup = SessionLocal()
+            try:
+                for cid in chain:
+                    _fail_remaining_campaign_tasks(
+                        db_cleanup,
+                        cid,
+                        reason="Người dùng yêu cầu dừng chiến dịch (Đã dừng thủ công)",
+                    )
+                db_cleanup.commit()
+            finally:
+                db_cleanup.close()
 
-    # Nếu chuỗi bị dừng dở chừng, đảm bảo mọi chiến dịch còn lại trong chuỗi được hoàn tất trạng thái FAILED/STOPPED
-    stop_req = any(
-        _active_seeding_campaigns.get(c, {}).get("stop_requested", False)
-        for c in chain
-    )
-    if stop_req:
-        db_cleanup = SessionLocal()
-        try:
-            for cid in chain:
-                _fail_remaining_campaign_tasks(
-                    db_cleanup,
-                    cid,
-                    reason="Người dùng yêu cầu dừng chiến dịch (Đã dừng thủ công)",
-                )
-            db_cleanup.commit()
-        finally:
-            db_cleanup.close()
+    finally:
+        _running_batches.pop(initial_campaign_id, None)
 
 
 @router.post("/campaigns/{campaign_id}/start")
@@ -1854,6 +1915,11 @@ async def start_seeding_campaign(
         campaign_id
     ].get("running"):
         return {"message": "Chiến dịch đang chạy", "status": "RUNNING"}
+
+    # Đang có lô seeding khác (của user này) chạy thì không cho chạy thêm lô thứ hai
+    running = _find_running_campaign(db, campaign.created_by)
+    if running and running.id not in _batch_campaign_chains.get(campaign_id, [campaign_id]):
+        raise HTTPException(status_code=409, detail=_running_conflict_detail(running))
 
     background_tasks.add_task(_execute_campaign_runner, campaign_id)
     return {
@@ -1992,33 +2058,23 @@ async def stop_all_seeding(
 # ─────────────────────────────────────────────────────────────
 @router.get("/campaigns/active")
 async def get_active_seeding_campaign(
-    campaign_type: str = Query(..., description="PAGE | PROFILE | POST"),
+    campaign_type: str | None = Query(None, description="PAGE | PROFILE | POST, bỏ trống = mọi loại"),
     request: Request = None,
     authorization: str | None = Header(None),
     db: Session = Depends(get_db),
 ):
     """
-    Lô seeding đang chạy (hoặc đang chờ tới lượt) của user hiện tại trên engine này, theo loại trang.
-    Giao diện gọi khi mở lại trang Seeding để giữ nút "Dừng seeding": trạng thái đang chạy ở giao diện chỉ nằm
-    trong bộ nhớ của trang nên bị mất khi chuyển sang trang khác.
-    Chỉ xét chiến dịch do engine này đang điều phối (có trong bộ nhớ), để chiến dịch bị kẹt RUNNING từ lần chạy
-    trước (engine đã tắt giữa chừng) không làm giao diện tưởng là vẫn đang chạy.
+    Lô seeding đang chạy (hoặc đang chờ tới lượt) của user hiện tại trên engine này.
+    Giao diện các trang Seeding gọi định kỳ (không truyền loại trang):
+    - Lô của chính trang đó: giữ nút "Dừng seeding" khi chuyển trang rồi quay lại.
+    - Lô của trang khác: khoá nút "Bắt đầu seeding", nút Dừng dừng lô đó (mỗi lúc chỉ chạy 1 lô).
     """
-    known_ids = set(_batch_campaign_chains.keys()) | set(_active_seeding_campaigns.keys())
-    if not known_ids:
-        return {"campaign_id": None}
-
-    q = db.query(SeedingCampaign).filter(
-        SeedingCampaign.id.in_(known_ids),
-        SeedingCampaign.campaign_type == campaign_type.upper(),
-        SeedingCampaign.status.in_(["RUNNING", "PENDING"]),
-    )
     current_user = get_current_user_info(request, authorization)
-    if current_user and current_user.get("id") is not None:
-        q = q.filter(SeedingCampaign.created_by == current_user["id"])
-
-    camp = q.order_by(SeedingCampaign.id.asc()).first()
-    return {"campaign_id": camp.id if camp else None}
+    user_id = current_user.get("id") if current_user else None
+    camp = _find_running_campaign(db, user_id, campaign_type)
+    if not camp:
+        return {"campaign_id": None, "campaign_type": None, "name": None}
+    return {"campaign_id": camp.id, "campaign_type": camp.campaign_type, "name": camp.target_summary}
 
 
 @router.get("/campaigns")

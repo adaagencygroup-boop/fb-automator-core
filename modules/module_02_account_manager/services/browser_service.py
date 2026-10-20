@@ -149,6 +149,10 @@ def _open_live_browser_worker(uid: str):
         driver.get("https://www.facebook.com")
         human_sleep(2.0, 3.0)
 
+        # Nếu vào phải trang lưu nick, chờ 10s rồi bấm 'Dùng trang cá nhân khác'
+        from ..automation.login_flow import _handle_saved_account_screen
+        _handle_saved_account_screen(driver)
+
         # Nếu chưa login, thực hiện auto-login nếu có mật khẩu/cookie
         from ..automation.login_flow import _check_logged_in, _try_cookie_login, _is_2fa_required, _handle_2fa, _handle_post_login_popups, is_checkpoint_url
         from ..automation.locators import LOGIN
@@ -166,6 +170,7 @@ def _open_live_browser_worker(uid: str):
             if not _check_logged_in(driver) and account.password and not is_checkpoint_url(driver.current_url or ""):
                 attempted_login = True
                 try:
+                    _handle_saved_account_screen(driver)
                     password_plain = decrypt(account.password, HWID)
                     email_el = wait_and_find(driver, LOGIN["email_input"], timeout=5)
                     human_type(email_el, uid)

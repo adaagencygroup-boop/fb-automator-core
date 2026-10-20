@@ -369,16 +369,14 @@ app.include_router(creator_router)
 from modules.module_05_page_manager.routes_reels import router as reels_router
 app.include_router(reels_router, prefix="/api")
 
-from modules.module_05_page_manager.routes_pages import router as page_manager_router
-app.include_router(page_manager_router, prefix="/api")
-
-from modules.module_05_page_manager.routes_oauth_callback import router as oauth_callback_router
-app.include_router(oauth_callback_router)
-
-from modules.module_05_page_manager.routes import router as ai_post_router
-app.include_router(ai_post_router)
 from modules.module_05_page_manager.routes_download import router as download_router
 app.include_router(download_router, prefix="/api")
+from modules.module_05_page_manager.routes_pages import router as page_manager_router
+app.include_router(page_manager_router, prefix="/api")
+from modules.module_05_page_manager.routes_oauth_callback import router as oauth_callback_router
+app.include_router(oauth_callback_router)
+from modules.module_05_page_manager.routes import router as ai_post_router
+app.include_router(ai_post_router)
 
 @app.get("/api/pages", dependencies=[Depends(scoped_owner)])
 def get_pages(request: Request):
