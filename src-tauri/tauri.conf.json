@@ -38,9 +38,9 @@
     "externalBin": [
       "binaries/local_engine"
     ],
-    "resources": [
-      "../.env"
-    ]
+    "resources": {
+      "../.env": ".env"
+    }
   },
   "plugins": {
     "deep-link": {
