@@ -64,10 +64,26 @@ fn main() {
                 Ok(cmd) => {
                     let cmd_with_args = cmd.args(["--port", "28129"]);
                     match cmd_with_args.spawn() {
-                        Ok((_rx, child)) => {
+                        Ok((mut rx, child)) => {
                             println!("✅ [Tauri] Python Sidecar spawned successfully!");
                             let mut state_lock = child_clone.lock().unwrap();
                             *state_lock = Some(child);
+
+                            // Drain stdout and stderr so pipe buffer never blocks
+                            tauri::async_runtime::spawn(async move {
+                                use tauri_plugin_shell::process::CommandEvent;
+                                while let Some(event) = rx.recv().await {
+                                    match event {
+                                        CommandEvent::Stdout(bytes) => {
+                                            println!("[Sidecar] {}", String::from_utf8_lossy(&bytes));
+                                        }
+                                        CommandEvent::Stderr(bytes) => {
+                                            eprintln!("[Sidecar ERR] {}", String::from_utf8_lossy(&bytes));
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            });
                         }
                         Err(err) => {
                             eprintln!("⚠️ [Tauri] Could not spawn local_engine sidecar: {}. (If developing, run engine.py manually)", err);
