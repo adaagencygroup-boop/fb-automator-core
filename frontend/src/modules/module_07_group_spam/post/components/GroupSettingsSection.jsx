@@ -22,8 +22,7 @@ import { testGroupAiConnection, getGeminiModels, saveGroupSettings } from "../..
  * 2. Cấu hình & mã hóa API Key cục bộ trên máy
  * 3. Luồng chạy (threads: 1-10)
  * 4. Thời gian nghỉ giữa phiên (rest_minutes: 0-1440)
- * 5. Giới hạn số bài đăng tối đa (max_posts: 1-1000)
- * 6. Thao tác nhanh: Tải model Google, Kiểm tra API, Lưu cấu hình / Chỉnh sửa
+ * 5. Thao tác nhanh: Tải model Google, Kiểm tra API, Lưu cấu hình / Chỉnh sửa
  * ============================================================================
  */
 export default function GroupSettingsSection({
@@ -281,7 +280,7 @@ export default function GroupSettingsSection({
         </Field>
       </div>
 
-      <div className="mt-4 grid gap-4 sm:grid-cols-3">
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <Field label="Luồng">
           <Tooltip content="Số luồng chạy đồng thời (1 - 10). Tương ứng số tài khoản đăng bài song song cùng lúc." align="left">
             <Input
@@ -306,20 +305,6 @@ export default function GroupSettingsSection({
               onChange={(event) => setRestMinutes(event.target.value)}
               disabled={settingsLoading || locked}
               title="Thời gian nghỉ giữa các phiên đăng bài tính bằng phút"
-              className="disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
-            />
-          </Tooltip>
-        </Field>
-        <Field label="Số bài tối đa">
-          <Tooltip content="Số bài đăng tối đa trong chiến dịch (1 - 1000 bài). Hệ thống sẽ tự dừng khi đạt giới hạn này." align="right">
-            <Input
-              type="number"
-              min="1"
-              max="1000"
-              value={maxPosts}
-              onChange={(event) => setMaxPosts(event.target.value)}
-              disabled={settingsLoading || locked}
-              title="Giới hạn số bài đăng tối đa trong chiến dịch (1 - 1000)"
               className="disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
             />
           </Tooltip>
