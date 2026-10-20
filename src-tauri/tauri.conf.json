@@ -37,6 +37,9 @@
     ],
     "externalBin": [
       "binaries/local_engine"
+    ],
+    "resources": [
+      "../.env"
     ]
   },
   "plugins": {
