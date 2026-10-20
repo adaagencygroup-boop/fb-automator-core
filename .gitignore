@@ -99,7 +99,7 @@ Desktop.ini
 build/
 dist/
 *.egg-info/
-src-tauri/target/
+src-tauri/ rget/
 src-tauri/binaries/*.exe
 *.pdb
 

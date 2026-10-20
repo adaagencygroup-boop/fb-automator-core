@@ -41,7 +41,6 @@ import {
 } from "../service";
 import {
   INITIAL_POST,
-  MOCK_ACCOUNTS,
 } from "../shared/constants";
 import {
   SectionCard,
@@ -69,11 +68,9 @@ const DEFAULT_GEMINI_MODELS = [
 export default function GroupPostModule() {
   const mediaInputRef = useRef(null);
 
-  const [accounts, setAccounts] = useState(MOCK_ACCOUNTS);
-  const [accountsLoading, setAccountsLoading] = useState(false);
-  const [selectedAccountKeys, setSelectedAccountKeys] = useState(
-    MOCK_ACCOUNTS.slice(0, 4).map((account) => account.key)
-  );
+  const [accounts, setAccounts] = useState([]);
+  const [accountsLoading, setAccountsLoading] = useState(true);
+  const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
   const [model, setModel] = useState("gpt-4o");
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
@@ -113,14 +110,22 @@ export default function GroupPostModule() {
   const loadAccounts = async () => {
     setAccountsLoading(true);
     try {
-      setAccounts(MOCK_ACCOUNTS);
-      setSelectedAccountKeys((current) =>
-        current.length ? current : MOCK_ACCOUNTS.slice(0, 4).map((account) => account.key)
-      );
+      const data = await getAccounts();
+      const rawList = Array.isArray(data) ? data : (data?.accounts || []);
+      const rows = rawList.map(normalizeAccount);
+      setAccounts(rows);
+      setSelectedAccountKeys((current) => {
+        const validKeys = new Set(rows.map((account) => account.key));
+        const filteredCurrent = current.filter((key) => validKeys.has(key));
+        if (filteredCurrent.length > 0) return filteredCurrent;
+        // Ưu tiên chọn tối đa 4 tài khoản không bị DIE
+        const preferredKeys = rows.filter((account) => account.status !== "DIE").slice(0, 4).map((account) => account.key);
+        return preferredKeys.length > 0 ? preferredKeys : rows.slice(0, 4).map((account) => account.key);
+      });
     } catch (err) {
-      console.warn("Lỗi nạp tài khoản:", err);
-      setAccounts(MOCK_ACCOUNTS);
-      setSelectedAccountKeys(MOCK_ACCOUNTS.slice(0, 4).map((account) => account.key));
+      console.warn("Lỗi nạp tài khoản từ Module 2:", err);
+      setAccounts([]);
+      setSelectedAccountKeys([]);
     } finally {
       setAccountsLoading(false);
     }

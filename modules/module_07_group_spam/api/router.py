@@ -133,6 +133,8 @@ class SearchGroupInput(BaseModel):
     max_results: int = Field(default=50, ge=1, le=200)
     member_filter: str = Field(default="all")
     group_type: str = Field(default="all")
+    frequency_filter: str = Field(default="all")
+    account_uid: Optional[str] = None
 
 
 class CampaignInput(BaseModel):
@@ -184,6 +186,8 @@ async def search_groups(item: SearchGroupInput):
             item.max_results,
             item.member_filter,
             item.group_type,
+            item.frequency_filter,
+            item.account_uid,
         )
         return {"groups": results, "count": len(results)}
     except Exception as exc:
@@ -192,9 +196,11 @@ async def search_groups(item: SearchGroupInput):
 
 @router.get("/source/history")
 async def get_group_posting_history():
-    """Lấy danh sách các nhóm đã đăng thành công để tránh spam lặp lại."""
+    """Lấy danh sách các nhóm đã đăng thành công từ PostgreSQL để tránh spam lặp lại hoặc nạp lại nhóm."""
+    from modules.module_07_group_spam.group_source import get_posted_group_records
+    groups = await asyncio.to_thread(get_posted_group_records)
     posted = await asyncio.to_thread(get_posted_group_keys)
-    return {"posted_groups": list(posted), "count": len(posted)}
+    return {"posted_groups": list(posted), "history_groups": groups, "count": len(groups)}
 
 
 @router.post("/campaign")
