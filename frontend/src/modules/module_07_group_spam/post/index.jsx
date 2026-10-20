@@ -21,6 +21,9 @@ import {
   Underline,
   List,
   Link2,
+  X,
+  Film,
+  Trash2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -38,10 +41,10 @@ import {
   runGroupCampaign,
   saveGroupSettings,
   testGroupAiConnection,
+  uploadGroupMedia,
 } from "../service";
 import {
   INITIAL_POST,
-  MOCK_ACCOUNTS,
 } from "../shared/constants";
 import {
   SectionCard,
@@ -69,11 +72,9 @@ const DEFAULT_GEMINI_MODELS = [
 export default function GroupPostModule() {
   const mediaInputRef = useRef(null);
 
-  const [accounts, setAccounts] = useState(MOCK_ACCOUNTS);
-  const [accountsLoading, setAccountsLoading] = useState(false);
-  const [selectedAccountKeys, setSelectedAccountKeys] = useState(
-    MOCK_ACCOUNTS.slice(0, 4).map((account) => account.key)
-  );
+  const [accounts, setAccounts] = useState([]);
+  const [accountsLoading, setAccountsLoading] = useState(true);
+  const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
   const [model, setModel] = useState("gpt-4o");
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
@@ -113,14 +114,22 @@ export default function GroupPostModule() {
   const loadAccounts = async () => {
     setAccountsLoading(true);
     try {
-      setAccounts(MOCK_ACCOUNTS);
-      setSelectedAccountKeys((current) =>
-        current.length ? current : MOCK_ACCOUNTS.slice(0, 4).map((account) => account.key)
-      );
+      const data = await getAccounts();
+      const rawList = Array.isArray(data) ? data : (data?.accounts || []);
+      const rows = rawList.map(normalizeAccount);
+      setAccounts(rows);
+      setSelectedAccountKeys((current) => {
+        const validKeys = new Set(rows.map((account) => account.key));
+        const filteredCurrent = current.filter((key) => validKeys.has(key));
+        if (filteredCurrent.length > 0) return filteredCurrent;
+        // Ưu tiên chọn tối đa 4 tài khoản không bị DIE
+        const preferredKeys = rows.filter((account) => account.status !== "DIE").slice(0, 4).map((account) => account.key);
+        return preferredKeys.length > 0 ? preferredKeys : rows.slice(0, 4).map((account) => account.key);
+      });
     } catch (err) {
-      console.warn("Lỗi nạp tài khoản:", err);
-      setAccounts(MOCK_ACCOUNTS);
-      setSelectedAccountKeys(MOCK_ACCOUNTS.slice(0, 4).map((account) => account.key));
+      console.warn("Lỗi nạp tài khoản từ Module 2:", err);
+      setAccounts([]);
+      setSelectedAccountKeys([]);
     } finally {
       setAccountsLoading(false);
     }
@@ -275,8 +284,29 @@ export default function GroupPostModule() {
   };
 
   const handleFiles = (fileList) => {
-    const nextFiles = Array.from(fileList || []).slice(0, 10);
-    setMediaFiles(nextFiles);
+    const incoming = Array.from(fileList || []);
+    setMediaFiles((prev) => {
+      const merged = [...prev, ...incoming].slice(0, 10);
+      return merged;
+    });
+  };
+
+  const handleRemoveMedia = (indexToRemove) => {
+    setMediaFiles((prev) => prev.filter((_, idx) => idx !== indexToRemove));
+  };
+
+  const handleClearAllMedia = () => {
+    setMediaFiles([]);
+    if (mediaInputRef.current) {
+      mediaInputRef.current.value = "";
+    }
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes && bytes !== 0) return "";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   const generatePosts = async () => {
@@ -321,6 +351,19 @@ export default function GroupPostModule() {
         const saved = await handleSaveSettings(false);
         if (!saved) throw new Error("Cấu hình chưa hợp lệ");
       }
+      let savedMediaPaths = [];
+      if (mediaFiles.length > 0) {
+        setSettingsFeedback({ type: "info", message: `Đang tải lên ${mediaFiles.length} tệp media lên hệ thống...` });
+        const formData = new FormData();
+        mediaFiles.forEach((file) => {
+          formData.append("files", file);
+        });
+        const uploadRes = await uploadGroupMedia(formData);
+        if (uploadRes?.files?.length) {
+          savedMediaPaths = uploadRes.files.map((f) => f.path || f.relative_path);
+        }
+      }
+
       const activeGroups = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
       await runGroupCampaign({
         action_type: "POST",
@@ -328,7 +371,7 @@ export default function GroupPostModule() {
         account_uids: selectedAccounts.map((account) => account.uid),
         groups: activeGroups,
         posts,
-        media: mediaFiles.map((file) => file.name),
+        media: savedMediaPaths.length ? savedMediaPaths : mediaFiles.map((file) => file.name),
         settings: {
           model,
           threads: Number(threads),
@@ -336,6 +379,8 @@ export default function GroupPostModule() {
           max_posts: Number(maxPosts),
           delay_min: Number(delayMin),
           delay_max: Number(delayMax),
+          min_media: Number(minMedia) || 0,
+          max_media: Number(maxMedia) || 0,
           avoid_duplicate: avoidDuplicate,
           shuffle_content: shuffleContent,
           schedule_at: scheduleEnabled && scheduleDate ? `${scheduleDate}T${scheduleTime}` : null,
@@ -343,6 +388,7 @@ export default function GroupPostModule() {
       });
       setRunState("running");
       setProgress(12);
+      toast.success("Đã khởi động chiến dịch đăng bài nhóm thành công!", "BẮT ĐẦU CHIẾN DỊCH");
     } catch (error) {
       setSettingsFeedback({ type: "error", message: error.message || "Không thể bắt đầu chiến dịch" });
       setRunState("idle");
@@ -456,6 +502,88 @@ export default function GroupPostModule() {
           </span>
           <span className="mt-1 text-[10px] text-slate-400">Hỗ trợ JPG, PNG (tối đa 10 ảnh)</span>
         </button>
+        {mediaFiles.length > 0 && (
+          <div className="mt-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-700">
+                Tệp đã chọn ({mediaFiles.length}/10):
+              </span>
+              <button
+                type="button"
+                onClick={handleClearAllMedia}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-500 transition-colors hover:text-rose-700 hover:underline"
+              >
+                <Trash2 className="size-3" />
+                Xoá tất cả
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
+              {mediaFiles.map((file, idx) => {
+                const isVideo = file.type?.startsWith("video/") || /\.(mp4|mov|avi|mkv)$/i.test(file.name || "");
+                const previewUrl = file instanceof File ? URL.createObjectURL(file) : null;
+
+                return (
+                  <div
+                    key={`${file.name}-${idx}`}
+                    className="group relative flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white p-1.5 shadow-xs transition-all hover:border-blue-300 hover:shadow-sm"
+                  >
+                    <div className="relative aspect-square w-full overflow-hidden rounded-md bg-slate-100">
+                      {isVideo && previewUrl ? (
+                        <div className="relative h-full w-full bg-black">
+                          <video
+                            src={previewUrl}
+                            muted
+                            playsInline
+                            controls
+                            className="h-full w-full object-cover"
+                            preload="metadata"
+                          />
+                        </div>
+                      ) : previewUrl ? (
+                        <img
+                          src={previewUrl}
+                          alt={file.name}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-slate-400">
+                          <ImageIcon className="size-6" />
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveMedia(idx);
+                        }}
+                        className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-rose-500/90 text-white opacity-90 shadow-sm transition-transform hover:scale-110 hover:bg-rose-600 sm:opacity-0 sm:group-hover:opacity-100"
+                        title="Xoá tệp này"
+                      >
+                        <X className="size-3" />
+                      </button>
+
+                      <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 py-0.5 text-[8px] font-medium text-white backdrop-blur-xs">
+                        #{idx + 1}
+                      </span>
+                    </div>
+
+                    <div className="mt-1.5 px-0.5">
+                      <p className="truncate text-[10px] font-medium text-slate-700" title={file.name}>
+                        {file.name}
+                      </p>
+                      <p className="text-[9px] text-slate-400">
+                        {formatFileSize(file.size)}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label="Tối thiểu media mỗi bài">
             <Input type="number" min="0" value={minMedia} onChange={(event) => setMinMedia(event.target.value)} />

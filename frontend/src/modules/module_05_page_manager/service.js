@@ -73,6 +73,11 @@ export async function openAiPage(uid, pageId) {
 export async function testAiKeys(payload) {
   return api.post("/api/pages/ai/test-key", payload);
 }
+
+export async function testPixabayKey(payload) {
+  return api.post("/api/pages/ai/test-pixabay-key", payload);
+}
+
 export async function startAiPost(payload) {
   return api.post("/api/pages/ai/start", payload);
 }

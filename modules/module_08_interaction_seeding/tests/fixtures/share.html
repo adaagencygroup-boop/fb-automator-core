@@ -1,0 +1,51 @@
+<!doctype html>
+<!-- Trang giả: hộp thoại Share của Facebook (nút Feed + nút đối tượng, menu "Post audience" trong CÙNG hộp thoại,
+     ô "Set as default audience", nút Done, Share now). ?mode=friends | public | broken (Done không đổi được).
+     window.__shared = đối tượng lúc bấm Share now, window.__default = đối tượng mặc định sau khi Done. -->
+<html><head><meta charset="utf-8"><style>div[role=button],div[role=radio]{display:inline-block;min-width:60px;min-height:24px;margin:2px}</style></head>
+<body>
+<p>Bài viết thử</p>
+<div role="button" id="sharebtn" aria-label="Send this to friends or post it on your profile."><div data-ad-rendering-role="share_button">Share</div></div>
+<script>
+  const mode = new URLSearchParams(location.search).get('mode') || 'friends';
+  let aud = mode === 'public' ? 'Public' : 'Friends', selected = aud, defaultAud = aud, dlg = null;
+  const PILL = a => `<div role="button" id="pill" aria-label="Edit privacy. Sharing with ${a}. "><span dir="auto"><div class="x1n2onr6"><div class="x1qhmfi1"><div><img height="12" width="12" alt="${a}"><span class="html-span">${a}</span><i data-visualcompletion="css-img" style="background-position:0px -831px;width:12px;height:12px;display:inline-block"></i></div></div></div></span></div>`;
+  function showShare() {
+    dlg.innerHTML = `<span>Share</span><div role="button" aria-label="Feed"><span>Feed</span></div>${PILL(aud)}<div>Say something about this...</div><div role="button" id="sharenow"><span>Share now</span></div>`;
+    dlg.querySelector('#pill').addEventListener('click', showAudience);
+    dlg.querySelector('#sharenow').addEventListener('click', () => { if (!window.__shared) { window.__shared = aud; dlg.remove(); } });
+  }
+  function syncBox() {
+    const b = dlg.querySelector('#defbox'), same = selected === defaultAud;
+    b.setAttribute('aria-checked', String(same)); b.setAttribute('aria-disabled', String(same));
+  }
+  function showAudience() {
+    if (dlg.querySelector('#optPublic')) return;
+    dlg.innerHTML = `<span>Post audience</span><span>Who can see your post?</span>
+      <div role="radio" id="optPublic"><span dir="auto">Public</span></div><div role="radio" id="optFriends"><span dir="auto">Friends</span></div>
+      <div id="_r_1_"><span dir="auto">Set as default audience.</span></div>
+      <div role="none" style="position:relative;width:20px;height:20px;display:inline-block"><input id="defbox" aria-labelledby="_r_1_" type="checkbox" value="default_privacy_checkbox" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;margin:0"></div>
+      <div role="button" id="done"><div role="none" style="position:relative"><span dir="auto"><span>Done</span></span><div role="none" data-visualcompletion="ignore" style="position:absolute;inset:0"></div></div></div>`;
+    selected = aud; syncBox();
+    dlg.querySelector('#optPublic').addEventListener('click', () => { selected = 'Public'; syncBox(); });
+    const b = dlg.querySelector('#defbox');
+    b.addEventListener('click', e => {
+      if (b.getAttribute('aria-disabled') === 'true') { e.preventDefault(); return; }
+      b.setAttribute('aria-checked', String(b.getAttribute('aria-checked') !== 'true'));
+    });
+    dlg.querySelector('#done').addEventListener('click', () => {
+      if (mode !== 'broken') {
+        if (b.getAttribute('aria-checked') === 'true') defaultAud = selected;
+        aud = selected;
+      }
+      window.__default = defaultAud;
+      showShare();
+    });
+  }
+  document.getElementById('sharebtn').addEventListener('click', () => {
+    if (dlg || window.__shared) return;
+    dlg = document.createElement('div'); dlg.setAttribute('role', 'dialog'); dlg.style.cssText = 'width:520px;min-height:300px';
+    document.body.appendChild(dlg); showShare();
+  });
+</script>
+</body></html>

@@ -76,8 +76,8 @@ export function normalizeAccount(account, index) {
     account.name ||
     (account.uid ? `Nick FB (${account.uid})` : `Tài khoản ${index + 1}`);
 
-  const rawStatus = String(account.status || "").toUpperCase();
-  const status = rawStatus === "LIVE" ? "LIVE" : rawStatus === "DIE" ? "DIE" : rawStatus ? rawStatus : "LIVE";
+  const rawStatus = account.status ? String(account.status).toUpperCase() : null;
+  const status = rawStatus === "LIVE" ? "LIVE" : rawStatus === "DIE" ? "DIE" : rawStatus || "UNKNOWN";
 
   const subtitle = account.email || account.mail || "Chưa có email";
 
