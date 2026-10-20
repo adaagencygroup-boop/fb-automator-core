@@ -1042,39 +1042,36 @@ function OwnedFanpageList({ owner }) {
                               </td>
                               <td data-label="Hành động" className="py-2 px-2.5 text-right">
                                 <div className="flex min-w-0 flex-nowrap items-center justify-end gap-1">
-                                  {/* Nếu token LIVE thì không cần nút cấp lại. Chỉ hiện khi hết hạn hoặc chưa có token */}
-                                  {!isLiveToken && (
-                                    isExpiredToken ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleProfileOAuth(acc.uid)}
-                                        disabled={isActionDisabled}
-                                        className="h-7 px-2.5 rounded-md bg-amber-600 hover:bg-amber-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
-                                        title="Token đã hết hạn. Mở Chrome Profile để cấp lại Token mới!"
-                                      >
-                                        {accountJobs[acc.uid]?.kind === "oauth" ? (
-                                          <Loader2 className="w-3 h-3 animate-spin" />
-                                        ) : (
-                                          <Zap className="w-3 h-3 text-amber-200 fill-amber-200" />
-                                        )}
-                                        Cấp lại
-                                      </button>
-                                    ) : (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleProfileOAuth(acc.uid)}
-                                        disabled={isActionDisabled}
-                                        className="h-7 px-2 rounded-md bg-blue-600 hover:bg-blue-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
-                                        title="Mở Chrome Profile của nick này để tự động cấp Token và nạp Fanpage"
-                                      >
-                                        {accountJobs[acc.uid]?.kind === "oauth" ? (
-                                          <Loader2 className="w-3 h-3 animate-spin" />
-                                        ) : (
-                                          <Zap className="w-3 h-3 text-amber-300 fill-amber-300" />
-                                        )}
-                                        {rawHasToken ? "Cấp lại" : "Cấp Token"}
-                                      </button>
-                                    )
+                                  {isExpiredToken ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleProfileOAuth(acc.uid)}
+                                      disabled={isActionDisabled}
+                                      className="h-7 px-2.5 rounded-md bg-amber-600 hover:bg-amber-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
+                                      title="Token đã hết hạn. Mở Chrome Profile để cấp lại Token mới!"
+                                    >
+                                      {accountJobs[acc.uid]?.kind === "oauth" ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <Zap className="w-3 h-3 text-amber-200 fill-amber-200" />
+                                      )}
+                                      Cấp lại
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleProfileOAuth(acc.uid)}
+                                      disabled={isActionDisabled}
+                                      className="h-7 px-2 rounded-md bg-blue-600 hover:bg-blue-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
+                                      title="Mở Chrome Profile của nick này để tự động cấp Token và nạp Fanpage"
+                                    >
+                                      {accountJobs[acc.uid]?.kind === "oauth" ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <Zap className="w-3 h-3 text-amber-300 fill-amber-300" />
+                                      )}
+                                      {rawHasToken ? "Cấp lại" : "Cấp Token"}
+                                    </button>
                                   )}
 
                                   {/* Token chết/hết hạn thì không quét. Chỉ quét khi token LIVE hoặc có token chưa check */}
