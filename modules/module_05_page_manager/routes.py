@@ -10,6 +10,7 @@ from modules.module_02_account_manager.database.repository import AccountReposit
 from modules.module_04_page_creator.automation.facebook_urls import facebook_picture_url
 from modules.module_04_page_creator.routes import get_owner_username
 from modules.module_05_page_manager.ai_job import pages_of, parse_schedule_times, request_stop, snapshot, start_job
+from modules.module_05_page_manager.ai_generator import MODEL_FALLBACK_CHAIN, models_to_try
 from modules.module_05_page_manager.vi_messages import suggested_replacement, vi_gemini_message, vi_pixabay_message
 from modules.module_05_page_manager.page_counter import (
     count_pages_for_account,
@@ -37,14 +38,18 @@ class OpenPageBody(BaseModel):
 
 class TestKeyBody(BaseModel):
     api_key: str
-    model_name: str = "gemini-3.8-flash"
+    model_name: str = "gemini-3-flash-preview"
+    pixabay_key: str = ""
+
+
+class TestPixabayBody(BaseModel):
     pixabay_key: str = ""
 
 
 class StartBody(BaseModel):
     api_keys: list[str] = Field(default_factory=list)
     pixabay_key: str = ""
-    model_name: str = "gemini-3.8-flash"
+    model_name: str = "gemini-3-flash-preview"
     fb_version: str = "v22.0"
     prompt: str = ""
     schedule_enabled: bool = False
@@ -114,24 +119,52 @@ def _provider_message(response: httpx.Response) -> str:
     return str(detail or f"HTTP {response.status_code}")
 
 
-def _check_gemini(api_key: str, model_name: str) -> None:
-    model = (model_name or "gemini-3.8-flash").strip()
+def _probe_gemini_model(api_key: str, model: str) -> tuple[bool, str]:
+    """Thử 1 model. Trả (ok, message). Hỗ trợ key AIza* và AQ.* (AI Studio mới)."""
     response = httpx.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+        params={"key": api_key},
+        headers={"Content-Type": "application/json"},
         json={"contents": [{"parts": [{"text": "Reply with OK"}]}]},
         timeout=30,
     )
     if response.status_code == 200:
-        return
-    message = _provider_message(response)
-    replacement = suggested_replacement(message)
-    if replacement:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Model {model} không còn cho key này. Hãy chọn {replacement}.",
-        )
-    raise HTTPException(status_code=400, detail=vi_gemini_message(message))
+        return True, ""
+    return False, _provider_message(response)
+
+
+def _check_gemini(api_key: str, model_name: str) -> str:
+    """Thử model đã chọn rồi cascade xuống model nhỏ hơn. Trả về model đang dùng được."""
+    selected = (model_name or "gemini-3-flash-preview").strip().split("/")[-1]
+    # Model chọn trước, rồi cả chuỗi to→nhỏ (bỏ trùng).
+    candidates = []
+    for name in [selected, *MODEL_FALLBACK_CHAIN, *models_to_try(selected)]:
+        if name and name not in candidates:
+            candidates.append(name)
+
+    last_error = ""
+    for model in candidates:
+        try:
+            ok, raw = _probe_gemini_model(api_key, model)
+        except httpx.HTTPError as exc:
+            last_error = str(exc)
+            continue
+        if ok:
+            return model
+        last_error = raw
+        # Key hỏng hẳn → không cần thử model khác.
+        lower = (raw or "").lower()
+        if any(token in lower for token in ("api key not valid", "api_key_invalid", "invalid api key", "permission_denied")):
+            raise HTTPException(status_code=400, detail=vi_gemini_message(raw))
+
+    hint = suggested_replacement(last_error)
+    detail = vi_gemini_message(last_error) if last_error else "Không kết nối được Gemini."
+    if hint and hint not in detail:
+        detail = f"{detail} Gợi ý thử {hint}."
+    raise HTTPException(
+        status_code=400,
+        detail=f"Đã thử {len(candidates)} model, không cái nào dùng được. {detail}",
+    )
 
 
 def _check_pixabay(api_key: str) -> None:
@@ -149,22 +182,46 @@ def _check_pixabay(api_key: str) -> None:
 
 @router.post("/test-key")
 def test_key(body: TestKeyBody):
-    """Gemini key bắt buộc để viết bài. Pixabay chỉ để tải ảnh, để trống thì bỏ qua."""
+    """Gemini key: tự thử cascade model to→nhỏ, trả về model đang dùng được."""
     api_key = (body.api_key or "").strip()
     if len(api_key) < 20:
         raise HTTPException(status_code=400, detail="Gemini API key quá ngắn hoặc đang để trống.")
     try:
-        _check_gemini(api_key, body.model_name)
+        working_model = _check_gemini(api_key, body.model_name)
+    except HTTPException:
+        raise
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=400, detail="Không kết nối được Gemini.") from exc
+        raise HTTPException(
+            status_code=400,
+            detail=f"Không kết nối được Gemini (mạng/proxy): {exc.__class__.__name__}",
+        ) from exc
+
+    selected = (body.model_name or "").strip().split("/")[-1]
+    if working_model != selected:
+        gemini_msg = f"Gemini key dùng được. Đã tự chuyển sang model {working_model}."
+    else:
+        gemini_msg = f"Gemini key dùng được với model {working_model}."
+
+    # Pixabay kiểm tra bằng nút riêng — không fail Gemini vì Pixabay rate-limit.
+    return {
+        "gemini": "ok",
+        "pixabay": "skipped",
+        "model_name": working_model,
+        "message": gemini_msg,
+    }
+
+
+@router.post("/test-pixabay-key")
+def test_pixabay_key(body: TestPixabayBody):
+    """Chỉ kiểm tra Pixabay — không bắt buộc Gemini. Không có ảnh thì job vẫn đăng chữ."""
     pixabay = (body.pixabay_key or "").strip()
-    if not pixabay:
-        return {"gemini": "ok", "pixabay": "skipped", "message": "Gemini key dùng được. Chưa nhập Pixabay, bài đăng sẽ không tải ảnh từ Pixabay."}
+    if len(pixabay) < 10:
+        raise HTTPException(status_code=400, detail="Pixabay API key quá ngắn hoặc đang để trống.")
     try:
         _check_pixabay(pixabay)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=400, detail="Không kết nối được Pixabay.") from exc
-    return {"gemini": "ok", "pixabay": "ok", "message": "Gemini key và Pixabay key đều dùng được."}
+    return {"pixabay": "ok", "message": "Pixabay key dùng được."}
 
 
 @router.post("/login")
@@ -240,7 +297,7 @@ def start(body: StartBody, db: Session = Depends(get_db)):
         start_job(owner, {
             "api_keys": keys,
             "pixabay_key": (body.pixabay_key or "").strip(),
-            "model_name": (body.model_name or "gemini-3.8-flash").strip(),
+            "model_name": (body.model_name or "gemini-3-flash-preview").strip(),
             "fb_version": (body.fb_version or "v22.0").strip(),
             "prompt": prompt[:2000],
             "schedule_enabled": body.schedule_enabled,

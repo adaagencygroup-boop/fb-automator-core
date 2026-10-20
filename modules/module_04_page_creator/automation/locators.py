@@ -134,12 +134,20 @@ PAGE_CREATION = {
         '//div[@role="button" and (@aria-label="Tiếp" or @aria-label="Next")]',
     ],
     "post_submit_button": [
+        # Modal Post settings (UI page mới sau Next)
+        '//div[@role="dialog"][.//span[contains(., "Post settings") or contains(., "Cài đặt bài viết")]]'
+        '//div[@role="button"][.//span[normalize-space()="Post" or normalize-space()="Đăng"]]',
+        '//div[@role="dialog"][.//span[contains(., "Post settings") or contains(., "Cài đặt bài viết")]]'
+        '//*[@role="button" and (@aria-label="Post" or @aria-label="Đăng")]',
+        '//div[@role="dialog"]//span[normalize-space()="Post" or normalize-space()="Đăng"]'
+        '/ancestor::*[@role="button"][1]',
         '//div[contains(@class, "x1i10hfl") and @role="button" and @tabindex="0" and (@aria-label="Post" or @aria-label="Đăng")]',
         '//div[@role="button" and @tabindex="0" and (@aria-label="Post" or @aria-label="Đăng")]',
         '//div[@role="button" and (@aria-label="Post" or @aria-label="Đăng")]',
         '//div[@role="dialog"]//div[@role="button" and (@aria-label="Post" or @aria-label="Đăng")]',
         '//div[contains(@class, "x1ja2u2z")]//span[text()="Post" or text()="Đăng"]/ancestor::div[@role="button" and @tabindex="0"][1]',
         '//span[text()="Post" or text()="Đăng"]/ancestor::div[@role="button" and @tabindex="0"][1]',
+        '//span[normalize-space()="Post" or normalize-space()="Đăng"]/ancestor::*[@role="button"][1]',
     ],
 }
 

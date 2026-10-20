@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- Trang giả cho bước kiểm tra lại sau thao tác (verify_action_kept). ?s=<kịch bản>, thay đổi xảy ra sau 2 giây. -->
+<html><head><meta charset="utf-8"><style>body{padding-top:100px} div[role=button]{display:inline-block;padding:6px 14px;min-width:40px}</style></head>
+<body><div id="root"></div>
+<script>
+  const s = new URLSearchParams(location.search).get('s');
+  const root = document.getElementById('root');
+  const later = fn => setTimeout(fn, 2000);
+  const LIKE = (cls, count) => `<div role="button" id="likeBtn" aria-label="Like"><span><i id="ic" data-visualcompletion="css-img" class="${cls}" style="background-position:0px -441px;width:20px;height:20px;display:inline-block"></i></span><div data-ad-rendering-role="like_button"></div><span id="cnt">${count}</span></div>`;
+  if (s.startsWith('follow') || s === 'warn') root.innerHTML = '<div role="button"><span>Đang theo dõi</span></div>';
+  if (s === 'follow_revert') later(() => { root.innerHTML = '<div role="button"><span>Theo dõi</span></div>'; });
+  if (s === 'warn') later(() => document.body.insertAdjacentHTML('beforeend',
+    '<div role="dialog" style="width:400px;height:200px"><div>Bạn tạm thời bị chặn</div><div>Có vẻ như bạn đã sử dụng nhầm tính năng này do thao tác quá nhanh.</div><div role="button">OK</div></div>'));
+  if (s === 'security') later(() => document.body.insertAdjacentHTML('beforeend',
+    '<div role="dialog" style="width:400px;height:200px"><div>Sorry, this feature isn\'t available right now</div><div>A security check is required to continue.</div></div>'));
+  if (s.startsWith('react')) root.innerHTML = LIKE('x1 xliked', 7);
+  if (s === 'react_count') later(() => { document.getElementById('cnt').textContent = '8'; });
+  if (s === 'react_revert') later(() => { document.getElementById('ic').className = 'x1 x1d69dk1'; });
+  if (s.startsWith('comment')) root.innerHTML = '<ul><li id="c1">Quoc Hoang: Cố lên mọi người</li></ul>';
+  if (s === 'comment_removed') later(() => { document.getElementById('c1').remove(); });
+  if (s === 'post_modal') root.innerHTML = '<div role="dialog" style="width:700px;height:600px"><div data-ad-rendering-role="like_button"></div><p>Bình luận: mạng lag quá, thử lại sau nhé</p></div>';
+</script>
+</body></html>

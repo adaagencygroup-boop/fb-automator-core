@@ -23,13 +23,17 @@ export default function PostSummaryCards({
   const commentPerPost = doComment ? halfAccounts : 0;
 
   // Giống share_range_per_post() ở backend (vd 50 nick / 4 bài -> 10–15)
-  const shareMin = targetCount <= 1 ? accountCount : Math.floor((4 * accountCount) / (5 * targetCount));
-  const shareMax = targetCount <= 1 ? accountCount : Math.ceil((6 * accountCount) / (5 * targetCount));
+  // Mỗi bài luôn có ít nhất 1 lượt; ít nick hơn số bài thì mỗi bài đúng 1 lượt (1 nick share nhiều bài)
+  const fewerAccountsThanPosts = targetCount > 1 && accountCount > 0 && accountCount < targetCount;
+  const shareMin = targetCount <= 1 ? accountCount
+    : fewerAccountsThanPosts ? 1 : Math.max(1, Math.floor((4 * accountCount) / (5 * targetCount)));
+  const shareMax = targetCount <= 1 ? accountCount
+    : fewerAccountsThanPosts ? 1 : Math.ceil((6 * accountCount) / (5 * targetCount));
   const sharePerPostLabel = !doShare ? 0 : shareMin === shareMax ? shareMin : `${shareMin}–${shareMax}`;
 
   const totalReacts = targetCount * reactPerPost;
   const totalComments = targetCount * commentPerPost;
-  const totalShares = doShare && targetCount > 0 ? accountCount : 0;
+  const totalShares = doShare && targetCount > 0 && accountCount > 0 ? Math.max(accountCount, targetCount) : 0;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-5">

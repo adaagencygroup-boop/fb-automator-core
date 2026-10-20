@@ -34,6 +34,39 @@ class LoginLocators:
 
 
 # =====================================================================
+# 1.1. CẢNH BÁO / CHẶN CỦA FACEBOOK (dùng chung cho mọi thao tác seeding)
+# =====================================================================
+class CommonLocators:
+    """Nhận diện hộp thoại cảnh báo của Facebook sau khi thao tác (bị chặn tạm thời, giới hạn tần suất...)."""
+
+    # Trả về nội dung cảnh báo (rút gọn) nếu đang có hộp thoại / thông báo cảnh báo của Facebook, không có thì null.
+    # Chỉ xét hộp thoại nhỏ (role=dialog / alertdialog / alert), bỏ qua hộp thoại chứa bài viết (khung xem bài,
+    # có nút Like / bình luận) để chữ trong bài hay bình luận của người khác không bị tưởng là cảnh báo.
+    JS_FIND_FACEBOOK_WARNING = """
+        const KEYWORDS = [
+            'tạm thời bị chặn', 'bị chặn tạm thời', 'tính năng này tạm thời', 'hành động bị chặn',
+            'giới hạn tần suất', 'giới hạn số lần', 'thử lại sau', 'sử dụng nhầm tính năng', 'lạm dụng tính năng',
+            'thao tác quá nhanh', 'không thể sử dụng tính năng', 'tài khoản của bạn bị hạn chế', 'đang bị hạn chế',
+            'không thể đăng bình luận', 'không thể theo dõi', 'hiện không khả dụng', 'kiểm tra bảo mật',
+            'temporarily blocked', 'action blocked', 'try again later', 'we limit how often', 'misusing this feature',
+            'going too fast', "can't use this feature", 'cannot use this feature', 'account is restricted',
+            "couldn't be posted", 'could not be posted', "can't follow",
+            "isn't available right now", 'is not available right now', 'security check is required',
+        ];
+        const boxes = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="alert"]'));
+        for (const b of boxes) {
+            const r = b.getBoundingClientRect();
+            if (r.width < 50 || r.height < 20) continue;
+            if (b.querySelector('[data-ad-rendering-role], [role="article"]')) continue;
+            const text = (b.innerText || '').replace(/\\s+/g, ' ').trim();
+            const low = text.toLowerCase();
+            if (KEYWORDS.some(k => low.includes(k))) return text.slice(0, 160);
+        }
+        return null;
+    """
+
+
+# =====================================================================
 # 2. PAGE SEEDING LOCATORS (FANPAGE)
 # =====================================================================
 class PageLocators:
@@ -428,14 +461,77 @@ class PostLocators:
         "//div[@aria-label='Thích' or @aria-label='Like']",
     ]
 
+    # Nút Like chính của bài viết. Bố cục mới: khung nút chỉ có icon (sprite -441px khi chưa thích)
+    # + div[data-ad-rendering-role="like_button"] RỖNG, không có chữ "Thích".
     JS_FIND_LIKE_BUTTON = """
-        const modal = document.querySelector('div[role="dialog"]');
-        const root = modal || document;
-        const marker = root.querySelector('div[data-ad-rendering-role="like_button"]');
-        if (marker) {
-            return marker.closest('div[role="button"]') || marker.parentElement.parentElement || marker.parentElement;
+        // Ưu tiên hộp thoại (mở sau cùng) có chứa nút Like của bài viết, không có thì tìm trên cả trang
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).reverse();
+        let root = null, marker = null;
+        for (const d of dialogs) {
+            const m = d.querySelector('div[data-ad-rendering-role="like_button"]');
+            if (m) { root = d; marker = m; break; }
         }
-        return null;
+        if (!marker) {
+            marker = document.querySelector('div[data-ad-rendering-role="like_button"]');
+            root = marker ? document : (dialogs[0] || document);
+        }
+        let target = null;
+        if (marker) {
+            target = marker.closest('div[role="button"]') || marker.closest('div.x1i10hfl');
+            if (!target && marker.parentElement && marker.parentElement.parentElement) {
+                target = marker.parentElement.parentElement.querySelector('div[role="button"], div.x1i10hfl');
+            }
+        }
+        if (!target) {
+            target = Array.from(root.querySelectorAll('div[role="button"], div.x1i10hfl, div[tabindex="0"]')).find(el => {
+                if (el.closest('ul') || el.closest('form')) return false;
+                const a = (el.getAttribute('aria-label') || '').toLowerCase().trim();
+                return a === 'like' || a === 'thích' || a === 'react' || a === 'thích bài viết';
+            }) || null;
+        }
+        if (!target && marker && marker.parentElement) target = marker.parentElement;
+        return target;
+    """
+
+    # Nút Like đã ở trạng thái "đã thích" chưa — chỉ tin dấu hiệu chắc chắn: aria-pressed, nhãn "Remove/Gỡ...",
+    # hoặc CHỮ "Thích/Like" có màu (chữ xám r≈g≈b = chưa thích). Không dùng màu khung nút (khung thừa hưởng
+    # màu chữ đen của trang nên luôn bị tưởng là "có màu" -> nhận nhầm là đã thích rồi bỏ qua, không bấm).
+    JS_IS_LIKE_BUTTON_LIKED = """
+        const btn = (() => {""" + JS_FIND_LIKE_BUTTON + """})();
+        if (!btn) return false;
+        if (btn.getAttribute('aria-pressed') === 'true') return true;
+        const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+        if (aria.includes('gỡ') || aria.includes('unlike') || aria.includes('bỏ thích') || aria.includes('remove')) return true;
+        const textEl = Array.from(btn.querySelectorAll('span')).reverse().find(s => {
+            const t = (s.textContent || '').trim().toLowerCase();
+            return t === 'thích' || t === 'like';
+        });
+        if (textEl) {
+            const nums = (window.getComputedStyle(textEl).color || '').match(/[\\d.]+/g) || [];
+            const [r, g, b] = nums.slice(0, 3).map(Number);
+            if (nums.length >= 3 && Math.max(r, g, b) - Math.min(r, g, b) > 40) return true;
+        }
+        return false;
+    """
+
+    # "Dấu vân tay" của nút cảm xúc để biết sau một lúc nút có bị đổi lại không (Facebook hoàn tác cảm xúc vừa thả):
+    # nhãn aria + icon (class, vị trí sprite, ảnh). Không lấy chữ / số lượt thích để người khác thả cảm xúc
+    # trong lúc đợi không bị tưởng là hoàn tác. null nếu không tìm thấy nút.
+    JS_LIKE_BUTTON_SIGNATURE = """
+        const btn = (() => {""" + JS_FIND_LIKE_BUTTON + """})();
+        if (!btn) return null;
+        const icons = Array.from(btn.querySelectorAll('i, img, svg')).map(el =>
+            (el.getAttribute('class') || '') + '#' + (el.style ? el.style.backgroundPosition || '' : '') + '#' + (el.getAttribute('src') || '')
+        );
+        return [btn.getAttribute('aria-label') || '', btn.getAttribute('aria-pressed') || '', ...icons].join('|');
+    """
+
+    # Bấm Like đã có tác dụng chưa: nút báo "đã thích", hoặc nút đã đổi so với lúc trước khi bấm
+    # (window.__seedLikeSigBefore). Facebook tô màu icon khi đã thích bằng cách đổi class của thẻ <i>.
+    JS_LIKE_CLICK_TOOK_EFFECT = """
+        if ((() => {""" + JS_IS_LIKE_BUTTON_LIKED + """})()) return true;
+        const sig = (() => {""" + JS_LIKE_BUTTON_SIGNATURE + """})();
+        return sig !== null && window.__seedLikeSigBefore !== undefined && sig !== window.__seedLikeSigBefore;
     """
 
     # 4.2. Khung Comment (Facebook Lexical Editor)
