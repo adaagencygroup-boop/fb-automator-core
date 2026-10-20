@@ -90,6 +90,20 @@ export default function SeedingPostPage() {
     }),
   ];
 
+  // Khi mở lại trang (ví dụ chuyển sang trang khác rồi quay lại) mà lô seeding của trang này vẫn đang chạy
+  // thì khôi phục trạng thái đang chạy: ẩn nút Bắt đầu, hiện nút Dừng và tiếp tục theo dõi tới khi xong.
+  useEffect(() => {
+    seedingApi
+      .getActiveSeedingCampaign("POST")
+      .then((res) => {
+        if (res?.campaign_id) {
+          setCurrentCampaignId(res.campaign_id);
+          setIsRunning(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Poll campaign status while running
   useEffect(() => {
     if (!isRunning || !currentCampaignId) return;

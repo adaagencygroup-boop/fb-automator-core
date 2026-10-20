@@ -107,6 +107,15 @@ export const seedingApi = {
     }
   },
 
+  // Lô seeding đang chạy của user theo loại trang (PAGE | PROFILE | POST), không có thì campaign_id = null
+  getActiveSeedingCampaign: async (campaignType) => {
+    try {
+      return await api.get("/api/seeding/campaigns/active", { params: { campaign_type: campaignType } });
+    } catch {
+      return { campaign_id: null };
+    }
+  },
+
   getSeedingStats: async () => {
     try {
       const res = await api.get("/api/seeding/stats");

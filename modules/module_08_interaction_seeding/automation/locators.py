@@ -34,6 +34,38 @@ class LoginLocators:
 
 
 # =====================================================================
+# 1.1. CẢNH BÁO / CHẶN CỦA FACEBOOK (dùng chung cho mọi thao tác seeding)
+# =====================================================================
+class CommonLocators:
+    """Nhận diện hộp thoại cảnh báo của Facebook sau khi thao tác (bị chặn tạm thời, giới hạn tần suất...)."""
+
+    # Trả về nội dung cảnh báo (rút gọn) nếu đang có hộp thoại / thông báo cảnh báo của Facebook, không có thì null.
+    # Chỉ xét hộp thoại nhỏ (role=dialog / alertdialog / alert), bỏ qua hộp thoại chứa bài viết (khung xem bài,
+    # có nút Like / bình luận) để chữ trong bài hay bình luận của người khác không bị tưởng là cảnh báo.
+    JS_FIND_FACEBOOK_WARNING = """
+        const KEYWORDS = [
+            'tạm thời bị chặn', 'bị chặn tạm thời', 'tính năng này tạm thời', 'hành động bị chặn',
+            'giới hạn tần suất', 'giới hạn số lần', 'thử lại sau', 'sử dụng nhầm tính năng', 'lạm dụng tính năng',
+            'thao tác quá nhanh', 'không thể sử dụng tính năng', 'tài khoản của bạn bị hạn chế', 'đang bị hạn chế',
+            'không thể đăng bình luận', 'không thể theo dõi',
+            'temporarily blocked', 'action blocked', 'try again later', 'we limit how often', 'misusing this feature',
+            'going too fast', "can't use this feature", 'cannot use this feature', 'account is restricted',
+            "couldn't be posted", 'could not be posted', "can't follow",
+        ];
+        const boxes = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="alert"]'));
+        for (const b of boxes) {
+            const r = b.getBoundingClientRect();
+            if (r.width < 50 || r.height < 20) continue;
+            if (b.querySelector('[data-ad-rendering-role], [role="article"]')) continue;
+            const text = (b.innerText || '').replace(/\\s+/g, ' ').trim();
+            const low = text.toLowerCase();
+            if (KEYWORDS.some(k => low.includes(k))) return text.slice(0, 160);
+        }
+        return null;
+    """
+
+
+# =====================================================================
 # 2. PAGE SEEDING LOCATORS (FANPAGE)
 # =====================================================================
 class PageLocators:
@@ -436,6 +468,18 @@ class PostLocators:
             return marker.closest('div[role="button"]') || marker.parentElement.parentElement || marker.parentElement;
         }
         return null;
+    """
+
+    # "Dấu vân tay" của nút cảm xúc để biết sau một lúc nút có bị đổi lại không (Facebook hoàn tác cảm xúc vừa thả):
+    # nhãn aria + icon (class, vị trí sprite, ảnh). Không lấy chữ / số lượt thích để người khác thả cảm xúc
+    # trong lúc đợi không bị tưởng là hoàn tác. null nếu không tìm thấy nút.
+    JS_LIKE_BUTTON_SIGNATURE = """
+        const btn = (() => {""" + JS_FIND_LIKE_BUTTON + """})();
+        if (!btn) return null;
+        const icons = Array.from(btn.querySelectorAll('i, img, svg')).map(el =>
+            (el.getAttribute('class') || '') + '#' + (el.style ? el.style.backgroundPosition || '' : '') + '#' + (el.getAttribute('src') || '')
+        );
+        return [btn.getAttribute('aria-label') || '', btn.getAttribute('aria-pressed') || '', ...icons].join('|');
     """
 
     # 4.2. Khung Comment (Facebook Lexical Editor)

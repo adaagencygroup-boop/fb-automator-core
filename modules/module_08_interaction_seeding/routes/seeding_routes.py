@@ -1402,6 +1402,7 @@ def _process_account_tasks(
 
             success = False
             msg = ""
+            comment_text = None
 
             if ut.action in ("FOLLOW", "LIKE_PAGE"):
                 acc_label = (
@@ -1448,6 +1449,19 @@ def _process_account_tasks(
                 success, msg = bot.execute_share(
                     target.url, callback=lambda m: broadcast("info", f"[{uid}] {m}")
                 )
+
+            # Bấm xong chưa chắc Facebook đã ghi nhận: có lúc Facebook hiện cảnh báo rồi hoàn tác thao tác.
+            # Đợi một lúc rồi kiểm tra lại; bị cảnh báo / hoàn tác thì ghi thất bại thay vì thành công.
+            # Bỏ qua khi thao tác đã có từ trước (bot không bấm gì).
+            if success and "từ trước" not in (msg or ""):
+                kept, why = bot.verify_action_kept(
+                    ut.action,
+                    target_type=target.target_type or "POST",
+                    comment_text=comment_text,
+                    callback=lambda m: broadcast("info", f"[{uid}] {m}"),
+                )
+                if not kept:
+                    success, msg = False, why
 
             ut.finished_at = vn_now()
             ut.error_message = msg
@@ -1976,6 +1990,37 @@ async def stop_all_seeding(
 # ─────────────────────────────────────────────────────────────
 # 4. DANH SÁCH LỊCH SỬ SEEDING (CHO TRANG LỊCH SỬ)
 # ─────────────────────────────────────────────────────────────
+@router.get("/campaigns/active")
+async def get_active_seeding_campaign(
+    campaign_type: str = Query(..., description="PAGE | PROFILE | POST"),
+    request: Request = None,
+    authorization: str | None = Header(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Lô seeding đang chạy (hoặc đang chờ tới lượt) của user hiện tại trên engine này, theo loại trang.
+    Giao diện gọi khi mở lại trang Seeding để giữ nút "Dừng seeding": trạng thái đang chạy ở giao diện chỉ nằm
+    trong bộ nhớ của trang nên bị mất khi chuyển sang trang khác.
+    Chỉ xét chiến dịch do engine này đang điều phối (có trong bộ nhớ), để chiến dịch bị kẹt RUNNING từ lần chạy
+    trước (engine đã tắt giữa chừng) không làm giao diện tưởng là vẫn đang chạy.
+    """
+    known_ids = set(_batch_campaign_chains.keys()) | set(_active_seeding_campaigns.keys())
+    if not known_ids:
+        return {"campaign_id": None}
+
+    q = db.query(SeedingCampaign).filter(
+        SeedingCampaign.id.in_(known_ids),
+        SeedingCampaign.campaign_type == campaign_type.upper(),
+        SeedingCampaign.status.in_(["RUNNING", "PENDING"]),
+    )
+    current_user = get_current_user_info(request, authorization)
+    if current_user and current_user.get("id") is not None:
+        q = q.filter(SeedingCampaign.created_by == current_user["id"])
+
+    camp = q.order_by(SeedingCampaign.id.asc()).first()
+    return {"campaign_id": camp.id if camp else None}
+
+
 @router.get("/campaigns")
 async def list_seeding_campaigns(
     campaign_type: str | None = Query(None, description="PAGE | PROFILE | POST | ALL"),
