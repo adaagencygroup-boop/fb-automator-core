@@ -57,6 +57,7 @@ yarn-error.log*
 downloads/
 temp/
 tmp/
+scratch/
 
 # 5. Browser Automation & Profiles
 profiles/

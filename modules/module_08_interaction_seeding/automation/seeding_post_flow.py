@@ -28,6 +28,22 @@ class PostSeedingFlow:
     def __init__(self, bot: BaseFacebookBot):
         self.bot = bot
         self.driver = bot.driver
+        # Bài viết đang mở: (link gốc, URL thật sau khi Facebook chuyển hướng)
+        self._opened_post = None
+
+    def _open_post(self, target_url: str, callback=None, wait=(4.5, 6.5)):
+        """Mở bài viết nếu trình duyệt chưa ở đúng bài đó.
+        Link /share/p/... bị Facebook chuyển sang URL khác, nên phải nhớ URL thật sau khi mở.
+        Nếu không, bình luận / chia sẻ sau khi thả cảm xúc sẽ tưởng là chưa mở và tải lại bài viết."""
+        current = (self.driver.current_url or "").split("#")[0]
+        target_clean = target_url.split("?")[0].rstrip("/")
+        if current and (target_clean in current or self._opened_post == (target_url, current)):
+            return
+        if callback:
+            callback(f"🌐 Mở bài viết: {target_url}")
+        self.driver.get(target_url)
+        self.bot.random_sleep(*wait)
+        self._opened_post = (target_url, (self.driver.current_url or "").split("#")[0])
 
     # ─────────────────────────────────────────────────────────────
     # 1. ACTION: REACT (LIKE / THẢ CẢM XÚC BÀI VIẾT)
@@ -65,13 +81,7 @@ class PostSeedingFlow:
             target_labels = r_info["labels"]
             emoji = r_info["emoji"]
 
-            if callback:
-                callback(f"🌐 Mở bài viết: {target_url}")
-            current_url = self.driver.current_url or ""
-            target_clean = target_url.split("?")[0].rstrip("/")
-            if not current_url or target_clean not in current_url:
-                self.driver.get(target_url)
-                self.bot.random_sleep(4.5, 6.5)
+            self._open_post(target_url, callback, wait=(4.5, 6.5))
 
             if "login" in (self.driver.current_url or "").lower():
                 return False, "Chưa đăng nhập Facebook"
@@ -126,8 +136,8 @@ class PostSeedingFlow:
             already_reacted = self.driver.execute_script(js_is_reacted)
             if already_reacted:
                 if callback:
-                    callback(f"✓ Bài viết này đã được '{vn_name}' từ trước (tránh bấm lại để không bị hủy).")
-                return True, f"Đã {vn_name} từ trước"
+                    callback(f"⚠️ Bài viết này đã được '{vn_name}' từ trước (tránh bấm lại để không bị hủy).")
+                return False, f"Tài khoản đã bày tỏ cảm xúc '{vn_name}' cho bài viết này từ trước"
 
             if callback:
                 callback(f"{emoji} Đang thực hiện thả cảm xúc '{vn_name}' vào bài viết...")
@@ -376,13 +386,7 @@ class PostSeedingFlow:
             if callback:
                 callback("✍ Chuẩn bị bình luận bài viết...")
 
-            current_url = self.driver.current_url or ""
-            target_clean = target_url.split("?")[0].rstrip("/")
-            if not current_url or target_clean not in current_url:
-                if callback:
-                    callback(f"🌐 Mở bài viết: {target_url}")
-                self.driver.get(target_url)
-                self.bot.random_sleep(3.5, 6.0)
+            self._open_post(target_url, callback, wait=(3.5, 6.0))
 
             if "login" in (self.driver.current_url or "").lower():
                 return False, "Chưa đăng nhập Facebook hoặc phiên đăng nhập hết hạn"
@@ -575,6 +579,36 @@ class PostSeedingFlow:
     # ─────────────────────────────────────────────────────────────
     # 3. ACTION: SHARE BÀI VIẾT (CHẾ ĐỘ PUBLIC)
     # ─────────────────────────────────────────────────────────────
+    def _close_share_dialog(self):
+        """Đóng hộp thoại chia sẻ (và menu đối tượng nếu đang mở) bằng phím ESC, không chia sẻ."""
+        for _ in range(2):
+            ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+            time.sleep(0.8)
+
+    def _click_until(self, find_js: str, ok_js: str) -> tuple[bool, str]:
+        """Bấm phần tử do find_js tìm được rồi đợi ok_js trả về true (tối đa 3 giây).
+        Mỗi lần chỉ bấm 1 kiểu (chuột thật -> JS click -> click mạnh): bấm dồn nhiều lần như perform_robust_click
+        có thể mở rồi lại đóng menu, hoặc bấm trúng nút khác sau khi giao diện đã đổi."""
+        for how in ("chuột thật", "JS click", "click mạnh"):
+            target = self.driver.execute_script(find_js)
+            if not target:
+                return False, "không tìm thấy phần tử cần bấm"
+            try:
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", target)
+                if how == "chuột thật":
+                    ActionChains(self.driver).move_to_element(target).click().perform()
+                elif how == "JS click":
+                    self.driver.execute_script("arguments[0].click();", target)
+                else:
+                    perform_robust_click(self.driver, target)
+            except Exception as e:
+                logger.debug(f"Bấm phần tử ({how}) lỗi: {e}")
+            for _ in range(6):
+                time.sleep(0.5)
+                if self.driver.execute_script(ok_js):
+                    return True, how
+        return False, "đã thử 3 cách bấm nhưng không có tác dụng"
+
     def execute_share(
         self,
         target_url: str,
@@ -585,13 +619,7 @@ class PostSeedingFlow:
             if callback:
                 callback("🔄 Chuẩn bị chia sẻ bài viết...")
 
-            current_url = self.driver.current_url or ""
-            target_clean = target_url.split("?")[0].rstrip("/")
-            if not current_url or target_clean not in current_url:
-                if callback:
-                    callback(f"🌐 Mở bài viết: {target_url}")
-                self.driver.get(target_url)
-                self.bot.random_sleep(4.0, 6.0)
+            self._open_post(target_url, callback, wait=(4.0, 6.0))
 
             if "login" in (self.driver.current_url or "").lower():
                 return False, "Chưa đăng nhập Facebook hoặc phiên đăng nhập hết hạn"
@@ -648,7 +676,8 @@ class PostSeedingFlow:
                 const text = (pill.innerText || pill.textContent || '').trim();
                 const lowerText = text.toLowerCase();
                 const img = pill.querySelector('img');
-                const alt = (img ? (img.getAttribute('alt') || '') : '').toLowerCase();
+                // Đọc cả alt của icon và aria-label của nút (vd "Edit privacy. Sharing with Public.")
+                const alt = ((img ? (img.getAttribute('alt') || '') : '') + ' ' + (pill.getAttribute('aria-label') || '')).toLowerCase();
 
                 const hasPublicWord = lowerText.includes('public') || lowerText.includes('công khai') || alt.includes('public') || alt.includes('công khai');
                 const hasFriendsWord = lowerText.includes('friends') || lowerText.includes('bạn bè') || alt.includes('friends') || alt.includes('bạn bè');
@@ -677,20 +706,16 @@ class PostSeedingFlow:
                 if callback:
                     callback("⚙️ Chế độ chia sẻ chưa phải Public (đang là Friends), đang bấm vào để chọn Public...")
 
-                aud_btn = self.driver.execute_script(PostLocators.JS_GET_AUDIENCE_PILL)
-                if not aud_btn:
-                    aud_btn = self.bot.safe_find_element(
-                        By.XPATH,
-                        "//div[contains(@class, 'x1qhmfi1')] | //i[contains(@style, '-831px')]/ancestor::div[@role='button' or contains(@class, 'x1qhmfi1')][1]",
-                        timeout=2
-                    )
+                menu_opened, how = self._click_until(
+                    PostLocators.JS_GET_AUDIENCE_CLICK_TARGET, PostLocators.JS_IS_AUDIENCE_MENU_OPEN
+                )
+                if not menu_opened:
+                    self._close_share_dialog()
+                    return False, f"Không mở được menu chọn đối tượng (Post audience): {how}. Đã hủy chia sẻ"
+                if callback:
+                    callback(f"✓ Đã mở menu chọn đối tượng (Post audience) bằng {how}")
 
-                if aud_btn:
-                    perform_robust_click(self.driver, aud_btn)
-                else:
-                    return False, "Không tìm thấy nút chọn đối tượng (Friends/Public) trong hộp thoại chia sẻ"
-
-                self.bot.random_sleep(2.0, 3.0)
+                self.bot.random_sleep(1.0, 1.8)
 
                 if callback:
                     callback("⚙️ Đang chọn tùy chọn: Public (Công khai)...")
@@ -721,32 +746,46 @@ class PostSeedingFlow:
 
                 self.bot.random_sleep(1.5, 2.2)
 
+                # Tick "Set as default audience" để Public thành đối tượng mặc định của nick (lần share sau khỏi chọn lại).
+                # Ô đã tick sẵn / bị khóa (Public đã là mặc định) thì bỏ qua. Không tick được thì vẫn share Public nhưng báo cảnh báo.
+                box_state = self.driver.execute_script(PostLocators.JS_DEFAULT_AUDIENCE_CHECKBOX_STATE)
+                if not box_state:
+                    logger.warning("Không tìm thấy ô 'Set as default audience' trong menu đối tượng")
+                    if callback:
+                        callback("⚠️ Không tìm thấy ô 'Set as default audience', vẫn tiếp tục chia sẻ Public")
+                elif box_state.get("checked"):
+                    if callback:
+                        callback("✓ Ô 'Set as default audience' đã được tick sẵn")
+                elif box_state.get("disabled"):
+                    if callback:
+                        callback("⚠️ Ô 'Set as default audience' đang bị khóa, không tick được")
+                else:
+                    if callback:
+                        callback("⚙️ Đang tick ô 'Set as default audience' để đặt Public làm mặc định...")
+                    ticked, how = self._click_until(
+                        PostLocators.JS_GET_DEFAULT_AUDIENCE_CHECKBOX, PostLocators.JS_IS_DEFAULT_AUDIENCE_CHECKED
+                    )
+                    if not ticked:
+                        logger.warning(f"Không tick được 'Set as default audience': {how}")
+                    if callback:
+                        callback(f"✓ Đã tick 'Set as default audience' (bằng {how})" if ticked
+                                 else f"⚠️ Không tick được 'Set as default audience': {how}. Vẫn tiếp tục chia sẻ Public")
+                    self.bot.random_sleep(0.8, 1.4)
+
                 if callback:
                     callback("⚙️ Đang bấm nút Done (Xong)...")
 
-                done_target = self.driver.execute_script("""
-                    const doneCandidates = Array.from(document.querySelectorAll('div[role="dialog"] span')).filter(el => {
-                        const t = (el.innerText || el.textContent || '').trim().toLowerCase();
-                        return t === 'done' || t === 'xong';
-                    });
-                    for (const d of doneCandidates) {
-                        const target = d.closest('div[role="button"]') || d.closest('.x1i10hfl') || d;
-                        const rect = target.getBoundingClientRect();
-                        if (rect.width > 20 && rect.height > 10) {
-                            return target;
-                        }
-                    }
-                    return null;
-                """)
+                # Bấm Done cho tới khi menu "Post audience" đóng lại
+                done_ok, how = self._click_until(
+                    PostLocators.JS_GET_AUDIENCE_DONE_BUTTON, PostLocators.JS_IS_AUDIENCE_MENU_CLOSED
+                )
+                if not done_ok:
+                    self._close_share_dialog()
+                    return False, f"Không bấm được nút Done của menu đối tượng: {how}. Đã hủy chia sẻ"
+                if callback:
+                    callback(f"✓ Đã bấm Done, menu đối tượng đã đóng (bằng {how})")
 
-                if done_target:
-                    perform_robust_click(self.driver, done_target)
-                else:
-                    done_el = self.bot.safe_find_element(By.XPATH, "//div[@role='dialog']//span[normalize-space()='Done' or normalize-space()='Xong']/ancestor::div[@role='button'][1]", timeout=2)
-                    if done_el:
-                        perform_robust_click(self.driver, done_el)
-
-                self.bot.random_sleep(2.0, 3.0)
+                self.bot.random_sleep(1.0, 1.8)
 
                 if callback:
                     callback("🔍 Đang kiểm tra xác nhận đối tượng đã chuyển sang Public...")
@@ -772,7 +811,10 @@ class PostSeedingFlow:
                     if callback:
                         callback("✓ Đã xác nhận đối tượng đã chuyển sang Công khai (Public) thành công!")
                 else:
-                    logger.warning("Cảnh báo: Không thể xác nhận đối tượng đã chuyển sang Public qua pill, tiếp tục...")
+                    # Không xác nhận được Public -> KHÔNG bấm Share now, tránh chia sẻ ở chế độ Bạn bè
+                    logger.warning("Không xác nhận được đối tượng chia sẻ là Public, hủy chia sẻ.")
+                    self._close_share_dialog()
+                    return False, "Không chuyển được đối tượng chia sẻ sang Công khai (Public), đã hủy chia sẻ"
             else:
                 if callback:
                     callback("✓ Đối tượng chia sẻ đã là Công khai (Public), tiến hành bấm Share now...")

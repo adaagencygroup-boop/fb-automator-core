@@ -166,21 +166,88 @@ def force_kill_driver(driver):
             pass
 
 
-def safe_close_driver(driver):
-    """Đóng bằng driver.quit() để Chrome kịp ghi cookie / phiên xuống đĩa; treo thì kill."""
+def _driver_pids(driver):
+    """PID của ChromeDriver và Chrome con, lấy trước khi quit. detach=True để Chrome sống sau quit."""
     try:
-        # detach=True: driver.quit() đôi khi để lại cửa sổ Chrome làm profile bị khóa, đóng từng cửa sổ trước
+        pid = driver.service.process.pid
+    except Exception:
+        return []
+    if not isinstance(pid, int) or pid <= 0:
+        return []
+    pids = [pid]
+    try:
+        import psutil
+        for child in psutil.Process(pid).children(recursive=True):
+            if isinstance(child.pid, int):
+                pids.append(child.pid)
+    except Exception:
+        pass
+    return pids
+
+
+def _kill_pids(pids):
+    for pid in pids:
+        if not isinstance(pid, int) or pid <= 0:
+            continue
         try:
-            for handle in driver.window_handles:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=5)
+            else:
+                os.kill(pid, 9)
+        except Exception:
+            pass
+
+
+def safe_close_driver(driver):
+    """Đóng bằng driver.quit() để Chrome kịp ghi cookie, rồi tắt nốt cửa sổ detach còn sống."""
+    pids = _driver_pids(driver)
+    try:
+        try:
+            for handle in list(driver.window_handles or []):
                 driver.switch_to.window(handle)
                 driver.close()
         except Exception:
             pass
         driver.quit()
-        return
     except Exception as e:
         logger.debug(f"driver.quit() exception: {e}")
-    force_kill_driver(driver)
+    _kill_pids(pids)
+
+
+def _command_uses_profile(cmdline, profile_path: str) -> bool:
+    """Chỉ khớp profile automation, không khớp Chrome cá nhân của máy."""
+    if not cmdline or not profile_path:
+        return False
+    needle = os.path.normcase(os.path.normpath(profile_path))
+    if len(needle) < 12:
+        return False
+    return needle in os.path.normcase(" ".join(cmdline))
+
+
+def _release_profile_chrome(profile_path: str):
+    """Tắt Chrome/ChromeDriver còn sống trên đúng profile này. quit() không thấy tiến trình mở từ lần trước."""
+    try:
+        import psutil
+    except ImportError:
+        return
+    victims = []
+    for proc in psutil.process_iter(["name", "cmdline"]):
+        try:
+            name = (proc.info["name"] or "").lower()
+            if name not in {"chrome.exe", "chromium.exe", "chromedriver.exe"}:
+                continue
+            if _command_uses_profile(proc.info["cmdline"], profile_path):
+                victims.append(proc)
+        except (psutil.Error, OSError):
+            continue
+    for proc in victims:
+        try:
+            proc.kill()
+        except psutil.Error:
+            pass
+    if victims:
+        psutil.wait_procs(victims, timeout=5)
+        logger.info(f"Đã tắt {len(victims)} tiến trình Chrome còn giữ profile")
 
 
 def _cleanup_profile_lockfiles(profile_path: str):
@@ -215,7 +282,9 @@ def close_driver_for_uid(uid: str, owner: Optional[str] = None):
             logger.warning(f"Lỗi khi đóng driver cũ cho UID {uid}: {e}")
 
     _close_bridge(key)
-    _cleanup_profile_lockfiles(get_profile_path(uid, owner))
+    profile_path = get_profile_path(uid, owner)
+    _release_profile_chrome(profile_path)
+    _cleanup_profile_lockfiles(profile_path)
 
 
 def close_scoped_active_drivers(scope: str, force: bool = False) -> List[str]:
@@ -372,15 +441,31 @@ def open_browser(
     try:
         with _chrome_launch_lock:
             driver_path = _get_chromedriver_path()
+
+            def _start_chrome(path):
+                service = Service(path) if path else Service()
+                return webdriver.Chrome(service=service, options=options)
+
             try:
-                service = Service(driver_path) if driver_path else Service()
-                driver = webdriver.Chrome(service=service, options=options)
+                driver = _start_chrome(driver_path)
             except Exception as e:
-                if not driver_path:
-                    raise
-                _reset_chromedriver_path()
-                logger.warning(f"[{uid}] Chromedriver cache failed ({e}), falling back to built-in Selenium Manager...")
-                driver = webdriver.Chrome(service=Service(), options=options)
+                exited = "session not created" in str(e).lower() or "chrome instance exited" in str(e).lower()
+                if exited:
+                    logger.warning(f"[{uid}] Chrome không mở được vì profile đang bị giữ. Đóng Chrome cũ của nick rồi thử lại.")
+                    _release_profile_chrome(profile_path)
+                    _cleanup_profile_lockfiles(profile_path)
+                    time.sleep(0.5)
+                    try:
+                        driver = _start_chrome(driver_path)
+                    except Exception as retry_error:
+                        e = retry_error
+                        exited = False
+                if driver is None and driver_path and not exited:
+                    _reset_chromedriver_path()
+                    logger.warning(f"[{uid}] Chromedriver cache failed ({e}), falling back to built-in Selenium Manager...")
+                    driver = _start_chrome(None)
+                elif driver is None:
+                    raise e
 
         register_active_driver(driver, uid, owner=owner, scope=scope, on_before_close=on_before_close)
 

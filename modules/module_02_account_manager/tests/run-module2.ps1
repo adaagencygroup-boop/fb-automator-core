@@ -35,7 +35,7 @@ try {
     $summary[-1].blocked = @($beDetails.blocked).Count
     if ($beDetails.blocked.Count -gt 0 -and $summary[-1].exit_code -eq 0) { $summary[-1].status = 'Chưa kiểm chứng' }
     $fe = Join-Path $root 'frontend'
-    $summary += Run-Check 'fe' 'node' @('--test','--test-isolation=none','src/modules/module_02_account_manager/hooks/useAccountPages.test.mjs','src/modules/module_02_account_manager/utils/drag-selection.test.mjs','src/modules/module_02_account_manager/utils/import-mapping.test.mjs') $fe
+    $summary += Run-Check 'fe' 'node' @('--test','--test-isolation=none','src/modules/module_02_account_manager/hooks/useAccountPages.test.mjs','src/modules/module_02_account_manager/hooks/useAccountRealtime.test.mjs','src/modules/module_02_account_manager/utils/account-realtime.test.mjs','src/modules/module_02_account_manager/utils/drag-selection.test.mjs','src/modules/module_02_account_manager/utils/import-mapping.test.mjs') $fe
     $summary += Run-Check 'lint' 'npm.cmd' @('run','lint') $fe
     $env:NEXT_PUBLIC_API_URL = 'http://127.0.0.1:28132'
     $summary += Run-Check 'build' 'npm.cmd' @('run','build') $fe

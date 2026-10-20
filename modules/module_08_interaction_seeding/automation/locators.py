@@ -504,6 +504,17 @@ class PostLocators:
     """
 
     JS_GET_AUDIENCE_PILL = """
+        // 0. Ưu tiên: nút "Edit privacy. Sharing with ..." nằm trong hộp thoại chia sẻ (dialog mở sau cùng).
+        //    aria-label vừa xác định đúng nút, vừa ghi rõ đối tượng đang chọn (Public / Friends).
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).reverse();
+        for (const d of dialogs) {
+            const btn = Array.from(d.querySelectorAll('div[role="button"][aria-label]')).find(b => {
+                const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                return a.includes('privacy') || a.includes('quyền riêng tư');
+            });
+            if (btn) return btn;
+        }
+
         // 1. Quét tìm theo icon chevron (-831px) đặc trưng duy nhất của nút chọn đối tượng
         const chevrons = Array.from(document.querySelectorAll('i[data-visualcompletion="css-img"]')).filter(i => {
             return (i.getAttribute('style') || '').includes('-831px');
@@ -539,6 +550,104 @@ class PostLocators:
             }
         }
 
+        return null;
+    """
+
+    # Phần tử bấm để mở menu "Post audience": khối .x1qhmfi1 trong hộp thoại Share, nằm cạnh nút "Feed"
+    # (icon 12px alt Public/Friends + chữ đối tượng + mũi tên -831px). Nút "Feed" không có icon/mũi tên nên không bị bắt nhầm.
+    JS_GET_AUDIENCE_CLICK_TARGET = """
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).reverse();
+        for (const d of dialogs) {
+            const block = Array.from(d.querySelectorAll('div.x1qhmfi1')).find(el => {
+                const r = el.getBoundingClientRect();
+                return r.width > 15 && r.height > 10
+                    && el.querySelector('img[alt]')
+                    && el.querySelector('i[data-visualcompletion="css-img"]');
+            });
+            if (block) return block;
+        }
+        // Dự phòng: tìm nút đối tượng như JS_GET_AUDIENCE_PILL
+        return (() => {""" + JS_GET_AUDIENCE_PILL + """})();
+    """
+
+    # Menu "Post audience" đã mở chưa: dialog có chữ "Who can see your post" / "Post audience" (hoặc bản tiếng Việt),
+    # hoặc có ít nhất 2 lựa chọn dạng radio đang hiện.
+    JS_IS_AUDIENCE_MENU_OPEN = """
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
+        return dialogs.some(d => {
+            const r = d.getBoundingClientRect();
+            if (r.width < 50 || r.height < 50) return false;
+            const t = (d.innerText || '').toLowerCase();
+            if (t.includes('who can see your post') || t.includes('post audience')
+                || t.includes('ai có thể xem') || t.includes('đối tượng của bài viết')) return true;
+            const radios = Array.from(d.querySelectorAll('[role="radio"], input[type="radio"]')).filter(x => {
+                const rr = x.getBoundingClientRect();
+                return rr.width > 0 && rr.height > 0;
+            });
+            return radios.length >= 2;
+        });
+    """
+
+    JS_IS_AUDIENCE_MENU_CLOSED = "return !(() => {" + JS_IS_AUDIENCE_MENU_OPEN + "})();"
+
+    # Ô tick "Set as default audience" / "Đặt làm đối tượng mặc định" trong menu "Post audience":
+    #   input[type=checkbox][value="default_privacy_checkbox"] (aria-labelledby trỏ tới chữ "Set as default audience.")
+    # Dự phòng: checkbox có nhãn chứa "default audience" / "đối tượng mặc định".
+    JS_GET_DEFAULT_AUDIENCE_CHECKBOX = """
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).reverse();
+        for (const d of dialogs) {
+            let box = d.querySelector('input[type="checkbox"][value="default_privacy_checkbox"]');
+            if (!box) {
+                box = Array.from(d.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).find(b => {
+                    const id = b.getAttribute('aria-labelledby');
+                    const label = id ? document.getElementById(id) : null;
+                    const t = ((label ? label.textContent : '') + ' ' + (b.getAttribute('aria-label') || '')).toLowerCase();
+                    return t.includes('default audience') || t.includes('đối tượng mặc định');
+                });
+            }
+            if (box) return box;
+        }
+        return null;
+    """
+
+    # Trạng thái ô tick: {checked, disabled} theo aria-checked / aria-disabled (Facebook dùng 2 thuộc tính này), null nếu không có ô.
+    JS_DEFAULT_AUDIENCE_CHECKBOX_STATE = """
+        const box = (() => {""" + JS_GET_DEFAULT_AUDIENCE_CHECKBOX + """})();
+        if (!box) return null;
+        const ac = box.getAttribute('aria-checked');
+        const ad = box.getAttribute('aria-disabled');
+        return {
+            checked: ac !== null ? ac === 'true' : box.checked === true,
+            disabled: ad !== null ? ad === 'true' : box.disabled === true
+        };
+    """
+
+    JS_IS_DEFAULT_AUDIENCE_CHECKED = "const s = (() => {" + JS_DEFAULT_AUDIENCE_CHECKBOX_STATE + "})(); return !!(s && s.checked);"
+
+    # Nút "Done" / "Xong" của menu "Post audience". Cấu trúc thật:
+    #   [role=button?] > div[role=none] (có lớp phủ hover data-visualcompletion="ignore") > ... > span > span "Done"
+    # Phần tử bấm: nút role="button" bao ngoài nếu có, nếu không thì khối div[role=none] ngoài cùng chứa lớp phủ hover.
+    JS_GET_AUDIENCE_DONE_BUTTON = """
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).reverse();
+        for (const d of dialogs) {
+            const spans = Array.from(d.querySelectorAll('span')).filter(s => {
+                const t = (s.innerText || s.textContent || '').trim().toLowerCase();
+                return (t === 'done' || t === 'xong') && !s.querySelector('span');
+            });
+            for (const s of spans) {
+                let target = s.closest('[role="button"]');
+                if (!target) {
+                    let el = s.closest('div[role="none"]');
+                    while (el) {
+                        if (el.querySelector(':scope > [data-visualcompletion="ignore"]')) { target = el; break; }
+                        el = el.parentElement ? el.parentElement.closest('div[role="none"]') : null;
+                    }
+                }
+                target = target || s;
+                const r = target.getBoundingClientRect();
+                if (r.width > 20 && r.height > 10) return target;
+            }
+        }
         return null;
     """
 

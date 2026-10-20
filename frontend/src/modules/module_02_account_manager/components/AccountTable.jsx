@@ -1,4 +1,5 @@
 "use client";
+import { isAccountBusy, PHASE_LABELS } from "../utils/account-realtime.mjs";
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { attachDragSelection } from "../utils/drag-selection.mjs";
@@ -152,7 +153,7 @@ export default function AccountTable({
   onBulkDelete,
   onRefresh,
   isCheckingStatus = false,
-  openingBrowserUids,
+  accountProgress = {},
   effectiveThreads = 3,
   setCustomThreads,
   maxThreads = 10,
@@ -446,6 +447,9 @@ export default function AccountTable({
               filteredAccounts.map((account, index) => {
                 const initial = (account.profile_name || account.uid).trim().charAt(0).toUpperCase();
                 const isSelected = selectedUids.includes(account.uid);
+                const progress = accountProgress[account.uid];
+                const isBusy = isAccountBusy(progress);
+                const progressLabel = progress ? PHASE_LABELS[progress.phase] || "Không xác định được kết quả" : "";
 
                 return (
                   <React.Fragment key={account.uid}>
@@ -590,7 +594,7 @@ export default function AccountTable({
                             className={`flex items-center justify-center w-7 h-7 rounded-md transition-colors border cursor-pointer shadow-2xs ${
                               expandedUids.has(account.uid) && !closingUids.has(account.uid)
                                 ? "bg-blue-50 border-blue-200 text-[#2563EB]"
-                                : "border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#94A3B8] hover:text-[#2563EB]"
+                                : "border-[#E2E8F0] bg-white hover:bg-blue-50 hover:border-blue-200 text-[#94A3B8] hover:text-[#2563EB]"
                             }`}
                           >
                             {expandedUids.has(account.uid) && !closingUids.has(account.uid) ? (
@@ -605,7 +609,7 @@ export default function AccountTable({
                             type="button"
                             onClick={() => onEditAccount(account.uid)}
                             title="Chỉnh sửa thông tin"
-                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#94A3B8] hover:text-[#2563EB] transition-colors cursor-pointer shadow-2xs"
+                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-amber-50 hover:border-amber-200 text-[#94A3B8] hover:text-amber-600 transition-colors cursor-pointer shadow-2xs"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
@@ -614,16 +618,20 @@ export default function AccountTable({
                           <button
                             type="button"
                             onClick={() => onOpenBrowser(account.uid)}
-                            disabled={openingBrowserUids?.has(account.uid)}
-                            title={openingBrowserUids?.has(account.uid) ? "Đang mở Chrome..." : "Mở trình duyệt Profile Chrome"}
-                            className={`flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#94A3B8] hover:text-[#059669] transition-colors cursor-pointer shadow-2xs ${
-                              openingBrowserUids?.has(account.uid) ? "opacity-70 cursor-not-allowed text-[#2563EB]" : ""
+                            disabled={isBusy}
+                            aria-busy={isBusy}
+                            aria-label={`${isBusy ? progressLabel : "Mở trình duyệt Profile Chrome"} — ${account.uid}`}
+                            title={progressLabel ? `${progressLabel} — Mở trình duyệt Profile Chrome` : "Mở trình duyệt Profile Chrome"}
+                            className={`flex items-center justify-center w-7 h-7 rounded-md border transition-colors shadow-2xs ${
+                              isBusy
+                                ? "border-emerald-200 bg-emerald-50 text-[#059669] cursor-wait"
+                                : "border-[#E2E8F0] bg-white hover:bg-emerald-50 hover:border-emerald-200 text-[#94A3B8] hover:text-[#059669] cursor-pointer"
                             }`}
                           >
-                            {openingBrowserUids?.has(account.uid) ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin text-[#2563EB]" />
+                            {isBusy ? (
+                              <Loader2 aria-hidden="true" className="w-3.5 h-3.5 animate-spin" />
                             ) : (
-                              <Globe className="w-3.5 h-3.5" />
+                              <Globe aria-hidden="true" className="w-3.5 h-3.5" />
                             )}
                           </button>
 
@@ -632,7 +640,7 @@ export default function AccountTable({
                             type="button"
                             onClick={() => onDeleteAccount(account.uid)}
                             title="Xóa tài khoản"
-                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-red-50/50 hover:border-[#FECDD3] text-[#94A3B8] hover:text-[#BE123C] transition-colors cursor-pointer shadow-2xs"
+                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-rose-50 hover:border-rose-200 text-[#94A3B8] hover:text-[#BE123C] transition-colors cursor-pointer shadow-2xs"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -659,14 +667,6 @@ export default function AccountTable({
         {isLoadingMore && <p role="status" className="p-3 text-center text-sm text-slate-500">Đang tải thêm...</p>}
         {moreError && <div role="alert" className="p-3 text-center text-sm text-red-600">{moreError} <button type="button" onClick={onRetryMore} className="ml-2 text-blue-600 underline">Thử lại</button></div>}
       </div>
-      {isRefreshing && (
-        <div className="absolute inset-0 z-20 bg-white/45 backdrop-blur-[1px] flex items-center justify-center transition-opacity">
-          <div className="inline-flex items-center gap-2.5 px-4 py-2 rounded-xl bg-white/95 shadow-md border border-slate-200 text-xs font-semibold text-slate-700">
-            <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-            <span>Đang làm mới dữ liệu...</span>
-          </div>
-        </div>
-      )}
     </div>
 
       {/* 3. Section - Bottom Action Bar / Concurrent Threads Controller */}

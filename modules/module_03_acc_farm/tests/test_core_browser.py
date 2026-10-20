@@ -194,5 +194,19 @@ class TestProxyFailure(unittest.TestCase):
         self.assertFalse(any(a.startswith("--user-agent") for a in args))
 
 
+class TestProfileRelease(unittest.TestCase):
+    def test_matches_only_the_automation_profile(self):
+        profile_path = r"F:\app\tool py\fb-automator-core\data\browser_profiles\abc\61577351974413"
+        self.assertTrue(core_driver._command_uses_profile(
+            ["chrome.exe", f"--user-data-dir={profile_path}"],
+            profile_path,
+        ))
+        self.assertFalse(core_driver._command_uses_profile(
+            ["chrome.exe", r"--user-data-dir=C:\Users\me\AppData\Local\Google\Chrome\User Data"],
+            profile_path,
+        ))
+        self.assertFalse(core_driver._command_uses_profile(["chromedriver.exe", "--port=1"], profile_path))
+
+
 if __name__ == "__main__":
     unittest.main()

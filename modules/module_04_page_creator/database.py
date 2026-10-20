@@ -27,6 +27,7 @@ class CreatedPage(Base):
     owner_username = Column(String(100), nullable=True, index=True)
     creator_fb_uid = Column(String(50), nullable=False)
     shared_admin_uid = Column(String(50), nullable=False, default="")
+    shared_admin_name = Column(String(150), nullable=False, default="")
     page_name = Column(String(255), nullable=False)
     page_category = Column(String(100), nullable=True)
     page_url = Column(Text, nullable=True)
@@ -49,6 +50,7 @@ _ADDITIVE_COLUMNS = {
         "owner_username": "VARCHAR(100)",
         "creator_fb_uid": "VARCHAR(50)",
         "shared_admin_uid": "VARCHAR(50) DEFAULT ''",
+        "shared_admin_name": "VARCHAR(150) DEFAULT ''",
         "page_name": "VARCHAR(255)",
         "page_category": "VARCHAR(100)",
         "page_url": "TEXT",
@@ -62,6 +64,27 @@ _ADDITIVE_COLUMNS = {
         "value": "TEXT",
     },
 }
+
+
+def _ensure_index(engine, sql: str, attempts: int = 3) -> None:
+    """Tạo index riêng từng câu; lỗi kết nối thì thử lại, không làm chết startup."""
+    import time
+
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError, OperationalError
+
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(sql))
+            return
+        except (OperationalError, DBAPIError) as exc:
+            last_error = exc
+            if attempt < attempts:
+                time.sleep(attempt)
+                continue
+    print(f"[Module 04] Bỏ qua tạo index (không chặn startup): {last_error}")
 
 
 def ensure_schema():
@@ -83,12 +106,15 @@ def ensure_schema():
                 if name not in existing:
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {kind}"))
                     added.append(f"{table}.{name}")
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_created_pages_owner_username ON created_pages (owner_username)"
-        ))
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_creator_settings_owner_username ON creator_settings (owner_username)"
-        ))
+    # Index tách riêng: pooler/Supabase đôi khi cắt kết nối giữa CREATE INDEX
+    _ensure_index(
+        engine,
+        "CREATE INDEX IF NOT EXISTS ix_created_pages_owner_username ON created_pages (owner_username)",
+    )
+    _ensure_index(
+        engine,
+        "CREATE INDEX IF NOT EXISTS ix_creator_settings_owner_username ON creator_settings (owner_username)",
+    )
     return added
 
 
@@ -129,11 +155,30 @@ class PageRepo:
         if owner:
             payload["owner_username"] = owner
         payload.setdefault("shared_admin_uid", "")
+        payload.setdefault("shared_admin_name", "")
         page = CreatedPage(**payload)
         db.add(page)
         db.commit()
         db.refresh(page)
         return page
+
+    @staticmethod
+    def remember_admin_name(db, admin_uid, admin_name):
+        """Ghi tên admin vừa đọc được cho mọi page đang trỏ tới UID này mà chưa có tên."""
+        uid = (admin_uid or "").strip()
+        name = (admin_name or "").strip()
+        if not uid or not name:
+            return 0
+        updated = (
+            db.query(CreatedPage)
+            .filter(
+                CreatedPage.shared_admin_uid == uid,
+                (CreatedPage.shared_admin_name.is_(None)) | (CreatedPage.shared_admin_name == ""),
+            )
+            .update({CreatedPage.shared_admin_name: name[:150]}, synchronize_session=False)
+        )
+        db.commit()
+        return updated
 
 
 def _setting_owner():

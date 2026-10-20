@@ -89,7 +89,6 @@ DDL_STATEMENTS = [
         reaction VARCHAR(10), -- Chỉ dùng cho REACT
         comment_id INT REFERENCES seeding_comments(id) ON DELETE SET NULL,
         status VARCHAR(20) DEFAULT 'PENDING', -- 'PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'SKIPPED'
-        attempts INT DEFAULT 0,
         error_message TEXT,
         scheduled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Thời điểm sớm nhất được phép chạy (giãn cách)
         started_at TIMESTAMP,

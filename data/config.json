@@ -9,7 +9,7 @@
         "max_posts_per_page_day": 5
     },
     "gemini": {
-        "model_name": "gemini-1.5-flash",
+        "model_name": "gemini-3.8-flash",
         "batch_size": 10,
         "timeout_seconds": 120,
         "temperature": 0.7

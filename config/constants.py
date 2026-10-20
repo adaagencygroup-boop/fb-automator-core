@@ -6,10 +6,19 @@ from enum import Enum
 from pathlib import Path
 from dotenv import load_dotenv
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+import sys
+if getattr(sys, "frozen", False):
+  BASE_DIR = Path(sys.executable).resolve().parent
+else:
+  BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 LOGS_DIR = BASE_DIR / "logs"
 DOWNLOADS_DIR = BASE_DIR / "downloads"
+TIKTOK_CONFIG_PATH = DATA_DIR / "tiktok_config.json"
+TIKTOK_CONFIG_INI_PATH = DATA_DIR / "tiktok_config.ini"
+TIKTOK_SESSION_PATH = DATA_DIR / "tiktok_session.json"
+YOUTUBE_CONFIG_PATH = DATA_DIR / "youtube_config.json"
+YOUTUBE_CONFIG_INI_PATH = DATA_DIR / "youtube_config.ini"
 
 # Tải biến môi trường từ file .env tại thư mục gốc dự án
 ENV_PATH = BASE_DIR / ".env"

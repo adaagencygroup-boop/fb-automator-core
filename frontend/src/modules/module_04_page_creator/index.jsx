@@ -1,27 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  AlertCircle,
-  CheckCircle2,
-  ClipboardList,
+  ChevronDown,
+  CircleCheck,
+  FileSpreadsheet,
+  Info,
+  RefreshCw,
+  Search,
+  Star,
+  TriangleAlert,
   ExternalLink,
   Eye,
   EyeOff,
-  FileSpreadsheet,
-  FileText,
-  Hourglass,
   Loader2,
-  Pause,
   Play,
-  Power,
-  RefreshCw,
-  Search,
-  Settings2,
-  ShieldAlert,
-  Sparkles,
-  Users,
-  X,
 } from "lucide-react";
 import CustomSelect from "@/components/ui/custom-select";
 import {
@@ -33,8 +26,9 @@ import {
 import Pagination from "@/components/ui/pagination";
 import { formatVietnamDateTime, parseToVietnamDate } from "@/lib/date-utils";
 import { toast } from "@/lib/toast";
-import { getAccounts } from "@/modules/module_02_account_manager/service";
+import { getAccountsPage } from "@/modules/module_02_account_manager/service";
 import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE";
+import { attachDragSelection } from "@/modules/module_02_account_manager/utils/drag-selection.mjs";
 import {
   getCreatedPageHistory,
   getCreatorSettings,
@@ -44,6 +38,7 @@ import {
   saveCreatorSetting,
   startPageCreation,
   stopPageCreation,
+  testCreatorGeminiKey,
 } from "./service";
 
 const TEMPLATE = [
@@ -60,18 +55,30 @@ const COUNTRIES = [
 ];
 
 const MODELS = [
-  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Tốc độ cao — Khuyến nghị)" },
-  { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash (Tốc độ cao — Khuyến nghị)" },
+  { value: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Tốc độ cao — Khuyến nghị)" },
+  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+  { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
   { value: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite" },
+  { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash" },
 ];
 
-const fieldClass =
-  "h-10 w-full rounded-lg bg-[#EFF4FF] px-3 text-sm text-[#0B1C30] outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-[#2563EB]/30";
+const DELIMITERS = [
+  { value: "|", symbol: "|", label: "(Gạch đứng - Mặc định)" },
+  { value: ",", symbol: ",", label: "(Dấu phẩy)" },
+  { value: "	", symbol: "Tab", label: "(Ký tự Tab)" },
+  { value: ";", symbol: ";", label: "(Chấm phẩy)" },
+];
 
-function splitLine(line) {
+/** Đoán ký tự phân cách của 1 dòng (dùng khi nạp tệp). Dấu phẩy xét cuối vì địa chỉ hay chứa dấu phẩy */
+function guessDelimiter(line) {
+  return ["|", "	", ";", ","].find((item) => line.includes(item)) || null;
+}
+
+/** forced: ký tự phân cách người dùng chọn; bỏ trống thì tự đoán (dùng khi nạp tệp) */
+function splitLine(line, forced) {
   const trimmed = line.trim();
   if (!trimmed) return null;
-  const delimiter = trimmed.includes("|") ? "|" : trimmed.includes(",") ? "," : null;
+  const delimiter = forced || guessDelimiter(trimmed);
   const parts = delimiter ? trimmed.split(delimiter).map((part) => part.trim()) : [trimmed];
   return {
     page_name: parts[0] || "",
@@ -81,10 +88,10 @@ function splitLine(line) {
   };
 }
 
-function parsePageLines(text) {
+function parsePageLines(text, delimiter) {
   return text
     .split(/\r?\n/)
-    .map(splitLine)
+    .map((line) => splitLine(line, delimiter))
     .filter((item) => item && item.page_name);
 }
 
@@ -93,21 +100,6 @@ function rowIssues(page) {
   if (!page.phone) issues.push("Thiếu SĐT");
   if (page.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(page.email)) issues.push("Sai email");
   return issues;
-}
-
-function Pill({ tone = "green", children }) {
-  const tones = {
-    green: "bg-[#ECFDF5] text-[#047857]",
-    red: "bg-[#FFF1F2] text-[#BE123C]",
-    slate: "bg-[#F1F5F9] text-[#475569]",
-    blue: "bg-[#DBE1FF] text-[#1D4ED8]",
-  };
-  return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${tones[tone]}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${tone === "green" ? "bg-[#10B981]" : tone === "red" ? "bg-[#F43F5E]" : tone === "blue" ? "bg-[#2563EB]" : "bg-[#94A3B8]"}`} />
-      {children}
-    </span>
-  );
 }
 
 function eventOf(log) {
@@ -210,18 +202,19 @@ function clockLabel(value) {
 function logTone(log) {
   const type = String(log.type || log.extra?.level || "").toLowerCase();
   const message = log.message || "";
-  if (type === "error" || type === "failed") return "text-[#BE123C]";
-  if (type === "success" || /thành công|hoàn tất/i.test(message)) return "text-[#047857]";
-  if (type === "warning") return "text-amber-700";
-  if (/khởi tạo|bắt đầu|bốc page/i.test(message)) return "font-semibold text-[#2563EB]";
-  return "text-slate-600";
+  if (type === "error" || type === "failed") return "font-medium text-[#BA1A1A]";
+  if (type === "success" || /thành công|hoàn tất/i.test(message)) return "font-semibold text-[#4EDEA3]";
+  if (type === "warning") return "font-medium text-amber-700";
+  if (/khởi tạo|bắt đầu|bốc page/i.test(message)) return "font-medium text-[#1B45A3]";
+  if (/bypass|captcha|token/i.test(message)) return "font-medium text-[#456E89]";
+  return "font-medium text-[#33353D]";
 }
 
 function LogLine({ message }) {
   const parts = String(message || "").split(/(https?:\/\/\S+)/g);
   return parts.map((part, index) =>
     part.startsWith("http") ? (
-      <a key={`${part}-${index}`} href={part} target="_blank" rel="noreferrer" className="break-all text-[#047857] underline">
+      <a key={`${part}-${index}`} href={part} target="_blank" rel="noreferrer" className="break-all underline">
         {part}
       </a>
     ) : (
@@ -231,14 +224,17 @@ function LogLine({ message }) {
 }
 
 const JOB_STATUS = {
-  running: { label: "Đang chạy", className: "bg-[#DBE1FF] text-[#1D4ED8]" },
-  claimed: { label: "Chờ luồng", className: "bg-[#F1F5F9] text-[#64748B]" },
-  queued: { label: "Chờ chạy", className: "bg-[#F1F5F9] text-[#64748B]" },
-  done: { label: "Đã chạy", className: "bg-[#ECFDF5] text-[#047857]" },
-  error: { label: "Chạy lỗi", className: "bg-[#FFF1F2] text-[#BE123C]" },
-  paused: { label: "Tạm dừng", className: "bg-amber-50 text-amber-700" },
+  running: { label: "Đang chạy", className: "bg-[#DBE1FF] text-[#004AC6]", icon: "status_running" },
+  claimed: { label: "Chờ luồng", className: "bg-[#E5EEFF] text-[#565E74]", dot: true },
+  queued: { label: "Chờ chạy", className: "bg-[#E5EEFF] text-[#565E74]", dot: true },
+  done: { label: "Đã chạy", className: "bg-[#D1FAE5] text-[#065F46]", icon: "status_done" },
+  error: { label: "Chạy lỗi", className: "bg-[#FFDAD6] text-[#93000A]", icon: "status_error" },
+  paused: { label: "Tạm dừng", className: "bg-amber-50 text-amber-700", dot: true },
 };
 
+const RUN_CARD = "rounded-xl bg-white shadow-[0_1px_4px_rgba(15,23,42,0.04)]";
+
+/** Màn "Đang tạo Fanpage" — theo Figma node 1020:11714 */
 function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
   const logRef = useRef(null);
   const pages = Array.isArray(task?.pages) ? task.pages : [];
@@ -265,94 +261,103 @@ function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
   }, [engineLogs.length]);
 
   return (
-    <div className="-m-6 min-h-full space-y-4 bg-[#F8F9FF] p-6">
-      <section className="flex flex-col gap-4 rounded-2xl bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.06)] lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex gap-3">
-          <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${paused ? "bg-amber-500" : "bg-[#004AC6]"}`} />
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-[#0B1C30]">{paused ? "Đang tạm dừng" : "Đang tạo Fanpage"}</h1>
-            <p className="mt-1 max-w-xl text-sm text-slate-500">
-              Quá trình tạo Fanpage đang diễn ra, vui lòng không đóng cửa sổ để tránh ngắt quãng luồng xử lý.
-            </p>
+    <div className={`${PAGE_FONT} -m-6 flex min-h-full flex-col gap-6 bg-[#F8F9FF] p-4 sm:p-6`}>
+      <section className={`${RUN_CARD} flex flex-col gap-4 p-6 lg:flex-row lg:items-center lg:justify-between`}>
+        <div className="flex max-w-[581px] flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span aria-hidden="true" className={`size-2.5 shrink-0 rounded-full ${paused ? "bg-amber-500" : "bg-[#004AC6]"}`} />
+            <h1 className="text-2xl leading-8 font-bold tracking-[-0.6px] text-[#0B1C30]">{paused ? "Đang tạm dừng" : "Đang tạo Fanpage"}</h1>
           </div>
+          <p className="text-sm leading-[22px] text-[#6B5D5D]">
+            Quá trình tạo Fanpage đang diễn ra, vui lòng không đóng cửa sổ để tránh ngắt quãng luồng xử lý.
+          </p>
         </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
-          <button type="button" onClick={onPause} className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#F8F9FF] px-4 text-sm font-semibold text-[#0B1C30] ring-1 ring-slate-200">
-            {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onPause}
+            className="flex h-9 items-center gap-2 rounded-lg bg-[#EFF4FF] px-4 text-sm leading-5 font-medium text-[#0B1C30] shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#E5EEFF]"
+          >
+            {paused ? <Play aria-hidden="true" className="size-3.5" /> : <CreatorIcon name="run_pause" />}
             {paused ? "Chạy tiếp" : "Tạm dừng"}
           </button>
-          <button type="button" onClick={onStop} className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#E11D48] px-4 text-sm font-semibold text-white">
-            <Power className="h-4 w-4" />
+          <button
+            type="button"
+            onClick={onStop}
+            className="flex h-9 items-center gap-2 rounded-lg bg-[#BA1A1A] px-4 text-sm leading-5 font-medium text-white shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#A11616]"
+          >
+            <CreatorIcon name="run_stop" />
             Dừng khẩn cấp
           </button>
         </div>
       </section>
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Thành công" icon={<CheckCircle2 className="h-5 w-5 text-[#10B981]" />} iconClass="bg-[#ECFDF5]">
-          <span>{success}</span>
-          <span className="text-lg font-semibold text-slate-400"> / {rows.length}</span>
-        </MetricCard>
-        <MetricCard label="Thất bại / lỗi" value={failed} hint="page" icon={<ShieldAlert className="h-5 w-5 text-[#E11D48]" />} iconClass="bg-[#FFF1F2]" valueClass="text-[#BE123C]" />
-        <MetricCard label="Đang chạy" value={active.length} hint={paused ? "đang tạm dừng" : "luồng song song"} icon={<RefreshCw className={`h-5 w-5 text-[#2563EB] ${active.length && !paused ? "animate-spin" : ""}`} />} iconClass="bg-[#EEF2FF]" valueClass="text-[#2563EB]" />
-        <MetricCard label="Hàng đợi" value={queued} hint="chờ xử lý" icon={<Hourglass className="h-5 w-5 text-slate-500" />} iconClass="bg-[#F1F5F9]" />
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="Thành công" value={success} suffix={`/ ${rows.length}`} suffixClass="text-base leading-6" icon="kpi_success" iconClass="bg-[#EFF4FF] text-[#059669]" />
+        <MetricCard label="Thất bại / lỗi" value={failed} suffix="tài khoản" icon="kpi_failed" iconClass="bg-[#FFDAD6] text-[#BA1A1A]" valueClass="text-[#BA1A1A]" />
+        <MetricCard
+          label="Đang chạy"
+          value={active.length}
+          suffix={paused ? "đang tạm dừng" : "luồng song song"}
+          icon="kpi_running"
+          iconClass={`bg-[#DBE1FF] text-[#004AC6] ${active.length && !paused ? "[&>span]:animate-spin" : ""}`}
+          valueClass="text-[#2563EB]"
+        />
+        <MetricCard label="Hàng đợi" value={queued} suffix="chờ xử lý" icon="kpi_queue" iconClass="bg-[#DAE2FD] text-[#565E74]" />
       </section>
 
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.7fr)]">
-        <div className="space-y-4">
-          <section className="overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
-            <div className="flex items-start justify-between gap-3 px-5 pb-2 pt-5">
-              <div className="flex gap-3">
-                <SectionIcon>
-                  <ClipboardList className="h-5 w-5" />
-                </SectionIcon>
-                <div>
-                  <h2 className="text-sm font-bold text-[#0B1C30]">Danh sách luồng khởi tạo</h2>
-                  <p className="mt-0.5 text-xs text-slate-500">Giám sát phân bổ tài khoản và danh tính page đang chạy.</p>
-                </div>
-              </div>
-              <span className="rounded-full bg-[#F1F5F9] px-3 py-1 text-xs font-semibold text-slate-600">Tổng: {rows.length} page</span>
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,573fr)_minmax(320px,352fr)]">
+        <div className="flex min-w-0 flex-col gap-6">
+          <section className={`${RUN_CARD} overflow-hidden`}>
+            <div className="flex flex-wrap items-center justify-between gap-3 p-6">
+              <RunHeading icon="run_list" title="Danh sách luồng khởi tạo" subtitle="Giám sát phân bổ tài khoản & danh tính" />
+              <span className="rounded-md bg-[#E5EEFF] px-2.5 py-1 text-[11px] leading-[14px] font-medium tracking-[0.33px] text-[#434655]">
+                Tổng: {rows.length} tài khoản
+              </span>
             </div>
             <div className="overflow-x-auto">
-              <table className="min-w-full text-left text-sm">
-                <thead className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
-                  <tr>
-                    <th className="px-5 py-3">Tài khoản</th>
-                    <th className="px-3 py-3">Fanpage mục tiêu</th>
-                    <th className="px-3 py-3">Trạng thái</th>
-                    <th className="px-5 py-3">Hành động</th>
+              <table className="w-full min-w-[540px] border-collapse text-left">
+                <thead className="bg-[#EFF4FF] text-[11px] leading-[14px] font-bold tracking-[0.55px] whitespace-nowrap text-[#565E74] uppercase">
+                  <tr className="h-[52px]">
+                    <th className="pr-4 pl-6">Tài khoản</th>
+                    <th className="px-4">Fanpage mục tiêu</th>
+                    <th className="w-[1%] px-4 text-center">Trạng thái</th>
+                    <th className="w-[1%] pr-6 pl-4 text-right">Hành động</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="px-5 py-8 text-sm text-slate-500">Chưa nhận được danh sách page của phiên này.</td>
+                      <td colSpan={4} className="px-4 py-8 text-sm text-[#434655]">Chưa nhận được danh sách page của phiên này.</td>
                     </tr>
                   ) : rows.map((row) => {
                     const visual = paused && row.state === "running" ? "paused" : row.state;
                     const badge = JOB_STATUS[visual];
                     return (
-                      <tr key={row.key} className="border-t border-slate-100">
-                        <td className="px-5 py-3">
-                          <p className="font-semibold text-[#0B1C30]">{row.name}</p>
-                          <p className="font-mono text-xs text-slate-400">{row.uid}</p>
+                      <tr key={row.key} className="even:bg-[rgba(248,249,255,0.5)]">
+                        <td className="py-3.5 pr-4 pl-6">
+                          <p className="text-base leading-6 font-semibold text-[#0B1C30]">{row.name}</p>
+                          <p className="text-[11px] leading-[14px] font-bold tracking-[0.33px] text-[#434655]">{row.uid}</p>
                         </td>
-                        <td className="px-3 py-3 font-medium text-[#0B1C30]">{row.pageName}</td>
-                        <td className="px-3 py-3">
-                          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${badge.className}`}>
-                            <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                        <td className="px-4 py-3.5 text-[13px] leading-5 font-medium text-[#0B1C30]">{row.pageName}</td>
+                        <td className="px-4 py-3.5 text-center">
+                          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] leading-[14px] font-semibold tracking-[0.33px] whitespace-nowrap ${badge.className}`}>
+                            {badge.icon ? <CreatorIcon name={badge.icon} /> : <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />}
                             {badge.label}
                           </span>
                         </td>
-                        <td className="px-5 py-3">
+                        <td className="py-3.5 pr-6 pl-4 text-right">
                           {row.pageUrl ? (
-                            <a href={row.pageUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-[#2563EB] hover:underline">
-                              <ExternalLink className="h-3.5 w-3.5" />
+                            <a
+                              href={row.pageUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 rounded-md bg-[#EFF4FF] px-2.5 py-1 text-[11px] leading-[14px] font-semibold tracking-[0.33px] text-[#004AC6] shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#E5EEFF]"
+                            >
+                              <CreatorIcon name="open_link" />
                               Mở
                             </a>
-                          ) : (
-                            <span className="text-xs text-slate-300">—</span>
-                          )}
+                          ) : null}
                         </td>
                       </tr>
                     );
@@ -362,46 +367,45 @@ function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
             </div>
           </section>
 
-          <section className="rounded-2xl bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
-            <div className="mb-4 flex gap-3">
-              <SectionIcon>
-                <RefreshCw className="h-5 w-5" />
-              </SectionIcon>
-              <div>
-                <h2 className="text-sm font-bold text-[#0B1C30]">Giám sát các luồng thực thi</h2>
-                <p className="mt-0.5 text-xs text-slate-500">Quản lý song song môi trường Chromium, proxy và hành vi người dùng.</p>
-              </div>
-            </div>
+          <section className={`${RUN_CARD} flex flex-col gap-4 border border-[rgba(193,198,214,0.21)] p-6`}>
+            <RunHeading icon="run_monitor" title="Giám sát các luồng thực thi" subtitle="Quản lý song song môi trường Chromium Headless, Proxy và hành vi người dùng" />
             {liveRows.length === 0 ? (
-              <p className="rounded-xl bg-[#F8F9FF] px-4 py-6 text-sm text-slate-500">Chưa có luồng nào đang thực thi. Page trong hàng đợi sẽ hiện ở đây khi nick bắt đầu.</p>
+              <p className="rounded-xl bg-[#EFF4FF] px-4 py-6 text-sm text-[#434655]">
+                Chưa có luồng nào đang thực thi. Page trong hàng đợi sẽ hiện ở đây khi nick bắt đầu.
+              </p>
             ) : (
-              <div className="space-y-3">
+              <div className="flex flex-col gap-4 pt-1">
                 {liveRows.map((row) => {
                   const late = row.percent >= 90;
                   return (
-                    <article key={row.key} className="rounded-2xl bg-[#F4F7FF] px-4 py-4">
-                      <div className="flex items-start gap-3">
-                        <span className={`mt-0.5 rounded-md px-1.5 py-0.5 text-[10px] font-bold text-white ${row.index % 2 === 0 ? "bg-[#2563EB]" : "bg-[#10B981]"}`}>
+                    <article key={row.key} className="flex flex-col gap-3 rounded-xl bg-[#EFF4FF] p-4">
+                      <div className="flex items-center gap-3">
+                        <span className={`shrink-0 rounded-lg px-2.5 py-1 text-[11px] leading-[14px] font-bold tracking-[0.33px] text-white ${late ? "bg-[#059669]" : "bg-[#2563EB]"}`}>
                           #{String(row.index + 1).padStart(2, "0")}
                         </span>
                         <div className="min-w-0">
-                          <h3 className="truncate text-sm font-bold text-[#0B1C30]">{row.pageName}</h3>
-                          <p className="mt-0.5 text-xs text-slate-500">{row.name} (UID: {row.uid})</p>
+                          <h3 className="truncate text-base leading-6 font-bold text-[#0B1C30]">{row.pageName}</h3>
+                          <p className="flex items-center gap-1 text-[11px] leading-[14px] font-semibold tracking-[0.33px] text-[#434655]">
+                            <CreatorIcon name="user" />
+                            <span className="truncate">{row.name} (UID: {row.uid})</span>
+                          </p>
                         </div>
                       </div>
-                      <div className="mt-3 flex items-center justify-between gap-3 text-xs">
-                        <p className="min-w-0 truncate text-slate-600">
-                          <span className={`mr-1.5 ${late ? "text-[#10B981]" : "text-[#2563EB]"}`}>●</span>
-                          {row.step || "Đang khởi tạo luồng xử lý"}
-                        </p>
-                        {row.subStage ? (
-                          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${late ? "bg-[#ECFDF5] text-[#047857]" : "bg-white text-[#2563EB]"}`}>
-                            {row.subStage}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white">
-                        <div className={`h-full rounded-full ${late ? "bg-[#10B981]" : "bg-[#2563EB]"}`} style={{ width: `${Math.max(row.percent, 8)}%` }} />
+                      <div className="flex flex-col gap-1.5 pt-1">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className={`flex min-w-0 items-center gap-1.5 text-[11px] leading-[14px] font-medium tracking-[0.33px] ${late ? "text-[#047857]" : "text-[#2563EB]"}`}>
+                            <span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${late ? "bg-[#059669]" : "bg-[#2563EB]"}`} />
+                            <span className="truncate">{row.step || "Đang khởi tạo luồng xử lý"}</span>
+                          </p>
+                          {row.subStage ? (
+                            <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-[14px] font-bold tracking-[0.33px] text-[#565E74] ${late ? "bg-[#D1FAE5]" : "bg-[#E5EEFF]"}`}>
+                              {row.subStage}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="h-2.5 overflow-hidden rounded-full bg-[#DCE9FF]">
+                          <div className={`h-full rounded-full ${late ? "bg-[#10B981]" : "bg-[#2563EB]"}`} style={{ width: `${Math.max(row.percent, 8)}%` }} />
+                        </div>
                       </div>
                     </article>
                   );
@@ -411,20 +415,27 @@ function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
           </section>
         </div>
 
-        <aside className="overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgba(15,23,42,0.06)] xl:sticky xl:top-0">
-          <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-3">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#FF5F57]" />
-            <span className="h-2.5 w-2.5 rounded-full bg-[#FEBC2E]" />
-            <span className="h-2.5 w-2.5 rounded-full bg-[#28C840]" />
-            <p className="ml-2 text-xs font-semibold text-slate-500">Realtime Automation Engine Log</p>
+        <aside className="flex min-h-[480px] flex-col overflow-hidden rounded-xl border border-[rgba(65,71,84,0.2)] bg-[#F8F9FF] shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] xl:sticky xl:top-0 xl:h-[calc(100vh-140px)] xl:max-h-[951px]">
+          <div className="flex items-center gap-2 border-b border-[rgba(65,71,84,0.2)] bg-[#EFF4FF] p-2">
+            <span className="flex items-center gap-1.5" aria-hidden="true">
+              <span className="size-2.5 rounded-full bg-[#FFB4AB]" />
+              <span className="size-2.5 rounded-full bg-[#FEBC2E]" />
+              <span className="size-2.5 rounded-full bg-[#4EDEA3]" />
+            </span>
+            <p className="flex items-center gap-1 pl-1 text-xs leading-4 font-semibold tracking-[0.3px] text-[#33353D]">
+              <CreatorIcon name="terminal" className="text-[#7BD0FF]" />
+              Realtime Automation Engine Log
+            </p>
           </div>
-          <div ref={logRef} className="h-[640px] space-y-2 overflow-auto bg-[#F8FAFC] p-4 font-mono text-[11px] leading-5">
+          <div ref={logRef} className={`flex-1 space-y-1.5 overflow-auto p-4 text-xs leading-[19.5px] tracking-[0.24px] text-[#32343D] ${SCROLLBAR}`}>
             {engineLogs.length === 0 ? (
-              <p className="text-slate-400">Đang chờ log từ engine...</p>
+              <p className="text-[#737686]">Đang chờ log từ engine...</p>
             ) : engineLogs.map((log, index) => (
-              <p key={`${log.timestamp}-${index}`} className={logTone(log)}>
-                <span className="text-slate-400">[{clockLabel(log.extra?.time || log.timestamp)}] </span>
-                <LogLine message={log.message} />
+              <p key={`${log.timestamp}-${index}`} className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2">
+                <span className="text-[#32343D]">[{clockLabel(log.extra?.time || log.timestamp)}]</span>
+                <span className={logTone(log)}>
+                  <LogLine message={log.message} />
+                </span>
               </p>
             ))}
           </div>
@@ -434,47 +445,44 @@ function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
   );
 }
 
-function MetricCard({ label, value, hint, icon, iconClass, valueClass = "text-[#0B1C30]", children }) {
+function MetricCard({ label, value, suffix, suffixClass = "text-xs leading-4", icon, iconClass, valueClass = "text-[#0B1C30]" }) {
   return (
-    <article className="flex items-center justify-between rounded-2xl bg-white px-4 py-4 shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
-      <div>
-        <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
-        <p className={`mt-1 text-3xl font-bold tracking-tight ${valueClass}`}>
-          {children ?? value}
+    <article className="flex items-start justify-between gap-3 rounded-xl bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+      <div className="flex flex-col gap-[7px] pt-[7px]">
+        <p className="text-[11px] leading-[14px] font-semibold tracking-[0.55px] text-[#565E74] uppercase">{label}</p>
+        <p className="flex items-baseline gap-1.5">
+          <span className={`text-[32px] leading-10 font-bold tracking-[-0.48px] ${valueClass}`}>{value}</span>
+          {suffix ? <span className={`font-medium text-[#434655] ${suffixClass}`}>{suffix}</span> : null}
         </p>
-        {hint ? <p className="text-xs text-slate-400">{hint}</p> : null}
       </div>
-      <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${iconClass}`}>{icon}</span>
+      <span className={`grid size-10 shrink-0 place-items-center rounded-xl ${iconClass}`}>
+        <CreatorIcon name={icon} />
+      </span>
     </article>
   );
 }
 
-function SectionIcon({ children }) {
+/** Tiêu đề card ở màn đang chạy: icon 32px + tiêu đề 16px đậm + mô tả */
+function RunHeading({ icon, title, subtitle }) {
   return (
-    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#EFF4FF] text-[#2563EB]">
-      {children}
-    </span>
-  );
-}
-
-function Field({ label, hint, children }) {
-  return (
-    <label className="block">
-      <span className="mb-1.5 flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-        {label}
-        {hint}
+    <div className="flex min-w-0 items-center gap-2.5">
+      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-[#EFF4FF] text-[#004AC6]">
+        <CreatorIcon name={icon} />
       </span>
-      {children}
-    </label>
+      <div className="flex min-w-0 flex-col gap-1">
+        <h2 className="text-base leading-6 font-bold text-[#0B1C30]">{title}</h2>
+        <p className="max-w-[344px] text-xs leading-4 text-[#434655]">{subtitle}</p>
+      </div>
+    </div>
   );
 }
 
 const HISTORY_PAGE_SIZE = 10;
 
 const HISTORY_STATUS = {
-  SUCCESS: { label: "Thành công", className: "bg-[#ECFDF5] text-[#047857]", dot: "bg-[#10B981]" },
-  PARTIAL: { label: "Một phần", className: "bg-amber-50 text-amber-700", dot: "bg-amber-500" },
-  FAILED: { label: "Thất bại", className: "bg-[#FFF1F2] text-[#BE123C]", dot: "bg-[#F43F5E]" },
+  SUCCESS: { label: "Thành công", className: "border-[#A7F3D0] bg-[#ECFDF5] text-[#047857]", dot: "bg-[#10B981]" },
+  PARTIAL: { label: "Một phần", className: "border-amber-200 bg-amber-50 text-amber-700", dot: "bg-amber-500" },
+  FAILED: { label: "Thất bại", className: "border-[#FECDD3] bg-[#FFF1F2] text-[#BE123C]", dot: "bg-[#F43F5E]" },
 };
 
 const HISTORY_RANGES = [
@@ -494,7 +502,7 @@ const HISTORY_STATUSES = [
 function historyStatusMeta(status) {
   return HISTORY_STATUS[status] || {
     label: status || "Không rõ",
-    className: "bg-slate-100 text-slate-600",
+    className: "border-slate-200 bg-slate-100 text-slate-600",
     dot: "bg-slate-400",
   };
 }
@@ -592,8 +600,6 @@ function HistoryView() {
   const totalPages = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const pageRows = filtered.slice((safePage - 1) * HISTORY_PAGE_SIZE, safePage * HISTORY_PAGE_SIZE);
-  const from = total === 0 ? 0 : (safePage - 1) * HISTORY_PAGE_SIZE + 1;
-  const to = Math.min(safePage * HISTORY_PAGE_SIZE, total);
 
   const exportRows = () => {
     if (!filtered.length) {
@@ -605,162 +611,159 @@ function HistoryView() {
   };
 
   return (
-    <div className="-m-6 min-h-full space-y-5 bg-[#F8F9FF] p-6">
+    <div className={`${PAGE_FONT} -m-6 flex min-h-full flex-col gap-5 bg-[#F8F9FF] p-4 sm:p-5`}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-[#0F172A] sm:text-3xl">Lịch sử tạo Fanpage</h1>
-          <p className="mt-1 text-sm text-slate-500">Theo dõi page đã tạo, UID tạo, admin nhận và kết quả từng lần chạy.</p>
+          <h1 className="pt-1 text-2xl leading-8 font-bold tracking-[-0.6px] text-[#0F172A]">Lịch sử tạo Fanpage</h1>
+          <p className="text-sm leading-5 text-[#475569]">
+            Danh sách và trạng thái chi tiết các Fanpage đã được khởi tạo tự động qua hệ thống phân tán.
+          </p>
         </div>
         <button
           type="button"
           onClick={exportRows}
-          className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#2563EB] px-4 text-sm font-semibold text-white shadow-[0_1px_2px_rgba(37,99,235,0.3)] hover:bg-[#1D4ED8]"
+          className="flex h-8 shrink-0 items-center justify-center gap-2 self-start rounded-lg bg-[#2563EB] px-4 text-xs leading-4 font-semibold text-white shadow-[0_1px_2px_rgba(59,130,246,0.2)] hover:bg-[#1D4ED8] sm:self-auto"
         >
-          <FileSpreadsheet className="h-4 w-4" />
-          Xuất Excel / Báo cáo
+          <FileSpreadsheet aria-hidden="true" className="size-4" />
+          Xuất Excel (.csv)
         </button>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <HistoryMetric
-          label="Tổng Fanpage"
-          value={loading ? null : total}
-          icon={<FileText className="h-5 w-5" />}
-          iconClass="bg-[#F1F5F9] text-[#475569]"
-        />
-        <HistoryMetric
-          label="Tạo thành công"
-          value={loading ? null : success}
-          hint={total ? `${Math.round((success / total) * 100)}%` : "—"}
-          icon={<CheckCircle2 className="h-5 w-5" />}
-          iconClass="bg-[#ECFDF5] text-[#059669]"
-          labelClass="text-[#059669]"
-        />
-        <HistoryMetric
-          label="Thất bại / lỗi"
-          value={loading ? null : failed}
-          hint={total ? `${Math.round((failed / total) * 100)}%` : "—"}
-          icon={<AlertCircle className="h-5 w-5" />}
-          iconClass="bg-[#FFF1F2] text-[#E11D48]"
-          labelClass="text-[#F43F5E]"
-          valueClass="text-[#BE123C]"
-        />
+        <HistoryMetric label="Tổng Fanpage" value={loading ? null : total} icon={Star} iconClass="border-[#DBEAFE] bg-[#EFF6FF] text-[#2563EB]" />
+        <HistoryMetric label="Tạo thành công" value={loading ? null : success} icon={CircleCheck} iconClass="border-[#D1FAE5] bg-[#ECFDF5] text-[#059669]" valueClass="text-[#059669]" />
+        <HistoryMetric label="Thất bại / lỗi" value={loading ? null : failed} icon={TriangleAlert} iconClass="border-[#FFE4E6] bg-[#FFF1F2] text-[#E11D48]" valueClass="text-[#E11D48]" />
       </div>
 
-      <section className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.05)]">
-        <div className="flex flex-col gap-3 border-b border-slate-100 p-4 lg:flex-row lg:items-center">
-          <label className="relative min-w-0 flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Tìm kiếm tên page, UID..."
-              className="h-10 w-full rounded-xl border border-slate-200 bg-[#F8F9FF] pl-9 pr-3 text-sm text-[#0B1C30] outline-none placeholder:text-slate-400 focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/20"
-            />
-          </label>
+      <section className="flex flex-col gap-3 rounded-xl border border-[#E2E8F0] bg-white p-4 lg:flex-row lg:items-center">
+        <label className="relative min-w-0 flex-1">
+          <span className="sr-only">Tìm kiếm lịch sử</span>
+          <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-[#475569]" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Tìm theo tên Page, Creator UID, Admin UID..."
+            className="h-[34px] w-full rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] pr-3 pl-9 text-xs text-[#0F172A] outline-none placeholder:text-[#475569] focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/20"
+          />
+        </label>
+        <div className="flex gap-3">
           <CustomSelect
             value={statusFilter}
             onChange={setStatusFilter}
             options={HISTORY_STATUSES}
-            size="lg"
-            className="w-full lg:w-52"
-            prefixIcon={<FilterIcon />}
+            className="min-w-0 flex-1 lg:w-[143px] lg:flex-none"
+            buttonClassName={FILTER_SELECT}
           />
           <CustomSelect
             value={range}
             onChange={setRange}
             options={HISTORY_RANGES}
-            size="lg"
-            className="w-full lg:w-44"
+            className="min-w-0 flex-1 lg:w-[143px] lg:flex-none"
+            buttonClassName={FILTER_SELECT}
           />
           <button
             type="button"
-            onClick={load}
+            onClick={() => load()}
             disabled={loading}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-[#0B1C30] hover:bg-slate-50 disabled:opacity-60"
+            aria-label="Làm mới"
+            title="Làm mới"
+            className="grid h-[34px] w-[65px] shrink-0 place-items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] text-[#475569] hover:bg-white disabled:opacity-60"
           >
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            Làm mới
+            <RefreshCw aria-hidden="true" className={`size-4 ${loading ? "animate-spin" : ""}`} />
           </button>
         </div>
+      </section>
 
+      <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white">
         {loading ? (
-          <div className="flex items-center gap-2 px-5 py-12 text-sm text-slate-500">
+          <div className="flex items-center gap-2 px-5 py-12 text-sm text-[#475569]">
             <Loader2 className="h-4 w-4 animate-spin" /> Đang tải lịch sử...
           </div>
         ) : error ? (
           <div className="px-5 py-12 text-sm text-[#BE123C]">
             {error}
-            <button type="button" onClick={load} className="ml-3 font-semibold text-[#2563EB]">
+            <button type="button" onClick={() => load()} className="ml-3 font-semibold text-[#2563EB]">
               Thử lại
             </button>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-[980px] w-full text-left text-sm">
-              <thead className="bg-[#F8F9FF] text-[11px] font-bold uppercase tracking-wide text-slate-400">
-                <tr>
-                  <th className="px-5 py-3">STT / Thời gian</th>
-                  <th className="px-3 py-3">Tên Fanpage / Link</th>
-                  <th className="px-3 py-3">UID tạo</th>
-                  <th className="px-3 py-3">Admin nhận</th>
-                  <th className="px-3 py-3">Hạng mục</th>
-                  <th className="px-3 py-3">Trạng thái</th>
-                  <th className="px-5 py-3 text-right">Thao tác</th>
+          <div className={`overflow-x-auto ${SCROLLBAR}`}>
+            <table className="w-full min-w-[760px] border-collapse text-left text-xs leading-4">
+              <thead className="border-b border-[#E2E8F0] bg-[rgba(248,250,252,0.8)] text-[11px] leading-4 font-bold tracking-[0.55px] whitespace-nowrap text-[#475569] uppercase">
+                <tr className="h-[46px]">
+                  <th className="pr-4 pl-6">Tên Fanpage</th>
+                  <th className="w-[140px] px-4">Creator UID</th>
+                  <th className="w-[140px] px-4">Admin UID</th>
+                  <th className="w-[1%] px-4">Trạng thái</th>
+                  <th className="w-[1%] pr-6 pl-4 text-right">Thao tác</th>
                 </tr>
               </thead>
               <tbody>
                 {pageRows.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-5 py-12 text-center text-sm text-slate-500">
+                    <td colSpan={5} className="px-5 py-12 text-center text-sm text-[#475569]">
                       {rows.length === 0 ? "Chưa có lịch sử tạo Fanpage." : "Không có dòng nào khớp bộ lọc."}
                     </td>
                   </tr>
                 ) : pageRows.map((row, index) => {
-                  const stamp = formatVietnamDateTime(row.created_at);
                   const meta = historyStatusMeta(row.status);
+                  const failedRow = row.status === "FAILED";
                   const order = (safePage - 1) * HISTORY_PAGE_SIZE + index + 1;
                   return (
-                    <tr key={row.id ?? `${row.page_name}-${order}`} className="border-t border-slate-100 hover:bg-[#F8FAFF]">
-                      <td className="px-5 py-3.5">
-                        <p className="font-semibold text-[#0F172A]">{String(order).padStart(2, "0")}</p>
-                        <p className="text-xs text-slate-400">{stamp.date}</p>
-                        <p className="font-mono text-[11px] text-slate-400">{stamp.time}</p>
+                    <tr
+                      key={row.id ?? `${row.page_name}-${order}`}
+                      className={`border-t border-[#F1F5F9] first:border-t-0 ${failedRow ? "bg-[rgba(255,241,242,0.2)]" : "hover:bg-[#F8FAFF]"}`}
+                    >
+                      <td className="py-3.5 pr-4 pl-6">
+                        <div className="flex items-center gap-3">
+                          <PageAvatar name={row.page_name} failed={failedRow} />
+                          <div className="min-w-0">
+                            <p className="truncate font-bold text-[#0F172A]" title={row.page_name}>{row.page_name || "—"}</p>
+                            {failedRow ? (
+                              <p className="line-clamp-2 max-w-[260px] text-[11px] font-medium text-[#E11D48]" title={row.log_detail || ""}>
+                                Lỗi: {row.log_detail || "Không rõ nguyên nhân"}
+                              </p>
+                            ) : row.page_url ? (
+                              <a href={row.page_url} target="_blank" rel="noreferrer" className="block max-w-[260px] truncate text-[11px] font-medium text-[#2563EB] hover:underline" title={row.page_url}>
+                                {shortUrl(row.page_url)}
+                              </a>
+                            ) : (
+                              <p className="text-[11px] font-medium text-[#94A3B8]">Chưa có link</p>
+                            )}
+                          </div>
+                        </div>
                       </td>
-                      <td className="max-w-[240px] px-3 py-3.5">
-                        <p className="truncate font-semibold text-[#0F172A]" title={row.page_name}>{row.page_name || "—"}</p>
-                        <p className="truncate text-xs text-[#2563EB]" title={row.page_url || ""}>{row.page_url || "Chưa có link"}</p>
-                      </td>
-                      <td className="px-3 py-3.5 font-mono text-xs text-[#2563EB]">{row.creator_fb_uid || "—"}</td>
-                      <td className="px-3 py-3.5 font-mono text-xs text-slate-600">{row.shared_admin_uid || "—"}</td>
-                      <td className="px-3 py-3.5 text-slate-600">{row.page_category || "—"}</td>
-                      <td className="px-3 py-3.5">
-                        <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${meta.className}`}>
-                          <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
+                      <td className="px-4 py-3.5 text-[#475569]">{row.creator_fb_uid || "—"}</td>
+                      <td className="px-4 py-3.5 text-[#475569]">{row.shared_admin_uid || "—"}</td>
+                      <td className="px-4 py-3.5">
+                        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] leading-4 font-bold whitespace-nowrap ${meta.className}`}>
+                          <span aria-hidden="true" className={`size-1.5 rounded-full ${meta.dot}`} />
                           {meta.label}
                         </span>
                       </td>
-                      <td className="px-5 py-3.5">
+                      <td className="py-3.5 pr-6 pl-4">
                         <div className="flex items-center justify-end gap-1">
-                          <button
-                            type="button"
-                            onClick={() => setDetail(row)}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-[#EFF4FF] hover:text-[#2563EB]"
-                            title="Xem log"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </button>
                           {row.page_url ? (
                             <a
                               href={row.page_url}
                               target="_blank"
                               rel="noreferrer"
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-[#EFF4FF] hover:text-[#2563EB]"
+                              className="grid size-6 place-items-center rounded text-[#475569] hover:bg-[#EFF4FF] hover:text-[#2563EB]"
                               title="Mở Fanpage"
+                              aria-label={`Mở Fanpage ${row.page_name || ""}`}
                             >
-                              <ExternalLink className="h-4 w-4" />
+                              <ExternalLink aria-hidden="true" className="size-4" />
                             </a>
                           ) : null}
+                          <button
+                            type="button"
+                            onClick={() => setDetail(row)}
+                            className="grid size-6 place-items-center rounded text-[#475569] hover:bg-[#EFF4FF] hover:text-[#2563EB]"
+                            title="Xem log"
+                            aria-label={`Xem log ${row.page_name || ""}`}
+                          >
+                            <Info aria-hidden="true" className="size-4" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -772,9 +775,12 @@ function HistoryView() {
         )}
 
         {!loading && !error ? (
-          <div className="flex flex-col gap-3 border-t border-slate-100 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-xs text-slate-500">
-              Hiển thị {from}–{to} / {total} fanpage
+          <div className="flex flex-col gap-3 border-t border-[#E2E8F0] px-5 py-3.5 sm:flex-row sm:items-center sm:justify-between">
+            <p className="flex items-center gap-3 text-xs leading-4 font-medium text-[#475569]">
+              <span>
+                Đang hiển thị <b className="font-bold text-[#0F172A]">{pageRows.length}/</b> <b className="font-bold text-[#0F172A]">{total}</b> kết quả
+              </span>
+              <span aria-hidden="true" className="text-[#CBD5E1]">|</span>
             </p>
             <Pagination currentPage={safePage} totalPages={total === 0 ? 0 : totalPages} onPageChange={setPage} />
           </div>
@@ -793,26 +799,47 @@ function HistoryView() {
   );
 }
 
-function HistoryMetric({ label, value, hint, icon, iconClass, labelClass = "text-[#94A3B8]", valueClass = "text-[#0F172A]" }) {
+const FILTER_SELECT = "!h-[34px] !rounded-lg !border-[#E2E8F0] !bg-[#F8FAFC] !px-3 !text-xs !font-medium !text-[#334155] !shadow-none";
+
+/** "https://www.facebook.com/abc" -> "facebook.com/abc" */
+function shortUrl(url) {
+  return String(url).replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "");
+}
+
+const AVATAR_TONES = [
+  "border-[#BFDBFE] bg-[#DBEAFE] text-[#2563EB]",
+  "border-[#FBCFE8] bg-[#FCE7F3] text-[#DB2777]",
+  "border-[#FDE68A] bg-[#FEF3C7] text-[#B45309]",
+  "border-[#99F6E4] bg-[#CCFBF1] text-[#0F766E]",
+  "border-[#E9D5FF] bg-[#F3E8FF] text-[#7C3AED]",
+];
+
+/** Ô vuông đầu dòng: chữ cái đầu tên page, màu cố định theo tên (dòng lỗi luôn màu đỏ) */
+function PageAvatar({ name, failed }) {
+  const text = String(name || "?").trim();
+  const tone = failed
+    ? "border-[#FECDD3] bg-[#FFE4E6] text-[#E11D48]"
+    : AVATAR_TONES[[...text].reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % AVATAR_TONES.length];
   return (
-    <article className="flex items-center justify-between rounded-2xl border border-slate-200/90 bg-white p-5 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
-      <div>
-        <p className={`text-xs font-bold uppercase tracking-wider ${labelClass}`}>{label}</p>
-        <p className={`mt-1 text-3xl font-extrabold tracking-tight ${valueClass}`}>
-          {value == null ? <span className="block h-9 w-16 rounded bg-slate-200/70" /> : value.toLocaleString("vi-VN")}
-        </p>
-        {hint ? <p className="mt-0.5 text-xs font-semibold text-slate-400">{hint}</p> : null}
-      </div>
-      <span className={`flex h-12 w-12 items-center justify-center rounded-xl ${iconClass}`}>{icon}</span>
-    </article>
+    <span aria-hidden="true" className={`grid size-8 shrink-0 place-items-center rounded-lg border text-xs font-bold uppercase ${tone}`}>
+      {[...text][0] || "?"}
+    </span>
   );
 }
 
-function FilterIcon() {
+function HistoryMetric({ label, value, icon: Icon, iconClass, valueClass = "text-[#0F172A]" }) {
   return (
-    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" aria-hidden="true">
-      <path d="M2 3.5h12M4.5 8h7M7 12.5h2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
+    <article className="flex items-start justify-between gap-3 rounded-xl border border-[rgba(226,232,240,0.9)] bg-white p-5">
+      <div className="flex flex-col gap-1">
+        <p className="text-[11px] leading-[16.5px] font-bold tracking-[0.55px] text-[#475569] uppercase">{label}</p>
+        <p className={`text-[30px] leading-9 font-extrabold tracking-[-0.75px] ${valueClass}`}>
+          {value == null ? <span className="block h-9 w-16 rounded bg-slate-200/70" /> : value.toLocaleString("en-US")}
+        </p>
+      </div>
+      <span className={`grid size-10 shrink-0 place-items-center rounded-lg border ${iconClass}`}>
+        <Icon aria-hidden="true" className="size-5" />
+      </span>
+    </article>
   );
 }
 
@@ -861,11 +888,24 @@ export default function PageCreatorModule({ subPage }) {
 
 function CreateView() {
   const [accounts, setAccounts] = useState([]);
+  const [accountsLoading, setAccountsLoading] = useState(true);
+  const [accountsError, setAccountsError] = useState("");
+  // Tải tài khoản theo trang khi cuộn (API /api/accounts/page, 10 dòng/lần, tìm kiếm phía server)
+  const [pageInfo, setPageInfo] = useState({ nextCursor: null, hasMore: false });
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState("");
+  // Mọi tài khoản đã tải (kể cả trang trước / kết quả tìm kiếm cũ) để màn đang chạy vẫn biết tên nick đã chọn
+  const [knownAccounts, setKnownAccounts] = useState({});
+  const accountRequestId = useRef(0);
+  const sentinelRef = useRef(null);
   const [selected, setSelected] = useState([]);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const debouncedSearchRef = useRef("");
   const [pageText, setPageText] = useState("");
   const [inputMode, setInputMode] = useState("paste");
   const [uploadedFile, setUploadedFile] = useState(null);
+  const [delimiter, setDelimiter] = useState("|");
   const [targetAdminUid, setTargetAdminUid] = useState("");
   const [threads, setThreads] = useState(3);
   const [delayMin, setDelayMin] = useState(45);
@@ -874,7 +914,7 @@ function CreateView() {
   const [countryCode, setCountryCode] = useState("+84");
   const [geminiKey, setGeminiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
-  const [geminiModel, setGeminiModel] = useState("gemini-2.5-flash");
+  const [geminiModel, setGeminiModel] = useState("gemini-3.8-flash");
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState(false);
   const [task, setTask] = useState(null);
@@ -884,11 +924,29 @@ function CreateView() {
   const previewRef = useRef(null);
   const { logs } = useLocalSSE(true);
 
-  const pages = useMemo(() => parsePageLines(pageText), [pageText]);
-  const visibleAccounts = accounts.filter((account) => {
-    const blob = `${account.uid} ${account.email || ""} ${account.profile_name || ""}`.toLowerCase();
-    return blob.includes(search.trim().toLowerCase());
+  const pages = useMemo(() => parsePageLines(pageText, delimiter), [pageText, delimiter]);
+  const visibleAccounts = accounts;
+  // Kéo chuột chọn nhiều dòng (dùng chung logic với bảng Quản lý tài khoản)
+  const accountScrollRef = useRef(null);
+  const visibleAccountsRef = useRef(visibleAccounts);
+  const selectedRef = useRef(selected);
+  useLayoutEffect(() => {
+    visibleAccountsRef.current = visibleAccounts;
+    selectedRef.current = selected;
   });
+  useEffect(() => {
+    if (!accountScrollRef.current) return undefined;
+    return attachDragSelection(accountScrollRef.current, {
+      getVisibleUids: () => visibleAccountsRef.current.map((account) => account.uid),
+      getAvailableUids: () => [...new Set([...selectedRef.current, ...visibleAccountsRef.current.map((account) => account.uid)])],
+      getSelectedUids: () => selectedRef.current,
+      onSelectionChange: (uids) => {
+        selectedRef.current = uids;
+        setSelected(uids);
+      },
+      disabled: accountsLoading || Boolean(accountsError),
+    });
+  }, [accountsLoading, accountsError]);
   const allVisibleSelected = visibleAccounts.length > 0 && visibleAccounts.every((account) => selected.includes(account.uid));
   const preview = pages.map((page, index) => {
     const issues = rowIssues(page);
@@ -912,10 +970,76 @@ function CreateView() {
     }
   }, []);
 
+  // cursor = null: tải lại từ đầu (lần đầu / đổi từ khóa); có cursor: tải thêm khi cuộn
+  const fetchAccountsPage = useCallback(async (cursor, query) => {
+    const id = ++accountRequestId.current;
+    const first = cursor == null;
+    // Trang đầu: trạng thái "đang tải" do nơi gọi bật (bộ hẹn giờ tìm kiếm / nút Thử lại)
+    if (!first) {
+      setLoadingMore(true);
+      setMoreError("");
+    }
+    try {
+      const result = await getAccountsPage({ cursor: cursor ?? undefined, search: query });
+      if (id !== accountRequestId.current) return; // đã có yêu cầu mới hơn (vd. gõ từ khóa khác)
+      const rows = Array.isArray(result?.accounts) ? result.accounts : [];
+      setAccounts((current) => (first ? rows : [...current, ...rows.filter((row) => !current.some((item) => item.uid === row.uid))]));
+      setKnownAccounts((current) => ({ ...current, ...Object.fromEntries(rows.map((row) => [row.uid, row])) }));
+      setPageInfo({ nextCursor: result?.next_cursor ?? null, hasMore: Boolean(result?.has_more) });
+      if (first) {
+        setAccountsError("");
+        setMoreError("");
+      }
+    } catch (err) {
+      if (id !== accountRequestId.current) return;
+      if (first) setAccountsError(err.message || "Không tải được tài khoản");
+      else setMoreError(err.message || "Không tải thêm được tài khoản");
+    } finally {
+      if (id === accountRequestId.current) {
+        setAccountsLoading(false);
+        setLoadingMore(false);
+      }
+    }
+  }, []);
+
+  const loadAccounts = () => {
+    setAccountsLoading(true);
+    setAccountsError("");
+    fetchAccountsPage(null, debouncedSearch);
+  };
+
+  // Chờ 300ms sau khi gõ rồi mới tìm trên server
   useEffect(() => {
-    getAccounts()
-      .then((data) => setAccounts(Array.isArray(data) ? data : []))
-      .catch((err) => toast.error(err.message || "Không tải được tài khoản", "TẠO PAGE"));
+    const timer = setTimeout(() => {
+      const next = search.trim();
+      if (next === debouncedSearchRef.current) return;
+      debouncedSearchRef.current = next;
+      // Đổi từ khóa: hiện skeleton trong lúc tìm
+      setAccountsLoading(true);
+      setAccountsError("");
+      setDebouncedSearch(next);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Tải trang đầu khi vào trang / đổi từ khóa
+  useEffect(() => {
+    fetchAccountsPage(null, debouncedSearch);
+  }, [debouncedSearch, fetchAccountsPage]);
+
+  // Cuộn gần đáy bảng thì tải thêm
+  useEffect(() => {
+    const node = sentinelRef.current;
+    const root = accountScrollRef.current;
+    if (!node || !root || !pageInfo.hasMore || accountsLoading || loadingMore || moreError) return undefined;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) fetchAccountsPage(pageInfo.nextCursor, debouncedSearch);
+    }, { root, rootMargin: "160px" });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [pageInfo, accountsLoading, loadingMore, moreError, debouncedSearch, fetchAccountsPage]);
+
+  useEffect(() => {
     getCreatorSettings()
       .then((settings) => {
         if (settings?.gemini_api_key) setGeminiKey(settings.gemini_api_key);
@@ -965,9 +1089,17 @@ function CreateView() {
       })
       .filter(Boolean)
       .join("\n");
+    // Tệp đã được chuẩn hóa về " | " nên đặt lại ký tự phân cách tương ứng
+    setDelimiter("|");
     setPageText(normalized);
     setUploadedFile({ name: file.name, size: file.size });
-    setInputMode("paste");
+  };
+
+  const copyUid = (uid) => {
+    navigator.clipboard?.writeText(uid).then(
+      () => toast.success(`Đã sao chép UID ${uid}`, "TẠO PAGE"),
+      () => toast.error("Trình duyệt chặn quyền sao chép.", "TẠO PAGE")
+    );
   };
 
   const handleTestKey = async () => {
@@ -978,10 +1110,13 @@ function CreateView() {
     }
     setTestingKey(true);
     try {
-      await saveCreatorSetting("gemini_api_key", key);
-      toast.success("Đã lưu Gemini API key cho lần tạo page tiếp theo.", "TẠO PAGE");
+      const result = await testCreatorGeminiKey({
+        api_key: key,
+        model_name: geminiModel,
+      });
+      toast.success(result.message || "Gemini key dùng được.", "TẠO PAGE");
     } catch (err) {
-      toast.error(err.message || "Không lưu được key", "TẠO PAGE");
+      toast.error(err.message || "Key không dùng được.", "TẠO PAGE");
     } finally {
       setTestingKey(false);
     }
@@ -1067,13 +1202,11 @@ function CreateView() {
     }
   };
 
-  const recentLogs = logs.slice(-30).reverse();
-
   if (running) {
     return (
       <RunningScreen
         task={task}
-        accounts={accounts}
+        accounts={Object.values(knownAccounts)}
         logs={logs}
         paused={paused}
         onPause={handlePause}
@@ -1082,124 +1215,225 @@ function CreateView() {
     );
   }
 
+  const validCount = preview.filter((row) => row.ok).length;
+
   return (
-    <div className="-m-6 min-h-full space-y-5 bg-[#F8F9FF] p-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-[#0F172A]">Tạo Fanpage</h1>
-        <p className="mt-1 max-w-3xl text-sm text-slate-500">
-          Hỗ trợ người dùng tự động hóa quy trình tạo và thiết lập thông tin cho nhiều Fanpage Facebook theo dữ liệu và cấu hình được chuẩn bị trước.
+    <div className={`${PAGE_FONT} -m-6 flex min-h-full flex-col gap-4 bg-[#F8F9FF] px-4 pt-4 sm:gap-6 sm:px-6 sm:pt-6`}>
+      <div className="flex flex-col gap-1">
+        <h1 className="text-xl leading-7 font-bold sm:text-2xl sm:leading-8 tracking-[-0.6px] text-[#0B1C30]">Tạo Fanpage</h1>
+        <p className="max-w-[835px] text-sm leading-5 text-[#434655]">
+          Hỗ trợ người dùng tự động hóa quy trình tạo và thiết lập thông tin cho nhiều Fanpage Facebook theo dữ liệu và cấu hình được chuẩn bị trước
         </p>
       </div>
 
-      <section className="rounded-2xl bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex gap-3">
-            <SectionIcon>
-              <Users className="h-5 w-5" />
-            </SectionIcon>
-            <div>
-              <h2 className="text-sm font-bold text-[#0B1C30]">Tài Khoản Facebook Tạo Page</h2>
-              <p className="mt-0.5 text-xs text-slate-500">Chọn danh sách nick clone/via đủ trust để thực thi khởi tạo, không định checkpoint.</p>
-            </div>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+      {/* SECTION 1: Tài khoản Facebook tạo page */}
+      <section className={PANEL}>
+        <div className="flex flex-wrap items-center justify-between gap-4 pb-5">
+          <SectionHeading
+            className="flex-1 basis-[300px]"
+            icon="accounts"
+            title="Tài Khoản Facebook Tạo Page"
+            subtitle="Chọn danh sách nick clone/via đủ độ trust để thực thi khởi tạo không dính checkpoint"
+          />
+          {/* Không dùng breakpoint: tự xuống dòng theo độ rộng khối (sidebar mở/đóng làm vùng nội dung đổi rộng) */}
+          <div className="flex max-w-full min-w-0 items-center gap-3">
+            <label className="relative block w-72 min-w-0 shrink">
+              <span className="sr-only">Tìm tài khoản</span>
+              <CreatorIcon name="search" className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-[#434655]" />
               <input
+                type="search"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Tìm UID, Tên nick..."
-                className={`${fieldClass} w-full pl-9 sm:w-64`}
+                className="h-10 w-full rounded-lg bg-[#EFF4FF] pr-3 pl-9 text-sm text-[#0B1C30] outline-none placeholder:text-[#737686] focus:ring-2 focus:ring-[#2563EB]/30"
               />
-            </div>
-            <span className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#DBE1FF] px-3 text-xs font-semibold text-[#1D4ED8]">
-              <span className="h-2 w-2 rounded-full bg-[#2563EB]" />
+            </label>
+            <span className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-[#DBE1FF] px-3.5 text-sm leading-5 font-semibold text-[#00174B]">
+              <span aria-hidden="true" className="size-2 rounded-full bg-[#2563EB]" />
               {selected.length} tài khoản đã chọn
             </span>
           </div>
         </div>
 
-        <div className="mt-4 max-h-[320px] overflow-auto rounded-xl border border-[#E7ECF8]">
-          <table className="min-w-full text-left text-xs">
-            <thead className="sticky top-0 bg-[#EFF4FF] text-[11px] font-bold uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="w-10 px-3 py-3">
-                  <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} aria-label="Chọn tất cả nick đang hiện" className="accent-[#2563EB]" />
+        <div ref={accountScrollRef} className={`max-h-[319px] overflow-auto rounded-xl pr-1 select-none ${SCROLLBAR}`}>
+          <table aria-busy={accountsLoading} className="w-full min-w-[860px] border-collapse text-left">
+            <thead className="sticky top-0 z-10 bg-[#EFF4FF]">
+              <tr className="h-[52px]">
+                <th className="w-12 px-4">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    onChange={toggleAllVisible}
+                    disabled={accountsLoading || !visibleAccounts.length}
+                    aria-label="Chọn tất cả nick đang hiện"
+                    className={CHECKBOX}
+                  />
                 </th>
-                <th className="px-2 py-3">STT</th>
-                <th className="px-2 py-3">UID Facebook</th>
-                <th className="px-2 py-3">Họ & tên tài khoản</th>
-                <th className="px-2 py-3">Trạng thái ĐN</th>
-                <th className="px-2 py-3">Trạng thái TK</th>
-                <th className="px-2 py-3">Proxy</th>
-                <th className="px-2 py-3">Kết nối</th>
+                <th className={`${TABLE_HEAD} w-16 px-3`}>STT</th>
+                <th className={`${TABLE_HEAD} px-4`}>UID Facebook</th>
+                <th className={`${TABLE_HEAD} px-4`}>Họ &amp; tên tài khoản</th>
+                <th className={`${TABLE_HEAD} px-4`}>Trạng thái ĐN</th>
+                <th className={`${TABLE_HEAD} px-4`}>Trạng thái TK</th>
+                <th className={`${TABLE_HEAD} px-4`}>Proxy gắn kèm</th>
               </tr>
             </thead>
             <tbody>
-              {visibleAccounts.length === 0 ? (
+              {accountsLoading ? (
+                // Skeleton trong lúc tải tài khoản (logic giống bảng Quản lý tài khoản)
+                Array.from({ length: 4 }, (_, index) => (
+                  <tr key={`skeleton-${index}`} aria-hidden="true" className="h-[62px] border-t border-[#E5EEFF] first:border-t-0 motion-safe:animate-pulse">
+                    <td className="px-4"><div className="size-4 rounded-[2.5px] bg-slate-200/70" /></td>
+                    <td className="px-3"><div className="h-3 w-5 rounded bg-slate-200/70" /></td>
+                    <td className="px-4"><div className="h-3.5 w-28 rounded bg-slate-200/70" /></td>
+                    <td className="px-4"><div className="h-4 w-32 rounded bg-slate-200/70" /></td>
+                    <td className="px-4"><div className="h-[22px] w-[104px] rounded-md bg-slate-200/70" /></td>
+                    <td className="px-4"><div className="h-[18px] w-10 rounded-full bg-slate-200/70" /></td>
+                    <td className="px-4"><div className="h-3 w-28 rounded bg-slate-200/70" /></td>
+                  </tr>
+                ))
+              ) : accountsError ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-500">
-                    {accounts.length === 0 ? "Chưa có tài khoản. Import ở mục Quản lý tài khoản." : "Không tìm thấy nick khớp từ khóa."}
+                  <td colSpan={7} className="px-4 py-10 text-center">
+                    <p role="alert" className="text-sm text-[#BE123C]">Không thể tải tài khoản: {accountsError}</p>
+                    <button type="button" onClick={() => loadAccounts()} className="mt-3 rounded-lg bg-[#2563EB] px-4 py-2 text-xs font-semibold text-white hover:bg-[#1D4ED8]">
+                      Thử lại
+                    </button>
+                  </td>
+                </tr>
+              ) : visibleAccounts.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-10 text-center text-sm text-[#434655]">
+                    {debouncedSearch ? "Không tìm thấy nick khớp từ khóa." : "Chưa có tài khoản. Import ở mục Quản lý tài khoản."}
                   </td>
                 </tr>
               ) : (
                 visibleAccounts.map((account, index) => {
                   const checked = selected.includes(account.uid);
                   return (
-                    <tr key={account.uid} className="border-t border-slate-100">
-                      <td className="px-3 py-3">
-                        <input type="checkbox" checked={checked} onChange={() => toggleUid(account.uid)} aria-label={`Chọn ${account.uid}`} className="accent-[#2563EB]" />
+                    <tr
+                      key={account.uid}
+                      data-account-uid={account.uid}
+                      aria-selected={checked}
+                      onClick={() => toggleUid(account.uid)}
+                      className={`h-[62px] cursor-pointer border-t border-[#E5EEFF] first:border-t-0 hover:bg-[#F8F9FF] ${checked ? "bg-[#F8FAFF]" : ""}`}
+                    >
+                      <td className="px-4" onClick={(event) => event.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleUid(account.uid)}
+                          aria-label={`Chọn ${account.uid}`}
+                          className={CHECKBOX}
+                        />
                       </td>
-                      <td className="px-2 py-3 text-slate-400">{String(index + 1).padStart(2, "0")}</td>
-                      <td className="px-2 py-3 font-mono font-semibold text-[#2563EB]">{account.uid}</td>
-                      <td className="px-2 py-3 font-medium text-[#0B1C30]">{account.profile_name || "Chưa cập nhật"}</td>
-                      <td className="px-2 py-3">
-                        {account.login_status === "logged_in" ? (
-                          <Pill>Đã đăng nhập</Pill>
-                        ) : account.login_status === "failed" ? (
-                          <Pill tone="red">Đăng nhập lỗi</Pill>
-                        ) : (
-                          <Pill tone="slate">Chưa đăng nhập</Pill>
-                        )}
+                      <td className="px-3 text-sm text-[#434655]">{String(index + 1).padStart(2, "0")}</td>
+                      <td className="px-4">
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-sm leading-5 font-bold text-[#2563EB]">{account.uid}</span>
+                          <button
+                            type="button"
+                            aria-label={`Sao chép UID ${account.uid}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              copyUid(account.uid);
+                            }}
+                            className="rounded p-0.5 text-[#434655] hover:text-[#2563EB]"
+                          >
+                            <CreatorIcon name="copy" />
+                          </button>
+                        </span>
                       </td>
-                      <td className="px-2 py-3">
-                        {account.status === "live" ? <Pill>Live</Pill> : account.status === "die" ? <Pill tone="red">Die</Pill> : <span className="text-slate-400">—</span>}
+                      <td className="max-w-[220px] truncate px-4 text-base leading-6 font-semibold text-[#0B1C30]">
+                        {account.profile_name || "Chưa cập nhật"}
                       </td>
-                      <td className="px-2 py-3 font-mono text-[11px] text-slate-600">{account.proxy || "—"}</td>
-                      <td className="px-2 py-3">{account.login_status === "logged_in" ? <Pill>Ổn</Pill> : <span className="text-slate-400">—</span>}</td>
+                      <td className="px-4">
+                        <LoginBadge status={account.login_status} />
+                      </td>
+                      <td className="px-4">
+                        <LiveBadge status={account.status} />
+                      </td>
+                      <td className="px-4 text-xs text-[#434655]">{account.proxy || "—"}</td>
                     </tr>
                   );
                 })
+              )}
+              {!accountsLoading && !accountsError && pageInfo.hasMore && !loadingMore && !moreError && (
+                <tr ref={sentinelRef} aria-hidden="true">
+                  <td colSpan={7} className="h-px p-0" />
+                </tr>
+              )}
+              {loadingMore && (
+                <tr aria-hidden="true" className="h-[62px] border-t border-[#E5EEFF] motion-safe:animate-pulse">
+                  <td className="px-4"><div className="size-4 rounded-[2.5px] bg-slate-200/70" /></td>
+                  <td className="px-3"><div className="h-3 w-5 rounded bg-slate-200/70" /></td>
+                  <td className="px-4"><div className="h-3.5 w-28 rounded bg-slate-200/70" /></td>
+                  <td className="px-4"><div className="h-4 w-32 rounded bg-slate-200/70" /></td>
+                  <td className="px-4"><div className="h-[22px] w-[104px] rounded-md bg-slate-200/70" /></td>
+                  <td className="px-4"><div className="h-[18px] w-10 rounded-full bg-slate-200/70" /></td>
+                  <td className="px-4"><div className="h-3 w-28 rounded bg-slate-200/70" /></td>
+                </tr>
+              )}
+              {moreError && (
+                <tr className="border-t border-[#E5EEFF]">
+                  <td colSpan={7} className="px-4 py-3 text-center text-xs text-[#BE123C]">
+                    {moreError}
+                    <button
+                      type="button"
+                      onClick={() => fetchAccountsPage(pageInfo.nextCursor, debouncedSearch)}
+                      className="ml-3 font-semibold text-[#2563EB] hover:underline"
+                    >
+                      Thử lại
+                    </button>
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>
         </div>
       </section>
 
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.9fr)]">
-        <section className="rounded-2xl bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex gap-3">
-              <SectionIcon>
-                <FileText className="h-5 w-5" />
-              </SectionIcon>
-              <div>
-                <h2 className="text-sm font-bold text-[#0B1C30]">Danh Sách Fanpage Cần Tạo</h2>
-                <p className="mt-0.5 text-xs text-slate-500">Nạp danh sách tự định dạng .CSV hoặc .TXT, hoặc dán thủ công.</p>
-              </div>
-            </div>
-            <button type="button" onClick={downloadTemplate} className="shrink-0 text-xs font-semibold text-[#2563EB] hover:underline">
+      {/* SECTION 2: danh sách page (7 cột) + thiết lập job (5 cột) */}
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] xl:items-stretch">
+        <section className={`${PANEL} flex flex-col gap-5`}>
+          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+            <SectionHeading
+              className="flex-1 basis-[300px]"
+              icon="page_list"
+              title="Danh Sách Fanpage Cần Tạo"
+              subtitle="Nạp danh sách từ tệp định dạng .CSV hoặc .TXT hoặc dán thủ công"
+            />
+            <button
+              type="button"
+              onClick={downloadTemplate}
+              className="flex shrink-0 items-center gap-1 text-sm leading-4 font-semibold text-[#004AC6] hover:underline"
+            >
+              <CreatorIcon name="download" />
               Tải template mẫu
             </button>
           </div>
 
-          <div className="mt-4 inline-flex rounded-lg bg-[#EFF4FF] p-1 text-xs font-semibold">
-            <button type="button" onClick={() => setInputMode("paste")} className={`rounded-md px-3 py-1.5 ${inputMode === "paste" ? "bg-white text-[#0B1C30] shadow-sm" : "text-slate-500"}`}>
-              Dán thủ công
-            </button>
-            <button type="button" onClick={() => { setInputMode("file"); fileRef.current?.click(); }} className={`rounded-md px-3 py-1.5 ${inputMode === "file" ? "bg-white text-[#0B1C30] shadow-sm" : "text-slate-500"}`}>
-              Tải tệp lên (.CSV/.TXT)
-            </button>
+          <div role="tablist" aria-label="Cách nhập danh sách" className="flex w-full items-center rounded-xl bg-[#EFF4FF] p-1 sm:w-fit">
+            {[
+              { id: "paste", label: "Dán thủ công", icon: "paste" },
+              { id: "file", label: "Tải tệp lên (.CSV/.TXT)", icon: "upload" },
+            ].map(({ id, label, icon }) => {
+              const active = inputMode === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setInputMode(id)}
+                  className={`flex h-7 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 text-xs leading-4 whitespace-nowrap sm:flex-none sm:px-4 ${
+                    active ? "bg-white font-semibold text-[#004AC6] shadow-[0_1px_2px_rgba(0,0,0,0.05)]" : "font-medium text-[#434655] hover:text-[#0B1C30]"
+                  }`}
+                >
+                  <CreatorIcon name={icon} />
+                  {label}
+                </button>
+              );
+            })}
           </div>
           <input
             ref={fileRef}
@@ -1213,187 +1447,253 @@ function CreateView() {
             }}
           />
 
-          <p className="mt-4 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-            Định dạng: <span className="text-[#2563EB]">Tên page</span>
-            <span className="mx-1 text-slate-300">|</span>
-            <span className="text-[#2563EB]">SĐT</span>
-            <span className="mx-1 text-slate-300">|</span>
-            <span className="text-[#2563EB]">Email</span>
-            <span className="mx-1 text-slate-300">|</span>
-            <span className="text-[#2563EB]">Địa chỉ</span>
+          <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] leading-4 font-semibold tracking-[0.55px] uppercase">
+            <span className="w-[75px] text-[#1E2430]">Định dạng:</span>
+            <span className="text-[#2563EB]">Tên page | SĐT | Email | Địa chỉ</span>
           </p>
-          <textarea
-            rows={8}
-            value={pageText}
-            onChange={(event) => setPageText(event.target.value)}
-            placeholder={TEMPLATE}
-            className="mt-2 w-full rounded-xl border border-[#C1C6D6] bg-white p-3 font-mono text-sm text-[#0B1C30] outline-none focus:border-[#2563EB]"
-          />
+
+          {inputMode === "paste" && (
+            <textarea
+              value={pageText}
+              onChange={(event) => setPageText(event.target.value)}
+              aria-label="Danh sách Fanpage cần tạo"
+              spellCheck={false}
+              placeholder={TEMPLATE}
+              className="min-h-64 w-full flex-1 resize-none sm:min-h-[356px] rounded-xl border border-[#C1C6D6] bg-white px-2 pt-2 pb-3.5 text-xs leading-[19.5px] font-medium tracking-[0.24px] text-[#161C27] shadow-[inset_0_2px_4px_rgba(0,0,0,0.05)] outline-none placeholder:text-[#737686] focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/20"
+            />
+          )}
+
+          {inputMode === "file" && !uploadedFile && (
+            <UploadDropzone onPick={() => fileRef.current?.click()} onDropFile={onPickFile} />
+          )}
 
           {uploadedFile && (
-            <div className="mt-3 flex items-center justify-between rounded-xl bg-[#EFF4FF] px-3 py-3">
-              <div className="flex items-center gap-3">
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#DBE1FF] text-[#2563EB]">
-                  <FileText className="h-4 w-4" />
+            <div className="flex items-center justify-between gap-4 rounded-xl bg-[#EFF4FF] py-4 pr-1 pl-4">
+              <div className="flex min-w-0 items-center gap-3.5">
+                <span className="grid h-12 w-[29px] shrink-0 place-items-center rounded-xl bg-[#DBE1FF] text-[#004AC6] shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+                  <CreatorIcon name="file" />
                 </span>
-                <span>
-                  <span className="block text-sm font-semibold text-[#0B1C30]">{uploadedFile.name}</span>
-                  <span className="text-xs text-slate-500">Dung lượng: {(uploadedFile.size / 1024).toFixed(1)} KB</span>
-                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-base leading-6 font-semibold tracking-[-0.4px] text-[#0B1C30]">{uploadedFile.name}</p>
+                  <p className="pt-0.5 text-xs leading-4 text-[#434655]">
+                    Dung lượng: <span className="font-bold text-[#0B1C30]">{(uploadedFile.size / 1024).toFixed(1)} KB</span>
+                  </p>
+                </div>
               </div>
-              <button type="button" onClick={() => setUploadedFile(null)} aria-label="Bỏ tệp đã tải" className="rounded-lg p-1 text-slate-400 hover:bg-white hover:text-slate-700">
-                <X className="h-4 w-4" />
+              <button
+                type="button"
+                onClick={() => setUploadedFile(null)}
+                aria-label="Bỏ tệp đã tải"
+                className="rounded-lg p-1.5 text-[#434655] hover:bg-white hover:text-[#0B1C30]"
+              >
+                <CreatorIcon name="close" />
               </button>
             </div>
           )}
 
-          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
-            <span className="font-semibold uppercase tracking-wide text-slate-400">Ký tự phân cách:</span>
-            <span className="rounded-lg bg-[#EFF4FF] px-2.5 py-1 font-medium text-[#0B1C30]">dấu gạch đứng — mặc định</span>
-            <button
-              type="button"
-              onClick={() => {
-                setPageText("");
-                setUploadedFile(null);
-              }}
-              className="ml-auto font-semibold text-slate-500 hover:text-[#0B1C30]"
-            >
-              Xóa trắng
-            </button>
-            <button type="button" onClick={() => previewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })} className="rounded-lg bg-[#2563EB] px-3 py-1.5 font-semibold text-white">
-              Xem chi tiết
-            </button>
+          <div className="mt-auto flex flex-wrap items-center justify-between gap-3 pt-1">
+            <div className="flex w-full items-center gap-2.5 sm:w-auto">
+              <span className="shrink-0 text-[11px] leading-[14px] font-semibold tracking-[0.55px] whitespace-nowrap text-[#434655] uppercase">Ký tự phân cách:</span>
+              <DelimiterSelect value={delimiter} onChange={setDelimiter} />
+            </div>
+            <div className="flex w-full items-center gap-2 sm:w-auto [&>button]:flex-1 [&>button]:justify-center sm:[&>button]:flex-none">
+              <button
+                type="button"
+                onClick={() => {
+                  setPageText("");
+                  setUploadedFile(null);
+                }}
+                disabled={!pageText && !uploadedFile}
+                className="flex h-9 items-center gap-1 rounded-lg bg-[#EFF4FF] px-3 text-[11px] leading-[14px] font-medium tracking-[0.33px] text-[#434655] hover:text-[#0B1C30] disabled:opacity-50"
+              >
+                <CreatorIcon name="clear" />
+                Xóa trắng
+              </button>
+              <button
+                type="button"
+                onClick={() => previewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                className="flex h-9 items-center gap-1 rounded-lg bg-[#DBE1FF] px-3.5 text-[11px] leading-[14px] font-semibold tracking-[0.33px] text-[#004AC6] hover:bg-[#CCD6FF]"
+              >
+                <CreatorIcon name="eye" />
+                Xem chi tiết
+              </button>
+            </div>
           </div>
         </section>
 
-        <section className="rounded-2xl bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
-          <div className="flex gap-3">
-            <SectionIcon>
-              <Settings2 className="h-5 w-5" />
-            </SectionIcon>
-            <div>
-              <h2 className="text-sm font-bold text-[#0B1C30]">Thiết Lập Job Tự Động</h2>
-              <p className="mt-0.5 text-xs text-slate-500">Cấu hình quyền quản trị, luồng xử lý và tham số chiến dịch.</p>
-            </div>
-          </div>
+        <section className={`${PANEL} flex flex-col gap-5`}>
+          <SectionHeading
+            icon="job_settings"
+            title="Thiết Lập Job Tự Động"
+            subtitle="Cấu hình quyền quản trị, luồng xử lý và tham số chống quét"
+          />
 
-          <div className="mt-4">
-            <Field
-              label="Facebook UID nhận quyền Admin"
-              hint={<span className="normal-case tracking-normal text-[#2563EB]">Quản trị viên</span>}
-            >
-              <input value={targetAdminUid} onChange={(event) => setTargetAdminUid(event.target.value)} placeholder="200019844129" className={`${fieldClass} font-mono`} />
-            </Field>
-            <p className="mt-2 rounded-lg bg-[#ECFDF5] px-3 py-2 text-xs text-[#047857]">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <label htmlFor="creator-admin-uid" className="text-sm leading-5 font-semibold text-[#0B1C30]">Facebook UID Nhận Quyền Admin</label>
+              <span className="text-[11px] leading-[14px] tracking-[0.33px] text-[#004AC6]">Quản trị viên</span>
+            </div>
+            <label htmlFor="creator-admin-uid" className={SOFT_INPUT}>
+              <CreatorIcon name="admin_uid" className="mr-1 text-[#004AC6]" />
+              <input
+                id="creator-admin-uid"
+                name="creator-admin-uid"
+                inputMode="numeric"
+                autoComplete="off"
+                data-1p-ignore
+                data-lpignore="true"
+                value={targetAdminUid}
+                onChange={(event) => setTargetAdminUid(event.target.value)}
+                placeholder="Nhập UID Facebook"
+                className="w-full min-w-0 bg-transparent text-base font-semibold text-[#0B1C30] outline-none placeholder:font-normal placeholder:text-[#737686]"
+              />
+            </label>
+            <p className="flex items-center gap-1.5 rounded-lg bg-[#ECFDF5] px-2.5 py-1.5 text-xs leading-[18px] text-[#047857]">
+              <CreatorIcon name="shield_check" />
               Nick sẽ tự động nhận toàn quyền kiểm soát (Owner) ngay sau khi tạo xong.
             </p>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <Field label="Số luồng chạy">
-              <SuffixInput value={threads} onChange={setThreads} min={1} max={10} suffix="Luồng" />
-            </Field>
-            <Field label="Số vòng lặp">
-              <SuffixInput value={repeatCount} onChange={setRepeatCount} min={1} suffix="Vòng" />
-            </Field>
-          </div>
-
-          <div className="mt-4">
-            <div className="mb-1.5 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              <span>Độ trễ mỗi lần tạo page</span>
-              <span className="normal-case tracking-normal text-slate-400">Thực thi tuần tự</span>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="creator-threads" className={FIELD_LABEL}>Số Luồng Chạy</label>
+              <SuffixInput id="creator-threads" value={threads} onChange={setThreads} min={1} max={10} suffix="Luồng" bold />
+              <p className={FIELD_HINT}>Khuyên dùng 3-5 luồng</p>
             </div>
-            <p className="mb-2 text-[11px] text-slate-400">Khuyến nghị 3–5 luồng. Delay random giữa các page.</p>
-            <div className="grid grid-cols-2 gap-3">
-              <SuffixInput value={delayMin} onChange={setDelayMin} min={0} suffix="giây" prefix="Min" />
-              <SuffixInput value={delayMax} onChange={setDelayMax} min={0} suffix="giây" prefix="Max" />
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="creator-loops" className={FIELD_LABEL}>Số Vòng Lặp</label>
+              <SuffixInput id="creator-loops" value={repeatCount} onChange={setRepeatCount} min={1} suffix="Vòng" bold />
+              <p className={FIELD_HINT}>Thực thi tuần tự</p>
             </div>
           </div>
 
-          <div className="mt-4">
-            <Field label="Mã quốc gia (Location Code)">
-              <select value={countryCode} onChange={(event) => setCountryCode(event.target.value)} className={fieldClass}>
-                {COUNTRIES.map((item) => (
-                  <option key={item.value} value={item.value}>{item.label}</option>
-                ))}
-              </select>
-            </Field>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-start justify-between gap-3">
+              <span className={FIELD_LABEL}>Độ Trễ Mỗi Lần Tạo Page (Delay Random)</span>
+              <span className="shrink-0 text-[11px] leading-[14px] font-bold tracking-[0.33px] whitespace-nowrap text-[#004AC6]">
+                {delayMin || 0}s - {delayMax || 0}s
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <SuffixInput id="creator-delay-min" value={delayMin} onChange={setDelayMin} min={0} prefix="Min:" suffix="giây" />
+              <SuffixInput id="creator-delay-max" value={delayMax} onChange={setDelayMax} min={0} prefix="Max:" suffix="giây" />
+            </div>
           </div>
 
-          <div className="mt-5 border-t border-slate-100 pt-4">
-            <div className="mb-3 flex items-center gap-2 text-sm font-bold text-[#0B1C30]">
-              <Sparkles className="h-4 w-4 text-[#2563EB]" />
+          <div className="flex flex-col gap-1.5">
+            <span className={FIELD_LABEL}>Mã Quốc Gia (Location Code)</span>
+            <CustomSelect
+              value={countryCode}
+              onChange={setCountryCode}
+              options={COUNTRIES}
+              size="lg"
+              buttonClassName="!h-10 !rounded-lg !border-transparent !bg-[#EFF4FF] !text-sm !font-medium !shadow-none"
+            />
+          </div>
+
+          <div className="flex flex-col gap-3 rounded-xl bg-[#EFF4FF] p-4">
+            <h3 className="flex items-center gap-2 text-base leading-6 font-semibold text-[#0B1C30]">
+              <CreatorIcon name="gemini" className="text-[#2563EB]" />
               Cấu hình Gemini AI
+            </h3>
+            <div className="flex flex-col gap-1">
+              <span className={GEMINI_LABEL}>Mô hình sinh nội dung</span>
+              <CustomSelect
+                value={geminiModel}
+                onChange={setGeminiModel}
+                options={MODELS}
+                buttonClassName="!h-9 !rounded-lg !border-transparent !bg-white !pl-4 !text-xs !font-semibold !shadow-none"
+              />
             </div>
-            <Field label="Mô hình sinh nội dung">
-              <select value={geminiModel} onChange={(event) => setGeminiModel(event.target.value)} className={fieldClass}>
-                {MODELS.map((item) => (
-                  <option key={item.value} value={item.value}>{item.label}</option>
-                ))}
-              </select>
-            </Field>
-            <div className="mt-3">
-              <Field label="Gemini API key">
-                <div className="flex gap-2">
-                  <div className="relative min-w-0 flex-1">
-                    <input
-                      type={showKey ? "text" : "password"}
-                      value={geminiKey}
-                      onChange={(event) => setGeminiKey(event.target.value)}
-                      placeholder="Dán API key, hoặc dùng GEMINI_API_KEYS trong môi trường"
-                      className={`${fieldClass} pr-10 font-mono`}
-                    />
-                    <button type="button" onClick={() => setShowKey((value) => !value)} aria-label={showKey ? "Ẩn key" : "Hiện key"} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400">
-                      {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
-                  <button type="button" onClick={handleTestKey} disabled={testingKey} className="inline-flex h-10 shrink-0 items-center rounded-lg bg-[#2563EB] px-3 text-xs font-semibold text-white disabled:opacity-60">
-                    {testingKey ? <Loader2 className="h-4 w-4 animate-spin" /> : "Kiểm tra Key"}
+            <div className="flex flex-col gap-1">
+              <label htmlFor="creator-gemini-key" className={GEMINI_LABEL}>Gemini API Key</label>
+              <div className="flex gap-2">
+                <label htmlFor="creator-gemini-key" className={`${SOFT_INPUT} !h-9 min-w-0 flex-1 !bg-white`}>
+                  <CreatorIcon name="key" className="text-[#434655]" />
+                  <input
+                    id="creator-gemini-key"
+                    type={showKey ? "text" : "password"}
+                    value={geminiKey}
+                    onChange={(event) => setGeminiKey(event.target.value)}
+                    placeholder="Dán API key hoặc dùng GEMINI_API_KEYS"
+                    autoComplete="new-password"
+                    spellCheck={false}
+                    className="w-full min-w-0 bg-transparent text-xs tracking-[1.2px] text-[#0B1C30] outline-none placeholder:tracking-normal placeholder:text-[#737686]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKey((value) => !value)}
+                    aria-label={showKey ? "Ẩn key" : "Hiện key"}
+                    className="shrink-0 text-[#737686] hover:text-[#0B1C30]"
+                  >
+                    {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
-                </div>
-              </Field>
+                </label>
+                <button
+                  type="button"
+                  onClick={handleTestKey}
+                  disabled={testingKey}
+                  className="flex h-9 shrink-0 items-center gap-1 rounded-lg bg-[#2563EB] px-3 text-[11px] leading-[14px] font-semibold tracking-[0.33px] text-white shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#1D4ED8] disabled:opacity-60"
+                >
+                  {testingKey ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin" /> : <CreatorIcon name="check_key" />}
+                  Kiểm tra Key
+                </button>
+              </div>
             </div>
           </div>
         </section>
       </div>
 
-      <section ref={previewRef} className="overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
-        <div className="flex items-center gap-2 bg-[#EFF4FF] px-5 py-3 text-sm font-bold text-[#0B1C30]">
-          <ClipboardList className="h-4 w-4 text-[#2563EB]" />
-          Đối soát dữ liệu trước khi chạy
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-left text-xs">
-            <thead className="text-[11px] font-bold uppercase tracking-wide text-slate-500">
-              <tr>
-                <th className="px-4 py-3">STT</th>
-                <th className="px-3 py-3">UID</th>
-                <th className="px-3 py-3">Tên page</th>
-                <th className="px-3 py-3">Số điện thoại</th>
-                <th className="px-3 py-3">Email</th>
-                <th className="px-3 py-3">Địa chỉ</th>
-                <th className="px-3 py-3">Trạng thái</th>
+      {/* Đối soát dữ liệu trước khi chạy */}
+      <section
+        ref={previewRef}
+        aria-label="Đối soát dữ liệu trước khi chạy"
+        className="scroll-mt-6 overflow-hidden rounded-lg bg-white"
+      >
+        <div className={`max-h-[420px] overflow-auto ${SCROLLBAR}`}>
+          <table className="w-full min-w-[860px] border-collapse text-left text-xs leading-[18px] text-[#252629]">
+            <thead className="sticky top-0 z-10 bg-[#EFF4FF]">
+              <tr className="h-[52px]">
+                <th className={`${PREVIEW_HEAD} w-[31px] pl-16 text-center`}>STT</th>
+                <th className={`${PREVIEW_HEAD} w-[104px]`}>UID</th>
+                <th className={`${PREVIEW_HEAD} w-[115px]`}>Tên page</th>
+                <th className={`${PREVIEW_HEAD} w-[98px]`}>Số điện thoại</th>
+                <th className={`${PREVIEW_HEAD} w-[144px]`}>Email</th>
+                <th className={`${PREVIEW_HEAD} text-center`}>Địa chỉ</th>
+                <th className={`${PREVIEW_HEAD} pr-16 text-right`}>Trạng thái</th>
               </tr>
             </thead>
             <tbody>
               {preview.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-sm text-slate-500">Chưa có dòng page hợp lệ. Dán danh sách hoặc tải tệp .CSV/.TXT.</td>
+                  <td colSpan={7} className="py-10 text-center text-sm">
+                    Chưa có dòng page hợp lệ. Dán danh sách hoặc tải tệp .CSV/.TXT.
+                  </td>
                 </tr>
               ) : (
                 preview.map((row) => (
-                  <tr key={`${row.stt}-${row.page_name}`} className="border-t border-slate-100">
-                    <td className="px-4 py-3 text-slate-400">{row.stt}</td>
-                    <td className="px-3 py-3 font-mono text-[#2563EB]">{row.uid || "Chưa gán"}</td>
-                    <td className="px-3 py-3 font-medium text-[#0B1C30]">{row.page_name}</td>
-                    <td className={`px-3 py-3 ${row.phone ? "text-slate-700" : "font-semibold text-[#BE123C]"}`}>{row.phone || "Thiếu SĐT"}</td>
-                    <td className="px-3 py-3 text-slate-700">{row.email || "—"}</td>
-                    <td className="px-3 py-3 text-slate-700">{row.address || "—"}</td>
+                  <tr key={`${row.stt}-${row.page_name}`} className="h-[92px]">
+                    <td className="py-3 pr-3 pl-16 text-center text-[#8B90A0]">{row.stt}</td>
+                    <td className="px-3 py-3 font-medium tracking-[0.3px] text-[#2563EB]">{row.uid || <span className="font-normal tracking-normal text-[#8B90A0]">Chưa gán</span>}</td>
+                    <td className="max-w-[115px] px-3 py-3 font-medium text-[#5E616B]">{row.page_name}</td>
                     <td className="px-3 py-3">
+                      {row.phone || <ErrorChip>Thiếu SĐT</ErrorChip>}
+                    </td>
+                    <td className="max-w-[170px] truncate px-3 py-3 text-[11px]">
+                      {row.issues.includes("Sai email") ? <ErrorChip>Sai email</ErrorChip> : row.email || "—"}
+                    </td>
+                    <td className="px-3 py-3 text-center">{row.address || "—"}</td>
+                    <td className="py-3 pr-16 pl-3 text-right">
                       {row.ok ? (
-                        <span className="inline-flex items-center gap-1 font-semibold text-[#047857]"><CheckCircle2 className="h-3.5 w-3.5" /> Hợp lệ</span>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-[rgba(78,222,163,0.1)] px-2 py-0.5 text-[11px] text-[#0F965F]">
+                          <CreatorIcon name="valid" />
+                          Hợp lệ
+                        </span>
                       ) : (
-                        <span className="font-semibold text-[#BE123C]">Lỗi · {row.issues.join(", ")}</span>
+                        <span title={row.issues.join(", ")} className="inline-flex items-center gap-1 rounded-full bg-[rgba(255,180,171,0.15)] px-2 py-0.5 text-[11px] text-[#B01705]">
+                          <CreatorIcon name="error" />
+                          Lỗi
+                        </span>
                       )}
                     </td>
                   </tr>
@@ -1402,58 +1702,286 @@ function CreateView() {
             </tbody>
           </table>
         </div>
-        <div className="flex flex-col gap-3 border-t border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs text-slate-500">
-            <span className="font-semibold text-[#0B1C30]">{selected.length} Account</span>
-            <span className="mx-2">·</span>
-            {pages.length} Fanpage
-            <span className="mx-2">·</span>
-            Đồng thời: {threads || 0} Luồng
-            <span className="mx-2">·</span>
-            Admin UID: {targetAdminUid.trim() || "—"}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={handleStart}
-              disabled={starting || running}
-              className="inline-flex h-12 items-center gap-2 rounded-xl bg-[#2563EB] px-5 text-sm font-bold tracking-wide text-white shadow-[0_1px_2px_rgba(37,99,235,0.35)] disabled:opacity-60"
-            >
-              {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              BẮT ĐẦU TẠO
-            </button>
-          </div>
-        </div>
       </section>
 
-      <section className="rounded-2xl bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.06)]">
-        <h2 className="mb-3 text-sm font-bold text-[#0B1C30]">Nhật ký vận hành</h2>
-        <div className="max-h-48 space-y-1 overflow-auto rounded-xl bg-[#F8F9FF] p-3 font-mono text-xs text-slate-700">
-          {recentLogs.length === 0 ? <p>Chưa có log.</p> : recentLogs.map((log, index) => (
-            <p key={`${log.timestamp}-${index}`}>
-              <span className="text-slate-400">{log.timestamp} </span>
-              {log.message}
-            </p>
-          ))}
+      {/* Thanh tổng kết dính đáy + nút bắt đầu */}
+      <div className="sticky -bottom-6 z-20 -mx-4 mt-auto flex flex-wrap items-center justify-between gap-3 bg-[#F8F9FF]/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:gap-4 sm:px-6">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm leading-5 text-[#434655]">
+          <SummaryStat icon="stat_accounts"><b className="font-normal text-[#0B1C30]">{selected.length}</b> Account</SummaryStat>
+          <span aria-hidden="true">•</span>
+          <SummaryStat icon="stat_pages">
+            <b className="font-normal text-[#0B1C30]">{pages.length}</b> Fanpage
+            {pages.length !== validCount ? <span className="text-[#BE123C]"> ({pages.length - validCount} lỗi)</span> : null}
+          </SummaryStat>
+          <span aria-hidden="true">•</span>
+          <SummaryStat icon="stat_threads">Đồng thời: {threads || 0} Luồng</SummaryStat>
+          <span aria-hidden="true">•</span>
+          <SummaryStat icon="stat_admin">
+            Admin UID: <span className="font-bold text-[#2563EB]">{targetAdminUid.trim() || "Chưa nhập"}</span>
+          </SummaryStat>
         </div>
-      </section>
+        <button
+          type="button"
+          onClick={handleStart}
+          disabled={starting || running}
+          className="flex h-12 w-full items-center justify-center sm:w-[219px] gap-2 rounded-xl bg-[#2563EB] px-3 text-xl leading-7 font-bold tracking-[-0.1px] text-white shadow-[0_10px_15px_-3px_rgba(37,99,235,0.25),0_4px_6px_-4px_rgba(37,99,235,0.25)] hover:bg-[#1D4ED8] disabled:cursor-not-allowed disabled:opacity-70"
+        >
+          {starting ? <Loader2 aria-hidden="true" className="size-5 animate-spin" /> : <CreatorIcon name="rocket" />}
+          BẮT ĐẦU TẠO
+        </button>
+      </div>
     </div>
   );
 }
 
-function SuffixInput({ value, onChange, min = 0, max, suffix, prefix }) {
+/** Toàn trang Tạo Fanpage dùng Inter, kể cả tiêu đề (globals.css mặc định đặt h1-h6 sang font heading) */
+const PAGE_FONT = "font-sans [&_h1]:font-sans [&_h2]:font-sans [&_h3]:font-sans";
+const PANEL = "rounded-2xl bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.05)] sm:p-6";
+const TABLE_HEAD = "text-[11px] leading-[14px] font-bold tracking-[0.55px] whitespace-nowrap uppercase text-[#434655]";
+const PREVIEW_HEAD = "px-3 text-[11px] leading-4 font-bold tracking-[0.55px] uppercase text-[#161C27]";
+const FIELD_LABEL = "text-xs leading-4 font-semibold text-[#0B1C30]";
+const FIELD_HINT = "text-[11px] leading-[16.5px] text-[#434655]";
+const GEMINI_LABEL = "text-[11px] leading-[16.5px] text-[#434655] uppercase";
+const CHECKBOX = "size-4 cursor-pointer rounded-[2.5px] accent-[#2563EB]";
+const SOFT_INPUT = "flex h-10 items-center gap-2 rounded-lg bg-[#EFF4FF] px-3 focus-within:ring-2 focus-within:ring-[#2563EB]/30";
+const SCROLLBAR =
+  "supports-[-moz-appearance:none]:[scrollbar-width:thin] supports-[-moz-appearance:none]:[scrollbar-color:#4B8EFF_transparent] [&::-webkit-scrollbar]:w-[5px] [&::-webkit-scrollbar]:h-[5px] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-corner]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-[20px] [&::-webkit-scrollbar-thumb]:bg-[#4B8EFF]";
+
+/** Icon xuất từ Figma (public/icons/creator) — [rộng, cao] đúng thuộc tính width/height gốc của từng SVG */
+const CREATOR_ICONS = {
+  accounts: [20, 17],
+  admin_uid: [15, 17],
+  kpi_failed: [16, 20],
+  kpi_queue: [16, 20],
+  kpi_running: [16, 22],
+  kpi_success: [20, 20],
+  open_link: [11, 11],
+  run_list: [15, 15],
+  run_monitor: [17, 17],
+  run_pause: [11, 11],
+  run_stop: [15, 15],
+  status_done: [13, 8],
+  status_error: [12, 12],
+  status_running: [10, 10],
+  terminal: [14, 11],
+  user: [10, 10],
+  check: [11, 9],
+  cloud_upload: [24, 18],
+  check_key: [14, 14],
+  clear: [14, 10],
+  close: [12, 12],
+  copy: [11, 13],
+  download: [12, 12],
+  error: [11, 11],
+  eye: [15, 10],
+  file: [19, 24],
+  gemini: [19, 19],
+  job_settings: [18, 18],
+  key: [16, 8],
+  page_list: [18, 18],
+  paste: [12, 14],
+  rocket: [19, 19],
+  search: [14, 14],
+  shield_check: [11, 14],
+  stat_accounts: [18, 9],
+  stat_admin: [12, 15],
+  stat_pages: [14, 14],
+  stat_threads: [15, 12],
+  upload: [11, 14],
+  valid: [11, 11],
+  warning: [11, 9],
+};
+
+/** Vẽ SVG gốc bằng CSS mask để màu đi theo class text-* (vd. tab đang chọn đổi xanh) */
+function CreatorIcon({ name, className = "" }) {
+  const [width, height] = CREATOR_ICONS[name];
+  const url = `url(/icons/creator/icon_${name}.svg)`;
   return (
-    <div className="relative">
-      {prefix && <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">{prefix}</span>}
+    <span
+      aria-hidden="true"
+      className={`inline-block shrink-0 bg-current ${className}`}
+      style={{ width, height, maskImage: url, WebkitMaskImage: url, maskRepeat: "no-repeat", WebkitMaskRepeat: "no-repeat", maskSize: "100% 100%", WebkitMaskSize: "100% 100%" }}
+    />
+  );
+}
+
+/** Icon vuông nền xanh nhạt + tiêu đề + mô tả ở đầu mỗi section */
+function SectionHeading({ icon, title, subtitle, className = "" }) {
+  return (
+    <div className={`flex min-w-0 items-start gap-3 ${className}`}>
+      <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-[#EFF4FF] text-[#2563EB] shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+        <CreatorIcon name={icon} />
+      </span>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <h2 className="text-lg leading-[26px] font-semibold text-[#0B1C30]">{title}</h2>
+        <p className="max-w-[352px] text-xs leading-4 text-[#434655]">{subtitle}</p>
+      </div>
+    </div>
+  );
+}
+
+const LOGIN_BADGE = {
+  logged_in: { label: "Đã đăng nhập", box: "bg-[#ECFDF5] text-[#047857]", dot: "bg-[#10B981]" },
+  failed: { label: "Đăng nhập lỗi", box: "bg-[#FFF1F2] text-[#BE123C]", dot: "bg-[#F43F5E]" },
+};
+
+function LoginBadge({ status }) {
+  const meta = LOGIN_BADGE[status] || { label: "Chưa đăng nhập", box: "bg-[#F1F5F9] text-[#475569]", dot: "bg-[#94A3B8]" };
+  return (
+    <span className={`inline-flex h-[22px] items-center gap-1.5 rounded-md px-2.5 text-[11px] font-medium tracking-[0.33px] whitespace-nowrap ${meta.box}`}>
+      <span aria-hidden="true" className={`size-1.5 rounded-full ${meta.dot}`} />
+      {meta.label}
+    </span>
+  );
+}
+
+function LiveBadge({ status }) {
+  if (status === "live") {
+    return <span className="inline-flex h-[18px] items-center rounded-full bg-[#D1FAE5] px-2 text-[11px] font-semibold tracking-[0.33px] text-[#065F46]">Live</span>;
+  }
+  if (status === "die") {
+    return <span className="inline-flex h-[18px] items-center rounded-full bg-[#FFE4E6] px-2 text-[11px] font-semibold tracking-[0.33px] text-[#BE123C]">Die</span>;
+  }
+  return <span className="text-xs text-[#737686]">—</span>;
+}
+
+function ErrorChip({ children }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded bg-[rgba(255,180,171,0.5)] px-2 py-0.5 text-[10px] leading-[18px] whitespace-nowrap text-[#BA4A3C]">
+      <CreatorIcon name="warning" className="text-[#D57063]" />
+      {children}
+    </span>
+  );
+}
+
+function SummaryStat({ icon, children }) {
+  return (
+    <span className="flex items-center gap-1.5 whitespace-nowrap">
+      <CreatorIcon name={icon} className="text-[#004AC6]" />
+      <span>{children}</span>
+    </span>
+  );
+}
+
+/** Chọn ký tự phân cách — menu theo Figma node 1017:9541 */
+function DelimiterSelect({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const current = DELIMITERS.find((item) => item.value === value) || DELIMITERS[0];
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (event) => {
+      if (event.type === "keydown" ? event.key === "Escape" : !rootRef.current?.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative min-w-0 flex-1 sm:w-[211px] sm:flex-none">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="flex h-9 w-full items-center justify-between gap-2 rounded-lg bg-[#EFF4FF] pr-3 pl-4 text-xs leading-[14px] font-medium text-[#0B1C30] outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]/30"
+      >
+        <span className="truncate">
+          {current.symbol} {current.label}
+        </span>
+        <ChevronDown aria-hidden="true" className={`size-3.5 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <ul
+          role="listbox"
+          aria-label="Ký tự phân cách"
+          className="absolute bottom-[calc(100%+4px)] left-0 z-30 w-[220px] overflow-hidden rounded-xl border border-[rgba(65,71,84,0.4)] bg-white shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)]"
+        >
+          {DELIMITERS.map((item) => {
+            const selected = item.value === value;
+            return (
+              <li key={item.value} role="option" aria-selected={selected}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChange(item.value);
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs leading-4 font-medium tracking-[0.24px] ${
+                    selected ? "h-[37px] rounded-[5px] bg-[#2563EB] text-white" : "text-[#161C27] hover:bg-[#EFF4FF]"
+                  }`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className={selected ? "font-bold" : ""}>{item.symbol}</span>
+                    {item.label}
+                  </span>
+                  {selected && <CreatorIcon name="check" />}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** Vùng tải tệp khi chưa chọn tệp — theo Figma node 1017:9526 */
+function UploadDropzone({ onPick, onDropFile }) {
+  const [dragging, setDragging] = useState(false);
+  return (
+    <div
+      onDragOver={(event) => {
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDragging(false);
+        onDropFile(event.dataTransfer.files?.[0]);
+      }}
+      className={`flex flex-1 flex-col items-center justify-center rounded-xl border bg-white p-6 transition-colors ${
+        dragging ? "border-[#2563EB] bg-[#F8FAFF]" : "border-[#C1C6D6]"
+      }`}
+    >
+      <span className="mb-2 grid size-12 place-items-center rounded-xl bg-[rgba(0,46,105,0.5)] text-[#7BD0FF] shadow-[0_0_20px_-3px_rgba(123,208,255,0.25)]">
+        <CreatorIcon name="cloud_upload" />
+      </span>
+      <p className="mb-3 text-xs leading-4 text-[#8B90A0]">{dragging ? "Thả tệp vào đây" : "Tải tệp lên"}</p>
+      <button
+        type="button"
+        onClick={onPick}
+        className="rounded-lg border border-[#C1C6D6] bg-white px-4 py-1.5 text-xs leading-4 font-semibold text-[#161C27] shadow-[0_1px_3px_rgba(0,0,0,0.1),0_1px_2px_-1px_rgba(0,0,0,0.1)] hover:bg-[#F8F9FF]"
+      >
+        Chọn file từ máy tính
+      </button>
+    </div>
+  );
+}
+
+/** Ô số có tiền tố / hậu tố đơn vị (Luồng, Vòng, giây) */
+function SuffixInput({ id, value, onChange, min = 0, max, suffix, prefix, bold = false }) {
+  const unit = "text-[11px] leading-[14px] tracking-[0.33px] text-[#434655]";
+  return (
+    <label htmlFor={id} className={SOFT_INPUT}>
+      {prefix && <span className={`${unit} font-semibold`}>{prefix}</span>}
       <input
+        id={id}
         type="number"
+        inputMode="numeric"
         min={min}
         max={max}
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className={`${fieldClass} ${prefix ? "pl-12" : ""} pr-14`}
+        className={`w-full min-w-0 bg-transparent text-base ${bold ? "font-bold" : "font-semibold"} text-[#0B1C30] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`}
       />
-      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">{suffix}</span>
-    </div>
+      <span className={`${unit} shrink-0 ${bold ? "font-medium" : "font-semibold"}`}>{suffix}</span>
+    </label>
   );
 }

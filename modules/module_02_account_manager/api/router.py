@@ -9,6 +9,7 @@ from ..database.repository import AccountRepository as Repo
 from ..services import account_service as accounts, status_service, login_service
 from ..services.browser_service import queue_open_browser
 from ..services.events import event_stream
+from ..services import operations
 from ..utils.paths import validate_uid
 from .schemas import SingleAccountInput, ImportRequest, UidsRequest, DeleteAccountsRequest, LoginRequest, OpenBrowserRequest, TestProxyRequest
 
@@ -80,13 +81,20 @@ async def list_accounts(db: Session = Depends(get_db)):
     return [accounts.serialize(a) for a in Repo.get_all(db)]
 
 @router.get("/page")
-async def page_accounts(limit: int = Query(10, ge=1), cursor: int | None = Query(None, ge=1), search: str = "", status: str = "all", login_status: str = "all", db: Session = Depends(get_db)):
-    from sqlalchemy import or_, func
+async def page_accounts(limit: int = Query(10, ge=1), cursor: int | None = Query(None, ge=1), search: str = "", status: str = "all", login_status: str = "all", active_only: bool = False, db: Session = Depends(get_db)):
+    from sqlalchemy import and_, or_, func
     from ..database.models import Account
     query = Repo.query(db)
+    if active_only:
+        # Match the farm picker: a checked LIVE profile OR a logged-in session.
+        query = query.filter(or_(
+            and_(Account.status == "LIVE", Account.status_checked_at.isnot(None)),
+            Account.login_status == "LOGGED_IN",
+        ))
     if search.strip():
         pattern = "%" + search.strip().lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-        query = query.filter(or_(*(func.lower(column).like(pattern, escape="\\") for column in (Account.uid, Account.profile_name, Account.email))))
+        columns = (Account.uid, Account.profile_name, Account.proxy) if active_only else (Account.uid, Account.profile_name, Account.email)
+        query = query.filter(or_(*(func.lower(column).like(pattern, escape="\\") for column in columns)))
     if status not in ("all", "live", "die") or login_status not in ("all", "logged_in", "failed", "not_logged_in"):
         raise HTTPException(422, "Invalid status filter")
     if status != "all":
@@ -168,8 +176,9 @@ async def test_proxy(req: TestProxyRequest):
 async def login(req: LoginRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     for uid in req.uids:
         accounts.require_account(db, uid)
-    background_tasks.add_task(run_owned, owner_context.get(), login_service.login_batch, req.uids, req.threads)
-    return {"started": True, "count": len(req.uids)}
+    operation_id = operations.create("login", req.uids)
+    background_tasks.add_task(run_owned, owner_context.get(), login_service.login_batch, req.uids, req.threads, operation_id)
+    return {"started": True, "count": len(req.uids), "operation_id": operation_id}
 
 @router.post("/open-browser")
 async def open_browser(req: OpenBrowserRequest, db: Session = Depends(get_db)):
@@ -179,6 +188,10 @@ async def open_browser(req: OpenBrowserRequest, db: Session = Depends(get_db)):
 @router.get("/stream")
 async def stream():
     return StreamingResponse(stream_owned(owner_context.get(), event_stream), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+@router.get("/operations/{operation_id}")
+async def operation_progress(operation_id: str):
+    return operations.read(operation_id)
 
 @router.post("/{uid}/sync-cookies")
 async def sync_cookies(uid: str, db: Session = Depends(get_db)):

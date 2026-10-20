@@ -1,141 +1,130 @@
 "use client";
-
 import { useState, useEffect } from "react";
+import { getPages } from "./service";
 import FanpageList from "./FanpageList";
-import { getPages, fetchPageTokens } from "./service";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableHead,
-  TableRow,
-  TableCell,
-} from "@/components/ui/table";
-
+import AiPost from "./AiPost";
+import ReelsPoster from "./ReelsPoster";
+import TikTokDownloadTab from "./components/TikTokDownloadTab";
+import YouTubeDownloadTab from "./components/YouTubeDownloadTab";
+import HistoryTab from "./components/HistoryTab";
+import PostDetailModal from "./components/PostDetailModal";
+let globalPagesCache = null;
 export default function PageManagerModule({ subPage } = {}) {
-  if (subPage === "pages.list") {
-    return <FanpageList />;
-  }
-  return <TokenManager />;
-}
-
-function TokenManager() {
-  const [pages, setPages] = useState([]);
-  const [userToken, setUserToken] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const data = await getPages();
-      setPages(data.pages || []);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
+  const [currentTab, setCurrentTab] = useState(subPage || "pages.list");
+  const [pages, setPages] = useState(() => {
+    if (globalPagesCache && globalPagesCache.length > 0) return globalPagesCache;
+    if (typeof window !== "undefined") {
+      try {
+        const local = localStorage.getItem("fb_pages_cache");
+        if (local) {
+          const parsed = JSON.parse(local);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            globalPagesCache = parsed;
+            return parsed;
+          }
+        }
+      } catch {}
     }
+    return [];
+  });
+  const [loading, setLoading] = useState(() => (!globalPagesCache || globalPagesCache.length === 0));
+  const [selectedPost, setSelectedPost] = useState(null);
+  const [postModalOpen, setPostModalOpen] = useState(false);
+  const loadData = async (forceLoading = false) => {
+    if (forceLoading || (!globalPagesCache || globalPagesCache.length === 0)) {
+      setLoading(true);
+    }
+    try {
+      const pRes = await getPages();
+      const list = Array.isArray(pRes?.pages) ? pRes.pages : (Array.isArray(pRes) ? pRes : []);
+      if (list.length > 0) {
+        globalPagesCache = list;
+        try {
+          localStorage.setItem("fb_pages_cache", JSON.stringify(list));
+        } catch {}
+        setPages(list);
+      }
+    } catch {}
+    setLoading(false);
   };
-
+  useEffect(() => {
+    if (subPage) setCurrentTab(subPage);
+  }, [subPage]);
   useEffect(() => {
     loadData();
   }, []);
-
-  const handleFetchTokens = async () => {
-    if (!userToken.trim()) return alert("Vui lòng nhập User Token!");
-    try {
-      const res = await fetchPageTokens(userToken);
-      if (res.success) {
-        alert(`Đã nạp thành công ${res.count} Fanpage vào hệ thống!`);
-        setUserToken("");
-        loadData();
-      }
-    } catch (e) {
-      alert("Lỗi: " + e.message);
-    }
+  const handlePageFieldUpdate = (pageId, fields) => {
+    setPages((prev) => {
+      const updated = prev.map((p) => (String(p.page_id || p.id) === String(pageId) ? { ...p, ...fields } : p));
+      globalPagesCache = updated;
+      try {
+        localStorage.setItem("fb_pages_cache", JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
   };
-
+  const handleOpenPostDetail = (post) => {
+    setSelectedPost(post);
+    setPostModalOpen(true);
+  };
+  if (subPage === "pages.list") {
+    return <FanpageList />;
+  }
+  if (subPage === "pages.ai_post") {
+    return <AiPost />;
+  }
+  if (subPage === "pages.reels") {
+    return <ReelsPoster />;
+  }
+  if (subPage === "pages.tiktok") {
+    return <TikTokDownloadTab pages={pages} loading={loading} onPageUpdate={handlePageFieldUpdate} />;
+  }
+  if (subPage === "pages.youtube") {
+    return <YouTubeDownloadTab pages={pages} loading={loading} onPageUpdate={handlePageFieldUpdate} />;
+  }
+  if (subPage === "pages.history") {
+    return (
+      <div className="space-y-4">
+        <HistoryTab onSelectPost={handleOpenPostDetail} />
+        <PostDetailModal open={postModalOpen} onOpenChange={setPostModalOpen} post={selectedPost} />
+      </div>
+    );
+  }
   return (
-    <div className="space-y-6">
-      {/* Fetch Token Card */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between p-5 pb-3">
-          <CardTitle className="text-primary flex items-center gap-2">
-            <span>🔑</span> Nạp Page Từ User Access Token
-          </CardTitle>
-          <Button onClick={handleFetchTokens} size="sm">
-            Lấy Token Vĩnh Viễn
-          </Button>
-        </CardHeader>
-        <CardContent className="p-5 pt-0">
-          <Input
-            type="text"
-            value={userToken}
-            onChange={(e) => setUserToken(e.target.value)}
-            placeholder="Dán User Access Token (me/accounts) vào đây..."
-            className="font-mono text-xs"
-          />
-        </CardContent>
-      </Card>
-
-      {/* Pages Table Card */}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between p-5 pb-3">
-          <CardTitle className="flex items-center gap-2">
-            <span>📢</span> Danh Sách Fanpage Đang Quản Lý ({pages.length})
-          </CardTitle>
-          <Button onClick={loadData} disabled={loading} size="sm" variant="outline">
-            {loading ? "Đang tải..." : "🔄 Cập nhật"}
-          </Button>
-        </CardHeader>
-        <CardContent className="p-5 pt-0">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Page ID</TableHead>
-                  <TableHead>Tên Fanpage</TableHead>
-                  <TableHead>AI Auto Post</TableHead>
-                  <TableHead>Reels Folder</TableHead>
-                  <TableHead className="text-right">Trạng Thái</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {pages.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
-                      Chưa có Fanpage nào được nạp. Hãy dán User Token ở trên để đồng bộ.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  pages.map((p, i) => (
-                    <TableRow key={p.id || i}>
-                      <TableCell className="font-mono text-muted-foreground">{p.page_id}</TableCell>
-                      <TableCell className="font-bold text-foreground">{p.page_name}</TableCell>
-                      <TableCell>
-                        <span className={p.auto_ai_enabled ? "text-primary font-semibold" : "text-muted-foreground"}>
-                          {p.auto_ai_enabled ? "● Đang bật" : "○ Tắt"}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {p.reels_folder || "Chưa gán"}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Badge variant={p.status === "ACTIVE" ? "success" : "destructive"}>
-                          {p.status || "ACTIVE"}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-1.5 p-1 rounded-lg bg-card border border-border shadow-subtle">
+        {[
+          { id: "pages.list", label: "Danh Sách Fanpage" },
+          { id: "pages.ai_post", label: "Đăng Bài AI" },
+          { id: "pages.reels", label: "Đăng Video Reels" },
+          { id: "pages.tiktok", label: "Tải Video TikTok" },
+          { id: "pages.youtube", label: "Tải YouTube Shorts" },
+          { id: "pages.history", label: "Lịch Sử / Nhật Ký" },
+        ].map((tab) => (
+          <button key={tab.id} type="button" onClick={() => setCurrentTab(tab.id)} className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${currentTab === tab.id ? "bg-primary text-white shadow-subtle" : "text-muted-foreground hover:text-foreground"}`}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      <div className={currentTab === "pages.list" ? "block" : "hidden"}>
+        <FanpageList />
+      </div>
+      <div className={currentTab === "pages.ai_post" ? "block" : "hidden"}>
+        <AiPost />
+      </div>
+      <div className={currentTab === "pages.reels" ? "block" : "hidden"}>
+        <ReelsPoster />
+      </div>
+      <div className={currentTab === "pages.tiktok" ? "block" : "hidden"}>
+        <TikTokDownloadTab pages={pages} loading={loading} onPageUpdate={handlePageFieldUpdate} />
+      </div>
+      <div className={currentTab === "pages.youtube" ? "block" : "hidden"}>
+        <YouTubeDownloadTab pages={pages} loading={loading} onPageUpdate={handlePageFieldUpdate} />
+      </div>
+      <div className={currentTab === "pages.history" ? "block" : "hidden"}>
+        <HistoryTab onSelectPost={handleOpenPostDetail} />
+      </div>
+      <PostDetailModal open={postModalOpen} onOpenChange={setPostModalOpen} post={selectedPost} />
     </div>
   );
 }

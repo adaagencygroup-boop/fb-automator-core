@@ -281,3 +281,19 @@
     transform: translateX(0);
   }
 }
+
+/* Hiệu ứng chạy chữ khi hover cho dòng thông tin phụ Fanpage */
+@keyframes marquee-scroll {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-45%);
+  }
+}
+
+.group:hover .animate-marquee-hover {
+  display: inline-block;
+  animation: marquee-scroll 3.5s ease-in-out infinite alternate;
+}
+

@@ -90,6 +90,7 @@ export const toast = {
   success: (first, second) => show(normalizeOpts(first, second, "THÀNH CÔNG", "success", "check")),
   error: (first, second) => show(normalizeOpts(first, second, "ĐÃ CÓ LỖI XẢY RA", "error", "alert")),
   warning: (first, second) => show(normalizeOpts(first, second, "CẢNH BÁO", "warning", "alert")),
+  warn: (first, second) => show(normalizeOpts(first, second, "CẢNH BÁO", "warning", "alert")),
   info: (first, second) => show(normalizeOpts(first, second, "THÔNG BÁO", "info", "info")),
   dismiss,
   /** Xóa toast theo key (vd. khi đăng nhập thành công thì bỏ toast lỗi đăng nhập) */

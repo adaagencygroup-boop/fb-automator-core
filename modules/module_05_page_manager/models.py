@@ -8,6 +8,8 @@ downloaded_videos ID đã tải thành công, chống trùng. object_path là đ
 download_logs    Nhật ký từng lần tải, gồm cả lần thất bại.
 page_jobs        Một lần bấm Kích hoạt (AI, REEL, TIKTOK, YOUTUBE).
 page_job_items   Trạng thái của từng Page trong job đó.
+ai_page_scans    Lần đếm page gần nhất của từng nick, còn sau khi tắt app.
+ai_managed_pages Từng fanpage đếm được, để không phải đăng nhập lại.
 """
 import json
 
@@ -119,6 +121,28 @@ DDL_STATEMENTS = [
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS ai_page_scans (
+        owner_username VARCHAR(100) NOT NULL DEFAULT '',
+        account_uid VARCHAR(100) NOT NULL,
+        page_count INT NOT NULL DEFAULT 0,
+        scanned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (owner_username, account_uid)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ai_managed_pages (
+        id SERIAL PRIMARY KEY,
+        owner_username VARCHAR(100) NOT NULL DEFAULT '',
+        account_uid VARCHAR(100) NOT NULL,
+        page_key VARCHAR(200) NOT NULL,
+        page_name VARCHAR(255) NOT NULL,
+        page_url TEXT,
+        category VARCHAR(200) DEFAULT '',
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_ai_managed_page UNIQUE (owner_username, account_uid, page_key)
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS posting_schedules (
         id SERIAL PRIMARY KEY,
         page_id VARCHAR(100),
@@ -136,6 +160,7 @@ COLUMN_MIGRATIONS = [
     "ALTER TABLE pages ADD COLUMN IF NOT EXISTS account_uid VARCHAR(100)",
     "ALTER TABLE pages ADD COLUMN IF NOT EXISTS ai_keyword TEXT",
     "ALTER TABLE pages ADD COLUMN IF NOT EXISTS tiktok_keyword TEXT",
+    "ALTER TABLE pages ADD COLUMN IF NOT EXISTS tiktok_url TEXT",
     "ALTER TABLE pages ADD COLUMN IF NOT EXISTS youtube_keyword TEXT",
     "ALTER TABLE pages ADD COLUMN IF NOT EXISTS youtube_url TEXT",
     "ALTER TABLE posting_history ADD COLUMN IF NOT EXISTS account_uid VARCHAR(100)",
@@ -157,6 +182,7 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_download_logs_source_page ON download_logs (source, page_id)",
     "CREATE INDEX IF NOT EXISTS idx_page_jobs_type_status ON page_jobs (job_type, status)",
     "CREATE INDEX IF NOT EXISTS idx_page_job_items_job ON page_job_items (job_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ai_managed_pages_owner_uid ON ai_managed_pages (owner_username, account_uid)",
 ]
 
 
@@ -171,23 +197,28 @@ def init_models():
     db.execute("UPDATE downloaded_videos SET source = 'TIKTOK' WHERE source IS NULL")
     db.execute("ALTER TABLE downloaded_videos ALTER COLUMN source SET NOT NULL")
     db.execute("UPDATE downloaded_videos SET object_path = link WHERE object_path IS NULL AND link IS NOT NULL")
-    db.execute(
-        """
-        DO $$
-        BEGIN
-            IF NOT EXISTS (
-                SELECT 1 FROM pg_constraint WHERE conname = 'unique_page_source_video'
-            ) THEN
-                ALTER TABLE downloaded_videos DROP CONSTRAINT IF EXISTS unique_page_video;
-                ALTER TABLE downloaded_videos
-                    ADD CONSTRAINT unique_page_source_video UNIQUE (page_id, source, video_id);
-            END IF;
-        END $$;
-        """
-    )
+    db.execute("""
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'unique_page_source_video'
+        ) THEN
+          ALTER TABLE downloaded_videos DROP CONSTRAINT IF EXISTS unique_page_video;
+          ALTER TABLE downloaded_videos ADD CONSTRAINT unique_page_source_video UNIQUE (page_id, source, video_id);
+        END IF;
+      END $$;
+    """)
 
-    _migrate_pages_data()
-    _migrate_posting_progress()
+
+    db.execute("CREATE TABLE IF NOT EXISTS module5_migrations (version TEXT PRIMARY KEY)")
+    migrated = db.fetch_one("SELECT version FROM module5_migrations WHERE version = 'meta_owner_v1'")
+    if not migrated:
+        _migrate_pages_data()
+        _migrate_posting_progress()
+    from .meta_migration import migrate_meta_owners
+    migrate_meta_owners()
+    from .meta_web_migration import migrate_meta_web
+    migrate_meta_web()
 
 
 def _migrate_pages_data():

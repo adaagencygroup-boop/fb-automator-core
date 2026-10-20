@@ -138,7 +138,7 @@ export default function Sidebar({ activeTab, open = true }) {
       )}
     >
       {/* Brand / Logo Area */}
-      <div className="flex items-center px-5 pt-4 pb-[17px] border-b border-slate-100 shrink-0">
+      <div className="flex items-center px-5 pt-4 pb-[17px] border-b shrink-0">
         <div className="size-9 rounded-lg bg-primary flex items-center justify-center shrink-0 drop-shadow-[0px_1px_1px_rgba(0,0,0,0.05)]">
           <img
             src="/icons/icon_brand_facebook_f.svg"

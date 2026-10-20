@@ -11,16 +11,20 @@ from ..database.repository import AccountRepository as Repo
 from ..security.encryption import decrypt_data
 from . import runtime
 from .events import broadcast
+from . import operations
 
 def login_one(uid):
     from ..automation.browser_manager import get_profile_lock
     from ..automation.login_flow import run_login
     with get_profile_lock(uid):
         if runtime.stopping.is_set():
+            operations.update(uid, "failed")
             return
+        operations.update(uid, "opening")
         with SessionLocal() as db:
             account = Repo.get_by_uid(db, uid)
             if account is None:
+                operations.update(uid, "failed")
                 return
             def secret(value):
                 try:
@@ -35,13 +39,26 @@ def login_one(uid):
                 stage = "lưu cookie vào DB"
                 if result.get("cookie"):
                     Repo.update_cookies(db, uid, result["cookie"])
+                operations.publish(uid, "completed" if result["success"] else "failed", db)
                 broadcast("success" if result["success"] else "error", f"Đăng nhập {'thành công' if result['success'] else 'thất bại'}: {uid}", uid=uid)
             except Exception as exc:
                 db.rollback()
+                operations.publish(uid, "failed", db)
                 reason = "DB đã hết kết nối khả dụng" if "EMAXCONNSESSION" in str(exc) else type(exc).__name__
                 broadcast("error", f"Lỗi {stage}: {uid} ({reason})", uid=uid)
 
-async def login_batch(uids, threads):
+async def login_batch(uids, threads, operation_id=None):
+    with operations.scope(operation_id):
+        try:
+            await _login_batch(uids, threads)
+        finally:
+            if operation_id:
+                for uid, row in operations.read(operation_id)["accounts"].items():
+                    if row["phase"] not in operations.TERMINAL:
+                        operations.update(uid, "failed")
+
+
+async def _login_batch(uids, threads):
     semaphore = asyncio.Semaphore(threads)
     async def run(uid):
         async with semaphore:

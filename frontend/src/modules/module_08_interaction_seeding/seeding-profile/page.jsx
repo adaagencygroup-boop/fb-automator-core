@@ -1,6 +1,7 @@
 "use client";
 
 import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
+import { normalizeTargetUrl } from "@/modules/module_08_interaction_seeding/validation";
 import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
 import { toast } from "@/components/ui/toast";
 import { UserCheck } from "lucide-react";
@@ -98,6 +99,13 @@ export default function SeedingProfilePage() {
               `Chiến dịch hoàn tất với trạng thái: ${detail.status_display || status}.`,
               status === "COMPLETED" ? "success" : "warn",
             );
+            // Tải lại danh sách trang cá nhân chưa chạy để loại bỏ các link đã hoàn tất
+            seedingApi
+              .getSeedingTargets("PROFILE")
+              .then((res) => {
+                setTargets(res?.targets || []);
+              })
+              .catch(() => {});
           }
         }
       } catch (err) {
@@ -113,8 +121,8 @@ export default function SeedingProfilePage() {
     seedingApi
       .getSeedingTargets("PROFILE")
       .then((res) => {
+        setTargets(res?.targets || []);
         if (res && res.targets && res.targets.length > 0) {
-          setTargets(res.targets);
           setSuccessMessage(
             `Đã tải ${res.targets.length} trang cá nhân từ cơ sở dữ liệu`,
           );
@@ -125,7 +133,8 @@ export default function SeedingProfilePage() {
 
   const handleAddTargets = async (rawUrls) => {
     try {
-      const res = await seedingApi.validateSeedingTargets("PROFILE", rawUrls);
+      const normalizedUrls = (rawUrls || []).map((u) => normalizeTargetUrl(u, "PROFILE"));
+      const res = await seedingApi.validateSeedingTargets("PROFILE", normalizedUrls);
       if (res && res.targets) {
         setTargets(res.targets);
         setSuccessMessage(
@@ -271,7 +280,7 @@ export default function SeedingProfilePage() {
               Seeding Trang cá nhân
             </h1>
             <p className="text-xs text-slate-500 mt-1 font-normal">
-              Tăng Follow Trang cá nhân tự động bằng Chrome profiles thực tế.
+              Tăng Follow và Like Trang cá nhân cho nhiều tài khoản cá nhân Facebook.
             </p>
           </div>
         </div>

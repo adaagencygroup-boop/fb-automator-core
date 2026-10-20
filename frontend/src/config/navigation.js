@@ -137,10 +137,17 @@ export const NAV_ITEMS = [
       },
       {
         id: "pages.youtube",
-        label: "Tải Youtube Short",
-        description: "Tải video YouTube Shorts để dùng cho Fanpage.",
+        label: "Tải Video YouTube",
+        description: "Tải Video YouTube Shorts Để Dùng Cho Fanpage.",
         moduleId: "pages",
         icon: icon("icon_nav_youtube_shorts", 24, 9),
+      },
+      {
+        id: "pages.history",
+        label: "Lịch Sử / Nhật Ký",
+        description: "Tra Cứu & Thống Kê Kết Quả Các Tác Vụ Trong Module Quản Lý Fanpage.",
+        moduleId: "pages",
+        icon: HISTORY_ICON,
       },
     ],
   },
@@ -225,7 +232,7 @@ export const HIDDEN_NAV_ITEMS = [
   {
     id: "profile",
     label: "Hồ sơ cá nhân",
-    description: "Thông tin cá nhân, proxy và API key của bạn.",
+    description: "Quản trị thông tin xác thực tài khoản, thời hạn License và liên kết phần cứng HWID an toàn.",
     moduleId: "settings",
     icon: icon("icon_nav_profile", 30, 13),
   },

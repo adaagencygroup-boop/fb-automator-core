@@ -1,6 +1,7 @@
 "use client";
 
 import { seedingApi } from "@/modules/module_08_interaction_seeding/service";
+import { normalizeTargetUrl } from "@/modules/module_08_interaction_seeding/validation";
 import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE.js";
 import { toast } from "@/components/ui/toast";
 import { FileText } from "lucide-react";
@@ -111,6 +112,13 @@ export default function SeedingPostPage() {
               `Chiến dịch hoàn tất với trạng thái: ${detail.status_display || status}.`,
               status === "COMPLETED" ? "success" : "warn",
             );
+            // Tải lại danh sách bài viết chưa chạy để loại bỏ các link đã hoàn tất
+            seedingApi
+              .getSeedingTargets("POST")
+              .then((res) => {
+                setTargets(res?.targets || []);
+              })
+              .catch(() => {});
           }
         }
       } catch (err) {
@@ -126,8 +134,8 @@ export default function SeedingPostPage() {
     seedingApi
       .getSeedingTargets("POST")
       .then((res) => {
+        setTargets(res?.targets || []);
         if (res && res.targets && res.targets.length > 0) {
-          setTargets(res.targets);
           setSuccessMessage(
             `Đã tải ${res.targets.length} bài viết từ cơ sở dữ liệu`,
           );
@@ -153,17 +161,12 @@ export default function SeedingPostPage() {
 
   const handleDoLikeChange = (val) => {
     setDoLike(val);
-    if (val) {
-      // Khi chọn Like bài viết thì mặc định tích chọn cảm xúc Like (LIKE / Thích)
-      setSelectedReactions((prev) =>
-        prev.includes("LIKE") ? prev : ["LIKE", ...prev],
-      );
-    }
   };
 
   const handleAddTargets = async (rawUrls) => {
     try {
-      const res = await seedingApi.validateSeedingTargets("POST", rawUrls);
+      const normalizedUrls = (rawUrls || []).map((u) => normalizeTargetUrl(u, "POST"));
+      const res = await seedingApi.validateSeedingTargets("POST", normalizedUrls);
       if (res && res.targets) {
         setTargets(res.targets);
         setSuccessMessage(

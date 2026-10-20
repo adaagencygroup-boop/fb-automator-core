@@ -154,6 +154,10 @@ export async function openLiveBrowser(uid) {
   }
 }
 
+export function getAccountOperation(operationId) {
+  return api.get(`/api/accounts/operations/${encodeURIComponent(operationId)}`);
+}
+
 export async function testProxy(proxy) {
   try {
     return await api.post("/api/accounts/test-proxy", { proxy });

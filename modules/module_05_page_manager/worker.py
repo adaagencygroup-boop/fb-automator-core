@@ -28,10 +28,15 @@ class AutoPostWorker(QThread):
     def __init__(self, api_keys, fb_version, sleep_min, sleep_max, pages_file, prompt_template, model_name, creds_file, sheet_id, pixabay_key,
                  ai_sched_enabled=False, ai_sched_times="",
                  reels_sched_enabled=False, reels_sched_times="",
-                 video_sched_enabled=False, video_sched_times=""):
+                 video_sched_enabled=False, video_sched_times="", owner=None, page_ids=None):
         super().__init__()
+        from modules.module_02_account_manager.context import owner_context
+        from modules.module_05_page_manager.owned_data import require_owner
+        self.owner = require_owner(owner or owner_context.get())
+        self.page_ids = page_ids
         self.api_keys = [k.strip() for k in api_keys if k.strip()]
-        self.fb_version = fb_version
+        from modules.module_05_page_manager.meta_config import GRAPH_API_VERSION
+        self.fb_version = GRAPH_API_VERSION
         self.sleep_min = sleep_min
         self.sleep_max = sleep_max
         self.pages_file = pages_file
@@ -64,6 +69,14 @@ class AutoPostWorker(QThread):
     def check_running(self):
         return self.is_running
 
+    def refresh_page(self, page):
+        from modules.module_05_page_manager.owned_data import pages_for
+        rows = pages_for(self.owner, [page['id']])
+        if not rows:
+            raise ValueError("Page không còn thuộc owner của worker.")
+        page.update(rows[0])
+        self._current_page = page
+
     def save_posted(self, p_name, p_id):
         save_posted_to_google_sheet(
             page_name=p_name,
@@ -78,24 +91,10 @@ class AutoPostWorker(QThread):
             self.log(f"[ERROR] Thư mục video không tồn tại: {video_folder}")
             return None
 
-        # Đọc tiến trình đã đăng từ posting_progress.json
-        progress_file = "posting_progress.json"
-        last_posted = 0
+        from modules.module_05_page_manager.owned_data import progress
+        base_id, suffix = page_id.rsplit("_", 1) if "_" in page_id else (page_id, "reel")
+        last_posted = progress(self.owner, base_id, suffix.upper()).get("last_folder_index") or 0
         progress_data = {}
-        if os.path.exists(progress_file):
-            try:
-                with open(progress_file, 'r', encoding='utf-8') as f:
-                    progress_data = json.load(f)
-                
-                page_progress = progress_data.get(page_id)
-                if page_progress is not None:
-                    last_posted = page_progress.get("last_posted_folder", 0)
-                else:
-                    # Tương thích ngược: Đọc từ ID gốc nếu chưa có tiến trình hậu tố
-                    base_id = page_id.split('_')[0]
-                    last_posted = progress_data.get(base_id, {}).get("last_posted_folder", 0)
-            except Exception as e:
-                self.log(f"[WARNING] Không đọc được file tiến trình: {str(e)}")
 
         # Tìm các thư mục con có dạng số
         subfolders = []
@@ -199,6 +198,7 @@ class AutoPostWorker(QThread):
                         
                     if not self.check_running(): break
                     
+                    self.refresh_page(target_page)
                     post_to_facebook_page(
                         page_name=target_page['name'],
                         page_id=target_page['id'],
@@ -245,6 +245,7 @@ class AutoPostWorker(QThread):
             self.log(f"[*] Video Reels: {os.path.basename(video_path)}")
             self.log(f"[*] Xem trước nội dung bài đăng Reels:\n{caption[:200]}...")
 
+            self.refresh_page(page)
             success = upload_reel_to_facebook(
                 page_name=page['name'],
                 page_id=page['id'],
@@ -261,8 +262,8 @@ class AutoPostWorker(QThread):
                     progress_data[suffixed_id] = {}
                 progress_data[suffixed_id]["last_posted_folder"] = folder_number
                 try:
-                    with open("posting_progress.json", 'w', encoding='utf-8') as f:
-                        json.dump(progress_data, f, ensure_ascii=False, indent=4)
+                    from modules.module_05_page_manager.owned_data import save_progress
+                    save_progress(self.owner, str(page['id']), "REEL", folder_number)
                     self.log(f"[INFO] Lưu tiến trình đăng Reels thành công cho {page['name']} (Thư mục: {folder_number}).")
                 except Exception as e:
                     self.log(f"[ERROR] Lỗi lưu tiến trình đăng Reels: {str(e)}")
@@ -298,6 +299,7 @@ class AutoPostWorker(QThread):
             self.log(f"[*] Video Dài: {os.path.basename(video_path)}")
             self.log(f"[*] Xem trước nội dung bài đăng Video:\n{caption[:200]}...")
 
+            self.refresh_page(page)
             success = upload_video_to_facebook(
                 page_name=page['name'],
                 page_id=page['id'],
@@ -314,8 +316,8 @@ class AutoPostWorker(QThread):
                     progress_data[suffixed_id] = {}
                 progress_data[suffixed_id]["last_posted_folder"] = folder_number
                 try:
-                    with open("posting_progress.json", 'w', encoding='utf-8') as f:
-                        json.dump(progress_data, f, ensure_ascii=False, indent=4)
+                    from modules.module_05_page_manager.owned_data import save_progress
+                    save_progress(self.owner, str(page['id']), "VIDEO", folder_number)
                     self.log(f"[INFO] Lưu tiến trình đăng Video dài thành công cho {page['name']} (Thư mục: {folder_number}).")
                 except Exception as e:
                     self.log(f"[ERROR] Lỗi lưu tiến trình đăng Video: {str(e)}")
@@ -332,8 +334,8 @@ class AutoPostWorker(QThread):
         self.log("=========================================================")
 
         try:
-            with open(self.pages_file, 'r', encoding='utf-8') as f:
-                pages_list = json.load(f)
+            from modules.module_05_page_manager.owned_data import pages_for
+            pages_list = pages_for(self.owner, self.page_ids)
         except Exception as e:
             self.log(f"[CRITICAL] Không đọc được file token page: {str(e)}")
             self.finished_signal.emit()
