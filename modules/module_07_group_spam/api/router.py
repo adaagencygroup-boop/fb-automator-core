@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from pathlib import Path
+import shutil
 from typing import Any, Optional
+import uuid
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
@@ -203,6 +207,60 @@ async def get_group_posting_history():
     return {"posted_groups": list(posted), "history_groups": groups, "count": len(groups)}
 
 
+UPLOAD_MEDIA_DIR = Path("data/module_07_group_spam/uploads")
+
+
+@router.post("/media/upload")
+async def upload_group_media(files: list[UploadFile] = File(...)):
+    """Upload danh sách file media (ảnh/video) lưu vào backend phục vụ automation."""
+    if not files:
+        raise HTTPException(400, "Không có tệp media nào được gửi lên")
+
+    UPLOAD_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    uploaded = []
+
+    for file in files:
+        try:
+            ext = Path(file.filename or "").suffix.lower()
+            safe_name = f"{uuid.uuid4().hex[:12]}{ext}"
+            file_path = UPLOAD_MEDIA_DIR / safe_name
+
+            with file_path.open("wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+
+            uploaded.append({
+                "original_name": file.filename,
+                "saved_name": safe_name,
+                "path": str(file_path.resolve()),
+                "relative_path": str(file_path).replace("\\", "/"),
+                "size": file_path.stat().st_size,
+            })
+        except Exception as exc:
+            raise HTTPException(500, f"Lỗi lưu tệp {file.filename}: {exc}") from exc
+
+    return {
+        "success": True,
+        "message": f"Đã tải lên thành công {len(uploaded)} tệp media",
+        "files": uploaded,
+    }
+
+
+@router.get("/media/list")
+async def list_group_media():
+    """Liệt kê các tệp media đã lưu trong thư mục uploads của module 7."""
+    UPLOAD_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    items = []
+    for p in UPLOAD_MEDIA_DIR.iterdir():
+        if p.is_file():
+            items.append({
+                "name": p.name,
+                "path": str(p.resolve()),
+                "relative_path": str(p).replace("\\", "/"),
+                "size": p.stat().st_size,
+            })
+    return {"files": items, "count": len(items)}
+
+
 @router.post("/campaign")
 async def start_group_campaign(item: CampaignInput):
     """Khởi động chiến dịch đăng bài / bình luận nhóm."""
@@ -213,5 +271,6 @@ async def start_group_campaign(item: CampaignInput):
         "message": f"Đã tiếp nhận chiến dịch {item.action_type} cho {len(item.groups)} nhóm.",
         "groups_count": len(item.groups),
         "accounts_count": len(item.account_uids),
+        "media_count": len(item.media),
     }
 
