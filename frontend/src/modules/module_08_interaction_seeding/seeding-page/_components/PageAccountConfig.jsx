@@ -74,6 +74,14 @@ export default function PageAccountConfig({
               )
             </span>
           </div>
+
+          {availableAccounts > 0 && accountCount > 0 && (
+            <p className="text-[11px] text-gray-500 px-1">
+              {accountCount < availableAccounts
+                ? `Mỗi lần chạy, hệ thống chọn ngẫu nhiên ${accountCount} trong ${availableAccounts} tài khoản khả dụng (thứ tự chạy cũng ngẫu nhiên).`
+                : `Dùng cả ${availableAccounts} tài khoản khả dụng, thứ tự chạy ngẫu nhiên.`}
+            </p>
+          )}
         </div>
 
         {/* Info box */}

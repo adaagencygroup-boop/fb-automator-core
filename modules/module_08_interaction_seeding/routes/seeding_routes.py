@@ -955,11 +955,15 @@ async def create_seeding_campaign(
     if owner_identifiers:
         q = q.filter(Account.user_id.in_(owner_identifiers))
 
+    if req.account_count <= 0:
+        raise HTTPException(status_code=400, detail="Số lượng tài khoản muốn chạy phải lớn hơn 0!")
+
     if req.uids and len(req.uids) > 0:
         q = q.filter(Account.uid.in_(req.uids))
-        available_accounts = q.all()
-    else:
-        available_accounts = q.order_by(Account.id.asc()).limit(req.account_count).all()
+    # Chọn NGẪU NHIÊN account_count nick trong số nick khả dụng (không lấy cố định N nick đầu danh sách),
+    # để mọi nick đều được dùng qua các lần chạy. random.sample trả về thứ tự ngẫu nhiên nên thứ tự chạy cũng ngẫu nhiên.
+    eligible_accounts = q.all()
+    available_accounts = random.sample(eligible_accounts, min(req.account_count, len(eligible_accounts)))
 
     if not available_accounts:
         raise HTTPException(

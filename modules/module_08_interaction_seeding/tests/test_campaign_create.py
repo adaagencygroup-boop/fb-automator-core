@@ -60,6 +60,42 @@ class AllocationTests(SeedingTestCase):
         self.assertEqual(self.db.query(SeedingComment).count(), 0)
 
 
+class AccountSelectionTests(SeedingTestCase):
+    def _used_accounts(self, count):
+        cid = self.create("PAGE", [f"https://web.facebook.com/Page{self.n}"], account_count=count)["campaign_ids"][0]
+        self.n += 1
+        return [t.account_uid for t in self.tasks(cid)]
+
+    def setUp(self):
+        super().setUp()
+        self.n = 0
+
+    def test_picks_random_40_of_50_not_always_the_first_40(self):
+        uids = self.add_accounts(50)
+        runs = [self._used_accounts(40) for _ in range(10)]
+        for used in runs:
+            self.assertEqual(len(used), 40)
+            self.assertEqual(len(set(used)), 40)
+            self.assertTrue(set(used) <= set(uids))
+        self.assertGreater(len(set().union(*runs)), 40)                        # nick 41-50 cũng được dùng
+        self.assertTrue(any(set(used) != set(uids[:40]) for used in runs))     # không cố định 40 nick đầu
+        self.assertTrue(any(used != sorted(used) for used in runs))            # thứ tự chạy ngẫu nhiên
+
+    def test_asking_for_more_than_available_uses_all(self):
+        uids = self.add_accounts(3)
+        self.assertEqual(sorted(self._used_accounts(10)), uids)
+
+    def test_never_picks_another_users_accounts(self):
+        mine = self.add_accounts(5)
+        self.add_accounts(5, owner="99", prefix="other")
+        self.assertTrue(set(self._used_accounts(10)) <= set(mine))
+
+    def test_zero_accounts_is_rejected(self):
+        self.add_accounts(5)
+        res = self.create("PAGE", ["https://web.facebook.com/PageZ"], account_count=0, expect=400)
+        self.assertIn("lớn hơn 0", res["detail"])
+
+
 class InputValidationTests(SeedingTestCase):
     def setUp(self):
         super().setUp()
