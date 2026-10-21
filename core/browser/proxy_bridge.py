@@ -746,63 +746,75 @@ class ProxyBridge:
                 self._safe_close(upstream_sock)
             self._safe_close(client_sock)
 
-    def _relay_bidirectional(self, s1: socket.socket, s2: socket.socket):
-        """Relay có bộ đệm giới hạn, giữ dữ liệu khi bên nhận chưa sẵn sàng."""
-        s1.setblocking(False)
-        s2.setblocking(False)
-        sockets = [s1, s2]
-        peers = {s1: s2, s2: s1}
-        pending = {s1: bytearray(), s2: bytearray()}
-        read_closed = set()
-        write_closed = set()
-        max_pending = 256 * 1024
-
-        while self._running:
+    def _pipe_stream(self, src: socket.socket, dst: socket.socket, done_event: threading.Event):
+        """Chuyển tiếp luồng byte liên tục giữa 2 socket có backpressure chống rớt kết nối khi upload video."""
+        try:
+            while self._running and not done_event.is_set():
+                data = src.recv(65536)
+                if not data:
+                    break
+                dst.sendall(data)
+        except Exception:
+            pass
+        finally:
             try:
-                # Chỉ chuyển EOF sau khi đã gửi hết dữ liệu đang chờ. Nửa kết
-                # nối còn lại vẫn được đọc để nhận phản hồi sau khi upload xong.
-                for source in read_closed:
-                    destination = peers[source]
-                    if not pending[destination] and destination not in write_closed:
-                        destination.shutdown(socket.SHUT_WR)
-                        write_closed.add(destination)
-                if len(read_closed) == 2 and not any(pending.values()):
-                    return
+                # Báo EOF cho chiều gửi nhưng cho phép chiều ngược lại nhận nốt dữ liệu
+                dst.shutdown(socket.SHUT_WR)
+            except Exception:
+                pass
+            done_event.set()
 
-                # Ngừng đọc một chiều khi bộ đệm đầy, nhưng vẫn phục vụ chiều
-                # ngược lại. Không tích toàn bộ video vào RAM khi proxy chậm.
-                readers = [s for s in sockets
-                           if s not in read_closed and len(pending[peers[s]]) < max_pending]
-                writers = [s for s in sockets if pending[s]]
-                rlist, wlist, xlist = select.select(readers, writers, sockets, 60.0)
-                if xlist or not (rlist or wlist):
-                    return
+    def _relay_bidirectional(self, s1: socket.socket, s2: socket.socket):
+        """
+        Relay luồng dữ liệu 2 chiều song công (Full-Duplex Streaming):
+        - Sử dụng timeout 300s để hỗ trợ truyền tải video lớn (25MB - 500MB) qua Proxy.
+        - Tự động điều tiết áp lực TCP buffer (Backpressure): không ném BlockingIOError làm rớt kết nối.
+        - Khắc phục triệt để lỗi upload video lên Facebook Reels/Story bị gián đoạn/nhảy ngược về 5%.
+        """
+        try:
+            s1.settimeout(300.0)
+            s2.settimeout(300.0)
+        except Exception:
+            pass
 
-                for s in rlist:
-                    destination = peers[s]
-                    try:
-                        data = s.recv(min(32768, max_pending - len(pending[destination])))
-                    except (BlockingIOError, InterruptedError):
-                        continue
-                    if not data:
-                        read_closed.add(s)
-                    else:
-                        pending[destination].extend(data)
+        done1 = threading.Event()
+        done2 = threading.Event()
+        t1 = threading.Thread(
+            target=self._pipe_stream,
+            args=(s1, s2, done1),
+            name="ProxyBridge-Pipe-Up",
+            daemon=True,
+        )
+        t2 = threading.Thread(
+            target=self._pipe_stream,
+            args=(s2, s1, done2),
+            name="ProxyBridge-Pipe-Down",
+            daemon=True,
+        )
+        t1.start()
+        t2.start()
 
-                for s in wlist:
-                    try:
-                        sent = s.send(pending[s])
-                    except (BlockingIOError, InterruptedError):
-                        continue
-                    if not sent:
-                        return
-                    del pending[s][:sent]
-            except InterruptedError:
-                continue
-            except (OSError, ValueError) as exc:
-                if self._running:
-                    logger.debug("[ProxyBridge:%s] Relay stopped: %s", self.port, exc)
-                return
+        # Chờ ít nhất một chiều kết thúc truyền tải
+        while self._running:
+            if done1.is_set() or done2.is_set():
+                break
+            done1.wait(timeout=0.5)
+
+        # Chờ thêm một khoảng ngắn để chiều còn lại nhận nốt phản hồi (vd: HTTP 200 sau upload)
+        if done1.is_set() and not done2.is_set():
+            done2.wait(timeout=15.0)
+        elif done2.is_set() and not done1.is_set():
+            done1.wait(timeout=5.0)
+
+        # Dọn dẹp đóng 2 chiều an toàn
+        for s in (s1, s2):
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+
+        t1.join(timeout=1.0)
+        t2.join(timeout=1.0)
 
     def _safe_close(self, sock: socket.socket):
         self._untrack_socket(sock)

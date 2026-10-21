@@ -3,6 +3,7 @@ core.browser: mở Chrome dùng chung cho mọi module (profile, khóa, dấu v�
 Xem core/browser/README.md.
 """
 from core.browser.driver import (
+    bring_chrome_to_front,
     close_all_active_bridges,
     close_all_active_drivers,
     close_bridge_for_uid,
