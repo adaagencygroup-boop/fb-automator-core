@@ -55,11 +55,30 @@ class FakeVideoDriver:
         self.index = (self.index + 1) % len(self.video_ids)
 
 
+class StaleVideoDriver(FakeVideoDriver):
+    """Lần hỏi trạng thái video thứ stale_at: phần tử đã bị gỡ khỏi trang; leave_to = trang đã chuyển sang URL này."""
+
+    def __init__(self, ctl, video_ids, stale_at, leave_to=None, **kwargs):
+        super().__init__(ctl, video_ids, **kwargs)
+        self.state_calls = 0
+        self.stale_at = stale_at
+        self.leave_to = leave_to
+
+    def execute_script(self, script, *args):
+        if script == farming_flow._VIDEO_STATE_JS:
+            self.state_calls += 1
+            if self.state_calls == self.stale_at:
+                if self.leave_to:
+                    self.current_url = self.leave_to
+                raise farming_flow.StaleElementReferenceException("stale element reference")
+        return super().execute_script(script, *args)
+
+
 class WatchCountingTests(unittest.TestCase):
     def run_scenario(self, video_ids, playing=True, url="https://www.facebook.com/watch/",
-                     arrow_advances=True, total=15):
-        ctl = FakeControl()
-        driver = FakeVideoDriver(ctl, video_ids, playing, url)
+                     arrow_advances=True, total=15, driver=None, open_url=None):
+        ctl = driver.ctl if driver else FakeControl()
+        driver = driver or FakeVideoDriver(ctl, video_ids, playing, url)
         self.driver = driver
         chains = Mock()
         chains.move_to_element.return_value = chains
@@ -74,7 +93,13 @@ class WatchCountingTests(unittest.TestCase):
             return chains
 
         chains.send_keys.side_effect = send_keys
-        with patch.object(farming_flow, "_open") as self.open_mock, \
+
+        def open_page(*_args, **_kwargs):
+            # Mở lại Watch thì trang về lại open_url (None: trang không đổi, mô phỏng mở lại không được)
+            if open_url:
+                driver.current_url = open_url
+
+        with patch.object(farming_flow, "_open", side_effect=open_page) as self.open_mock, \
              patch.object(farming_flow, "ActiveTimer", FakeTimer), \
              patch.object(farming_flow, "ActionChains", return_value=chains), \
              patch.object(farming_flow, "_find_visible", return_value=[]), \
@@ -128,6 +153,42 @@ class WatchCountingTests(unittest.TestCase):
         result = self.run_scenario([None])
         self.assertEqual(result["status"], "SKIPPED")
         self.assertEqual(result["quantity"], 0)
+
+    def test_video_removed_midway_is_skipped_not_fatal(self):
+        # Lần hỏi thứ 2 (đang xem video đầu) phần tử đã bị Facebook gỡ: bỏ video đó, xem tiếp video khác
+        driver = StaleVideoDriver(FakeControl(), ["fb:111", "fb:222", "fb:333"], stale_at=2)
+        result = self.run_scenario(None, driver=driver)
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertGreaterEqual(result["quantity"], 1)
+        self.assertEqual(self.open_mock.call_count, 1)
+
+    def test_leaving_watch_page_reopens_watch(self):
+        # Đang xem thì bấm sang Trang chủ: mở lại Watch và xem tiếp đủ thời gian
+        driver = StaleVideoDriver(FakeControl(), ["fb:111", "fb:222", "fb:333"], stale_at=2,
+                                  leave_to="https://www.facebook.com/")
+        result = self.run_scenario(None, driver=driver, open_url="https://www.facebook.com/watch/")
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(self.open_mock.call_count, 2)
+        self.assertGreaterEqual(driver.ctl.elapsed, 15)
+
+    def test_page_keeps_leaving_watch_stops_after_reopen_limit(self):
+        driver = StaleVideoDriver(FakeControl(), ["fb:111", "fb:222"], stale_at=2,
+                                  leave_to="https://www.facebook.com/groups/feed/")
+        result = self.run_scenario(None, driver=driver, total=600)
+        self.assertIn(result["status"], ("SUCCESS", "SKIPPED"))
+        self.assertEqual(self.open_mock.call_count, 1 + farming_flow.WATCH_MAX_REOPENS)
+        self.assertLess(driver.ctl.elapsed, 600)
+
+    def test_on_watch_page(self):
+        def on(url, landing=""):
+            return farming_flow._on_watch_page(Mock(current_url=url), landing)
+        self.assertTrue(on("https://www.facebook.com/watch/?v=123"))
+        self.assertTrue(on("https://web.facebook.com/reel/111"))
+        self.assertTrue(on("https://www.facebook.com/somepage/videos/123/"))
+        self.assertFalse(on("https://www.facebook.com/"))
+        self.assertFalse(on("https://www.facebook.com/groups/feed/"))
+        # Facebook đổi đường dẫn của Watch: trang được đưa tới khi mở Watch vẫn tính là Watch
+        self.assertTrue(on("https://www.facebook.com/video/", "/video/"))
 
 
 if __name__ == "__main__":
