@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { Clock, Download, RefreshCw } from "lucide-react";
 import * as XLSX from "xlsx";
+import { toast } from "@/components/ui/toast";
 import HistoryStatsCards from "./_components/HistoryStatsCards";
 import HistoryFilters from "./_components/HistoryFilters";
 import HistoryTable from "./_components/HistoryTable";
@@ -154,28 +155,58 @@ export default function SeedingHistoryPage() {
     return parts.length > 0 ? parts.join(", ") : "Tất cả";
   };
 
-  // Xuất file Excel đầy đủ tất cả chiến dịch theo bộ lọc đang áp dụng
+  // Xuất file Excel đầy đủ tất cả chiến dịch: khi không lọc gì thì xuất tất cả từ trước đến nay, khi có lọc thì xuất đúng các bản ghi đã lọc
   const handleExportExcel = async () => {
     try {
       setIsExporting(true);
 
-      // Gọi API lấy toàn bộ danh sách bản ghi theo bộ lọc đang áp dụng (page_size lớn)
+      // Lấy bộ lọc thực tế (đồng bộ với các giá trị đang chọn trên form bộ lọc)
+      const activeSearch = draftSearch.trim();
+      const activeType = draftType;
+      const activeStatus = draftStatus;
+      const activeFromDate = draftFromDate;
+      const activeToDate = draftToDate;
+
+      // Đồng bộ appliedFilters để giao diện bảng bên dưới khớp 100% với dữ liệu xuất
+      setAppliedFilters({
+        search: activeSearch,
+        type: activeType,
+        status: activeStatus,
+        fromDate: activeFromDate,
+        toDate: activeToDate,
+      });
+
+      // Tham số gửi Backend: all_records = true để lấy toàn bộ dữ liệu (không bị phân trang 10 dòng)
       const exportParams = {
+        all_records: true,
         page: 1,
-        page_size: 50000,
+        page_size: 100000,
       };
-      if (appliedFilters.type !== "ALL") exportParams.campaign_type = appliedFilters.type;
-      if (appliedFilters.status !== "ALL") exportParams.status = appliedFilters.status;
-      if (appliedFilters.search.trim()) exportParams.search = appliedFilters.search.trim();
-      if (appliedFilters.fromDate) exportParams.from_date = appliedFilters.fromDate;
-      if (appliedFilters.toDate) exportParams.to_date = appliedFilters.toDate;
+
+      const isFiltered = Boolean(
+        (activeType && activeType !== "ALL") ||
+        (activeStatus && activeStatus !== "ALL") ||
+        activeSearch ||
+        activeFromDate ||
+        activeToDate
+      );
+
+      if (activeType && activeType !== "ALL") exportParams.campaign_type = activeType;
+      if (activeStatus && activeStatus !== "ALL") exportParams.status = activeStatus;
+      if (activeSearch) exportParams.search = activeSearch;
+      if (activeFromDate) exportParams.from_date = activeFromDate;
+      if (activeToDate) exportParams.to_date = activeToDate;
 
       const res = await seedingApi.getSeedingCampaigns(exportParams);
-      const allCampaigns =
-        res && Array.isArray(res.items) && res.items.length > 0 ? res.items : campaigns;
+      const allCampaigns = res && Array.isArray(res.items) ? res.items : [];
 
       if (!allCampaigns || allCampaigns.length === 0) {
-        alert("Không có dữ liệu chiến dịch để xuất báo cáo!");
+        toast.warning(
+          isFiltered
+            ? "Không tìm thấy chiến dịch nào phù hợp với bộ lọc đã chọn để xuất file!"
+            : "Chưa có bất kỳ dữ liệu chiến dịch seeding nào trong hệ thống để xuất báo cáo!",
+          "KHÔNG CÓ DỮ LIỆU"
+        );
         return;
       }
 
@@ -242,7 +273,7 @@ export default function SeedingHistoryPage() {
       ws["!cols"] = [
         { wch: 6 },  // STT
         { wch: 14 }, // Mã chiến dịch
-        { wch: 20 }, // Thời gian tạo
+        { wch: 24 }, // Thời gian tạo
         { wch: 16 }, // Loại chiến dịch
         { wch: 45 }, // Mục tiêu seeding
         { wch: 26 }, // Hành động thực hiện
@@ -264,10 +295,19 @@ export default function SeedingHistoryPage() {
         now.getDate()
       )}_${pad(now.getHours())}${pad(now.getMinutes())}`;
 
-      XLSX.writeFile(wb, `lich_su_seeding_${dateFormatted}.xlsx`);
+      const filePrefix = isFiltered ? "lich_su_seeding_da_loc" : "lich_su_seeding_tat_ca";
+      XLSX.writeFile(wb, `${filePrefix}_${dateFormatted}.xlsx`);
+
+      toast.success(
+        `Đã xuất thành công ${allCampaigns.length} chiến dịch (${isFiltered ? "theo bộ lọc" : "tất cả lịch sử"}) ra file Excel!`,
+        "XUẤT EXCEL THÀNH CÔNG"
+      );
     } catch (err) {
       console.error("Lỗi xuất file Excel:", err);
-      alert("Đã xảy ra lỗi trong quá trình xuất Excel. Vui lòng thử lại!");
+      toast.error(
+        err?.message || "Đã xảy ra lỗi trong quá trình xuất Excel. Vui lòng thử lại!",
+        "LỖI XUẤT FILE"
+      );
     } finally {
       setIsExporting(false);
     }

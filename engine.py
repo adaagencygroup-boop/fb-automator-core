@@ -249,9 +249,6 @@ app.add_middleware(
 
 if farm_router:
     app.include_router(farm_router)
-
-
-# ==================== SYSTEM & HEALTH CHECK ====================
 @app.get("/api/health")
 def health_check():
     return {

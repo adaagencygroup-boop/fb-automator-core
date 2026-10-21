@@ -2089,8 +2089,11 @@ async def list_seeding_campaigns(
     user_id: int | None = Query(
         None, description="Lọc theo created_by (dành cho Admin)"
     ),
+    all_records: bool = Query(
+        False, description="Lấy toàn bộ bản ghi theo bộ lọc không giới hạn phân trang (dành cho xuất Excel)"
+    ),
     page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
+    page_size: int = Query(10, ge=1, le=100000),
     request: Request = None,
     authorization: str | None = Header(None),
     db: Session = Depends(get_db),
@@ -2118,54 +2121,66 @@ async def list_seeding_campaigns(
         if user_id is not None:
             q = q.filter(SeedingCampaign.created_by == user_id)
 
-    if campaign_type and campaign_type.upper() not in ("ALL", "TẤT CẢ"):
-        q = q.filter(SeedingCampaign.campaign_type == campaign_type.upper())
+    if campaign_type and campaign_type.upper().strip() not in ("ALL", "TẤT CẢ", "TAT_CA", ""):
+        q = q.filter(SeedingCampaign.campaign_type == campaign_type.upper().strip())
 
-    if status and status.upper() not in ("ALL", "TẤT CẢ"):
-        clean_status = status.upper()
-        if clean_status in ("HOÀN THÀNH", "COMPLETED"):
+    if status and status.upper().strip() not in ("ALL", "TẤT CẢ", "TAT_CA", ""):
+        clean_status = status.upper().strip()
+        if clean_status in ("HOÀN THÀNH", "COMPLETED", "SUCCESS"):
             q = q.filter(SeedingCampaign.status == "COMPLETED")
         elif clean_status in ("ĐANG CHẠY", "RUNNING"):
             q = q.filter(SeedingCampaign.status == "RUNNING")
-        elif clean_status in ("KHÔNG HOÀN THÀNH", "FAILED", "STOPPED"):
+        elif clean_status in ("KHÔNG HOÀN THÀNH", "FAILED", "STOPPED", "THẤT BẠI"):
             q = q.filter(SeedingCampaign.status.in_(["FAILED", "STOPPED"]))
 
     if search and search.strip():
-        term = f"%{search.strip()}%"
-        target_subquery = (
+        raw_search = search.strip()
+        term = f"%{raw_search}%"
+        clean_num = raw_search.lstrip("#")
+        id_filters = []
+        if clean_num.isdigit():
+            id_filters.append(SeedingCampaign.id == int(clean_num))
+
+        target_campaign_ids = (
             db.query(SeedingCampaignTarget.campaign_id)
-            .join(SeedingTarget, SeedingCampaignTarget.target_id == SeedingTarget.id)
+            .outerjoin(SeedingTarget, SeedingCampaignTarget.target_id == SeedingTarget.id)
             .filter(
                 or_(
                     SeedingTarget.display_name.ilike(term),
                     SeedingTarget.url.ilike(term),
                     SeedingTarget.fb_id.ilike(term),
+                    SeedingCampaignTarget.display_name.ilike(term),
+                    SeedingCampaignTarget.target_url.ilike(term),
+                    SeedingCampaignTarget.note.ilike(term),
                 )
             )
-            .subquery()
         )
-        q = q.filter(SeedingCampaign.id.in_(target_subquery))
+        q = q.filter(
+            or_(
+                SeedingCampaign.id.in_(target_campaign_ids),
+                *id_filters,
+            )
+        )
 
     # from_date / to_date là ngày theo giờ Việt Nam ('YYYY-MM-DD'), lấy trọn ngày to_date
-    if from_date:
+    if from_date and from_date.strip():
         try:
-            q = q.filter(SeedingCampaign.created_at >= vn_date_bound(from_date))
-        except ValueError:
+            q = q.filter(SeedingCampaign.created_at >= vn_date_bound(from_date.strip()))
+        except Exception:
             pass
 
-    if to_date:
+    if to_date and to_date.strip():
         try:
-            q = q.filter(SeedingCampaign.created_at < vn_date_bound(to_date, end_of_day=True))
-        except ValueError:
+            q = q.filter(SeedingCampaign.created_at < vn_date_bound(to_date.strip(), end_of_day=True))
+        except Exception:
             pass
 
     total = q.count()
-    items = (
-        q.order_by(SeedingCampaign.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
+    ordered_q = q.order_by(SeedingCampaign.created_at.desc(), SeedingCampaign.id.desc())
+    if all_records:
+        items = ordered_q.all()
+    else:
+        items = ordered_q.offset((page - 1) * page_size).limit(page_size).all()
 
     results = []
     for c in items:
@@ -2206,7 +2221,7 @@ async def list_seeding_campaigns(
             }
         )
 
-    return {"total": total, "page": page, "page_size": page_size, "items": results}
+    return {"total": total, "page": page, "page_size": page_size if not all_records else total, "items": results}
 
 
 # ─────────────────────────────────────────────────────────────

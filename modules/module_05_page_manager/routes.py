@@ -1,4 +1,6 @@
 """API màn Đăng bài AI: danh sách nick, đếm page, kích hoạt / dừng luồng."""
+from concurrent.futures import ThreadPoolExecutor
+
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -12,6 +14,7 @@ from modules.module_04_page_creator.routes import get_owner_username
 from modules.module_05_page_manager.ai_job import pages_of, parse_schedule_times, request_stop, snapshot, start_job
 from modules.module_05_page_manager.ai_generator import MODEL_FALLBACK_CHAIN, models_to_try
 from modules.module_05_page_manager.vi_messages import suggested_replacement, vi_gemini_message, vi_pixabay_message
+from modules.module_05_page_manager.page_avatar import page_avatar, valid_page_avatar
 from modules.module_05_page_manager.page_counter import (
     count_pages_for_account,
     get_count,
@@ -70,18 +73,35 @@ def _pages_for(db: Session, owner: str, uid: str):
     return stored, live
 
 
-def _fanpage_row(page: dict, account) -> dict:
+def _fanpage_row(page: dict, account, avatar_url: str = "") -> dict:
     graph_id = str(page.get("graph_id") or "")
+    stored = str(page.get("avatar_url") or "")
+    avatar = avatar_url or (stored if valid_page_avatar(stored) else "")
     return {
         "id": page.get("id"),
         "name": page.get("name") or "Fanpage",
         "url": page.get("url") or "",
         "category": page.get("category") or "",
         "graph_id": graph_id,
-        "avatar_url": facebook_picture_url(graph_id) if graph_id.isdigit() else "",
+        "avatar_url": avatar,
         "owner_uid": account.uid,
         "owner_name": account.profile_name or "",
     }
+
+
+def _avatars_for(pages: list) -> list[str]:
+    """Ảnh đại diện thật của từng page. Graph picture là silhouette xám nên không dùng."""
+    if not pages:
+        return []
+
+    def one(page):
+        stored = str(page.get("avatar_url") or "")
+        if valid_page_avatar(stored):
+            return stored
+        return page_avatar(str(page.get("url") or ""), str(page.get("graph_id") or ""))
+
+    with ThreadPoolExecutor(max_workers=min(6, len(pages))) as pool:
+        return list(pool.map(one, pages))
 
 
 def _account_rows(db: Session, owner: str):
@@ -89,6 +109,7 @@ def _account_rows(db: Session, owner: str):
     rows = []
     for account in accounts:
         counted, live = _pages_for(db, owner, account.uid)
+        avatars = _avatars_for(counted)
         rows.append({
             "uid": account.uid,
             "profile_name": account.profile_name or "",
@@ -97,7 +118,7 @@ def _account_rows(db: Session, owner: str):
             "page_count": int(live["count"]) if live.get("status") == "done" and live.get("count") is not None else len(counted),
             "count_status": live.get("status") or "idle",
             "count_message": live.get("message") or "",
-            "pages": [_fanpage_row(page, account) for page in counted],
+            "pages": [_fanpage_row(page, account, avatar) for page, avatar in zip(counted, avatars)],
         })
     return rows
 
