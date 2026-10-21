@@ -26,6 +26,9 @@ MODEL_SPECS = {
     "gemini-2.5-flash": {"provider": "gemini", "api_model": "gemini-2.5-flash"},
     "gemini-2.5-flash-lite": {"provider": "gemini", "api_model": "gemini-2.5-flash-lite"},
     "gemini-2.5-pro": {"provider": "gemini", "api_model": "gemini-2.5-pro"},
+    # DeepSeek models
+    "deepseek-v4-flash": {"provider": "deepseek", "api_model": "deepseek-flash"},
+    "deepseek-flash": {"provider": "deepseek", "api_model": "deepseek-flash"},
     # Backward compatibility for settings saved by the first Module 7 version.
     "gemini": {"provider": "gemini", "api_model": "gemini-2.5-flash"},
 }
@@ -44,6 +47,8 @@ def model_spec(model: str) -> dict[str, str]:
         return MODEL_SPECS[model]
     if re.fullmatch(r"gemini-[A-Za-z0-9._-]{1,100}", model or ""):
         return {"provider": "gemini", "api_model": model}
+    if (model or "").startswith("deepseek"):
+        return {"provider": "deepseek", "api_model": "deepseek-flash"}
     raise ValueError("Model AI không được hỗ trợ")
 
 
@@ -105,8 +110,10 @@ class GroupSettingsStore:
                 providers[provider] = {
                     "configured": bool(key),
                     "hint": f"••••{key[-4:]}" if key else "",
+                    "key": key or "",
                 }
             current_provider = model_spec(data["model"])["provider"]
+            current_key = self._decrypt_key(data["api_keys"].get(current_provider))
             return {
                 "model": data["model"],
                 "threads": int(data["threads"]),
@@ -114,6 +121,7 @@ class GroupSettingsStore:
                 "max_posts": int(data["max_posts"]),
                 "api_key_configured": providers[current_provider]["configured"],
                 "api_key_hint": providers[current_provider]["hint"],
+                "api_key": current_key or "",
                 "providers": providers,
             }
 

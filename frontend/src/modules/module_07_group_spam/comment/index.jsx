@@ -31,6 +31,8 @@ import {
   Trash2,
   Underline,
   Users,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -41,7 +43,7 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
-import { runGroupCampaign } from "../service";
+import { getGroupSettings, runGroupCampaign } from "../service";
 import Link from "next/link";
 import {
   GROUPS,
@@ -57,6 +59,12 @@ import {
   normalizeAccount,
 } from "../shared/components";
 
+const getProvider = (m) => {
+  if (m === "gemini" || m?.startsWith("gemini-")) return "gemini";
+  if (m?.startsWith("deepseek")) return "deepseek";
+  return "openai";
+};
+
 export default function GroupCommentModule() {
   const mediaInputRef = useRef(null);
   const groupFileInputRef = useRef(null);
@@ -67,19 +75,13 @@ export default function GroupCommentModule() {
   const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
   const [model, setModel] = useState("gpt-4o");
   const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
   const [threads, setThreads] = useState("2");
   const [restMinutes, setRestMinutes] = useState("10");
   const [maxComments, setMaxComments] = useState("20");
-  const [groupSource, setGroupSource] = useState("file");
-  const [groupFile, setGroupFile] = useState({
-    name: "danh_sach_link_comment_01.txt",
-    size: 18944,
-    status: "valid",
-    dedupCount: 4,
-    invalidCount: 2,
-    validGroupsCount: 50,
-  });
-  const [groupSearch, setGroupSearch] = useState("việc làm online, tuyển dụng ctv, kinh doanh online");
+  const [groupSource, setGroupSource] = useState("search");
+  const [groupFile, setGroupFile] = useState(null);
+  const [groupSearch, setGroupSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
   const [selectedGroupKeys, setSelectedGroupKeys] = useState(GROUPS.map((group) => group.key));
   const [mediaFiles, setMediaFiles] = useState([]);
@@ -124,6 +126,15 @@ export default function GroupCommentModule() {
 
   useEffect(() => {
     loadAccounts();
+    getGroupSettings().then((data) => {
+      if (!data) return;
+      if (data.model) setModel(data.model);
+      const activeProv = getProvider(data.model);
+      const key = data.api_key || data.providers?.[activeProv]?.key;
+      if (key) setApiKey(key);
+      if (data.threads) setThreads(String(data.threads));
+      if (data.rest_minutes) setRestMinutes(String(data.rest_minutes));
+    }).catch(() => {});
   }, []);
 
   const filteredAccounts = useMemo(() => {
@@ -536,17 +547,29 @@ export default function GroupCommentModule() {
               <option value="gpt-4o">GPT-4o (OpenAI)</option>
               <option value="gpt-4o-mini">GPT-4o mini (OpenAI)</option>
               <option value="gemini">Gemini</option>
+              <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
             </SelectField>
             <span className="block text-[10px] font-normal text-slate-400">Chọn mô hình AI tạo nội dung theo phong cách mong muốn.</span>
           </Field>
           <Field label="API Key" required>
-            <Input
-              type="password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder="sk-ant-api03-••••••••••••••••"
-              className="font-mono"
-            />
+            <div className="relative">
+              <Input
+                type={showApiKey ? "text" : "password"}
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                placeholder="sk-ant-api03-••••••••••••••••"
+                className="pr-10 font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowApiKey((prev) => !prev)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 cursor-pointer"
+                title={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
+                aria-label={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
+              >
+                {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
             <span className="block text-[10px] font-normal text-slate-400">Nhập API Key hợp lệ của nhà cung cấp AI đã chọn.</span>
           </Field>
         </div>

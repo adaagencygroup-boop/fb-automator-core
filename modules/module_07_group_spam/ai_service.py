@@ -12,6 +12,7 @@ from .settings import model_spec
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
 
 class AIProviderError(RuntimeError):
@@ -66,6 +67,30 @@ def _call_openai(api_model: str, api_key: str, prompt: str, timeout: int = 90) -
     return text
 
 
+def _call_deepseek(api_model: str, api_key: str, prompt: str, timeout: int = 90) -> str:
+    response = requests.post(
+        DEEPSEEK_API_URL,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "model": api_model,
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.8,
+            "max_tokens": 4096,
+        },
+        timeout=timeout,
+    )
+    if response.status_code != 200:
+        raise _request_error(response)
+    data = response.json()
+    choices = data.get("choices", [])
+    if not choices or not choices[0].get("message", {}).get("content"):
+        raise AIProviderError("DeepSeek không trả về nội dung văn bản")
+    return str(choices[0]["message"]["content"]).strip()
+
+
 def _call_gemini(api_model: str, api_key: str, prompt: str, timeout: int = 90) -> str:
     response = requests.post(
         f"{GEMINI_API_BASE}/{api_model}:generateContent",
@@ -91,6 +116,8 @@ def call_model(model: str, api_key: str, prompt: str, timeout: int = 90) -> str:
     try:
         if spec["provider"] == "openai":
             return _call_openai(spec["api_model"], api_key, prompt, timeout)
+        elif spec["provider"] == "deepseek":
+            return _call_deepseek(spec["api_model"], api_key, prompt, timeout)
         return _call_gemini(spec["api_model"], api_key, prompt, timeout)
     except requests.Timeout as exc:
         raise AIProviderError("Kết nối AI quá thời gian chờ") from exc
@@ -104,6 +131,12 @@ def test_connection(model: str, api_key: str) -> None:
         if spec["provider"] == "openai":
             response = requests.get(
                 f"https://api.openai.com/v1/models/{spec['api_model']}",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=20,
+            )
+        elif spec["provider"] == "deepseek":
+            response = requests.get(
+                "https://api.deepseek.com/models",
                 headers={"Authorization": f"Bearer {api_key}"},
                 timeout=20,
             )

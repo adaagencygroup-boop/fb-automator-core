@@ -51,34 +51,6 @@ function notifySessionLost(code) {
   window.dispatchEvent(new CustomEvent(SESSION_EVENT, { detail: code }));
 }
 
-function apiError(error) {
-  const detail = error.response?.data?.detail || error.response?.data?.message;
-  const result = new Error(typeof detail === "string" ? detail : error.message || "Không thể kết nối tới Local Engine");
-  result.status = error.response?.status || 0;
-  result.code = typeof detail === "string" ? detail : error.code;
-  return result;
-}
-
-function refreshAccess() {
-  if (!refreshPromise) {
-    refreshPromise = axios
-      .post(`${API_BASE}/api/v1/auth/refresh`, {}, {
-        withCredentials: true, timeout: 15000,
-        headers: { "X-Auth-Client": "user", ...(getSessionUserId() ? { "X-Auth-User-Id": getSessionUserId() } : {}) },
-      })
-      .finally(() => {
-        refreshPromise = null;
-      });
-  }
-  return refreshPromise;
-}
-
-function shouldSkipRefresh(url) {
-  return ["/auth/refresh", "/auth/login", "/registration-status", "/verify-license", "/admin/login", "/auth/register", "/auth/logout"].some((part) =>
-    String(url || "").includes(part)
-  );
-}
-
 function extractErrorMessage(error) {
   const detail = error.response?.data?.detail;
   if (typeof detail === "string") return detail;
@@ -101,6 +73,34 @@ function extractErrorMessage(error) {
     error.response?.data?.message ||
     error.message ||
     "Không thể kết nối tới Local Engine (Port 28129)"
+  );
+}
+
+function apiError(error) {
+  const message = extractErrorMessage(error);
+  const result = new Error(message);
+  result.status = error.response?.status || 0;
+  result.code = typeof error.response?.data?.detail === "string" ? error.response.data.detail : error.code;
+  return result;
+}
+
+function refreshAccess() {
+  if (!refreshPromise) {
+    refreshPromise = axios
+      .post(`${API_BASE}/api/v1/auth/refresh`, {}, {
+        withCredentials: true, timeout: 15000,
+        headers: { "X-Auth-Client": "user", ...(getSessionUserId() ? { "X-Auth-User-Id": getSessionUserId() } : {}) },
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+}
+
+function shouldSkipRefresh(url) {
+  return ["/auth/refresh", "/auth/login", "/registration-status", "/verify-license", "/admin/login", "/auth/register", "/auth/logout"].some((part) =>
+    String(url || "").includes(part)
   );
 }
 

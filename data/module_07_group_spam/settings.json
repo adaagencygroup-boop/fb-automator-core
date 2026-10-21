@@ -1,9 +1,10 @@
 {
-  "model": "gemini-pro-latest",
+  "model": "deepseek-v4-flash",
   "threads": 2,
   "rest_minutes": 10,
   "max_posts": 10,
   "api_keys": {
-    "gemini": "YWpaBuoUI0WgXSxp8luVWZsevUMpeEixCiQE0gkZScRwo/yoFFCPD2gpIcgRvxlpEeqNUKcVRQjetXLsrHxPfED0cDurwhdKOCRFkgVdht0="
+    "gemini": "CA/Ve1Ap62SHFI7viHEVGz5GiWBgT+oGOLLIiL0oDALNMPVpG8/7IlUIGJPDZjJXzdUDGb15ajhd3fgQaIPibg==",
+    "deepseek": "TRdDvKacV85cJoO6x83cDuYi5ciLCY7Jc2bRHfjRYhabHMxWHgU70/uXpFaxTBfPK+5pAFWHd8AOwl99AMxOJg=="
   }
 }

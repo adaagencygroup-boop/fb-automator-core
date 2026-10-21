@@ -25,6 +25,12 @@ import { testGroupAiConnection, getGeminiModels, saveGroupSettings } from "../..
  * 5. Thao tác nhanh: Tải model Google, Kiểm tra API, Lưu cấu hình / Chỉnh sửa
  * ============================================================================
  */
+const getProvider = (m) => {
+  if (m === "gemini" || m?.startsWith("gemini-")) return "gemini";
+  if (m?.startsWith("deepseek")) return "deepseek";
+  return "openai";
+};
+
 export default function GroupSettingsSection({
   model = "gpt-4o",
   setModel,
@@ -54,7 +60,7 @@ export default function GroupSettingsSection({
   isLocked,
   setIsLocked,
 }) {
-  const activeProvider = model === "gemini" || model.startsWith("gemini-") ? "gemini" : "openai";
+  const activeProvider = getProvider(model);
   const savedKey = providerStatus?.[activeProvider];
   const hasApiKey = Boolean(apiKey.trim() || savedKey?.configured);
 
@@ -64,6 +70,13 @@ export default function GroupSettingsSection({
     if (setIsLocked) setIsLocked(val);
     setInternalLocked(val);
   };
+
+  // Tự động nạp API key đã lưu nếu state apiKey đang rỗng
+  useEffect(() => {
+    if (!apiKey && savedKey?.key) {
+      setApiKey(savedKey.key);
+    }
+  }, [savedKey?.key, activeProvider]);
 
   const [errorDialog, setErrorDialog] = useState(null);
 
@@ -87,8 +100,11 @@ export default function GroupSettingsSection({
       onModelChange(event);
       return;
     }
-    setModel(event.target.value);
-    setApiKey("");
+    const newModel = event.target.value;
+    setModel(newModel);
+    const newProvider = getProvider(newModel);
+    const existingKey = providerStatus?.[newProvider]?.key || "";
+    setApiKey(existingKey);
     if (setShowApiKey) setShowApiKey(false);
     if (setSettingsFeedback) setSettingsFeedback(null);
   };
@@ -160,6 +176,10 @@ export default function GroupSettingsSection({
     if (setSettingsAction) setSettingsAction("saving");
     if (setSettingsFeedback) setSettingsFeedback(null);
     try {
+      if (!apiKey.trim() && !savedKey?.configured) {
+        const provName = activeProvider === "deepseek" ? "DeepSeek" : activeProvider === "gemini" ? "Google Gemini" : "OpenAI";
+        throw new Error(`Vui lòng nhập API Key cho ${provName} trước khi lưu cấu hình.`);
+      }
       const payload = {
         model,
         api_key: apiKey.trim() || null,
@@ -169,7 +189,9 @@ export default function GroupSettingsSection({
       };
       const result = await saveGroupSettings(payload);
       if (setProviderStatus) setProviderStatus(result.providers || {});
-      setApiKey("");
+      const activeProv = getProvider(model);
+      const savedKeyVal = result.api_key || result.providers?.[activeProv]?.key || apiKey.trim();
+      setApiKey(savedKeyVal);
       if (setShowApiKey) setShowApiKey(false);
       if (setSettingsFeedback) {
         setSettingsFeedback({ type: "success", message: "Đã lưu cấu hình trên máy này" });
@@ -216,7 +238,7 @@ export default function GroupSettingsSection({
     >
       <div className="grid gap-4 md:grid-cols-2">
         <Field label="Model AI" required>
-          <Tooltip content="Chọn mô hình AI tạo nội dung: OpenAI GPT-4o, GPT-4o mini hoặc Google Gemini." align="left">
+          <Tooltip content="Chọn mô hình AI tạo nội dung: OpenAI GPT-4o, Google Gemini hoặc DeepSeek V4 Flash." align="left">
             <SelectField
               value={model}
               onChange={handleModelChange}
@@ -233,6 +255,9 @@ export default function GroupSettingsSection({
                     {item.name}
                   </option>
                 ))}
+              </optgroup>
+              <optgroup label="DeepSeek">
+                <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
               </optgroup>
             </SelectField>
           </Tooltip>
@@ -253,9 +278,9 @@ export default function GroupSettingsSection({
                 placeholder={
                   savedKey?.configured
                     ? `Đã lưu ${savedKey.hint}`
-                    : activeProvider === "openai"
-                      ? "sk-••••••••••••••••"
-                      : "AIza••••••••••••••••"
+                    : activeProvider === "gemini"
+                      ? "AIza••••••••••••••••"
+                      : "sk-••••••••••••••••"
                 }
                 className="pr-10 font-mono disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
                 autoComplete="off"
@@ -274,7 +299,7 @@ export default function GroupSettingsSection({
           </Tooltip>
           <span className="block text-[10px] font-normal text-slate-400">
             {savedKey?.configured
-              ? `Đang dùng khóa đã mã hóa trên máy (${savedKey.hint}). Nhập khóa mới để thay thế.`
+              ? `Đang dùng khóa đã lưu trên máy (${savedKey.hint}). ${locked ? "Bấm Chỉnh sửa để xem hoặc sửa khóa." : "Khóa đang hiển thị đầy đủ, bạn có thể chỉnh sửa trực tiếp."}`
               : "Nhập API Key hợp lệ của nhà cung cấp AI đã chọn."}
           </span>
         </Field>
@@ -334,7 +359,15 @@ export default function GroupSettingsSection({
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => setLocked(false)}
+              onClick={() => {
+                setLocked(false);
+                if (!apiKey && savedKey?.key) {
+                  setApiKey(savedKey.key);
+                }
+                if (setShowApiKey) {
+                  setShowApiKey(true);
+                }
+              }}
               className="cursor-pointer text-xs flex items-center gap-1.5 border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-medium shadow-2xs"
             >
               <Edit3 className="size-3.5 text-slate-600" />
@@ -342,16 +375,18 @@ export default function GroupSettingsSection({
             </Button>
           ) : (
             <>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={Boolean(settingsAction) || settingsLoading}
-                onClick={handleLoadGeminiModels}
-                className="cursor-pointer text-xs"
-              >
-                {settingsAction === "loading-models" ? "Đang tải model..." : "Tải model Google"}
-              </Button>
+              {activeProvider === "gemini" && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={Boolean(settingsAction) || settingsLoading}
+                  onClick={handleLoadGeminiModels}
+                  className="cursor-pointer text-xs"
+                >
+                  {settingsAction === "loading-models" ? "Đang tải model..." : "Tải model Google"}
+                </Button>
+              )}
               <Button
                 type="button"
                 size="sm"
