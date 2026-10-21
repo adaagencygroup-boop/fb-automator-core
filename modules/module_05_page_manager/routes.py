@@ -1,6 +1,4 @@
 """API màn Đăng bài AI: danh sách nick, đếm page, kích hoạt / dừng luồng."""
-from concurrent.futures import ThreadPoolExecutor
-
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -12,6 +10,7 @@ from modules.module_02_account_manager.database.repository import AccountReposit
 from modules.module_04_page_creator.automation.facebook_urls import facebook_picture_url
 from modules.module_04_page_creator.routes import get_owner_username
 from modules.module_05_page_manager.ai_job import pages_of, parse_schedule_times, request_stop, snapshot, start_job
+from modules.module_05_page_manager.ai_settings import load_settings, save_settings
 from modules.module_05_page_manager.ai_generator import MODEL_FALLBACK_CHAIN, models_to_try
 from modules.module_05_page_manager.vi_messages import suggested_replacement, vi_gemini_message, vi_pixabay_message
 from modules.module_05_page_manager.page_avatar import page_avatar, valid_page_avatar
@@ -19,6 +18,7 @@ from modules.module_05_page_manager.page_counter import (
     count_pages_for_account,
     get_count,
     open_fanpage_in_browser,
+    persist_page_avatars,
     remember_keywords,
 )
 from sqlalchemy.orm import Session
@@ -47,6 +47,18 @@ class TestKeyBody(BaseModel):
 
 class TestPixabayBody(BaseModel):
     pixabay_key: str = ""
+
+
+class SettingsBody(BaseModel):
+    gemini_key: str = ""
+    pixabay_key: str = ""
+    model_name: str = "gemini-3-flash-preview"
+    prompt: str = ""
+    schedule_enabled: bool = False
+    schedule_times: list[str] = Field(default_factory=list)
+    sleep_min: int = 600
+    sleep_max: int = 900
+    keywords: dict[str, str] = Field(default_factory=dict)
 
 
 class StartBody(BaseModel):
@@ -89,19 +101,19 @@ def _fanpage_row(page: dict, account, avatar_url: str = "") -> dict:
     }
 
 
-def _avatars_for(pages: list) -> list[str]:
-    """Ảnh đại diện thật của từng page. Graph picture là silhouette xám nên không dùng."""
+def _avatars_for(owner: str, uid: str, pages: list) -> list[str]:
+    """Đọc URL đã lưu. Page chưa có ảnh thì tải một lần và ghi DB, lần sau không tải lại."""
     if not pages:
         return []
-
-    def one(page):
-        stored = str(page.get("avatar_url") or "")
-        if valid_page_avatar(stored):
-            return stored
-        return page_avatar(str(page.get("url") or ""), str(page.get("graph_id") or ""))
-
-    with ThreadPoolExecutor(max_workers=min(6, len(pages))) as pool:
-        return list(pool.map(one, pages))
+    try:
+        return persist_page_avatars(owner, uid, pages)
+    except Exception:
+        return [
+            page_avatar(str(page.get("url") or ""), str(page.get("graph_id") or ""))
+            if not valid_page_avatar(str(page.get("avatar_url") or ""))
+            else str(page.get("avatar_url") or "")
+            for page in pages
+        ]
 
 
 def _account_rows(db: Session, owner: str):
@@ -109,7 +121,7 @@ def _account_rows(db: Session, owner: str):
     rows = []
     for account in accounts:
         counted, live = _pages_for(db, owner, account.uid)
-        avatars = _avatars_for(counted)
+        avatars = _avatars_for(owner, account.uid, counted)
         rows.append({
             "uid": account.uid,
             "profile_name": account.profile_name or "",
@@ -273,6 +285,34 @@ async def open_page(body: OpenPageBody, background_tasks: BackgroundTasks, db: S
         raise HTTPException(status_code=404, detail="Không tìm thấy fanpage của nick này.")
     background_tasks.add_task(open_fanpage_in_browser, owner_context.get(), uid, dict(page))
     return {"started": True, "uid": uid, "page_id": page_id, "name": page.get("name") or ""}
+
+
+def _owner():
+    owner = get_owner_username()
+    if not owner:
+        raise HTTPException(status_code=401, detail="Thiếu phiên đăng nhập.")
+    return owner
+
+
+@router.get("/settings")
+def read_ai_settings():
+    """Cấu hình đã lưu của user đang đăng nhập. Chưa lưu lần nào thì saved=false."""
+    owner = _owner()
+    try:
+        return load_settings(owner)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Không đọc được cấu hình đăng bài.") from exc
+
+
+@router.put("/settings")
+def write_ai_settings(body: SettingsBody):
+    owner = _owner()
+    try:
+        return save_settings(owner, body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Không lưu được cấu hình đăng bài.") from exc
 
 
 @router.post("/start")

@@ -1,3 +1,4 @@
+import time
 import unittest
 from unittest.mock import patch
 
@@ -6,9 +7,12 @@ from datetime import datetime
 from modules.module_05_page_manager.ai_job import (
     _content_for,
     _format_remain,
+    _has_later_page,
     _next_slot,
+    due_slot,
     parse_schedule_times,
 )
+from modules.module_05_page_manager.page_poster import PostInterrupted, _guard
 from modules.module_05_page_manager.vi_messages import suggested_replacement, vi_gemini_message
 
 
@@ -20,11 +24,47 @@ class ScheduleTimeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_schedule_times("25:00")
 
+    def test_late_slot_runs_as_soon_as_free(self):
+        now = datetime(2026, 10, 21, 9, 7, 0)
+        fired = set()
+        slot, late = due_slot(["09:00", "09:05", "15:00"], fired, now=now)
+        self.assertEqual(slot, "09:00")
+        self.assertTrue(late)
+        slot, late = due_slot(["09:00", "09:05", "15:00"], fired, now=now)
+        self.assertEqual(slot, "09:05")
+        self.assertTrue(late)
+        slot, late = due_slot(["09:00", "09:05", "15:00"], fired, now=now)
+        self.assertIsNone(slot)
+        self.assertFalse(late)
+        upcoming, remain = _next_slot(["09:00", "09:05", "15:00"], fired, now=now)
+        self.assertEqual(upcoming, "15:00")
+        self.assertGreater(remain, 0)
+
+    def test_exact_minute_is_not_marked_late(self):
+        now = datetime(2026, 10, 21, 9, 0, 30)
+        slot, late = due_slot(["09:00"], set(), now=now)
+        self.assertEqual(slot, "09:00")
+        self.assertFalse(late)
+
     def test_next_slot_is_the_nearest_upcoming(self):
         now = datetime(2026, 10, 16, 9, 50, 0)
         slot, remain = _next_slot(["09:55", "15:00", "21:00"], set(), now=now)
         self.assertEqual(slot, "09:55")
         self.assertEqual(remain, 5 * 60)
+
+    def test_last_page_does_not_wait(self):
+        pages = [{"url": "https://facebook.com/a"}, {"url": ""}, {"url": "https://facebook.com/b"}]
+        self.assertTrue(_has_later_page(pages, 0))
+        self.assertTrue(_has_later_page(pages, 1))
+        self.assertFalse(_has_later_page(pages, 2))
+
+    def test_guard_distinguishes_stop_and_timeout(self):
+        with self.assertRaises(PostInterrupted) as stopped:
+            _guard(lambda: True, time.monotonic() + 30)
+        self.assertEqual(stopped.exception.kind, "stopped")
+        with self.assertRaises(PostInterrupted) as expired:
+            _guard(lambda: False, time.monotonic() - 1)
+        self.assertEqual(expired.exception.kind, "timeout")
 
     def test_countdown_text(self):
         self.assertEqual(_format_remain(90), "1 phút 30 giây")

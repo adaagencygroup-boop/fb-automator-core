@@ -7,6 +7,8 @@ thay vì news feed cá nhân.
 import io
 import logging
 import os
+import random
+import threading
 import time
 
 from selenium import webdriver
@@ -14,10 +16,31 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 
-from modules.module_02_account_manager.automation.browser_manager import human_sleep, human_type, wait_and_find
+from modules.module_02_account_manager.automation.browser_manager import human_sleep, wait_and_find
 from modules.module_04_page_creator.automation.locators import PAGE_CREATION
 
 logger = logging.getLogger(__name__)
+
+PAGE_LOAD_TIMEOUT = 45
+POST_LIMIT_SECONDS = 180
+
+
+class PostInterrupted(Exception):
+    """Bài đang soạn bị dừng, hoặc quá hạn một lần đăng."""
+
+    def __init__(self, kind: str):
+        super().__init__(kind)
+        self.kind = kind
+
+
+def _close_composer(driver) -> None:
+    """Đóng khung soạn. Không bấm Đăng."""
+    try:
+        driver.switch_to.active_element.send_keys(Keys.ESCAPE)
+        time.sleep(0.2)
+        driver.switch_to.active_element.send_keys(Keys.ESCAPE)
+    except Exception:
+        pass
 
 
 def _click_mind_box(driver: webdriver.Chrome) -> bool:
@@ -221,51 +244,135 @@ def use_page_session(driver: webdriver.Chrome, page_id: str) -> None:
         driver.add_cookie(payload)
 
 
-def post_on_page(driver: webdriver.Chrome, page_url: str, post_content: str, image_path: str = None, page_id: str = "") -> bool:
+def _guard(should_stop, deadline):
+    if should_stop():
+        raise PostInterrupted("stopped")
+    if time.monotonic() >= deadline:
+        raise PostInterrupted("timeout")
+
+
+def _pause(seconds_min, seconds_max, should_stop, deadline):
+    end = time.monotonic() + random.uniform(seconds_min, seconds_max)
+    while True:
+        _guard(should_stop, deadline)
+        left = end - time.monotonic()
+        if left <= 0:
+            return
+        time.sleep(min(0.5, left))
+
+
+def _type_text(element, text, should_stop, deadline):
+    for char in text or "":
+        _guard(should_stop, deadline)
+        element.send_keys(char)
+        time.sleep(random.uniform(0.02, 0.05))
+
+
+def _wait_visible(driver, locators, timeout, should_stop, deadline):
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        _guard(should_stop, deadline)
+        for locator in locators:
+            try:
+                for element in driver.find_elements(By.XPATH, locator):
+                    if element.is_displayed():
+                        return element
+            except Exception:
+                pass
+        time.sleep(0.4)
+    from selenium.common.exceptions import TimeoutException
+    raise TimeoutException(f"Không thấy ô soạn bài sau {timeout} giây")
+
+
+def post_on_page(driver: webdriver.Chrome, page_url: str, post_content: str, image_path: str = None, page_id: str = "", should_stop=None) -> bool:
     if not page_url or not post_content:
         return False
-    use_page_session(driver, page_id)
-    logger.info("Mở khung đăng bài: %s với page %s", page_url, page_id or "hiện tại")
-    driver.get(page_url)
-    human_sleep(2.0, 3.0)
-    confirm_use_page(driver)
-    human_sleep(1.0, 1.6)
+    should_stop = should_stop or (lambda: False)
+    deadline = time.monotonic() + POST_LIMIT_SECONDS
+    finished = threading.Event()
 
-    if not _click_mind_box(driver):
-        post_box = wait_and_find(driver, PAGE_CREATION["post_box"], timeout=15)
-        try:
-            post_box.click()
-        except Exception:
-            driver.execute_script("arguments[0].click();", post_box)
-    human_sleep(2.0, 3.5)
+    def watch():
+        while not finished.wait(0.5):
+            if should_stop() or time.monotonic() >= deadline:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+                return
 
-    text_area = wait_and_find(driver, PAGE_CREATION["post_text_area"], timeout=15)
+    threading.Thread(target=watch, name="ai-post-watch", daemon=True).start()
     try:
-        text_area.click()
+        try:
+            driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+        except Exception:
+            pass
+        _guard(should_stop, deadline)
+        use_page_session(driver, page_id)
+        logger.info("Mở khung đăng bài: %s với page %s", page_url, page_id or "hiện tại")
+        try:
+            driver.get(page_url)
+        except PostInterrupted:
+            raise
+        except Exception as exc:
+            from selenium.common.exceptions import TimeoutException
+            _guard(should_stop, deadline)
+            if not isinstance(exc, TimeoutException):
+                raise
+            try:
+                driver.execute_script("window.stop();")
+            except Exception:
+                pass
+            raise TimeoutError("Trang page tải quá 45 giây") from exc
+        _pause(2.0, 3.0, should_stop, deadline)
+        confirm_use_page(driver)
+        _pause(1.0, 1.6, should_stop, deadline)
+
+        if not _click_mind_box(driver):
+            post_box = _wait_visible(driver, PAGE_CREATION["post_box"], 15, should_stop, deadline)
+            try:
+                post_box.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", post_box)
+        _pause(2.0, 3.5, should_stop, deadline)
+
+        text_area = _wait_visible(driver, PAGE_CREATION["post_text_area"], 15, should_stop, deadline)
+        try:
+            text_area.click()
+        except Exception:
+            pass
+        _type_text(text_area, post_content, should_stop, deadline)
+        _pause(1.5, 2.5, should_stop, deadline)
+
+        if image_path and os.path.exists(image_path):
+            _guard(should_stop, deadline)
+            _attach_local_image(driver, image_path)
+
+        if dismiss_not_now(driver):
+            _pause(1.0, 1.6, should_stop, deadline)
+
+        if not _click_final_post(driver, should_stop, deadline):
+            _guard(should_stop, deadline)
+            raise TimeoutError("Không bấm được nút Post/Đăng (aria-label=Post).")
+        _pause(2.0, 3.0, should_stop, deadline)
+        if dismiss_not_now(driver):
+            _pause(1.0, 1.6, should_stop, deadline)
+        else:
+            _pause(2.0, 3.0, should_stop, deadline)
+            dismiss_not_now(driver)
+        _pause(2.0, 3.0, should_stop, deadline)
+        return True
+    except PostInterrupted as exc:
+        if exc.kind == "stopped":
+            _close_composer(driver)
+        raise
     except Exception:
-        pass
-    human_type(text_area, post_content, min_delay=0.02, max_delay=0.05)
-    human_sleep(1.5, 2.5)
-
-    # Có ảnh Pixabay thì gắn; không có / gắn lỗi thì đăng chữ thôi.
-    if image_path and os.path.exists(image_path):
-        _attach_local_image(driver, image_path)
-
-    if dismiss_not_now(driver):
-        human_sleep(1.0, 1.6)
-
-    # Composer 1 bước: có Post ngay. Composer 2 bước: Next → Post settings → Post.
-    # Nút vẫn aria-label="Post" như trước; lỗi hay do chưa sang Post settings / is_displayed=false.
-    if not _click_final_post(driver):
-        raise TimeoutError("Không bấm được nút Post/Đăng (aria-label=Post).")
-    human_sleep(2.0, 3.0)
-    if dismiss_not_now(driver):
-        human_sleep(1.0, 1.6)
-    else:
-        human_sleep(2.0, 3.0)
-        dismiss_not_now(driver)
-    human_sleep(2.0, 3.0)
-    return True
+        if should_stop():
+            raise PostInterrupted("stopped")
+        if time.monotonic() >= deadline:
+            raise PostInterrupted("timeout")
+        raise
+    finally:
+        finished.set()
 
 
 def _js_click_aria(driver: webdriver.Chrome, *labels: str) -> bool:
@@ -291,20 +398,22 @@ def _js_click_aria(driver: webdriver.Chrome, *labels: str) -> bool:
         return False
 
 
-def _click_final_post(driver: webdriver.Chrome) -> bool:
+def _click_final_post(driver: webdriver.Chrome, should_stop=None, deadline=None) -> bool:
     """Bấm đúng aria-label=Post/Đăng. Nếu đang ở bước Next thì bấm Next trước rồi đợi Post."""
-    deadline = time.time() + 25
+    should_stop = should_stop or (lambda: False)
+    post_deadline = time.monotonic() + 25
+    limit = deadline if deadline is not None else post_deadline
     tried_next = False
-    while time.time() < deadline:
+    while time.monotonic() < post_deadline:
+        _guard(should_stop, limit)
         if _js_click_aria(driver, "Post", "Đăng"):
             logger.info("Đã bấm [aria-label=Post/Đăng]")
             return True
 
-        # Composer 2 bước: chưa có Post thì bấm Next một lần để mở Post settings.
         if not tried_next and _js_click_aria(driver, "Next", "Tiếp"):
             logger.info("Đã bấm Next/Tiếp → chờ Post settings hiện aria-label=Post")
             tried_next = True
-            human_sleep(1.5, 2.5)
+            _pause(1.5, 2.5, should_stop, limit)
             continue
 
         time.sleep(0.5)
