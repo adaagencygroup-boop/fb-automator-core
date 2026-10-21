@@ -34,16 +34,18 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import {
   generateGroupPosts,
+  getCurrentGroupCampaign,
+  getGroupCampaign,
   getGeminiModels,
   getGroupSettings,
   runGroupCampaign,
   saveGroupSettings,
+  stopGroupCampaign,
   testGroupAiConnection,
   uploadGroupMedia,
 } from "../service";
@@ -172,7 +174,6 @@ export default function GroupPostModule() {
   const [posts, setPosts] = useState(Array.from({ length: 5 }, (_, index) => (index === 0 ? INITIAL_POST : "")));
   // Giữ bản mới nhất để nạp đúng nội dung khi chuyển tab mà không làm mất caret lúc gõ.
   const postsRef = useRef(posts);
-  postsRef.current = posts;
   const linkRangeRef = useRef(null);
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState("");
@@ -187,8 +188,13 @@ export default function GroupPostModule() {
   const [scheduleDate, setScheduleDate] = useState("");
   const [scheduleTime, setScheduleTime] = useState("08:00");
   const [runState, setRunState] = useState("idle");
-  const [progress, setProgress] = useState(0);
+  const [campaignId, setCampaignId] = useState(null);
+  const [campaignProgress, setCampaignProgress] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
+
+  useEffect(() => {
+    postsRef.current = posts;
+  }, [posts]);
 
   const loadAccounts = async () => {
     setAccountsLoading(true);
@@ -249,6 +255,57 @@ export default function GroupPostModule() {
     return () => { cancelled = true; };
   }, []);
 
+  // Khôi phục chiến dịch đang chạy khi người dùng đổi tab hoặc tải lại giao diện.
+  useEffect(() => {
+    let cancelled = false;
+    getCurrentGroupCampaign()
+      .then((job) => {
+        if (cancelled || !job?.job_id) return;
+        const terminal = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"].includes(job.status);
+        setCampaignProgress(job);
+        if (!terminal) {
+          setCampaignId(job.job_id);
+          setRunState(job.status === "QUEUED" ? "starting" : "running");
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!campaignId) return undefined;
+    let cancelled = false;
+    let timer;
+    const poll = async () => {
+      try {
+        const job = await getGroupCampaign(campaignId);
+        if (cancelled) return;
+        setCampaignProgress(job);
+        const terminal = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"].includes(job.status);
+        if (terminal) {
+          setRunState("idle");
+          setCampaignId(null);
+          if (job.status === "COMPLETED") toast.success(job.message, "HOÀN TẤT CHIẾN DỊCH");
+          else if (job.status === "STOPPED") toast.info(job.message, "ĐÃ DỪNG CHIẾN DỊCH");
+          else toast.error(job.message, "CHIẾN DỊCH KẾT THÚC");
+          return;
+        }
+        setRunState(job.status === "QUEUED" ? "starting" : "running");
+        timer = window.setTimeout(poll, 1000);
+      } catch (error) {
+        if (!cancelled) {
+          setSettingsFeedback({ type: "error", message: error.message || "Mất kết nối khi theo dõi chiến dịch" });
+          timer = window.setTimeout(poll, 3000);
+        }
+      }
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [campaignId]);
+
   const currentGroupPool = useMemo(() => {
     if (groupSource === "file" && groupFile?.groups?.length) {
       return groupFile.groups;
@@ -261,6 +318,7 @@ export default function GroupPostModule() {
   const hasGroups = selectedGroups.length > 0 || (groupSource === "file" ? Boolean(groupFile) : false);
   const activeGroupsCount = groupSource === "file" ? (groupFile?.validGroupsCount || selectedGroups.length) : selectedGroups.length;
   const generatedCount = posts.filter((post) => post.trim()).length;
+  const activePostLength = String(posts[activePost] || "").replace(/<[^>]*>/g, "").length;
   const totalPlanned = Math.min(Number(maxPosts) || 0, activeGroupsCount * Math.max(selectedAccounts.length, 1));
   const activeProvider = getProvider(model);
   const savedKey = providerStatus[activeProvider];
@@ -533,17 +591,37 @@ export default function GroupPostModule() {
     reader.readAsDataURL(file);
   };
 
+  const appendCampaignLog = (level, message) => {
+    setCampaignProgress((current) => ({
+      ...(current || {}),
+      logs: [
+        ...(current?.logs || []),
+        { time: new Date().toISOString().slice(0, 19), level, message },
+      ],
+    }));
+  };
+
   const handleStart = async () => {
     if (!selectedAccounts.length || !hasGroups) return;
     setRunState("starting");
-    setProgress(4);
+    setCampaignProgress({
+      status: "QUEUED",
+      logs: [{
+        time: new Date().toISOString().slice(0, 19),
+        level: "INFO",
+        message: "Đã nhận lệnh bắt đầu, đang chuẩn bị cấu hình chiến dịch...",
+      }],
+    });
     try {
       if (!isSettingsLocked) {
+        appendCampaignLog("INFO", "Đang kiểm tra và lưu cấu hình Module 7...");
         const saved = await handleSaveSettings(false);
         if (!saved) throw new Error("Cấu hình chưa hợp lệ");
       }
+      appendCampaignLog("SUCCESS", `Đã chuẩn bị ${selectedAccounts.length} tài khoản và nguồn nhóm.`);
       let savedMediaPaths = [];
       if (mediaFiles.length > 0) {
+        appendCampaignLog("INFO", `Đang tải lên ${mediaFiles.length} tệp media...`);
         setSettingsFeedback({ type: "info", message: `Đang tải lên ${mediaFiles.length} tệp media lên hệ thống...` });
         const formData = new FormData();
         mediaFiles.forEach((file) => {
@@ -552,11 +630,13 @@ export default function GroupPostModule() {
         const uploadRes = await uploadGroupMedia(formData);
         if (uploadRes?.files?.length) {
           savedMediaPaths = uploadRes.files.map((f) => f.path || f.relative_path);
+          appendCampaignLog("SUCCESS", `Đã tải lên ${savedMediaPaths.length} tệp media.`);
         }
       }
 
       const activeGroups = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
-      await runGroupCampaign({
+      appendCampaignLog("INFO", `Đang gửi chiến dịch ${selectedAccounts.length} tài khoản × ${activeGroups.length} nhóm tới worker...`);
+      const campaign = await runGroupCampaign({
         action_type: "POST",
         account_ids: selectedAccounts.map((account) => account.id),
         account_uids: selectedAccounts.map((account) => account.uid),
@@ -577,19 +657,28 @@ export default function GroupPostModule() {
           schedule_at: scheduleEnabled && scheduleDate ? `${scheduleDate}T${scheduleTime}` : null,
         },
       });
-      setRunState("running");
-      setProgress(12);
+      setCampaignId(campaign.job_id);
+      setCampaignProgress(campaign);
+      setRunState(campaign.status === "QUEUED" ? "starting" : "running");
       toast.success("Đã khởi động chiến dịch đăng bài nhóm thành công!", "BẮT ĐẦU CHIẾN DỊCH");
     } catch (error) {
+      appendCampaignLog("ERROR", error.message || "Không thể bắt đầu chiến dịch");
       setSettingsFeedback({ type: "error", message: error.message || "Không thể bắt đầu chiến dịch" });
       setRunState("idle");
-      setProgress(0);
     }
   };
 
-  const handleStop = () => {
-    setRunState("idle");
-    setProgress(0);
+  const handleStop = async () => {
+    if (!campaignId) return;
+    try {
+      setRunState("stopping");
+      const job = await stopGroupCampaign(campaignId);
+      setCampaignProgress(job);
+      toast.info("Hệ thống sẽ dừng sau thao tác Facebook hiện tại.", "ĐANG DỪNG");
+    } catch (error) {
+      setSettingsFeedback({ type: "error", message: error.message || "Không thể dừng chiến dịch" });
+      setRunState("running");
+    }
   };
 
   return (
@@ -911,7 +1000,7 @@ export default function GroupPostModule() {
                 className="min-h-24 max-h-80 overflow-y-auto px-3 py-3 text-xs leading-5 text-slate-800 outline-none [&_a]:cursor-pointer [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:text-base [&_h3]:font-semibold [&_img]:my-2 [&_img]:max-h-40 [&_img]:max-w-full [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:list-disc [&_ul]:pl-6"
               />
               <div className="px-3 pb-2 text-right text-[9px] text-slate-400">
-                {editorRef.current?.innerText?.length || 0}/2000
+                {activePostLength}/2000
               </div>
             </div>
           </div>
@@ -1054,16 +1143,23 @@ export default function GroupPostModule() {
       {/* Tiến trình */}
       <Card className="min-h-64 border-slate-200 p-5 shadow-sm">
         <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
-          <span className="flex size-5 items-center justify-center rounded bg-emerald-50 text-emerald-600">▥</span> Theo dõi tiến trình
+          <span className="flex size-5 items-center justify-center rounded bg-emerald-50 text-emerald-600">▥</span>
+          Theo dõi tiến trình
         </div>
-        {runState !== "idle" ? (
-          <div className="flex min-h-48 flex-col items-center justify-center gap-3">
-            <Progress value={progress} className="max-w-xl" />
-            <p className="text-xs font-semibold text-primary">
-              {runState === "starting"
-                ? "Đang khởi tạo tác vụ..."
-                : `Đang thực hiện ${progress}/${Math.max(totalPlanned, 1)} tác vụ`}
-            </p>
+        {runState !== "idle" || campaignProgress ? (
+          <div className="mt-4 max-h-72 min-h-48 space-y-1 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/50 p-2">
+            {campaignProgress?.logs?.length ? campaignProgress.logs.slice().reverse().map((log, index) => (
+              <div key={`${log.time}-${index}`} className="flex gap-2 rounded px-2 py-1.5 text-[10px] hover:bg-white">
+                <span className="shrink-0 text-slate-400">{log.time?.split("T")[1] || "--:--:--"}</span>
+                <span className={log.level === "ERROR" ? "text-rose-600" : log.level === "SUCCESS" ? "text-emerald-600" : log.level === "WARNING" ? "text-amber-600" : "text-slate-600"}>
+                  {log.message}
+                </span>
+              </div>
+            )) : (
+              <div className="flex min-h-44 items-center justify-center text-[10px] text-slate-300">
+                {runState === "starting" ? "Đang khởi tạo tác vụ..." : "Chưa có nhật ký thực thi"}
+              </div>
+            )}
           </div>
         ) : (
           <div className="flex min-h-48 items-center justify-center text-xs text-slate-300">

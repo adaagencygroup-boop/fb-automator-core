@@ -128,6 +128,10 @@ async def lifespan(app: FastAPI):
         )
 
         init_page_models()
+    with startup_step("Module 07 group posting"):
+        from modules.module_07_group_spam.models import init_models as init_group_models
+
+        init_group_models()
     with startup_step("Backend module imports"):
         loaded = load_backend_modules()
     print(

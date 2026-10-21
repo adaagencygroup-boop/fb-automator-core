@@ -8,7 +8,7 @@ import shutil
 from typing import Any, Optional
 import uuid
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -21,6 +21,8 @@ from ..group_source import (
     search_facebook_groups,
 )
 from ..settings import group_settings, model_spec
+from ..campaign import campaign_manager
+from modules.module_02_account_manager.api.router import scoped_owner
 
 
 router = APIRouter(prefix="/api/groups", tags=["Module 07: Group posting"])
@@ -150,6 +152,29 @@ class CampaignInput(BaseModel):
     media: list[str] = Field(default_factory=list)
     settings: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("action_type")
+    @classmethod
+    def post_campaign_only(cls, value: str) -> str:
+        value = value.strip().upper()
+        if value != "POST":
+            raise ValueError("Luồng này chỉ hỗ trợ chiến dịch đăng bài")
+        return value
+
+    @field_validator("account_uids")
+    @classmethod
+    def requires_accounts(cls, value: list[str]) -> list[str]:
+        cleaned = list(dict.fromkeys(str(uid).strip() for uid in value if str(uid).strip()))
+        if not cleaned:
+            raise ValueError("Chưa chọn tài khoản Facebook nào")
+        return cleaned
+
+    @field_validator("posts")
+    @classmethod
+    def requires_content(cls, value: list[str]) -> list[str]:
+        if not any(str(post).strip() for post in value):
+            raise ValueError("Chưa có nội dung bài đăng")
+        return value
+
 
 @router.post("/source/parse")
 async def parse_group_source(item: ParseFileInput):
@@ -262,32 +287,35 @@ async def list_group_media():
 
 
 @router.post("/campaign")
-async def start_group_campaign(item: CampaignInput):
-    """Khởi động chiến dịch đăng bài / bình luận nhóm."""
+async def start_group_campaign(item: CampaignInput, owner: str | None = Depends(scoped_owner)):
+    """Khởi động worker đăng bài và trả về job để frontend theo dõi."""
     if not item.groups:
         raise HTTPException(400, "Chưa chọn nhóm Facebook nào để chạy chiến dịch")
+    try:
+        job = campaign_manager.start(item.model_dump(), owner)
+        # Giữ cờ `success` của hợp đồng API cũ; số lượt thành công nằm ở success_count.
+        return {**job, "success_count": job.get("success", 0), "success": True}
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(409, str(exc)) from exc
 
-    settings = item.settings or {}
-    schedule_at = settings.get("schedule_at")
-    delay_min = settings.get("delay_min", 30)
-    delay_max = settings.get("delay_max", 60)
-    shuffle_content = settings.get("shuffle_content", True)
-    avoid_duplicate = settings.get("avoid_duplicate", False)
 
-    group_keys = [g.get("key") or g.get("url") or g.get("id") or str(g) for g in item.groups]
+@router.get("/campaign/current")
+async def get_current_group_campaign(owner: str | None = Depends(scoped_owner)):
+    return campaign_manager.current(owner) or {"status": "IDLE"}
 
-    return {
-        "success": True,
-        "message": f"Đã tiếp nhận chiến dịch {item.action_type} cho {len(item.groups)} nhóm.",
-        "groups_count": len(item.groups),
-        "accounts_count": len(item.account_uids),
-        "posts_count": len(item.posts),
-        "media_count": len(item.media),
-        "settings_applied": {
-            "delay_range": f"{delay_min}s - {delay_max}s",
-            "shuffle_content": shuffle_content,
-            "avoid_duplicate": avoid_duplicate,
-            "schedule_at": schedule_at,
-        },
-    }
+
+@router.get("/campaign/{job_id}")
+async def get_group_campaign(job_id: str, owner: str | None = Depends(scoped_owner)):
+    job = campaign_manager.get(job_id, owner)
+    if not job:
+        raise HTTPException(404, "Không tìm thấy chiến dịch")
+    return job
+
+
+@router.post("/campaign/{job_id}/stop")
+async def stop_group_campaign(job_id: str, owner: str | None = Depends(scoped_owner)):
+    job = campaign_manager.stop(job_id, owner)
+    if not job:
+        raise HTTPException(404, "Không tìm thấy chiến dịch")
+    return job
 
