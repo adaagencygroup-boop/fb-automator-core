@@ -1,26 +1,34 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+import math
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import text
-from typing import List, Optional
+from sqlalchemy import text, func, or_
+from typing import List, Optional, Union
 from datetime import datetime, timedelta
 from modules.module_06_omnichannel_chat.database import get_db
-from modules.module_06_omnichannel_chat.schemas import NotificationOut
+from modules.module_06_omnichannel_chat.schemas import NotificationOut, PaginatedNotificationsOut
 from modules.module_06_omnichannel_chat.auth import get_current_user_optional
 from modules.module_06_omnichannel_chat.routers.pages import resolve_current_user_id
 from modules.module_06_omnichannel_chat.models import Notification, Page, Account, SystemUser
 
 router = APIRouter(prefix="/api/facebook", tags=["Notifications"])
 
-@router.get("/notifications", response_model=List[NotificationOut])
+@router.get("/notifications", response_model=Union[PaginatedNotificationsOut, List[NotificationOut]])
 def get_notifications(
     request: Request,
     facebook_user_id: Optional[str] = None,
     user_id: Optional[str] = None,
     page_id: Optional[str] = None,
+    page: Optional[int] = Query(None, ge=1, description="Số trang (1-indexed)"),
+    page_size: Optional[int] = Query(None, ge=1, le=100, description="Số lượng thông báo trên 1 trang"),
+    limit: Optional[int] = Query(None, ge=1, le=100, description="Số lượng thông báo cần lấy"),
+    offset: Optional[int] = Query(None, ge=0, description="Vị trí bắt đầu"),
+    notification_type: Optional[str] = Query(None, description="Loại thông báo: comment hoặc interaction"),
+    filter: Optional[str] = Query(None, description="Lọc: unread, replied, unreplied"),
+    search: Optional[str] = Query(None, description="Tìm kiếm theo tiêu đề hoặc người gửi"),
     db: Session = Depends(get_db),
     current_user: Optional[SystemUser] = Depends(get_current_user_optional)
 ):
-    """Fetch all notifications associated with a Facebook User ID (within last 14 days / 2 weeks)."""
+    """Fetch notifications with pagination support (within last 14 days / 2 weeks)."""
     two_weeks_ago = datetime.utcnow() - timedelta(days=14)
 
     # Automatically purge notifications older than 14 days
@@ -65,14 +73,55 @@ def get_notifications(
     page_dict = {str(r["page_id"]): r["page_name"] for r in page_rows}
     allowed_page_ids = list(page_dict.keys())
 
+    p_page = page if isinstance(page, int) else None
+    p_size = page_size if isinstance(page_size, int) else None
+    p_limit = limit if isinstance(limit, int) else None
+    p_offset = offset if isinstance(offset, int) else None
+    s_type = notification_type.strip().lower() if isinstance(notification_type, str) else ""
+    s_filter = filter.strip().lower() if isinstance(filter, str) else ""
+    s_query = search.strip().lower() if isinstance(search, str) else ""
+
+    is_paginated = p_page is not None or p_limit is not None or p_offset is not None or p_size is not None
+    effective_page_size = p_size or p_limit or 20
+    effective_page = p_page or ((p_offset // effective_page_size) + 1 if p_offset is not None else 1)
+    effective_offset = p_offset if p_offset is not None else (effective_page - 1) * effective_page_size
+
     if not allowed_page_ids:
+        if is_paginated:
+            return PaginatedNotificationsOut(items=[], notifications=[], total=0, page=1, page_size=effective_page_size, total_pages=0)
         return []
 
-    results = db.query(Notification)\
+    query = db.query(Notification)\
         .filter(Notification.created_time >= two_weeks_ago)\
-        .filter(Notification.page_id.in_(allowed_page_ids))\
-        .order_by(Notification.created_time.desc())\
-        .all()
+        .filter(Notification.page_id.in_(allowed_page_ids))
+
+    if s_type:
+        query = query.filter(Notification.notification_type == s_type)
+    if s_filter == "unread":
+        query = query.filter(Notification.unread == True)
+    elif s_filter == "unreplied":
+        query = query.filter(Notification.is_replied == False)
+    elif s_filter == "replied":
+        query = query.filter(Notification.is_replied == True)
+
+    if s_query:
+        s = f"%{s_query}%"
+        query = query.filter(
+            or_(
+                func.lower(Notification.title).like(s),
+                func.lower(Notification.from_user_name).like(s),
+            )
+        )
+
+    total = query.count()
+    query = query.order_by(Notification.created_time.desc())
+
+    if is_paginated:
+        results = query.offset(effective_offset).limit(effective_page_size).all()
+        total_pages = math.ceil(total / effective_page_size) if effective_page_size else 1
+    else:
+        results = query.all()
+        total_pages = 1
 
     notif_list = []
     for notif in results:
@@ -95,6 +144,16 @@ def get_notifications(
             "replied_at": notif.replied_at
         }
         notif_list.append(data)
+
+    if is_paginated:
+        return PaginatedNotificationsOut(
+            items=notif_list,
+            notifications=notif_list,
+            total=total,
+            page=effective_page,
+            page_size=effective_page_size,
+            total_pages=total_pages
+        )
 
     return notif_list
 

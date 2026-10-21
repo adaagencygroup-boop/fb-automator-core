@@ -186,4 +186,25 @@ class CommentReactInput(BaseModel):
     page_id: str
     reaction: str  # LIKE, LOVE, HAHA, WOW, SAD, ANGRY
 
+# ===== 📄 CÁC SCHEMAS PHÂN TRANG (PAGINATION) =====
+
+class PaginatedResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+class PaginatedPagesOut(PaginatedResponse):
+    items: List[PageOut]
+    pages: Optional[List[PageOut]] = None
+
+class PaginatedConversationsOut(PaginatedResponse):
+    items: List[dict]
+    conversations: Optional[List[dict]] = None
+
+class PaginatedNotificationsOut(PaginatedResponse):
+    items: List[NotificationOut]
+    notifications: Optional[List[NotificationOut]] = None
+
+
 
