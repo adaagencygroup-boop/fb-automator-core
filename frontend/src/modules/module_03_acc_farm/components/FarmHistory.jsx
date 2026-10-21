@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Download, Eraser, Info, Search } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, Download, Eraser, Info, Search } from "lucide-react";
 import CustomSelect from "@/components/ui/custom-select";
 import Pagination from "@/components/ui/pagination";
 import { toast } from "@/lib/toast";
 import { formatVietnamDateTime } from "@/lib/date-utils";
 import { ACTION_FULL_LABELS, FINAL_STATUSES, FRIEND_SOURCE_LABELS, PROXY_MODE_LABELS, RUN_STATUS } from "../constants";
-import { cleanupFarmHistory, downloadFarmHistoryCsv, getFarmHistory } from "../service";
+import { cleanupFarmHistory, downloadFarmHistoryCsv, downloadFarmHistoryXlsx, getFarmHistory } from "../service";
 import HistoryDetail from "./HistoryDetail";
 import { ActionChip, NumberInput, PageTitle, RunStatusBadge, UidCopy, formatDuration } from "./parts";
 
@@ -81,6 +81,64 @@ function CleanupDialog({ onClose, onDone }) {
   );
 }
 
+const EXPORT_FORMATS = [
+  { format: "xlsx", label: "Excel (.xlsx)", hint: "Giờ Việt Nam, mở thẳng bằng Excel", download: downloadFarmHistoryXlsx },
+  { format: "csv", label: "CSV (.csv)", hint: "Dữ liệu thô, giờ UTC", download: downloadFarmHistoryCsv },
+];
+
+/** 1 nút xuất file, bấm ra menu chọn định dạng */
+function ExportMenu({ exporting, onExport }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onClick = (e) => !ref.current?.contains(e.target) && setOpen(false);
+    const onKey = (e) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        disabled={exporting}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="flex h-9 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-sm font-semibold text-emerald-700 shadow-subtle hover:bg-emerald-100 disabled:opacity-60"
+      >
+        <Download className="h-4 w-4" /> {exporting ? "Đang xuất..." : "Xuất Excel / CSV"}
+        <ChevronDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div role="menu" className="absolute right-0 z-20 mt-1 w-60 overflow-hidden rounded-lg border border-border bg-white py-1 shadow-lg">
+          {EXPORT_FORMATS.map((item) => (
+            <button
+              key={item.format}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onExport(item);
+              }}
+              className="flex w-full flex-col px-3.5 py-2 text-left hover:bg-slate-50"
+            >
+              <span className="text-sm font-semibold text-slate-800">{item.label}</span>
+              <span className="text-[11px] text-slate-400">{item.hint}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InteractionHistory() {
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [search, setSearch] = useState("");
@@ -124,10 +182,10 @@ function InteractionHistory() {
     setPage(1);
   };
 
-  const exportCsv = async () => {
+  const exportFile = async ({ download }) => {
     setExporting(true);
     try {
-      await downloadFarmHistoryCsv(filters);
+      await download(filters);
     } catch (err) {
       toast.error(err.message, "KHÔNG XUẤT ĐƯỢC FILE");
     } finally {
@@ -143,9 +201,7 @@ function InteractionHistory() {
         <button type="button" onClick={() => setCleanupOpen(true)} className="flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-medium text-slate-700 shadow-subtle hover:bg-slate-50">
           <Eraser className="h-4 w-4" /> Dọn dẹp nhật ký
         </button>
-        <button type="button" onClick={exportCsv} disabled={exporting} className="flex h-9 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-sm font-semibold text-emerald-700 shadow-subtle hover:bg-emerald-100 disabled:opacity-60">
-          <Download className="h-4 w-4" /> {exporting ? "Đang xuất..." : "Xuất Excel / CSV"}
-        </button>
+        <ExportMenu exporting={exporting} onExport={exportFile} />
       </div>
 
       <div className="flex flex-col gap-2 rounded-2xl border border-border bg-white p-4 shadow-subtle lg:flex-row lg:items-center">

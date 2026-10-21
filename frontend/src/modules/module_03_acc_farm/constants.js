@@ -50,9 +50,13 @@ export const PROXY_MODE_LABELS = {
   none: "IP máy",
 };
 
+// Chỉ hiện ở chi tiết lịch sử khi nick là legacy; nick native (mặc định) không hiện dòng Fingerprint
 export const FINGERPRINT_LABELS = {
-  native: "Fingerprint riêng",
-  legacy: "Fingerprint gốc",
+  legacy: "Chrome thật (không giả lập)",
+};
+
+export const FINGERPRINT_HINTS = {
+  legacy: "Profile có từ trước nên giữ nguyên dấu vân tay thật của Chrome, không thêm nhiễu",
 };
 
 export const FRIEND_SOURCE_LABELS = {
