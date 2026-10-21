@@ -25,6 +25,18 @@ export async function runGroupCampaign(data) {
   return api.post("/api/groups/campaign", data);
 }
 
+export function getGroupCampaign(jobId) {
+  return api.get(`/api/groups/campaign/${jobId}`);
+}
+
+export function getCurrentGroupCampaign() {
+  return api.get("/api/groups/campaign/current");
+}
+
+export function stopGroupCampaign(jobId) {
+  return api.post(`/api/groups/campaign/${jobId}/stop`);
+}
+
 export function parseGroupFileSource(data) {
   return api.post("/api/groups/source/parse", data);
 }
