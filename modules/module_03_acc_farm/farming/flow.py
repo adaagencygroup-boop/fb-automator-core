@@ -14,7 +14,7 @@ import time
 from typing import Callable, Optional
 from urllib.parse import quote_plus, urlparse
 
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import StaleElementReferenceException, WebDriverException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
 from selenium.webdriver.common.by import By
@@ -408,20 +408,50 @@ def _open(driver, ctl: FarmControl, url: str, reuse: bool = False):
     check_account_state(driver)
 
 
+NEWSFEED_MAX_REOPENS = 5  # Số lần mở lại Trang chủ khi trang bị chuyển đi nơi khác (vd bấm sang Nhóm, Watch)
+
+
+def _on_home_feed(driver, landing_path: str = "") -> bool:
+    """
+    Còn ở Trang chủ (bảng feed) của Facebook: / hoặc /home.php, hoặc đúng trang Facebook đưa tới khi mở Trang chủ
+    (landing_path, phòng khi Facebook đổi đường dẫn).
+    """
+    parsed = urlparse(driver.current_url or "")
+    if not (parsed.hostname or "").endswith("facebook.com"):
+        return False
+    path = parsed.path.rstrip("/")
+    return path in ("", "/home.php") or (bool(landing_path) and path == landing_path.rstrip("/"))
+
+
 # ─────────────────────────── KỊCH BẢN ────────────────────────────
 
 def run_newsfeed(driver, ctl: FarmControl, total_seconds: float, delay_min: float, delay_max: float,
                  report: Callable[[str], None]) -> dict:
-    """Lướt Newsfeed tự nhiên: cuộn mượt 500-800px, 10-15% cuộn ngược, dừng đọc theo delay."""
+    """
+    Lướt Newsfeed tự nhiên: cuộn mượt 500-800px, 10-15% cuộn ngược, dừng đọc theo delay.
+    Trang bị chuyển khỏi Trang chủ (người dùng bấm sang chỗ khác) thì mở lại Trang chủ, tối đa NEWSFEED_MAX_REOPENS lần.
+    """
     if total_seconds <= 0:
         return _result("SKIPPED", "Thời gian lướt = 0")
     _open(driver, ctl, FB_HOME, reuse=True)
+    landing_path = urlparse(driver.current_url or "").path
     timer = ActiveTimer(ctl, total_seconds)
     scrolls = 0
+    reopens = 0
     scroll_up_rate = random.uniform(0.10, 0.15)
     try:
         while timer.remaining() > 0:
             ctl.checkpoint()
+            if not _on_home_feed(driver, landing_path):
+                if reopens >= NEWSFEED_MAX_REOPENS:
+                    logger.info("Newsfeed: trang rời khỏi Trang chủ %s lần, kết thúc sớm (%s)",
+                                reopens, (driver.current_url or "").split("?")[0])
+                    break
+                reopens += 1
+                report(f"Lướt Newsfeed: trang đã chuyển khỏi Trang chủ, mở lại Trang chủ "
+                       f"({timer.elapsed() / 60:.1f}/{total_seconds / 60:.1f} phút)")
+                _open(driver, ctl, FB_HOME)
+                continue
             human_scroll(driver, random.randint(500, 800))
             scrolls += 1
             if random.random() < scroll_up_rate:
@@ -505,11 +535,31 @@ return {
 
 WATCH_STUCK_LIMIT = 4      # Số lần chuyển liên tiếp mà vẫn gặp video đã xem thì tải lại Watch
 WATCH_MAX_RELOADS = 3
+WATCH_MAX_REOPENS = 5      # Số lần mở lại Watch khi trang bị chuyển đi nơi khác (vd bấm sang Trang chủ)
 
 
 def _in_reel_viewer(driver) -> bool:
     """/watch có thể bị Facebook chuyển sang trình xem Reels (/reel/<id>): trang không cuộn, chuyển video bằng phím."""
     return "/reel/" in urlparse(driver.current_url or "").path
+
+
+def _on_watch_page(driver, landing_path: str = "") -> bool:
+    """
+    Còn ở khu vực xem video: /watch, trình xem Reels, trang 1 video, hoặc đúng trang Facebook đưa tới khi mở Watch
+    (landing_path, phòng khi Facebook đổi đường dẫn của Watch).
+    """
+    path = urlparse(driver.current_url or "").path
+    if path.startswith("/watch") or "/reel/" in path or "/videos/" in path or path == "/video.php":
+        return True
+    return bool(landing_path) and path.rstrip("/") == landing_path.rstrip("/")
+
+
+def _video_state(driver, video) -> Optional[dict]:
+    """Trạng thái video; None khi phần tử đã bị gỡ khỏi trang (Facebook vẽ lại feed, hoặc trang đã chuyển đi nơi khác)."""
+    try:
+        return driver.execute_script(_VIDEO_STATE_JS, video)
+    except StaleElementReferenceException:
+        return None
 
 
 def _advance_video(driver, video, stuck: int):
@@ -540,11 +590,13 @@ def run_watch(driver, ctl: FarmControl, total_seconds: float, view_min: float, v
     if total_seconds <= 0:
         return _result("SKIPPED", "Thời gian xem = 0")
     _open(driver, ctl, FB_WATCH)
+    landing_path = urlparse(driver.current_url or "").path
     timer = ActiveTimer(ctl, total_seconds)
     watched = 0
     misses = 0
     stuck = 0
     reloads = 0
+    reopens = 0
     seen_videos = set()
 
     def progress_text(note: str) -> str:
@@ -554,6 +606,17 @@ def run_watch(driver, ctl: FarmControl, total_seconds: float, view_min: float, v
     try:
         while timer.remaining() > 0:
             ctl.checkpoint()
+            # Trang đã rời Watch (người dùng bấm sang Trang chủ, mở thông báo...): mở lại Watch rồi xem tiếp
+            if not _on_watch_page(driver, landing_path):
+                if reopens >= WATCH_MAX_REOPENS:
+                    logger.info("Watch: trang rời khỏi Watch %s lần, kết thúc sớm (%s)",
+                                reopens, (driver.current_url or "").split("?")[0])
+                    break
+                reopens += 1
+                stuck = misses = 0
+                report(progress_text("trang đã chuyển khỏi Watch, mở lại Watch"))
+                _open(driver, ctl, FB_WATCH)
+                continue
             if stuck >= WATCH_STUCK_LIMIT:
                 if reloads >= WATCH_MAX_RELOADS:
                     logger.info("Watch: vẫn kẹt sau %s lần tải lại, kết thúc sớm", reloads)
@@ -580,7 +643,7 @@ def run_watch(driver, ctl: FarmControl, total_seconds: float, view_min: float, v
                 ctl.sleep(random.uniform(1.5, 3.0))
                 continue
             misses = 0
-            state = driver.execute_script(_VIDEO_STATE_JS, video)
+            state = _video_state(driver, video)
             keys = set(state.get("keys") or []) if state else set()
             if not keys or keys.intersection(seen_videos):
                 stuck += 1
@@ -613,8 +676,12 @@ def run_watch(driver, ctl: FarmControl, total_seconds: float, view_min: float, v
                 interval = min(1.0, watch_for - elapsed_watch)
                 ctl.sleep(interval)
                 elapsed_watch += interval
-                current = driver.execute_script(_VIDEO_STATE_JS, video)
-                if not current or not keys.intersection(current.get("keys") or []):
+                current = _video_state(driver, video)
+                if current is None:
+                    # Video bị gỡ khỏi trang giữa chừng: không tính video này, tìm video khác ở vòng sau
+                    report(progress_text("video đang xem đã biến mất khỏi trang, tìm video khác"))
+                    break
+                if not keys.intersection(current.get("keys") or []):
                     break
                 current_time = current["currentTime"]
                 if current["playing"]:
