@@ -559,13 +559,16 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
                 if _field:
                     _set_account(_uid, **{_field: quantity})
 
+            def partial_of(e, _done=done):
+                # Newsfeed / Watch gắn phần đã chạy (giây, lần cuộn, video), nhóm gắn từ khóa đã dùng vào lỗi
+                # (mọi loại lỗi); số lượng kết bạn / nhóm báo qua progress
+                partial = dict(getattr(e, "partial", None) or {})
+                return partial.pop("quantity", _done["quantity"]), partial
+
             try:
                 result = _run_action(driver, ctl, uid, action, params, cfg, report, progress)
             except FarmStopped as e:
-                # Newsfeed / Watch gắn phần đã chạy (giây, lần cuộn, video), nhóm gắn từ khóa đã dùng vào lỗi;
-                # số lượng kết bạn / nhóm báo qua progress
-                partial = dict(getattr(e, "partial", None) or {})
-                quantity = partial.pop("quantity", done["quantity"])
+                quantity, partial = partial_of(e)
                 _record_action(uid, action, {
                     "status": "SKIPPED", "quantity": quantity,
                     "details": f"Dừng giữa chừng, đã làm {quantity}" if quantity else "Dừng giữa chừng",
@@ -575,21 +578,26 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
                 _set_account(uid, actions=actions)
                 raise
             except FarmAccountDead as e:
-                _record_action(uid, action, {"status": "FAILED", "quantity": done["quantity"],
-                                             "details": f"Tài khoản chết giữa chừng: {e}"[:300]}, owner)
+                quantity, partial = partial_of(e)
+                _record_action(uid, action, {"status": "FAILED", "quantity": quantity,
+                                             "details": f"Tài khoản chết giữa chừng: {e}"[:300], **partial}, owner)
                 actions[action] = "FAILED"
                 _set_account(uid, actions=actions)
                 raise
             except Exception as e:
                 # Lỗi 1 hoạt động: ghi nhận rồi chạy tiếp (BR-STS-02); trình duyệt chết thì để vòng ngoài xử lý
+                quantity, partial = partial_of(e)
                 try:
                     _ = driver.title
                 except Exception:
-                    _record_action(uid, action, {"status": "FAILED", "quantity": done["quantity"],
-                                                 "details": "Trình duyệt bị đóng giữa chừng"}, owner)
+                    _record_action(uid, action, {"status": "FAILED", "quantity": quantity,
+                                                 "details": "Trình duyệt bị đóng hoặc không phản hồi giữa chừng",
+                                                 **partial}, owner)
+                    actions[action] = "FAILED"
+                    _set_account(uid, actions=actions)
                     raise
                 logger.exception(f"[{uid}] Lỗi kịch bản {action}: {e}")
-                result = {"status": "FAILED", "quantity": done["quantity"], "details": f"Lỗi: {str(e)[:200]}"}
+                result = {"status": "FAILED", "quantity": quantity, "details": f"Lỗi: {str(e)[:200]}", **partial}
 
             _record_action(uid, action, result, owner)
 
