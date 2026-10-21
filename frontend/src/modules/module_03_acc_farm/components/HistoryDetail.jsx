@@ -7,6 +7,7 @@ import {
   Bell,
   Clock,
   Cookie,
+  ExternalLink,
   Fingerprint,
   Globe,
   Loader2,
@@ -104,6 +105,59 @@ function SectionTitle({ icon: Icon, children }) {
       <Icon className="h-3.5 w-3.5" />
       {children}
     </h4>
+  );
+}
+
+// Người / nhóm đã tương tác trong 1 hành động (farm_interaction_logs.targets)
+const TARGET_PREVIEW = 5;
+const TARGET_STATUS = {
+  joined: { label: "Đã vào", badge: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  pending: { label: "Chờ duyệt", badge: "bg-amber-50 text-amber-700 border-amber-200" },
+};
+
+// Chỉ mở link https của facebook.com (dữ liệu đọc từ trang Facebook)
+function facebookUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && /(^|\.)facebook\.com$/.test(parsed.hostname) ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function TargetList({ action, targets }) {
+  const [expanded, setExpanded] = useState(false);
+  const Icon = action === "JOIN_GROUP" ? Users : User;
+  const shown = expanded ? targets : targets.slice(0, TARGET_PREVIEW);
+  return (
+    <ul className="mt-1.5 space-y-1">
+      {shown.map((t, i) => {
+        const href = facebookUrl(t?.url);
+        const status = TARGET_STATUS[t?.status];
+        const name = t?.name || "(không đọc được tên)";
+        return (
+          <li key={i} className="flex items-center gap-1.5 text-xs">
+            <Icon className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+            {href ? (
+              <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex min-w-0 items-center gap-1 font-medium text-primary hover:underline">
+                <span className="truncate">{name}</span>
+                <ExternalLink className="h-3 w-3 shrink-0" />
+              </a>
+            ) : (
+              <span className={cn("truncate", t?.name ? "text-slate-700" : "italic text-slate-400")}>{name}</span>
+            )}
+            {status && <span className={cn("shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold", status.badge)}>{status.label}</span>}
+          </li>
+        );
+      })}
+      {targets.length > TARGET_PREVIEW && (
+        <li>
+          <button type="button" onClick={() => setExpanded((v) => !v)} className="text-[11px] font-semibold text-primary hover:underline">
+            {expanded ? "Thu gọn" : `Xem thêm ${targets.length - TARGET_PREVIEW}`}
+          </button>
+        </li>
+      )}
+    </ul>
   );
 }
 
@@ -324,6 +378,7 @@ export default function HistoryDetail({ id, onClose }) {
                             <span className={cn("rounded-md border px-1.5 py-0.5 text-[10px] font-semibold", meta.badge)}>{meta.label}</span>
                           </div>
                           {log.details && <div className="mt-0.5 text-xs text-slate-600">{log.details}</div>}
+                          {log.targets?.length > 0 && <TargetList action={log.action_type} targets={log.targets} />}
                         </li>
                       );
                     })}
