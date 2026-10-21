@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Tải ảnh minh họa từ Pixabay. Hết kết quả thì caller dùng ảnh fallback tạm."""
+"""Tải ảnh minh họa từ Pixabay. Hết kết quả thì caller dùng ảnh tạm."""
+import hashlib
 import random
+from pathlib import Path
+
 import requests
 
 _FALLBACK_QUERIES = (
@@ -10,6 +13,37 @@ _FALLBACK_QUERIES = (
     "vietnamese food",
     "coffee shop",
 )
+
+
+def keyword_cache_name(keyword) -> str:
+    """Tên file cache theo từ khóa. Từ khóa trống không dùng chung một file."""
+    text = " ".join(str(keyword or "").split()).casefold()
+    if not text:
+        return ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest() + ".jpg"
+
+
+def remember_keyword_image(folder, keyword, content: bytes) -> bool:
+    name = keyword_cache_name(keyword)
+    if not name or not content:
+        return False
+    path = Path(folder)
+    path.mkdir(parents=True, exist_ok=True)
+    temporary = path / f"{name}.part"
+    temporary.write_bytes(content)
+    temporary.replace(path / name)
+    return True
+
+
+def read_keyword_image(folder, keyword):
+    name = keyword_cache_name(keyword)
+    if not name:
+        return None
+    target = Path(folder) / name
+    if not target.is_file():
+        return None
+    data = target.read_bytes()
+    return data or None
 
 
 def get_image_from_internet(query_keyword, pixabay_key, log_func):
@@ -49,7 +83,7 @@ def get_image_from_internet(query_keyword, pixabay_key, log_func):
             )
             if response.status_code == 429:
                 log_func("[!] Pixabay giới hạn lượt gọi.")
-                break
+                return None
             if response.status_code != 200:
                 continue
             try:
@@ -59,7 +93,7 @@ def get_image_from_internet(query_keyword, pixabay_key, log_func):
             if hits:
                 hit = random.choice(hits)
                 return hit.get("largeImageURL") or hit.get("webformatURL")
-        log_func("[!] Pixabay không có ảnh phù hợp — sẽ dùng ảnh tạm.")
+        log_func("[!] Pixabay không có ảnh phù hợp.")
     except Exception as exc:
         log_func(f"[LỖI] Không gọi được Pixabay: {exc}")
 

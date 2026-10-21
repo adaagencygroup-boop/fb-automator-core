@@ -906,11 +906,12 @@ export default function GroupPostModule() {
             </div>
           </Field>
           <Field label="Thời gian bắt đầu (tùy chọn)">
-            <div className="grid grid-cols-2 gap-3">
+            <div className={`grid grid-cols-2 gap-3 transition-opacity ${scheduleEnabled ? "opacity-100" : "pointer-events-none opacity-40"}`}>
               <div className="relative">
                 <CalendarDays className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
                 <Input
                   type="date"
+                  disabled={!scheduleEnabled}
                   value={scheduleDate}
                   onChange={(event) => setScheduleDate(event.target.value)}
                   className="pl-9"
@@ -920,6 +921,7 @@ export default function GroupPostModule() {
                 <Clock3 className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
                 <Input
                   type="time"
+                  disabled={!scheduleEnabled}
                   value={scheduleTime}
                   onChange={(event) => setScheduleTime(event.target.value)}
                   className="pl-9"

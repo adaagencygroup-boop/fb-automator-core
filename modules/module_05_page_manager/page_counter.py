@@ -106,6 +106,17 @@ def keep_saved_categories(pages, previous_categories: dict) -> list:
     return merged
 
 
+def keep_saved_avatars(pages, previous_avatars: dict) -> list:
+    """Giữ URL ảnh đã lưu khi lần đếm mới không mang theo ảnh."""
+    merged = []
+    for page in pages:
+        row = dict(page)
+        if not str(row.get("avatar_url") or "").strip():
+            row["avatar_url"] = previous_avatars.get(str(row.get("id") or ""), "") or ""
+        merged.append(row)
+    return merged
+
+
 def _scope(owner, uid) -> tuple:
     return str(owner or ""), str(uid or "")
 
@@ -118,6 +129,7 @@ def _row_to_page(row: dict) -> dict:
         "url": row.get("page_url") or "",
         "category": row.get("category") or "",
         "graph_id": key if key.isdigit() else "",
+        "avatar_url": row.get("avatar_url") or "",
     }
 
 
@@ -134,7 +146,7 @@ def load_saved_count(owner, uid):
         return None
     rows = db.fetch_all(
         """
-        SELECT page_key, page_name, page_url, category
+        SELECT page_key, page_name, page_url, category, avatar_url
         FROM ai_managed_pages
         WHERE owner_username = ? AND account_uid = ?
         ORDER BY id
@@ -151,22 +163,21 @@ def save_managed_pages(owner, uid, pages, page_count=None) -> list:
     from core.database.connection import db
 
     scope = _scope(owner, uid)
-    previous = {
-        str(row.get("page_key") or ""): row.get("category") or ""
-        for row in db.fetch_all(
-            "SELECT page_key, category FROM ai_managed_pages WHERE owner_username = ? AND account_uid = ?",
-            scope,
-        )
-    }
-    kept = keep_saved_categories(pages, previous)
+    previous_rows = db.fetch_all(
+        "SELECT page_key, category, avatar_url FROM ai_managed_pages WHERE owner_username = ? AND account_uid = ?",
+        scope,
+    )
+    previous = {str(row.get("page_key") or ""): row.get("category") or "" for row in previous_rows}
+    previous_avatars = {str(row.get("page_key") or ""): row.get("avatar_url") or "" for row in previous_rows}
+    kept = keep_saved_avatars(keep_saved_categories(pages, previous), previous_avatars)
     db.execute("DELETE FROM ai_managed_pages WHERE owner_username = ? AND account_uid = ?", scope)
     for page in kept:
         db.execute(
             """
             INSERT INTO ai_managed_pages (
-                owner_username, account_uid, page_key, page_name, page_url, category
+                owner_username, account_uid, page_key, page_name, page_url, category, avatar_url
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 scope[0],
@@ -175,6 +186,7 @@ def save_managed_pages(owner, uid, pages, page_count=None) -> list:
                 str(page.get("name") or "Fanpage")[:255],
                 page.get("url") or "",
                 str(page.get("category") or "")[:200],
+                str(page.get("avatar_url") or ""),
             ),
         )
     db.execute(
@@ -212,6 +224,104 @@ def remember_keywords(owner, uid, keywords: dict) -> None:
             value = cleaned.get(str(page.get("id") or ""))
             if value is not None:
                 page["category"] = value
+
+
+def remember_avatar(owner, uid, page_key, avatar_url) -> None:
+    """Ghi URL ảnh page. Lần mở danh sách sau chỉ đọc, không tải lại Facebook."""
+    from core.database.connection import db
+    from modules.module_05_page_manager.page_avatar import valid_page_avatar
+
+    url = str(avatar_url or "").strip()
+    key = str(page_key or "").strip()[:200]
+    if not key or not valid_page_avatar(url):
+        return
+    scope = _scope(owner, uid)
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_page_avatars (
+            owner_username VARCHAR(100) NOT NULL,
+            page_key VARCHAR(200) NOT NULL,
+            avatar_url TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (owner_username, page_key)
+        )
+        """
+    )
+    db.execute(
+        """
+        INSERT INTO ai_page_avatars (owner_username, page_key, avatar_url, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT (owner_username, page_key) DO UPDATE SET
+            avatar_url = EXCLUDED.avatar_url,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (scope[0], key, url),
+    )
+    db.execute(
+        """
+        UPDATE ai_managed_pages
+        SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE owner_username = ? AND account_uid = ? AND page_key = ?
+        """,
+        (url, scope[0], scope[1], key),
+    )
+    with _counts_lock:
+        cached = _counts.get(scope)
+        if not cached:
+            return
+        for page in cached.get("pages") or []:
+            if str(page.get("id") or "") == key:
+                page["avatar_url"] = url
+
+
+def load_avatar_map(owner) -> dict:
+    from core.database.connection import db
+
+    owner_name = str(owner or "")
+    if not owner_name:
+        return {}
+    try:
+        rows = db.fetch_all(
+            "SELECT page_key, avatar_url FROM ai_page_avatars WHERE owner_username = ?",
+            (owner_name,),
+        )
+    except Exception:
+        rows = []
+    return {
+        str(row.get("page_key") or ""): row.get("avatar_url") or ""
+        for row in rows
+        if row.get("page_key")
+    }
+
+
+def persist_page_avatars(owner, uid, pages) -> list:
+    """Page đã có URL hợp lệ thì giữ. Thiếu thì tải một lần và ghi DB."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from modules.module_05_page_manager.page_avatar import page_avatar, valid_page_avatar
+
+    if not pages:
+        return []
+    known = load_avatar_map(owner)
+
+    def one(page):
+        key = str(page.get("id") or "")
+        stored = str(page.get("avatar_url") or "") or known.get(key, "")
+        if valid_page_avatar(stored):
+            page["avatar_url"] = stored
+            return stored
+        found = page_avatar(str(page.get("url") or ""), str(page.get("graph_id") or key))
+        if valid_page_avatar(found):
+            try:
+                remember_avatar(owner, uid, key, found)
+            except Exception:
+                pass
+            page["avatar_url"] = found
+            return found
+        return ""
+
+    with ThreadPoolExecutor(max_workers=min(6, len(pages))) as pool:
+        return list(pool.map(one, pages))
 
 
 def get_count(owner, uid) -> dict:
@@ -485,6 +595,10 @@ def open_fanpage_in_browser(owner, uid: str, page: dict):
 
     page_id = str(page.get("graph_id") or page.get("id") or "").strip()
     page_name = page.get("name") or "Fanpage"
+    try:
+        persist_page_avatars(owner, uid, [page])
+    except Exception:
+        pass
     page_url = page.get("url") or (f"https://www.facebook.com/profile.php?id={page_id}" if page_id.isdigit() else "")
     with owner_scope(owner):
         lock = get_profile_lock(uid)
@@ -609,6 +723,10 @@ def _count_pages(uid: str):
         entered = enter_pages_from_profile_switcher(driver, uid, account.profile_name or "")
         listed = entered or counted
         pages = save_managed_pages(owner, uid, listed, page_count=len(counted))
+        try:
+            persist_page_avatars(owner, uid, pages)
+        except Exception:
+            pass
         _set_count(
             owner,
             uid,

@@ -266,11 +266,28 @@ async def start_group_campaign(item: CampaignInput):
     """Khởi động chiến dịch đăng bài / bình luận nhóm."""
     if not item.groups:
         raise HTTPException(400, "Chưa chọn nhóm Facebook nào để chạy chiến dịch")
+
+    settings = item.settings or {}
+    schedule_at = settings.get("schedule_at")
+    delay_min = settings.get("delay_min", 30)
+    delay_max = settings.get("delay_max", 60)
+    shuffle_content = settings.get("shuffle_content", True)
+    avoid_duplicate = settings.get("avoid_duplicate", False)
+
+    group_keys = [g.get("key") or g.get("url") or g.get("id") or str(g) for g in item.groups]
+
     return {
         "success": True,
         "message": f"Đã tiếp nhận chiến dịch {item.action_type} cho {len(item.groups)} nhóm.",
         "groups_count": len(item.groups),
         "accounts_count": len(item.account_uids),
+        "posts_count": len(item.posts),
         "media_count": len(item.media),
+        "settings_applied": {
+            "delay_range": f"{delay_min}s - {delay_max}s",
+            "shuffle_content": shuffle_content,
+            "avoid_duplicate": avoid_duplicate,
+            "schedule_at": schedule_at,
+        },
     }
 

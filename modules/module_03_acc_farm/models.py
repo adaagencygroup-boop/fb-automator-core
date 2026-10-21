@@ -86,6 +86,7 @@ DDL_STATEMENTS = [
         status VARCHAR(20) NOT NULL,
         quantity INT DEFAULT 0,
         details TEXT,
+        targets TEXT,
         created_at TIMESTAMP NOT NULL
     );
     """,
@@ -119,6 +120,8 @@ DDL_STATEMENTS = [
 # Cột mới phải có cả trong CREATE TABLE ở trên và ở đây (bảng, cột, kiểu).
 ADDED_COLUMNS = [
     ("farm_run_history", "groups_keyword", "TEXT"),
+    # Người / nhóm đã tương tác của 1 hành động (JSON), xem migrations/006_farm_log_targets.sql
+    ("farm_interaction_logs", "targets", "TEXT"),
 ]
 
 

@@ -319,6 +319,52 @@ def close_all_active_drivers():
     close_all_active_bridges()
 
 
+def bring_chrome_to_front(driver=None):
+    """
+    Kích hoạt cửa sổ Chrome lên tiền cảnh (foreground) trên Windows.
+    Sử dụng kỹ thuật SetWindowPos HWND_TOPMOST -> HWND_NOTOPMOST để ép hiển thị
+    trên tất cả các cửa sổ ứng dụng khác (kể cả IDE / terminal đang active).
+    """
+    if driver:
+        try:
+            driver.maximize_window()
+            driver.switch_to.window(driver.current_window_handle)
+        except Exception:
+            pass
+
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            SW_RESTORE = 9
+            SW_MAXIMIZE = 3
+            HWND_TOPMOST = -1
+            HWND_NOTOPMOST = -2
+            SWP_SHOWWINDOW = 0x0040
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+
+            def _enum_windows_cb(hwnd, _):
+                if user32.IsWindowVisible(hwnd):
+                    class_buf = ctypes.create_unicode_buffer(256)
+                    user32.GetClassNameW(hwnd, class_buf, 256)
+                    if class_buf.value == "Chrome_WidgetWin_1":
+                        user32.ShowWindow(hwnd, SW_RESTORE)
+                        user32.ShowWindow(hwnd, SW_MAXIMIZE)
+                        user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+                        user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+                        user32.BringWindowToTop(hwnd)
+                        user32.SetForegroundWindow(hwnd)
+                return True
+
+            WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+            user32.EnumWindows(WNDPROC(_enum_windows_cb), 0)
+        except Exception:
+            pass
+
+
 # ── Mở Chrome ──
 
 def open_browser(
@@ -357,6 +403,15 @@ def open_browser(
     profile_path = get_profile_path(uid, owner)
     key = profile_key(uid, owner)
 
+    # Dọn dẹp các tệp lock và DevToolsActivePort cũ nếu tiến trình trước bị tắt đột ngột
+    for stale_file in ("DevToolsActivePort", "lockfile", "SingletonLock", "SingletonCookie", "SingletonSocket"):
+        try:
+            target_lock = os.path.join(profile_path, stale_file)
+            if os.path.exists(target_lock):
+                os.remove(target_lock)
+        except Exception:
+            pass
+
     # Phải resolve trước khi Chrome tạo thư mục Default cho profile mới
     config = resolve_browser_config(uid, profile_path)
     w, h = config.window_size
@@ -380,6 +435,9 @@ def open_browser(
     options.add_argument("--disable-extensions")
     options.add_argument(f"--lang={config.lang_flag}")
     options.add_argument(f"--window-size={w},{h}")
+    if not headless:
+        options.add_argument("--start-maximized")
+        options.add_argument("--window-position=50,50")
     options.add_experimental_option("prefs", {
         "profile.default_content_setting_values.notifications": 2,
         "credentials_enable_service": False,
@@ -494,6 +552,9 @@ def open_browser(
         driver.profile_path = profile_path
         driver.uid = str(uid)
         driver.owner = owner
+
+        if not headless:
+            bring_chrome_to_front(driver)
 
         # Proxy chỉ cho phép Facebook chặn trang đọc IP nên không kiểm tra được
         if proxy_applied and verify_egress and proxy_mode != "facebook_only":

@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from fastapi import HTTPException
 
@@ -70,6 +70,7 @@ class RunJoinGroupsTests(unittest.TestCase):
     def run_flow(self, keywords, buttons_by_url, target=3, stop_after_picks=None):
         driver = Mock()
         driver.current_url = ""
+        driver.execute_script.return_value = None  # Không đọc được tên / link / trạng thái nhóm trên thẻ
         opened, picks = [], {"n": 0}
 
         def open_url(drv, ctl, url, reuse=False):
@@ -121,7 +122,13 @@ class RunJoinGroupsTests(unittest.TestCase):
     def test_stop_midway_keeps_used_keywords(self):
         with self.assertRaises(farming_flow.FarmStopped) as ctx:
             self.run_flow(["a", "b"], {self.search("a"): 5}, stop_after_picks=1)
-        self.assertEqual(ctx.exception.partial, {"keywords": ["a"]})
+        # Dừng ở lần chọn nhóm thứ 2: giữ từ khóa đã dùng và 1 nhóm đã tham gia (không đọc được tên / link)
+        self.assertEqual(ctx.exception.partial,
+                         {"keywords": ["a"], "targets": [{"name": None, "url": None, "status": None}]})
+
+    def test_result_lists_joined_groups(self):
+        result, _ = self.run_flow([], {farming_flow.FB_GROUPS_DISCOVER: 2}, target=2)
+        self.assertEqual(len(result["targets"]), 2)
 
 
 class HistoryKeywordTests(unittest.TestCase):
@@ -146,17 +153,24 @@ class AddedColumnTests(unittest.TestCase):
         fake = Mock(_is_postgres=True)
         with patch.object(farm_models, "db", fake):
             farm_models._add_missing_columns()
-        fake.execute.assert_called_once_with("ALTER TABLE farm_run_history ADD COLUMN IF NOT EXISTS groups_keyword TEXT")
+        self.assertEqual(fake.execute.call_args_list, [
+            call(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {kind}")
+            for table, column, kind in farm_models.ADDED_COLUMNS
+        ])
+        self.assertIn(call("ALTER TABLE farm_interaction_logs ADD COLUMN IF NOT EXISTS targets TEXT"),
+                      fake.execute.call_args_list)
 
     def test_sqlite_adds_only_when_missing(self):
         fake = Mock(_is_postgres=False)
         fake.fetch_all.return_value = [{"name": "id"}]
         with patch.object(farm_models, "db", fake):
             farm_models._add_missing_columns()
-        fake.execute.assert_called_once_with("ALTER TABLE farm_run_history ADD COLUMN groups_keyword TEXT")
+        self.assertEqual(fake.execute.call_args_list, [
+            call(f"ALTER TABLE {table} ADD COLUMN {column} {kind}") for table, column, kind in farm_models.ADDED_COLUMNS
+        ])
 
         fake = Mock(_is_postgres=False)
-        fake.fetch_all.return_value = [{"name": "id"}, {"name": "groups_keyword"}]
+        fake.fetch_all.return_value = [{"name": "id"}] + [{"name": column} for _, column, _ in farm_models.ADDED_COLUMNS]
         with patch.object(farm_models, "db", fake):
             farm_models._add_missing_columns()
         fake.execute.assert_not_called()

@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS public.farm_interaction_logs (
     status VARCHAR(20) NOT NULL,
     quantity INT DEFAULT 0,
     details TEXT,
+    targets TEXT,
     created_at TIMESTAMP NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_farm_logs_uid_action_created ON public.farm_interaction_logs (fb_uid, action_type, created_at);
