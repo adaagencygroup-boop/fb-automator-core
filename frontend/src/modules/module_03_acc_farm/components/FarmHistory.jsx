@@ -9,6 +9,7 @@ import { formatVietnamDateTime } from "@/lib/date-utils";
 import { ACTION_FULL_LABELS, FINAL_STATUSES, FRIEND_SOURCE_LABELS, PROXY_MODE_LABELS, RUN_STATUS } from "../constants";
 import { cleanupFarmHistory, downloadFarmHistoryCsv, downloadFarmHistoryXlsx, getFarmHistory } from "../service";
 import HistoryDetail from "./HistoryDetail";
+import { HistoryView } from "./HistoryView";
 import { ActionChip, NumberInput, PageTitle, RunStatusBadge, UidCopy, formatDuration } from "./parts";
 
 const PAGE_SIZE = 10;
