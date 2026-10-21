@@ -71,11 +71,11 @@ def get_conversations(
     where_clauses = []
 
     if logged_in_uid:
-        where_clauses.append("(CAST(a.user_id AS VARCHAR) = :user_id OR a.uid = :user_id)")
+        where_clauses.append("(CAST(a.user_id AS VARCHAR) = :user_id OR CAST(va.system_user_id AS VARCHAR) = :user_id)")
         params["user_id"] = str(logged_in_uid)
 
     if facebook_user_id:
-        where_clauses.append("p.account_uid = :fb_uid")
+        where_clauses.append("p.facebook_user_id = :fb_uid")
         params["fb_uid"] = str(facebook_user_id)
 
     if page_id:
@@ -84,20 +84,20 @@ def get_conversations(
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     sql = text(f"""
-        SELECT DISTINCT p.page_id, p.page_name, p.account_uid as facebook_user_id
-        FROM pages p
-        LEFT JOIN accounts a ON p.account_uid = a.uid
+        SELECT DISTINCT p.page_id, p.page_name, p.facebook_user_id
+        FROM v_pages p
+        LEFT JOIN v_accounts va ON p.facebook_user_id = va.facebook_user_id
+        LEFT JOIN accounts a ON (
+            p.facebook_user_id = a.uid 
+            OR va.user_access_token = a.token
+            OR va.facebook_user_id = a.uid
+            OR (va.name IS NOT NULL AND va.name != '' AND va.name = a.profile_name)
+        )
         {where_sql}
     """)
     page_rows = db.execute(sql, params).mappings().all()
     page_dict = {str(r["page_id"]): r["page_name"] for r in page_rows}
     page_ids = list(page_dict.keys())
-
-    # Fallback nếu user_id lọc chưa thấy hoặc danh sách rỗng
-    if not page_ids:
-        all_p = db.execute(text("SELECT DISTINCT page_id, page_name FROM pages")).mappings().all()
-        page_dict = {str(r["page_id"]): r["page_name"] for r in all_p}
-        page_ids = list(page_dict.keys())
 
     p_page = page if isinstance(page, int) else None
     p_size = page_size if isinstance(page_size, int) else None
@@ -153,25 +153,15 @@ def get_conversations(
             db_convs = query.all()
             total_pages = 1
 
-        # Batch preload customer profiles if any name or avatar missing
-        psids_to_check = [c.customer_psid for c in db_convs if not c.customer_name or not c.customer_avatar]
-        cust_map = {}
-        if psids_to_check:
-            cust_rows = db.query(Customer).filter(Customer.psid.in_(psids_to_check)).all()
-            cust_map = {cr.psid: cr for cr in cust_rows}
-
         results = []
         for c in db_convs:
             p_name = page_dict.get(str(c.page_id)) or "Trang Facebook"
-            cust_cached = cust_map.get(c.customer_psid)
-            c_name = c.customer_name or (cust_cached.name if cust_cached else None) or f"Khách hàng {c.customer_psid[:8]}"
-            c_avatar = c.customer_avatar or (cust_cached.avatar_url if cust_cached else None) or f"https://graph.facebook.com/v19.0/{c.page_id}/picture?type=large"
             results.append({
                 "page_id": c.page_id,
                 "page_name": p_name,
-                "avatar_url": c_avatar,
+                "avatar_url": c.customer_avatar or f"https://graph.facebook.com/v19.0/{c.page_id}/picture?type=large",
                 "sender_id": c.customer_psid,
-                "customer_name": c_name,
+                "customer_name": c.customer_name or f"Khách hàng {c.customer_psid[:8]}",
                 "last_message": c.last_message,
                 "timestamp": int(c.last_message_at.timestamp() * 1000) if c.last_message_at else 0,
                 "direction": "outbound" if c.is_replied else "inbound",
@@ -199,26 +189,17 @@ def get_conversations(
         .order_by(Message.timestamp.desc(), Message.created_at.desc())\
         .all()
 
-    sender_ids = list({str(msg.sender_id) for msg in all_messages if msg.sender_id})
-    customers_map = {}
-    if sender_ids:
-        c_list = db.query(Customer).filter(Customer.psid.in_(sender_ids)).all()
-        customers_map = {str(c.psid): c for c in c_list}
-
     conv_map = {}
     for msg in all_messages:
         key = f"{msg.page_id}_{msg.sender_id}"
         if key not in conv_map:
             p_name = page_dict.get(str(msg.page_id)) or "Trang Facebook"
-            cust_obj = customers_map.get(str(msg.sender_id))
-            c_name = cust_obj.name if (cust_obj and cust_obj.name) else f"Khách hàng {str(msg.sender_id)[:8]}"
-            c_avatar = cust_obj.avatar_url if (cust_obj and cust_obj.avatar_url) else f"https://graph.facebook.com/v19.0/{msg.page_id}/picture?type=large"
             conv_map[key] = {
                 "page_id": msg.page_id,
                 "page_name": p_name,
-                "avatar_url": c_avatar,
+                "avatar_url": f"https://graph.facebook.com/v19.0/{msg.page_id}/picture?type=large",
                 "sender_id": msg.sender_id,
-                "customer_name": c_name,
+                "customer_name": f"Khách hàng {msg.sender_id[:8]}",
                 "last_message": msg.text,
                 "timestamp": msg.timestamp,
                 "direction": msg.direction,

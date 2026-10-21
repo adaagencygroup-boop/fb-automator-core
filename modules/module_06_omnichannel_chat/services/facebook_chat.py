@@ -234,11 +234,11 @@ class FacebookChatService:
     async def delete_message(self, page_id: str, message_id: str) -> bool:
         return self.message_repo.delete_message(message_id)
 
-    def get_customer_profile_sync(self, psid: str, page_id: str) -> Dict[str, Any]:
+    async def get_customer_profile(self, psid: str, page_id: str) -> Dict[str, Any]:
         from modules.module_06_omnichannel_chat.repositories import CustomerRepository
         customer_repo = CustomerRepository(self.db)
         cached_customer = customer_repo.get_by_psid(psid)
-        if cached_customer and cached_customer.name and cached_customer.avatar_url:
+        if cached_customer and cached_customer.name:
             return {
                 "name": cached_customer.name,
                 "avatar_url": cached_customer.avatar_url or ""
@@ -255,7 +255,7 @@ class FacebookChatService:
         }
 
         try:
-            response = requests.get(url, params=params, timeout=5)
+            response = await asyncio.to_thread(requests.get, url, params=params, timeout=5)
             data = response.json()
             if "error" not in data:
                 c_name = data.get("name", "")
@@ -268,11 +268,5 @@ class FacebookChatService:
         except Exception as e:
             print(f"[Customer Profile Fetch Error] {e}")
 
-        return {
-            "name": cached_customer.name if cached_customer else "",
-            "avatar_url": cached_customer.avatar_url if cached_customer else ""
-        }
-
-    async def get_customer_profile(self, psid: str, page_id: str) -> Dict[str, Any]:
-        return await asyncio.to_thread(self.get_customer_profile_sync, psid, page_id)
+        return {"name": "", "avatar_url": ""}
 

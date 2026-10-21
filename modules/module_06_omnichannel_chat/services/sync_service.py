@@ -29,12 +29,6 @@ class FacebookSyncService:
     def exchange_token(self, short_lived_token: str) -> str:
         return self.auth_service.exchange_token(short_lived_token)
 
-    async def get_customer_profile(self, psid: str, page_id: str) -> Dict[str, Any]:
-        return await self.chat_service.get_customer_profile(psid, page_id)
-
-    def get_customer_profile_sync(self, psid: str, page_id: str) -> Dict[str, Any]:
-        return self.chat_service.get_customer_profile_sync(psid, page_id)
-
     def sync_historical_data(self, page_id: str, facebook_user_id: str):
         from modules.module_06_omnichannel_chat.database import SessionLocal
         from modules.module_06_omnichannel_chat.repositories import PageRepository, MessageRepository, NotificationRepository, ConversationRepository, CustomerRepository
@@ -47,7 +41,6 @@ class FacebookSyncService:
             notif_repo = NotificationRepository(db)
             conv_repo = ConversationRepository(db)
             customer_repo = CustomerRepository(db)
-            chat_service = FacebookChatService(db)
 
             page = page_repo.get_by_page_id(page_id)
             if not page or not page.page_access_token:
@@ -213,16 +206,11 @@ class FacebookSyncService:
                                             db.commit()
 
                                         # Cập nhật bảng v_conversations và v_customers
-                                        customer_profile = chat_service.get_customer_profile_sync(sender_id, page_id)
-                                        final_name = customer_profile.get("name") or customer_name
-                                        final_avatar = customer_profile.get("avatar_url") or ""
-
-                                        customer_repo.upsert_customer(psid=sender_id, name=final_name, avatar_url=final_avatar)
+                                        customer_repo.upsert_customer(psid=sender_id, name=customer_name)
                                         conv_repo.upsert_conversation(
                                             page_id=page_id,
                                             customer_psid=sender_id,
-                                            customer_name=final_name,
-                                            customer_avatar=final_avatar,
+                                            customer_name=customer_name,
                                             last_message=text,
                                             last_message_at=dt,
                                             is_read=True,
