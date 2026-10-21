@@ -363,7 +363,8 @@ def _record_action(uid: str, action: str, result: dict, owner: Optional[str]):
         run_id = _state["accounts"].get(uid, {}).get("run_id")
         _history_data.setdefault(uid, {}).setdefault("actions", []).append({"action": action, **result})
     repository.add_log(run_id, adapters.get_machine_id(), uid, action, result["status"],
-                       result.get("quantity", 0), result.get("details", ""), owner_username=owner)
+                       result.get("quantity", 0), result.get("details", ""), owner_username=owner,
+                       targets=result.get("targets"))
 
 
 def _proxy_host(proxy: Optional[str]) -> Optional[str]:
@@ -1062,8 +1063,18 @@ async def farm_history_detail(history_id: int):
         raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi lịch sử.")
     return {
         "history": _serialize_history(data["history"]),
-        "logs": [{**log, "created_at": _iso(log.get("created_at"))} for log in data["logs"]],
+        "logs": [{**log, "created_at": _iso(log.get("created_at")), "targets": _json_list(log.get("targets"))}
+                 for log in data["logs"]],
     }
+
+
+def _json_list(value) -> List:
+    """Cột JSON dạng danh sách; rỗng / hỏng thì trả []."""
+    try:
+        parsed = json.loads(value) if value else []
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 @router.post("/history/cleanup")

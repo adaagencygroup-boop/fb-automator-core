@@ -14,6 +14,7 @@ CSDL của Module 03 gồm:
 | `migrations/003_tab2_post_schema.sql` | Schema Tab 2 để chạy tay trên Supabase (PostgreSQL 13+), trigger tự cập nhật, dọn dẹp, bật RLS |
 | `migrations/004_inspect_tab2.sql` | Kiểm tra chỉ đọc Tab 2: cột, index, ràng buộc khóa, RLS, đếm theo trạng thái |
 | `migrations/005_browser_fingerprints.sql` | Bảng dùng chung `browser_fingerprints` của `core/browser` (chạy tay trên Supabase sau 001) |
+| `migrations/006_farm_log_targets.sql` | Thêm cột `farm_interaction_logs.targets` (người / nhóm đã tương tác); engine cũng tự thêm khi khởi động |
 | `tests/test_migration_sync.py` | Báo lỗi nếu bảng / cột / index ở `models.py` và file SQL Tab 1 (001) / bảng dùng chung (005) lệch nhau |
 
 ### Bảng Tab 1 (Nuôi nick)
@@ -21,7 +22,7 @@ CSDL của Module 03 gồm:
 | --- | --- |
 | `farm_runs` | Lượt chạy của 1 nick trong 1 lần Kích hoạt: trạng thái, hoạt động hiện tại, lỗi |
 | `farm_run_history` | 1 dòng / lượt đã kết thúc (ghi xong không sửa): proxy, kết quả, số liệu từng kịch bản, cấu hình đã dùng |
-| `farm_interaction_logs` | Từng hành động trong lượt; tổng `quantity` trong ngày (giờ VN) dùng tính giới hạn kết bạn / nhóm |
+| `farm_interaction_logs` | Từng hành động trong lượt; tổng `quantity` trong ngày (giờ VN) dùng tính giới hạn kết bạn / nhóm. `targets` (JSON): tên + link người đã gửi lời mời / nhóm đã tham gia (kèm `joined` / `pending`) |
 | `farm_browser_fingerprints` | Bảng cũ: dấu vân tay theo nick. Không còn ghi, dữ liệu đã chuyển sang `browser_fingerprints` |
 | `farm_settings` | Cấu hình theo máy (`machine_id`): bật/tắt giới hạn ngày, số kết bạn / nhóm tối đa |
 

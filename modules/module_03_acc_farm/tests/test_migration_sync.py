@@ -4,8 +4,11 @@ from pathlib import Path
 
 from modules.module_03_acc_farm.models import ADDED_COLUMNS, DDL_STATEMENTS, SHARED_DDL_STATEMENTS
 
-MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "001_tab1_farm_schema.sql"
-SHARED_MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "005_browser_fingerprints.sql"
+MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
+MIGRATION = MIGRATIONS_DIR / "001_tab1_farm_schema.sql"
+# Các file chỉ thêm cột cho bảng Tab 1 sau khi 001 đã chạy trên Supabase
+TAB1_ADD_COLUMN_MIGRATIONS = [MIGRATIONS_DIR / "006_farm_log_targets.sql"]
+SHARED_MIGRATION = MIGRATIONS_DIR / "005_browser_fingerprints.sql"
 
 
 def _normalize(stmt: str) -> str:
@@ -27,11 +30,12 @@ class MigrationSyncTests(unittest.TestCase):
 
     def setUp(self):
         self.sql = MIGRATION.read_text(encoding="utf-8")
+        self.files = [MIGRATION, *TAB1_ADD_COLUMN_MIGRATIONS]
         self.from_models = {_normalize(s) for s in DDL_STATEMENTS} | {
             f"alter table {table} add column if not exists {column} {kind}".lower()
             for table, column, kind in ADDED_COLUMNS
         }
-        self.from_sql = _schema_statements(self.sql)
+        self.from_sql = set().union(*(_schema_statements(f.read_text(encoding="utf-8")) for f in self.files))
 
     def test_added_columns_also_in_create_table(self):
         creates = {re.search(r"create table if not exists (\w+)", s).group(1): s
@@ -50,9 +54,10 @@ class MigrationSyncTests(unittest.TestCase):
         self.assertEqual(rls, tables)
 
     def test_runs_in_one_transaction(self):
-        body = re.sub(r"--[^\n]*", "", self.sql).strip()
-        self.assertTrue(body.startswith("BEGIN;"))
-        self.assertTrue(body.endswith("COMMIT;"))
+        for path in self.files:
+            body = re.sub(r"--[^\n]*", "", path.read_text(encoding="utf-8")).strip()
+            self.assertTrue(body.startswith("BEGIN;"), path.name)
+            self.assertTrue(body.endswith("COMMIT;"), path.name)
 
 
 class SharedMigrationSyncTests(unittest.TestCase):
