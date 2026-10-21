@@ -11,6 +11,7 @@ import json
 import os
 import sys
 from urllib.parse import unquote
+from uuid import uuid4
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -251,6 +252,10 @@ if farm_router:
     app.include_router(farm_router)
 
 
+# Đổi mỗi lần process engine khởi động. Video chào chỉ hiện lại khi start.py chạy lại.
+ENGINE_BOOT_ID = uuid4().hex
+
+
 # ==================== SYSTEM & HEALTH CHECK ====================
 @app.get("/api/health")
 def health_check():
@@ -259,6 +264,7 @@ def health_check():
         "app": "Facebook Automator Pro",
         "version": "2.0.0",
         "port": 28129,
+        "boot_id": ENGINE_BOOT_ID,
     }
 
 
