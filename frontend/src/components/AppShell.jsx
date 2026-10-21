@@ -10,9 +10,13 @@ import api from "@/services/api";
 import { WS_BASE } from "@/config/constants";
 import { findNavItem, findNavItemByPath, pathOf } from "@/config/navigation";
 import { usePersistentBoolean } from "@/lib/usePersistentBoolean";
+import { useMediaQuery } from "@/lib/use-media-query";
 
 // Khung "Nhật ký hệ thống realtime" ở cuối màn hình — đang ẩn. Đổi thành true để hiện lại.
 const SHOW_SYSTEM_LOG = false;
+
+// Dưới bề rộng này, sidebar không chiếm chỗ nữa mà mở dạng drawer đè lên nội dung + lớp phủ.
+const SIDEBAR_OVERLAY_QUERY = "(max-width: 1279px)";
 
 /**
  * Khung chung của mọi trang: đăng nhập (AuthGate) -> Sidebar + Header + vùng nội dung.
@@ -29,7 +33,23 @@ function Workspace({ session, children }) {
 
   const [engineOnline, setEngineOnline] = useState(false);
   const [logs, setLogs] = useState([]);
+  // Màn rộng: sidebar chiếm chỗ (đẩy nội dung), nhớ trạng thái.
+  // Màn hẹp: sidebar là drawer đè lên nội dung, luôn bắt đầu ở trạng thái đóng.
   const [sidebarOpen, setSidebarOpen] = usePersistentBoolean("fb-automator.sidebar-open", true);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const isOverlay = useMediaQuery(SIDEBAR_OVERLAY_QUERY);
+  const navOpen = isOverlay ? drawerOpen : sidebarOpen;
+  const toggleNav = () => (isOverlay ? setDrawerOpen((v) => !v) : setSidebarOpen((v) => !v));
+
+  // Đang mở drawer thì bấm Esc để đóng
+  useEffect(() => {
+    if (!isOverlay || !drawerOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") setDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOverlay, drawerOpen]);
 
   useEffect(() => {
     // Kiểm tra Engine
@@ -62,7 +82,29 @@ function Workspace({ session, children }) {
 
   return (
     <div className="flex h-screen w-screen bg-background text-foreground antialiased overflow-hidden">
-      <Sidebar activeTab={activeTab} open={sidebarOpen} />
+      {isOverlay ? (
+        // Màn hẹp: drawer đè lên nội dung + lớp phủ, không chiếm chỗ của vùng nội dung
+        navOpen && (
+          <>
+            <div
+              className="fixed inset-0 z-40 bg-slate-900/40"
+              aria-hidden="true"
+              onClick={() => setDrawerOpen(false)}
+            />
+            <div
+              className="fixed inset-y-0 left-0 z-50 shadow-2xl"
+              // Bấm vào một mục menu thì đóng drawer luôn
+              onClick={(e) => {
+                if (e.target instanceof Element && e.target.closest("a")) setDrawerOpen(false);
+              }}
+            >
+              <Sidebar activeTab={activeTab} open />
+            </div>
+          </>
+        )
+      ) : (
+        <Sidebar activeTab={activeTab} open={sidebarOpen} />
+      )}
 
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         <Header
@@ -72,8 +114,8 @@ function Workspace({ session, children }) {
             initials: String(user.username || "?").slice(0, 2).toUpperCase(),
           }}
           onProfileClick={() => goTo("profile")}
-          sidebarOpen={sidebarOpen}
-          onToggleSidebar={() => setSidebarOpen((v) => !v)}
+          sidebarOpen={navOpen}
+          onToggleSidebar={toggleNav}
           isAdmin={session.isAdmin}
           adminUrl={session.adminUrl}
           onLogout={session.logout}

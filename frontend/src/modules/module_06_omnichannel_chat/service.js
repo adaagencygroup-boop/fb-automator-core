@@ -1,55 +1,376 @@
 import api from "@/services/api";
-import { MOCK_PAGES, MOCK_TOTAL_PAGES, MOCK_CONVERSATIONS, MOCK_NOTIFICATIONS, buildMockMessages } from "./mockData";
+import { API_BASE } from "@/config/constants";
 
-// Khi Local Engine chưa chạy / chưa có API, trả dữ liệu mẫu để dựng giao diện.
-// `isMock: true` giúp màn hình biết đang hiển thị dữ liệu mẫu.
-
-export async function getChatPages() {
-  return api
-    .get("/api/chat/pages")
-    .catch(() => ({ pages: MOCK_PAGES, total: MOCK_TOTAL_PAGES, isMock: true }));
-}
-
-export async function getConversations(params = {}) {
-  return api
-    .get("/api/chat/conversations", { params })
-    .catch(() => ({ conversations: MOCK_CONVERSATIONS, isMock: true }));
-}
-
-export async function getNotifications() {
-  return api
-    .get("/api/chat/notifications")
-    .catch(() => ({ notifications: MOCK_NOTIFICATIONS, isMock: true }));
-}
-
-/** "Reset dữ liệu": yêu cầu Engine đồng bộ lại toàn bộ Page & hội thoại */
-export async function resyncChatData() {
-  return api.post("/api/chat/resync").catch(() => ({ success: false, isMock: true }));
-}
-
-/** Tin nhắn của một hội thoại (cũ -> mới) */
-export async function getMessages(conversationId) {
-  return api
-    .get(`/api/chat/conversations/${conversationId}/messages`)
-    .catch(() => ({ messages: buildMockMessages(conversationId), isMock: true }));
+/**
+ * Backend trả thời gian dạng UTC "naive" (không kèm múi giờ), vd "2026-10-20T03:00:00".
+ * JS sẽ hiểu nhầm là giờ địa phương -> lệch 7h ở VN. Thêm "Z" để parse đúng là UTC.
+ * Chuỗi đã có Z hoặc offset (+hh:mm / -hhmm) thì giữ nguyên.
+ */
+export function toUtcIso(value) {
+  if (!value) return value;
+  const s = String(value).trim();
+  if (!s || s.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(s)) return s;
+  return `${s}Z`;
 }
 
 /**
- * Gửi tin nhắn từ Page. payload: { text, attachment?, replyToId? }
- * Không trả dữ liệu mẫu khi lỗi: màn hình sẽ đánh dấu tin nhắn "Gửi lỗi".
- * (Khi đang xem dữ liệu mẫu, màn hình tự giả lập gửi và không gọi hàm này.)
- * TODO: tệp đính kèm cần API upload riêng — hiện `attachment.url` chỉ là link tạm trên trình duyệt.
+ * URL công khai (PUBLIC_MEDIA_BASE_URL / tunnel) chỉ dùng để Facebook tải file.
+ * Hiển thị trong app thì trỏ thẳng về engine local — tránh trang cảnh báo của ngrok
+ * (ngrok free trả HTML thay vì ảnh khi request đến từ trình duyệt) và đỡ tốn băng thông tunnel.
+ */
+export function displayMediaUrl(url) {
+  const s = String(url || "");
+  if (!s || s.startsWith("blob:") || s.startsWith("data:")) return s; // ảnh xem trước tại chỗ
+  const i = s.indexOf("/uploads/");
+  if (i === -1) return s; // file không nằm trên engine (vd ảnh khách gửi từ Facebook)
+  return `${API_BASE}${s.slice(i)}`;
+}
+
+/**
+ * Backend lưu đính kèm dưới dạng text có tiền tố, vd "[image] https://...".
+ * Bóc ra thành { text, attachment } để hiển thị đúng ảnh/tệp thay vì in ra link.
+ * Dùng chung cho cả tải lịch sử (getMessages) lẫn tin realtime qua WebSocket.
+ */
+export function parseAttachmentText(raw) {
+  const value = String(raw || "");
+  if (value.startsWith("[image] ")) {
+    return { text: "", attachment: { type: "image", url: value.slice(8).trim() } };
+  }
+  if (value.startsWith("[audio] ")) {
+    return { text: "", attachment: { type: "audio", url: value.slice(8).trim(), name: "Voice clip" } };
+  }
+  if (value.startsWith("[file] ")) {
+    return { text: "", attachment: { type: "file", url: value.slice(7).trim(), name: "Tệp đính kèm" } };
+  }
+  return { text: value, attachment: null };
+}
+
+/**
+ * Dịch lỗi Graph API sang thông báo tiếng Việt dễ hiểu + gợi ý xử lý.
+ * Token Facebook (user/page access token) có hạn và sẽ hết; khi đó mọi lệnh gọi Graph đều lỗi.
+ */
+export function friendlyFbError(message) {
+  const m = String(message || "");
+  if (/token expired|revoked|session has expired|access token|oauthexception|authentication failed/i.test(m)) {
+    return "Token Facebook đã hết hạn hoặc bị thu hồi. Hãy đồng bộ lại token cho tài khoản ở Quản lý tài khoản rồi thử lại.";
+  }
+  if (/econnrefused|local engine|không thể kết nối|network error|timeout/i.test(m)) {
+    return "Không kết nối được Local Engine. Hãy kiểm tra Engine đã bật chưa rồi thử lại.";
+  }
+  return m || "Đã xảy ra lỗi. Vui lòng thử lại.";
+}
+
+/**
+ * Lấy danh sách Fanpage từ Backend (/api/facebook/pages)
+ */
+export async function getChatPages(facebookUserId = null) {
+  try {
+    const params = facebookUserId ? { facebook_user_id: facebookUserId } : {};
+    const res = await api.get("/api/facebook/pages", { params });
+    const raw = Array.isArray(res) ? res : res?.pages || [];
+    const pages = raw.map((p) => ({
+      id: String(p.page_id),
+      name: p.page_name,
+      avatar: p.avatar_url || null,
+      unread: 0,
+      facebookUserId: p.facebook_user_id,
+      status: p.status || "active",
+    }));
+    return { pages, total: pages.length, isMock: false };
+  } catch (error) {
+    console.warn("[getChatPages] Lỗi tải danh sách Page từ Backend:", error.message);
+    return { pages: [], total: 0, isMock: false, error: error.message || "Không tải được danh sách Page" };
+  }
+}
+
+/**
+ * Lấy danh sách các cuộc hội thoại (/api/facebook/conversations)
+ */
+export async function getConversations(params = {}) {
+  try {
+    const res = await api.get("/api/facebook/conversations", { params });
+    const raw = Array.isArray(res) ? res : res?.conversations || [];
+    const conversations = raw.map((c) => {
+      const tagsArr = Array.isArray(c.tags)
+        ? c.tags
+        : typeof c.tags === "string" && c.tags
+        ? c.tags.split(",").map((t) => t.trim()).filter(Boolean)
+        : [];
+
+      return {
+        id: `${c.page_id}_${c.sender_id}`,
+        pageId: String(c.page_id),
+        pageName: c.page_name,
+        customer: String(c.sender_id),
+        customerName: c.customer_name || `KH ${String(c.sender_id).slice(0, 8)}`,
+        avatar: c.avatar_url || null,
+        lastMessage: c.last_message || "",
+        updatedAt:
+          toUtcIso(c.created_at) ||
+          (c.timestamp ? new Date(c.timestamp).toISOString() : new Date().toISOString()),
+        unread: !c.is_read,
+        replied: Boolean(c.is_replied),
+        starred: Boolean(c.is_starred),
+        tags: tagsArr,
+      };
+    });
+    return { conversations, isMock: false };
+  } catch (error) {
+    console.warn("[getConversations] Lỗi tải hội thoại từ Backend:", error.message);
+    return { conversations: [], isMock: false, error: error.message || "Không tải được hội thoại" };
+  }
+}
+
+/**
+ * Lấy danh sách thông báo tương tác & bình luận (/api/facebook/notifications)
+ */
+export async function getNotifications(facebookUserId = null) {
+  try {
+    const params = facebookUserId ? { facebook_user_id: facebookUserId } : {};
+    const res = await api.get("/api/facebook/notifications", { params });
+    const raw = Array.isArray(res) ? res : res?.notifications || [];
+    const notifications = raw.map((n) => ({
+      id: String(n.id || n.facebook_notification_id),
+      rawId: String(n.facebook_notification_id || n.id || ""),
+      actor: n.from_user_name || "Khách hàng",
+      text: n.title || "",
+      createdAt: n.created_time || new Date().toISOString(),
+      unread: Boolean(n.unread),
+      replied: Boolean(n.is_replied),
+      pageId: String(n.page_id),
+      type: n.notification_type === "comment" ? "comment" : "interaction",
+      link: n.link || "",
+    }));
+    return { notifications, isMock: false };
+  } catch (error) {
+    console.warn("[getNotifications] Lỗi tải thông báo từ Backend:", error.message);
+    return { notifications: [], isMock: false, error: error.message || "Không tải được thông báo" };
+  }
+}
+
+/**
+ * Lấy lịch sử tin nhắn của một cuộc hội thoại (/api/facebook/messages)
+ * conversationId định dạng: `${page_id}_${sender_id}`
+ */
+export async function getMessages(conversationId) {
+  try {
+    const parts = String(conversationId || "").split("_");
+    const page_id = parts[0] || "";
+    const sender_id = parts.slice(1).join("_") || "";
+
+    const res = await api.get("/api/facebook/messages", {
+      params: { page_id, sender_id },
+    });
+
+    const raw = Array.isArray(res) ? res : res?.messages || [];
+    const messages = raw.map((m) => {
+      const { text, attachment } = parseAttachmentText(m.text);
+
+      return {
+        id: String(m.id || m.facebook_message_id),
+        direction: m.direction === "outbound" ? "out" : "in",
+        text,
+        attachment,
+        createdAt:
+          toUtcIso(m.created_at) ||
+          (m.timestamp ? new Date(m.timestamp).toISOString() : new Date().toISOString()),
+        reaction: m.reactions || null,
+        status: "sent",
+      };
+    });
+    return { messages, isMock: false };
+  } catch (error) {
+    console.warn("[getMessages] Lỗi tải tin nhắn từ Backend:", error.message);
+    return { messages: [], isMock: false, error: error.message || "Không tải được tin nhắn" };
+  }
+}
+
+/**
+ * Gửi tin nhắn trả lời khách hàng (/api/facebook/send-reply)
  */
 export async function sendMessage(conversationId, payload) {
-  return api.post(`/api/chat/conversations/${conversationId}/messages`, payload);
+  const parts = String(conversationId || "").split("_");
+  const page_id = parts[0] || "";
+  const recipient_id = parts.slice(1).join("_") || "";
+
+  // Đính kèm: backend nhận form-data (Form/File), KHÔNG phải query params.
+  // Có file thật -> upload thẳng (blob: URL của trình duyệt Facebook không tải được).
+  if (payload.attachment?.file) {
+    const form = new FormData();
+    form.append("page_id", page_id);
+    form.append("recipient_id", recipient_id);
+    form.append("attachment_type", payload.attachment.type || "file");
+    if (payload.replyToId) form.append("reply_to_message_id", payload.replyToId);
+    form.append("file", payload.attachment.file, payload.attachment.name || payload.attachment.file.name);
+
+    // Content-Type undefined -> trình duyệt tự đặt multipart kèm boundary
+    const res = await api.post("/api/facebook/send-attachment", form, {
+      headers: { "Content-Type": undefined },
+    });
+    return { success: true, message: { status: undefined, id: res?.data?.message_id }, url: res?.url };
+  }
+
+  // Đính kèm bằng URL công khai (không nhận blob: vì Facebook không tải được)
+  if (payload.attachment?.url && !String(payload.attachment.url).startsWith("blob:")) {
+    const form = new FormData();
+    form.append("page_id", page_id);
+    form.append("recipient_id", recipient_id);
+    form.append("attachment_type", payload.attachment.type || "image");
+    form.append("url", payload.attachment.url);
+    if (payload.replyToId) form.append("reply_to_message_id", payload.replyToId);
+
+    const res = await api.post("/api/facebook/send-attachment-url", form, {
+      headers: { "Content-Type": undefined },
+    });
+    return { success: true, message: { status: undefined, id: res?.data?.message_id } };
+  }
+
+  const res = await api.post("/api/facebook/send-reply", {
+    page_id,
+    recipient_id,
+    text: payload.text || "",
+    reply_to_message_id: payload.replyToId || null,
+  });
+
+  return { success: true, message: { status: undefined, id: res?.data?.message_id } };
 }
 
-/** Gắn / bỏ sao hội thoại */
+/**
+ * Bật / tắt đánh dấu sao ⭐ hội thoại (/api/facebook/conversations/star)
+ */
 export async function setConversationStarred(conversationId, starred) {
-  return api.post(`/api/chat/conversations/${conversationId}/star`, { starred });
+  const parts = String(conversationId || "").split("_");
+  const page_id = parts[0] || "";
+  const customer_psid = parts.slice(1).join("_") || "";
+
+  return api.post("/api/facebook/conversations/star", {
+    page_id,
+    customer_psid,
+    is_starred: Boolean(starred),
+  });
 }
 
-/** Cập nhật nhãn của hội thoại */
+/**
+ * Gắn nhãn phân loại hội thoại (/api/facebook/conversations/tag)
+ */
 export async function setConversationTags(conversationId, tags) {
-  return api.post(`/api/chat/conversations/${conversationId}/tags`, { tags });
+  const parts = String(conversationId || "").split("_");
+  const page_id = parts[0] || "";
+  const customer_psid = parts.slice(1).join("_") || "";
+  const tagsStr = Array.isArray(tags) ? tags.join(", ") : String(tags || "");
+
+  return api.post("/api/facebook/conversations/tag", {
+    page_id,
+    customer_psid,
+    tags: tagsStr,
+  });
+}
+
+/**
+ * Bày tỏ cảm xúc emoji tin nhắn (/api/facebook/messages/{message_id}/react)
+ */
+export async function reactToMessage(conversationId, messageId, reaction) {
+  const parts = String(conversationId || "").split("_");
+  const page_id = parts[0] || "";
+  const recipient_id = parts.slice(1).join("_") || "";
+
+  return api.post(`/api/facebook/messages/${messageId}/react`, {
+    page_id,
+    recipient_id,
+    reaction,
+  });
+}
+
+/**
+ * Đánh dấu hội thoại đã đọc (/api/facebook/conversations/{page_id}/{sender_id}/read)
+ */
+export async function markConversationRead(conversationId) {
+  const parts = String(conversationId || "").split("_");
+  const page_id = parts[0] || "";
+  const sender_id = parts.slice(1).join("_") || "";
+
+  return api.put(`/api/facebook/conversations/${page_id}/${sender_id}/read`);
+}
+
+/**
+ * Đánh dấu thông báo đã đọc (/api/facebook/notifications/{notif_id}/read)
+ */
+export async function markNotificationRead(notifId) {
+  return api.put(`/api/facebook/notifications/${notifId}/read`);
+}
+
+/**
+ * Reset dữ liệu hội thoại & Page (/api/facebook/reset)
+ */
+export async function resyncChatData() {
+  return api.post("/api/facebook/reset").catch(() => ({ success: false }));
+}
+
+/**
+ * Đồng bộ Fanpage từ User Token (/api/facebook/sync-by-token)
+ */
+export async function syncByToken(accessToken) {
+  return api.post("/api/facebook/sync-by-token", { access_token: accessToken });
+}
+
+/**
+ * Tách post_id (dạng `{page_id}_{số}`) từ một thông báo.
+ * Backend nhúng post_id vào facebook_notification_id khi đồng bộ:
+ *   react_{post_id}_{userId} · react_sum_{post_id} · share_{post_id} · post_created_{post_id}
+ *   comment id: {page_id}_{post}_{comment}
+ * Ưu tiên dò theo page_id, sau đó fallback phân tích link.
+ */
+export function postIdFromNotification(notification) {
+  if (!notification) return "";
+  const pageId = String(notification.pageId || notification.page_id || "");
+  const rawId = String(notification.facebookNotificationId || notification.rawId || notification.id || "");
+
+  if (pageId) {
+    const escaped = pageId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m = rawId.match(new RegExp(`${escaped}_(\\d+)`));
+    if (m) return `${pageId}_${m[1]}`;
+  }
+
+  const link = String(notification.link || "");
+  const pair = link.match(/(\d+_\d+)/);
+  if (pair) return pair[1];
+  const story = link.match(/story_fbid=(\d+)/) || link.match(/\/posts\/(\d+)/) || link.match(/\/(\d+)(?:[/?]|$)/);
+  if (story) return pageId ? `${pageId}_${story[1]}` : story[1];
+  return "";
+}
+
+/**
+ * Lấy chi tiết bài viết (nội dung, media, reaction/comment/share, danh sách bình luận).
+ * Trả về payload Graph API; cờ `is_external = true` cho bài trong Nhóm / Trang khác.
+ */
+export async function getPostDetails(postId, pageId) {
+  const res = await api.get(`/api/facebook/posts/${encodeURIComponent(postId)}`, {
+    params: { page_id: pageId },
+  });
+  return res || {};
+}
+
+/** Bình luận công khai dưới tên Page (dùng post_id để bình luận thẳng vào bài, hoặc comment_id để trả lời) */
+export async function replyToComment(objectId, pageId, text, attachmentUrl) {
+  return api.post(`/api/facebook/comments/${encodeURIComponent(objectId)}/reply`, {
+    page_id: pageId,
+    text,
+    attachment_url: attachmentUrl || null,
+  });
+}
+
+/** Trả lời riêng (vào hộp thư) cho người bình luận */
+export async function privateReplyToComment(commentId, pageId, text) {
+  return api.post(`/api/facebook/comments/${encodeURIComponent(commentId)}/private-reply`, {
+    page_id: pageId,
+    text,
+  });
+}
+
+/** Bày tỏ cảm xúc cho một bình luận dưới tên Page */
+export async function reactToComment(commentId, pageId, reaction = "LIKE") {
+  return api.post(`/api/facebook/comments/${encodeURIComponent(commentId)}/react`, {
+    page_id: pageId,
+    reaction,
+  });
 }

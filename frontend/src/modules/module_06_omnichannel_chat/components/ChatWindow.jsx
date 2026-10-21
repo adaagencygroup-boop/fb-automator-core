@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { cn } from "@/lib/utils";
 import { MaskIcon } from "@/components/icons/MaskIcon";
 import { CONVERSATION_TAGS, EMOJIS, QUICK_REPLIES, REACTIONS, REPLY_WINDOW_MS } from "../constants";
+import { displayMediaUrl } from "../service";
 
 // Figma: "giao diện chat" (1072:12415) — Section - COLUMN 2 (giữa Danh sách Page và Hội thoại)
 // Gồm: Header khách hàng · Lịch sử tin nhắn · Banner đếm ngược 24h · Ô soạn tin.
@@ -218,11 +219,24 @@ function Avatar({ src, name, size }) {
 /* Header                                                              */
 /* ------------------------------------------------------------------ */
 
-function ChatHeader({ conversation, pageName, onToggleStar, onToggleTag, onMarkUnread, onClose }) {
+function ChatHeader({ conversation, pageName, onToggleStar, onToggleTag, onMarkUnread, onClose, onBack }) {
   const tags = CONVERSATION_TAGS.filter((t) => conversation.tags?.includes(t.id));
   return (
     <header className="h-[82px] shrink-0 flex items-center justify-between gap-3 px-4 border-b border-slate-100">
       <div className="flex items-center gap-3 min-w-0">
+        {/* Nút quay lại danh sách — chỉ có ở bố cục hẹp (2 cột) */}
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="Quay lại danh sách hội thoại"
+            className={cn("shrink-0 -ml-1 size-8 rounded-full flex items-center justify-center text-slate-600 hover:bg-slate-100", FOCUS)}
+          >
+            <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12.5 15.5L7 10l5.5-5.5" />
+            </svg>
+          </button>
+        )}
         <span className="relative shrink-0">
           <span className="block rounded-full border border-slate-200">
             <Avatar src={conversation.avatar} name={conversation.customerName} size={38} />
@@ -417,18 +431,20 @@ function MessageActions({ message, outgoing, onReply, onReact }) {
 
 function MessageBody({ message, outgoing, radius }) {
   const { attachment } = message;
+  // Hiển thị qua engine local thay vì URL tunnel (ngrok chặn request từ trình duyệt)
+  const mediaUrl = attachment ? displayMediaUrl(attachment.url) : "";
   const bubbleColor = outgoing ? "bg-[#5821F5] text-white" : "bg-[#F0F2F5] text-[#050505]";
   return (
     <>
       {attachment?.type === "image" && (
-        <a href={attachment.url} target="_blank" rel="noreferrer" className={cn("block overflow-hidden border border-slate-200", radius, FOCUS)}>
+        <a href={mediaUrl} target="_blank" rel="noreferrer" className={cn("block overflow-hidden border border-slate-200", radius, FOCUS)}>
           {/* eslint-disable-next-line @next/next/no-img-element -- ảnh khách gửi / ảnh tạm khi chọn tệp */}
-          <img src={attachment.url} alt={attachment.name || "Hình ảnh"} className="block max-h-60 max-w-full object-cover bg-slate-100" />
+          <img src={mediaUrl} alt={attachment.name || "Hình ảnh"} className="block max-h-60 max-w-full object-cover bg-slate-100" />
         </a>
       )}
       {attachment && attachment.type !== "image" && (
         <a
-          href={attachment.url}
+          href={mediaUrl}
           target="_blank"
           rel="noreferrer"
           download={attachment.name}
@@ -454,13 +470,16 @@ function MessageBody({ message, outgoing, radius }) {
   );
 }
 
-function MessageRow({ message, outgoing, radius, showAvatar, avatar, customerName, onReply, onReact, onRetry }) {
+function MessageRow({ message, outgoing, radius, showAvatar, avatar, customerName, onReply, onReact, onRetry, isLastOutgoing }) {
   return (
     <div className={cn("group/msg flex items-center w-full", outgoing ? "justify-end" : "justify-start")}>
       {outgoing && <MessageActions message={message} outgoing onReply={onReply} onReact={onReact} />}
 
       {!outgoing && (
-        <span className="self-end shrink-0 w-7 mr-2">{showAvatar && <Avatar src={avatar} name={customerName} size={28} />}</span>
+        // Có cảm xúc -> bong bóng thêm mb-3, avatar phải lệch cùng mức để không bị tụt xuống
+        <span className={cn("self-end shrink-0 w-7 mr-2", message.reaction && "mb-3")}>
+          {showAvatar && <Avatar src={avatar} name={customerName} size={28} />}
+        </span>
       )}
 
       <div
@@ -495,6 +514,22 @@ function MessageRow({ message, outgoing, radius, showAvatar, avatar, customerNam
             Gửi lỗi · Thử lại
           </button>
         )}
+        {/* Trạng thái kiểu Messenger: chỉ hiện dưới tin outbound cuối cùng */}
+        {outgoing && isLastOutgoing && message.status !== "failed" && (
+          <span className="mt-0.5 pr-0.5 inline-flex items-center gap-1 text-[11px] leading-4 text-slate-400">
+            {message.status === "sending" ? (
+              "Đang gửi…"
+            ) : (
+              <>
+                <svg viewBox="0 0 16 16" width="11" height="11" className="shrink-0" aria-hidden="true">
+                  <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                  <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Đã gửi
+              </>
+            )}
+          </span>
+        )}
       </div>
 
       {!outgoing && <MessageActions message={message} onReply={onReply} onReact={onReact} />}
@@ -502,7 +537,7 @@ function MessageRow({ message, outgoing, radius, showAvatar, avatar, customerNam
   );
 }
 
-function MessageGroup({ group, conversation, onReply, onReact, onRetry }) {
+function MessageGroup({ group, conversation, onReply, onReact, onRetry, lastOutgoingId }) {
   const outgoing = group.direction === "out";
   const count = group.messages.length;
   return (
@@ -522,6 +557,7 @@ function MessageGroup({ group, conversation, onReply, onReact, onRetry }) {
           onReply={() => onReply(m)}
           onReact={(r) => onReact(m.id, r)}
           onRetry={() => onRetry(m)}
+          isLastOutgoing={outgoing && m.id === lastOutgoingId}
         />
       ))}
     </div>
@@ -552,7 +588,7 @@ function ReplyWindowBanner({ lastInboundAt }) {
       <span className={cn("text-xs leading-4 font-bold", expired ? "text-red-700" : "text-[#92400E]")}>
         {expired
           ? "Đã quá 24h kể từ tin nhắn cuối của khách — Facebook có thể chặn tin nhắn gửi đi."
-          : `Còn ${hours}h ${minutes}m để phản hồi`}
+          : `Còn ${hours > 0 ? `${hours}h${minutes > 0 ? ` ${minutes}m` : ""}` : `${minutes}m`} để phản hồi`}
       </span>
     </div>
   );
@@ -595,7 +631,8 @@ function Composer({ onSend, replyTo, onCancelReply, bordered }) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    onSend({ text: "", attachment: { type, url: URL.createObjectURL(file), name: file.name } });
+    // url (blob:) chỉ để xem trước tại chỗ; `file` mới là thứ được upload lên server
+    onSend({ text: "", attachment: { type, url: URL.createObjectURL(file), name: file.name, file } });
   };
 
   const actionBtn = "size-8 rounded-lg text-blue-600 hover:bg-blue-50";
@@ -751,12 +788,20 @@ export default function ChatWindow({
   onToggleTag,
   onMarkUnread,
   onClose,
+  onBack,
 }) {
   const [replyTo, setReplyTo] = useState(null);
   const scrollRef = useRef(null);
 
   const rows = useMemo(() => buildRows(messages || []), [messages]);
   const lastInboundAt = useMemo(() => [...(messages || [])].reverse().find((m) => m.direction === "in")?.createdAt, [messages]);
+  // Trạng thái "Đang gửi / Đã gửi" chỉ hiện khi tin MỚI NHẤT của cả cuộc trò chuyện là tin mình gửi.
+  // Khách nhắn tiếp sau đó -> ẩn đi (giống Messenger).
+  const lastOutgoingId = useMemo(() => {
+    const list = messages || [];
+    const last = list[list.length - 1];
+    return last?.direction === "out" ? last.id : undefined;
+  }, [messages]);
 
   // Có tin mới -> cuộn xuống cuối
   const count = messages?.length ?? 0;
@@ -781,6 +826,7 @@ export default function ChatWindow({
         onToggleTag={onToggleTag}
         onMarkUnread={onMarkUnread}
         onClose={onClose}
+        onBack={onBack}
       />
 
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto bg-slate-50/50" aria-live="polite">
@@ -805,6 +851,7 @@ export default function ChatWindow({
                   onReply={setReplyTo}
                   onReact={onReact}
                   onRetry={onRetry}
+                  lastOutgoingId={lastOutgoingId}
                 />
               ),
             )}
