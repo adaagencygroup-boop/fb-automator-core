@@ -4,7 +4,7 @@ System Constants and Enums
 import os
 from enum import Enum
 from pathlib import Path
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 import sys
 if getattr(sys, "frozen", False):
@@ -37,8 +37,22 @@ CONFIG_PATH = DATA_DIR / "config.json"
 KEYS_PATH = DATA_DIR / "keys.txt"
 PROXIES_PATH = DATA_DIR / "proxies.txt"
 
-# PostgreSQL production từ .env. Không có URL local.
-DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+def _postgres_url(value):
+    """Chỉ nhận DSN libpq. URL prisma+postgres của IDE không dùng được với psycopg2."""
+    value = (value or "").strip().strip('"').strip("'")
+    if value.startswith("postgres://"):
+        value = "postgresql://" + value[len("postgres://"):]
+    return value if value.startswith("postgresql://") else ""
+
+
+# Ưu tiên DATABASE_URL postgresql có sẵn trong process (test/CI).
+# Terminal Cursor đôi khi inject prisma+postgres:// — bỏ qua và lấy URL trong .env.
+_file_database_url = _postgres_url(
+    dotenv_values(ENV_PATH).get("DATABASE_URL") if ENV_PATH.exists() else ""
+)
+DATABASE_URL = _postgres_url(os.environ.get("DATABASE_URL")) or _file_database_url
+if DATABASE_URL:
+    os.environ["DATABASE_URL"] = DATABASE_URL
 
 # Cấu hình Local Engine Server
 ENGINE_HOST = os.environ.get("ENGINE_HOST", "127.0.0.1").strip()
