@@ -76,11 +76,27 @@ export function HistoryView() {
   const [totalRecords, setTotalRecords] = useState(0);
 
   const [copiedUid, setCopiedUid] = useState(null);
+  const [copiedMedia, setCopiedMedia] = useState(false);
   const [selectedDetailPost, setSelectedDetailPost] = useState(null);
+  const [showSuccessLogs, setShowSuccessLogs] = useState(false);
   const [showCleanupModal, setShowCleanupModal] = useState(false);
   const [cleanupDays, setCleanupDays] = useState(30);
   const [isCleaning, setIsCleaning] = useState(false);
   const [reloadCounter, setReloadCounter] = useState(0);
+
+  // Đóng modal khi bấm Escape và reset các state phụ
+  useEffect(() => {
+    if (!selectedDetailPost) {
+      setCopiedMedia(false);
+      setShowSuccessLogs(false);
+      return;
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") setSelectedDetailPost(null);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedDetailPost]);
 
   // Helper format ngày giờ
   const formatDateTime = useCallback((dateStr) => {
@@ -572,138 +588,297 @@ export function HistoryView() {
         </div>
       </div>
 
-      {/* ── Modal Chi tiết Bài viết (Info Dialog) ── */}
-      {selectedDetailPost && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-blue-600" />
-                <h3 className="font-bold text-sm text-slate-900">Chi tiết nhật ký bài đăng</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedDetailPost(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
-              >
-                <X size={16} />
-              </button>
-            </div>
+      {/* ── Modal Chi tiết Bài viết (Info Dialog theo UC-M03-10) ── */}
+      {selectedDetailPost && (() => {
+        const postDateObj = formatDateTime(selectedDetailPost.published_at || selectedDetailPost.updated_at || selectedDetailPost.created_at);
+        const actualTimeStr = `${postDateObj.time} ${postDateObj.date}`;
+        const scheduleLabel = selectedDetailPost.schedule_time && selectedDetailPost.schedule_time !== "all" && selectedDetailPost.schedule_time !== "Ngay lập tức"
+          ? `Hẹn: ${selectedDetailPost.schedule_time}`
+          : "Ngay lập tức";
 
-            <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto text-xs">
-              <div className="grid grid-cols-2 gap-3 p-3 bg-slate-50 rounded-xl border border-slate-100">
-                <div>
-                  <span className="text-slate-400 block text-[11px]">Tài khoản:</span>
-                  <span className="font-bold text-slate-800">{selectedDetailPost.account_name || "Chưa đặt tên"}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[11px]">UID:</span>
-                  <span className="font-mono text-blue-600 font-semibold">{selectedDetailPost.account_uid}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[11px]">Hình thức:</span>
-                  <span className="font-bold text-slate-800 uppercase">{selectedDetailPost.post_type}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[11px]">Khung giờ:</span>
-                  <span className="font-mono text-slate-700">{selectedDetailPost.schedule_time || "Ngay lập tức"}</span>
-                </div>
-              </div>
+        const isPublished = selectedDetailPost.status === "PUBLISHED";
+        const isError = !isPublished;
+        const postUrl = selectedDetailPost.facebook_post_url;
+        const profileUrl = selectedDetailPost.account_uid ? `https://www.facebook.com/${selectedDetailPost.account_uid}` : null;
 
-              <div>
-                <span className="text-slate-500 font-bold block mb-1">Nội dung bài viết:</span>
-                <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200/80 whitespace-pre-wrap text-slate-700 font-sans leading-relaxed">
-                  {selectedDetailPost.content || "(Không có nội dung văn bản)"}
-                </div>
-              </div>
+        // Parse logs
+        const rawLogs = selectedDetailPost.logs;
+        let logsList = [];
+        if (Array.isArray(rawLogs)) {
+          logsList = rawLogs;
+        } else if (typeof rawLogs === "string") {
+          try {
+            const parsed = JSON.parse(rawLogs);
+            if (Array.isArray(parsed)) logsList = parsed;
+          } catch { }
+        }
 
-              {selectedDetailPost.media_path && (
-                <div>
-                  <span className="text-slate-500 font-bold block mb-1">Đường dẫn media:</span>
-                  <div className="p-2 bg-slate-100 font-mono text-[11px] text-slate-600 rounded-lg break-all">
-                    {selectedDetailPost.media_path}
+        if (logsList.length === 0) {
+          const timeStr = formatDateTime(selectedDetailPost.created_at).time;
+          logsList.push({
+            timestamp: timeStr,
+            thread: "System",
+            type: "info",
+            message: `Khởi tạo tiến trình đăng ${selectedDetailPost.post_type?.toUpperCase()} cho tài khoản ${selectedDetailPost.account_name || selectedDetailPost.account_uid}`
+          });
+          if (selectedDetailPost.media_path) {
+            const fileName = selectedDetailPost.media_path.replace(/\\/g, '/').split('/').pop();
+            logsList.push({
+              timestamp: timeStr,
+              thread: "Thread-01",
+              type: "info",
+              message: `Tệp đính kèm: ${fileName}`
+            });
+          }
+          if (isPublished) {
+            logsList.push({
+              timestamp: formatDateTime(selectedDetailPost.published_at || selectedDetailPost.updated_at).time,
+              thread: "Thread-01",
+              type: "success",
+              message: `XUẤT BẢN THÀNH CÔNG! Link: ${selectedDetailPost.facebook_post_url || 'Đã lưu trên Facebook'}`
+            });
+          } else if (selectedDetailPost.status === "STOPPED") {
+            logsList.push({
+              timestamp: formatDateTime(selectedDetailPost.updated_at).time,
+              thread: "System",
+              type: "warn",
+              message: `[ĐÃ DỪNG] ${selectedDetailPost.error_message || 'Tiến trình đã dừng theo yêu cầu của người dùng.'}`
+            });
+          } else if (selectedDetailPost.error_message) {
+            logsList.push({
+              timestamp: formatDateTime(selectedDetailPost.updated_at).time,
+              thread: "Thread-01",
+              type: "error",
+              message: `[${selectedDetailPost.status || 'FAILED'}] ${selectedDetailPost.error_message}`
+            });
+          }
+        }
+
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setSelectedDetailPost(null);
+            }}
+          >
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-xl w-full overflow-hidden animate-in zoom-in-95 duration-150 flex flex-col max-h-[90vh]">
+              {/* Header */}
+              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-200/60 flex items-center justify-center text-blue-600">
+                    <Info size={16} />
                   </div>
-                </div>
-              )}
-
-              {selectedDetailPost.error_message && selectedDetailPost.status !== "STOPPED" && (
-                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2">
-                  <AlertCircle size={16} className="text-rose-500 shrink-0 mt-0.5" />
                   <div>
-                    <span className="font-bold text-rose-800 block">Thông báo lỗi:</span>
-                    <p className="text-rose-700 text-[11px] mt-0.5">{selectedDetailPost.error_message}</p>
+                    <h3 className="font-bold text-sm text-slate-900 leading-tight">Chi tiết nhật ký bài đăng</h3>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Mã phiên: #{selectedDetailPost.id || selectedDetailPost._id || "N/A"}</p>
                   </div>
                 </div>
-              )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedDetailPost(null)}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                  title="Đóng (Esc)"
+                >
+                  <X size={16} />
+                </button>
+              </div>
 
-              {/* ── Danh sách Log thực thi tự động (Execution Logs) ── */}
-              {(() => {
-                const rawLogs = selectedDetailPost.logs;
-                let logsList = [];
-                if (Array.isArray(rawLogs)) {
-                  logsList = rawLogs;
-                } else if (typeof rawLogs === "string") {
-                  try {
-                    const parsed = JSON.parse(rawLogs);
-                    if (Array.isArray(parsed)) logsList = parsed;
-                  } catch { }
-                }
+              {/* Scrollable Body */}
+              <div className="p-5 space-y-4 overflow-y-auto text-xs">
+                {/* 🔹 Phần 1: Header thông tin định danh & thời gian (Grid 2 cột) */}
+                <div className="grid grid-cols-2 gap-3 p-3.5 bg-slate-50/90 rounded-2xl border border-slate-100">
+                  {/* Tài khoản thực thi */}
+                  <div className="space-y-0.5">
+                    <span className="text-slate-400 block text-[10px] font-semibold uppercase tracking-wider">Tài khoản thực thi</span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-bold text-slate-800 text-xs truncate max-w-[160px]" title={selectedDetailPost.account_name}>
+                        {selectedDetailPost.account_name || "Chưa đặt tên"}
+                      </span>
+                      {selectedDetailPost.account_uid && (
+                        <div className="flex items-center gap-1 bg-white px-1.5 py-0.5 rounded-md border border-slate-200 text-[10px] font-mono text-slate-600">
+                          <span>{selectedDetailPost.account_uid}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(selectedDetailPost.account_uid);
+                              setCopiedUid(selectedDetailPost.account_uid);
+                              setTimeout(() => setCopiedUid(null), 2000);
+                              toast.success("Đã chép UID tài khoản");
+                            }}
+                            className="text-slate-400 hover:text-blue-600 transition-colors p-0.5 cursor-pointer"
+                            title="Sao chép UID"
+                          >
+                            {copiedUid === selectedDetailPost.account_uid ? (
+                              <Check size={11} className="text-emerald-500" />
+                            ) : (
+                              <Copy size={11} />
+                            )}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
 
-                // Fallback nếu bài đăng chưa có logs chi tiết trong DB
-                if (logsList.length === 0) {
-                  const timeStr = formatDateTime(selectedDetailPost.created_at).time;
-                  logsList.push({
-                    timestamp: timeStr,
-                    thread: "System",
-                    type: "info",
-                    message: `Khởi chạy bài đăng ${selectedDetailPost.post_type?.toUpperCase()} cho ${selectedDetailPost.account_name || selectedDetailPost.account_uid}`
-                  });
-                  if (selectedDetailPost.media_path) {
-                    const fileName = selectedDetailPost.media_path.replace(/\\/g, '/').split('/').pop();
-                    logsList.push({
-                      timestamp: timeStr,
-                      thread: "Thread-01",
-                      type: "info",
-                      message: `Tệp đính kèm: ${fileName}`
-                    });
-                  }
-                  if (selectedDetailPost.status === "PUBLISHED") {
-                    logsList.push({
-                      timestamp: formatDateTime(selectedDetailPost.published_at || selectedDetailPost.updated_at).time,
-                      thread: "Thread-01",
-                      type: "success",
-                      message: `XUẤT BẢN THÀNH CÔNG! Link: ${selectedDetailPost.facebook_post_url || 'Đã lưu'}`
-                    });
-                  } else if (selectedDetailPost.status === "STOPPED") {
-                    logsList.push({
-                      timestamp: formatDateTime(selectedDetailPost.updated_at).time,
-                      thread: "System",
-                      type: "warn",
-                      message: `[ĐÃ DỪNG] ${selectedDetailPost.error_message || 'Tiến trình đã dừng theo yêu cầu của người dùng.'}`
-                    });
-                  } else if (selectedDetailPost.error_message) {
-                    logsList.push({
-                      timestamp: formatDateTime(selectedDetailPost.updated_at).time,
-                      thread: "Thread-01",
-                      type: "error",
-                      message: `[${selectedDetailPost.status}] ${selectedDetailPost.error_message}`
-                    });
-                  }
-                }
+                  {/* Trạng thái */}
+                  <div className="space-y-0.5 text-right">
+                    <span className="text-slate-400 block text-[10px] font-semibold uppercase tracking-wider">Trạng thái</span>
+                    <div>
+                      {selectedDetailPost.status === "PUBLISHED" ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                          <span>Đã xuất bản</span>
+                        </span>
+                      ) : selectedDetailPost.status === "STOPPED" ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+                          <span>Đã dừng</span>
+                        </span>
+                      ) : selectedDetailPost.status === "DIE" ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-800 border border-red-300">
+                          <span className="w-1.5 h-1.5 rounded-full bg-red-600 shrink-0" />
+                          <span>Acc chết</span>
+                        </span>
+                      ) : selectedDetailPost.status === "BLOCKED" ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-purple-600 shrink-0" />
+                          <span>Bị chặn</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
+                          <span>Lỗi hệ thống</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
 
-                return (
-                  <div className="space-y-1.5 pt-1">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1.5 text-slate-700 font-bold text-xs">
-                        <Terminal size={14} className="text-blue-600" />
-                        <span>Nhật ký thực thi (Execution Logs)</span>
-                      </div>
-                      <span className="text-[10px] text-slate-400 font-mono">
-                        {logsList.length} sự kiện
+                  {/* Hình thức & Khung giờ */}
+                  <div className="space-y-0.5 pt-1.5 border-t border-slate-200/60">
+                    <span className="text-slate-400 block text-[10px] font-semibold uppercase tracking-wider">Hình thức & Khung giờ</span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {selectedDetailPost.post_type === "reels" ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          <Video size={11} />
+                          <span>REELS</span>
+                        </span>
+                      ) : selectedDetailPost.post_type === "story" ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-pink-50 text-pink-700 border border-pink-200">
+                          <FileText size={11} />
+                          <span>STORY</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                          <FileText size={11} />
+                          <span>STATUS</span>
+                        </span>
+                      )}
+                      <span className="text-[11px] font-medium text-slate-600 flex items-center gap-1">
+                        <Clock size={11} className="text-slate-400" />
+                        <span>{scheduleLabel}</span>
                       </span>
                     </div>
+                  </div>
 
-                    <div className="bg-[#0f172a] rounded-xl p-3 border border-slate-800 font-mono text-[11px] max-h-52 overflow-y-auto space-y-1.5 shadow-inner">
+                  {/* Thời gian thực tế */}
+                  <div className="space-y-0.5 pt-1.5 border-t border-slate-200/60 text-right">
+                    <span className="text-slate-400 block text-[10px] font-semibold uppercase tracking-wider">Thời gian thực tế</span>
+                    <div className="font-mono text-[11px] text-slate-700 flex items-center justify-end gap-1">
+                      <Calendar size={11} className="text-slate-400" />
+                      <span>{actualTimeStr}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 🔹 Phần 2: Toàn văn nội dung bài viết (Full Caption - Không cắt `...`) */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-600 font-bold text-xs flex items-center gap-1.5">
+                      <FileText size={13} className="text-slate-500" />
+                      <span>Toàn văn nội dung (Full Caption)</span>
+                    </span>
+                    {selectedDetailPost.content && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(selectedDetailPost.content);
+                          toast.success("Đã sao chép nội dung bài viết");
+                        }}
+                        className="text-[11px] text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1 transition-colors cursor-pointer"
+                      >
+                        <Copy size={11} />
+                        <span>Sao chép</span>
+                      </button>
+                    )}
+                  </div>
+                  <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200/80 whitespace-pre-wrap font-sans text-xs text-slate-800 leading-relaxed max-h-44 overflow-y-auto selection:bg-blue-100">
+                    {selectedDetailPost.content ? (
+                      selectedDetailPost.content
+                    ) : (
+                      <span className="text-slate-400 italic font-sans">(Không có nội dung văn bản)</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* 🔹 Phần 2b: Đường dẫn Media nguồn (Nếu có) */}
+                {selectedDetailPost.media_path && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-600 font-bold text-xs flex items-center gap-1.5">
+                        <Video size={13} className="text-slate-500" />
+                        <span>Đường dẫn tệp nguồn (Media Path)</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(selectedDetailPost.media_path);
+                          setCopiedMedia(true);
+                          setTimeout(() => setCopiedMedia(false), 2000);
+                          toast.success("Đã sao chép đường dẫn file");
+                        }}
+                        className="text-[11px] text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1 transition-colors cursor-pointer"
+                      >
+                        {copiedMedia ? <Check size={11} className="text-emerald-500" /> : <Copy size={11} />}
+                        <span>{copiedMedia ? "Đã chép" : "Sao chép đường dẫn"}</span>
+                      </button>
+                    </div>
+                    <div className="p-2.5 bg-slate-100/90 border border-slate-200 rounded-xl font-mono text-[11px] text-slate-700 break-all select-all">
+                      {selectedDetailPost.media_path}
+                    </div>
+                  </div>
+                )}
+
+                {/* Thông báo lỗi nếu có */}
+                {selectedDetailPost.error_message && selectedDetailPost.status !== "STOPPED" && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5">
+                    <AlertCircle size={16} className="text-rose-500 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <span className="font-bold text-rose-800 block text-xs">Thông báo lỗi:</span>
+                      <p className="text-rose-700 text-[11px] leading-relaxed break-words">{selectedDetailPost.error_message}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* 🔹 Phần 3: Nhật ký thực thi (Execution Logs) */}
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-slate-700 font-bold text-xs">
+                      <Terminal size={14} className="text-blue-600" />
+                      <span>Nhật ký thực thi (Execution Logs)</span>
+                      <span className="text-[10px] text-slate-400 font-normal font-mono">({logsList.length} sự kiện)</span>
+                    </div>
+                    {isPublished && (
+                      <button
+                        type="button"
+                        onClick={() => setShowSuccessLogs((prev) => !prev)}
+                        className="text-[11px] text-blue-600 hover:text-blue-700 font-medium cursor-pointer"
+                      >
+                        {showSuccessLogs ? "Thu gọn" : "Xem nhật ký kỹ thuật"}
+                      </button>
+                    )}
+                  </div>
+
+                  {(isError || showSuccessLogs) && (
+                    <div className="bg-[#0f172a] rounded-xl p-3.5 border border-slate-800 font-mono text-[11px] max-h-48 overflow-y-auto space-y-1.5 shadow-inner">
                       {logsList.map((log, idx) => (
                         <div key={idx} className="flex items-start gap-2 leading-relaxed font-mono">
                           <span className="text-slate-500 shrink-0 select-none">[{log.timestamp || "--:--:--"}]</span>
@@ -722,39 +897,49 @@ export function HistoryView() {
                         </div>
                       ))}
                     </div>
-                  </div>
-                );
-              })()}
-            </div>
+                  )}
+                </div>
+              </div>
 
-            <div className="p-3.5 bg-slate-50/60 border-t border-slate-100 flex items-center justify-between">
-              {(() => {
-                const modalTargetUrl = selectedDetailPost.facebook_post_url || (selectedDetailPost.account_uid ? (selectedDetailPost.post_type === 'reels' ? `https://www.facebook.com/${selectedDetailPost.account_uid}/reels` : selectedDetailPost.post_type === 'story' ? `https://www.facebook.com/stories/${selectedDetailPost.account_uid}` : `https://www.facebook.com/${selectedDetailPost.account_uid}`) : null);
-                return modalTargetUrl ? (
-                  <a
-                    href={modalTargetUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-blue-600 hover:underline font-semibold flex items-center gap-1"
-                  >
-                    <ExternalLink size={13} />
-                    <span>{selectedDetailPost.facebook_post_url ? "Xem trên Facebook" : "Xem trang cá nhân Facebook"}</span>
-                  </a>
-                ) : (
-                  <span />
-                );
-              })()}
-              <button
-                type="button"
-                onClick={() => setSelectedDetailPost(null)}
-                className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors"
-              >
-                Đóng
-              </button>
+              {/* 🔹 Phần 4: Footer Action Buttons (Theo chuẩn BR-M03-HIS-01) */}
+              <div className="p-3.5 px-5 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between shrink-0">
+                <div>
+                  {isPublished && postUrl ? (
+                    <a
+                      href={postUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3.5 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors border border-blue-200"
+                    >
+                      <ExternalLink size={13} />
+                      <span>Mở liên kết bài viết</span>
+                    </a>
+                  ) : profileUrl ? (
+                    <a
+                      href={profileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3.5 py-2 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors border border-slate-200"
+                    >
+                      <ExternalLink size={13} />
+                      <span>Xem trang cá nhân Facebook</span>
+                    </a>
+                  ) : (
+                    <span />
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedDetailPost(null)}
+                  className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  Đóng
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── Modal Dọn Dẹp Nhật Ký ── */}
       {showCleanupModal && (

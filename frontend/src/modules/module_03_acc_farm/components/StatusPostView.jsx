@@ -1192,7 +1192,7 @@ export function StatusPostView({ initialState = "config" }) {
   const selectedCount = accounts.filter((a) => a.selected).length;
 
   return (
-    <div className="space-y-6 max-w-6xl pb-20">
+    <div className="space-y-6  pb-20">
       {/* ── BƯỚC 1: THIẾT LẬP CẤU HÌNH HỆ THỐNG ── */}
       <div className="space-y-3">
         <div className="flex items-center gap-2.5">
