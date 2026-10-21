@@ -15,14 +15,10 @@ Kế thừa & chuẩn hóa nghiệp vụ từ FaceBook_Post_Group.py:
 from __future__ import annotations
 
 import logging
-import logging
 import re
-import time
 import time
 import urllib.parse
 from typing import Any, Dict, List, Optional, Set
-
-logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -575,14 +571,8 @@ def search_facebook_groups(
     group_type: str = "all",
     frequency_filter: str = "all",
     account_uid: Optional[str] = None,
-    frequency_filter: str = "all",
-    account_uid: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Tìm kiếm nhóm Facebook thật theo từ khóa và bộ lọc.
-    Kế thừa nghiệp vụ từ FaceBook_Post_Group.py:905-918.
-    Ưu tiên cào dữ liệu thật từ Facebook bằng tài khoản đầu tiên (hoặc tài khoản chỉ định).
-    Tự động lọc theo quyền riêng tư, số lượng thành viên, tần suất bài đăng và lịch sử đã đăng.
     Tìm kiếm nhóm Facebook thật theo từ khóa và bộ lọc.
     Kế thừa nghiệp vụ từ FaceBook_Post_Group.py:905-918.
     Ưu tiên cào dữ liệu thật từ Facebook bằng tài khoản đầu tiên (hoặc tài khoản chỉ định).
@@ -600,14 +590,6 @@ def search_facebook_groups(
             mem_num = grp.get("mem_num", 50.0)
             privacy = grp.get("privacy", "public")
             freq = grp.get("frequency", "")
-    # 1. Cào trực tiếp nhóm Facebook thật bằng trình duyệt Chrome qua tài khoản đầu tiên / chỉ định
-    browser_results = search_facebook_via_browser(clean_keyword, account_uid, max_results * 2)
-    if browser_results:
-        filtered: List[Dict[str, Any]] = []
-        for grp in browser_results:
-            mem_num = grp.get("mem_num", 50.0)
-            privacy = grp.get("privacy", "public")
-            freq = grp.get("frequency", "")
 
             # Áp dụng bộ lọc số lượng thành viên
             if member_filter == "10k" and mem_num < 10:
@@ -623,91 +605,6 @@ def search_facebook_groups(
             if group_type == "private" and privacy != "private":
                 continue
 
-            # Áp dụng bộ lọc tần suất bài viết
-            if frequency_filter and frequency_filter != "all":
-                freq_match = re.search(r"(\d+)", freq)
-                freq_val = int(freq_match.group(1)) if freq_match else 0
-                filter_match = re.search(r"(\d+)", str(frequency_filter))
-                if filter_match:
-                    target_freq = int(filter_match.group(1))
-                    if freq_val < target_freq:
-                        continue
-
-            filtered.append(grp)
-            if len(filtered) >= max_results:
-                break
-
-        if filtered:
-            for idx, item in enumerate(filtered, 1):
-                item["id"] = f"{idx:02d}"
-            return filtered
-
-    # 2. Dự phòng: Tìm kiếm nhóm Facebook từ kho dữ liệu nhóm đã chuẩn hóa (nếu cào trực tiếp không có kết quả)
-    posted_set = get_posted_group_keys()
-    norm_kw = remove_accents(clean_keyword)
-    kw_tokens = [t.strip() for t in re.split(r"[,;\s]+", norm_kw) if len(t.strip()) >= 2]
-
-    matched_groups: List[tuple[int, Dict[str, Any]]] = []
-
-    for grp in REAL_FACEBOOK_GROUPS:
-        # Tính điểm liên quan giữa từ khóa tìm kiếm và nhóm
-        grp_name_norm = remove_accents(grp["name"])
-        grp_url_norm = remove_accents(grp["url"])
-        grp_tags_norm = [remove_accents(t) for t in grp.get("tags", [])]
-
-        score = 0
-        if norm_kw in grp_name_norm or norm_kw in grp_url_norm:
-            score += 15
-
-        for token in kw_tokens:
-            if token in grp_name_norm:
-                score += 5
-            elif token in grp_url_norm:
-                score += 4
-            elif any(token in tag for tag in grp_tags_norm):
-                score += 3
-
-        # Nếu không có từ khóa nào khớp nhưng tổng từ khóa tìm kiếm chung chung, gán điểm cơ bản
-        if score == 0 and any(w in grp_name_norm for w in ["hoi", "nhom", "cong dong", "cho", "dien dan"]):
-            score = 1
-
-        if score > 0:
-            mem_num = grp["mem_num"]
-            privacy = grp["privacy"]
-            freq = grp["frequency"]
-
-            # Áp dụng bộ lọc số lượng thành viên
-            if member_filter == "10k" and mem_num < 10:
-                continue
-            if member_filter == "50k" and mem_num < 50:
-                continue
-            if member_filter == "100k" and mem_num < 100:
-                continue
-
-            # Áp dụng bộ lọc loại nhóm
-            if group_type == "public" and privacy != "public":
-                continue
-            if group_type == "private" and privacy != "private":
-                continue
-
-            # Áp dụng bộ lọc tần suất bài viết
-            if frequency_filter and frequency_filter != "all":
-                freq_match = re.search(r"(\d+)", freq)
-                freq_val = int(freq_match.group(1)) if freq_match else 0
-                filter_match = re.search(r"(\d+)", str(frequency_filter))
-                if filter_match:
-                    target_freq = int(filter_match.group(1))
-                    if freq_val < target_freq:
-                        continue
-
-            group_key = f"group_{grp['uid']}"
-            is_already_posted = (group_key.lower() in posted_set) or (grp["url"].lower() in posted_set)
-
-            item = {
-                "key": group_key,
-                "name": grp["name"],
-                "url": grp["url"],
-                "uid": grp["uid"],
             # Áp dụng bộ lọc tần suất bài viết
             if frequency_filter and frequency_filter != "all":
                 freq_match = re.search(r"(\d+)", freq)
@@ -811,40 +708,8 @@ def search_facebook_groups(
             seen_urls.add(grp["url"])
             grp["id"] = f"{len(results) + 1:02d}"
             results.append(grp)
-            }
-            matched_groups.append((score, item))
-
-    # Sắp xếp theo độ liên quan cao nhất
-    matched_groups.sort(key=lambda x: x[0], reverse=True)
-
-    results: List[Dict[str, Any]] = []
-    seen_urls: Set[str] = set()
-
-    for idx, (_, grp) in enumerate(matched_groups, 1):
-        if grp["url"] not in seen_urls:
-            seen_urls.add(grp["url"])
-            grp["id"] = f"{len(results) + 1:02d}"
-            results.append(grp)
         if len(results) >= max_results:
             break
-
-    # Nếu từ khóa quá đặc thù không khớp nhóm có sẵn trong danh mục, tạo thực thể định danh sạch theo URL thật
-    if not results and clean_keyword:
-        slug_base = re.sub(r"[^\w\s-]", "", clean_keyword, flags=re.UNICODE).strip().replace(" ", "")
-        if not slug_base:
-            slug_base = "group"
-        url = f"facebook.com/groups/{slug_base}"
-        results.append({
-            "id": "01",
-            "key": f"group_{slug_base}",
-            "name": f"Hội {clean_keyword.title()}",
-            "url": url,
-            "uid": slug_base,
-            "frequency": "15 bài viết/ngày",
-            "members": "50.0K",
-            "privacy": "public",
-            "already_posted": f"group_{slug_base}".lower() in posted_set or url.lower() in posted_set,
-        })
 
     # Nếu từ khóa quá đặc thù không khớp nhóm có sẵn trong danh mục, tạo thực thể định danh sạch theo URL thật
     if not results and clean_keyword:
