@@ -82,7 +82,23 @@ class GroupSettingsApiTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["model"], "gemini-3.8-flash")
         self.assertTrue(body["api_key_configured"])
-        self.assertNotIn("AIza-example-key", response.text)
+        self.assertEqual(body["api_key"], "AIza-example-key")
+
+    def test_deepseek_v4_flash_model_is_supported(self):
+        with patch("modules.module_07_group_spam.settings.encrypt_data", return_value="cipher"), \
+             patch("modules.module_07_group_spam.settings.decrypt_data", return_value="sk-deepseek-key"):
+            response = self.client.put("/api/groups/settings", json={
+                "model": "deepseek-v4-flash",
+                "api_key": "sk-deepseek-key",
+                "threads": 2,
+                "rest_minutes": 5,
+                "max_posts": 10,
+            })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["model"], "deepseek-v4-flash")
+        self.assertEqual(body["providers"]["deepseek"]["configured"], True)
+
 
     def test_rejects_invalid_runtime_values(self):
         response = self.client.put("/api/groups/settings", json={

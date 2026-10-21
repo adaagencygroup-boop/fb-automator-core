@@ -59,6 +59,12 @@ import {
   normalizeAccount,
 } from "../shared/components";
 
+const getProvider = (m) => {
+  if (m === "gemini" || m?.startsWith("gemini-")) return "gemini";
+  if (m?.startsWith("deepseek")) return "deepseek";
+  return "openai";
+};
+
 export default function GroupCommentModule() {
   const mediaInputRef = useRef(null);
   const groupFileInputRef = useRef(null);
@@ -123,7 +129,7 @@ export default function GroupCommentModule() {
     getGroupSettings().then((data) => {
       if (!data) return;
       if (data.model) setModel(data.model);
-      const activeProv = data.model?.startsWith("gemini-") || data.model === "gemini" ? "gemini" : "openai";
+      const activeProv = getProvider(data.model);
       const key = data.api_key || data.providers?.[activeProv]?.key;
       if (key) setApiKey(key);
       if (data.threads) setThreads(String(data.threads));
@@ -541,6 +547,7 @@ export default function GroupCommentModule() {
               <option value="gpt-4o">GPT-4o (OpenAI)</option>
               <option value="gpt-4o-mini">GPT-4o mini (OpenAI)</option>
               <option value="gemini">Gemini</option>
+              <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
             </SelectField>
             <span className="block text-[10px] font-normal text-slate-400">Chọn mô hình AI tạo nội dung theo phong cách mong muốn.</span>
           </Field>

@@ -73,6 +73,12 @@ const DEFAULT_GEMINI_MODELS = [
   { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro (quyền truy cập cũ)" },
 ];
 
+const getProvider = (m) => {
+  if (m === "gemini" || m?.startsWith("gemini-")) return "gemini";
+  if (m?.startsWith("deepseek")) return "deepseek";
+  return "openai";
+};
+
 // Nút toolbar dùng chung, giữ vùng chọn trong editor khi bấm.
 function EditorButton({ label, onClick, children }) {
   return (
@@ -224,7 +230,7 @@ export default function GroupPostModule() {
         setRestMinutes(String(data.rest_minutes));
         setMaxPosts(String(data.max_posts));
         setProviderStatus(data.providers || {});
-        const activeProv = data.model?.startsWith("gemini-") || data.model === "gemini" ? "gemini" : "openai";
+        const activeProv = getProvider(data.model);
         const initialKey = data.api_key || data.providers?.[activeProv]?.key || "";
         if (initialKey) {
           setApiKey(initialKey);
@@ -256,9 +262,25 @@ export default function GroupPostModule() {
   const activeGroupsCount = groupSource === "file" ? (groupFile?.validGroupsCount || selectedGroups.length) : selectedGroups.length;
   const generatedCount = posts.filter((post) => post.trim()).length;
   const totalPlanned = Math.min(Number(maxPosts) || 0, activeGroupsCount * Math.max(selectedAccounts.length, 1));
-  const activeProvider = model === "gemini" || model.startsWith("gemini-") ? "gemini" : "openai";
+  const activeProvider = getProvider(model);
   const savedKey = providerStatus[activeProvider];
   const hasApiKey = Boolean(apiKey.trim() || savedKey?.configured);
+
+  const liveAccountsCount = useMemo(() => {
+    return selectedAccounts.filter((acc) => acc.status === "LIVE").length;
+  }, [selectedAccounts]);
+
+  const modelDisplayName = useMemo(() => {
+    if (model === "deepseek-v4-flash" || model === "deepseek-flash") return "DeepSeek V4 Flash";
+    if (model === "gpt-4o") return "OpenAI GPT-4o";
+    if (model === "gpt-4o-mini") return "OpenAI GPT-4o mini";
+    const found = geminiModels?.find((item) => item.id === model);
+    if (found) return found.name;
+    if (model?.startsWith("gemini-")) {
+      return model.split("-").map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" ");
+    }
+    return model;
+  }, [model, geminiModels]);
 
   const normalizedSettings = () => {
     const values = {
@@ -277,13 +299,17 @@ export default function GroupPostModule() {
     if (!Number.isInteger(values.max_posts) || values.max_posts < 1 || values.max_posts > 1000) {
       throw new Error("Max bài phải là số nguyên từ 1 đến 1000");
     }
+    if (!values.api_key && !providerStatus[activeProvider]?.configured) {
+      const provName = activeProvider === "deepseek" ? "DeepSeek" : activeProvider === "gemini" ? "Google Gemini" : "OpenAI";
+      throw new Error(`Vui lòng nhập API Key cho ${provName} trước khi lưu cấu hình.`);
+    }
     return values;
   };
 
   const handleModelChange = (event) => {
     const newModel = event?.target?.value || event;
     setModel(newModel);
-    const newProvider = newModel?.startsWith("gemini-") || newModel === "gemini" ? "gemini" : "openai";
+    const newProvider = getProvider(newModel);
     const existingKey = providerStatus?.[newProvider]?.key || "";
     setApiKey(existingKey);
     setShowApiKey(false);
@@ -296,7 +322,7 @@ export default function GroupPostModule() {
     try {
       const result = await saveGroupSettings(normalizedSettings());
       setProviderStatus(result.providers || {});
-      const activeProv = model?.startsWith("gemini-") || model === "gemini" ? "gemini" : "openai";
+      const activeProv = getProvider(model);
       const savedKeyVal = result.api_key || result.providers?.[activeProv]?.key || apiKey.trim();
       setApiKey(savedKeyVal);
       setShowApiKey(false);
@@ -645,320 +671,356 @@ export default function GroupPostModule() {
       </div>
 
       {/* Bước 4 */}
-      <SectionCard number="4" title="Chọn media (ảnh/video)">
-        <div className="mb-4 flex h-9 items-center justify-center rounded-md bg-primary text-xs font-semibold text-white">
-          <ImageIcon className="mr-2 size-4" /> Hình ảnh + Video
-        </div>
-        <input
-          ref={mediaInputRef}
-          type="file"
-          multiple
-          accept="image/*,video/*"
-          className="hidden"
-          onChange={(event) => handleFiles(event.target.files)}
-        />
-        <button
-          type="button"
-          onClick={() => mediaInputRef.current?.click()}
-          onDragOver={(event) => event.preventDefault()}
-          onDrop={(event) => {
-            event.preventDefault();
-            handleFiles(event.dataTransfer.files);
-          }}
-          className="flex min-h-40 w-full flex-col items-center justify-center rounded-lg border border-dashed border-blue-200 bg-slate-50/60 text-center transition-colors hover:bg-blue-50/40"
-        >
-          <span className="flex size-12 items-center justify-center rounded-full bg-blue-100 text-primary">
-            <Plus className="size-5" />
-          </span>
-          <span className="mt-3 text-xs font-bold text-slate-700">
-            {mediaFiles.length ? `Đã chọn ${mediaFiles.length} tệp media` : "Nhấp để tải ảnh lên hoặc kéo thả"}
-          </span>
-          <span className="mt-1 text-[10px] text-slate-400">Hỗ trợ JPG, PNG (tối đa 10 ảnh)</span>
-        </button>
-        {mediaFiles.length > 0 && (
-          <div className="mt-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-700">
-                Tệp đã chọn ({mediaFiles.length}/10):
-              </span>
-              <button
-                type="button"
-                onClick={handleClearAllMedia}
-                className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-500 transition-colors hover:text-rose-700 hover:underline"
-              >
-                <Trash2 className="size-3" />
-                Xoá tất cả
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
-              {mediaFiles.map((file, idx) => {
-                const isVideo = file.type?.startsWith("video/") || /\.(mp4|mov|avi|mkv)$/i.test(file.name || "");
-                const previewUrl = file instanceof File ? URL.createObjectURL(file) : null;
-
-                return (
-                  <div
-                    key={`${file.name}-${idx}`}
-                    className="group relative flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white p-1.5 shadow-xs transition-all hover:border-blue-300 hover:shadow-sm"
-                  >
-                    <div className="relative aspect-square w-full overflow-hidden rounded-md bg-slate-100">
-                      {isVideo && previewUrl ? (
-                        <div className="relative h-full w-full bg-black">
-                          <video
-                            src={previewUrl}
-                            muted
-                            playsInline
-                            controls
-                            className="h-full w-full object-cover"
-                            preload="metadata"
-                          />
-                        </div>
-                      ) : previewUrl ? (
-                        <img
-                          src={previewUrl}
-                          alt={file.name}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center text-slate-400">
-                          <ImageIcon className="size-6" />
-                        </div>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRemoveMedia(idx);
-                        }}
-                        className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-rose-500/90 text-white opacity-90 shadow-sm transition-transform hover:scale-110 hover:bg-rose-600 sm:opacity-0 sm:group-hover:opacity-100"
-                        title="Xoá tệp này"
-                      >
-                        <X className="size-3" />
-                      </button>
-
-                      <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 py-0.5 text-[8px] font-medium text-white backdrop-blur-xs">
-                        #{idx + 1}
-                      </span>
-                    </div>
-
-                    <div className="mt-1.5 px-0.5">
-                      <p className="truncate text-[10px] font-medium text-slate-700" title={file.name}>
-                        {file.name}
-                      </p>
-                      <p className="text-[9px] text-slate-400">
-                        {formatFileSize(file.size)}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+      <div id="step-4-media" className="scroll-mt-6">
+        <SectionCard number="4" title="Chọn media (ảnh/video)">
+          <div className="mb-4 flex h-9 items-center justify-center rounded-md bg-primary text-xs font-semibold text-white">
+            <ImageIcon className="mr-2 size-4" /> Hình ảnh + Video
           </div>
-        )}
+          <input
+            ref={mediaInputRef}
+            type="file"
+            multiple
+            accept="image/*,video/*"
+            className="hidden"
+            onChange={(event) => handleFiles(event.target.files)}
+          />
+          <button
+            type="button"
+            onClick={() => mediaInputRef.current?.click()}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              handleFiles(event.dataTransfer.files);
+            }}
+            className="flex min-h-40 w-full flex-col items-center justify-center rounded-lg border border-dashed border-blue-200 bg-slate-50/60 text-center transition-colors hover:bg-blue-50/40"
+          >
+            <span className="flex size-12 items-center justify-center rounded-full bg-blue-100 text-primary">
+              <Plus className="size-5" />
+            </span>
+            <span className="mt-3 text-xs font-bold text-slate-700">
+              {mediaFiles.length ? `Đã chọn ${mediaFiles.length} tệp media` : "Nhấp để tải ảnh lên hoặc kéo thả"}
+            </span>
+            <span className="mt-1 text-[10px] text-slate-400">Hỗ trợ JPG, PNG (tối đa 10 ảnh)</span>
+          </button>
+          {mediaFiles.length > 0 && (
+            <div className="mt-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-700">
+                  Tệp đã chọn ({mediaFiles.length}/10):
+                </span>
+                <button
+                  type="button"
+                  onClick={handleClearAllMedia}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-500 transition-colors hover:text-rose-700 hover:underline"
+                >
+                  <Trash2 className="size-3" />
+                  Xoá tất cả
+                </button>
+              </div>
 
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <Field label="Tối thiểu media mỗi bài">
-            <Input type="number" min="0" value={minMedia} onChange={(event) => setMinMedia(event.target.value)} />
-          </Field>
-          <Field label="Tối đa media mỗi bài">
-            <Input type="number" min="0" value={maxMedia} onChange={(event) => setMaxMedia(event.target.value)} />
-          </Field>
-        </div>
-      </SectionCard>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
+                {mediaFiles.map((file, idx) => {
+                  const isVideo = file.type?.startsWith("video/") || /\.(mp4|mov|avi|mkv)$/i.test(file.name || "");
+                  const previewUrl = file instanceof File ? URL.createObjectURL(file) : null;
+
+                  return (
+                    <div
+                      key={`${file.name}-${idx}`}
+                      className="group relative flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white p-1.5 shadow-xs transition-all hover:border-blue-300 hover:shadow-sm"
+                    >
+                      <div className="relative aspect-square w-full overflow-hidden rounded-md bg-slate-100">
+                        {isVideo && previewUrl ? (
+                          <div className="relative h-full w-full bg-black">
+                            <video
+                              src={previewUrl}
+                              muted
+                              playsInline
+                              controls
+                              className="h-full w-full object-cover"
+                              preload="metadata"
+                            />
+                          </div>
+                        ) : previewUrl ? (
+                          <img
+                            src={previewUrl}
+                            alt={file.name}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-slate-400">
+                            <ImageIcon className="size-6" />
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveMedia(idx);
+                          }}
+                          className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-rose-500/90 text-white opacity-90 shadow-sm transition-transform hover:scale-110 hover:bg-rose-600 sm:opacity-0 sm:group-hover:opacity-100"
+                          title="Xoá tệp này"
+                        >
+                          <X className="size-3" />
+                        </button>
+
+                        <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 py-0.5 text-[8px] font-medium text-white backdrop-blur-xs">
+                          #{idx + 1}
+                        </span>
+                      </div>
+
+                      <div className="mt-1.5 px-0.5">
+                        <p className="truncate text-[10px] font-medium text-slate-700" title={file.name}>
+                          {file.name}
+                        </p>
+                        <p className="text-[9px] text-slate-400">
+                          {formatFileSize(file.size)}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <Field label="Tối thiểu media mỗi bài">
+              <Input type="number" min="0" value={minMedia} onChange={(event) => setMinMedia(event.target.value)} />
+            </Field>
+            <Field label="Tối đa media mỗi bài">
+              <Input type="number" min="0" value={maxMedia} onChange={(event) => setMaxMedia(event.target.value)} />
+            </Field>
+          </div>
+        </SectionCard>
+      </div>
 
       {/* Bước 5 */}
-      <SectionCard number="5" title="Tạo nội dung bằng AI">
-        <div className="grid gap-4 md:grid-cols-[1fr_320px]">
-          <Field label="Nội dung gốc chủ đề/mô tả">
-            <div className="relative">
-              <Textarea
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                maxLength={2000}
-                placeholder="Nhập nội dung gốc để AI tạo ra các bài đăng..."
-                className="min-h-24 resize-none pb-6"
-              />
-              <span className="absolute bottom-2 right-3 text-[9px] text-slate-400">{prompt.length}/2000</span>
-            </div>
-          </Field>
-          <div className="flex flex-col justify-between gap-3">
-            <Field label="Số lượng bài AI tạo ra">
-              <SelectField value={aiCount} onChange={(event) => setAiCount(event.target.value)}>
-                <option value="3">3</option>
-                <option value="5">5</option>
-                <option value="10">10</option>
-              </SelectField>
+      <div id="step-5-content" className="scroll-mt-6">
+        <SectionCard number="5" title="Tạo nội dung bằng AI">
+          <div className="grid gap-4 md:grid-cols-[1fr_320px]">
+            <Field label="Nội dung gốc chủ đề/mô tả">
+              <div className="relative">
+                <Textarea
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  maxLength={2000}
+                  placeholder="Nhập nội dung gốc để AI tạo ra các bài đăng..."
+                  className="min-h-24 resize-none pb-6"
+                />
+                <span className="absolute bottom-2 right-3 text-[9px] text-slate-400">{prompt.length}/2000</span>
+              </div>
             </Field>
-            <Button type="button" onClick={generatePosts} disabled={isGenerating} className="w-full">
-              <Sparkles className="mr-2 size-3.5" /> {isGenerating ? "Đang tạo nội dung..." : "Tạo nội dung AI"}
-            </Button>
+            <div className="flex flex-col justify-between gap-3">
+              <Field label="Số lượng bài AI tạo ra">
+                <SelectField value={aiCount} onChange={(event) => setAiCount(event.target.value)}>
+                  <option value="3">3</option>
+                  <option value="5">5</option>
+                  <option value="10">10</option>
+                </SelectField>
+              </Field>
+              <Button type="button" onClick={generatePosts} disabled={isGenerating} className="w-full">
+                <Sparkles className="mr-2 size-3.5" /> {isGenerating ? "Đang tạo nội dung..." : "Tạo nội dung AI"}
+              </Button>
+            </div>
           </div>
-        </div>
 
-        <div className="mt-5 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <div>
-              <p className="text-xs font-bold text-slate-800">Kết quả nội dung AI ({generatedCount} bài)</p>
-              <p className="text-[10px] text-slate-400">Bạn có thể chỉnh sửa nội dung trước khi đăng</p>
+          <div className="mt-5 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-slate-800">Kết quả nội dung AI ({generatedCount} bài)</p>
+                <p className="text-[10px] text-slate-400">Bạn có thể chỉnh sửa nội dung trước khi đăng</p>
+              </div>
+              <Button type="button" size="sm" variant="outline" className="text-primary" disabled={isGenerating} onClick={generatePosts}>
+                <RotateCcw className="mr-1.5 size-3.5" /> Tạo lại
+              </Button>
             </div>
-            <Button type="button" size="sm" variant="outline" className="text-primary" disabled={isGenerating} onClick={generatePosts}>
-              <RotateCcw className="mr-1.5 size-3.5" /> Tạo lại
-            </Button>
-          </div>
-          <div className="flex overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-            {posts.map((_, index) => (
-              <button
-                type="button"
-                key={index}
-                onClick={() => setActivePost(index)}
-                className={`h-9 min-w-20 flex-1 text-[10px] font-semibold ${activePost === index ? "bg-primary text-white" : "text-slate-500 hover:bg-white"
-                  }`}
-              >
-                Bài {index + 1}
-              </button>
-            ))}
-          </div>
-          <p className="mb-2 mt-4 text-[11px] font-semibold text-slate-600">Nội dung bài {activePost + 1}</p>
-          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-            <input
-              ref={inlineImageRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(event) => {
-                insertInlineImage(event.target.files?.[0]);
-                event.target.value = "";
-              }}
-            />
-            {/* Toolbar định dạng nội dung và chèn các thành phần vào vị trí con trỏ. */}
-            <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50 px-3 py-2 text-slate-500">
-              <EditorButton label="Hoàn tác" onClick={() => runEditorCommand("undo")}><Undo2 /></EditorButton>
-              <EditorButton label="Làm lại" onClick={() => runEditorCommand("redo")}><Redo2 /></EditorButton>
-              <span className="mx-1 h-5 border-l border-slate-200" />
-              <select
-                aria-label="Kiểu đoạn văn"
-                defaultValue="p"
-                onChange={(event) => runEditorCommand("formatBlock", event.target.value)}
-                className="h-7 rounded border-0 bg-transparent px-1 text-[11px] text-slate-600 outline-none hover:bg-white"
-              >
-                <option value="p">Đoạn văn</option>
-                <option value="h2">Tiêu đề 2</option>
-                <option value="h3">Tiêu đề 3</option>
-                <option value="blockquote">Trích dẫn</option>
-              </select>
-              <span className="mx-1 h-5 border-l border-slate-200" />
-              <EditorButton label="Đậm" onClick={() => runEditorCommand("bold")}><Bold /></EditorButton>
-              <EditorButton label="Nghiêng" onClick={() => runEditorCommand("italic")}><Italic /></EditorButton>
-              <EditorButton label="Gạch chân" onClick={() => runEditorCommand("underline")}><Underline /></EditorButton>
-              <span className="mx-1 h-5 border-l border-slate-200" />
-              <EditorButton label="Danh sách dấu đầu dòng" onClick={() => runEditorCommand("insertUnorderedList")}><List /></EditorButton>
-              <EditorButton label="Danh sách đánh số" onClick={() => runEditorCommand("insertOrderedList")}><ListOrdered /></EditorButton>
-              <EditorButton label="Đường phân cách" onClick={() => runEditorCommand("insertHorizontalRule")}><Minus /></EditorButton>
-              <span className="mx-1 h-5 border-l border-slate-200" />
-              <EditorButton label="Chèn liên kết" onClick={openLinkDialog}><Link2 /></EditorButton>
-              <EditorButton label="Chèn ảnh" onClick={() => inlineImageRef.current?.click()}><ImageIcon /></EditorButton>
+            <div className="flex overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              {posts.map((_, index) => (
+                <button
+                  type="button"
+                  key={index}
+                  onClick={() => setActivePost(index)}
+                  className={`h-9 min-w-20 flex-1 text-[10px] font-semibold ${activePost === index ? "bg-primary text-white" : "text-slate-500 hover:bg-white"
+                    }`}
+                >
+                  Bài {index + 1}
+                </button>
+              ))}
             </div>
-            {/* Vùng soạn thảo rich text; lưu HTML để giữ định dạng riêng từng bài. */}
-            <div
-              ref={editorRef}
-              contentEditable
-              suppressContentEditableWarning
-              role="textbox"
-              aria-label={`Nội dung bài ${activePost + 1}`}
-              aria-multiline="true"
-              onInput={(event) => updateActivePost(event.currentTarget.innerHTML)}
-              onClick={(event) => {
-                const anchor = event.target.closest("a[href]");
-                if (!anchor || !event.currentTarget.contains(anchor)) return;
-                event.preventDefault();
-                window.open(anchor.href, "_blank", "noopener,noreferrer");
-              }}
-              onPaste={(event) => {
-                event.preventDefault();
-                const text = event.clipboardData.getData("text/plain");
-                document.execCommand("insertText", false, text);
-              }}
-              className="min-h-24 max-h-80 overflow-y-auto px-3 py-3 text-xs leading-5 text-slate-800 outline-none [&_a]:cursor-pointer [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:text-base [&_h3]:font-semibold [&_img]:my-2 [&_img]:max-h-40 [&_img]:max-w-full [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:list-disc [&_ul]:pl-6"
-            />
-            <div className="px-3 pb-2 text-right text-[9px] text-slate-400">
-              {editorRef.current?.innerText?.length || 0}/2000
+            <p className="mb-2 mt-4 text-[11px] font-semibold text-slate-600">Nội dung bài {activePost + 1}</p>
+            <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+              <input
+                ref={inlineImageRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(event) => {
+                  insertInlineImage(event.target.files?.[0]);
+                  event.target.value = "";
+                }}
+              />
+              {/* Toolbar định dạng nội dung và chèn các thành phần vào vị trí con trỏ. */}
+              <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50 px-3 py-2 text-slate-500">
+                <EditorButton label="Hoàn tác" onClick={() => runEditorCommand("undo")}><Undo2 /></EditorButton>
+                <EditorButton label="Làm lại" onClick={() => runEditorCommand("redo")}><Redo2 /></EditorButton>
+                <span className="mx-1 h-5 border-l border-slate-200" />
+                <select
+                  aria-label="Kiểu đoạn văn"
+                  defaultValue="p"
+                  onChange={(event) => runEditorCommand("formatBlock", event.target.value)}
+                  className="h-7 rounded border-0 bg-transparent px-1 text-[11px] text-slate-600 outline-none hover:bg-white"
+                >
+                  <option value="p">Đoạn văn</option>
+                  <option value="h2">Tiêu đề 2</option>
+                  <option value="h3">Tiêu đề 3</option>
+                  <option value="blockquote">Trích dẫn</option>
+                </select>
+                <span className="mx-1 h-5 border-l border-slate-200" />
+                <EditorButton label="Đậm" onClick={() => runEditorCommand("bold")}><Bold /></EditorButton>
+                <EditorButton label="Nghiêng" onClick={() => runEditorCommand("italic")}><Italic /></EditorButton>
+                <EditorButton label="Gạch chân" onClick={() => runEditorCommand("underline")}><Underline /></EditorButton>
+                <span className="mx-1 h-5 border-l border-slate-200" />
+                <EditorButton label="Danh sách dấu đầu dòng" onClick={() => runEditorCommand("insertUnorderedList")}><List /></EditorButton>
+                <EditorButton label="Danh sách đánh số" onClick={() => runEditorCommand("insertOrderedList")}><ListOrdered /></EditorButton>
+                <EditorButton label="Đường phân cách" onClick={() => runEditorCommand("insertHorizontalRule")}><Minus /></EditorButton>
+                <span className="mx-1 h-5 border-l border-slate-200" />
+                <EditorButton label="Chèn liên kết" onClick={openLinkDialog}><Link2 /></EditorButton>
+                <EditorButton label="Chèn ảnh" onClick={() => inlineImageRef.current?.click()}><ImageIcon /></EditorButton>
+              </div>
+              {/* Vùng soạn thảo rich text; lưu HTML để giữ định dạng riêng từng bài. */}
+              <div
+                ref={editorRef}
+                contentEditable
+                suppressContentEditableWarning
+                role="textbox"
+                aria-label={`Nội dung bài ${activePost + 1}`}
+                aria-multiline="true"
+                onInput={(event) => updateActivePost(event.currentTarget.innerHTML)}
+                onClick={(event) => {
+                  const anchor = event.target.closest("a[href]");
+                  if (!anchor || !event.currentTarget.contains(anchor)) return;
+                  event.preventDefault();
+                  window.open(anchor.href, "_blank", "noopener,noreferrer");
+                }}
+                onPaste={(event) => {
+                  event.preventDefault();
+                  const text = event.clipboardData.getData("text/plain");
+                  document.execCommand("insertText", false, text);
+                }}
+                className="min-h-24 max-h-80 overflow-y-auto px-3 py-3 text-xs leading-5 text-slate-800 outline-none [&_a]:cursor-pointer [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:text-base [&_h3]:font-semibold [&_img]:my-2 [&_img]:max-h-40 [&_img]:max-w-full [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:list-disc [&_ul]:pl-6"
+              />
+              <div className="px-3 pb-2 text-right text-[9px] text-slate-400">
+                {editorRef.current?.innerText?.length || 0}/2000
+              </div>
             </div>
           </div>
-        </div>
-      </SectionCard>
+        </SectionCard>
+      </div>
 
       {/* Bước 6 */}
-      <SectionCard number="6" title="Cài đặt đăng bài">
-        <div className="flex flex-wrap gap-x-8 gap-y-3">
-          <CheckLabel checked={scheduleEnabled} onCheckedChange={setScheduleEnabled}>
-            Bật hẹn giờ đăng bài
-          </CheckLabel>
-          <CheckLabel checked={avoidDuplicate} onCheckedChange={setAvoidDuplicate}>
-            Không đăng trùng nội dung
-          </CheckLabel>
-          <CheckLabel checked={shuffleContent} onCheckedChange={setShuffleContent}>
-            Đăng ngẫu nhiên nội dung (nếu có nhiều nội dung)
-          </CheckLabel>
-        </div>
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
-          <Field label="Thời gian nghỉ giữa các lần đăng (giây)">
-            <div className="flex items-center gap-3">
-              <Input
-                type="number"
-                min="0"
-                value={delayMin}
-                onChange={(event) => setDelayMin(event.target.value)}
-                className="text-center"
-              />
-              <span className="text-slate-400">–</span>
-              <Input
-                type="number"
-                min="0"
-                value={delayMax}
-                onChange={(event) => setDelayMax(event.target.value)}
-                className="text-center"
-              />
-              <span className="text-[10px] text-slate-400">giây</span>
-            </div>
-          </Field>
-          <Field label="Thời gian bắt đầu (tùy chọn)">
-            <div className={`grid grid-cols-2 gap-3 transition-opacity ${scheduleEnabled ? "opacity-100" : "pointer-events-none opacity-40"}`}>
-              <div className="relative">
-                <CalendarDays className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+      <div id="step-6-posting" className="scroll-mt-6">
+        <SectionCard number="6" title="Cài đặt đăng bài">
+          <div className="flex flex-wrap gap-x-8 gap-y-3">
+            <CheckLabel checked={scheduleEnabled} onCheckedChange={setScheduleEnabled}>
+              Bật hẹn giờ đăng bài
+            </CheckLabel>
+            <CheckLabel checked={avoidDuplicate} onCheckedChange={setAvoidDuplicate}>
+              Không đăng trùng nội dung
+            </CheckLabel>
+            <CheckLabel checked={shuffleContent} onCheckedChange={setShuffleContent}>
+              Đăng ngẫu nhiên nội dung (nếu có nhiều nội dung)
+            </CheckLabel>
+          </div>
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <Field label="Thời gian nghỉ giữa các lần đăng (giây)">
+              <div className="flex items-center gap-3">
                 <Input
-                  type="date"
-                  disabled={!scheduleEnabled}
-                  value={scheduleDate}
-                  onChange={(event) => setScheduleDate(event.target.value)}
-                  className="pl-9"
+                  type="number"
+                  min="0"
+                  value={delayMin}
+                  onChange={(event) => setDelayMin(event.target.value)}
+                  className="text-center"
                 />
-              </div>
-              <div className="relative">
-                <Clock3 className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+                <span className="text-slate-400">–</span>
                 <Input
-                  type="time"
-                  disabled={!scheduleEnabled}
-                  value={scheduleTime}
-                  onChange={(event) => setScheduleTime(event.target.value)}
-                  className="pl-9"
+                  type="number"
+                  min="0"
+                  value={delayMax}
+                  onChange={(event) => setDelayMax(event.target.value)}
+                  className="text-center"
                 />
+                <span className="text-[10px] text-slate-400">giây</span>
               </div>
-            </div>
-          </Field>
-        </div>
-      </SectionCard>
+            </Field>
+            <Field label="Thời gian bắt đầu (tùy chọn)">
+              <div className={`grid grid-cols-2 gap-3 transition-opacity ${scheduleEnabled ? "opacity-100" : "pointer-events-none opacity-40"}`}>
+                <div className="relative">
+                  <CalendarDays className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    type="date"
+                    disabled={!scheduleEnabled}
+                    value={scheduleDate}
+                    onChange={(event) => setScheduleDate(event.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="relative">
+                  <Clock3 className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    type="time"
+                    disabled={!scheduleEnabled}
+                    value={scheduleTime}
+                    onChange={(event) => setScheduleTime(event.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+              </div>
+            </Field>
+          </div>
+        </SectionCard>
+      </div>
 
       {/* Thông tin tác vụ cấu hình */}
       <SectionCard title="Thông tin tác vụ cấu hình" aside={<Info className="size-4 text-primary" />}>
         <div className="grid gap-x-10 gap-y-3 text-[11px] md:grid-cols-2">
           {[
-            [<Users key="a" className="size-3.5" />, "Tài khoản", `${selectedAccounts.length} tài khoản đã chọn`],
-            [<ListFilter key="b" className="size-3.5" />, "Hạn bài", `${maxPosts} bài`],
-            [<Sparkles key="c" className="size-3.5" />, "API Key", hasApiKey ? "Đã cấu hình" : "Chưa cấu hình"],
-            [<Sparkles key="d" className="size-3.5" />, "Số bài AI", `${generatedCount} bài`],
-            [<Search key="e" className="size-3.5" />, "Nguồn nhóm", groupSource === "search" ? "Tìm theo từ khóa" : "Từ file link nhóm"],
-            [<ImageIcon key="f" className="size-3.5" />, "Min / Max media", `${minMedia} – ${maxMedia} ảnh`],
+            [
+              <Users key="a" className="size-3.5" />,
+              "Tài khoản",
+              selectedAccounts.length
+                ? `${selectedAccounts.length} tài khoản đã chọn${liveAccountsCount > 0 ? ` (${liveAccountsCount} Live)` : ""}`
+                : "Chưa chọn tài khoản",
+            ],
+            [
+              <ListFilter key="b" className="size-3.5" />,
+              "Hạn bài",
+              `${maxPosts} bài (kế hoạch ${totalPlanned} bài)`,
+            ],
+            [
+              <Sparkles key="c" className="size-3.5" />,
+              "API Key",
+              hasApiKey ? `Đã cấu hình (${modelDisplayName})` : "Chưa cấu hình",
+            ],
+            [
+              <Sparkles key="d" className="size-3.5" />,
+              "Số bài AI",
+              `${generatedCount} / ${posts.length} bài`,
+            ],
+            [
+              <Search key="e" className="size-3.5" />,
+              "Nguồn nhóm",
+              groupSource === "search"
+                ? (groupSearch ? `Từ khóa "${groupSearch}" (${activeGroupsCount} nhóm)` : `Tìm theo từ khóa (${activeGroupsCount} nhóm)`)
+                : (groupFile?.name ? `${groupFile.name} (${activeGroupsCount} nhóm)` : `Từ file link nhóm (${activeGroupsCount} nhóm)`),
+            ],
+            [
+              <ImageIcon key="f" className="size-3.5" />,
+              "Min / Max media",
+              mediaFiles.length
+                ? `${mediaFiles.length} tệp đã chọn (${minMedia} – ${maxMedia} ảnh/bài)`
+                : `${minMedia} – ${maxMedia} ảnh`,
+            ],
             [<RefreshCw key="g" className="size-3.5" />, "Luồng chạy", `${threads} luồng`],
             [<Clock3 key="h" className="size-3.5" />, "Giãn cách đăng", `${delayMin} – ${delayMax} giây`],
             [<Clock3 key="i" className="size-3.5" />, "Nghỉ", `${restMinutes} phút`],
@@ -975,8 +1037,10 @@ export default function GroupPostModule() {
               </span>
               <strong
                 className={
-                  value === "Đã cấu hình" || (label === "Hẹn giờ" && scheduleEnabled)
+                  value?.startsWith?.("Đã cấu hình") || (label === "Hẹn giờ" && scheduleEnabled)
                     ? "text-emerald-600"
+                    : value === "Chưa cấu hình" || value === "Chưa chọn tài khoản"
+                    ? "text-amber-600"
                     : "text-slate-700"
                 }
               >

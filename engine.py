@@ -436,10 +436,16 @@ def main():
     parser.add_argument(
         "--host", type=str, default="127.0.0.1", help="Host (default: 127.0.0.1)"
     )
+    parser.add_argument(
+        "--reload", action="store_true", help="Enable auto-reload on code change (development)"
+    )
     args = parser.parse_args()
 
     print(f"[Local Engine] Starting on http://{args.host}:{args.port}")
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    if args.reload:
+        uvicorn.run("engine:app", host=args.host, port=args.port, reload=True, log_level="info")
+    else:
+        uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 
 if __name__ == "__main__":
