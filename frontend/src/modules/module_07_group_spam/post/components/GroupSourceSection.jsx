@@ -75,6 +75,18 @@ export default function GroupSourceSection({
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
+  // Tài khoản đầu tiên được chọn ở Bước 1 để thực hiện cào dữ liệu nhóm thật từ Facebook
+  const activeScrapingAccount = useMemo(() => {
+    if (!selectedAccountKeys || selectedAccountKeys.length === 0) return null;
+    const firstKey = selectedAccountKeys[0];
+    return (
+      (accounts || []).find((a) => a.key === firstKey || a.uid === firstKey) || {
+        uid: firstKey,
+        name: `Tài khoản (${firstKey})`,
+      }
+    );
+  }, [selectedAccountKeys, accounts]);
+
   // Danh sách nhóm đang hiển thị: dữ liệu thật từ Backend (file hoặc search/thủ công)
   const baseGroups = useMemo(() => {
     if (groupSource === "file") {
@@ -240,6 +252,19 @@ export default function GroupSourceSection({
 
   // Quét tìm nhóm theo từ khóa qua Backend (dữ liệu nhóm Facebook thật)
   const handleSearchGroups = async () => {
+    // RÀNG BUỘC: Bắt buộc phải chọn ít nhất 1 tài khoản ở Bước 1
+    if (!selectedAccountKeys || selectedAccountKeys.length === 0) {
+      toast.warning(
+        "Vui lòng chọn ít nhất 1 tài khoản Facebook ở Bước 1 để thực hiện quét nhóm thật!",
+        "YÊU CẦU CHỌN TÀI KHOẢN"
+      );
+      const step1El = document.getElementById("step-1-accounts");
+      if (step1El) {
+        step1El.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      return;
+    }
+
     const keyword = groupSearch?.trim();
     if (!keyword) {
       toast.info("Vui lòng nhập từ khóa tìm nhóm Facebook", "TÌM NHÓM");
@@ -585,6 +610,46 @@ export default function GroupSourceSection({
       {/* NỘI DUNG CHẾ ĐỘ 2: TÌM KIẾM THEO TỪ KHÓA */}
       {groupSource === "search" && (
         <div className="mt-4 space-y-3">
+          {/* Thông tin tài khoản cào dữ liệu hoặc cảnh báo cần chọn tài khoản */}
+          {activeScrapingAccount ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200/80 bg-emerald-50/70 px-3 py-2 text-[11px] text-emerald-800">
+              <div className="flex items-center gap-2">
+                <span className="flex size-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>
+                  Tài khoản dùng để quét nhóm thật: <strong className="font-semibold text-emerald-950">{activeScrapingAccount.name}</strong>{" "}
+                  <span className="font-mono text-[10px] text-emerald-700/80">(UID: {activeScrapingAccount.uid})</span>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  document.getElementById("step-1-accounts")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+                className="text-[10px] font-semibold text-emerald-700 underline hover:text-emerald-900 cursor-pointer"
+              >
+                Đổi tài khoản ở Bước 1
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="size-4 text-amber-600 shrink-0" />
+                <span>
+                  <strong>Chưa chọn tài khoản ở Bước 1.</strong> Hệ thống cần 1 tài khoản Facebook để đăng nhập và cào dữ liệu nhóm thật.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  document.getElementById("step-1-accounts")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+                className="rounded-md bg-amber-600 px-2.5 py-1 text-[11px] font-semibold text-white shadow-2xs hover:bg-amber-700 cursor-pointer"
+              >
+                Lên Bước 1 chọn tài khoản
+              </button>
+            </div>
+          )}
+
           <div className="flex gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />

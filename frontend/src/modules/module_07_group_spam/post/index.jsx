@@ -79,6 +79,7 @@ export default function GroupPostModule() {
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsAction, setSettingsAction] = useState("");
   const [settingsFeedback, setSettingsFeedback] = useState(null);
+  const [isAccountLocked, setIsAccountLocked] = useState(false);
   const [isSettingsLocked, setIsSettingsLocked] = useState(false);
   const [threads, setThreads] = useState("2");
   const [restMinutes, setRestMinutes] = useState("10");
@@ -373,44 +374,50 @@ export default function GroupPostModule() {
       </div>
 
       {/* Bước 1: Chọn tài khoản / người dùng đi seeding */}
-      <GroupAccountSection
-        accounts={accounts}
-        accountsLoading={accountsLoading}
-        selectedAccountKeys={selectedAccountKeys}
-        setSelectedAccountKeys={setSelectedAccountKeys}
-        onRefreshAccounts={loadAccounts}
-      />
+      <div id="step-1-accounts" className="scroll-mt-6">
+        <GroupAccountSection
+          accounts={accounts}
+          accountsLoading={accountsLoading}
+          selectedAccountKeys={selectedAccountKeys}
+          setSelectedAccountKeys={setSelectedAccountKeys}
+          onRefreshAccounts={loadAccounts}
+          isLocked={isAccountLocked}
+          setIsLocked={setIsAccountLocked}
+        />
+      </div>
 
       {/* Bước 2: Cấu hình API & thông số chung */}
-      <GroupSettingsSection
-        model={model}
-        setModel={setModel}
-        apiKey={apiKey}
-        setApiKey={setApiKey}
-        showApiKey={showApiKey}
-        setShowApiKey={setShowApiKey}
-        threads={threads}
-        setThreads={setThreads}
-        restMinutes={restMinutes}
-        setRestMinutes={setRestMinutes}
-        maxPosts={maxPosts}
-        setMaxPosts={setMaxPosts}
-        geminiModels={geminiModels}
-        setGeminiModels={setGeminiModels}
-        providerStatus={providerStatus}
-        setProviderStatus={setProviderStatus}
-        settingsLoading={settingsLoading}
-        settingsAction={settingsAction}
-        setSettingsAction={setSettingsAction}
-        settingsFeedback={settingsFeedback}
-        setSettingsFeedback={setSettingsFeedback}
-        onSaveSettings={handleSaveSettings}
-        onTestApi={handleTestApi}
-        onLoadGeminiModels={handleLoadGeminiModels}
-        onModelChange={handleModelChange}
-        isLocked={isSettingsLocked}
-        setIsLocked={setIsSettingsLocked}
-      />
+      <div id="step-2-settings" className="scroll-mt-6">
+        <GroupSettingsSection
+          model={model}
+          setModel={setModel}
+          apiKey={apiKey}
+          setApiKey={setApiKey}
+          showApiKey={showApiKey}
+          setShowApiKey={setShowApiKey}
+          threads={threads}
+          setThreads={setThreads}
+          restMinutes={restMinutes}
+          setRestMinutes={setRestMinutes}
+          maxPosts={maxPosts}
+          setMaxPosts={setMaxPosts}
+          geminiModels={geminiModels}
+          setGeminiModels={setGeminiModels}
+          providerStatus={providerStatus}
+          setProviderStatus={setProviderStatus}
+          settingsLoading={settingsLoading}
+          settingsAction={settingsAction}
+          setSettingsAction={setSettingsAction}
+          settingsFeedback={settingsFeedback}
+          setSettingsFeedback={setSettingsFeedback}
+          onSaveSettings={handleSaveSettings}
+          onTestApi={handleTestApi}
+          onLoadGeminiModels={handleLoadGeminiModels}
+          onModelChange={handleModelChange}
+          isLocked={isSettingsLocked}
+          setIsLocked={setIsSettingsLocked}
+        />
+      </div>
 
       {/* Bước 3: Nguồn nhóm */}
       <div id="step-3-group-source" className="scroll-mt-6">
@@ -427,6 +434,8 @@ export default function GroupPostModule() {
           setSelectedGroupKeys={setSelectedGroupKeys}
           customGroups={customGroups}
           setCustomGroups={setCustomGroups}
+          selectedAccountKeys={selectedAccountKeys}
+          accounts={accounts}
         />
       </div>
 
