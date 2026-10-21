@@ -8,7 +8,6 @@ from modules.module_06_omnichannel_chat.repositories import (
     MessageRepository,
     ConversationRepository,
     CustomerRepository,
-    PageRepository,
 )
 from modules.module_06_omnichannel_chat.websocket import manager
 from modules.module_06_omnichannel_chat.models import Page, Notification, Message, Conversation, Customer
@@ -77,7 +76,7 @@ async def process_webhook_event(event: Dict[str, Any]):
                             msg.reactions = reaction_val
                             db.commit()
 
-                            page_record = PageRepository(db).get_by_page_id(page_id)
+                            page_record = db.query(Page).filter(Page.page_id == page_id).first()
                             if page_record:
                                 ws_payload = {
                                     "type": "reaction",
@@ -164,7 +163,7 @@ async def process_webhook_event(event: Dict[str, Any]):
                     )
 
                     # Resolve Page mapping
-                    page_record = PageRepository(db).get_by_page_id(page_id)
+                    page_record = db.query(Page).filter(Page.page_id == page_id).first()
                     if page_record:
                         # Resolve real customer profile from Graph API
                         from modules.module_06_omnichannel_chat.services import FacebookSyncService
@@ -328,7 +327,7 @@ async def process_webhook_event(event: Dict[str, Any]):
                         ).first()
 
                         if not db_notif:
-                            page_record = PageRepository(db).get_by_page_id(page_id)
+                            page_record = db.query(Page).filter(Page.page_id == page_id).first()
                             from modules.module_06_omnichannel_chat.services import FacebookSyncService
                             sync_service = FacebookSyncService(db)
                             profile_info = await sync_service.get_customer_profile(sender_id, page_id) if (sender_id and page_id) else {}

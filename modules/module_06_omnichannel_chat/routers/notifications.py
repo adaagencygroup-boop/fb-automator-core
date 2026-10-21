@@ -72,11 +72,11 @@ def get_notifications(
     where_clauses = []
 
     if logged_in_uid:
-        where_clauses.append("(CAST(a.user_id AS VARCHAR) = :user_id OR a.uid = :user_id)")
+        where_clauses.append("(CAST(a.user_id AS VARCHAR) = :user_id OR CAST(va.system_user_id AS VARCHAR) = :user_id)")
         params["user_id"] = str(logged_in_uid)
 
     if facebook_user_id:
-        where_clauses.append("p.account_uid = :fb_uid")
+        where_clauses.append("p.facebook_user_id = :fb_uid")
         params["fb_uid"] = str(facebook_user_id)
 
     if page_id:
@@ -86,19 +86,19 @@ def get_notifications(
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     sql = text(f"""
         SELECT DISTINCT p.page_id, p.page_name
-        FROM pages p
-        LEFT JOIN accounts a ON p.account_uid = a.uid
+        FROM v_pages p
+        LEFT JOIN v_accounts va ON p.facebook_user_id = va.facebook_user_id
+        LEFT JOIN accounts a ON (
+            p.facebook_user_id = a.uid 
+            OR va.user_access_token = a.token
+            OR va.facebook_user_id = a.uid
+            OR (va.name IS NOT NULL AND va.name != '' AND va.name = a.profile_name)
+        )
         {where_sql}
     """)
     page_rows = db.execute(sql, params).mappings().all()
     page_dict = {str(r["page_id"]): r["page_name"] for r in page_rows}
     allowed_page_ids = list(page_dict.keys())
-
-    # Fallback nếu user_id lọc chưa thấy hoặc danh sách rỗng
-    if not allowed_page_ids:
-        all_p = db.execute(text("SELECT DISTINCT page_id, page_name FROM pages")).mappings().all()
-        page_dict = {str(r["page_id"]): r["page_name"] for r in all_p}
-        allowed_page_ids = list(page_dict.keys())
 
     p_page = page if isinstance(page, int) else None
     p_size = page_size if isinstance(page_size, int) else None
