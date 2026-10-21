@@ -113,12 +113,7 @@ async def lifespan(app: FastAPI):
         )
 
         ensure_creator_schema()
-    with startup_step("Module 05 page manager"):
-        from modules.module_05_page_manager.models import (
-            init_models as init_page_models,
-        )
-
-        init_page_models()
+    # Module 05 schema is managed in init_database()
     with startup_step("Backend module imports"):
         loaded = load_backend_modules()
     print(
@@ -241,7 +236,14 @@ app.add_middleware(LicenseMiddleware)
 # Cho phép Web UI (localhost:3000, tauri://localhost) gọi API
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost)$",
+    allow_origins=[
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_origin_regex=r"^(https?://((.+\.)?localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

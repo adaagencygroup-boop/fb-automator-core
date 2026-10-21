@@ -77,29 +77,52 @@ function Workspace({ session, children }) {
   }, [router]);
 
   useEffect(() => {
-    // Kiểm tra Engine
-    api
-      .get("/api/health")
-      .then(() => setEngineOnline(true))
-      .catch(() => setEngineOnline(false));
+    let active = true;
+    let timer = null;
+
+    // Kiểm tra Engine định kỳ và tự động reconnect
+    const checkHealth = async () => {
+      try {
+        await api.get("/api/health");
+        if (active) {
+          setEngineOnline(true);
+          timer = setTimeout(checkHealth, 20000);
+        }
+      } catch {
+        if (active) {
+          setEngineOnline(false);
+          timer = setTimeout(checkHealth, 2000);
+        }
+      }
+    };
+
+    checkHealth();
 
     // Nhận log realtime qua WebSocket
     let ws;
-    try {
-      ws = new WebSocket(WS_BASE);
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          const time = new Date().toLocaleTimeString();
-          setLogs((prev) => [...prev.slice(-300), { time, ...data }]);
-        } catch {
-          /* bỏ qua gói tin không phải JSON */
-        }
-      };
-    } catch {
-      /* Engine chưa chạy */
-    }
-    return () => ws?.close();
+    const connectWs = () => {
+      try {
+        ws = new WebSocket(WS_BASE);
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            const time = new Date().toLocaleTimeString();
+            setLogs((prev) => [...prev.slice(-300), { time, ...data }]);
+          } catch {
+            /* bỏ qua gói tin không phải JSON */
+          }
+        };
+      } catch {
+        /* Engine chưa chạy */
+      }
+    };
+    connectWs();
+
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+      ws?.close();
+    };
   }, []);
 
   const goTo = (navId) => router.push(pathOf(findNavItem(navId).item));

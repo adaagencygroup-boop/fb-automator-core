@@ -75,6 +75,12 @@ export default function LoginScreen({ onAuthenticated, onStatus, onRegister, ses
       const result = await api.post("/api/v1/auth/login", {
         username: username.trim(), password, hwid: currentHwid, remember_me: rememberMe,
       });
+      if (result?.access_token) {
+        localStorage.setItem("fb_auth_token", result.access_token);
+      }
+      if (result?.refresh_token) {
+        localStorage.setItem("fb_refresh_token", result.refresh_token);
+      }
       if (rememberMe) localStorage.setItem("remembered_username", username.trim());
       else localStorage.removeItem("remembered_username");
       setFeedback(result.status === "expired" ? loginFeedback.license : {

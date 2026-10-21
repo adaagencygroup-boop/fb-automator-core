@@ -13,6 +13,10 @@ export const api = axios.create({
 });
 
 api.interceptors.request.use((config) => {
+  const token = typeof window !== "undefined" ? localStorage.getItem("fb_auth_token") : null;
+  if (token && !config.headers["Authorization"]) {
+    config.headers["Authorization"] = `Bearer ${token}`;
+  }
   const userId = getSessionUserId();
   const identityFree = ["/auth/login", "/auth/register", "/verify-license", "/registration-status"].some((path) => String(config.url).includes(path));
   if (userId && !identityFree) config.headers["X-Auth-User-Id"] = userId;
@@ -61,10 +65,21 @@ function apiError(error) {
 
 function refreshAccess() {
   if (!refreshPromise) {
+    const refreshToken = typeof window !== "undefined" ? localStorage.getItem("fb_refresh_token") : null;
     refreshPromise = axios
       .post(`${API_BASE}/api/v1/auth/refresh`, {}, {
         withCredentials: true, timeout: 15000,
-        headers: { "X-Auth-Client": "user", ...(getSessionUserId() ? { "X-Auth-User-Id": getSessionUserId() } : {}) },
+        headers: {
+          "X-Auth-Client": "user",
+          ...(refreshToken ? { "X-Refresh-Token": refreshToken } : {}),
+          ...(getSessionUserId() ? { "X-Auth-User-Id": getSessionUserId() } : {}),
+        },
+      })
+      .then((res) => {
+        if (res.data?.access_token && typeof window !== "undefined") {
+          localStorage.setItem("fb_auth_token", res.data.access_token);
+        }
+        return res.data;
       })
       .finally(() => {
         refreshPromise = null;
@@ -124,7 +139,11 @@ api.interceptors.response.use(
     ) {
       original._retry = true;
       try {
-        await refreshAccess();
+        const refreshData = await refreshAccess();
+        if (refreshData?.access_token) {
+          original.headers = original.headers || {};
+          original.headers["Authorization"] = `Bearer ${refreshData.access_token}`;
+        }
         return api.request(original);
       } catch (refreshError) {
         const refreshDetail = authDetail(refreshError);

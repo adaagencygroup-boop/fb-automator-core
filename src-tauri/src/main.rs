@@ -14,6 +14,7 @@ struct SidecarState {
 fn main() {
     let sidecar_child: Arc<Mutex<Option<CommandChild>>> = Arc::new(Mutex::new(None));
     let child_clone = Arc::clone(&sidecar_child);
+    let child_for_exit = Arc::clone(&sidecar_child);
 
     let mut builder = tauri::Builder::default();
 
@@ -40,6 +41,9 @@ fn main() {
 
     // Register deep-link plugin
     builder = builder.plugin(tauri_plugin_deep_link::init());
+
+    // Register dialog plugin
+    builder = builder.plugin(tauri_plugin_dialog::init());
 
     // Register shell plugin
     builder = builder.plugin(tauri_plugin_shell::init());
@@ -109,11 +113,16 @@ fn main() {
         | RunEvent::ExitRequested { .. } => {
             println!("🛑 [Tauri] Closing app, terminating Python sidecar cleanly...");
             // Gọi shutdown endpoint qua HTTP trước để engine đóng database nhẹ nhàng
-            let _ = std::thread::spawn(|| {
-                let _ = std::process::Command::new("curl")
-                    .args(["-X", "POST", "http://127.0.0.1:28129/api/shutdown"])
-                    .output();
-            });
+            let _ = std::process::Command::new("curl")
+                .args(["-X", "POST", "http://127.0.0.1:28129/api/shutdown"])
+                .output();
+
+            // Cưỡng chế kill sidecar nếu vẫn còn chạy
+            if let Ok(mut lock) = child_for_exit.lock() {
+                if let Some(child) = lock.take() {
+                    let _ = child.kill();
+                }
+            }
         }
         _ => {}
     });

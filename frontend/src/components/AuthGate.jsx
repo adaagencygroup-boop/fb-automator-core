@@ -34,6 +34,8 @@ export default function AuthGate({ children }) {
   const hasUser = Boolean(user);
   useEffect(() => {
     const onRevoked = () => {
+      localStorage.removeItem("fb_auth_token");
+      localStorage.removeItem("fb_refresh_token");
       setUser(null);
       setScreen("login");
       setSessionNotice("Phiên đăng nhập đã bị thu hồi. Vui lòng đăng nhập lại.");
@@ -43,7 +45,6 @@ export default function AuthGate({ children }) {
   }, []);
 
   useEffect(() => {
-    window.localStorage.removeItem("fb_auth_token");
     let stopped = false;
     let timer;
     let failures = 0;
@@ -60,7 +61,7 @@ export default function AuthGate({ children }) {
         if (stopped) return;
         if (![401, 403].includes(error.status)) {
           setConnectionError(true);
-          timer = setTimeout(restore, Math.min(30000, 2000 * 2 ** failures++));
+          timer = setTimeout(restore, Math.min(4000, 1500 + failures++ * 500));
           return;
         }
         const statusScreen = { ACCOUNT_BANNED: "banned", ACCOUNT_LOCKED: "banned", ACCOUNT_PENDING: "pending", ACCOUNT_REJECTED: "rejected" }[error.code];
@@ -153,6 +154,8 @@ export default function AuthGate({ children }) {
   }, [hasUser, loadMe, sessionUsername]);
 
   async function logout() {
+    localStorage.removeItem("fb_auth_token");
+    localStorage.removeItem("fb_refresh_token");
     await api.post("/api/v1/auth/logout").catch(() => { });
     clearSessionUserId();
     setUser(null);
@@ -177,7 +180,23 @@ export default function AuthGate({ children }) {
   }
 
   if (!ready) {
-    return <Shell><p role="status" className="text-sm text-slate-500">{connectionError ? "Mất kết nối máy chủ. Đang thử kết nối lại..." : "Đang kiểm tra phiên đăng nhập..."}</p></Shell>;
+    return (
+      <Shell>
+        <div className="flex flex-col items-center justify-center space-y-4 max-w-sm text-center">
+          <div className="w-10 h-10 rounded-full border-4 border-sky-200 border-t-sky-600 animate-spin" />
+          <div className="space-y-1">
+            <h3 className="font-semibold text-slate-800 text-base">
+              {connectionError ? "Đang kết nối Engine hệ thống..." : "Đang kiểm tra phiên đăng nhập..."}
+            </h3>
+            <p className="text-xs text-slate-500">
+              {connectionError
+                ? "Dịch vụ Facebook Automator đang khởi chạy ngầm, vui lòng đợi giây lát..."
+                : "Hệ thống đang chuẩn bị môi trường làm việc..."}
+            </p>
+          </div>
+        </div>
+      </Shell>
+    );
   }
 
   if (!user) {

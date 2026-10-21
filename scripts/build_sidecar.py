@@ -16,6 +16,7 @@ if sys.platform == "win32":
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TAURI_BIN_DIR = BASE_DIR / "src-tauri" / "binaries"
+TAURI_RELEASE_DIR = BASE_DIR / "src-tauri" / "target" / "release"
 
 def build_sidecar():
     print("=" * 70)
@@ -49,11 +50,16 @@ def build_sidecar():
     # Tauri quy dinh ten binary sidecar theo target triple: <name>-<target-triple>.exe
     target_triple_exe = TAURI_BIN_DIR / "local_engine-x86_64-pc-windows-msvc.exe"
     shutil.copy2(built_exe, target_triple_exe)
+    print(f">> Da sao chep vao: {target_triple_exe}")
+
+    # Neu da co thu muc target/release, sao chep truc tiep vao de chay thu nghiem ngay
+    if TAURI_RELEASE_DIR.exists():
+        shutil.copy2(built_exe, TAURI_RELEASE_DIR / "local_engine.exe")
+        shutil.copy2(built_exe, TAURI_RELEASE_DIR / "local_engine-x86_64-pc-windows-msvc.exe")
+        print(f">> Da sao chep vao target/release!")
 
     print("\n" + "=" * 70)
     print(">> BUILD SIDECAR HOAN TAT THANH CONG!")
-    print(f">> Da sao chep vao: {target_triple_exe}")
-    print(">> Bay gio ban co the chay `cargo tauri build` hoac `npm run tauri build`!")
     print("=" * 70)
     return True
 

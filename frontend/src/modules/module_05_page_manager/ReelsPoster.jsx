@@ -162,9 +162,9 @@ export default function ReelsPoster() {
 
   // Mở hộp thoại chọn thư mục từ máy tính
   const handleOpenFolderPicker = async () => {
-    if (typeof window !== "undefined" && window.__TAURI__) {
+    if (typeof window !== "undefined" && (window.__TAURI__ || window.__TAURI_INTERNALS__)) {
       try {
-        const { open } = await import("@tauri-apps/api/dialog");
+        const { open } = await import("@tauri-apps/plugin-dialog");
         const selected = await open({
           directory: true,
           multiple: false,
@@ -192,7 +192,7 @@ export default function ReelsPoster() {
       const relPath = firstFile.webkitRelativePath || "";
       const rootFolderName = relPath.split("/")[0] || "";
       const fullPath = firstFile.path ? firstFile.path.substring(0, firstFile.path.lastIndexOf(firstFile.name)) : "";
-      const determinedPath = fullPath || (rootFolderName ? `D:\\Projects\\Work\\tool_facebook\\${rootFolderName}` : rootDir);
+      const determinedPath = fullPath || (rootFolderName ? rootFolderName : rootDir);
       
       setRootDir(determinedPath);
       handleScanFolders(determinedPath, true);
