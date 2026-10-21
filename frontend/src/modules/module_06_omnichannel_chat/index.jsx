@@ -10,6 +10,8 @@ import {
   friendlyFbError,
   toUtcIso,
   parseAttachmentText,
+  messagePreview,
+  attachmentLabel,
   sendMessage,
   setConversationStarred,
   setConversationTags,
@@ -18,6 +20,7 @@ import {
   reactToMessage,
 } from "./service";
 import PageList from "./components/PageList";
+import PageSwitcher from "./components/PageSwitcher";
 import ConversationList from "./components/ConversationList";
 import ChatWindow from "./components/ChatWindow";
 import NotificationDetail from "./components/NotificationDetail";
@@ -77,7 +80,6 @@ export default function OmnichannelChatModule() {
   const [loadError, setLoadError] = useState("");
   const [resetting, setResetting] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
-  const [pageSheetOpen, setPageSheetOpen] = useState(false); // sheet Danh sách Page khi đang mở chi tiết
   const [compactShowList, setCompactShowList] = useState(false); // bố cục 1 cột: đã vào Hội thoại chưa
 
   const [activePageId, setActivePageId] = useState(null); // null = tất cả các trang
@@ -109,16 +111,6 @@ export default function OmnichannelChatModule() {
     setLoadError(p.error || c.error || "");
     setLoading(false);
   };
-
-  // Đang mở sheet Danh sách Page thì bấm Esc để đóng
-  useEffect(() => {
-    if (!pageSheetOpen) return undefined;
-    const onKey = (e) => {
-      if (e.key === "Escape") setPageSheetOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [pageSheetOpen]);
 
   const reload = () => {
     setLoading(true);
@@ -191,8 +183,14 @@ export default function OmnichannelChatModule() {
                       ...next[idx],
                       id: incomingMsg.id,
                       status: undefined,
-                      // đổi ảnh xem trước (blob:) sang URL công khai thật do server trả về
-                      attachment: incomingMsg.attachment || next[idx].attachment,
+                      // Đổi ảnh xem trước (blob:) sang URL công khai thật do server trả về.
+                      // Bản echo không mang tên tệp gốc -> giữ lại tên của tin optimistic.
+                      attachment: incomingMsg.attachment
+                        ? {
+                            ...incomingMsg.attachment,
+                            name: incomingMsg.attachment.name || next[idx].attachment?.name,
+                          }
+                        : next[idx].attachment,
                     };
                     return { ...all, [convId]: next };
                   }
@@ -205,13 +203,7 @@ export default function OmnichannelChatModule() {
                 const exists = list.some((c) => c.id === convId);
                 const isCurrentActive = activeConvRef.current === convId;
                 // Xem trước ở danh sách hội thoại: đính kèm thì ghi nhãn, không in link
-                const snippet =
-                  parsed.text ||
-                  (parsed.attachment?.type === "image"
-                    ? "[Hình ảnh]"
-                    : parsed.attachment
-                    ? "[Tệp đính kèm]"
-                    : "[Hình ảnh/Tệp đính kèm]");
+                const snippet = messagePreview(msgData.text) || attachmentLabel();
                 const lastMsgText = msgData.direction === "outbound" ? `Bạn: ${snippet}` : snippet;
 
                 if (exists) {
@@ -395,7 +387,7 @@ export default function OmnichannelChatModule() {
       status: isMock ? undefined : "sending",
     };
     setThread(conversationId, (list) => [...list, message]);
-    const preview = text || (attachment?.type === "image" ? "[Hình ảnh]" : "[Tệp đính kèm]");
+    const preview = text || attachmentLabel(attachment?.type);
     updateConversation(conversationId, { replied: true, unread: false, lastMessage: `Bạn: ${preview}`, updatedAt: message.createdAt });
     deliver(conversationId, message);
   };
@@ -511,7 +503,7 @@ export default function OmnichannelChatModule() {
     />
   ) : null;
 
-  // Một bản PageList dùng chung: cột cố định (khi chưa mở chi tiết) hoặc sheet trượt
+  // Một bản PageList dùng chung cho cột cố định (1 cột drill-down hoặc 2 cột)
   const pageListEl = (className, onPicked) => (
     <PageList
       className={className}
@@ -592,20 +584,22 @@ export default function OmnichannelChatModule() {
         ) : (
           // Đang mở chi tiết: ẩn cột Page, chỉ còn nút icon mở sheet -> nhường chỗ cho nội dung
           <>
-            <div className="shrink-0 flex flex-col pt-1">
-              <button
-                type="button"
-                onClick={() => setPageSheetOpen(true)}
-                aria-label="Hiện danh sách Page"
-                aria-expanded={pageSheetOpen}
-                title="Danh sách Page"
-                className="size-9 rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm flex items-center justify-center hover:bg-slate-50 outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
-              >
-                <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
-                  <rect x="2.5" y="3.5" width="15" height="13" rx="2" />
-                  <path d="M8 3.5v13M4.8 7h0.8M4.8 10h0.8M4.8 13h0.8" />
-                </svg>
-              </button>
+            <div className="shrink-0 pt-1">
+              <PageSwitcher
+                pages={visiblePages}
+                total={totalPages}
+                activePageId={activePageId}
+                activePage={activePageId ? pagesById[activePageId] : null}
+                onSelectPage={(id) => {
+                  setActivePageId(id);
+                  setActiveConversationId(null);
+                  setOpenedNotificationId(null);
+                }}
+                search={search}
+                onSearchChange={setSearch}
+                onReset={() => setResetConfirmOpen(true)}
+                resetting={resetting}
+              />
             </div>
 
             {/* Cột trái: chi tiết (chiếm phần còn lại) */}
@@ -619,25 +613,6 @@ export default function OmnichannelChatModule() {
           </>
         )}
 
-        {/* Sheet Danh sách Page: trượt từ trái, có lớp phủ, nằm gọn trong vùng nội dung */}
-        {pageSheetOpen && (
-          <>
-            {/* fixed để lớp phủ trùm cả phần padding của vùng nội dung, không chỉ riêng hàng cột */}
-            <div
-              className="fixed inset-0 z-40 bg-slate-900/30"
-              aria-hidden="true"
-              onClick={() => setPageSheetOpen(false)}
-            />
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-label="Danh sách Page"
-              className="absolute inset-y-0 left-0 z-50 w-[317px] max-w-[85%] shadow-2xl"
-            >
-              {pageListEl("w-full h-full", () => setPageSheetOpen(false))}
-            </div>
-          </>
-        )}
       </div>
 
       {/* #4: xác nhận trước khi xoá/đồng bộ lại toàn bộ dữ liệu chat */}

@@ -99,8 +99,12 @@ function ConversationItem({ conversation, pageName, active, first, onSelect }) {
         <span className="w-full flex items-center justify-between">
           <span className="flex items-center gap-1.5 min-w-0">
             <img src="/icons/icon_facebook_source.svg" alt="Facebook" width={11.625} height={11.5547} className="block shrink-0" />
-            <span className="truncate text-xs leading-4 font-bold text-slate-900">
-              KH: {shortCustomer(conversation.customer)}
+            {/* Ưu tiên tên thật của khách; chưa có tên mới lùi về mã PSID rút gọn */}
+            <span
+              className="truncate text-xs leading-4 font-bold text-slate-900"
+              title={conversation.customerName || `KH: ${conversation.customer}`}
+            >
+              {conversation.customerName || `KH: ${shortCustomer(conversation.customer)}`}
             </span>
           </span>
           <time dateTime={conversation.updatedAt} className="shrink-0 text-[10px] leading-5 text-slate-400">

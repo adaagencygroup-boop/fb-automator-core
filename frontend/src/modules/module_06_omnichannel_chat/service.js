@@ -31,18 +31,65 @@ export function displayMediaUrl(url) {
  * Bóc ra thành { text, attachment } để hiển thị đúng ảnh/tệp thay vì in ra link.
  * Dùng chung cho cả tải lịch sử (getMessages) lẫn tin realtime qua WebSocket.
  */
+/**
+ * Suy ra tên tệp từ URL để khỏi phải hiện chữ "Tệp đính kèm" chung chung.
+ * Backend lưu dạng "/uploads/<timestamp>_<tên gốc>" -> bỏ tiền tố timestamp.
+ * Trả về "" khi URL không mang tên gốc, để chỗ hiển thị tự dùng nhãn mặc định.
+ */
+export function fileNameFromUrl(url) {
+  const path = String(url || "").split(/[?#]/)[0];
+  let base = path.slice(path.lastIndexOf("/") + 1);
+  if (!base) return "";
+  try {
+    base = decodeURIComponent(base);
+  } catch {
+    /* URL encode hỏng -> giữ nguyên */
+  }
+  // Tệp khách gửi được tải về với tên ngẫu nhiên, tên gốc không còn trong URL
+  if (/^fb_incoming_[0-9a-f]{16,}(\.|$)/i.test(base)) return "";
+  return base.replace(/^\d{9,}_/, "");
+}
+
+// facebook_chat.py ghi tiền tố bằng chính attachment_type FE gửi lên
+// (f"[{attachment_type}] {url}"), nên phải khớp mọi loại chứ không chỉ image/audio/file.
+const ATTACHMENT_LINE = /^\[(image|audio|video|file)\]\s+(\S.*)$/;
+
 export function parseAttachmentText(raw) {
   const value = String(raw || "");
-  if (value.startsWith("[image] ")) {
-    return { text: "", attachment: { type: "image", url: value.slice(8).trim() } };
-  }
-  if (value.startsWith("[audio] ")) {
-    return { text: "", attachment: { type: "audio", url: value.slice(8).trim(), name: "Voice clip" } };
-  }
-  if (value.startsWith("[file] ")) {
-    return { text: "", attachment: { type: "file", url: value.slice(7).trim(), name: "Tệp đính kèm" } };
-  }
-  return { text: value, attachment: null };
+  // sync_service có thể nối "nội dung\n[file] url" -> đính kèm luôn nằm ở dòng cuối
+  const lines = value.split("\n");
+  const matched = lines[lines.length - 1].trim().match(ATTACHMENT_LINE);
+  if (!matched) return { text: value, attachment: null };
+
+  const [, type, rawUrl] = matched;
+  const url = rawUrl.trim();
+  return {
+    text: lines.slice(0, -1).join("\n").trim(),
+    attachment: { type, url, name: type === "audio" ? "Voice clip" : fileNameFromUrl(url) },
+  };
+}
+
+const ATTACHMENT_LABELS = {
+  image: "[Hình ảnh]",
+  audio: "[Tin nhắn thoại]",
+  video: "[Video]",
+  file: "[Tệp đính kèm]",
+};
+
+/** Nhãn ngắn cho một đính kèm, dùng ở danh sách hội thoại */
+export const attachmentLabel = (type) => ATTACHMENT_LABELS[type] || ATTACHMENT_LABELS.file;
+
+/**
+ * Dòng xem trước trong danh sách hội thoại.
+ * Backend lưu đính kèm dưới dạng "[image] /uploads/..." -> phải đổi thành nhãn,
+ * nếu không danh sách sẽ in ra nguyên đường dẫn file.
+ */
+export function messagePreview(raw) {
+  const { text, attachment } = parseAttachmentText(raw);
+  if (text) return text;
+  if (!attachment) return "";
+  if (attachment.type === "file" && attachment.name) return `[Tệp] ${attachment.name}`;
+  return attachmentLabel(attachment.type);
 }
 
 /**
@@ -104,7 +151,7 @@ export async function getConversations(params = {}) {
         customer: String(c.sender_id),
         customerName: c.customer_name || `KH ${String(c.sender_id).slice(0, 8)}`,
         avatar: c.avatar_url || null,
-        lastMessage: c.last_message || "",
+        lastMessage: messagePreview(c.last_message),
         updatedAt:
           toUtcIso(c.created_at) ||
           (c.timestamp ? new Date(c.timestamp).toISOString() : new Date().toISOString()),
