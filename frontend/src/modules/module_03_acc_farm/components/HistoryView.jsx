@@ -231,16 +231,98 @@ export function HistoryView() {
     URL.revokeObjectURL(url);
   }, [postHistory, formatDateTime]);
 
+  // ── Xuất file Excel (.xlsx) ──
+  const handleExportXlsx = useCallback(async () => {
+    if (postHistory.length === 0) {
+      toast.warning("Không có dữ liệu bài đăng để xuất!", "XUẤT DỮ LIỆU");
+      return;
+    }
+
+    try {
+      const XLSX = await import("xlsx");
+      const headers = [
+        "STT",
+        "Thời gian đăng",
+        "Khung giờ hẹn",
+        "Tên tài khoản",
+        "UID Facebook",
+        "Nguồn media/ảnh",
+        "Hình thức",
+        "Nội dung bài viết (Caption)",
+        "Trạng thái",
+        "Link Facebook",
+        "Lý do lỗi (nếu có)"
+      ];
+
+      const rows = [headers];
+
+      postHistory.forEach((row, idx) => {
+        const dt = formatDateTime(row.published_at || row.created_at);
+        const statusText =
+          row.status === "PUBLISHED"
+            ? "Đã xuất bản"
+            : row.status === "DIE"
+            ? "Tài khoản chết"
+            : row.status === "BLOCKED"
+            ? "Bị chặn"
+            : row.status === "STOPPED"
+            ? "Đã dừng"
+            : "Lỗi hệ thống";
+
+        rows.push([
+          idx + 1,
+          `${dt.time} ${dt.date}`,
+          row.schedule_time || "",
+          row.account_name || "",
+          row.account_uid || "",
+          row.media_path || row.image_path || "",
+          row.post_type?.toUpperCase() || "",
+          row.content || "",
+          statusText,
+          row.facebook_post_url || "",
+          row.error_message || ""
+        ]);
+      });
+
+      const sheet = XLSX.utils.aoa_to_sheet(rows);
+      sheet["!cols"] = [
+        { wch: 6 },
+        { wch: 20 },
+        { wch: 15 },
+        { wch: 22 },
+        { wch: 20 },
+        { wch: 35 },
+        { wch: 12 },
+        { wch: 45 },
+        { wch: 16 },
+        { wch: 35 },
+        { wch: 30 }
+      ];
+      const book = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(book, sheet, "Lich su dang bai");
+      XLSX.writeFile(book, `Lich_su_dang_bai_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch (err) {
+      toast.error("Lỗi khi xuất file Excel: " + (err.message || err), "KHÔNG XUẤT ĐƯỢC FILE");
+    }
+  }, [postHistory, formatDateTime]);
+
   useEffect(() => {
     const onCleanup = () => setShowCleanupModal(true);
-    const onExport = () => handleExportCsv();
+    const onExport = (e) => {
+      const fmt = e?.detail?.format || "xlsx";
+      if (fmt === "csv") {
+        handleExportCsv();
+      } else {
+        handleExportXlsx();
+      }
+    };
     window.addEventListener("trigger-post-cleanup", onCleanup);
     window.addEventListener("trigger-post-export", onExport);
     return () => {
       window.removeEventListener("trigger-post-cleanup", onCleanup);
       window.removeEventListener("trigger-post-export", onExport);
     };
-  }, [handleExportCsv]);
+  }, [handleExportCsv, handleExportXlsx]);
 
   const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
 
@@ -307,7 +389,7 @@ export function HistoryView() {
               setSelectedDate(e.target.value);
               setCurrentPage(1);
             }}
-            className="h-9.5 px-3 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-700 focus:outline-none focus:border-blue-500 shadow-2xs cursor-pointer"
+            className="h-10 px-3 rounded-xl border border-slate-200 bg-white text-xs font-medium text-slate-700 focus:outline-none focus:border-blue-500 shadow-2xs cursor-pointer"
           />
         </div>
       </div>
