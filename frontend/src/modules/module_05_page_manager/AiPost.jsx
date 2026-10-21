@@ -73,25 +73,26 @@ function pictureUrl(uid) {
   return `https://graph.facebook.com/${uid}/picture?type=square&width=80&height=80`;
 }
 
-function Photo({ src, name, tone = "#0284C7" }) {
+function Photo({ src, name, tone = "#0284C7", size = 28 }) {
   const [failed, setFailed] = useState(false);
   if (src && !failed) {
     return (
       <img
         src={src}
         alt=""
-        width={28}
-        height={28}
+        width={size}
+        height={size}
         referrerPolicy="no-referrer"
         onError={() => setFailed(true)}
-        className="size-7 rounded-full border border-[#E2E8F0] object-cover"
+        className="rounded-full border border-[#E2E8F0] object-cover"
+        style={{ width: size, height: size }}
       />
     );
   }
   return (
     <span
-      className="flex size-7 items-center justify-center rounded-full text-[11px] font-bold text-white"
-      style={{ backgroundColor: tone }}
+      className="flex items-center justify-center rounded-full font-bold text-white"
+      style={{ backgroundColor: tone, width: size, height: size, fontSize: size > 30 ? 13 : 11 }}
     >
       {(name || "?").trim().charAt(0).toUpperCase()}
     </span>
@@ -263,8 +264,8 @@ export default function AiPost() {
       const next = { ...current };
       let changed = false;
       fanpages.forEach((page) => {
-        if (next[page.key] == null) {
-          next[page.key] = page.category || "";
+        if (next[page.key] == null || String(next[page.key]).trim() === "") {
+          next[page.key] = page.name || "";
           changed = true;
         }
       });
@@ -734,12 +735,12 @@ export default function AiPost() {
         </section>
 
         <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+          <div className="px-5 py-4">
             <div className="flex items-center gap-2">
               <LayoutGrid className="h-4 w-4 text-[#2563EB]" />
               <h2 className="text-sm font-bold text-[#0F172A]">Danh sách Fanpage</h2>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => setSelectedPages(new Set(fanpages.map((page) => page.key)))}
@@ -765,9 +766,9 @@ export default function AiPost() {
               <thead>
                 <tr className="border-y border-[#E2E8F0] text-[11px] font-semibold text-[#94A3B8]">
                   <th className="w-12 px-4 py-2.5" />
-                  <th className="w-24 px-2 py-2.5">Chạy AI</th>
+                  <th className="w-24 px-2 py-2.5 text-center">Chạy AI</th>
                   <th className="px-3 py-2.5">Tên Fanpage</th>
-                  <th className="w-[240px] px-5 py-2.5">Từ khóa tìm kiếm ảnh / Chủ đề viết bài</th>
+                  <th className="w-[240px] px-5 py-2.5 leading-4">Từ khóa tìm kiếm ảnh /<br />Chủ đề viết bài</th>
                 </tr>
               </thead>
               <tbody>
@@ -796,43 +797,42 @@ export default function AiPost() {
                                 return next;
                               })
                             }
-                            className={`flex size-5 items-center justify-center rounded-md ${
+                            className={`mx-auto flex size-5 items-center justify-center rounded-[5px] ${
                               checked ? "bg-[#22C55E] text-white" : "border border-[#CBD5E1] bg-white"
                             }`}
                           >
-                            {checked ? <Check className="h-3 w-3" /> : null}
+                            {checked ? <Check className="h-3 w-3" strokeWidth={3} /> : null}
                           </button>
                         </td>
                         <td className="px-3 py-3">
-                          <div className="flex items-center gap-2.5">
+                          <div className="flex items-center gap-3">
                             <Photo
                               src={page.avatarUrl}
                               name={page.name}
                               tone={PAGE_TONES[index % PAGE_TONES.length]}
+                              size={36}
                             />
                             <div className="min-w-0">
                               <button
                                 type="button"
                                 onClick={() => openPage(page)}
                                 disabled={openingKey === page.key}
-                                className="block max-w-full truncate text-left text-sm font-bold text-[#2563EB] hover:underline disabled:opacity-60"
+                                className="block max-w-full truncate text-left text-sm font-bold text-[#0F172A] hover:underline disabled:opacity-60"
                               >
                                 {openingKey === page.key ? "Đang mở..." : page.name}
                               </button>
-                              <p className="truncate text-[11px] text-[#94A3B8]">
-                                {page.category ? page.category : `Nick: ${page.ownerName}`}
-                              </p>
+                              <p className="truncate text-[11px] text-[#94A3B8]">Nick: {page.ownerName}</p>
                             </div>
                           </div>
                         </td>
                         <td className="px-5 py-3">
                           <input
-                            value={keywords[page.key] ?? ""}
+                            value={keywords[page.key] ?? page.name}
                             onChange={(event) =>
                               setKeywords((current) => ({ ...current, [page.key]: event.target.value }))
                             }
-                            placeholder="Nhập từ khóa, chủ đề"
-                            className="h-8 w-full rounded-lg border border-[#E2E8F0] px-3 text-xs text-[#334155] outline-none placeholder:text-[#CBD5E1] focus:border-[#2563EB]"
+                            placeholder={page.name}
+                            className="h-9 w-full rounded-lg border border-[#E2E8F0] px-3 text-xs text-[#334155] outline-none placeholder:text-[#94A3B8] focus:border-[#2563EB]"
                           />
                         </td>
                       </tr>

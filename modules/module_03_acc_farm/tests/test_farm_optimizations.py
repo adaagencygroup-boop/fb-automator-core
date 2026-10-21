@@ -1,6 +1,6 @@
 import threading
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 from modules.module_03_acc_farm import repository
 from modules.module_03_acc_farm import routes as farm_routes
@@ -76,7 +76,7 @@ class StopKeepsPartialProgressTests(unittest.TestCase):
                 patch.object(farming_flow.random, "random", return_value=0.99), \
                 patch.object(farming_flow.random, "uniform", return_value=10):
             with self.assertRaises(farming_flow.FarmStopped) as ctx:
-                farming_flow.run_newsfeed(Mock(), ctl, 600, 5, 15, Mock())
+                farming_flow.run_newsfeed(Mock(current_url="https://www.facebook.com/"), ctl, 600, 5, 15, Mock())
         # uniform giả = 10 nên mỗi vòng có cả nghỉ cuộn ngược 10s lẫn nghỉ đọc 10s: 3 vòng = 60s
         self.assertEqual(ctx.exception.partial, {"seconds": 60, "scrolls": 3})
 
@@ -106,6 +106,112 @@ class StopKeepsPartialProgressTests(unittest.TestCase):
         self.assertEqual((result["status"], result["seconds"], result["scrolls"]), ("SKIPPED", 42, 7))
         summary = repository.summarize_actions([{"action": "NEWSFEED", **result}])
         self.assertEqual((summary["newsfeed_seconds"], summary["newsfeed_scrolls"]), (42, 7))
+
+    def test_newsfeed_error_attaches_seconds_and_scrolls(self):
+        clock = {"t": 0.0}
+        ctl = Mock()
+        ctl.paused_total.return_value = 0
+        ctl.sleep.side_effect = lambda s: clock.__setitem__("t", clock["t"] + s)
+        scrolls = {"n": 0}
+
+        def scroll(*_a, **_k):
+            scrolls["n"] += 1
+            if scrolls["n"] > 2:
+                raise TimeoutError("chromedriver không phản hồi")
+        with patch.object(farming_flow.time, "time", side_effect=lambda: clock["t"]), \
+                patch.object(farming_flow, "_open"), patch.object(farming_flow, "human_scroll", side_effect=scroll), \
+                patch.object(farming_flow, "check_account_state"), \
+                patch.object(farming_flow.random, "random", return_value=0.99), \
+                patch.object(farming_flow.random, "uniform", return_value=10):
+            with self.assertRaises(TimeoutError) as ctx:
+                farming_flow.run_newsfeed(Mock(current_url="https://www.facebook.com/"), ctl, 600, 5, 15, Mock())
+        # Mỗi vòng gọi human_scroll 2 lần (cuộn xuống + cuộn ngược) và nghỉ 2 x 10s: lỗi ở lần cuộn đầu của vòng 2
+        self.assertEqual(ctx.exception.partial, {"seconds": 20, "scrolls": 1})
+
+
+class NewsfeedLeavesHomeTests(unittest.TestCase):
+    HOME = "https://www.facebook.com/"
+    GROUPS = "https://www.facebook.com/groups/feed/"
+
+    def run_newsfeed(self, open_returns_home, total=200):
+        """Lần cuộn thứ 2: người dùng bấm sang Nhóm. open_returns_home=False: mở lại Trang chủ không được."""
+        clock = {"t": 0.0}
+        ctl = Mock()
+        ctl.paused_total.return_value = 0
+        ctl.sleep.side_effect = lambda s: clock.__setitem__("t", clock["t"] + s)
+        driver = Mock(current_url=self.HOME)
+        scrolls = {"n": 0}
+
+        def scroll(*_a, **_k):
+            scrolls["n"] += 1
+            if scrolls["n"] == 2:
+                driver.current_url = self.GROUPS
+
+        def open_page(*_a, **_k):
+            if open_returns_home:
+                driver.current_url = self.HOME
+
+        with patch.object(farming_flow.time, "time", side_effect=lambda: clock["t"]), \
+                patch.object(farming_flow, "_open", side_effect=open_page) as open_mock, \
+                patch.object(farming_flow, "human_scroll", side_effect=scroll), \
+                patch.object(farming_flow, "check_account_state"), \
+                patch.object(farming_flow.random, "random", return_value=0.99), \
+                patch.object(farming_flow.random, "uniform", return_value=10):
+            result = farming_flow.run_newsfeed(driver, ctl, total, 5, 15, Mock())
+        return result, open_mock.call_count, clock["t"]
+
+    def test_leaving_home_reopens_home_and_keeps_scrolling(self):
+        result, opens, elapsed = self.run_newsfeed(open_returns_home=True)
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(opens, 2)  # mở đầu + 1 lần mở lại
+        self.assertGreaterEqual(elapsed, 200)
+
+    def test_page_keeps_leaving_home_stops_after_reopen_limit(self):
+        result, opens, elapsed = self.run_newsfeed(open_returns_home=False, total=600)
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertEqual(opens, 1 + farming_flow.NEWSFEED_MAX_REOPENS)
+        self.assertLess(elapsed, 600)
+
+    def test_on_home_feed(self):
+        def on(url, landing=""):
+            return farming_flow._on_home_feed(Mock(current_url=url), landing)
+        self.assertTrue(on("https://www.facebook.com/"))
+        self.assertTrue(on("https://web.facebook.com/?sk=h_chr"))
+        self.assertTrue(on("https://www.facebook.com/home.php"))
+        self.assertFalse(on("https://www.facebook.com/groups/feed/"))
+        self.assertFalse(on("https://www.facebook.com/watch/"))
+        self.assertFalse(on("https://www.facebook.com/profile.php?id=1"))
+        self.assertFalse(on("https://example.com/"))
+        self.assertTrue(on("https://www.facebook.com/feed/", "/feed/"))
+
+    def test_worker_records_partial_watch_when_browser_hangs(self):
+        # Chrome treo giữa Watch: lệnh tiếp theo và cả lệnh kiểm tra driver.title đều timeout
+        hung = TimeoutError("Read timed out")
+        hung.partial = {"seconds": 1680, "quantity": 12}
+        logs = []
+        driver = Mock()
+        driver.current_url = "https://www.facebook.com/"
+        type(driver).title = PropertyMock(side_effect=TimeoutError("Read timed out"))
+        farm_routes._control = farming_flow.FarmControl()
+        with patch.object(farm_routes, "_set_account"), \
+                patch.object(farm_routes, "_record_action", side_effect=lambda *a: logs.append(a)), \
+                patch.object(farm_routes, "_emit"), \
+                patch.object(farm_routes, "_uid_has_other_browser", return_value=False), \
+                patch.object(farm_routes, "_build_plan", return_value=[("WATCH", {"total_seconds": 1800, "delay": (5, 9)})]), \
+                patch.object(farm_routes, "run_watch", side_effect=hung), \
+                patch.object(farm_routes, "dismiss_notice_dialogs"), \
+                patch.object(farm_routes.adapters, "get_account", return_value=dict(ACCOUNT)), \
+                patch.object(farm_routes.adapters, "get_credentials", return_value=("", None)), \
+                patch.object(farm_routes.random, "uniform", return_value=0), \
+                patch("core.browser.open_browser", return_value=driver), \
+                patch("core.browser.get_profile_lock", return_value=threading.Lock()), \
+                patch("core.browser.extract_cookies_as_string", return_value=""), \
+                patch("modules.module_03_acc_farm.browser.login_flow.ensure_logged_in", return_value={"success": True}):
+            farm_routes._farm_worker("100", 1, farm_routes.FarmScenarioConfig(enabled_watch=True), None)
+        result = logs[0][2]
+        self.assertEqual((result["status"], result["quantity"], result["seconds"]), ("FAILED", 12, 1680))
+        summary = repository.summarize_actions([{"action": "WATCH", **result}])
+        self.assertEqual((summary["watch_seconds"], summary["watch_videos"]), (1680, 12))
 
 
 class ProfileNameTests(unittest.TestCase):

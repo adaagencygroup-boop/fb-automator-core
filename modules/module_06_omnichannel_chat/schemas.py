@@ -71,6 +71,8 @@ class NotificationOut(BaseModel):
     facebook_notification_id: str
     page_id: str
     page_name: Optional[str] = None
+    post_id: Optional[str] = None
+    comment_id: Optional[str] = None
     title: str
     link: Optional[str] = None
     created_time: datetime
@@ -185,5 +187,35 @@ class CommentReplyInput(BaseModel):
 class CommentReactInput(BaseModel):
     page_id: str
     reaction: str  # LIKE, LOVE, HAHA, WOW, SAD, ANGRY
+
+class CommentHideInput(BaseModel):
+    page_id: str
+    is_hidden: bool = True
+
+class PostCommentInput(BaseModel):
+    page_id: str
+    message: str
+    attachment_url: Optional[str] = None
+
+# ===== 📄 CÁC SCHEMAS PHÂN TRANG (PAGINATION) =====
+
+class PaginatedResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+class PaginatedPagesOut(PaginatedResponse):
+    items: List[PageOut]
+    pages: Optional[List[PageOut]] = None
+
+class PaginatedConversationsOut(PaginatedResponse):
+    items: List[dict]
+    conversations: Optional[List[dict]] = None
+
+class PaginatedNotificationsOut(PaginatedResponse):
+    items: List[NotificationOut]
+    notifications: Optional[List[NotificationOut]] = None
+
 
 

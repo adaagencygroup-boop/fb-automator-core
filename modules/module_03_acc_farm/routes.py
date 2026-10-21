@@ -363,7 +363,8 @@ def _record_action(uid: str, action: str, result: dict, owner: Optional[str]):
         run_id = _state["accounts"].get(uid, {}).get("run_id")
         _history_data.setdefault(uid, {}).setdefault("actions", []).append({"action": action, **result})
     repository.add_log(run_id, adapters.get_machine_id(), uid, action, result["status"],
-                       result.get("quantity", 0), result.get("details", ""), owner_username=owner)
+                       result.get("quantity", 0), result.get("details", ""), owner_username=owner,
+                       targets=result.get("targets"))
 
 
 def _proxy_host(proxy: Optional[str]) -> Optional[str]:
@@ -559,13 +560,16 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
                 if _field:
                     _set_account(_uid, **{_field: quantity})
 
+            def partial_of(e, _done=done):
+                # Newsfeed / Watch gắn phần đã chạy (giây, lần cuộn, video), nhóm gắn từ khóa đã dùng vào lỗi
+                # (mọi loại lỗi); số lượng kết bạn / nhóm báo qua progress
+                partial = dict(getattr(e, "partial", None) or {})
+                return partial.pop("quantity", _done["quantity"]), partial
+
             try:
                 result = _run_action(driver, ctl, uid, action, params, cfg, report, progress)
             except FarmStopped as e:
-                # Newsfeed / Watch gắn phần đã chạy (giây, lần cuộn, video), nhóm gắn từ khóa đã dùng vào lỗi;
-                # số lượng kết bạn / nhóm báo qua progress
-                partial = dict(getattr(e, "partial", None) or {})
-                quantity = partial.pop("quantity", done["quantity"])
+                quantity, partial = partial_of(e)
                 _record_action(uid, action, {
                     "status": "SKIPPED", "quantity": quantity,
                     "details": f"Dừng giữa chừng, đã làm {quantity}" if quantity else "Dừng giữa chừng",
@@ -575,21 +579,26 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
                 _set_account(uid, actions=actions)
                 raise
             except FarmAccountDead as e:
-                _record_action(uid, action, {"status": "FAILED", "quantity": done["quantity"],
-                                             "details": f"Tài khoản chết giữa chừng: {e}"[:300]}, owner)
+                quantity, partial = partial_of(e)
+                _record_action(uid, action, {"status": "FAILED", "quantity": quantity,
+                                             "details": f"Tài khoản chết giữa chừng: {e}"[:300], **partial}, owner)
                 actions[action] = "FAILED"
                 _set_account(uid, actions=actions)
                 raise
             except Exception as e:
                 # Lỗi 1 hoạt động: ghi nhận rồi chạy tiếp (BR-STS-02); trình duyệt chết thì để vòng ngoài xử lý
+                quantity, partial = partial_of(e)
                 try:
                     _ = driver.title
                 except Exception:
-                    _record_action(uid, action, {"status": "FAILED", "quantity": done["quantity"],
-                                                 "details": "Trình duyệt bị đóng giữa chừng"}, owner)
+                    _record_action(uid, action, {"status": "FAILED", "quantity": quantity,
+                                                 "details": "Trình duyệt bị đóng hoặc không phản hồi giữa chừng",
+                                                 **partial}, owner)
+                    actions[action] = "FAILED"
+                    _set_account(uid, actions=actions)
                     raise
                 logger.exception(f"[{uid}] Lỗi kịch bản {action}: {e}")
-                result = {"status": "FAILED", "quantity": done["quantity"], "details": f"Lỗi: {str(e)[:200]}"}
+                result = {"status": "FAILED", "quantity": quantity, "details": f"Lỗi: {str(e)[:200]}", **partial}
 
             _record_action(uid, action, result, owner)
 
@@ -1054,8 +1063,18 @@ async def farm_history_detail(history_id: int):
         raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi lịch sử.")
     return {
         "history": _serialize_history(data["history"]),
-        "logs": [{**log, "created_at": _iso(log.get("created_at"))} for log in data["logs"]],
+        "logs": [{**log, "created_at": _iso(log.get("created_at")), "targets": _json_list(log.get("targets"))}
+                 for log in data["logs"]],
     }
+
+
+def _json_list(value) -> List:
+    """Cột JSON dạng danh sách; rỗng / hỏng thì trả []."""
+    try:
+        parsed = json.loads(value) if value else []
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 @router.post("/history/cleanup")

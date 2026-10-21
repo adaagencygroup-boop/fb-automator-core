@@ -139,14 +139,22 @@ def update_run(run_id: int, **fields):
 
 
 def add_log(run_id: Optional[int], machine_id: str, uid: str, action_type: str, status: str,
-            quantity: int = 0, details: str = "", owner_username: Optional[str] = None):
-    params = (run_id, machine_id, owner_username or None, str(uid), action_type, status,
-              int(quantity or 0), details or "", utc_now())
+            quantity: int = 0, details: str = "", owner_username: Optional[str] = None,
+            targets: Optional[List[Dict[str, Any]]] = None):
+    """targets: người / nhóm đã tương tác (kết bạn, tham gia nhóm); rỗng thì không ghi cột targets."""
+    data = {
+        "run_id": run_id, "machine_id": machine_id, "owner_username": owner_username or None,
+        "fb_uid": str(uid), "action_type": action_type, "status": status,
+        "quantity": int(quantity or 0), "details": details or "",
+    }
+    if targets:
+        data["targets"] = json.dumps(targets, ensure_ascii=False)
+    data["created_at"] = utc_now()
+    cols = ", ".join(data)
+    placeholders = ", ".join("?" for _ in data)
+    params = tuple(data.values())
     writer.put(f"add_log#{run_id}:{action_type}", lambda: db.execute(
-        """INSERT INTO farm_interaction_logs
-           (run_id, machine_id, owner_username, fb_uid, action_type, status, quantity, details, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        params,
+        f"INSERT INTO farm_interaction_logs ({cols}) VALUES ({placeholders})", params,
     ))
 
 
@@ -413,7 +421,7 @@ def get_history_detail(machine_id: str, history_id: int) -> Optional[Dict[str, A
     logs = []
     if row.get("run_id"):
         logs = db.fetch_all(
-            "SELECT action_type, status, quantity, details, created_at FROM farm_interaction_logs "
+            "SELECT action_type, status, quantity, details, targets, created_at FROM farm_interaction_logs "
             "WHERE run_id = ? ORDER BY id",
             (row["run_id"],),
         )

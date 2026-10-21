@@ -7,6 +7,7 @@ import {
   Bell,
   Clock,
   Cookie,
+  ExternalLink,
   Fingerprint,
   Globe,
   Loader2,
@@ -22,7 +23,14 @@ import {
 } from "lucide-react";
 import { formatVietnamDateTime } from "@/lib/date-utils";
 import { cn } from "@/lib/utils";
-import { ACTION_FULL_LABELS, ACTION_STATUS, FINGERPRINT_LABELS, FRIEND_SOURCE_LABELS, PROXY_MODE_LABELS } from "../constants";
+import {
+  ACTION_FULL_LABELS,
+  ACTION_STATUS,
+  FINGERPRINT_HINTS,
+  FINGERPRINT_LABELS,
+  FRIEND_SOURCE_LABELS,
+  PROXY_MODE_LABELS,
+} from "../constants";
 import { getFarmHistoryDetail } from "../service";
 import { RunStatusBadge, UidCopy, formatDuration } from "./parts";
 
@@ -100,14 +108,67 @@ function SectionTitle({ icon: Icon, children }) {
   );
 }
 
-function InfoRow({ icon: Icon, label, children, tone = "text-slate-800" }) {
+// Người / nhóm đã tương tác trong 1 hành động (farm_interaction_logs.targets)
+const TARGET_PREVIEW = 5;
+const TARGET_STATUS = {
+  joined: { label: "Đã vào", badge: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  pending: { label: "Chờ duyệt", badge: "bg-amber-50 text-amber-700 border-amber-200" },
+};
+
+// Chỉ mở link https của facebook.com (dữ liệu đọc từ trang Facebook)
+function facebookUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && /(^|\.)facebook\.com$/.test(parsed.hostname) ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function TargetList({ action, targets }) {
+  const [expanded, setExpanded] = useState(false);
+  const Icon = action === "JOIN_GROUP" ? Users : User;
+  const shown = expanded ? targets : targets.slice(0, TARGET_PREVIEW);
+  return (
+    <ul className="mt-1.5 space-y-1">
+      {shown.map((t, i) => {
+        const href = facebookUrl(t?.url);
+        const status = TARGET_STATUS[t?.status];
+        const name = t?.name || "(không đọc được tên)";
+        return (
+          <li key={i} className="flex items-center gap-1.5 text-xs">
+            <Icon className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+            {href ? (
+              <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex min-w-0 items-center gap-1 font-medium text-primary hover:underline">
+                <span className="truncate">{name}</span>
+                <ExternalLink className="h-3 w-3 shrink-0" />
+              </a>
+            ) : (
+              <span className={cn("truncate", t?.name ? "text-slate-700" : "italic text-slate-400")}>{name}</span>
+            )}
+            {status && <span className={cn("shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold", status.badge)}>{status.label}</span>}
+          </li>
+        );
+      })}
+      {targets.length > TARGET_PREVIEW && (
+        <li>
+          <button type="button" onClick={() => setExpanded((v) => !v)} className="text-[11px] font-semibold text-primary hover:underline">
+            {expanded ? "Thu gọn" : `Xem thêm ${targets.length - TARGET_PREVIEW}`}
+          </button>
+        </li>
+      )}
+    </ul>
+  );
+}
+
+function InfoRow({ icon: Icon, label, children, tone = "text-slate-800", title }) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-dashed border-slate-100 py-2 last:border-0">
       <span className="flex items-center gap-2 text-xs text-slate-500">
         <Icon className="h-3.5 w-3.5 text-slate-400" />
         {label}
       </span>
-      <span className={cn("text-right text-xs font-semibold", tone)}>{children}</span>
+      <span title={title} className={cn("text-right text-xs font-semibold", tone, title && "cursor-help")}>{children}</span>
     </div>
   );
 }
@@ -257,9 +318,12 @@ export default function HistoryDetail({ id, onClose }) {
                   <InfoRow icon={ShieldCheck} label="Chế độ" tone={hasProxy ? "text-emerald-600" : "text-amber-600"}>
                     {PROXY_MODE_LABELS[h.proxy_mode] || h.proxy_mode || "—"}
                   </InfoRow>
-                  <InfoRow icon={Fingerprint} label="Fingerprint" tone={h.fingerprint_mode === "native" ? "text-violet-600" : "text-slate-700"}>
-                    {FINGERPRINT_LABELS[h.fingerprint_mode] || h.fingerprint_mode || "—"}
-                  </InfoRow>
+                  {/* Nick mới luôn có fingerprint giả lập riêng: chỉ hiện khi nick không được giả lập (bất thường) */}
+                  {h.fingerprint_mode === "legacy" && (
+                    <InfoRow icon={Fingerprint} label="Fingerprint" tone="text-amber-600" title={FINGERPRINT_HINTS.legacy}>
+                      {FINGERPRINT_LABELS.legacy}
+                    </InfoRow>
+                  )}
                   <InfoRow icon={Cookie} label="Lưu cookie cuối phiên" tone={h.cookie_saved ? "text-emerald-600" : "text-slate-400"}>
                     {h.cookie_saved ? "Đã lưu" : "Không"}
                   </InfoRow>
@@ -314,6 +378,7 @@ export default function HistoryDetail({ id, onClose }) {
                             <span className={cn("rounded-md border px-1.5 py-0.5 text-[10px] font-semibold", meta.badge)}>{meta.label}</span>
                           </div>
                           {log.details && <div className="mt-0.5 text-xs text-slate-600">{log.details}</div>}
+                          {log.targets?.length > 0 && <TargetList action={log.action_type} targets={log.targets} />}
                         </li>
                       );
                     })}

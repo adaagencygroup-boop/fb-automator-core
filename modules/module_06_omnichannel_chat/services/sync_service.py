@@ -444,6 +444,12 @@ class FacebookSyncService:
     async def react_to_comment(self, comment_id: str, page_id: str, reaction: str):
         return await self.comment_service.react_to_comment(comment_id, page_id, reaction)
 
+    async def hide_comment(self, comment_id: str, page_id: str, is_hidden: bool = True):
+        return await self.comment_service.hide_comment(comment_id, page_id, is_hidden)
+
+    async def delete_comment(self, comment_id: str, page_id: str):
+        return await self.comment_service.delete_comment(comment_id, page_id)
+
     async def get_customer_profile(self, psid: str, page_id: str):
         return await self.chat_service.get_customer_profile(psid, page_id)
 

@@ -58,6 +58,15 @@ except Exception as _farm_import_error:
     farm_router = farm_on_startup = farm_on_shutdown = None
     print(f"[Local Engine] Module 03 (Farm) not loaded: {_farm_import_error}")
 
+# Module 03 - Tab 2 (Đăng bài Facebook: Status, Reels, Story):
+try:
+    from modules.module_03_acc_farm.post_routes import (
+        router as post_router,
+    )
+except Exception as _post_import_error:
+    post_router = None
+    print(f"[Local Engine] Module 03 (Post) not loaded: {_post_import_error}")
+
 # Reconfigure stdout for safe Windows console output
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -171,6 +180,8 @@ _PUBLIC_API = {
     "/api/v1/admin/login",
     "/api/facebook/webhook",
     "/api/facebook/config",
+    "/api/post/dialog/file",
+    "/api/post/dialog/folder",
     "/api/groups/source/template",
     "/oauth/meta/callback",
     "/api/pages/web-oauth/callback-submit",
@@ -195,6 +206,7 @@ class LicenseMiddleware:
             and path.startswith("/api/")
             and path not in _PUBLIC_API
             and not path.startswith("/api/v1/")
+            and not path.startswith("/api/post")
         ):
             headers = {
                 key.decode("latin1").lower(): value.decode("latin1")
@@ -249,9 +261,8 @@ app.add_middleware(
 
 if farm_router:
     app.include_router(farm_router)
-
-
-# ==================== SYSTEM & HEALTH CHECK ====================
+if post_router:
+    app.include_router(post_router)
 @app.get("/api/health")
 def health_check():
     return {
