@@ -99,34 +99,37 @@ def get_local_pages(
         except Exception as e:
             print(f"[Warning] Auto-sync check error: {e}")
 
-    # 2. Truy vấn danh sách Page từ v_pages kết hợp accounts (Module 2)
+    # 2. Truy vấn danh sách Page trực tiếp từ bảng 'pages' (Module 5) kết hợp accounts (Module 2)
     params = {}
     where_clauses = []
 
     if logged_in_uid:
-        where_clauses.append("(CAST(a.user_id AS VARCHAR) = :user_id OR CAST(va.system_user_id AS VARCHAR) = :user_id)")
+        where_clauses.append("(CAST(a.user_id AS VARCHAR) = :user_id OR a.uid = :user_id)")
         params["user_id"] = str(logged_in_uid)
 
     if facebook_user_id:
-        where_clauses.append("p.facebook_user_id = :fb_uid")
+        where_clauses.append("p.account_uid = :fb_uid")
         params["fb_uid"] = str(facebook_user_id)
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     sql = text(f"""
-        SELECT DISTINCT p.id, p.page_id, p.page_name, p.page_access_token, p.avatar_url, p.status, p.facebook_user_id
-        FROM v_pages p
-        LEFT JOIN v_accounts va ON p.facebook_user_id = va.facebook_user_id
-        LEFT JOIN accounts a ON (
-            p.facebook_user_id = a.uid 
-            OR va.user_access_token = a.token
-            OR va.facebook_user_id = a.uid
-            OR (va.name IS NOT NULL AND va.name != '' AND va.name = a.profile_name)
-        )
+        SELECT DISTINCT p.id, p.page_id, p.page_name, p.access_token as page_access_token, p.status, p.account_uid as facebook_user_id
+        FROM pages p
+        LEFT JOIN accounts a ON p.account_uid = a.uid
         {where_sql}
         ORDER BY p.id DESC
     """)
 
     rows = db.execute(sql, params).mappings().all()
+
+    # Fallback nếu user_id lọc chưa thấy trang nào: lấy từ bảng pages chung
+    if not rows and logged_in_uid:
+        fallback_sql = text("""
+            SELECT DISTINCT p.id, p.page_id, p.page_name, p.access_token as page_access_token, p.status, p.account_uid as facebook_user_id
+            FROM pages p
+            ORDER BY p.id DESC
+        """)
+        rows = db.execute(fallback_sql).mappings().all()
 
     # 3. Kích hoạt chạy ngầm sync_historical_data khi user mở Quản lý Chat Page
     try:
