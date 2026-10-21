@@ -57,5 +57,39 @@ class FrontendContractTests(unittest.TestCase):
                 self.assertTrue(found, f"service.js gọi {method.upper()} {path} nhưng backend không có API này")
 
 
+class LinkRulesMatchFrontendTests(unittest.TestCase):
+    """Giao diện (validation.js) và backend phải chuẩn hóa link và lấy ID giống nhau, nếu không thì lọc trùng ở ô nhập
+    link (giao diện) và mục tiêu lưu trong DB (backend) bị lệch nhau."""
+
+    def test_same_link_and_id_as_frontend(self):
+        import json
+        import shutil
+        import subprocess
+        import tempfile
+
+        from .test_url_rules import SAMPLE_LINKS
+
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Máy không có Node.js")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "validation.mjs").write_text((FRONTEND / "validation.js").read_text(encoding="utf-8"), encoding="utf-8")
+            (tmp / "run.mjs").write_text(
+                'import { normalizeTargetUrl, extractTargetFbId } from "./validation.mjs";\n'
+                "const inputs = JSON.parse(process.argv[2]);\n"
+                "console.log(JSON.stringify(inputs.map(([t, u]) => {\n"
+                "  const n = normalizeTargetUrl(u, t); return [n, extractTargetFbId(n, t)]; })));\n",
+                encoding="utf-8",
+            )
+            out = subprocess.run([node, str(tmp / "run.mjs"), json.dumps(SAMPLE_LINKS)],
+                                 capture_output=True, text=True, timeout=60, check=True).stdout
+        for (target_type, raw), (js_url, js_id) in zip(SAMPLE_LINKS, json.loads(out)):
+            with self.subTest(raw=raw):
+                py_url = R.normalize_target_url(js_url, target_type)   # backend nhận link giao diện đã chuẩn hóa
+                self.assertEqual(py_url, js_url)
+                self.assertEqual(R.extract_fb_id(py_url, target_type), js_id)
+
+
 if __name__ == "__main__":
     unittest.main()

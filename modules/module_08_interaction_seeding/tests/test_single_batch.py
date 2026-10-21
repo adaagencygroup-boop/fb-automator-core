@@ -52,6 +52,31 @@ class SingleBatchTests(SeedingTestCase):
         self.assertEqual({self.campaign(c).status for c in ids}, {"STOPPED"})
         self.assertIsNone(self.api("GET", "/campaigns/active")["campaign_id"])
 
+    def _other_users_running_campaign(self):
+        """Chiến dịch của người khác đang chạy trên MÁY KHÁC (chỉ có trong DB chung, không có trong bộ nhớ máy này)."""
+        c = SeedingCampaign(campaign_type="PAGE", actions="FOLLOW", account_count=1, status="RUNNING",
+                            created_by=99, total_planned=1)
+        self.db.add(c)
+        self.db.commit()
+        return c.id
+
+    def test_stop_all_stops_own_batches_but_not_teammates_on_other_machines(self):
+        ids = self._start_post_batch()
+        stuck = SeedingCampaign(campaign_type="PROFILE", actions="FOLLOW", account_count=1, status="RUNNING",
+                                created_by=7, total_planned=1)   # của mình, bị kẹt từ lần tắt app trước
+        self.db.add(stuck)
+        self.db.commit()
+        teammate = self._other_users_running_campaign()
+        res = self.api("POST", "/stop-all")
+        self.assertEqual(set(res["campaign_ids"]), set(ids) | {stuck.id})
+        self.assertEqual(self.campaign(teammate).status, "RUNNING")
+
+    def test_admin_stop_all_does_not_touch_other_machines_either(self):
+        teammate = self._other_users_running_campaign()
+        self.user = {"id": 1, "username": "admin", "role": "admin"}
+        self.api("POST", "/stop-all")
+        self.assertEqual(self.campaign(teammate).status, "RUNNING")
+
     def test_runner_marks_batch_running_only_while_it_runs(self):
         ids = self.create("POST", POST_URLS, actions=["REACT"], reactions=["LIKE"], account_count=2)["campaign_ids"]
         seen = []
