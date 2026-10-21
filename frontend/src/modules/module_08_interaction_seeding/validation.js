@@ -124,8 +124,13 @@ export const extractTargetFbId = (urlOrText, targetType = "") => {
   m = clean.match(/^(?:share\/)?(?:p|r|v)\/([a-zA-Z0-9_\-]+)/i);
   if (m) return m[1];
 
-  // Post ID từ permalink: story_fbid=(\d+) hoặc fbid=(\d+)
-  m = clean.match(/[?&](?:story_fbid|fbid)=(\d+)/i);
+  // Post ID từ permalink: story_fbid / fbid là số hoặc chuỗi pfbid... (link kiểu mới).
+  // Phải lấy trước ?id= vì id= trong permalink là ID của Page: lấy nhầm thì 2 bài khác nhau của cùng 1 Page bị coi là trùng.
+  m = clean.match(/[?&](?:story_fbid|fbid)=([a-zA-Z0-9]+)/i);
+  if (m) return m[1];
+
+  // Link video rút gọn: fb.watch/abcDEF
+  m = clean.match(/fb\.watch\/([a-zA-Z0-9_\-]+)/i);
   if (m) return m[1];
 
   // Post ID từ /posts/([a-zA-Z0-9_\-]+)

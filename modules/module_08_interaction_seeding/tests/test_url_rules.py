@@ -3,6 +3,29 @@ import unittest
 
 from .helpers import R
 
+# Các dạng link hay gặp (dùng chung cho test chuẩn hóa và test so sánh với giao diện)
+SAMPLE_LINKS = [
+    ("POST", "https://www.facebook.com/share/p/1AbCd2EfGh/"),
+    ("POST", "m.facebook.com/share/p/1AbCd2EfGh?mibextid=xyz"),
+    ("POST", "1HuNarJSLn"),
+    ("POST", "100089123456_987654321"),
+    ("POST", "https://web.facebook.com/permalink.php?story_fbid=pfbid0AAA111&id=100064"),
+    ("POST", "https://www.facebook.com/QuanAP/posts/pfbid02abcDEF123?__cft__=x"),
+    ("POST", "https://www.facebook.com/photo/?fbid=123456789&set=a.1"),
+    ("POST", "https://www.facebook.com/reel/987654321"),
+    ("POST", "https://web.facebook.com/groups/123/posts/456/"),
+    ("POST", "https://www.facebook.com/watch/?v=555"),
+    ("POST", "https://fb.watch/abcDEF/"),
+    ("PAGE", "www.facebook.com/QuanAP/"),
+    ("PAGE", "https://facebook.com/profile.php?id=100064&ref=bookmarks"),
+    ("PAGE", "QuanAP"),
+    ("PAGE", "https://www.facebook.com/p/Ten-Page-100064123/"),
+    ("PROFILE", "100012345678"),
+    ("PROFILE", "https://m.facebook.com/people/Nguyen-Van-A/100012345678/"),
+    ("PROFILE", "https://www.facebook.com/dhn.integrity?mibextid=ZbWKwL"),
+    ("PROFILE", "https://www.facebook.com/profile.php?id=100012345678&sk=about"),
+]
+
 
 class NormalizeUrlTests(unittest.TestCase):
     def test_share_link_variants_become_one_canonical_link(self):
@@ -30,6 +53,16 @@ class NormalizeUrlTests(unittest.TestCase):
 
     def test_empty_input(self):
         self.assertEqual(R.normalize_target_url("   ", "POST"), "")
+
+    def test_normalizing_twice_gives_the_same_link(self):
+        # Giao diện chuẩn hóa link trước khi gửi, backend chuẩn hóa lại lần nữa: lần 2 không được làm hỏng link
+        # (vd UID_PostID từng bị đổi thành /share/p/UID_PostID -> link không tồn tại).
+        for target_type, raw in SAMPLE_LINKS:
+            with self.subTest(raw=raw):
+                once = R.normalize_target_url(raw, target_type)
+                self.assertEqual(R.normalize_target_url(once, target_type), once)
+        self.assertEqual(R.normalize_target_url("https://web.facebook.com/100089123456_987654321", "POST"),
+                         "https://web.facebook.com/100089123456_987654321")
 
 
 class ExtractFbIdTests(unittest.TestCase):

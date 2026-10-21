@@ -237,7 +237,8 @@ def normalize_target_url(raw_url: str, target_type: str = "") -> str:
                     "reel",
                     "reels",
                 }
-                if slug.lower() not in system_slugs:
+                # UID_PostID (vd 100089123456_987654321) là link bài viết thật, giữ nguyên, không đổi sang /share/p/
+                if slug.lower() not in system_slugs and not re.fullmatch(r"\d+_\d+", slug):
                     return f"https://web.facebook.com/share/p/{slug}"
 
         cleaned = clean_tracking_params(val)
@@ -272,7 +273,8 @@ def normalize_target_url(raw_url: str, target_type: str = "") -> str:
                     "reel",
                     "reels",
                 }
-                if slug.lower() not in system_slugs:
+                # UID_PostID (vd 100089123456_987654321) là link bài viết thật, giữ nguyên, không đổi sang /share/p/
+                if slug.lower() not in system_slugs and not re.fullmatch(r"\d+_\d+", slug):
                     return f"https://web.facebook.com/share/p/{slug}"
 
         cleaned = clean_tracking_params(full_url)
@@ -2004,29 +2006,35 @@ async def stop_all_seeding(
             allowed_user_id = current_user["id"]
 
     campaign_ids = set()
-    for cid in list(_active_seeding_campaigns.keys()):
+    # 1. Chiến dịch mà engine (máy) này đang chạy hoặc sắp chạy, kèm cả lô của chúng
+    running_here = list(_active_seeding_campaigns.keys()) + [
+        cid for chain in list(_running_batches.values()) for cid in chain
+    ]
+    for cid in running_here:
         campaign_ids.update(_batch_campaign_chains.get(cid, [cid]))
 
-    active_in_db = (
-        db.query(SeedingCampaign.id)
-        .filter(SeedingCampaign.status.in_(["PENDING", "RUNNING"]))
-        .all()
-    )
-    for (aid,) in active_in_db:
-        campaign_ids.add(aid)
-        campaign_ids.update(_batch_campaign_chains.get(aid, [aid]))
+    # 2. Chiến dịch bị kẹt RUNNING / PENDING trong DB (vd tắt app giữa chừng) — CHỈ của chính người đang bấm.
+    #    DB dùng chung cả team: không đụng chiến dịch người khác đang chạy trên máy khác (kể cả khi là admin).
+    if current_user and current_user.get("id") is not None:
+        stuck_in_db = (
+            db.query(SeedingCampaign.id)
+            .filter(
+                SeedingCampaign.status.in_(["PENDING", "RUNNING"]),
+                SeedingCampaign.created_by == current_user["id"],
+            )
+            .all()
+        )
+        for (aid,) in stuck_in_db:
+            campaign_ids.add(aid)
+            campaign_ids.update(_batch_campaign_chains.get(aid, [aid]))
 
     stopped_ids = []
     total_remaining_failed = 0
     for cid in campaign_ids:
         c = db.query(SeedingCampaign).filter(SeedingCampaign.id == cid).first()
         if c:
-            # Nếu là user thường, chỉ dừng campaign của chính user đó
-            if (
-                is_user_limited
-                and c.created_by is not None
-                and c.created_by != allowed_user_id
-            ):
+            # User thường chỉ dừng được chiến dịch của chính mình
+            if is_user_limited and c.created_by != allowed_user_id:
                 continue
             _active_seeding_campaigns.setdefault(cid, {})["stop_requested"] = True
             total_remaining_failed += _fail_remaining_campaign_tasks(
