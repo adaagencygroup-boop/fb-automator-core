@@ -1,4 +1,4 @@
-import React, { useRef, useState, useMemo } from "react";
+import React, { useRef, useState, useMemo, useEffect } from "react";
 import {
   Search,
   Link2,
@@ -10,18 +10,16 @@ import {
   Trash2,
   ListFilter,
   ExternalLink,
-  Plus,
   AlertCircle,
   Loader2,
   Globe,
   Lock,
-  Flame,
-  Users,
-  History,
+  MousePointerClick,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { attachDragSelection } from "../../shared/drag-selection";
 // import { SectionCard, SelectField } from "../../shared/components";
 import { GROUPS as DEFAULT_GROUPS } from "../../shared/constants";
 // import { parseGroupFileSource, searchGroupSource } from "../../service";
@@ -32,7 +30,6 @@ import {
   uploadGroupSourceFile,
   searchGroupSource,
   downloadGroupTemplate,
-  getGroupPostingHistory,
 } from "../../service";
 
 /**
@@ -65,14 +62,12 @@ export default function GroupSourceSection({
   accounts = [],
 }) {
   const groupFileInputRef = useRef(null);
+  const [maxResults, setMaxResults] = useState("50");
   const [memberFilter, setMemberFilter] = useState("all");
   const [groupTypeFilter, setGroupTypeFilter] = useState("all");
   const [frequencyFilter, setFrequencyFilter] = useState("all");
-  const [isManualDialogOpen, setIsManualDialogOpen] = useState(false);
-  const [manualGroupInput, setManualGroupInput] = useState("");
   const [isFileProcessing, setIsFileProcessing] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
-  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
   // Tài khoản đầu tiên được chọn ở Bước 1 để thực hiện cào dữ liệu nhóm thật từ Facebook
@@ -143,6 +138,33 @@ export default function GroupSourceSection({
     setSelectedGroupKeys((current) =>
       checked ? [...new Set([...current, key])] : current.filter((item) => item !== key)
     );
+  };
+
+  const tableContainerRef = useRef(null);
+  const rowsRef = useRef(filteredGroups);
+  rowsRef.current = filteredGroups;
+  const selectedKeysRef = useRef(selectedGroupKeys);
+  selectedKeysRef.current = selectedGroupKeys;
+
+  // Gắn cơ chế drag-to-select (giữ chuột kéo để lướt chọn nhiều nhóm liên tục)
+  useEffect(() => {
+    if (!tableContainerRef.current) return;
+    return attachDragSelection(tableContainerRef.current, {
+      getVisibleKeys: () => rowsRef.current.map((row) => row.key),
+      getSelectedKeys: () => selectedKeysRef.current,
+      onSelectionChange: (keys) => {
+        selectedKeysRef.current = keys;
+        setSelectedGroupKeys(keys);
+      },
+      disabled: isFileProcessing || isSearching,
+    });
+  }, [isFileProcessing, isSearching, setSelectedGroupKeys]);
+
+  // Click vào dòng nhóm để toggle chọn nhanh
+  const handleRowClick = (groupKey, event) => {
+    if (event.target.closest("button, input, select, textarea, a, [role='button']")) return;
+    const isCurrentlySelected = selectedGroupKeys.includes(groupKey);
+    toggleGroup(groupKey, !isCurrentlySelected);
   };
 
   // Chọn tất cả nhóm trong kết quả lọc
@@ -276,7 +298,7 @@ export default function GroupSourceSection({
       const activeAccountUid = selectedAccountKeys?.[0] || null;
       const res = await searchGroupSource({
         keyword,
-        max_results: 50,
+        max_results: Number(maxResults) || 50,
         member_filter: memberFilter,
         group_type: groupTypeFilter,
         frequency_filter: frequencyFilter,
@@ -287,7 +309,7 @@ export default function GroupSourceSection({
         if (setCustomGroups) setCustomGroups(foundGroups);
         setSelectedGroupKeys(foundGroups.map((g) => g.key));
         toast.success(
-          `Đã tìm thấy ${foundGroups.length} nhóm Facebook thật phù hợp cho "${keyword}"`,
+          `Đã tìm thấy ${foundGroups.length} nhóm Facebook thật phù hợp cho "${keyword}" (tối đa ${maxResults} nhóm)`,
           "TÌM NHÓM THÀNH CÔNG"
         );
       } else {
@@ -309,35 +331,6 @@ export default function GroupSourceSection({
     }
   };
 
-  // Nạp danh sách các nhóm đã từng đăng từ cơ sở dữ liệu PostgreSQL (group_session_logs)
-  const handleLoadHistoryGroups = async () => {
-    setIsLoadingHistory(true);
-    try {
-      const res = await getGroupPostingHistory();
-      const historyGroups = res?.history_groups || [];
-      if (historyGroups.length > 0) {
-        if (setCustomGroups) setCustomGroups(historyGroups);
-        setSelectedGroupKeys(historyGroups.map((g) => g.key));
-        toast.success(
-          `Đã nạp ${historyGroups.length} nhóm Facebook thực tế từ lịch sử đăng bài trong hệ thống.`,
-          "NẠP LỊCH SỬ THÀNH CÔNG"
-        );
-      } else {
-        toast.info(
-          "Chưa có nhóm nào trong lịch sử đăng bài của hệ thống.",
-          "LỊCH SỬ TRỐNG"
-        );
-      }
-    } catch (err) {
-      console.error("Lỗi nạp lịch sử nhóm từ DB:", err);
-      toast.error(
-        `Không thể nạp lịch sử nhóm: ${err.message || "Lỗi kết nối cơ sở dữ liệu"}`,
-        "LỖI NẠP LỊCH SỬ"
-      );
-    } finally {
-      setIsLoadingHistory(false);
-    }
-  };
 
   /**
    * Xử lý file link nhóm: Gọi Backend Module 7 (/api/groups/source/upload & /api/groups/source/parse)
@@ -609,15 +602,15 @@ export default function GroupSourceSection({
 
       {/* NỘI DUNG CHẾ ĐỘ 2: TÌM KIẾM THEO TỪ KHÓA */}
       {groupSource === "search" && (
-        <div className="mt-4 space-y-3">
+        <div className="mt-4 space-y-2.5">
           {/* Thông tin tài khoản cào dữ liệu hoặc cảnh báo cần chọn tài khoản */}
           {activeScrapingAccount ? (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200/80 bg-emerald-50/70 px-3 py-2 text-[11px] text-emerald-800">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-0.5 text-xs">
               <div className="flex items-center gap-2">
-                <span className="flex size-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>
-                  Tài khoản dùng để quét nhóm thật: <strong className="font-semibold text-emerald-950">{activeScrapingAccount.name}</strong>{" "}
-                  <span className="font-mono text-[10px] text-emerald-700/80">(UID: {activeScrapingAccount.uid})</span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50/80 px-2.5 py-0.5 text-[11px] text-emerald-800">
+                  <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  Tài khoản quét: <strong className="font-semibold text-emerald-950">{activeScrapingAccount.name}</strong>
+                  <span className="font-mono text-[10px] text-emerald-700/80">({activeScrapingAccount.uid})</span>
                 </span>
               </div>
               <button
@@ -625,16 +618,16 @@ export default function GroupSourceSection({
                 onClick={() => {
                   document.getElementById("step-1-accounts")?.scrollIntoView({ behavior: "smooth", block: "start" });
                 }}
-                className="text-[10px] font-semibold text-emerald-700 underline hover:text-emerald-900 cursor-pointer"
+                className="text-[11px] text-slate-500 hover:text-primary transition-colors cursor-pointer"
               >
-                Đổi tài khoản ở Bước 1
+                Đổi tài khoản ở Bước 1 →
               </button>
             </div>
           ) : (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
               <div className="flex items-center gap-2">
                 <AlertCircle className="size-4 text-amber-600 shrink-0" />
-                <span>
+                <span className="text-[11px]">
                   <strong>Chưa chọn tài khoản ở Bước 1.</strong> Hệ thống cần 1 tài khoản Facebook để đăng nhập và cào dữ liệu nhóm thật.
                 </span>
               </div>
@@ -650,7 +643,8 @@ export default function GroupSourceSection({
             </div>
           )}
 
-          <div className="flex gap-2">
+          {/* Thanh tìm kiếm chính tích hợp chọn số lượng nhóm quét */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
               <Input
@@ -665,97 +659,111 @@ export default function GroupSourceSection({
                   }
                 }}
                 placeholder="Nhập từ khóa tìm nhóm (VD: việc làm online, tuyển dụng ctv, mẹ bỉm sữa...)"
-                className="pl-9"
+                className="h-9 pl-9 pr-3 text-xs"
               />
             </div>
+
+            {/* Chọn số lượng nhóm tối đa cần quét */}
+            <div className="w-full sm:w-44 shrink-0">
+              <SelectField
+                value={maxResults}
+                onChange={(e) => setMaxResults(e.target.value)}
+                className="h-9 text-xs border-slate-200 bg-white"
+                title="Chọn số lượng nhóm Facebook tối đa cần quét"
+              >
+                <option value="10">Quét 10 nhóm</option>
+                <option value="20">Quét 20 nhóm (Nhanh)</option>
+                <option value="30">Quét 30 nhóm</option>
+                <option value="50">Quét 50 nhóm (Mặc định)</option>
+                <option value="100">Quét 100 nhóm (Nhiều)</option>
+                <option value="150">Quét 150 nhóm</option>
+                <option value="200">Quét 200 nhóm (Tối đa)</option>
+              </SelectField>
+            </div>
+
             <Button
               type="button"
               size="sm"
               disabled={isSearching}
               onClick={handleSearchGroups}
-              className="cursor-pointer"
+              className="h-9 px-4 shrink-0 text-xs font-medium cursor-pointer shadow-xs"
             >
               {isSearching ? (
                 <Loader2 className="mr-1.5 size-3.5 animate-spin" />
               ) : (
                 <Search className="mr-1.5 size-3.5" />
               )}
-              {isSearching ? "Đang quét nhóm..." : "Quét nhóm theo từ khóa"}
+              {isSearching ? "Đang quét nhóm..." : "Quét nhóm"}
             </Button>
           </div>
 
-          {/* Bộ lọc lựa chọn dạng Select: Thành viên, Tần suất, Loại nhóm (Cân đối 3 cột) */}
-          <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 shadow-2xs">
-            <div className="mb-2 flex items-center justify-between text-[11px]">
-              <span className="flex items-center gap-1.5 font-bold text-slate-700">
-                <ListFilter className="size-3.5 text-primary" /> Tiêu chí lọc nhóm Facebook:
+          {/* Thanh tiêu chí lọc phụ: Gọn gàng trên 1 hàng, tối ưu diện tích thị giác */}
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200/80 bg-slate-50/70 px-3 py-2 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 mr-1">
+                <ListFilter className="size-3.5 text-primary" /> Tiêu chí lọc:
               </span>
-              {(memberFilter !== "all" || groupTypeFilter !== "all" || frequencyFilter !== "all") && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMemberFilter("all");
-                    setGroupTypeFilter("all");
-                    setFrequencyFilter("all");
-                  }}
-                  className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-400 hover:text-rose-500 transition-colors cursor-pointer"
-                >
-                  <RotateCw className="size-2.5" /> Đặt lại tất cả bộ lọc
-                </button>
-              )}
-            </div>
 
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-              {/* Cột 1: Số lượng thành viên */}
-              <div className="flex flex-col gap-1">
-                <label className="flex items-center gap-1 text-[10px] font-semibold text-slate-600">
-                  <Users className="size-3 text-primary" /> Số lượng thành viên:
-                </label>
+              {/* Lọc thành viên */}
+              <div className="w-36">
                 <SelectField
                   value={memberFilter}
                   onChange={(e) => setMemberFilter(e.target.value)}
-                  className="h-8 w-full border-slate-200 bg-white text-xs shadow-2xs"
+                  className="h-7 border-slate-200 bg-white text-[11px] py-0 px-2"
+                  title="Lọc theo số lượng thành viên"
                 >
-                  <option value="all">Tất cả số lượng TV</option>
-                  <option value="10k">&gt; 10K thành viên (10.000+)</option>
-                  <option value="50k">&gt; 50K thành viên (50.000+)</option>
-                  <option value="100k">&gt; 100K thành viên (100.000+)</option>
+                  <option value="all">TV: Tất cả</option>
+                  <option value="10k">&gt; 10K thành viên</option>
+                  <option value="50k">&gt; 50K thành viên</option>
+                  <option value="100k">&gt; 100K thành viên</option>
                 </SelectField>
               </div>
 
-              {/* Cột 2: Tần suất đăng bài */}
-              <div className="flex flex-col gap-1">
-                <label className="flex items-center gap-1 text-[10px] font-semibold text-slate-600">
-                  <Flame className="size-3 text-amber-500" /> Tần suất đăng bài:
-                </label>
+              {/* Lọc tần suất bài viết */}
+              <div className="w-36">
                 <SelectField
                   value={frequencyFilter}
                   onChange={(e) => setFrequencyFilter(e.target.value)}
-                  className="h-8 w-full border-slate-200 bg-white text-xs shadow-2xs"
+                  className="h-7 border-slate-200 bg-white text-[11px] py-0 px-2"
+                  title="Lọc theo tần suất bài viết/ngày"
                 >
-                  <option value="all">Tất cả tần suất</option>
+                  <option value="all">Tần suất: Tất cả</option>
                   <option value="5">5+ bài viết/ngày</option>
                   <option value="10">10+ bài viết/ngày</option>
                   <option value="20">20+ bài viết/ngày</option>
                 </SelectField>
               </div>
 
-              {/* Cột 3: Loại nhóm (Quyền riêng tư) */}
-              <div className="flex flex-col gap-1">
-                <label className="flex items-center gap-1 text-[10px] font-semibold text-slate-600">
-                  <Globe className="size-3 text-emerald-600" /> Quyền riêng tư nhóm:
-                </label>
+              {/* Lọc quyền riêng tư */}
+              <div className="w-36">
                 <SelectField
                   value={groupTypeFilter}
                   onChange={(e) => setGroupTypeFilter(e.target.value)}
-                  className="h-8 w-full border-slate-200 bg-white text-xs shadow-2xs"
+                  className="h-7 border-slate-200 bg-white text-[11px] py-0 px-2"
+                  title="Lọc theo quyền riêng tư nhóm"
                 >
-                  <option value="all">Tất cả loại nhóm</option>
-                  <option value="public">Nhóm công khai (Public)</option>
-                  <option value="private">Nhóm kiểm duyệt (Private)</option>
+                  <option value="all">Quyền: Tất cả</option>
+                  <option value="public">Nhóm Công khai</option>
+                  <option value="private">Nhóm Kiểm duyệt</option>
                 </SelectField>
               </div>
             </div>
+
+            {/* Đặt lại bộ lọc */}
+            {(memberFilter !== "all" || groupTypeFilter !== "all" || frequencyFilter !== "all") && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMemberFilter("all");
+                  setGroupTypeFilter("all");
+                  setFrequencyFilter("all");
+                }}
+                className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500 hover:text-rose-600 transition-colors cursor-pointer"
+                title="Đặt lại các tiêu chí lọc phụ"
+              >
+                <RotateCw className="size-2.5" /> Đặt lại lọc
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -794,60 +802,8 @@ export default function GroupSourceSection({
               >
                 <Trash2 className="mr-1 size-3.5" /> Bỏ chọn hết
               </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={isLoadingHistory}
-                onClick={handleLoadHistoryGroups}
-                className="h-8 text-xs text-indigo-600 border-indigo-200 hover:bg-indigo-50 cursor-pointer"
-                title="Nạp lại các nhóm Facebook đã từng đăng thành công từ CSDL PostgreSQL"
-              >
-                {isLoadingHistory ? (
-                  <Loader2 className="mr-1 size-3.5 animate-spin" />
-                ) : (
-                  <History className="mr-1 size-3.5" />
-                )}
-                Nạp từ lịch sử DB
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-8 text-xs text-primary cursor-pointer"
-                onClick={() => setIsManualDialogOpen((prev) => !prev)}
-              >
-                <Plus className="mr-1 size-3.5" /> Thêm link thủ công
-              </Button>
             </div>
           </div>
-
-          {/* Hộp thoại thêm link nhóm thủ công */}
-          {isManualDialogOpen && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg border border-primary/20 bg-blue-50/30 p-2.5">
-              <Input
-                value={manualGroupInput}
-                onChange={(e) => setManualGroupInput(e.target.value)}
-                placeholder="Dán link nhóm (https://www.facebook.com/groups/...) hoặc UID..."
-                className="h-8 text-xs bg-white"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleAddManualGroup();
-                }}
-              />
-              <Button type="button" size="sm" onClick={handleAddManualGroup} className="h-8 text-xs cursor-pointer">
-                Thêm
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setIsManualDialogOpen(false)}
-                className="h-8 text-xs cursor-pointer"
-              >
-                Hủy
-              </Button>
-            </div>
-          )}
 
           {/* THÔNG KÊ SỐ LƯỢNG */}
           <div className="my-3 flex items-center justify-between text-[11px]">
@@ -856,13 +812,15 @@ export default function GroupSourceSection({
               {selectedGroupKeys.length > 0 && ` (Đã chọn: ${selectedGroupKeys.length})`}
             </span>
             <span className="text-slate-400">
-              {groupSource === "file" ? "Nguồn: File link ngoài" : `Từ khóa: "${groupSearch || "Mặc định"}"`}
+              {groupSource === "file"
+                ? "Nguồn: File link ngoài"
+                : `Từ khóa: "${groupSearch || "Mặc định"}" (Lọc tối đa ${maxResults} nhóm)`}
             </span>
           </div>
 
           {/* BẢNG DANH SÁCH NHÓM */}
           <div className="overflow-hidden rounded-lg border border-slate-200">
-            <div className="max-h-[360px] overflow-auto">
+            <div ref={tableContainerRef} className="max-h-[360px] overflow-auto">
               <table className="w-full min-w-[700px] text-left text-[11px]">
                 <thead className="sticky top-0 bg-slate-50 text-slate-500 shadow-xs z-10">
                   <tr className="border-b border-slate-200">
@@ -921,7 +879,11 @@ export default function GroupSourceSection({
                       return (
                         <tr
                           key={group.key}
-                          className={`transition-colors ${isSelected ? "bg-blue-50/25" : "bg-white hover:bg-slate-50/50"}`}
+                          data-group-key={group.key}
+                          onClick={(e) => handleRowClick(group.key, e)}
+                          className={`transition-colors select-none cursor-pointer ${
+                            isSelected ? "bg-blue-50/70 hover:bg-blue-100/60" : "bg-white hover:bg-slate-50"
+                          }`}
                         >
                           <td className="px-3 py-2">
                             <Checkbox
@@ -977,6 +939,24 @@ export default function GroupSourceSection({
                 </tbody>
               </table>
             </div>
+          </div>
+
+          {/* THÔNG TIN HỖ TRỢ & HƯỚNG DẪN CHỌN */}
+          <div className="mt-2.5 flex items-center justify-between text-[11px] text-slate-400">
+            <span className="flex items-center gap-1 text-slate-400">
+              {filteredGroups.length > 0 && (
+                <span>
+                  Tổng cộng: <strong className="text-slate-600">{filteredGroups.length}</strong> nhóm
+                  {selectedGroupKeys.length > 0 && (
+                    <> (Đã chọn: <strong className="text-primary">{selectedGroupKeys.length}</strong>)</>
+                  )}
+                </span>
+              )}
+            </span>
+            <span className="flex items-center gap-1.5 text-slate-400">
+              <MousePointerClick className="size-3 text-primary/70" />
+              <span>Giữ & kéo chuột để lướt chọn dải nhóm</span>
+            </span>
           </div>
         </>
       )}

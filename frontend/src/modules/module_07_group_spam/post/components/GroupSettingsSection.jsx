@@ -65,6 +65,13 @@ export default function GroupSettingsSection({
     setInternalLocked(val);
   };
 
+  // Tự động nạp API key đã lưu nếu state apiKey đang rỗng
+  useEffect(() => {
+    if (!apiKey && savedKey?.key) {
+      setApiKey(savedKey.key);
+    }
+  }, [savedKey?.key, activeProvider]);
+
   const [errorDialog, setErrorDialog] = useState(null);
 
   // Tự động mở Modal Dialog khi có lỗi
@@ -87,8 +94,11 @@ export default function GroupSettingsSection({
       onModelChange(event);
       return;
     }
-    setModel(event.target.value);
-    setApiKey("");
+    const newModel = event.target.value;
+    setModel(newModel);
+    const newProvider = newModel === "gemini" || newModel.startsWith("gemini-") ? "gemini" : "openai";
+    const existingKey = providerStatus?.[newProvider]?.key || "";
+    setApiKey(existingKey);
     if (setShowApiKey) setShowApiKey(false);
     if (setSettingsFeedback) setSettingsFeedback(null);
   };
@@ -169,7 +179,9 @@ export default function GroupSettingsSection({
       };
       const result = await saveGroupSettings(payload);
       if (setProviderStatus) setProviderStatus(result.providers || {});
-      setApiKey("");
+      const activeProv = model === "gemini" || model.startsWith("gemini-") ? "gemini" : "openai";
+      const savedKeyVal = result.api_key || result.providers?.[activeProv]?.key || apiKey.trim();
+      setApiKey(savedKeyVal);
       if (setShowApiKey) setShowApiKey(false);
       if (setSettingsFeedback) {
         setSettingsFeedback({ type: "success", message: "Đã lưu cấu hình trên máy này" });
@@ -274,7 +286,7 @@ export default function GroupSettingsSection({
           </Tooltip>
           <span className="block text-[10px] font-normal text-slate-400">
             {savedKey?.configured
-              ? `Đang dùng khóa đã mã hóa trên máy (${savedKey.hint}). Nhập khóa mới để thay thế.`
+              ? `Đang dùng khóa đã lưu trên máy (${savedKey.hint}). ${locked ? "Bấm Chỉnh sửa để xem hoặc sửa khóa." : "Khóa đang hiển thị đầy đủ, bạn có thể chỉnh sửa trực tiếp."}`
               : "Nhập API Key hợp lệ của nhà cung cấp AI đã chọn."}
           </span>
         </Field>
@@ -334,7 +346,15 @@ export default function GroupSettingsSection({
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => setLocked(false)}
+              onClick={() => {
+                setLocked(false);
+                if (!apiKey && savedKey?.key) {
+                  setApiKey(savedKey.key);
+                }
+                if (setShowApiKey) {
+                  setShowApiKey(true);
+                }
+              }}
               className="cursor-pointer text-xs flex items-center gap-1.5 border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-medium shadow-2xs"
             >
               <Edit3 className="size-3.5 text-slate-600" />

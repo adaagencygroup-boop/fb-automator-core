@@ -31,6 +31,8 @@ import {
   Trash2,
   Underline,
   Users,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -41,7 +43,7 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
-import { runGroupCampaign } from "../service";
+import { getGroupSettings, runGroupCampaign } from "../service";
 import Link from "next/link";
 import {
   GROUPS,
@@ -67,6 +69,7 @@ export default function GroupCommentModule() {
   const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
   const [model, setModel] = useState("gpt-4o");
   const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
   const [threads, setThreads] = useState("2");
   const [restMinutes, setRestMinutes] = useState("10");
   const [maxComments, setMaxComments] = useState("20");
@@ -117,6 +120,15 @@ export default function GroupCommentModule() {
 
   useEffect(() => {
     loadAccounts();
+    getGroupSettings().then((data) => {
+      if (!data) return;
+      if (data.model) setModel(data.model);
+      const activeProv = data.model?.startsWith("gemini-") || data.model === "gemini" ? "gemini" : "openai";
+      const key = data.api_key || data.providers?.[activeProv]?.key;
+      if (key) setApiKey(key);
+      if (data.threads) setThreads(String(data.threads));
+      if (data.rest_minutes) setRestMinutes(String(data.rest_minutes));
+    }).catch(() => {});
   }, []);
 
   const filteredAccounts = useMemo(() => {
@@ -533,13 +545,24 @@ export default function GroupCommentModule() {
             <span className="block text-[10px] font-normal text-slate-400">Chọn mô hình AI tạo nội dung theo phong cách mong muốn.</span>
           </Field>
           <Field label="API Key" required>
-            <Input
-              type="password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder="sk-ant-api03-••••••••••••••••"
-              className="font-mono"
-            />
+            <div className="relative">
+              <Input
+                type={showApiKey ? "text" : "password"}
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                placeholder="sk-ant-api03-••••••••••••••••"
+                className="pr-10 font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowApiKey((prev) => !prev)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 cursor-pointer"
+                title={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
+                aria-label={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
+              >
+                {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
             <span className="block text-[10px] font-normal text-slate-400">Nhập API Key hợp lệ của nhà cung cấp AI đã chọn.</span>
           </Field>
         </div>

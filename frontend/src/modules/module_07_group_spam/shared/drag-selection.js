@@ -10,7 +10,11 @@
  */
 
 const INTERACTIVE = "button, input, select, textarea, a, [role='button'], [contenteditable]:not([contenteditable='false']), [data-no-row-selection]";
-export const ROW_SELECTOR = "[data-account-key]";
+export const ROW_SELECTOR = "[data-account-key], [data-group-key], [data-row-key]";
+
+export function getRowKey(row) {
+  return row?.dataset?.accountKey || row?.dataset?.groupKey || row?.dataset?.rowKey || "";
+}
 
 export function selectRowRange(keys, anchor, end, previous = []) {
   const startIdx = Math.min(anchor, end);
@@ -72,7 +76,7 @@ export function attachDragSelection(container, {
     for (const row of rows) {
       const rect = row.getBoundingClientRect();
       if (key === undefined || rect.top <= y) {
-        key = row.dataset.accountKey;
+        key = getRowKey(row);
       }
       if (rect.bottom >= y) break;
     }
@@ -156,7 +160,7 @@ export function attachDragSelection(container, {
     if (!row || !container.contains(row)) return;
 
     const visibleKeys = getVisibleKeys();
-    const anchor = visibleKeys.indexOf(row.dataset.accountKey);
+    const anchor = visibleKeys.indexOf(getRowKey(row));
     if (anchor < 0) return;
 
     stop();

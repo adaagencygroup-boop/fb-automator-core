@@ -105,8 +105,10 @@ class GroupSettingsStore:
                 providers[provider] = {
                     "configured": bool(key),
                     "hint": f"••••{key[-4:]}" if key else "",
+                    "key": key or "",
                 }
             current_provider = model_spec(data["model"])["provider"]
+            current_key = self._decrypt_key(data["api_keys"].get(current_provider))
             return {
                 "model": data["model"],
                 "threads": int(data["threads"]),
@@ -114,6 +116,7 @@ class GroupSettingsStore:
                 "max_posts": int(data["max_posts"]),
                 "api_key_configured": providers[current_provider]["configured"],
                 "api_key_hint": providers[current_provider]["hint"],
+                "api_key": current_key or "",
                 "providers": providers,
             }
 
