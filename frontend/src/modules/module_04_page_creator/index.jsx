@@ -627,7 +627,7 @@ function HistoryView() {
           <FileSpreadsheet aria-hidden="true" className="size-4" />
           Xuất Excel (.csv)
         </button>
-      </div>
+          </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
         <HistoryMetric label="Tổng Fanpage" value={loading ? null : total} icon={Star} iconClass="border-[#DBEAFE] bg-[#EFF6FF] text-[#2563EB]" />
@@ -645,7 +645,7 @@ function HistoryView() {
             placeholder="Tìm theo tên Page, Creator UID, Admin UID..."
             className="h-[34px] w-full rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] pr-3 pl-9 text-xs text-[#0F172A] outline-none placeholder:text-[#475569] focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/20"
           />
-        </label>
+            </label>
         <div className="flex gap-3">
           <CustomSelect
             value={statusFilter}
@@ -1478,7 +1478,7 @@ function CreateView() {
                   <p className="pt-0.5 text-xs leading-4 text-[#434655]">
                     Dung lượng: <span className="font-bold text-[#0B1C30]">{(uploadedFile.size / 1024).toFixed(1)} KB</span>
                   </p>
-                </div>
+          </div>
               </div>
               <button
                 type="button"

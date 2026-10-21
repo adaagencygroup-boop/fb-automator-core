@@ -96,3 +96,28 @@ class FacebookPostService:
                         response_json["full_picture"] = img_src or att.get("url", "")
 
         return response_json
+
+    async def create_post_comment(self, post_id: str, page_id: str, message: str, attachment_url: str = None) -> Dict[str, Any]:
+        page = self.page_repo.get_by_page_id(page_id)
+        if not page or not page.page_access_token:
+            raise ValueError(f"Page or page access token not found for Page ID {page_id}")
+
+        url = f"https://graph.facebook.com/{FACEBOOK_API_VERSION}/{post_id}/comments"
+        payload = {}
+        if message:
+            payload["message"] = message
+        if attachment_url:
+            payload["attachment_url"] = attachment_url
+
+        params = {"access_token": page.page_access_token}
+
+        try:
+            response = await asyncio.to_thread(
+                requests.post, url, params=params, json=payload, timeout=15
+            )
+            response_json = response.json()
+        except Exception as e:
+            raise FacebookAPIError(f"Network error creating comment on post: {str(e)}")
+
+        self.auth_service.handle_api_errors(response_json)
+        return response_json

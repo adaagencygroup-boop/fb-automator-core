@@ -7,6 +7,7 @@ import Header from "@/components/Header";
 import ConsoleTerminal from "@/components/ConsoleTerminal";
 import AuthGate from "@/components/AuthGate";
 import IntroMusic from "@/components/IntroMusic";
+import IntroVideo from "@/components/IntroVideo";
 import { SessionContext } from "@/components/SessionContext";
 import api from "@/services/api";
 import { WS_BASE } from "@/config/constants";
@@ -27,7 +28,12 @@ const SIDEBAR_OVERLAY_QUERY = "(max-width: 1279px)";
 export default function AppShell({ children }) {
   const pathname = usePathname();
   if (pathname.replace(/\/$/, "") === "/oauth/meta/callback") return children;
-  return <AuthGate>{(session) => <Workspace session={session}>{children}</Workspace>}</AuthGate>;
+  return (
+    <>
+      <IntroVideo />
+      <AuthGate>{(session) => <Workspace session={session}>{children}</Workspace>}</AuthGate>
+    </>
+  );
 }
 
 function Workspace({ session, children }) {
