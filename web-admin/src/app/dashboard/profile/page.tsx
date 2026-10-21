@@ -131,8 +131,10 @@ export default function AdminProfilePage() {
       })
       .catch((err) => {
         console.error("Error loading admin profile:", err);
-        localStorage.removeItem("admin_token");
-        router.push("/login");
+        if (err?.status === 401) {
+          localStorage.removeItem("admin_token");
+          router.push("/login");
+        }
       });
 
     const p2 = api.getMySessions()

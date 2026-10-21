@@ -1,5 +1,6 @@
 import axios from "axios";
 import { API_BASE } from "../config/constants";
+import { acceptSessionUser, getSessionUserId } from "./sessionIdentity.mjs";
 
 export const api = axios.create({
   baseURL: API_BASE,
@@ -7,7 +8,16 @@ export const api = axios.create({
   withCredentials: true,
   headers: {
     "Content-Type": "application/json",
+    "X-Auth-Client": "user",
   },
+});
+
+api.interceptors.request.use((config) => {
+  const userId = getSessionUserId();
+  const identityFree = ["/auth/login", "/auth/register", "/verify-license", "/registration-status"].some((path) => String(config.url).includes(path));
+  if (userId && !identityFree) config.headers["X-Auth-User-Id"] = userId;
+  else delete config.headers["X-Auth-User-Id"];
+  return config;
 });
 
 export const NETWORK_ERROR_MESSAGE = "Không thể kết nối tới Local Engine. Hãy kiểm tra Engine đã được bật chưa.";
@@ -21,11 +31,41 @@ function warnOnce(key, message) {
 }
 
 let refreshPromise = null;
+const SESSION_EVENT = "fb-session-revoked";
+const TERMINAL_AUTH = new Set([
+  "SESSION_REVOKED",
+  "ACCOUNT_BANNED",
+  "ACCOUNT_LOCKED",
+  "ACCOUNT_PENDING",
+  "ACCOUNT_REJECTED",
+  "ACCOUNT_NOT_FOUND",
+]);
+
+function authDetail(error) {
+  const detail = error?.response?.data?.detail;
+  return typeof detail === "string" ? detail : "";
+}
+
+function notifySessionLost(code) {
+  if (typeof window === "undefined" || code !== "SESSION_REVOKED") return;
+  window.dispatchEvent(new CustomEvent(SESSION_EVENT, { detail: code }));
+}
+
+function apiError(error) {
+  const detail = error.response?.data?.detail || error.response?.data?.message;
+  const result = new Error(typeof detail === "string" ? detail : error.message || "Không thể kết nối tới Local Engine");
+  result.status = error.response?.status || 0;
+  result.code = typeof detail === "string" ? detail : error.code;
+  return result;
+}
 
 function refreshAccess() {
   if (!refreshPromise) {
     refreshPromise = axios
-      .post(`${API_BASE}/api/v1/auth/refresh`, {}, { withCredentials: true, timeout: 15000 })
+      .post(`${API_BASE}/api/v1/auth/refresh`, {}, {
+        withCredentials: true, timeout: 15000,
+        headers: { "X-Auth-Client": "user", ...(getSessionUserId() ? { "X-Auth-User-Id": getSessionUserId() } : {}) },
+      })
       .finally(() => {
         refreshPromise = null;
       });
@@ -34,7 +74,7 @@ function refreshAccess() {
 }
 
 function shouldSkipRefresh(url) {
-  return ["/auth/refresh", "/verify-license", "/admin/login", "/auth/register", "/auth/logout"].some((part) =>
+  return ["/auth/refresh", "/auth/login", "/registration-status", "/verify-license", "/admin/login", "/auth/register", "/auth/logout"].some((part) =>
     String(url || "").includes(part)
   );
 }
@@ -66,44 +106,43 @@ function extractErrorMessage(error) {
 
 api.interceptors.response.use(
   (response) => {
+    if (String(response.config.url).split("?")[0].endsWith("/api/v1/auth/me")) acceptSessionUser(response.data);
     warned.delete("network"); // Engine đã chạy lại -> lần mất kết nối sau vẫn được ghi log
     return response.data;
   },
   async (error) => {
     const status = error.response?.status;
     const original = error.config;
-    if (status === 401 && original && !original._retry && !shouldSkipRefresh(original.url)) {
+    const detail = authDetail(error);
+    if (
+      status === 401
+      && original
+      && !original._retry
+      && !shouldSkipRefresh(original.url)
+      && !TERMINAL_AUTH.has(detail)
+      && detail !== "SESSION_IDENTITY_CHANGED"
+    ) {
       original._retry = true;
       try {
         await refreshAccess();
         return api.request(original);
       } catch (refreshError) {
-        if (!refreshError.response) {
-          const networkError = new Error(NETWORK_ERROR_MESSAGE);
-          networkError.isNetworkError = true;
-          return Promise.reject(networkError);
-        }
-        const refreshMsg =
-          refreshError.response?.data?.detail ||
-          refreshError.message ||
-          "Phiên đăng nhập đã hết hạn";
-        return Promise.reject(new Error(typeof refreshMsg === "string" ? refreshMsg : "Phiên đăng nhập đã hết hạn"));
+        const refreshDetail = authDetail(refreshError);
+        notifySessionLost(refreshDetail);
+        return Promise.reject(apiError(refreshError));
       }
     }
-    // Không nhận được phản hồi: Local Engine chưa chạy / sai cổng / bị chặn
-    if (!error.response) {
-      warnOnce("network", `[API] Không kết nối được Local Engine (${API_BASE}) — ${error.message}`);
-      const networkError = new Error(NETWORK_ERROR_MESSAGE);
-      networkError.isNetworkError = true;
-      return Promise.reject(networkError);
+    if (TERMINAL_AUTH.has(detail)) {
+      notifySessionLost(detail);
+      return Promise.reject(apiError(error));
     }
-    const errorMsg = extractErrorMessage(error);
-    // Dùng console.warn thay vì console.error: lỗi đã được báo trên giao diện,
-    // console.error sẽ bật màn "Console Error" của Next.js khi chạy dev.
-    if (status !== 401) console.warn(`[API ${status}] ${original?.method?.toUpperCase() || ""} ${original?.url || ""}`, errorMsg);
-    const httpError = new Error(errorMsg);
-    httpError.status = status;
-    return Promise.reject(httpError);
+    const errorMsg =
+      error.response?.data?.detail ||
+      error.response?.data?.message ||
+      error.message ||
+      "Không thể kết nối tới Local Engine (Port 28129)";
+    console.error("[API Error]", errorMsg);
+    return Promise.reject(apiError(error));
   }
 );
 

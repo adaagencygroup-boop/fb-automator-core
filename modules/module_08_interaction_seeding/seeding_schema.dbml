@@ -102,7 +102,6 @@ Table seeding_tasks {
   reaction varchar(10) [note: 'Chỉ dùng cho REACT']
   comment_id integer
   status varchar(20) [default: 'PENDING', note: 'PENDING | RUNNING | SUCCESS | FAILED | SKIPPED']
-  attempts integer [default: 0]
   error_message text
   scheduled_at timestamp [default: `CURRENT_TIMESTAMP`, note: 'Thời điểm sớm nhất được phép chạy (giãn cách)']
   started_at timestamp
@@ -119,6 +118,8 @@ Table seeding_tasks {
       FAILED / SKIPPED không chặn, để chiến dịch sau có thể thử lại.
       DBML không hỗ trợ WHERE - xem models.py.
     ''']
+
+    
   }
 
   Note: 'Tác vụ nguyên tử: 1 tài khoản x 1 hành động x 1 mục tiêu'

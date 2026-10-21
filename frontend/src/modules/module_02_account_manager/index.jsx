@@ -1,15 +1,18 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  getAccounts,
   importAccounts,
   deleteAccount,
   bulkDeleteAccounts,
+  getDeletePreview,
   checkAccountStatuses,
   loginAccounts,
   openLiveBrowser,
 } from "./service";
+import { useAccountPages } from "./hooks/useAccountPages";
+import useAccountRealtime from "./hooks/useAccountRealtime";
+import { isAccountBusy } from "./utils/account-realtime.mjs";
 import { useLocalSSE } from "./hooks/useLocalSSE";
 import AccountTable from "./components/AccountTable";
 import DynamicImportModal from "./components/DynamicImportModal";
@@ -21,6 +24,7 @@ import {
   AlertTriangle,
   ChevronDown,
   Gauge,
+  Loader2,
   Maximize2,
   Minimize2,
   ShieldCheck,
@@ -82,24 +86,39 @@ export default function AccountManagerModule() {
     return false;
   });
 
-  const [accounts, setAccounts] = useState([]);
   const [selectedUids, setSelectedUids] = useState([]);
   const [isDynamicImportOpen, setIsDynamicImportOpen] = useState(false);
   const [isSingleModalOpen, setIsSingleModalOpen] = useState(false);
   const [editUid, setEditUid] = useState(null);
   const [customThreads, setCustomThreads] = useState(null);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
-  const [openingBrowserUids, setOpeningBrowserUids] = useState(new Set());
   const [isLogExpanded, setIsLogExpanded] = useState(false);
   const [expandedLog, setExpandedLog] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deletePreview, setDeletePreview] = useState({ loading: false, pagesTotal: 0, error: null });
+  const [deletingPages, setDeletingPages] = useState(false);
+  const deletingRef = useRef(false);
 
   const { logs, connected, clearLogs } = useLocalSSE();
   const logListRef = useRef(null);
   const shouldAutoScrollRef = useRef(true);
-  const accountsRequestRef = useRef(0);
+  const tableRef = useRef(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [search, setSearch] = useState("");
+  const [accountFilter, setAccountFilter] = useState("all");
+  const [loginFilter, setLoginFilter] = useState("all");
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(searchTerm.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+  const query = useMemo(() => ({ search, status: accountFilter, login_status: loginFilter }), [search, accountFilter, loginFilter]);
+  const { accounts, setAccounts, stats, total, has_more: hasMore, isInitialLoading, isRefreshing, isLoadingMore, loadError, moreError, fetchAccounts, loadMore, retryMore, applyAccountPatches, requestRefresh } = useAccountPages(query, !isExpired, tableRef, setSelectedUids);
+  const realtime = useAccountRealtime({
+    enabled: !isExpired, applyAccountPatches, requestRefresh,
+    onUnknown: () => toast.warning("Không xác định được kết quả thao tác. Đã yêu cầu đồng bộ dữ liệu mới nhất.", "ĐỒNG BỘ"),
+  });
+  const isLoggingIn = realtime.loggingIn;
 
   useEffect(() => {
     if (shouldAutoScrollRef.current && logListRef.current) {
@@ -115,18 +134,6 @@ export default function AccountManagerModule() {
       ? Math.min(selectedUids.length, 10)
       : 3;
 
-  const fetchAccounts = async () => {
-    const requestId = ++accountsRequestRef.current;
-    try {
-      const updatedAccounts = await getAccounts();
-      if (requestId === accountsRequestRef.current) {
-        setAccounts(updatedAccounts);
-      }
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
   useEffect(() => {
     const handleLocalEngineEvent = (event) => {
       const data = event.detail;
@@ -134,76 +141,45 @@ export default function AccountManagerModule() {
       const rawMsg = String(data.message || "");
       const message = rawMsg.toLocaleLowerCase("vi-VN");
 
-      if (rawMsg.includes("Trình duyệt nick") || rawMsg.includes("Không thể mở trình duyệt cho")) {
-        setOpeningBrowserUids((prev) => {
-          const next = new Set(prev);
-          for (const uid of Array.from(next)) {
-            if (rawMsg.includes(uid)) next.delete(uid);
-          }
-          return next;
-        });
-      }
-      if (rawMsg.includes("Hoàn tất đăng nhập tất cả tài khoản!")) {
-        setIsLoggingIn(false);
-      }
-      if (
+      if (!data.operation_id && (
         rawMsg.includes("Đăng nhập thành công") ||
         rawMsg.includes("Đăng nhập thất bại") ||
         rawMsg.includes("Đăng nhập lỗi (checkpoint)") ||
         rawMsg.includes("Hoàn tất đăng nhập") ||
         rawMsg.includes("Trình duyệt nick") ||
         rawMsg.includes("Không xác nhận được profile")
-      ) {
-        fetchAccounts();
+      )) {
+        requestRefresh();
       }
 
       const importCheckUpdated =
         message.includes("đã kiểm tra live/die sau import") ||
         message.includes("hoàn tất kiểm tra sau import") ||
         message.includes("kiểm tra live/die sau import bị gián đoạn");
-      if (data.event !== "account_statuses_updated" && !importCheckUpdated && data.type !== "connected") {
+      if (data.event !== "account_statuses_updated" && !importCheckUpdated) {
         return;
       }
 
       const statuses = data.statuses;
-      if (statuses) {
-        setAccounts((currentAccounts) =>
-          currentAccounts.map((account) => {
-            const status = statuses[account.uid];
-            return status === "live" || status === "die" ? { ...account, status } : account;
-          })
-        );
-      }
-
-      fetchAccounts();
+      if (statuses) applyAccountPatches(Object.entries(statuses)
+        .filter(([, status]) => status === "live" || status === "die")
+        .map(([uid, status]) => ({ uid, changes: { status } })));
+      requestRefresh();
     };
 
     window.addEventListener("local_engine_event", handleLocalEngineEvent);
     return () => window.removeEventListener("local_engine_event", handleLocalEngineEvent);
-  }, [isExpired]);
-
-  useEffect(() => {
-    if (isExpired) return;
-    let ignore = false;
-    getAccounts()
-      .then((data) => {
-        if (!ignore) setAccounts(data);
-      })
-      .catch((error) => console.error(error));
-    return () => {
-      ignore = true;
-    };
-  }, [isExpired]);
+  }, [isExpired, requestRefresh, applyAccountPatches]);
 
   const handleOpenEdit = (uid) => {
     setEditUid(uid);
     setIsSingleModalOpen(true);
   };
 
-  const handleImportBulk = async (accountsToImport, skippedCount = 0) => {
+  const handleImportBulk = async (accountsToImport, skippedCount = 0, skipExisting = false) => {
     try {
-      const res = await importAccounts(accountsToImport);
-      await fetchAccounts();
+      const res = await importAccounts(accountsToImport, false, skipExisting);
+      skippedCount += res.skipped_count || 0;
       const added = res.added_count ?? res.imported ?? 0;
       const updated = res.updated_count ?? 0;
 
@@ -220,6 +196,10 @@ export default function AccountManagerModule() {
       }
 
       toast.success(msg, "NHẬP THÀNH CÔNG");
+      tableRef.current?.reset();
+      fetchAccounts(true).catch((err) => {
+        toast.warning("Không thể đồng bộ danh sách mới nhất: " + (err.message || String(err)), "CẢNH BÁO");
+      });
       return true;
     } catch (error) {
       toast.error("Không thể nhập tài khoản: " + error.message, "LỖI NHẬP FILE");
@@ -227,73 +207,116 @@ export default function AccountManagerModule() {
     }
   };
 
-  const handleDeleteSingle = (uid) => {
-    setDeleteTarget({ kind: "single", uid });
+  const prepareDelete = (target) => {
+    if (deletingRef.current) return;
+    setDeletePreview({ loading: true, pagesTotal: 0, error: null });
+    setDeleteTarget(target);
   };
+
+  const handleDeleteSingle = (uid) => prepareDelete({ kind: "single", uid });
 
   const handleBulkDelete = () => {
     if (!selectedUids.length) return;
-    setDeleteTarget({ kind: "bulk", uids: selectedUids });
+    prepareDelete({ kind: "bulk", uids: [...selectedUids] });
   };
 
-  const handleConfirmDelete = async () => {
+  useEffect(() => {
     if (!deleteTarget) return;
+    let cancelled = false;
+    const uids = deleteTarget.kind === "single" ? [deleteTarget.uid] : deleteTarget.uids;
+    getDeletePreview(uids).then(
+      (result) => {
+        if (!cancelled) setDeletePreview({ loading: false, pagesTotal: result.pages_total, error: null });
+      },
+      (error) => {
+        if (!cancelled) setDeletePreview({ loading: false, pagesTotal: 0, error: error.message });
+      }
+    );
+    return () => { cancelled = true; };
+  }, [deleteTarget]);
+
+  const handleCloseDelete = () => {
+    if (!deletingRef.current) setDeleteTarget(null);
+  };
+
+  const handleConfirmDelete = async (deletePages = false) => {
+    if (!deleteTarget || deletePreview.loading || deletePreview.error || deletingRef.current) return;
+    deletingRef.current = true;
+    setDeletingPages(deletePages);
     setIsDeleting(true);
     try {
+      let result;
+      let successfulUids;
       if (deleteTarget.kind === "single") {
-        await deleteAccount(deleteTarget.uid);
-        setSelectedUids((prev) => prev.filter((id) => id !== deleteTarget.uid));
-        toast.success(`Đã xóa tài khoản ${deleteTarget.uid}`, "ĐÃ XÓA TÀI KHOẢN");
+        result = await deleteAccount(deleteTarget.uid, deletePages);
+        successfulUids = [deleteTarget.uid];
       } else {
-        const uidsToDelete = deleteTarget.uids;
-        await bulkDeleteAccounts(uidsToDelete);
-        setSelectedUids((prev) => prev.filter((id) => !uidsToDelete.includes(id)));
-        toast.success(`Đã xóa ${uidsToDelete.length} tài khoản`, "ĐÃ XÓA HÀNG LOẠT");
+        result = await bulkDeleteAccounts(deleteTarget.uids, deletePages);
+        successfulUids = result.deleted_uids;
       }
-      await fetchAccounts();
-      setDeleteTarget(null);
+      const errors = result.errors || [];
+      setSelectedUids((prev) => prev.filter((id) => !successfulUids.includes(id)));
+      const pageMessage = result.pages_deleted > 0
+        ? ` Đã xóa ${result.pages_deleted} Fanpage liên quan.`
+        : result.pages_unlinked > 0
+        ? ` Đã giữ lại và ngắt liên kết ${result.pages_unlinked} Fanpage.`
+        : "";
+      const successMessage = deleteTarget.kind === "single"
+        ? `Đã xóa tài khoản ${deleteTarget.uid}.`
+        : `Đã xóa ${result.deleted} tài khoản.`;
+      if (errors.length) {
+        const details = errors.slice(0, 3).map((item) => `${item.uid}: ${item.error}`).join("; ");
+        const remaining = errors.length > 3 ? `; và ${errors.length - 3} tài khoản khác` : "";
+        if (successfulUids.length) {
+          toast.warning(`${successMessage}${pageMessage} Không thể xóa ${errors.length} tài khoản. ${details}${remaining}`, "KẾT QUẢ XÓA");
+        } else {
+          toast.error(`Không thể xóa các tài khoản đã chọn. ${details}${remaining}`, "LỖI XÓA");
+        }
+      } else {
+        toast.success(`${successMessage}${pageMessage}`, "XÓA THÀNH CÔNG");
+      }
+      if (successfulUids.length) {
+        setAccounts((prev) => prev.filter((acc) => !successfulUids.includes(acc.uid)));
+        setDeleteTarget(null);
+      }
+      fetchAccounts(false).catch((err) => {
+        toast.warning("Không thể đồng bộ danh sách mới nhất: " + (err.message || String(err)), "CẢNH BÁO");
+      });
     } catch (error) {
       toast.error("Lỗi khi xóa tài khoản: " + error.message, "LỖI XÓA");
     } finally {
+      deletingRef.current = false;
       setIsDeleting(false);
     }
   };
 
   const handleOpenBrowser = async (uid) => {
-    if (openingBrowserUids.has(uid)) return;
-    setOpeningBrowserUids((prev) => new Set(prev).add(uid));
+    if (isAccountBusy(realtime.progress[uid])) return;
+    if (!realtime.begin("browser", [uid])) return;
     try {
       toast.info(`Đang kích hoạt trình duyệt cho ${uid}...`, "Mở trình duyệt");
-      await openLiveBrowser(uid);
-      setTimeout(() => {
-        setOpeningBrowserUids((prev) => {
-          if (!prev.has(uid)) return prev;
-          const next = new Set(prev);
-          next.delete(uid);
-          return next;
-        });
-      }, 10000);
+      const result = await openLiveBrowser(uid);
+      realtime.watch(result.operation_id, "browser", [uid]);
     } catch (error) {
       toast.warning(error.message || `Không thể mở trình duyệt cho ${uid}`, "Trình duyệt");
-      setOpeningBrowserUids((prev) => {
-        const next = new Set(prev);
-        next.delete(uid);
-        return next;
-      });
+      realtime.fail([uid]);
     }
   };
 
   const handleLogin = async () => {
-    const uids = selectedUids;
-    if (!uids.length) return;
-    setIsLoggingIn(true);
+    const uids = [...selectedUids];
+    if (!uids.length || isLoggingIn) return;
+    if (!realtime.begin("login", uids)) {
+      toast.warning("Có tài khoản đang được xử lý. Hãy đợi hoặc bỏ chọn tài khoản đó.", "ĐĂNG NHẬP");
+      return;
+    }
     try {
-      await loginAccounts(uids, effectiveThreads);
+      const result = await loginAccounts(uids, effectiveThreads);
+      realtime.watch(result.operation_id, "login", uids);
       toast.info(`Bắt đầu đăng nhập ${uids.length} tài khoản với ${effectiveThreads} luồng...`, "ĐĂNG NHẬP");
-      setTimeout(() => setIsLoggingIn(false), 120000);
     } catch (error) {
       toast.error("Không thể bắt đầu đăng nhập: " + error.message, "LỖI ĐĂNG NHẬP");
-      setIsLoggingIn(false);
+      realtime.fail(uids);
     }
   };
 
@@ -313,11 +336,13 @@ export default function AccountManagerModule() {
     setIsCheckingStatus(true);
     try {
       const res = await checkAccountStatuses(selectedUids);
-      await fetchAccounts();
       toast.success(
-        `Đã kiểm tra xong: ${res.live || 0} Live, ${res.die || 0} Die.`,
+        `Đã kiểm tra xong: ${res.live || 0} Live, ${res.die || 0} Die, ${res.inconclusive || 0} chưa kết luận được.`,
         "KIỂM TRA HOÀN TẤT"
       );
+      fetchAccounts(false).catch((err) => {
+        toast.warning("Không thể đồng bộ danh sách mới nhất: " + (err.message || String(err)), "CẢNH BÁO");
+      });
     } catch (error) {
       toast.error(
         `Không thể kiểm tra trạng thái: ${error.message || String(error)}`,
@@ -328,15 +353,15 @@ export default function AccountManagerModule() {
     }
   };
 
-  const active = accounts.filter((account) => account.status === "live").length;
-  const dead = accounts.filter((account) => account.status === "die").length;
+  const active = stats.live;
+  const dead = stats.die;
   const checked = active + dead;
   const availability = checked ? `${((active / checked) * 100).toFixed(1)}%` : "--";
 
   const metricCards = [
     {
       label: "TỔNG TÀI KHOẢN",
-      value: accounts.length.toLocaleString("vi-VN"),
+      value: stats.total.toLocaleString("vi-VN"),
       icon: Users,
       labelColor: "text-[#94A3B8]",
       iconBg: "bg-[#F1F5F9] text-[#475569]",
@@ -372,7 +397,6 @@ export default function AccountManagerModule() {
         featureName="Quản lý Tài khoản Facebook"
         onRenewed={() => {
           setIsExpired(false);
-          fetchAccounts();
         }}
       />
     );
@@ -403,7 +427,8 @@ export default function AccountManagerModule() {
       </div>
 
       {/* 2. Section - StatsGrid (4 Cards) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      <p role="status" className="sr-only">{isInitialLoading ? "Đang tải tài khoản" : ""}</p>
+      <div aria-busy={isInitialLoading} className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {metricCards.map(({ label, value, icon: Icon, labelColor, iconBg }) => (
           <div
             key={label}
@@ -414,7 +439,9 @@ export default function AccountManagerModule() {
                 {label}
               </div>
               <div className="text-3xl font-extrabold text-[#0F172A] tracking-tight mt-1">
-                {value}
+                {isInitialLoading ? (
+                  <span aria-hidden="true" className="block h-9 w-24 rounded bg-slate-200/70 motion-safe:animate-pulse" />
+                ) : loadError ? "--" : value}
               </div>
             </div>
             <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${iconBg}`}>
@@ -426,6 +453,16 @@ export default function AccountManagerModule() {
 
       {/* 3. Section - FilterAndTableContainer (Toolbar + Table + Bottom Action Bar) */}
       <AccountTable
+        tableRef={tableRef}
+        searchTerm={searchTerm} setSearchTerm={setSearchTerm}
+        accountFilter={accountFilter} setAccountFilter={setAccountFilter}
+        loginFilter={loginFilter} setLoginFilter={setLoginFilter}
+        total={total} hasMore={hasMore} isLoadingMore={isLoadingMore}
+        moreError={moreError} onLoadMore={loadMore} onRetryMore={retryMore}
+        isLoading={isInitialLoading}
+        isRefreshing={isRefreshing}
+        loadError={loadError}
+        onRetry={() => fetchAccounts(true)}
         accounts={accounts}
         selectedUids={selectedUids}
         onToggleSelect={(uid) =>
@@ -434,13 +471,14 @@ export default function AccountManagerModule() {
           )
         }
         onSelectAll={handleSelectAll}
+        onSelectionChange={setSelectedUids}
         onEditAccount={handleOpenEdit}
         onDeleteAccount={handleDeleteSingle}
         onOpenBrowser={handleOpenBrowser}
         onBulkDelete={handleBulkDelete}
         onRefresh={handleCheckStatus}
         isCheckingStatus={isCheckingStatus}
-        openingBrowserUids={openingBrowserUids}
+        accountProgress={realtime.progress}
         effectiveThreads={effectiveThreads}
         setCustomThreads={setCustomThreads}
         maxThreads={maxThreads}
@@ -571,24 +609,72 @@ export default function AccountManagerModule() {
         isOpen={isSingleModalOpen}
         editUid={editUid}
         onClose={() => setIsSingleModalOpen(false)}
-        onSuccess={async ({ originalUid, uid }) => {
+        onSuccess={({ originalUid, uid, isEdit, savedData }) => {
           setSelectedUids((current) => Array.from(new Set(current.map((selected) => selected === originalUid ? uid : selected))));
-          await fetchAccounts();
+          if (isEdit) {
+            setAccounts((prev) =>
+              prev.map((acc) => {
+                if (acc.uid !== originalUid && acc.uid !== uid) return acc;
+                return {
+                  ...acc,
+                  uid,
+                  email: savedData?.email ? savedData.email : acc.email,
+                  proxy: savedData?.proxy ? savedData.proxy : acc.proxy,
+                };
+              })
+            );
+            toast.success(`Đã cập nhật thông tin tài khoản ${uid}.`, "CẬP NHẬT THÀNH CÔNG");
+            fetchAccounts(false).catch((err) => {
+              toast.warning("Không thể đồng bộ danh sách mới nhất: " + (err.message || String(err)), "CẢNH BÁO");
+            });
+          } else {
+            toast.success(`Đã thêm mới tài khoản ${uid} thành công.`, "THÊM THÀNH CÔNG");
+            tableRef.current?.reset();
+            fetchAccounts(true).catch((err) => {
+              toast.warning("Không thể đồng bộ danh sách mới nhất: " + (err.message || String(err)), "CẢNH BÁO");
+            });
+          }
         }}
         existingAccounts={accounts}
       />
 
       <ConfirmDialog
         isOpen={deleteTarget !== null}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={handleConfirmDelete}
+        onClose={handleCloseDelete}
+        onConfirm={() => handleConfirmDelete(deletePreview.pagesTotal > 0)}
         title="Xác nhận xóa tài khoản"
         description={
-          deleteTarget?.kind === "single"
-            ? `Bạn có chắc chắn muốn xóa tài khoản ${deleteTarget.uid}? Toàn bộ profile trình duyệt sẽ bị gỡ bỏ.`
-            : `Bạn có chắc chắn muốn xóa ${deleteTarget?.uids.length ?? 0} tài khoản đã chọn?`
+          deletePreview.loading ? (
+            <span role="status" className="inline-flex items-center gap-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Đang kiểm tra dữ liệu liên quan…
+            </span>
+          ) : deletePreview.error ? (
+            <span role="alert">
+              Không thể kiểm tra Fanpage: {deletePreview.error}.{" "}
+              <button type="button" className="font-semibold text-primary underline" onClick={() => prepareDelete({ ...deleteTarget })}>
+                Thử lại
+              </button>
+            </span>
+          ) : (
+            <span>
+              {deleteTarget?.kind === "single"
+                ? `Xóa tài khoản ${deleteTarget.uid}?`
+                : `Xóa ${deleteTarget?.uids.length ?? 0} tài khoản đã chọn?`}{" "}
+              {deletePreview.pagesTotal > 0 && (
+                <span className="mt-2 block">
+                  Có {deletePreview.pagesTotal} Fanpage liên quan. Chỉ xóa tài khoản sẽ giữ Fanpage và ngắt liên kết; xóa cả hai sẽ gỡ Fanpage khỏi phần mềm.
+                </span>
+              )}
+              <span className="mt-2 block">Dữ liệu trình duyệt và phiên đăng nhập của tài khoản sẽ bị xóa. Nếu thêm lại tài khoản, bạn cần đăng nhập lại.</span>
+            </span>
+          )
         }
-        confirmText="Xóa"
+        confirmText={deletePreview.pagesTotal > 0 ? "Xóa cả tài khoản & Fanpage" : "Xóa tài khoản"}
+        secondaryText={deletePreview.pagesTotal > 0 ? "Chỉ xóa tài khoản" : undefined}
+        onSecondaryConfirm={() => handleConfirmDelete(false)}
+        hideConfirm={deletePreview.loading || Boolean(deletePreview.error)}
+        loadingAction={deletePreview.pagesTotal > 0 && !deletingPages ? "secondary" : "confirm"}
         cancelText="Hủy bỏ"
         variant="danger"
         icon={<Trash2 className="h-5 w-5" />}

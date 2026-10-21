@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
+import { validatePassword } from "@/lib/validation";
 
 interface ChangePasswordModalProps {
   isOpen: boolean;
@@ -43,8 +44,9 @@ export function ChangePasswordModal({
   if (!isOpen) return null;
 
   // Validation rules
-  const hasMinLen = newPassword.length >= 6;
-  const hasLettersOrDigits = /^[A-Za-z0-9]+$/.test(newPassword);
+  const validation = validatePassword(newPassword);
+  const hasMinLen = validation.hasMinLength;
+  const hasLettersOrDigits = validation.hasUppercase && validation.hasLowercase && validation.hasNumber && validation.hasSpecialChar;
   const isDifferent =
     newPassword.length > 0 &&
     oldPassword.length > 0 &&
@@ -62,8 +64,8 @@ export function ChangePasswordModal({
       setErrorMsg("Vui lòng nhập mật khẩu mới.");
       return;
     }
-    if (newPassword.length < 6 || !/^[A-Za-z0-9]+$/.test(newPassword)) {
-      setErrorMsg("Mật khẩu tối thiểu 6 ký tự, chỉ gồm chữ hoặc số.");
+    if (!validation.isValid) {
+      setErrorMsg(validation.message || "Mật khẩu không hợp lệ.");
       return;
     }
     if (oldPassword === newPassword) {
@@ -352,7 +354,7 @@ export function ChangePasswordModal({
                     </svg>
                   )}
                 </span>
-                <span>Tối thiểu 6 ký tự</span>
+                <span>Từ 8 đến 12 ký tự</span>
               </li>
               <li className={`cpm-rule ${hasLettersOrDigits ? "cpm-rule--met" : ""}`}>
                 <span className="cpm-rule-icon">
@@ -367,7 +369,7 @@ export function ChangePasswordModal({
                     </svg>
                   )}
                 </span>
-                <span>Chỉ gồm chữ hoặc số</span>
+                <span>Có chữ hoa, chữ thường, số và ký tự đặc biệt</span>
               </li>
               <li className={`cpm-rule ${isDifferent ? "cpm-rule--met" : ""}`}>
                 <span className="cpm-rule-icon">

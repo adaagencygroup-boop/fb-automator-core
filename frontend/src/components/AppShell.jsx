@@ -6,6 +6,8 @@ import Sidebar from "@/components/Sidebar";
 import Header from "@/components/Header";
 import ConsoleTerminal from "@/components/ConsoleTerminal";
 import AuthGate from "@/components/AuthGate";
+import IntroMusic from "@/components/IntroMusic";
+import { SessionContext } from "@/components/SessionContext";
 import api from "@/services/api";
 import { WS_BASE } from "@/config/constants";
 import { findNavItem, findNavItemByPath, pathOf } from "@/config/navigation";
@@ -23,6 +25,8 @@ const SIDEBAR_OVERLAY_QUERY = "(max-width: 1279px)";
  * Trang đang mở được xác định từ URL (src/config/navigation.js -> pathOf).
  */
 export default function AppShell({ children }) {
+  const pathname = usePathname();
+  if (pathname.replace(/\/$/, "") === "/oauth/meta/callback") return children;
   return <AuthGate>{(session) => <Workspace session={session}>{children}</Workspace>}</AuthGate>;
 }
 
@@ -82,6 +86,8 @@ function Workspace({ session, children }) {
 
   return (
     <div className="flex h-screen w-screen bg-background text-foreground antialiased overflow-hidden">
+      <IntroMusic />
+
       {isOverlay ? (
         // Màn hẹp: drawer đè lên nội dung + lớp phủ, không chiếm chỗ của vùng nội dung
         navOpen && (
@@ -121,9 +127,9 @@ function Workspace({ session, children }) {
           onLogout={session.logout}
         />
 
-        <main className="flex-1 overflow-y-auto p-6 bg-background">
-          {user.modules_unlocked ? (
-            children
+        <main className={`flex-1 overflow-y-auto p-6 ${["dashboard", "profile"].includes(activeTab) ? "bg-[#f7f8ff]" : "bg-background"}`}>
+          {user.modules_unlocked || ["dashboard", "profile"].includes(activeTab) ? (
+            <SessionContext.Provider value={session}>{children}</SessionContext.Provider>
           ) : (
             <div className="mx-auto max-w-lg rounded-xl border border-border bg-white p-6 shadow-sm">
               <h2 className="text-lg font-bold tracking-tight text-sky-600">Chưa mở được các module</h2>

@@ -72,16 +72,29 @@ class AccountRepository:
         account.credential_encryption_version = 2
 
     @staticmethod
-    def update_login_status(db, uid, status, profile_name=None, owner_username=_UNSET):
+    def update_login_status(db, uid, status, profile_name=None, owner_username=_UNSET, *, avatar_url=None):
         account = AccountRepository.get_by_uid(db, uid, owner_username)
         if account:
             account.login_status = {"logged_in": "LOGGED_IN", "not_logged_in": "NOT_LOGGED", "failed": "ERROR"}.get(status, status)
             if account.login_status == "LOGGED_IN":
+                if avatar_url:
+                    account.avatar_url = avatar_url
                 account.last_login_at = utc_now()
                 account.status = "LIVE"
                 account.status_checked_at = utc_now()
             if profile_name:
                 account.profile_name = profile_name
+            db.commit()
+        return account
+
+    @staticmethod
+    def update_identity(db, uid, profile_name=None, avatar_url=None):
+        account = AccountRepository.get_by_uid(db, uid)
+        if account:
+            if profile_name:
+                account.profile_name = profile_name
+            if avatar_url:
+                account.avatar_url = avatar_url
             db.commit()
         return account
 
@@ -103,10 +116,11 @@ class AccountRepository:
         db.commit()
 
     @staticmethod
-    def delete(db, uid, owner_username=_UNSET):
+    def delete(db, uid, owner_username=_UNSET, *, commit=True):
         account = AccountRepository.get_by_uid(db, uid, owner_username)
         if not account:
             return False
         db.delete(account)
-        db.commit()
+        if commit:
+            db.commit()
         return True

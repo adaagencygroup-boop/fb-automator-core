@@ -32,7 +32,7 @@ class DatabaseManager:
         try:
             self._pg_pool = pool.ThreadedConnectionPool(
                 minconn=1,
-                maxconn=20,
+                maxconn=5,
                 dsn=DATABASE_URL
             )
             self._is_postgres = True
@@ -61,16 +61,20 @@ class DatabaseManager:
         if not self._is_postgres or not self._pg_pool:
             raise RuntimeError("Chưa có kết nối PostgreSQL production.")
         conn = self._pg_pool.getconn()
+        cursor = None
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             yield cursor
             conn.commit()
-            cursor.close()
         except Exception as e:
             conn.rollback()
             raise e
         finally:
-            self._pg_pool.putconn(conn)
+            try:
+                if cursor is not None:
+                    cursor.close()
+            finally:
+                self._pg_pool.putconn(conn)
 
     def execute(self, query: str, params: tuple = ()) -> Any:
         norm_q = self._normalize_query(query)

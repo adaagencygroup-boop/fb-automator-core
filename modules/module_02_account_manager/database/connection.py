@@ -12,11 +12,20 @@ def initialize(database_url=None):
     if engine is not None:
         return engine
     url = database_url or os.getenv("SUPABASE_DB_URL") or os.getenv("DATABASE_URL")
-    if not url or url.startswith("sqlite"):
+    if not url or (not database_url and url.startswith("sqlite")):
         raise RuntimeError("Module tài khoản chỉ dùng PostgreSQL production. Không dùng SQLite local.")
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
-    kwargs = {"pool_pre_ping": True}
+    # Use the driver declared in requirements, independent of SQLAlchemy defaults.
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
+    if url.startswith("sqlite"):
+        kwargs = {"pool_pre_ping": True, "connect_args": {"check_same_thread": False, "timeout": 30}}
+    else:
+        # Core/auth has a separate pool. SQLAlchemy's default 5 + 10 overflow
+        # can consume all 15 Supabase session-pool connections by itself.
+        kwargs = {"pool_pre_ping": True, "pool_size": 3, "max_overflow": 2, "pool_timeout": 10}
+
     candidate = create_engine(url, **kwargs)
     try:
         from .migrations import migrate

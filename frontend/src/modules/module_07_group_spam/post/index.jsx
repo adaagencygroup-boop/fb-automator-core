@@ -1,49 +1,53 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
-  Bold,
-  CalendarDays,
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  Clock3,
-  Download,
-  ExternalLink,
-  FileText,
-  FileUp,
-  ImageIcon,
-  Info,
-  Italic,
-  Link2,
-  List,
-  ListFilter,
-  Play,
-  Plus,
-  RefreshCw,
-  RotateCcw,
-  RotateCw,
-  Search,
   Sparkles,
+  RotateCcw,
+  Plus,
+  Play,
   Square,
-  Trash2,
-  Underline,
+  RefreshCw,
+  Clock3,
+  CalendarDays,
+  ListFilter,
   Users,
+  Search,
+  Check,
+  Info,
+  ImageIcon,
+  Bold,
+  Italic,
+  Underline,
+  List,
+  Link2,
+  Undo2,
+  Redo2,
+  ListOrdered,
+  Minus,
+  X,
+  Film,
+  Trash2,
 } from "lucide-react";
 
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
-import { runGroupCampaign } from "../service";
-import Link from "next/link";
 import {
-  GROUPS,
-  AVATAR_COLORS,
+  generateGroupPosts,
+  getGeminiModels,
+  getGroupSettings,
+  runGroupCampaign,
+  saveGroupSettings,
+  testGroupAiConnection,
+  uploadGroupMedia,
+} from "../service";
+import {
   INITIAL_POST,
 } from "../shared/constants";
 import {
@@ -51,41 +55,122 @@ import {
   Field,
   SelectField,
   CheckLabel,
-  initialsOf,
   normalizeAccount,
 } from "../shared/components";
+import GroupAccountSection from "./components/GroupAccountSection";
+import GroupSettingsSection from "./components/GroupSettingsSection";
+import GroupSourceSection from "./components/GroupSourceSection";
+
+const DEFAULT_GEMINI_MODELS = [
+  { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
+  { id: "gemini-3.7-flash", name: "Gemini 3.7 Flash" },
+  { id: "gemini-3.6-flash", name: "Gemini 3.6 Flash" },
+  { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash" },
+  { id: "gemini-3.5-flash-lite", name: "Gemini 3.5 Flash-Lite" },
+  { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" },
+  { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash (quyền truy cập cũ)" },
+  { id: "gemini-2.5-flash-lite", name: "Gemini 2.5 Flash-Lite (quyền truy cập cũ)" },
+  { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro (quyền truy cập cũ)" },
+];
+
+// Nút toolbar dùng chung, giữ vùng chọn trong editor khi bấm.
+function EditorButton({ label, onClick, children }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onClick}
+      className="rounded p-1.5 hover:bg-white hover:text-primary"
+    >
+      {React.cloneElement(children, { className: "size-3.5" })}
+    </button>
+  );
+}
+
+// Chuyển văn bản thường thành HTML và chỉ giữ các thẻ editor hỗ trợ.
+function editorHtml(value = "") {
+  const content = String(value);
+  if (!/<\/?(?:p|div|h[23]|blockquote|ul|ol|li|br|hr|b|strong|i|em|u|a|img)\b/i.test(content)) {
+    return content.split("\n").map((line) => line.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")).join("<br>");
+  }
+  const parsed = new DOMParser().parseFromString(content, "text/html");
+  const allowed = new Set(["P", "DIV", "H2", "H3", "BLOCKQUOTE", "UL", "OL", "LI", "BR", "HR", "B", "STRONG", "I", "EM", "U", "A", "IMG"]);
+  const clean = (node) => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        if (!allowed.has(child.tagName)) {
+          child.replaceWith(...Array.from(child.childNodes));
+          continue;
+        }
+        const originalHref = child.getAttribute("href");
+        const originalSrc = child.getAttribute("src");
+        for (const attr of Array.from(child.attributes)) child.removeAttribute(attr.name);
+        if (child.tagName === "A") {
+          if (originalHref && /^https?:\/\//i.test(originalHref)) {
+            child.setAttribute("href", originalHref);
+            child.setAttribute("target", "_blank");
+            child.setAttribute("rel", "noopener noreferrer");
+          }
+        }
+        if (child.tagName === "IMG") {
+          if (originalSrc && /^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(originalSrc)) {
+            child.setAttribute("src", originalSrc);
+            child.setAttribute("alt", "Ảnh đính kèm");
+          } else {
+            child.remove();
+            continue;
+          }
+        }
+        clean(child);
+      }
+    }
+  };
+  clean(parsed.body);
+  return parsed.body.innerHTML;
+}
 
 export default function GroupPostModule() {
   const mediaInputRef = useRef(null);
-  const groupFileInputRef = useRef(null);
+  const editorRef = useRef(null);
+  const inlineImageRef = useRef(null);
 
   const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
-  const [accountSearch, setAccountSearch] = useState("");
   const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
   const [model, setModel] = useState("gpt-4o");
   const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [providerStatus, setProviderStatus] = useState({});
+  const [geminiModels, setGeminiModels] = useState(DEFAULT_GEMINI_MODELS);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsAction, setSettingsAction] = useState("");
+  const [settingsFeedback, setSettingsFeedback] = useState(null);
+  const [isSettingsLocked, setIsSettingsLocked] = useState(false);
   const [threads, setThreads] = useState("2");
   const [restMinutes, setRestMinutes] = useState("10");
   const [maxPosts, setMaxPosts] = useState("10");
   const [groupSource, setGroupSource] = useState("file");
-  const [groupFile, setGroupFile] = useState({
-    name: "danh_sach_nhom_tiem_nang_04.txt",
-    size: 24780,
-    status: "valid",
-    dedupCount: 5,
-    invalidCount: 4,
-    validGroupsCount: 68,
-  });
-  const [groupSearch, setGroupSearch] = useState("việc làm online, tuyển dụng ctv, kinh doanh online");
+  const [groupFile, setGroupFile] = useState(null);
+  const [customGroups, setCustomGroups] = useState([]);
+  const [groupSearch, setGroupSearch] = useState("việc làm online, tuyển dụng ctv");
   const [groupFilter, setGroupFilter] = useState("");
-  const [selectedGroupKeys, setSelectedGroupKeys] = useState(GROUPS.map((group) => group.key));
+  const [selectedGroupKeys, setSelectedGroupKeys] = useState([]);
   const [mediaFiles, setMediaFiles] = useState([]);
   const [minMedia, setMinMedia] = useState("1");
   const [maxMedia, setMaxMedia] = useState("4");
   const [prompt, setPrompt] = useState("");
   const [aiCount, setAiCount] = useState("5");
   const [posts, setPosts] = useState(Array.from({ length: 5 }, (_, index) => (index === 0 ? INITIAL_POST : "")));
+  // Giữ bản mới nhất để nạp đúng nội dung khi chuyển tab mà không làm mất caret lúc gõ.
+  const postsRef = useRef(posts);
+  postsRef.current = posts;
+  const linkRangeRef = useRef(null);
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkText, setLinkText] = useState("");
+  const [linkError, setLinkError] = useState("");
   const [activePost, setActivePost] = useState(0);
   const [avoidDuplicate, setAvoidDuplicate] = useState(false);
   const [shuffleContent, setShuffleContent] = useState(true);
@@ -96,8 +181,7 @@ export default function GroupPostModule() {
   const [scheduleTime, setScheduleTime] = useState("08:00");
   const [runState, setRunState] = useState("idle");
   const [progress, setProgress] = useState(0);
-  const [accountPage, setAccountPage] = useState(1);
-  const [accountPageSize, setAccountPageSize] = useState(10);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const loadAccounts = async () => {
     setAccountsLoading(true);
@@ -106,11 +190,16 @@ export default function GroupPostModule() {
       const rawList = Array.isArray(data) ? data : (data?.accounts || []);
       const rows = rawList.map(normalizeAccount);
       setAccounts(rows);
-      setSelectedAccountKeys(
-        rows.filter((account) => account.status === "LIVE").slice(0, 4).map((account) => account.key)
-      );
+      setSelectedAccountKeys((current) => {
+        const validKeys = new Set(rows.map((account) => account.key));
+        const filteredCurrent = current.filter((key) => validKeys.has(key));
+        if (filteredCurrent.length > 0) return filteredCurrent;
+        // Ưu tiên chọn tối đa 4 tài khoản không bị DIE
+        const preferredKeys = rows.filter((account) => account.status !== "DIE").slice(0, 4).map((account) => account.key);
+        return preferredKeys.length > 0 ? preferredKeys : rows.slice(0, 4).map((account) => account.key);
+      });
     } catch (err) {
-      console.error("Lỗi nạp tài khoản từ Module 2:", err);
+      console.warn("Lỗi nạp tài khoản từ Module 2:", err);
       setAccounts([]);
       setSelectedAccountKeys([]);
     } finally {
@@ -119,144 +208,293 @@ export default function GroupPostModule() {
   };
 
   useEffect(() => {
-    loadAccounts();
+    let cancelled = false;
+    Promise.resolve().then(loadAccounts);
+    Promise.resolve().then(getGroupSettings)
+      .then((data) => {
+        if (cancelled) return;
+        setModel(data.model);
+        if (data.model?.startsWith("gemini-")) {
+          setGeminiModels((current) => current.some((item) => item.id === data.model)
+            ? current
+            : [{ id: data.model, name: data.model }, ...current]);
+        }
+        setThreads(String(data.threads));
+        setRestMinutes(String(data.rest_minutes));
+        setMaxPosts(String(data.max_posts));
+        setProviderStatus(data.providers || {});
+        const activeProv = data.model?.startsWith("gemini-") || data.model === "gemini" ? "gemini" : "openai";
+        if (data.providers?.[activeProv]?.configured) {
+          setIsSettingsLocked(true);
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setSettingsFeedback({ type: "error", title: "Lỗi nạp cấu hình", message: error.message || "Không đọc được cấu hình local" });
+      })
+      .finally(() => {
+        if (!cancelled) setSettingsLoading(false);
+      });
+    return () => { cancelled = true; };
   }, []);
 
-  const filteredAccounts = useMemo(() => {
-    const query = accountSearch.trim().toLowerCase();
-    if (!query) return accounts;
-    return accounts.filter((account) => `${account.name} ${account.uid}`.toLowerCase().includes(query));
-  }, [accountSearch, accounts]);
-
-  const paginatedAccounts = useMemo(() => {
-    const start = (accountPage - 1) * accountPageSize;
-    return filteredAccounts.slice(start, start + accountPageSize);
-  }, [filteredAccounts, accountPage, accountPageSize]);
-
-  const filteredGroups = useMemo(() => {
-    const query = groupFilter.trim().toLowerCase();
-    if (!query) return GROUPS;
-    return GROUPS.filter((group) => `${group.name} ${group.url}`.toLowerCase().includes(query));
-  }, [groupFilter]);
+  const currentGroupPool = useMemo(() => {
+    if (groupSource === "file" && groupFile?.groups?.length) {
+      return groupFile.groups;
+    }
+    return customGroups || [];
+  }, [groupSource, groupFile, customGroups]);
 
   const selectedAccounts = accounts.filter((account) => selectedAccountKeys.includes(account.key));
-  const selectedGroups = GROUPS.filter((group) => selectedGroupKeys.includes(group.key));
-  const hasGroups = groupSource === "search" ? selectedGroups.length > 0 : Boolean(groupFile);
-  const activeGroupsCount = groupSource === "file" ? (groupFile?.validGroupsCount || 68) : selectedGroups.length;
+  const selectedGroups = currentGroupPool.filter((group) => selectedGroupKeys.includes(group.key));
+  const hasGroups = selectedGroups.length > 0 || (groupSource === "file" ? Boolean(groupFile) : false);
+  const activeGroupsCount = groupSource === "file" ? (groupFile?.validGroupsCount || selectedGroups.length) : selectedGroups.length;
   const generatedCount = posts.filter((post) => post.trim()).length;
   const totalPlanned = Math.min(Number(maxPosts) || 0, activeGroupsCount * Math.max(selectedAccounts.length, 1));
+  const activeProvider = model === "gemini" || model.startsWith("gemini-") ? "gemini" : "openai";
+  const savedKey = providerStatus[activeProvider];
+  const hasApiKey = Boolean(apiKey.trim() || savedKey?.configured);
 
-  const toggleAccount = (key, checked) => {
-    setSelectedAccountKeys((current) =>
-      checked ? [...new Set([...current, key])] : current.filter((item) => item !== key),
-    );
-  };
-
-  const toggleGroup = (key, checked) => {
-    setSelectedGroupKeys((current) =>
-      checked ? [...new Set([...current, key])] : current.filter((item) => item !== key),
-    );
-  };
-
-  const handleFiles = (files) => {
-    const nextFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/") || file.type.startsWith("video/"));
-    setMediaFiles(nextFiles);
-  };
-
-  const processGroupFile = (file) => {
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = String(event.target?.result || "");
-      const lines = text
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line && !line.startsWith("#"));
-      const unique = Array.from(new Set(lines));
-      const validLinks = unique.filter(
-        (line) => line.includes("facebook.com") || line.includes("fb.com") || /^\d+$/.test(line)
-      );
-      const invalidCount = unique.length - validLinks.length;
-      const dedupCount = lines.length - unique.length;
-
-      setGroupFile({
-        name: file.name,
-        size: file.size,
-        status: "valid",
-        dedupCount,
-        invalidCount,
-        validGroupsCount: validLinks.length || lines.length || 1,
-      });
-
-      if (validLinks.length > 0) {
-        const fileGroups = validLinks.map((url, idx) => ({
-          id: String(idx + 1).padStart(2, "0"),
-          key: `file_group_${idx}`,
-          name: `Nhóm file #${idx + 1}`,
-          url: url.replace(/^https?:\/\//, ""),
-          frequency: "15 bài",
-          members: "—",
-        }));
-        setSelectedGroupKeys(fileGroups.map((g) => g.key));
-      }
+  const normalizedSettings = () => {
+    const values = {
+      model,
+      api_key: apiKey.trim() || null,
+      threads: Number(threads),
+      rest_minutes: Number(restMinutes),
+      max_posts: Number(maxPosts),
     };
-    reader.readAsText(file);
+    if (!Number.isInteger(values.threads) || values.threads < 1 || values.threads > 10) {
+      throw new Error("Số luồng phải là số nguyên từ 1 đến 10");
+    }
+    if (!Number.isInteger(values.rest_minutes) || values.rest_minutes < 0 || values.rest_minutes > 1440) {
+      throw new Error("Thời gian nghỉ phải là số nguyên từ 0 đến 1440 phút");
+    }
+    if (!Number.isInteger(values.max_posts) || values.max_posts < 1 || values.max_posts > 1000) {
+      throw new Error("Max bài phải là số nguyên từ 1 đến 1000");
+    }
+    return values;
   };
 
-  const handleGroupFileChange = (event) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      processGroupFile(file);
+  const handleModelChange = (event) => {
+    setModel(event.target.value);
+    setApiKey("");
+    setShowApiKey(false);
+    setSettingsFeedback(null);
+  };
+
+  const handleSaveSettings = async (shouldScroll = true) => {
+    setSettingsAction("saving");
+    setSettingsFeedback(null);
+    try {
+      const result = await saveGroupSettings(normalizedSettings());
+      setProviderStatus(result.providers || {});
+      setApiKey("");
+      setShowApiKey(false);
+      setSettingsFeedback({ type: "success", message: "Đã lưu cấu hình trên máy này" });
+      toast.success("Đã lưu cấu hình trên máy này thành công.", "LƯU THÀNH CÔNG");
+      setIsSettingsLocked(true);
+
+      if (shouldScroll) {
+        setTimeout(() => {
+          const step3Element = document.getElementById("step-3-group-source");
+          if (step3Element) {
+            step3Element.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        }, 120);
+      }
+
+      return true;
+    } catch (error) {
+      setSettingsFeedback({ type: "error", title: "Lỗi lưu cấu hình", message: error.message || "Không thể lưu cấu hình" });
+      return false;
+    } finally {
+      setSettingsAction("");
     }
   };
 
-  const handleGroupFileDrop = (event) => {
-    event.preventDefault();
-    const file = event.dataTransfer.files?.[0];
-    if (file) {
-      processGroupFile(file);
+  const handleTestApi = async () => {
+    setSettingsAction("testing");
+    setSettingsFeedback(null);
+    try {
+      if (!hasApiKey) throw new Error("Hãy nhập API Key trước khi kiểm tra");
+      const result = await testGroupAiConnection({ model, api_key: apiKey.trim() || null });
+      setSettingsFeedback({ type: "success", message: result.message || "Kết nối API thành công" });
+      toast.success(result.message || "Kết nối API thành công!", "KIỂM TRA THÀNH CÔNG");
+    } catch (error) {
+      setSettingsFeedback({ type: "error", title: "Lỗi kiểm tra API", message: error.message || "API Key không hợp lệ" });
+    } finally {
+      setSettingsAction("");
     }
   };
 
-  const handleDownloadTemplate = () => {
-    const templateContent = [
-      "# Danh sách link nhóm Facebook mẫu (Mỗi dòng 1 link hoặc UID nhóm)",
-      "https://www.facebook.com/groups/vieclamonline2024",
-      "https://www.facebook.com/groups/muabanonline2024",
-      "https://www.facebook.com/groups/tuyendungctvhn",
-      "https://www.facebook.com/groups/congdongmarketingvn",
-      "https://www.facebook.com/groups/khoinghiepkinhdoanh2024",
-    ].join("\n");
-    const blob = new Blob([templateContent], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "mau_danh_sach_nhom.txt";
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleRemoveGroupFile = () => {
-    setGroupFile(null);
-    if (groupFileInputRef.current) {
-      groupFileInputRef.current.value = "";
+  const handleLoadGeminiModels = async () => {
+    setSettingsAction("loading-models");
+    setSettingsFeedback(null);
+    try {
+      if (!apiKey.trim() && !providerStatus.gemini?.configured) {
+        throw new Error("Hãy nhập Google AI Studio API Key trước khi tải model");
+      }
+      const result = await getGeminiModels({ api_key: apiKey.trim() || null });
+      setGeminiModels(result.models);
+      if (!result.models.some((item) => item.id === model)) {
+        setModel(result.models[0].id);
+      }
+      setSettingsFeedback({
+        type: "success",
+        message: `Đã tải ${result.count} model khả dụng từ Google AI Studio`,
+      });
+      toast.success(`Đã tải ${result.count} model khả dụng từ Google AI Studio.`, "TẢI MODEL THÀNH CÔNG");
+    } catch (error) {
+      setSettingsFeedback({
+        type: "error",
+        title: "Lỗi tải model Google",
+        message: error.message || "Không tải được danh sách model Google",
+      });
+    } finally {
+      setSettingsAction("");
     }
   };
 
-  const generatePosts = () => {
+  const handleFiles = (fileList) => {
+    const incoming = Array.from(fileList || []);
+    setMediaFiles((prev) => {
+      const merged = [...prev, ...incoming].slice(0, 10);
+      return merged;
+    });
+  };
+
+  const handleRemoveMedia = (indexToRemove) => {
+    setMediaFiles((prev) => prev.filter((_, idx) => idx !== indexToRemove));
+  };
+
+  const handleClearAllMedia = () => {
+    setMediaFiles([]);
+    if (mediaInputRef.current) {
+      mediaInputRef.current.value = "";
+    }
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes && bytes !== 0) return "";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const generatePosts = async () => {
     const amount = Math.max(1, Math.min(10, Number(aiCount) || 1));
-    const source = prompt.trim() || "Viết bài tuyển cộng tác viên làm online tại nhà, giọng văn thân thiện và rõ ràng.";
-    setPosts(
-      Array.from({ length: amount }, (_, index) =>
-        index === 0
-          ? `${source}\n\nCông việc linh hoạt, phù hợp cho người muốn tăng thêm thu nhập. Ai quan tâm hãy nhắn tin để nhận thông tin chi tiết nhé! 💙`
-          : `${source}\n\nPhiên bản ${index + 1}: Nội dung được điều chỉnh để hạn chế trùng lặp khi đăng vào nhiều nhóm.`,
-      ),
-    );
-    setActivePost(0);
+    if (!prompt.trim()) {
+      setSettingsFeedback({ type: "error", message: "Hãy nhập chủ đề/mô tả trước khi tạo nội dung" });
+      return;
+    }
+    if (!hasApiKey) {
+      setSettingsFeedback({ type: "error", message: "Chưa cấu hình API Key cho model đã chọn" });
+      return;
+    }
+    setIsGenerating(true);
+    setSettingsFeedback(null);
+    try {
+      const result = await generateGroupPosts({
+        model,
+        api_key: apiKey.trim() || null,
+        prompt: prompt.trim(),
+        count: amount,
+      });
+      setPosts(result.posts);
+      setActivePost(0);
+      if (editorRef.current) editorRef.current.innerHTML = editorHtml(result.posts[0] || "");
+      setSettingsFeedback({ type: "success", message: `Đã tạo ${result.count} bài bằng ${model}` });
+    } catch (error) {
+      setSettingsFeedback({ type: "error", message: error.message || "Không thể tạo nội dung AI" });
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const updateActivePost = (value) => {
     setPosts((current) => current.map((post, index) => (index === activePost ? value : post)));
+  };
+
+  // Nạp lại nội dung tương ứng khi người dùng chuyển tab bài viết.
+  useEffect(() => {
+    if (editorRef.current) editorRef.current.innerHTML = editorHtml(postsRef.current[activePost] || "");
+  }, [activePost]);
+
+  // Áp dụng định dạng tại vị trí con trỏ rồi lưu HTML vào bài hiện tại.
+  const runEditorCommand = (command, value = null) => {
+    editorRef.current?.focus();
+    document.execCommand(command, false, value);
+    if (editorRef.current) updateActivePost(editorRef.current.innerHTML);
+  };
+
+  // Lưu vùng chọn để gắn liên kết sau khi người dùng nhập URL trong modal.
+  const openLinkDialog = () => {
+    const selection = window.getSelection();
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    linkRangeRef.current = range && editorRef.current?.contains(range.commonAncestorContainer)
+      ? range.cloneRange()
+      : null;
+    setLinkText(selection?.toString() || "");
+    setLinkUrl("");
+    setLinkError("");
+    setLinkDialogOpen(true);
+  };
+
+  const applyLink = (event) => {
+    event.preventDefault();
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(linkUrl.trim());
+    } catch {
+      setLinkError("Nhập địa chỉ URL hợp lệ.");
+      return;
+    }
+    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+      setLinkError("Liên kết phải bắt đầu bằng http:// hoặc https://.");
+      return;
+    }
+
+    const editor = editorRef.current;
+    const range = linkRangeRef.current;
+    if (!editor) return;
+    editor.focus();
+    const selection = window.getSelection();
+    if (range && editor.contains(range.commonAncestorContainer)) {
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    if (range && !range.collapsed) {
+      document.execCommand("createLink", false, parsedUrl.href);
+    } else {
+      const anchor = document.createElement("a");
+      anchor.href = parsedUrl.href;
+      anchor.textContent = linkText.trim() || parsedUrl.href;
+      const insertionRange = range || document.createRange();
+      if (!range) {
+        insertionRange.selectNodeContents(editor);
+        insertionRange.collapse(false);
+      }
+      insertionRange.deleteContents();
+      insertionRange.insertNode(anchor);
+      insertionRange.setStartAfter(anchor);
+      insertionRange.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(insertionRange);
+    }
+    updateActivePost(editor.innerHTML);
+    setLinkDialogOpen(false);
+  };
+
+  // Đọc ảnh người dùng chọn thành data URL để chèn trực tiếp vào bài.
+  const insertInlineImage = (file) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      editorRef.current?.focus();
+      document.execCommand("insertImage", false, String(reader.result));
+      if (editorRef.current) updateActivePost(editorRef.current.innerHTML);
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleStart = async () => {
@@ -264,6 +502,23 @@ export default function GroupPostModule() {
     setRunState("starting");
     setProgress(4);
     try {
+      if (!isSettingsLocked) {
+        const saved = await handleSaveSettings(false);
+        if (!saved) throw new Error("Cấu hình chưa hợp lệ");
+      }
+      let savedMediaPaths = [];
+      if (mediaFiles.length > 0) {
+        setSettingsFeedback({ type: "info", message: `Đang tải lên ${mediaFiles.length} tệp media lên hệ thống...` });
+        const formData = new FormData();
+        mediaFiles.forEach((file) => {
+          formData.append("files", file);
+        });
+        const uploadRes = await uploadGroupMedia(formData);
+        if (uploadRes?.files?.length) {
+          savedMediaPaths = uploadRes.files.map((f) => f.path || f.relative_path);
+        }
+      }
+
       const activeGroups = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
       await runGroupCampaign({
         action_type: "POST",
@@ -271,7 +526,7 @@ export default function GroupPostModule() {
         account_uids: selectedAccounts.map((account) => account.uid),
         groups: activeGroups,
         posts,
-        media: mediaFiles.map((file) => file.name),
+        media: savedMediaPaths.length ? savedMediaPaths : mediaFiles.map((file) => file.name),
         settings: {
           model,
           threads: Number(threads),
@@ -279,6 +534,8 @@ export default function GroupPostModule() {
           max_posts: Number(maxPosts),
           delay_min: Number(delayMin),
           delay_max: Number(delayMax),
+          min_media: Number(minMedia) || 0,
+          max_media: Number(maxMedia) || 0,
           avoid_duplicate: avoidDuplicate,
           shuffle_content: shuffleContent,
           schedule_at: scheduleEnabled && scheduleDate ? `${scheduleDate}T${scheduleTime}` : null,
@@ -286,7 +543,9 @@ export default function GroupPostModule() {
       });
       setRunState("running");
       setProgress(12);
-    } catch {
+      toast.success("Đã khởi động chiến dịch đăng bài nhóm thành công!", "BẮT ĐẦU CHIẾN DỊCH");
+    } catch (error) {
+      setSettingsFeedback({ type: "error", message: error.message || "Không thể bắt đầu chiến dịch" });
       setRunState("idle");
       setProgress(0);
     }
@@ -309,545 +568,63 @@ export default function GroupPostModule() {
         </p>
       </div>
 
-      {/* Bước 1 */}
-      <SectionCard
-        number="1"
-        title="Chọn tài khoản / người dùng đi seeding"
-        description="Chọn danh sách tài khoản Facebook sẽ thực hiện đăng bài và tương tác"
-        aside={
-          <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
-            + Đã chọn {selectedAccounts.length}/{accounts.length} tài khoản
-          </span>
-        }
-      >
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[240px] flex-1">
-            <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-            <Input
-              value={accountSearch}
-              onChange={(event) => setAccountSearch(event.target.value)}
-              placeholder="Tìm kiếm UID, tên tài khoản Facebook..."
-              className="pl-9"
-            />
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setSelectedAccountKeys(filteredAccounts.map((account) => account.key))}
-          >
-            <Check className="mr-1.5 size-3.5" /> Chọn tất cả
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="size-8"
-            title="Đồng bộ danh sách từ Module 2"
-            onClick={() => {
-              setAccountSearch("");
-              loadAccounts();
-            }}
-          >
-            <RefreshCw className={`size-3.5 ${accountsLoading ? "animate-spin text-primary" : ""}`} />
-          </Button>
-        </div>
+      {/* Bước 1: Chọn tài khoản / người dùng đi seeding */}
+      <GroupAccountSection
+        accounts={accounts}
+        accountsLoading={accountsLoading}
+        selectedAccountKeys={selectedAccountKeys}
+        setSelectedAccountKeys={setSelectedAccountKeys}
+        onRefreshAccounts={loadAccounts}
+      />
 
-        <div className="overflow-hidden rounded-lg border border-slate-200">
-          <div className="max-h-[330px] overflow-auto">
-            <table className="w-full min-w-[650px] text-left text-[11px]">
-              <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500">
-                <tr className="border-b border-slate-200">
-                  <th className="w-12 px-4 py-3">
-                    <Checkbox
-                      checked={filteredAccounts.length > 0 && filteredAccounts.every((account) => selectedAccountKeys.includes(account.key))}
-                      onCheckedChange={(checked) => setSelectedAccountKeys(checked ? filteredAccounts.map((account) => account.key) : [])}
-                    />
-                  </th>
-                  <th className="px-3 py-3 font-semibold">Tài khoản Facebook</th>
-                  <th className="px-3 py-3 font-semibold">UID Facebook</th>
-                  <th className="px-3 py-3 font-semibold">Trạng thái</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {paginatedAccounts.map((account, index) => {
-                  const selected = selectedAccountKeys.includes(account.key);
-                  return (
-                    <tr key={account.key} className={selected ? "bg-blue-50/30" : "bg-white"}>
-                      <td className="px-4 py-2.5">
-                        <Checkbox checked={selected} onCheckedChange={(checked) => toggleAccount(account.key, checked)} />
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-2.5">
-                          <Avatar className="size-8 border-0">
-                            <AvatarFallback className={AVATAR_COLORS[index % AVATAR_COLORS.length]}>
-                              {initialsOf(account.name)}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div>
-                            <p className="font-semibold text-slate-700">{account.name}</p>
-                            <p className="text-[10px] text-slate-400">{account.friends || "Tài khoản Module 2"}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2.5 font-mono text-slate-500">{account.uid}</td>
-                      <td className="px-3 py-2.5">
-                        <span className={account.status === "LIVE" ? "font-semibold text-emerald-600" : "font-semibold text-red-500"}>
-                          ● {account.status === "LIVE" ? "Live" : account.status}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {!accountsLoading && !filteredAccounts.length && (
-                  <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center">
-                      <div className="flex flex-col items-center justify-center space-y-2">
-                        <Users className="size-8 text-slate-300" />
-                        <p className="text-xs font-semibold text-slate-600">
-                          {accounts.length === 0
-                            ? "Chưa có tài khoản Facebook nào trong Module 2 (Quản lý tài khoản)"
-                            : "Không tìm thấy tài khoản Facebook phù hợp"}
-                        </p>
-                        <p className="max-w-md text-[11px] text-slate-400">
-                          {accounts.length === 0
-                            ? "Vui lòng vào Module 2 để thêm hoặc import tài khoản Facebook, sau đó quay lại để chọn tài khoản đi seeding."
-                            : "Thử tìm kiếm với từ khóa khác hoặc bấm nút làm mới."}
-                        </p>
-                        {accounts.length === 0 ? (
-                          <div className="pt-2">
-                            <Link
-                              href="/accounts"
-                              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-primary/90"
-                            >
-                              <Plus className="size-3.5" /> Thêm tài khoản tại Module 2
-                            </Link>
-                          </div>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                )}
-                {accountsLoading && (
-                  <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center text-slate-400">
-                      Đang tải tài khoản từ Module 2...
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      {/* Bước 2: Cấu hình API & thông số chung */}
+      <GroupSettingsSection
+        model={model}
+        setModel={setModel}
+        apiKey={apiKey}
+        setApiKey={setApiKey}
+        showApiKey={showApiKey}
+        setShowApiKey={setShowApiKey}
+        threads={threads}
+        setThreads={setThreads}
+        restMinutes={restMinutes}
+        setRestMinutes={setRestMinutes}
+        maxPosts={maxPosts}
+        setMaxPosts={setMaxPosts}
+        geminiModels={geminiModels}
+        setGeminiModels={setGeminiModels}
+        providerStatus={providerStatus}
+        setProviderStatus={setProviderStatus}
+        settingsLoading={settingsLoading}
+        settingsAction={settingsAction}
+        setSettingsAction={setSettingsAction}
+        settingsFeedback={settingsFeedback}
+        setSettingsFeedback={setSettingsFeedback}
+        onSaveSettings={handleSaveSettings}
+        onTestApi={handleTestApi}
+        onLoadGeminiModels={handleLoadGeminiModels}
+        onModelChange={handleModelChange}
+        isLocked={isSettingsLocked}
+        setIsLocked={setIsSettingsLocked}
+      />
 
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-[10px] text-slate-400">
-          <div className="flex items-center gap-4">
-            <span>
-              Hiển thị <strong className="text-slate-600">{Math.min(filteredAccounts.length, accountPageSize)}/{accounts.length}</strong> tài khoản
-            </span>
-            <span>
-              Dòng / trang:{" "}
-              <select
-                value={accountPageSize}
-                onChange={(e) => {
-                  setAccountPageSize(Number(e.target.value));
-                  setAccountPage(1);
-                }}
-                className="ml-1 rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-600 outline-none"
-              >
-                <option value={10}>10</option>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-              </select>
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                setAccountPageSize(accounts.length || 10);
-                setAccountPage(1);
-              }}
-              className="font-semibold text-primary hover:underline"
-            >
-              Xem tất cả →
-            </button>
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              disabled={accountPage <= 1}
-              onClick={() => setAccountPage((p) => Math.max(1, p - 1))}
-              className="rounded border border-slate-200 p-1.5 text-slate-400 hover:bg-slate-50 disabled:opacity-40"
-            >
-              <ChevronLeft className="size-3" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setAccountPage(1)}
-              className={`size-7 rounded font-semibold transition-colors ${
-                accountPage === 1 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              1
-            </button>
-            {Math.ceil(filteredAccounts.length / accountPageSize) > 1 && (
-              <button
-                type="button"
-                onClick={() => setAccountPage(2)}
-                className={`size-7 rounded font-semibold transition-colors ${
-                  accountPage === 2 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                2
-              </button>
-            )}
-            {Math.ceil(filteredAccounts.length / accountPageSize) > 2 && (
-              <button
-                type="button"
-                onClick={() => setAccountPage(3)}
-                className={`size-7 rounded font-semibold transition-colors ${
-                  accountPage === 3 ? "bg-primary text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                3
-              </button>
-            )}
-            <button
-              type="button"
-              disabled={accountPage >= Math.ceil(filteredAccounts.length / accountPageSize)}
-              onClick={() => setAccountPage((p) => p + 1)}
-              className="rounded border border-slate-200 p-1.5 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
-            >
-              <ChevronRight className="size-3" />
-            </button>
-          </div>
-        </div>
-      </SectionCard>
-
-      {/* Bước 2 */}
-      <SectionCard number="2" title="Cấu hình API & thông số chung">
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Model AI" required>
-            <SelectField value={model} onChange={(event) => setModel(event.target.value)}>
-              <option value="gpt-4o">GPT-4o (OpenAI)</option>
-              <option value="gpt-4o-mini">GPT-4o mini (OpenAI)</option>
-              <option value="gemini">Gemini</option>
-            </SelectField>
-            <span className="block text-[10px] font-normal text-slate-400">Chọn mô hình AI tạo nội dung theo phong cách mong muốn.</span>
-          </Field>
-          <Field label="API Key" required>
-            <Input
-              type="password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder="sk-ant-api03-••••••••••••••••"
-              className="font-mono"
-            />
-            <span className="block text-[10px] font-normal text-slate-400">Nhập API Key hợp lệ của nhà cung cấp AI đã chọn.</span>
-          </Field>
-        </div>
-        <div className="mt-4 grid gap-4 sm:grid-cols-3">
-          <Field label="Luồng">
-            <Input type="number" min="1" value={threads} onChange={(event) => setThreads(event.target.value)} />
-          </Field>
-          <Field label="Nghỉ (phút)">
-            <Input type="number" min="0" value={restMinutes} onChange={(event) => setRestMinutes(event.target.value)} />
-          </Field>
-          <Field label="Max bài">
-            <Input type="number" min="1" value={maxPosts} onChange={(event) => setMaxPosts(event.target.value)} />
-          </Field>
-        </div>
-      </SectionCard>
-
-      {/* Bước 3 */}
-      <SectionCard number="3" title="Nguồn nhóm">
-        <div className="grid gap-3 md:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => setGroupSource("search")}
-            className={`rounded-xl border p-3.5 text-left transition-colors ${
-              groupSource === "search"
-                ? "border-2 border-primary bg-white shadow-xs"
-                : "border-slate-200 bg-white hover:border-slate-300"
-            }`}
-          >
-            <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
-              <span
-                className={`flex size-3.5 items-center justify-center rounded-full border ${
-                  groupSource === "search" ? "border-2 border-primary bg-white" : "border-slate-300 bg-white"
-                }`}
-              >
-                {groupSource === "search" && <span className="size-1.5 rounded-full bg-primary" />}
-              </span>
-              <Search className="size-4 text-slate-500" />
-              <span>Tìm kiếm nhóm theo từ khóa</span>
-            </div>
-            <p className="mt-1 pl-5.5 text-[10px] text-slate-400">
-              Hệ thống tự động tìm các nhóm liên quan đến từ khóa và đăng bài.
-            </p>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setGroupSource("file")}
-            className={`rounded-xl border p-3.5 text-left transition-colors ${
-              groupSource === "file"
-                ? "border-2 border-primary bg-white shadow-xs"
-                : "border-slate-200 bg-white hover:border-slate-300"
-            }`}
-          >
-            <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
-              <span
-                className={`flex size-3.5 items-center justify-center rounded-full border ${
-                  groupSource === "file" ? "border-2 border-primary bg-white" : "border-slate-300 bg-white"
-                }`}
-              >
-                {groupSource === "file" && <span className="size-1.5 rounded-full bg-primary" />}
-              </span>
-              <span className="flex size-5 items-center justify-center rounded bg-primary text-white">
-                <Link2 className="size-3" />
-              </span>
-              <span>Từ file link nhóm</span>
-            </div>
-            <p className="mt-1 pl-5.5 text-[10px] text-slate-400">
-              Đăng bài vào các nhóm trong file link. Hỗ trợ file .txt, .csv, .xlsx (mỗi dòng 1 link).
-            </p>
-          </button>
-        </div>
-
-        {groupSource === "file" ? (
-          <div className="mt-4 space-y-3">
-            <input
-              ref={groupFileInputRef}
-              type="file"
-              accept=".txt,.csv,.xlsx"
-              className="hidden"
-              onChange={handleGroupFileChange}
-            />
-
-            <div
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={handleGroupFileDrop}
-              className="flex flex-col items-center justify-center rounded-xl border border-dashed border-blue-200 bg-blue-50/20 px-4 py-8 text-center transition-colors hover:bg-blue-50/30"
-            >
-              <div className="mb-2.5 flex size-9 items-center justify-center rounded-full bg-blue-100 text-primary">
-                <FileUp className="size-4.5" />
-              </div>
-              <p className="text-xs font-medium text-slate-600">
-                Kéo thả file vào đây hoặc{" "}
-                <button
-                  type="button"
-                  onClick={() => groupFileInputRef.current?.click()}
-                  className="font-semibold text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary cursor-pointer"
-                >
-                  📂 chọn file từ máy tính
-                </button>
-              </p>
-              <button
-                type="button"
-                onClick={handleDownloadTemplate}
-                className="mt-2 inline-flex items-center gap-1.5 text-xs text-primary hover:underline cursor-pointer"
-              >
-                <Download className="size-3.5" /> Tải file mẫu (.txt / .csv)
-              </button>
-            </div>
-
-            {groupFile && (
-              <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-emerald-100 bg-emerald-50 text-emerald-600">
-                    <FileText className="size-5" />
-                  </div>
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs font-bold text-slate-800">{groupFile.name}</span>
-                      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
-                        <Check className="size-3 stroke-[2.5]" /> Đã kiểm tra hợp lệ
-                      </span>
-                      <span className="text-[11px] text-slate-400 font-mono">
-                        {groupFile.size ? `${(groupFile.size / 1024).toFixed(1)} KB` : "24.2 KB"}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 text-[11px] text-slate-400">
-                      Đã tự động lọc bỏ {groupFile.dedupCount ?? 5} nhóm trùng lặp &{" "}
-                      {groupFile.invalidCount ?? 4} link hỏng/lỗi
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 self-end sm:self-auto">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => groupFileInputRef.current?.click()}
-                    className="h-8 gap-1.5 border-slate-200 text-xs text-slate-600 hover:bg-slate-50"
-                  >
-                    <RotateCw className="size-3.5 text-slate-500" /> Tải lại
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleRemoveGroupFile}
-                    className="h-8 gap-1.5 border-slate-200 text-xs text-slate-600 hover:border-red-200 hover:bg-red-50 hover:text-red-600"
-                  >
-                    <Trash2 className="size-3.5 text-slate-400" /> Xóa file
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <>
-            <div className="mt-5 flex gap-2">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-                <Input
-                  value={groupSearch}
-                  onChange={(event) => setGroupSearch(event.target.value)}
-                  className="pl-9"
-                />
-              </div>
-              <Button type="button" size="sm">
-                <Search className="mr-1.5 size-3.5" /> Tìm kiếm nhóm
-              </Button>
-            </div>
-            <div className="mt-4 flex flex-wrap items-center gap-2 text-[10px]">
-              <span className="flex items-center gap-1 font-semibold text-slate-600">
-                <ListFilter className="size-3.5 text-primary" /> Bộ lọc nhóm:
-              </span>
-              <span className="rounded border border-slate-200 bg-white px-3 py-2 text-slate-500">
-                Thành viên từ: <strong className="ml-3 text-slate-700">50000</strong> TV
-              </span>
-              {["> 10K", "> 50K TV", "> 100K TV"].map((item) => (
-                <button
-                  type="button"
-                  key={item}
-                  className={`rounded border px-3 py-2 font-semibold ${
-                    item === "> 50K TV"
-                      ? "border-primary bg-primary text-white"
-                      : "border-slate-200 bg-white text-slate-500"
-                  }`}
-                >
-                  {item}
-                </button>
-              ))}
-              <SelectField className="h-8 w-auto">
-                <option>Tất cả loại nhóm</option>
-                <option>Nhóm công khai</option>
-              </SelectField>
-              <span className="rounded bg-blue-50 px-3 py-2 font-semibold text-primary">
-                <Check className="mr-1 inline size-3" />
-                Áp dụng bộ lọc
-              </span>
-              <button type="button" className="px-2 py-2 text-slate-500">
-                Đặt lại
-              </button>
-            </div>
-
-            <div className="mt-4 flex flex-wrap gap-2">
-              <div className="relative min-w-[220px] flex-1">
-                <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-                <Input
-                  value={groupFilter}
-                  onChange={(event) => setGroupFilter(event.target.value)}
-                  placeholder="Lọc nhóm trong kết quả..."
-                  className="h-8 pl-9"
-                />
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setSelectedGroupKeys(filteredGroups.map((group) => group.key))}
-              >
-                <Check className="mr-1 size-3.5" /> Chọn tất cả
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="border-red-200 text-red-500 hover:bg-red-50 hover:text-red-600"
-                onClick={() => setSelectedGroupKeys([])}
-              >
-                <Trash2 className="mr-1 size-3.5" /> Xóa nhóm đã chọn
-              </Button>
-              <Button type="button" size="sm" variant="outline" className="text-primary">
-                <Plus className="mr-1 size-3.5" /> Thêm nhóm thủ công
-              </Button>
-            </div>
-
-            <div className="my-4 flex items-center justify-between text-[10px]">
-              <span className="font-semibold text-emerald-600">● Tìm thấy 68 nhóm phù hợp</span>
-              <span className="text-slate-400">Đang hiển thị {filteredGroups.length} nhóm / trang</span>
-            </div>
-
-            <div className="overflow-hidden rounded-lg border border-slate-200">
-              <div className="overflow-auto">
-                <table className="w-full min-w-[760px] text-left text-[10px]">
-                  <thead className="bg-slate-50 text-slate-500">
-                    <tr className="border-b border-slate-200">
-                      <th className="w-10 px-3 py-3">
-                        <Checkbox
-                          checked={filteredGroups.every((group) => selectedGroupKeys.includes(group.key))}
-                          onCheckedChange={(checked) =>
-                            setSelectedGroupKeys(checked ? filteredGroups.map((group) => group.key) : [])
-                          }
-                        />
-                      </th>
-                      <th className="w-10 px-2 py-3 font-semibold">STT</th>
-                      <th className="px-3 py-3 font-semibold">Tên nhóm & Link UID</th>
-                      <th className="px-3 py-3 font-semibold">Tần suất/ngày</th>
-                      <th className="px-3 py-3 font-semibold">Thành viên</th>
-                      <th className="w-16 px-3 py-3 text-center font-semibold">Thao tác</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredGroups.map((group) => (
-                      <tr
-                        key={group.key}
-                        className={selectedGroupKeys.includes(group.key) ? "bg-blue-50/20" : "bg-white"}
-                      >
-                        <td className="px-3 py-2.5">
-                          <Checkbox
-                            checked={selectedGroupKeys.includes(group.key)}
-                            onCheckedChange={(checked) => toggleGroup(group.key, checked)}
-                          />
-                        </td>
-                        <td className="px-2 py-2.5 text-slate-400">{group.id}</td>
-                        <td className="px-3 py-2.5">
-                          <p className="font-semibold text-slate-700">{group.name}</p>
-                          <a
-                            href={`https://${group.url}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="mt-0.5 inline-flex items-center gap-1 text-primary"
-                          >
-                            {group.url}
-                            <ExternalLink className="size-2.5" />
-                          </a>
-                        </td>
-                        <td className="px-3 py-2.5 text-slate-500">{group.frequency}</td>
-                        <td className="px-3 py-2.5 font-semibold text-slate-600">
-                          {group.members} TV
-                        </td>
-                        <td className="px-3 py-2.5 text-center">
-                          <button
-                            type="button"
-                            onClick={() => toggleGroup(group.key, false)}
-                            className="text-slate-400 hover:text-red-500"
-                          >
-                            <Trash2 className="size-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </>
-        )}
-      </SectionCard>
+      {/* Bước 3: Nguồn nhóm */}
+      <div id="step-3-group-source" className="scroll-mt-6">
+        <GroupSourceSection
+          groupSource={groupSource}
+          setGroupSource={setGroupSource}
+          groupFile={groupFile}
+          setGroupFile={setGroupFile}
+          groupSearch={groupSearch}
+          setGroupSearch={setGroupSearch}
+          groupFilter={groupFilter}
+          setGroupFilter={setGroupFilter}
+          selectedGroupKeys={selectedGroupKeys}
+          setSelectedGroupKeys={setSelectedGroupKeys}
+          customGroups={customGroups}
+          setCustomGroups={setCustomGroups}
+        />
+      </div>
 
       {/* Bước 4 */}
       <SectionCard number="4" title="Chọn media (ảnh/video)">
@@ -880,6 +657,88 @@ export default function GroupPostModule() {
           </span>
           <span className="mt-1 text-[10px] text-slate-400">Hỗ trợ JPG, PNG (tối đa 10 ảnh)</span>
         </button>
+        {mediaFiles.length > 0 && (
+          <div className="mt-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-700">
+                Tệp đã chọn ({mediaFiles.length}/10):
+              </span>
+              <button
+                type="button"
+                onClick={handleClearAllMedia}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-500 transition-colors hover:text-rose-700 hover:underline"
+              >
+                <Trash2 className="size-3" />
+                Xoá tất cả
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
+              {mediaFiles.map((file, idx) => {
+                const isVideo = file.type?.startsWith("video/") || /\.(mp4|mov|avi|mkv)$/i.test(file.name || "");
+                const previewUrl = file instanceof File ? URL.createObjectURL(file) : null;
+
+                return (
+                  <div
+                    key={`${file.name}-${idx}`}
+                    className="group relative flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white p-1.5 shadow-xs transition-all hover:border-blue-300 hover:shadow-sm"
+                  >
+                    <div className="relative aspect-square w-full overflow-hidden rounded-md bg-slate-100">
+                      {isVideo && previewUrl ? (
+                        <div className="relative h-full w-full bg-black">
+                          <video
+                            src={previewUrl}
+                            muted
+                            playsInline
+                            controls
+                            className="h-full w-full object-cover"
+                            preload="metadata"
+                          />
+                        </div>
+                      ) : previewUrl ? (
+                        <img
+                          src={previewUrl}
+                          alt={file.name}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-slate-400">
+                          <ImageIcon className="size-6" />
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveMedia(idx);
+                        }}
+                        className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-rose-500/90 text-white opacity-90 shadow-sm transition-transform hover:scale-110 hover:bg-rose-600 sm:opacity-0 sm:group-hover:opacity-100"
+                        title="Xoá tệp này"
+                      >
+                        <X className="size-3" />
+                      </button>
+
+                      <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 py-0.5 text-[8px] font-medium text-white backdrop-blur-xs">
+                        #{idx + 1}
+                      </span>
+                    </div>
+
+                    <div className="mt-1.5 px-0.5">
+                      <p className="truncate text-[10px] font-medium text-slate-700" title={file.name}>
+                        {file.name}
+                      </p>
+                      <p className="text-[9px] text-slate-400">
+                        {formatFileSize(file.size)}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label="Tối thiểu media mỗi bài">
             <Input type="number" min="0" value={minMedia} onChange={(event) => setMinMedia(event.target.value)} />
@@ -913,8 +772,8 @@ export default function GroupPostModule() {
                 <option value="10">10</option>
               </SelectField>
             </Field>
-            <Button type="button" onClick={generatePosts} className="w-full">
-              <Sparkles className="mr-2 size-3.5" /> Tạo nội dung AI
+            <Button type="button" onClick={generatePosts} disabled={isGenerating} className="w-full">
+              <Sparkles className="mr-2 size-3.5" /> {isGenerating ? "Đang tạo nội dung..." : "Tạo nội dung AI"}
             </Button>
           </div>
         </div>
@@ -925,7 +784,7 @@ export default function GroupPostModule() {
               <p className="text-xs font-bold text-slate-800">Kết quả nội dung AI ({generatedCount} bài)</p>
               <p className="text-[10px] text-slate-400">Bạn có thể chỉnh sửa nội dung trước khi đăng</p>
             </div>
-            <Button type="button" size="sm" variant="outline" className="text-primary" onClick={generatePosts}>
+            <Button type="button" size="sm" variant="outline" className="text-primary" disabled={isGenerating} onClick={generatePosts}>
               <RotateCcw className="mr-1.5 size-3.5" /> Tạo lại
             </Button>
           </div>
@@ -945,20 +804,69 @@ export default function GroupPostModule() {
           </div>
           <p className="mb-2 mt-4 text-[11px] font-semibold text-slate-600">Nội dung bài {activePost + 1}</p>
           <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-            <div className="flex items-center gap-1 border-b border-slate-100 bg-slate-50 px-3 py-2 text-slate-500">
-              {[Bold, Italic, Underline, List, Link2, ImageIcon].map((Icon, index) => (
-                <button type="button" key={index} className="rounded p-1.5 hover:bg-white hover:text-primary">
-                  <Icon className="size-3.5" />
-                </button>
-              ))}
-            </div>
-            <Textarea
-              value={posts[activePost] || ""}
-              onChange={(event) => updateActivePost(event.target.value)}
-              maxLength={2000}
-              className="min-h-36 resize-none rounded-none border-0 shadow-none focus-visible:ring-0"
+            <input
+              ref={inlineImageRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(event) => {
+                insertInlineImage(event.target.files?.[0]);
+                event.target.value = "";
+              }}
             />
-            <div className="px-3 pb-2 text-right text-[9px] text-slate-400">{(posts[activePost] || "").length}/2000</div>
+            {/* Toolbar định dạng nội dung và chèn các thành phần vào vị trí con trỏ. */}
+            <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50 px-3 py-2 text-slate-500">
+              <EditorButton label="Hoàn tác" onClick={() => runEditorCommand("undo")}><Undo2 /></EditorButton>
+              <EditorButton label="Làm lại" onClick={() => runEditorCommand("redo")}><Redo2 /></EditorButton>
+              <span className="mx-1 h-5 border-l border-slate-200" />
+              <select
+                aria-label="Kiểu đoạn văn"
+                defaultValue="p"
+                onChange={(event) => runEditorCommand("formatBlock", event.target.value)}
+                className="h-7 rounded border-0 bg-transparent px-1 text-[11px] text-slate-600 outline-none hover:bg-white"
+              >
+                <option value="p">Đoạn văn</option>
+                <option value="h2">Tiêu đề 2</option>
+                <option value="h3">Tiêu đề 3</option>
+                <option value="blockquote">Trích dẫn</option>
+              </select>
+              <span className="mx-1 h-5 border-l border-slate-200" />
+              <EditorButton label="Đậm" onClick={() => runEditorCommand("bold")}><Bold /></EditorButton>
+              <EditorButton label="Nghiêng" onClick={() => runEditorCommand("italic")}><Italic /></EditorButton>
+              <EditorButton label="Gạch chân" onClick={() => runEditorCommand("underline")}><Underline /></EditorButton>
+              <span className="mx-1 h-5 border-l border-slate-200" />
+              <EditorButton label="Danh sách dấu đầu dòng" onClick={() => runEditorCommand("insertUnorderedList")}><List /></EditorButton>
+              <EditorButton label="Danh sách đánh số" onClick={() => runEditorCommand("insertOrderedList")}><ListOrdered /></EditorButton>
+              <EditorButton label="Đường phân cách" onClick={() => runEditorCommand("insertHorizontalRule")}><Minus /></EditorButton>
+              <span className="mx-1 h-5 border-l border-slate-200" />
+              <EditorButton label="Chèn liên kết" onClick={openLinkDialog}><Link2 /></EditorButton>
+              <EditorButton label="Chèn ảnh" onClick={() => inlineImageRef.current?.click()}><ImageIcon /></EditorButton>
+            </div>
+            {/* Vùng soạn thảo rich text; lưu HTML để giữ định dạng riêng từng bài. */}
+            <div
+              ref={editorRef}
+              contentEditable
+              suppressContentEditableWarning
+              role="textbox"
+              aria-label={`Nội dung bài ${activePost + 1}`}
+              aria-multiline="true"
+              onInput={(event) => updateActivePost(event.currentTarget.innerHTML)}
+              onClick={(event) => {
+                const anchor = event.target.closest("a[href]");
+                if (!anchor || !event.currentTarget.contains(anchor)) return;
+                event.preventDefault();
+                window.open(anchor.href, "_blank", "noopener,noreferrer");
+              }}
+              onPaste={(event) => {
+                event.preventDefault();
+                const text = event.clipboardData.getData("text/plain");
+                document.execCommand("insertText", false, text);
+              }}
+              className="min-h-24 max-h-80 overflow-y-auto px-3 py-3 text-xs leading-5 text-slate-800 outline-none [&_a]:cursor-pointer [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:text-base [&_h3]:font-semibold [&_img]:my-2 [&_img]:max-h-40 [&_img]:max-w-full [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:list-disc [&_ul]:pl-6"
+            />
+            <div className="px-3 pb-2 text-right text-[9px] text-slate-400">
+              {editorRef.current?.innerText?.length || 0}/2000
+            </div>
           </div>
         </div>
       </SectionCard>
@@ -1028,7 +936,7 @@ export default function GroupPostModule() {
           {[
             [<Users key="a" className="size-3.5" />, "Tài khoản", `${selectedAccounts.length} tài khoản đã chọn`],
             [<ListFilter key="b" className="size-3.5" />, "Hạn bài", `${maxPosts} bài`],
-            [<Sparkles key="c" className="size-3.5" />, "API Key", apiKey ? "Đã nhập" : "Chưa nhập"],
+            [<Sparkles key="c" className="size-3.5" />, "API Key", hasApiKey ? "Đã cấu hình" : "Chưa cấu hình"],
             [<Sparkles key="d" className="size-3.5" />, "Số bài AI", `${generatedCount} bài`],
             [<Search key="e" className="size-3.5" />, "Nguồn nhóm", groupSource === "search" ? "Tìm theo từ khóa" : "Từ file link nhóm"],
             [<ImageIcon key="f" className="size-3.5" />, "Min / Max media", `${minMedia} – ${maxMedia} ảnh`],
@@ -1048,7 +956,7 @@ export default function GroupPostModule() {
               </span>
               <strong
                 className={
-                  value === "Đã nhập" || (label === "Hẹn giờ" && scheduleEnabled)
+                  value === "Đã cấu hình" || (label === "Hẹn giờ" && scheduleEnabled)
                     ? "text-emerald-600"
                     : "text-slate-700"
                 }
@@ -1099,13 +1007,52 @@ export default function GroupPostModule() {
           <Button
             type="button"
             variant="success"
-            disabled={runState !== "idle" || !selectedAccounts.length || !hasGroups}
+            disabled={runState !== "idle" || !selectedAccounts.length || !hasGroups || !hasApiKey || settingsLoading}
             onClick={handleStart}
           >
             <Play className="mr-2 size-3.5 fill-current" /> BẮT ĐẦU ĐĂNG BÀI
           </Button>
         </div>
       </Card>
+      {linkDialogOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setLinkDialogOpen(false);
+          }}
+        >
+          <form onSubmit={applyLink} className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
+            <h2 className="text-sm font-bold text-slate-800">Chèn liên kết</h2>
+            <p className="mt-1 text-xs text-slate-500">Liên kết sẽ gắn vào phần văn bản đang chọn.</p>
+            <label className="mt-4 block text-xs font-medium text-slate-600">
+              Địa chỉ liên kết
+              <Input
+                autoFocus
+                type="text"
+                inputMode="url"
+                value={linkUrl}
+                onChange={(event) => { setLinkUrl(event.target.value); setLinkError(""); }}
+                placeholder="https://example.com"
+                className="mt-1.5"
+              />
+            </label>
+            <label className="mt-3 block text-xs font-medium text-slate-600">
+              Nội dung hiển thị
+              <Input
+                value={linkText}
+                onChange={(event) => setLinkText(event.target.value)}
+                placeholder="Nhập nội dung liên kết"
+                className="mt-1.5"
+              />
+            </label>
+            {linkError && <p role="alert" className="mt-2 text-xs text-red-600">{linkError}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setLinkDialogOpen(false)}>Hủy</Button>
+              <Button type="submit">Chèn liên kết</Button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,6 +1,9 @@
 export function getVpsBase(): string {
   const fromEnv = process.env.NEXT_PUBLIC_VPS_API_URL?.trim().replace(/\/$/, "");
   if (fromEnv) return fromEnv;
+  if (typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname)) {
+    return `${window.location.protocol}//${window.location.hostname}:28129`;
+  }
   return "http://127.0.0.1:28129";
 }
 
@@ -113,7 +116,7 @@ export function translateApiError(raw: any): string {
   if (/missing authorization/i.test(str)) {
     return "Phiên làm việc hết hạn hoặc thiếu thông tin xác thực.";
   }
-  if (/invalid.*token/i.test(str) || /expired token/i.test(str)) {
+  if (/token_invalid|invalid.*token/i.test(str) || /expired token/i.test(str)) {
     return "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.";
   }
   if (/admin only|unauthorized|forbidden/i.test(str)) {
@@ -122,9 +125,38 @@ export function translateApiError(raw: any): string {
   return str || "Lỗi xử lý yêu cầu";
 }
 
-async function fetchApi(path: string, options?: RequestInit) {
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public code: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+let refreshPromise: Promise<void> | null = null;
+
+function refreshAdminToken(): Promise<void> {
+  if (!refreshPromise) {
+    const previousToken = typeof window !== "undefined" ? localStorage.getItem("admin_token") : null;
+    refreshPromise = fetchApi("/api/v1/auth/refresh", {
+      method: "POST",
+      headers: { "X-Auth-Client": "admin" },
+    }, false).then((data) => {
+      if (typeof data.access_token !== "string" || !data.access_token) {
+        throw new ApiError("Máy chủ chưa hỗ trợ làm mới phiên admin. Vui lòng thử lại sau.", 502, "ADMIN_REFRESH_UNAVAILABLE");
+      }
+      // Do not restore a session after logout or overwrite a newer login in another tab.
+      if (typeof window !== "undefined" && localStorage.getItem("admin_token") === previousToken && previousToken) {
+        localStorage.setItem("admin_token", data.access_token);
+      }
+    }).finally(() => { refreshPromise = null; });
+  }
+  return refreshPromise;
+}
+
+async function fetchApi(path: string, options?: RequestInit, allowRefresh = true): Promise<any> {
   const token = typeof window !== "undefined" ? localStorage.getItem("admin_token") : null;
   const res = await fetch(`${getVpsBase()}${path}`, {
+    credentials: "include",
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -136,17 +168,31 @@ async function fetchApi(path: string, options?: RequestInit) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     const rawDetail = typeof err.detail === "string" ? err.detail : (Array.isArray(err.detail) ? err.detail.map((d: any) => d.msg).join(", ") : res.statusText);
     const translatedMsg = translateApiError(rawDetail || "Lỗi kết nối máy chủ");
+    const isLocked = /bị khóa|banned|locked|account_banned/i.test(rawDetail);
+    const isSessionRevoked = /session_revoked|revoked/i.test(rawDetail);
+    const skipRefresh = ["/admin/login", "/auth/refresh", "/auth/logout"].some((part) => path.includes(part));
+
+    // A late failure from an old session must not clear a newer login/refresh.
+    if (typeof window !== "undefined" && token && localStorage.getItem("admin_token") !== token &&
+        (res.status === 401 || isLocked || (res.status === 403 && path.includes("/auth/refresh")))) {
+      if (allowRefresh && !skipRefresh && localStorage.getItem("admin_token")) return fetchApi(path, options, false);
+      throw new ApiError("Phản hồi thuộc phiên đăng nhập cũ.", 409, "AUTH_SESSION_CHANGED");
+    }
+
+    if (res.status === 401 && allowRefresh && !skipRefresh && !isLocked && !isSessionRevoked &&
+        typeof window !== "undefined" && token && !sessionStorage.getItem("pending_logout_modal")) {
+      // A concurrent request may already have renewed this token.
+      if (localStorage.getItem("admin_token") === token) await refreshAdminToken();
+      return fetchApi(path, options, false);
+    }
 
     // Tự động đăng xuất bị động (passive logout) nếu tài khoản bị khóa hoặc phiên bị hủy
     if (typeof window !== "undefined" && !path.includes("/admin/login")) {
       // Nếu đang trong quá trình hiển thị popup thông báo logout (ví dụ sau khi đổi username),
       // tạm dừng tự động điều hướng để popup hiển thị trọn vẹn cho người dùng
       if (sessionStorage.getItem("pending_logout_modal")) {
-        throw new Error(translatedMsg);
+        throw new ApiError(translatedMsg, res.status, rawDetail);
       }
-
-      const isLocked = /bị khóa|banned|locked|account_banned/i.test(rawDetail) || /bị khóa|banned|locked/i.test(translatedMsg);
-      const isSessionRevoked = /session_revoked|revoked/i.test(rawDetail);
 
       if (isLocked) {
         localStorage.removeItem("admin_token");
@@ -154,17 +200,17 @@ async function fetchApi(path: string, options?: RequestInit) {
         window.location.href = `/login?error=${encodeURIComponent("Tài khoản của bạn đã bị khóa")}`;
       } else if (res.status === 401 && isSessionRevoked) {
         localStorage.removeItem("admin_token");
-        const msg = "Phiên làm việc đã hết hạn hoặc thông tin đăng nhập đã thay đổi. Vui lòng đăng nhập lại.";
+        const msg = "Phiên đã bị thu hồi: tài khoản đăng nhập ở phiên khác, đã đăng xuất hoặc thông tin bảo mật đã thay đổi. Vui lòng đăng nhập lại.";
         sessionStorage.setItem("auth_error", msg);
         window.location.href = `/login?error=${encodeURIComponent(msg)}`;
-      } else if (res.status === 401 && path.includes("/admin/me")) {
+      } else if ((res.status === 401 && !path.includes("/auth/logout")) || (res.status === 403 && path.includes("/auth/refresh"))) {
         localStorage.removeItem("admin_token");
         sessionStorage.setItem("auth_error", translatedMsg);
         window.location.href = `/login?error=${encodeURIComponent(translatedMsg)}`;
       }
     }
 
-    throw new Error(translatedMsg);
+    throw new ApiError(translatedMsg, res.status, rawDetail);
   }
   return res.json();
 }
@@ -216,8 +262,9 @@ export interface AdminMe {
 }
 
 export const api = {
-  adminLogin: (username: string, password: string) =>
-    fetchApi(`/api/v1/admin/login?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`, { method: "POST" }),
+  refreshAdmin: refreshAdminToken,
+  adminLogin: (username: string, password: string, rememberMe = true) =>
+    fetchApi("/api/v1/admin/login", { method: "POST", body: JSON.stringify({ username, password, remember_me: rememberMe }) }),
 
   getAdminMe: async (): Promise<AdminMe> => {
     const data: AdminMe = await fetchApi("/api/v1/admin/me");
@@ -294,7 +341,7 @@ export const api = {
     }),
 
   logout: (): Promise<{ success: boolean; message: string }> =>
-    fetchApi("/api/v1/auth/logout", { method: "POST" }),
+    fetchApi("/api/v1/auth/logout", { method: "POST", headers: { "X-Auth-Client": "admin" } }),
 
   getActivityLogs: (limit = 200): Promise<ActivityLog[]> =>
     fetchApi(`/api/v1/admin/activity-logs?limit=${limit}`),

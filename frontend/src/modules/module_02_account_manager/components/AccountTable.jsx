@@ -1,6 +1,8 @@
 "use client";
+import { isAccountBusy, PHASE_LABELS } from "../utils/account-realtime.mjs";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { attachDragSelection } from "../utils/drag-selection.mjs";
 import AccountDetailPanel from "./AccountDetailPanel";
 import CustomSelect from "@/components/ui/custom-select";
 import {
@@ -61,6 +63,23 @@ function ConcurrentThreadsIcon({ className = "w-4 h-4 shrink-0" }) {
 
 const avatarColors = ["#1877F2", "#0084FF", "#087A62", "#4F46E5", "#0284C7"];
 
+function AccountAvatar({ url, initial, color }) {
+  const [failedUrl, setFailedUrl] = useState(null);
+  return (
+    <span
+      className="w-7 h-7 rounded-full overflow-hidden flex items-center justify-center shrink-0 font-bold text-[11px] text-white shadow-2xs"
+      style={{ backgroundColor: color }}
+    >
+      {url && failedUrl !== url ? (
+        // The signed Facebook CDN URL is used directly without an image proxy.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img key={url} src={url} alt="" referrerPolicy="no-referrer"
+          className="w-full h-full object-cover" onError={() => setFailedUrl(url)} />
+      ) : initial}
+    </span>
+  );
+}
+
 const accountFilterOptions = [
   { value: "all", label: "Tất cả trạng thái TK" },
   { value: "live", label: "Live" },
@@ -118,28 +137,72 @@ function DetailRow({ account, isClosing, onClosed, onClose }) {
 
 export default function AccountTable({
   accounts = [],
+  tableRef, total = 0, hasMore = false, isLoadingMore = false, moreError, onLoadMore, onRetryMore,
+  searchTerm, setSearchTerm, accountFilter, setAccountFilter, loginFilter, setLoginFilter,
+  isLoading = false,
+  isRefreshing = false,
+  loadError = null,
+  onRetry,
   selectedUids = [],
   onToggleSelect,
   onSelectAll,
+  onSelectionChange,
   onEditAccount,
   onDeleteAccount,
   onOpenBrowser,
   onBulkDelete,
   onRefresh,
   isCheckingStatus = false,
-  openingBrowserUids,
+  accountProgress = {},
   effectiveThreads = 3,
   setCustomThreads,
   maxThreads = 10,
   handleLogin,
   isLoggingIn = false,
 }) {
-  const [searchTerm, setSearchTerm] = useState("");
-  const [accountFilter, setAccountFilter] = useState("all");
-  const [loginFilter, setLoginFilter] = useState("all");
   const [expandedUids, setExpandedUids] = useState(new Set());
   const [closingUids, setClosingUids] = useState(new Set());
   const [copiedUid, setCopiedUid] = useState(null);
+  const scrollRef = useRef(null);
+  const selectedUidsRef = useRef(selectedUids);
+  const sentinelRef = useRef(null);
+  const anchorRef = useRef(null);
+  const rowsRef = useRef(accounts);
+  useLayoutEffect(() => { rowsRef.current = accounts; }, [accounts]);
+  useLayoutEffect(() => {
+    if (!tableRef) return;
+    tableRef.current = {
+      reset: () => { scrollRef.current.scrollTop = 0; anchorRef.current = null; },
+      capture: () => {
+        const root = scrollRef.current;
+        const top = root.getBoundingClientRect().top + (root.querySelector("thead")?.offsetHeight || 0);
+        const row = [...root.querySelectorAll("[data-account-uid]")].find(row => row.getBoundingClientRect().bottom > top);
+        return row ? { uid: row.dataset.accountUid, id: rowsRef.current.find(account => account.uid === row.dataset.accountUid)?.id, offset: row.getBoundingClientRect().top - root.getBoundingClientRect().top } : null;
+      },
+      restore: anchor => { anchorRef.current = anchor; },
+    };
+    return () => { tableRef.current = null; };
+  }, [tableRef]);
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    if (!anchor) return;
+    anchorRef.current = null;
+    const root = scrollRef.current;
+    const row = [...root.querySelectorAll("[data-account-uid]")].find(row => row.dataset.accountUid === anchor.uid);
+    if (row) root.scrollTop += row.getBoundingClientRect().top - root.getBoundingClientRect().top - anchor.offset;
+  }, [accounts]);
+  useEffect(() => {
+    if (!hasMore || isLoading || isLoadingMore || moreError || !sentinelRef.current) return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) onLoadMore();
+    }, { root: scrollRef.current, rootMargin: "160px" });
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [hasMore, isLoading, isLoadingMore, moreError, onLoadMore]);
+
+  useEffect(() => {
+    selectedUidsRef.current = selectedUids;
+  }, [selectedUids]);
 
   const handleDetailClosed = (uid) => {
     setExpandedUids((prev) => {
@@ -174,24 +237,7 @@ export default function AccountTable({
     setTimeout(() => setCopiedUid(null), 1500);
   };
 
-  const filteredAccounts = useMemo(() => {
-    const search = searchTerm.trim().toLowerCase();
-    return accounts.filter((account) => {
-      const matchesSearch =
-        !search ||
-        account.uid.toLowerCase().includes(search) ||
-        account.profile_name?.toLowerCase().includes(search) ||
-        account.email?.toLowerCase().includes(search);
-      const normalizedStatus = account.status;
-      const loginStatus = account.login_status || "not_logged_in";
-      return (
-        matchesSearch &&
-        (accountFilter === "all" || normalizedStatus === accountFilter) &&
-        (loginFilter === "all" || loginStatus === loginFilter)
-      );
-    });
-  }, [accounts, searchTerm, accountFilter, loginFilter]);
-
+  const filteredAccounts = accounts;
   const handleSearchChange = (event) => {
     setSearchTerm(event.target.value);
   };
@@ -207,6 +253,21 @@ export default function AccountTable({
   const isAllSelected =
     filteredAccounts.length > 0 &&
     filteredAccounts.every((account) => selectedUids.includes(account.uid));
+
+
+  useEffect(() => {
+    if (!scrollRef.current || !onSelectionChange) return;
+    return attachDragSelection(scrollRef.current, {
+      getVisibleUids: () => rowsRef.current.map(row => row.uid),
+      getAvailableUids: () => rowsRef.current.map(row => row.uid),
+      getSelectedUids: () => selectedUidsRef.current,
+      onSelectionChange: (uids) => {
+        selectedUidsRef.current = uids;
+        onSelectionChange(uids);
+      },
+      disabled: isLoading || Boolean(loadError),
+    });
+  }, [onSelectionChange, isLoading, loadError]);
 
   return (
     <section className="w-full flex flex-col rounded-2xl bg-white border border-[#E2E8F0] shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] overflow-hidden select-none">
@@ -253,7 +314,7 @@ export default function AccountTable({
           <button
             type="button"
             onClick={onRefresh}
-            disabled={isCheckingStatus || selectedUids.length === 0}
+            disabled={isLoading || isCheckingStatus || selectedUids.length === 0}
             className="flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] hover:bg-[#D1FAE5] px-3.5 text-xs font-semibold text-[#047857] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
             title="Kiểm tra trạng thái Live/Die của các tài khoản đã chọn"
           >
@@ -268,7 +329,7 @@ export default function AccountTable({
           <button
             type="button"
             onClick={onBulkDelete}
-            disabled={selectedUids.length === 0}
+            disabled={isLoading || selectedUids.length === 0}
             className="flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#FECDD3] bg-[#FFF1F2] hover:bg-[#FFE4E6] px-3.5 text-xs font-semibold text-[#BE123C] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
             title="Xóa các tài khoản đã chọn"
           >
@@ -278,9 +339,10 @@ export default function AccountTable({
         </div>
       </div>
 
-      {/* 2. Section - Data Table (Khung cuộn tối đa 5 account như Figma) */}
-      <div className="w-full overflow-x-auto max-h-[330px] overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#4B8EFF]/60 hover:[&::-webkit-scrollbar-thumb]:bg-[#2563EB] [&::-webkit-scrollbar-thumb]:rounded-full">
-        <table className="w-full table-fixed border-collapse min-w-[960px]">
+      {/* 2. Section - Data Table (Khung cuộn hiển thị 10 dòng tài khoản) */}
+      <div className="relative w-full">
+        <div ref={scrollRef} className="w-full overflow-x-auto max-h-[605px] overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#4B8EFF]/60 hover:[&::-webkit-scrollbar-thumb]:bg-[#2563EB] [&::-webkit-scrollbar-thumb]:rounded-full">
+          <table aria-busy={isLoading || isRefreshing} className="w-full table-fixed border-collapse min-w-[960px]">
           <colgroup>
             <col className="w-[4%]" />
             <col className="w-[5%]" />
@@ -298,6 +360,8 @@ export default function AccountTable({
                 <input
                   type="checkbox"
                   checked={isAllSelected}
+                  disabled={isLoading || !!loadError}
+                  aria-label="Chọn tất cả tài khoản"
                   onChange={() => onSelectAll(filteredAccounts.map((a) => a.uid))}
                   className="h-4 w-4 rounded border-[#CBD5E1] accent-[#2563EB] cursor-pointer"
                 />
@@ -329,7 +393,39 @@ export default function AccountTable({
           </thead>
 
           <tbody className="divide-y divide-slate-100 text-xs">
-            {filteredAccounts.length === 0 ? (
+            {isLoading ? (
+              Array.from({ length: 5 }, (_, index) => (
+                <tr key={`skeleton-${index}`} aria-hidden="true" className="h-14 motion-safe:animate-pulse">
+                  <td className="px-1 py-2"><div className="mx-auto h-4 w-4 rounded bg-slate-200/70" /></td>
+                  <td className="px-1 py-2"><div className="mx-auto h-3 w-4 rounded bg-slate-200/70" /></td>
+                  <td className="px-2 py-2"><div className="h-3 w-4/5 rounded bg-slate-200/70" /></td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="h-7 w-7 shrink-0 rounded-full bg-slate-200/70" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-3 w-3/4 rounded bg-slate-200/70" />
+                        <div className="h-2 w-1/2 rounded bg-slate-100" />
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-2 py-2"><div className="mx-auto h-5 w-14 rounded-full bg-slate-200/70" /></td>
+                  <td className="px-2 py-2"><div className="mx-auto h-5 w-24 rounded-full bg-slate-200/70" /></td>
+                  <td className="px-2 py-2"><div className="mx-auto h-3 w-16 rounded bg-slate-200/70" /></td>
+                  <td className="px-2 py-2">
+                    <div className="flex justify-center gap-1.5">
+                      {Array.from({ length: 4 }, (_, action) => <div key={action} className="h-7 w-7 rounded-md bg-slate-200/70" />)}
+                    </div>
+                  </td>
+                </tr>
+              ))
+            ) : loadError ? (
+              <tr>
+                <td colSpan={8} className="px-4 py-14 text-center">
+                  <p role="alert" className="text-sm text-red-600">Không thể tải tài khoản: {loadError}</p>
+                  <button type="button" onClick={onRetry} className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">Thử lại</button>
+                </td>
+              </tr>
+            ) : filteredAccounts.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-4 py-14 text-center text-slate-500">
                   <div className="flex flex-col items-center justify-center gap-2 max-w-sm mx-auto">
@@ -351,12 +447,17 @@ export default function AccountTable({
               filteredAccounts.map((account, index) => {
                 const initial = (account.profile_name || account.uid).trim().charAt(0).toUpperCase();
                 const isSelected = selectedUids.includes(account.uid);
+                const progress = accountProgress[account.uid];
+                const isBusy = isAccountBusy(progress);
+                const progressLabel = progress ? PHASE_LABELS[progress.phase] || "Không xác định được kết quả" : "";
 
                 return (
                   <React.Fragment key={account.uid}>
                     <tr
+                      data-account-uid={account.uid}
+                      aria-selected={isSelected}
                       className={`h-14 transition-colors hover:bg-slate-50/80 ${
-                        isSelected ? "bg-[#EFF6FF]/40" : ""
+                        isSelected ? "bg-[#EFF6FF] hover:bg-[#EFF6FF]" : ""
                       }`}
                     >
                       {/* 1. Checkbox */}
@@ -401,12 +502,8 @@ export default function AccountTable({
                       {/* 4. Tên tài khoản */}
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <span
-                            className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 font-bold text-[11px] text-white shadow-2xs"
-                            style={{ backgroundColor: avatarColors[index % avatarColors.length] }}
-                          >
-                            {initial}
-                          </span>
+                          <AccountAvatar url={account.avatar_url} initial={initial}
+                            color={avatarColors[index % avatarColors.length]} />
                           <div className="flex flex-col justify-center min-w-0 overflow-hidden">
                             <span
                               className="font-medium text-[#1E293B] truncate text-xs sm:text-sm"
@@ -497,7 +594,7 @@ export default function AccountTable({
                             className={`flex items-center justify-center w-7 h-7 rounded-md transition-colors border cursor-pointer shadow-2xs ${
                               expandedUids.has(account.uid) && !closingUids.has(account.uid)
                                 ? "bg-blue-50 border-blue-200 text-[#2563EB]"
-                                : "border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#94A3B8] hover:text-[#2563EB]"
+                                : "border-[#E2E8F0] bg-white hover:bg-blue-50 hover:border-blue-200 text-[#94A3B8] hover:text-[#2563EB]"
                             }`}
                           >
                             {expandedUids.has(account.uid) && !closingUids.has(account.uid) ? (
@@ -512,7 +609,7 @@ export default function AccountTable({
                             type="button"
                             onClick={() => onEditAccount(account.uid)}
                             title="Chỉnh sửa thông tin"
-                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#94A3B8] hover:text-[#2563EB] transition-colors cursor-pointer shadow-2xs"
+                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-amber-50 hover:border-amber-200 text-[#94A3B8] hover:text-amber-600 transition-colors cursor-pointer shadow-2xs"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
@@ -521,16 +618,20 @@ export default function AccountTable({
                           <button
                             type="button"
                             onClick={() => onOpenBrowser(account.uid)}
-                            disabled={openingBrowserUids?.has(account.uid)}
-                            title={openingBrowserUids?.has(account.uid) ? "Đang mở Chrome..." : "Mở trình duyệt Profile Chrome"}
-                            className={`flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#94A3B8] hover:text-[#059669] transition-colors cursor-pointer shadow-2xs ${
-                              openingBrowserUids?.has(account.uid) ? "opacity-70 cursor-not-allowed text-[#2563EB]" : ""
+                            disabled={isBusy}
+                            aria-busy={isBusy}
+                            aria-label={`${isBusy ? progressLabel : "Mở trình duyệt Profile Chrome"} — ${account.uid}`}
+                            title={progressLabel ? `${progressLabel} — Mở trình duyệt Profile Chrome` : "Mở trình duyệt Profile Chrome"}
+                            className={`flex items-center justify-center w-7 h-7 rounded-md border transition-colors shadow-2xs ${
+                              isBusy
+                                ? "border-emerald-200 bg-emerald-50 text-[#059669] cursor-wait"
+                                : "border-[#E2E8F0] bg-white hover:bg-emerald-50 hover:border-emerald-200 text-[#94A3B8] hover:text-[#059669] cursor-pointer"
                             }`}
                           >
-                            {openingBrowserUids?.has(account.uid) ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin text-[#2563EB]" />
+                            {isBusy ? (
+                              <Loader2 aria-hidden="true" className="w-3.5 h-3.5 animate-spin" />
                             ) : (
-                              <Globe className="w-3.5 h-3.5" />
+                              <Globe aria-hidden="true" className="w-3.5 h-3.5" />
                             )}
                           </button>
 
@@ -539,7 +640,7 @@ export default function AccountTable({
                             type="button"
                             onClick={() => onDeleteAccount(account.uid)}
                             title="Xóa tài khoản"
-                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-red-50/50 hover:border-[#FECDD3] text-[#94A3B8] hover:text-[#BE123C] transition-colors cursor-pointer shadow-2xs"
+                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-rose-50 hover:border-rose-200 text-[#94A3B8] hover:text-[#BE123C] transition-colors cursor-pointer shadow-2xs"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -562,12 +663,17 @@ export default function AccountTable({
             )}
           </tbody>
         </table>
+        <div ref={sentinelRef} className="h-1" />
+        {isLoadingMore && <p role="status" className="p-3 text-center text-sm text-slate-500">Đang tải thêm...</p>}
+        {moreError && <div role="alert" className="p-3 text-center text-sm text-red-600">{moreError} <button type="button" onClick={onRetryMore} className="ml-2 text-blue-600 underline">Thử lại</button></div>}
       </div>
+    </div>
 
       {/* 3. Section - Bottom Action Bar / Concurrent Threads Controller */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 text-xs">
         {/* Cụm trái: Đã chọn X trên Y tài khoản */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="basis-full text-sm text-slate-600">Đã tải {accounts.length} / {total} tài khoản</span>
           <span className="w-2 h-2 rounded-full bg-[#2563EB]" />
           <span className="text-[#475569] text-sm">
             Đã chọn{" "}
@@ -575,11 +681,12 @@ export default function AccountTable({
               {selectedUids.length}
             </strong>{" "}
             trên{" "}
-            <strong className="text-[#1E293B] font-bold">
-              {accounts.length}
+            <strong aria-busy={isLoading} className="text-[#1E293B] font-bold">
+              {isLoading ? <span aria-hidden="true" className="inline-block h-4 w-8 align-middle rounded bg-slate-200/70 motion-safe:animate-pulse" /> : loadError ? "--" : accounts.length}
             </strong>{" "}
             tài khoản
           </span>
+          <span className="basis-full pl-4 text-[11px] text-[#64748B]">Kéo chuột để chọn dòng · Ctrl/Cmd + kéo để chọn thêm</span>
         </div>
 
         {/* Cụm phải: Luồng đồng thời & Nút Đăng nhập */}
@@ -592,6 +699,7 @@ export default function AccountTable({
             </span>
             <input
               type="number"
+              disabled={isLoading}
               min={1}
               max={maxThreads}
               value={effectiveThreads}
@@ -606,7 +714,7 @@ export default function AccountTable({
           <button
             type="button"
             onClick={handleLogin}
-            disabled={isLoggingIn || !selectedUids.length}
+            disabled={isLoading || isLoggingIn || !selectedUids.length}
             className="flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold text-xs sm:text-sm shadow-[0_2px_4px_-2px_rgba(59,130,246,0.25),0_4px_6px_-1px_rgba(59,130,246,0.25)] transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
           >
             {isLoggingIn ? (

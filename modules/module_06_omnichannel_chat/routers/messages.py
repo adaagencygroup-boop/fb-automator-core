@@ -1,10 +1,11 @@
 import os
 import shutil
 import time
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
+import math
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import text
-from typing import List, Optional
+from sqlalchemy import text, func, or_
+from typing import List, Optional, Union
 from modules.module_06_omnichannel_chat.database import get_db
 from modules.module_06_omnichannel_chat.schemas import (
     MessageOut,
@@ -13,6 +14,7 @@ from modules.module_06_omnichannel_chat.schemas import (
     TagUpdateInput,
     StarUpdateInput,
     SendAttachmentUrlInput,
+    PaginatedConversationsOut,
 )
 from modules.module_06_omnichannel_chat.repositories import (
     MessageRepository,
@@ -31,8 +33,8 @@ from urllib.parse import quote
 
 UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../uploads"))
 
-# Facebook phải TẢI ĐƯỢC file đính kèm từ Internet, nên URL gửi cho Graph API phải là địa chỉ công khai.
-# Chạy local thì đặt PUBLIC_MEDIA_BASE_URL trỏ tới tunnel (ngrok/cloudflared) của engine này.
+# Facebook phai TAI DUOC file dinh kem tu Internet, nen URL gui cho Graph API phai la dia chi cong khai.
+# Chay local thi dat PUBLIC_MEDIA_BASE_URL tro toi tunnel (ngrok/cloudflared) cua engine nay.
 PUBLIC_MEDIA_BASE_URL = os.getenv("PUBLIC_MEDIA_BASE_URL", "https://phanmemchat.online").rstrip("/")
 
 @router.get("/messages", response_model=List[MessageOut])
@@ -53,12 +55,19 @@ def get_messages(
     msgs = query.order_by(Message.created_at.asc()).all()
     return msgs
 
-@router.get("/conversations")
+@router.get("/conversations", response_model=Union[PaginatedConversationsOut, List[dict]])
 def get_conversations(
     request: Request,
     page_id: Optional[str] = None,
     facebook_user_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    page: Optional[int] = Query(None, ge=1, description="Số trang (1-indexed)"),
+    page_size: Optional[int] = Query(None, ge=1, le=100, description="Số lượng cuộc hội thoại trên 1 trang"),
+    limit: Optional[int] = Query(None, ge=1, le=100, description="Số lượng cuộc hội thoại cần lấy"),
+    offset: Optional[int] = Query(None, ge=0, description="Vị trí bắt đầu"),
+    search: Optional[str] = Query(None, description="Tìm kiếm theo tên khách, nội dung, hoặc PSID"),
+    filter: Optional[str] = Query(None, description="Lọc: all, unread, replied, unreplied, starred"),
+    sort: Optional[str] = Query("newest", description="Sắp xếp: newest hoặc oldest"),
     db: Session = Depends(get_db),
     current_user: Optional[SystemUser] = Depends(get_current_user_optional)
 ):
@@ -96,12 +105,60 @@ def get_conversations(
     page_dict = {str(r["page_id"]): r["page_name"] for r in page_rows}
     page_ids = list(page_dict.keys())
 
+    p_page = page if isinstance(page, int) else None
+    p_size = page_size if isinstance(page_size, int) else None
+    p_limit = limit if isinstance(limit, int) else None
+    p_offset = offset if isinstance(offset, int) else None
+    s_query = search.strip().lower() if isinstance(search, str) else ""
+    s_filter = filter.strip().lower() if isinstance(filter, str) else ""
+    s_sort = sort.strip().lower() if isinstance(sort, str) else "newest"
+
+    is_paginated = p_page is not None or p_limit is not None or p_offset is not None or p_size is not None
+    effective_page_size = p_size or p_limit or 20
+    effective_page = p_page or ((p_offset // effective_page_size) + 1 if p_offset is not None else 1)
+    effective_offset = p_offset if p_offset is not None else (effective_page - 1) * effective_page_size
+
     if not page_ids:
+        if is_paginated:
+            return PaginatedConversationsOut(items=[], conversations=[], total=0, page=1, page_size=effective_page_size, total_pages=0)
         return []
 
     # Priority 1: Check fast indexed v_conversations table
-    db_convs = db.query(Conversation).filter(Conversation.page_id.in_(page_ids)).order_by(Conversation.last_message_at.desc()).all()
-    if db_convs:
+    query = db.query(Conversation).filter(Conversation.page_id.in_(page_ids))
+
+    if s_query:
+        s = f"%{s_query}%"
+        query = query.filter(
+            or_(
+                func.lower(Conversation.customer_name).like(s),
+                Conversation.customer_psid.like(s),
+                func.lower(Conversation.last_message).like(s)
+            )
+        )
+
+    if s_filter == "unread":
+        query = query.filter(Conversation.is_read == False)
+    elif s_filter == "starred":
+        query = query.filter(Conversation.is_starred == True)
+    elif s_filter == "replied":
+        query = query.filter(Conversation.is_replied == True)
+    elif s_filter == "unreplied":
+        query = query.filter(Conversation.is_replied == False)
+
+    total_convs = query.count()
+    if total_convs > 0 or not s_query:
+        if s_sort == "oldest":
+            query = query.order_by(Conversation.last_message_at.asc())
+        else:
+            query = query.order_by(Conversation.last_message_at.desc())
+
+        if is_paginated:
+            db_convs = query.offset(effective_offset).limit(effective_page_size).all()
+            total_pages = math.ceil(total_convs / effective_page_size) if effective_page_size else 1
+        else:
+            db_convs = query.all()
+            total_pages = 1
+
         results = []
         for c in db_convs:
             p_name = page_dict.get(str(c.page_id)) or "Trang Facebook"
@@ -120,6 +177,16 @@ def get_conversations(
                 "tags": c.tags or "",
                 "created_at": c.last_message_at.isoformat() if c.last_message_at else ""
             })
+
+        if is_paginated:
+            return PaginatedConversationsOut(
+                items=results,
+                conversations=results,
+                total=total_convs,
+                page=effective_page,
+                page_size=effective_page_size,
+                total_pages=total_pages
+            )
         return results
 
     # Priority 2: Fallback to messages table
@@ -154,7 +221,21 @@ def get_conversations(
             if msg.direction == "outbound":
                 conv_map[key]["is_replied"] = True
 
-    sorted_convs = sorted(list(conv_map.values()), key=lambda c: c["timestamp"] or 0, reverse=True)
+    sorted_convs = sorted(list(conv_map.values()), key=lambda c: c["timestamp"] or 0, reverse=(sort != "oldest"))
+    total_convs = len(sorted_convs)
+
+    if is_paginated:
+        sliced = sorted_convs[effective_offset : effective_offset + effective_page_size]
+        total_pages = math.ceil(total_convs / effective_page_size) if effective_page_size else 1
+        return PaginatedConversationsOut(
+            items=sliced,
+            conversations=sliced,
+            total=total_convs,
+            page=effective_page,
+            page_size=effective_page_size,
+            total_pages=total_pages
+        )
+
     return sorted_convs
 
 @router.put("/conversations/{page_id}/{sender_id}/read")
@@ -241,7 +322,7 @@ async def send_attachment_file(
     with open(filepath, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    local_file_url = f"/uploads/{quote(filename)}"  # tên file có dấu cách/ngoặc -> phải encode
+    local_file_url = f"/uploads/{quote(filename)}"  # ten file co dau cach/ngoac -> phai encode
     public_url = f"{PUBLIC_MEDIA_BASE_URL}{local_file_url}"
 
     try:
@@ -268,7 +349,7 @@ async def upload_media(
     with open(filepath, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    local_file_url = f"/uploads/{quote(filename)}"  # tên file có dấu cách/ngoặc -> phải encode
+    local_file_url = f"/uploads/{quote(filename)}"  # ten file co dau cach/ngoac -> phai encode
     public_url = f"{PUBLIC_MEDIA_BASE_URL}{local_file_url}"
 
     return {"success": True, "url": public_url}

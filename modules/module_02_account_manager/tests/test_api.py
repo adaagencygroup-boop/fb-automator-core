@@ -41,7 +41,10 @@ class TestAccountAPI(unittest.TestCase):
 
     def test_import_aliases_details_and_owner_isolation(self):
         response = self.client.post("/api/accounts/import", json={"owner_username": "alice", "accounts": [{"uid": "123", "password": "secret", "twofa_secret": "otp", "tokenhotmail": "mailtoken", "clientId": "client"}]})
-        self.assertEqual(response.json(), {"imported": 1, "errors": [], "checking": 0})
+        res_data = response.json()
+        self.assertEqual(res_data["imported"], 1)
+        self.assertEqual(res_data["errors"], [])
+        self.assertEqual(res_data["checking"], 0)
         self.assertEqual(self.save(owner="bob", password="other").status_code, 200)
         self.assertEqual(self.client.get("/api/accounts").json(), [])
         alice = self.client.get("/api/accounts", headers={"X-Owner-Username": "alice"}).json()[0]
@@ -175,11 +178,18 @@ class TestAccountAPI(unittest.TestCase):
         with patch(P + ".services.browser_service.runtime.submit") as submit:
             resp_browser = self.client.post("/tasks/open-browser", json={"uid": "999", "owner_username": "charlie"})
             self.assertEqual(resp_browser.status_code, 200)
-            self.assertEqual(resp_browser.json(), {"started": True, "uid": "999"})
+            self.assertEqual({k: resp_browser.json()[k] for k in ("started", "uid")}, {"started": True, "uid": "999"})
+            self.assertTrue(resp_browser.json()["operation_id"])
 
         # Test /tasks/login alias
         with patch(P + ".services.login_service.login_batch") as login_mock:
             resp_login = self.client.post("/tasks/login", json={"uids": ["999"], "threads": 2, "owner_username": "charlie"})
             self.assertEqual(resp_login.status_code, 200)
-            self.assertEqual(resp_login.json(), {"started": True, "count": 1})
+            self.assertEqual({k: resp_login.json()[k] for k in ("started", "count")}, {"started": True, "count": 1})
+            operation_id = resp_login.json()["operation_id"]
+            progress = self.client.get(f"/api/accounts/operations/{operation_id}", headers={"X-Owner-Username": "charlie"})
+            self.assertEqual(progress.status_code, 200)
+            self.assertEqual(progress.json()["accounts"]["999"]["phase"], "queued")
+            other = self.client.get(f"/api/accounts/operations/{operation_id}", headers={"X-Owner-Username": "other"})
+            self.assertEqual(other.status_code, 404)
 

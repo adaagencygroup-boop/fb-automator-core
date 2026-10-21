@@ -74,6 +74,15 @@ def post_to_facebook_page(page_name, page_id, page_token, message, image_url, fb
 
 def upload_reel_to_facebook(page_name, page_id, page_token, video_path, message, fb_version, log_func, save_posted_func):
     try:
+        if not video_path or not os.path.exists(video_path):
+            log_func(f"[ERROR] Không tìm thấy file video: {video_path}")
+            return False
+
+        file_size = os.path.getsize(video_path)
+        if file_size < 10240:
+            log_func(f"[ERROR] File video '{os.path.basename(video_path)}' không hợp lệ hoặc quá nhỏ ({file_size} bytes < 10KB). Facebook sẽ từ chối xử lý video này. Vui lòng bổ sung file video thật.")
+            return False
+
         log_func(f"[*] [REELS] Bắt đầu khởi tạo phiên tải lên Reels cho {page_name}...")
         # Bước 1: Khởi tạo
         url = f"https://graph.facebook.com/{fb_version}/{page_id}/video_reels"
@@ -124,9 +133,10 @@ def upload_reel_to_facebook(page_name, page_id, page_token, video_path, message,
         res3 = response3.json()
         
         if res3.get('success') or 'video_id' in res3:
-            log_func(f"[SUCCESS] Đã đăng Reels thành công lên Page: {page_name}! Video ID: {video_id}")
+            reel_url = f"https://www.facebook.com/reel/{video_id}"
+            log_func(f"[SUCCESS] Đã đăng Reels thành công lên Page: {page_name}! Link bài viết: {reel_url}")
             save_posted_func(page_name, video_id)
-            return True
+            return reel_url
         else:
             error_msg = res3.get('error', {}).get('message', 'Không rõ nguyên nhân')
             log_func(f"[ERROR] Hoàn tất Reels thất bại: {error_msg}")

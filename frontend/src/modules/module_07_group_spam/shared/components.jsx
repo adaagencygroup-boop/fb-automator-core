@@ -25,21 +25,23 @@ export function SectionCard({ number, title, description, aside, children, class
 
 export function Field({ label, required = false, children, className = "" }) {
   return (
-    <label className={`block space-y-1.5 ${className}`}>
-      <span className="text-[11px] font-semibold text-slate-600">
+    <div className={`block space-y-1.5 ${className}`}>
+      <span className="block text-[11px] font-semibold text-slate-600">
         {label} {required && <span className="text-slate-400">(bắt buộc)</span>}
       </span>
       {children}
-    </label>
+    </div>
   );
 }
 
-export function SelectField({ value, onChange, children, className = "" }) {
+export function SelectField({ value, onChange, children, className = "", disabled = false, ...props }) {
   return (
     <select
       value={value}
       onChange={onChange}
-      className={`h-9 w-full rounded-md border border-input bg-white px-3 text-xs text-slate-700 shadow-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 ${className}`}
+      disabled={disabled}
+      className={`h-9 w-full rounded-md border border-input bg-white px-3 text-xs text-slate-700 shadow-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 disabled:opacity-75 ${className}`}
+      {...props}
     >
       {children}
     </select>
@@ -74,21 +76,10 @@ export function normalizeAccount(account, index) {
     account.name ||
     (account.uid ? `Nick FB (${account.uid})` : `Tài khoản ${index + 1}`);
 
-  const rawStatus = String(account.status || "").toUpperCase();
-  const status = rawStatus === "LIVE" ? "LIVE" : rawStatus === "DIE" ? "DIE" : rawStatus ? rawStatus : "LIVE";
+  const rawStatus = account.status ? String(account.status).toUpperCase() : null;
+  const status = rawStatus === "LIVE" ? "LIVE" : rawStatus === "DIE" ? "DIE" : rawStatus || "UNKNOWN";
 
-  const loginStatus = String(account.login_status || "").toLowerCase();
-  const subtitle = account.friends
-    ? account.friends
-    : account.friends_count
-      ? `${account.friends_count} bạn bè`
-      : account.proxy
-        ? `Proxy: ${account.proxy}`
-        : loginStatus === "logged_in"
-          ? "Đã đăng nhập"
-          : loginStatus === "failed"
-            ? "Lỗi đăng nhập"
-            : "Tài khoản Module 2";
+  const subtitle = account.email || account.mail || "Chưa có email";
 
   return {
     ...account,
@@ -97,6 +88,6 @@ export function normalizeAccount(account, index) {
     name,
     uid: String(account.uid || "—"),
     status,
-    friends: subtitle,
+    email: subtitle,
   };
 }

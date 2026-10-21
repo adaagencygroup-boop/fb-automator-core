@@ -56,6 +56,19 @@ def _migrate_credentials(conn, engine):
             conn.execute(text(f"UPDATE accounts SET {', '.join(assignments)} WHERE id=:id"), params)
     conn.execute(text("INSERT INTO account_plugin_schema(version) VALUES (2) ON CONFLICT DO NOTHING"))
 
+def _migrate_unowned_accounts(conn, engine):
+    conn.execute(text("""
+        DELETE FROM accounts 
+        WHERE (user_id IS NULL OR user_id = '' OR user_id = 'admin')
+        AND uid IN (SELECT a2.uid FROM accounts a2 WHERE a2.user_id = '1')
+    """))
+    conn.execute(text("""
+        UPDATE accounts 
+        SET user_id = '1' 
+        WHERE (user_id IS NULL OR user_id = '' OR user_id = 'admin')
+    """))
+    conn.execute(text("INSERT INTO account_plugin_schema(version) VALUES (3) ON CONFLICT DO NOTHING"))
+
 def migrate(engine):
     with engine.begin() as conn:
         if engine.dialect.name == "postgresql":
@@ -66,3 +79,10 @@ def migrate(engine):
             _ensure_schema_v1(conn, engine)
         if 2 not in versions:
             _migrate_credentials(conn, engine)
+        if 3 not in versions:
+            _migrate_unowned_accounts(conn, engine)
+        if 4 not in versions:
+            columns = {column["name"] for column in inspect(conn).get_columns("accounts")}
+            if "avatar_url" not in columns:
+                conn.execute(text("ALTER TABLE accounts ADD COLUMN avatar_url TEXT"))
+            conn.execute(text("INSERT INTO account_plugin_schema(version) VALUES (4) ON CONFLICT DO NOTHING"))

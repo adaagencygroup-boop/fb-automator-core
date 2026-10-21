@@ -29,13 +29,13 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from core.browser import ProxyError, parse_proxy
 from modules.module_03_acc_farm import adapters, repository
 from modules.module_03_acc_farm.browser.login_flow import CHECKPOINT_HEAVY, HEAVY_CHECKPOINT_PREFIX
-from modules.module_03_acc_farm.browser.proxy_bridge import ProxyError, parse_proxy
 from modules.module_03_acc_farm.farming.flow import (
     FarmAccountDead,
     FarmControl,
@@ -302,13 +302,11 @@ def _build_plan(cfg: FarmScenarioConfig) -> List[tuple]:
     return steps
 
 
-def _uid_has_other_browser(uid: str) -> bool:
+def _uid_has_other_browser(uid: str, owner: Optional[str]) -> bool:
     """Nick có trình duyệt khác đang mở thật không (cửa sổ đã bị đóng tay thì gỡ khỏi danh sách)."""
-    from modules.module_03_acc_farm.browser.manager import _active_drivers, _active_drivers_lock, unregister_active_driver
-    with _active_drivers_lock:
-        drivers = [d for d, info in _active_drivers.items() if isinstance(info, dict) and info.get("uid") == str(uid)]
+    from core.browser import get_active_drivers, unregister_active_driver
     alive = False
-    for d in drivers:
+    for d in get_active_drivers(uid, owner):
         try:
             if d.window_handles:
                 alive = True
@@ -421,9 +419,43 @@ def _finalize(uid: str, cfg: FarmScenarioConfig, owner: Optional[str]):
 
 # ─────────────────────── WORKER ────────────────────────────
 
+# Tương tác nuôi nick: không để Chrome hãm timer / tạm dừng video khi cửa sổ bị che hoặc thu nhỏ
+FARM_CHROME_ARGUMENTS = [
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--disable-backgrounding-occluded-windows",
+    "--autoplay-policy=no-user-gesture-required",
+]
+
+# Page Visibility luôn báo đang hiển thị và chặn sự kiện visibilitychange tới script của trang
+FARM_VISIBILITY_JS = """
+    Object.defineProperty(document, 'hidden', { get: () => false });
+    Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+    const stopVisibility = (e) => e.stopImmediatePropagation();
+    window.addEventListener('visibilitychange', stopVisibility, true);
+    document.addEventListener('visibilitychange', stopVisibility, true);
+"""
+
+
+def _save_session_cookie(uid: str, owner: Optional[str], driver):
+    """Chrome của nick bị đóng để mở lại: lưu cookie còn sống trước khi đóng."""
+    from core.browser import extract_cookies_as_string
+
+    cookies = extract_cookies_as_string(driver)
+    if cookies and "c_user=" in cookies:
+        adapters.save_cookie(uid, cookies, owner=owner)
+        adapters.set_login_status(uid, "logged_in", owner=owner)
+
+
 def _farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[str]):
     """Chạy toàn bộ kịch bản đã tick cho 1 nick trên cùng 1 tab Chrome."""
-    from modules.module_03_acc_farm.browser.manager import create_driver, extract_cookies_as_string, get_profile_lock
+    # owner = người đã bấm Kích hoạt: mọi lệnh đọc / ghi tài khoản trong luồng này (kể cả login_flow) dùng owner đó
+    with adapters.owner_scope(owner):
+        _run_farm_worker(uid, slot, cfg, owner)
+
+
+def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[str]):
+    from core.browser import extract_cookies_as_string, get_profile_lock, open_browser
     from modules.module_03_acc_farm.browser.login_flow import ensure_logged_in, is_checkpoint_url
 
     ctl = _control
@@ -436,13 +468,13 @@ def _farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[s
 
     _set_account(uid, status="RUNNING", thread=slot, activity="Đang khởi động trình duyệt", started_at=time.time())
 
-    if _uid_has_other_browser(uid):
+    if _uid_has_other_browser(uid, owner):
         msg = "Nick đang mở trình duyệt ở tiến trình khác, bỏ qua lượt này"
         _emit("error", f"{msg}: {uid}", uid, slot)
         _set_account(uid, status="FAILED", error=msg, activity=msg)
         return
 
-    profile_lock = get_profile_lock(uid)
+    profile_lock = get_profile_lock(uid, owner)
     if not profile_lock.acquire(timeout=5):
         msg = "Nick đang bận ở tiến trình khác, bỏ qua lượt này"
         _emit("error", f"{msg}: {uid}", uid, slot)
@@ -454,6 +486,8 @@ def _farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[s
     error_msg = None
     save_cookie = True
     cookie_saved = False
+    # Bị chặn kết bạn / tham gia nhóm vẫn tính Hoàn thành: chỉ ghi ở ô hành động và log
+    blocked_labels = []
 
     try:
         account = adapters.get_account(uid)
@@ -469,7 +503,10 @@ def _farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[s
         pop_notices()
         pop_light_checkpoint()
         # Nick có proxy mà proxy chết thì dừng nick, không chạy bằng IP thật của máy
-        driver = create_driver(uid, proxy=proxy, scope="farm", allow_direct_fallback=False)
+        driver = open_browser(uid, owner=owner, proxy=proxy, scope="farm",
+                              allow_direct_fallback=False,
+                              extra_arguments=FARM_CHROME_ARGUMENTS, extra_init_scripts=[FARM_VISIBILITY_JS],
+                              on_before_close=lambda d, _uid=uid, _owner=owner: _save_session_cookie(_uid, _owner, d))
         mode = getattr(driver, "proxy_mode", "none")
         _hist(uid, proxy_mode=mode, egress_ip=getattr(driver, "proxy_egress_ip", None),
               fingerprint_mode=getattr(driver, "fingerprint_mode", None))
@@ -565,7 +602,7 @@ def _farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[s
             level = {"SUCCESS": "success", "BLOCKED": "warning", "SKIPPED": "warning"}.get(result["status"], "error")
             _emit(level, f"{label}: {result.get('details', '')}", uid, slot)
             if result["status"] == "BLOCKED":
-                final_status = "BLOCKED"
+                blocked_labels.append(label)
 
     except FarmStopped:
         final_status = "STOPPED"
@@ -606,10 +643,10 @@ def _farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[s
         profile_lock.release()
         _hist(uid, cookie_saved=cookie_saved, light_checkpoint=pop_light_checkpoint())
 
+    blocked_note = f" (Facebook chặn: {', '.join(blocked_labels)})" if blocked_labels else ""
     summary = {
-        "COMPLETED": ("success", "Hoàn thành toàn bộ kịch bản, "
+        "COMPLETED": ("success", f"Hoàn thành toàn bộ kịch bản{blocked_note}, "
                       + ("đã lưu cookie mới và đóng trình duyệt" if cookie_saved else "đóng trình duyệt (không có cookie mới để lưu)")),
-        "BLOCKED": ("warning", "Hoàn thành nhưng có tính năng bị Facebook chặn"),
         "STOPPED": ("warning", "Đã dừng theo yêu cầu"),
         "DIE": ("error", f"Tài khoản cần xác minh / mất phiên: {error_msg}"),
         "FAILED": ("error", f"Lỗi hệ thống: {error_msg}"),
@@ -621,12 +658,9 @@ def _farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[s
 # ─────────────────────── VÒNG ĐỜI ENGINE ────────────────────────────
 
 async def on_startup(ws_manager):
-    """engine.py gọi trong lifespan sau init_database(): log, DB local, thread ghi, dọn lượt treo của máy này."""
-    from modules.module_03_acc_farm._temp.local_db import init_local_db
-
+    """engine.py gọi trong lifespan sau init_database(): log, thread ghi, dọn lượt treo của máy này."""
     adapters.setup_logging()
     adapters.register_log_channel(ws_manager, asyncio.get_running_loop())
-    await asyncio.to_thread(init_local_db)
     repository.writer.start()
     try:
         stale = await asyncio.to_thread(repository.mark_stale_runs, await asyncio.to_thread(adapters.get_machine_id))
@@ -645,9 +679,10 @@ async def on_shutdown():
 # ─────────────────────── ENDPOINTS: CHẠY ────────────────────────────
 
 @router.post("/start")
-async def start_farm_interactions(req: FarmStartRequest):
+async def start_farm_interactions(req: FarmStartRequest, request: Request):
     global _control, _active_task
-    owner = adapters.get_owner_username()
+    # Nick thuộc người đang đăng nhập (giống Module 02); không đăng nhập thì chỉ nick local
+    owner = await asyncio.to_thread(adapters.owner_from_request, request)
     if owner and not adapters.is_license_valid(owner):
         raise HTTPException(status_code=403, detail="Tài khoản của bạn đã hết hạn bản quyền! Vui lòng liên hệ Quản trị viên để gia hạn.")
 
@@ -669,7 +704,7 @@ async def start_farm_interactions(req: FarmStartRequest):
     # Chỉ nick Live + Đã đăng nhập mới được chạy (VR-M03-ACC-01)
     eligible, rejected = [], []
     for uid in uids:
-        acc = await asyncio.to_thread(adapters.get_account, uid)
+        acc = await asyncio.to_thread(adapters.get_account, uid, owner)
         if acc and acc["status"] == "live" and acc["login_status"] == "logged_in":
             eligible.append({"uid": acc["uid"], "name": acc["profile_name"]})
         else:

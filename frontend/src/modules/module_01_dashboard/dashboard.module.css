@@ -1,0 +1,125 @@
+﻿.dashboard { display: flex; flex-direction: column; gap: 20px; color: #102239; max-width: 1440px; margin: 0 auto; }
+.heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.heading h1 { display: flex; align-items: center; gap: 8px; font-family: var(--font-heading), sans-serif; font-size: 24px; line-height: 32px; font-weight: 800; letter-spacing: -.8px; }
+.heading h1::before { content: ""; width: 9px; height: 23px; border-radius: 6px; background: #2462ef; flex-shrink: 0; }
+.refresh { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 12px; background: white; color: #475569; }
+.refresh:disabled { opacity: .6; }
+.license { min-height: 80px; display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 18px; border-radius: 16px; background: linear-gradient(110deg, #fff 65%, #f0fcf7); box-shadow: 0 1px 0 #e9edf5; }
+.licenseInfo { display: flex; align-items: center; gap: 16px; }
+.license h2, .sectionTitle, .renewal h2 { font-size: 17px; line-height: 26px; font-weight: 700; }
+.shield { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; color: #009e74; background: #edfcf5; flex-shrink: 0; }
+.status { display: inline-flex; align-items: center; gap: 6px; padding: 2px 12px; border-radius: 20px; background: #defbee; color: #00805e; font-size: 13px; font-weight: 600; }
+.status > span { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.inactive { color: #b45309; background: #fff4d6; }
+.expiry { display: flex; align-items: center; gap: 9px; padding: 10px 15px; border-radius: 14px; background: #effcf6; color: #008762; font-size: 12px; flex-shrink: 0; }
+.expiry strong { font-size: 20px; font-weight: 700; }
+.expiry small { display: block; font-size: 12px; }
+.calendar { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: #d4fbe9; }
+.licenseWarning, .licenseExpired { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 172px; min-height: 116px; padding: 24px; gap: 24px; border: 1px solid transparent; }
+.licenseWarning { background: linear-gradient(110deg, #fffbe9, #fff4f5 57%, #f9e1d7); }
+.licenseExpired { background: linear-gradient(110deg, #fff0f0, #fff 82%); border-color: #ffb4b4; box-shadow: 0 2px 3px #d1202010; }
+.licenseWarning h2, .licenseExpired h2 { font-size: 20px; line-height: 28px; letter-spacing: -.45px; }
+.licenseWarning .shield, .licenseExpired .shield { position: relative; width: 56px; height: 56px; border-radius: 17px; flex-shrink: 0; }
+.licenseWarning .shield { color: white; background: linear-gradient(135deg, #ffad00, #fa7820 45%, #ef3038); box-shadow: 0 3px 5px #ef44322a; }
+.licenseWarning .shield svg { fill: white; }
+.licenseExpired .shield { background: #ffdada; color: #be161b; }
+.licenseExpired .shield svg { fill: #be161b; stroke: #ffdada; }
+.shieldAlert { display: grid; place-items: center; position: absolute; bottom: -3px; right: -3px; width: 17px; height: 17px; border-radius: 50%; background: #be161b; color: white; font-size: 12px; font-weight: 700; }
+.licenseWarning .status, .licenseExpired .status { font-size: 12px; line-height: 18px; min-width: 118px; }
+.licenseExpired .status { background: #bf181d; color: white; }
+.licenseWarning .expiry, .licenseExpired .expiry { min-height: 66px; padding: 14px 16px; gap: 12px; background: #ffffffd9; border-radius: 14px; color: #3f465b; font-size: 14px; }
+.licenseWarning .expiry strong { font-size: 17px; color: #ca131b; margin-left: 5px; }
+.licenseWarning .expiry small, .licenseExpired .expiry small { font-size: 12px; line-height: 18px; color: #3f465b; }
+.licenseWarning .calendar, .licenseExpired .calendar { width: 40px; height: 40px; color: #c50913; background: #ffdada; border-radius: 9px; flex-shrink: 0; }
+.expiry .expiredTitle { display: block; font-size: 21px; line-height: 26px; color: #c9141b; }
+.renewButton { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; padding: 12px 16px; border-radius: 14px; color: white; background: linear-gradient(110deg, #ef1647, #e42021); font-size: 16px; line-height: 22px; font-weight: 700; box-shadow: 0 3px 5px #db16252e; white-space: nowrap; }
+.renewButton:hover { filter: brightness(.96); }
+.licenseExpired .renewButton { color: #102239; background: #dce9ff; box-shadow: none; }
+.licenseExpired .renewButton svg { color: #db111c; }
+.section { display: flex; flex-direction: column; gap: 10px; }
+.sectionTitle { display: flex; align-items: center; gap: 8px; }
+.sectionTitle > span { display: grid; place-items: center; width: 23px; height: 23px; border-radius: 7px; background: #2462ef; color: white; font-size: 12px; }
+.overview { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(0, 2.35fr) 148px; gap: 14px; align-items: center; padding: 22px 18px; min-height: 122px; border-radius: 16px; background: white; box-shadow: 0 1px 0 #e9edf5; }
+.total { display: flex; align-items: center; gap: 15px; }
+.totalIcon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; color: #2462ef; background: #eff6ff; flex-shrink: 0; }
+.accountIcon { background: #dbe0ff; color: #0055d5; }
+.totalLabel { font-size: 12px; line-height: 15px; letter-spacing: .35px; color: #515c7a; font-weight: 500; white-space: normal; }
+.totalValue { font-size: 30px; line-height: 36px; font-weight: 700; letter-spacing: -1px; }
+.detail { display: inline-flex; align-items: center; gap: 4px; color: #0055e9; font-size: 13px; line-height: 18px; font-weight: 600; }
+.accountMetrics { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; padding: 16px; border-radius: 14px; background: #f5f8ff; }
+.metric { min-width: 0; }
+.metricLabel { display: flex; align-items: center; gap: 5px; color: #53617e; font-size: 13px; line-height: 16px; min-height: 20px; }
+.metricLabel svg { flex-shrink: 0; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.success { color: #00a77c; }
+.failure { color: #ff3866; }
+.metricValue { margin-top: 4px; font-size: 24px; line-height: 32px; font-weight: 700; }
+.metricValue > span { font-size: 13px; font-weight: 500; }
+.track { height: 5px; margin-top: 7px; border-radius: 8px; background: #dce8ff; overflow: hidden; }
+.track > span { display: block; height: 100%; background: currentColor; border-radius: inherit; transition: width .3s ease; }
+.pageMetrics { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.pageMetrics > div { padding: 14px; border-radius: 14px; background: #f5f8ff; }
+.destination { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 52px; padding: 10px; border-radius: 12px; background: #2462ef; color: #fff; font-size: 12px; line-height: 18px; font-weight: 600; box-shadow: 0 3px 8px #2462ef33; }
+.destination svg { flex-shrink: 0; }
+.destination:hover { background: #1553dd; }
+.support { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 17px 15px; border: 1px solid #e3eaf6; border-radius: 12px; background: white; font-size: 12px; line-height: 18px; }
+.support > div { display: flex; align-items: center; gap: 10px; }
+.support svg { color: #565b70; flex-shrink: 0; }
+.support nav { display: flex; align-items: center; gap: 9px; flex-shrink: 0; font-size: 12px; }
+.support a, .renewal a { color: #0055e9; font-weight: 600; }
+.support nav > span { color: #b7c0d3; }
+.support button { color: #454e66; }
+.note { color: #64748b; font-size: 13px; }
+.error { border-radius: 10px; padding: 12px; background: #fff1f2; color: #be123c; font-size: 13px; }
+.renewDialog { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); margin: 0 !important; width: min(540px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 16px; border: 1px solid #eef0f8; border-radius: 16px; background: #f7f8ff; color: #303746; box-shadow: 0 16px 60px #0f172a24; }
+.renewDialog::backdrop { background: #0f172a66; backdrop-filter: blur(3px); }
+.renewDialog h2 { padding: 0 22px; margin: 0 0 16px; color: #242b39; font-size: 16px; line-height: 24px; font-weight: 700; text-align: center; }
+.renewClose { position: absolute; top: 10px; right: 10px; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: #8b93a5; }
+.renewClose:hover { color: #303746; background: #e9edfa; }
+.renewContacts { display: flex; flex-direction: column; gap: 10px; }
+.renewContact { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid #f0f3fc; border-radius: 12px; background: white; transition: background .15s ease; }
+.renewContact:hover { background: #f0f5ff; }
+.renewContactIcon { display: grid; place-items: center; width: 44px; height: 44px; flex-shrink: 0; border-radius: 10px; background: #2462ef; color: white; }
+.renewContactText { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: 14px; line-height: 21px; }
+.renewContactText strong { font-size: 16px; font-weight: 700; }
+.renewExternal { margin-left: auto; color: #8d95a7; flex-shrink: 0; }
+.renewDialog a:focus-visible, .renewDialog button:focus-visible { outline: 2px solid #2462ef; outline-offset: 3px; }
+@media (max-width: 600px) {
+  .renewDialog { padding: 20px 14px 14px; }
+  .renewDialog h2 { font-size: 16px; line-height: 24px; margin-bottom: 14px; }
+  .renewContactText { font-size: 14px; line-height: 21px; }
+  .renewContactText strong { font-size: 16px; }
+  .renewContactIcon { width: 44px; height: 44px; }
+}
+.dashboard a:focus-visible, .dashboard button:focus-visible { outline: 2px solid #2462ef; outline-offset: 4px; }
+@media (max-width: 1100px) {
+  .licenseWarning, .licenseExpired { grid-template-columns: minmax(0, 1fr) auto; gap: 16px; padding: 20px; }
+  .licenseWarning .expiry, .licenseExpired .expiry { grid-column: 1; grid-row: 2; }
+  .renewButton { grid-column: 2; grid-row: 2; }
+  .licenseWarning .licenseInfo, .licenseExpired .licenseInfo { grid-column: 1 / -1; }
+  .overview { grid-template-columns: minmax(165px, 1fr) minmax(0, 2fr) 128px; padding: 22px 18px; gap: 14px; }
+  .total { gap: 12px; }
+  .totalIcon { width: 44px; height: 44px; }
+  .accountMetrics { gap: 12px; padding: 14px; }
+  .support { flex-wrap: wrap; }
+}
+@media (max-width: 850px) {
+  .overview { grid-template-columns: 1fr; gap: 20px; }
+  .destination { min-height: 45px; }
+  .license { flex-wrap: wrap; padding: 20px; }
+  .heading h1 { font-size: 23px; line-height: 30px; }
+}
+@media (max-width: 480px) {
+  .licenseWarning, .licenseExpired { grid-template-columns: minmax(0, 1fr); }
+  .licenseWarning .licenseInfo, .licenseExpired .licenseInfo { gap: 10px; }
+  .licenseWarning h2, .licenseExpired h2 { font-size: 17px; line-height: 24px; }
+  .renewButton { grid-column: 1; grid-row: 3; }
+  .dashboard { gap: 20px; }
+  .pageMetrics { grid-template-columns: 1fr; }
+  .accountMetrics { gap: 10px; padding: 12px; }
+  .metricLabel { font-size: 12px; }
+  .metricValue { font-size: 20px; }
+  .license h2, .sectionTitle { font-size: 15px; }
+}
+
+

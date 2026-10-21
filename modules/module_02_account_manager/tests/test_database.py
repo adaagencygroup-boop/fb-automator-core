@@ -24,7 +24,9 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(conn.execute(text("SELECT password FROM accounts")).scalar(), "")
             self.assertEqual(conn.execute(text("SELECT credential_encryption_version FROM accounts")).scalar(), 2)
             self.assertIn("token_hotmail", {c["name"] for c in inspect(conn).get_columns("accounts")})
-            self.assertEqual(conn.execute(text("SELECT COUNT(*) FROM account_plugin_schema")).scalar(), 2)
+            self.assertIn("avatar_url", {c["name"] for c in inspect(conn).get_columns("accounts")})
+            self.assertIsNone(conn.execute(text("SELECT avatar_url FROM accounts")).scalar())
+            self.assertEqual(conn.execute(text("SELECT COUNT(*) FROM account_plugin_schema")).scalar(), 4)
         engine.dispose()
 
 

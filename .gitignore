@@ -45,6 +45,10 @@ data/module_02_account_manager/
 logs/
 logs/*.txt
 logs/*.log
+logs/login-*.png
+logs/register-*.png
+logs/pending-*.png
+logs/locked-*.png
 logs/*.log.*
 *.log
 npm-debug.log*
@@ -53,6 +57,7 @@ yarn-error.log*
 downloads/
 temp/
 tmp/
+scratch/
 
 # 5. Browser Automation & Profiles
 profiles/
@@ -95,7 +100,7 @@ Desktop.ini
 build/
 dist/
 *.egg-info/
-src-tauri/target/
+src-tauri/ rget/
 src-tauri/binaries/*.exe
 *.pdb
 
@@ -103,3 +108,11 @@ src-tauri/binaries/*.exe
 .pytest_cache/
 .coverage
 htmlcov/
+test-results/
+
+
+
+# private
+AGENTS.md
+.agents
+ngrok.exe

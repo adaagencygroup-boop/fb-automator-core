@@ -32,10 +32,10 @@ class StartValidationTests(unittest.TestCase):
     def start(self, keyword: str, join_enabled: bool = True):
         req = farm_routes.FarmStartRequest(uids=["1"], threads=1, config=farm_routes.FarmScenarioConfig(
             enabled_join_groups=join_enabled, enabled_check_notif=True, group_keyword=keyword))
-        with patch.object(farm_routes.adapters, "get_owner_username", return_value=None), \
+        with patch.object(farm_routes.adapters, "owner_from_request", return_value=None), \
                 patch.object(farm_routes.adapters, "get_account", return_value=None):
             with self.assertRaises(HTTPException) as ctx:
-                asyncio.run(farm_routes.start_farm_interactions(req))
+                asyncio.run(farm_routes.start_farm_interactions(req, Mock()))
         return ctx.exception
 
     def test_50_chars_passes_keyword_check(self):

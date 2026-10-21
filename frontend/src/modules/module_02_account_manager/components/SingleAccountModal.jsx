@@ -142,8 +142,9 @@ export default function SingleAccountModal({
     setErrorField(null);
 
     try {
-      await saveSingleAccount({
+      const savedPayload = {
         uid: trimmedUid,
+        create_only: !editUid,
         ...(editUid ? { original_uid: editUid } : {}),
         password: trimmedPassword,
         two_fa: twoFa.trim(),
@@ -155,9 +156,12 @@ export default function SingleAccountModal({
         token_hotmail: tokenHotmail.trim(),
         client_id: clientId.trim(),
         proxy: proxy.trim(),
-      });
-      if (onSuccess) await onSuccess({ originalUid: editUid, uid: trimmedUid });
+      };
+      await saveSingleAccount(savedPayload);
       handleClose();
+      if (onSuccess) {
+        onSuccess({ originalUid: editUid, uid: trimmedUid, isEdit: Boolean(editUid), savedData: savedPayload });
+      }
     } catch (submitError) {
       setError(submitError.message || "Lỗi khi lưu thông tin tài khoản");
     } finally {
