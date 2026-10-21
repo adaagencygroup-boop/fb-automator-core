@@ -378,6 +378,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
   });
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   const paginatedItems = filteredItems.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const isReadyToStart = Boolean(authStatus.connected && !isConfigLoading && !isAuthChecking && !openingLogin && downloadFolder && downloadFolder.trim());
   const handleClearPageVideos = async (it) => {
     const pageName = it.page_name || "Fanpage";
     if (!window.confirm(`Bạn Có Chắc Chắn Muốn Xóa Toàn Bộ Video TikTok Đã Tải Của Fanpage "${pageName}" Khỏi Ổ Đĩa Không?`)) {
@@ -684,7 +685,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
               <div className="flex items-center gap-2">
                 <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-300 dark:border-emerald-800 text-[11px] font-normal gap-1 px-2.5 py-0.5">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Đã Kết Nối TikTok{authStatus.username ? `: ${authStatus.username}` : ""}</span>
+                  <span>Đã Kết Nối TikTok</span>
                 </Badge>
                 <Button variant="outline" size="sm" type="button" onClick={handleDisconnect} className="h-7 text-xs font-normal text-rose-600 border-rose-200 hover:bg-rose-50 dark:border-rose-900/60 dark:hover:bg-rose-950/40 gap-1 px-2.5 shadow-none">
                   <LogOut className="w-3.5 h-3.5" /> Đăng Xuất
@@ -961,7 +962,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                                   <Square className="w-3 h-3 fill-current" /> Dừng
                                 </Button>
                               ) : (
-                                <Button size="sm" variant="outline" onClick={() => handleStartItem(it)} disabled={isRunning || !authStatus.connected || isConfigLoading || isAuthChecking || openingLogin} className="h-7 px-2 text-[11px] font-normal text-blue-600 border-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/40 gap-1 shadow-none disabled:opacity-40" title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (isAuthChecking || openingLogin) ? "Đang Chờ Đăng Nhập Tài Khoản TikTok..." : !authStatus.connected ? "Vui Lòng Đăng Nhập Tài Khoản TikTok Trước Khi Kích Hoạt Tải Video!" : "Kích Hoạt Tải Riêng Fanpage Này"}>
+                                <Button size="sm" variant="outline" onClick={() => handleStartItem(it)} disabled={isRunning || !isReadyToStart} className="h-7 px-2 text-[11px] font-normal text-blue-600 border-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/40 gap-1 shadow-none disabled:opacity-40" title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (isAuthChecking || openingLogin) ? "Đang Chờ Đăng Nhập Tài Khoản TikTok..." : !authStatus.connected ? "Vui Lòng Đăng Nhập Tài Khoản TikTok Trước Khi Kích Hoạt Tải Video!" : (!downloadFolder || !downloadFolder.trim()) ? "Vui Lòng Cài Đặt Thư Mục Lưu Video Trước Khi Kích Hoạt!" : "Kích Hoạt Tải Riêng Fanpage Này"}>
                                   <Play className="w-3 h-3 fill-current" /> Kích Hoạt
                                 </Button>
                               )}
@@ -994,7 +995,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                 </div>
               )}
               <div className="space-y-2 pt-3 border-t border-border">
-                {(!authStatus.connected || isConfigLoading || isAuthChecking || openingLogin) && (
+                {!isReadyToStart && (
                   <div className="flex items-center gap-1.5 text-[11px] font-normal text-amber-600 dark:text-amber-400">
                     <Lock className="w-3.5 h-3.5 shrink-0 text-amber-500" />
                     <span>
@@ -1002,12 +1003,14 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                         ? "Nút Kích Hoạt Đang Bị Khóa Vì Hệ Thống Đang Nạp Cấu Hình."
                         : (isAuthChecking || openingLogin)
                         ? "Nút Kích Hoạt Đang Bị Khóa Vì Đang Chờ Đăng Nhập TikTok."
-                        : "Nút Kích Hoạt Đang Bị Khóa Vì Chưa Đăng Nhập Tài Khoản TikTok (Bắt Buộc Đăng Nhập Để Kích Hoạt)."}
+                        : !authStatus.connected
+                        ? "Nút Kích Hoạt Đang Bị Khóa Vì Chưa Đăng Nhập Tài Khoản TikTok (Bắt Buộc Đăng Nhập Để Kích Hoạt)."
+                        : "Nút Kích Hoạt Đang Bị Khóa Vì Chưa Cài Đặt Thư Mục Lưu Video (Bắt Buộc Chọn Thư Mục Lưu)."}
                     </span>
                   </div>
                 )}
                 <div className="flex items-center gap-3">
-                  <Button variant="outline" className="flex-1 font-normal text-xs h-9 text-blue-600 border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-900/60 dark:text-blue-400 dark:hover:bg-blue-950/40 gap-2 shadow-none disabled:opacity-40" disabled={isRunning || items.length === 0 || !authStatus.connected || isConfigLoading || isAuthChecking || openingLogin} onClick={handleStart} title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (isAuthChecking || openingLogin) ? "Đang Chờ Đăng Nhập Tài Khoản TikTok..." : !authStatus.connected ? "Vui Lòng Đăng Nhập Tài Khoản TikTok Trước Khi Kích Hoạt Tải Video!" : items.length === 0 ? "Chưa Có Fanpage Nào Để Kích Hoạt" : "Kích Hoạt Tải Hàng Loạt Cho Tất Cả Fanpage"}>
+                  <Button variant="outline" className="flex-1 font-normal text-xs h-9 text-blue-600 border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-900/60 dark:text-blue-400 dark:hover:bg-blue-950/40 gap-2 shadow-none disabled:opacity-40" disabled={isRunning || items.length === 0 || !isReadyToStart} onClick={handleStart} title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (isAuthChecking || openingLogin) ? "Đang Chờ Đăng Nhập Tài Khoản TikTok..." : !authStatus.connected ? "Vui Lòng Đăng Nhập Tài Khoản TikTok Trước Khi Kích Hoạt Tải Video!" : (!downloadFolder || !downloadFolder.trim()) ? "Vui Lòng Cài Đặt Thư Mục Lưu Video Trước Khi Kích Hoạt!" : items.length === 0 ? "Chưa Có Fanpage Nào Để Kích Hoạt" : "Kích Hoạt Tải Hàng Loạt Cho Tất Cả Fanpage"}>
                     <Play className="w-3.5 h-3.5 fill-current" /> Kích Hoạt Tất Cả
                   </Button>
                   <Button variant="outline" className="flex-1 font-normal text-xs h-9 text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700 dark:border-rose-900/60 dark:text-rose-400 dark:hover:bg-rose-950/40 gap-2 shadow-none disabled:opacity-40" disabled={!isRunning} onClick={handleStop}>

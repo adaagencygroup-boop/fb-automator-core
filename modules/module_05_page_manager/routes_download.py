@@ -375,14 +375,15 @@ def clear_all_downloaded_videos(source: Optional[str] = None, folder: Optional[s
   for r in rows:
     p = r.get("object_path")
     if p:
-      parent_dirs.add(os.path.dirname(p))
-      if os.path.exists(p):
+      norm_p = os.path.normpath(p)
+      parent_dirs.add(os.path.dirname(norm_p))
+      if os.path.exists(norm_p):
         try:
-          os.remove(p)
+          os.remove(norm_p)
           deleted_count += 1
         except Exception:
           pass
-      txt_p = os.path.splitext(p)[0] + ".txt"
+      txt_p = os.path.splitext(norm_p)[0] + ".txt"
       if os.path.exists(txt_p):
         try:
           os.remove(txt_p)
@@ -500,7 +501,7 @@ def bulk_update_keywords(req: BulkKeywordsRequest, request: Request):
 def get_page_videos(page_id: str, source: Optional[str] = None):
   p_row = db.fetch_one("SELECT page_id, page_name FROM pages WHERE page_id = %s OR id::text = %s", (page_id, page_id))
   real_pid = p_row["page_id"] if p_row else page_id
-  query = "SELECT * FROM downloaded_videos WHERE page_id = %s OR page_id = %s"
+  query = "SELECT * FROM downloaded_videos WHERE (page_id = %s OR page_id = %s)"
   params = [page_id, real_pid]
   if source:
     query += " AND upper(source) = %s"
@@ -513,7 +514,7 @@ def clear_page_videos(page_id: str, source: Optional[str] = None):
   p_row = db.fetch_one("SELECT id, page_id, page_name FROM pages WHERE page_id = %s OR id::text = %s", (page_id, page_id))
   real_pid = p_row["page_id"] if p_row else page_id
   id_str = str(p_row["id"]) if p_row and p_row.get("id") else page_id
-  query = "SELECT object_path, video_id, source FROM downloaded_videos WHERE page_id = %s OR page_id = %s OR page_id = %s"
+  query = "SELECT object_path, video_id, source FROM downloaded_videos WHERE (page_id = %s OR page_id = %s OR page_id = %s)"
   params = [page_id, real_pid, id_str]
   if source:
     query += " AND upper(source) = %s"
@@ -524,14 +525,15 @@ def clear_page_videos(page_id: str, source: Optional[str] = None):
   for r in rows:
     p = r.get("object_path")
     if p:
-      parent_dirs.add(os.path.dirname(p))
-      if os.path.exists(p):
+      norm_p = os.path.normpath(p)
+      parent_dirs.add(os.path.dirname(norm_p))
+      if os.path.exists(norm_p):
         try:
-          os.remove(p)
+          os.remove(norm_p)
           deleted_count += 1
         except Exception:
           pass
-      txt_p = os.path.splitext(p)[0] + ".txt"
+      txt_p = os.path.splitext(norm_p)[0] + ".txt"
       if os.path.exists(txt_p):
         try:
           os.remove(txt_p)
@@ -592,7 +594,7 @@ def clear_page_videos(page_id: str, source: Optional[str] = None):
           os.rmdir(pdir)
       except Exception:
         pass
-  del_query = "DELETE FROM downloaded_videos WHERE page_id = %s OR page_id = %s OR page_id = %s"
+  del_query = "DELETE FROM downloaded_videos WHERE (page_id = %s OR page_id = %s OR page_id = %s)"
   del_params = [page_id, real_pid, id_str]
   if source:
     del_query += " AND upper(source) = %s"
@@ -613,18 +615,20 @@ def delete_single_video(page_id: str, video_db_id: int):
   if not row:
     return {"success": False, "message": "Video Không Tồn Tại"}
   p = row.get("object_path")
-  if p and os.path.exists(p):
-    try:
-      os.remove(p)
-    except Exception:
-      pass
-    txt_p = os.path.splitext(p)[0] + ".txt"
+  if p:
+    norm_p = os.path.normpath(p)
+    if os.path.exists(norm_p):
+      try:
+        os.remove(norm_p)
+      except Exception:
+        pass
+    txt_p = os.path.splitext(norm_p)[0] + ".txt"
     if os.path.exists(txt_p):
       try:
         os.remove(txt_p)
       except Exception:
         pass
-    pdir = os.path.dirname(p)
+    pdir = os.path.dirname(norm_p)
     if pdir and os.path.exists(pdir) and os.path.isdir(pdir):
       try:
         if not os.listdir(pdir):

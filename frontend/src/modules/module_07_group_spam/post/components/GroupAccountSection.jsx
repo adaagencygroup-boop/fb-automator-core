@@ -12,11 +12,13 @@ import {
   Edit3,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/lib/toast";
 import { SectionCard, initialsOf } from "../../shared/components";
+import { AVATAR_COLORS } from "../../shared/constants";
 import { AVATAR_COLORS } from "../../shared/constants";
 import { attachDragSelection } from "../../shared/drag-selection";
 
@@ -26,8 +28,11 @@ import { attachDragSelection } from "../../shared/drag-selection";
  * Kế thừa nghiệp vụ từ FaceBook_Post_Group.py:
  * 1. Quản lý & nạp danh sách tài khoản Facebook thực tế từ Module 2 (Quản lý tài khoản)
  * 2. Tìm kiếm nhanh tài khoản theo UID, Tên người dùng, Email
+ * 1. Quản lý & nạp danh sách tài khoản Facebook thực tế từ Module 2 (Quản lý tài khoản)
+ * 2. Tìm kiếm nhanh tài khoản theo UID, Tên người dùng, Email
  * 3. Chọn tất cả / Bỏ chọn từng tài khoản
  * 4. Cuộn trực tiếp không phân trang, hiển thị đầy đủ tài khoản
+ * 5. Hiển thị thông tin Live/Die, Avatar, UID
  * 5. Hiển thị thông tin Live/Die, Avatar, UID
  * ============================================================================
  */
@@ -58,6 +63,7 @@ export default function GroupAccountSection({
     if (!query) return effectiveAccounts;
     return effectiveAccounts.filter((account) =>
       `${account.name || ""} ${account.uid || ""} ${account.email || ""}`.toLowerCase().includes(query)
+        `${account.name || ""} ${account.uid || ""} ${account.email || ""}`.toLowerCase().includes(query)
     );
   }, [accountSearch, effectiveAccounts]);
 
@@ -221,11 +227,9 @@ export default function GroupAccountSection({
                     key={account.key}
                     data-account-key={account.key}
                     onClick={(e) => handleRowClick(account.key, e)}
-                    className={`transition-colors select-none ${
-                      locked ? "cursor-default" : "cursor-pointer"
-                    } ${
-                      selected ? "bg-blue-50/70 hover:bg-blue-100/60" : "bg-white hover:bg-slate-50"
-                    }`}
+                    className={`transition-colors select-none ${locked ? "cursor-default" : "cursor-pointer"
+                      } ${selected ? "bg-blue-50/70 hover:bg-blue-100/60" : "bg-white hover:bg-slate-50"
+                      }`}
                   >
                     <td className="px-4 py-2.5">
                       <Checkbox
@@ -237,6 +241,9 @@ export default function GroupAccountSection({
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-2.5">
                         <Avatar className="size-8 border-0">
+                          {(account.avatar_url || account.avatar) && (
+                            <AvatarImage src={account.avatar_url || account.avatar} alt={account.name || "FB"} />
+                          )}
                           {(account.avatar_url || account.avatar) && (
                             <AvatarImage src={account.avatar_url || account.avatar} alt={account.name || "FB"} />
                           )}
@@ -263,6 +270,15 @@ export default function GroupAccountSection({
                           ● {account.status || "Chưa check"}
                         </span>
                       )}
+                      {String(account.status || "").toUpperCase() === "LIVE" ? (
+                        <span className="font-semibold text-emerald-600">● Live</span>
+                      ) : String(account.status || "").toUpperCase() === "DIE" ? (
+                        <span className="font-semibold text-red-500">● Die</span>
+                      ) : (
+                        <span className="font-semibold text-slate-400">
+                          ● {account.status || "Chưa check"}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 );
@@ -275,24 +291,29 @@ export default function GroupAccountSection({
                       <Users className="size-8 text-slate-300" />
                       <p className="text-xs font-semibold text-slate-600">
                         {effectiveAccounts.length === 0
+                        {effectiveAccounts.length === 0
                           ? "Chưa có tài khoản Facebook nào trong Module 2 (Quản lý tài khoản)"
                           : "Không tìm thấy tài khoản Facebook phù hợp"}
                       </p>
                       <p className="max-w-md text-[11px] text-slate-400">
                         {effectiveAccounts.length === 0
+                        {effectiveAccounts.length === 0
                           ? "Vui lòng vào Module 2 để thêm hoặc import tài khoản Facebook, sau đó quay lại để chọn tài khoản đi seeding."
                           : "Thử tìm kiếm với từ khóa khác hoặc bấm nút làm mới."}
                       </p>
                       {effectiveAccounts.length === 0 ? (
-                        <div className="pt-2">
-                          <Link
-                            href="/accounts"
-                            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-primary/90"
-                          >
-                            <Plus className="size-3.5" /> Thêm tài khoản tại Module 2
-                          </Link>
-                        </div>
-                      ) : null}
+                        {
+                          effectiveAccounts.length === 0 ? (
+                            <div className="pt-2">
+                              <Link
+                                href="/accounts"
+                                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-primary/90"
+                              >
+                                <Plus className="size-3.5" /> Thêm tài khoản tại Module 2
+                              </Link>
+                            </div>
+                          ) : null
+                        }
                     </div>
                   </td>
                 </tr>
@@ -326,13 +347,12 @@ export default function GroupAccountSection({
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
         <div
-          className={`text-[11px] ${
-            locked
+          className={`text-[11px] ${locked
               ? "text-emerald-600 font-medium"
               : selectedAccountKeys.length > 0
                 ? "text-slate-500"
                 : "text-amber-600 font-medium"
-          }`}
+            }`}
         >
           {locked
             ? `Đã xác nhận ${selectedAccountKeys.length} tài khoản Facebook. Bấm Chỉnh sửa nếu muốn thay đổi.`

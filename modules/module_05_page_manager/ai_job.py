@@ -182,11 +182,19 @@ def _content_for(page, config, check):
         return _fallback_content(page)
 
     _progress(name, "Đang sinh nội dung bằng AI...")
+
+    def on_ai_log(message):
+        text = str(message or "")
+        if "xuống" in text.lower() or "gợi ý" in text.lower() or "Model" in text:
+            _progress(name, text.replace("[THÔNG TIN] ", "").replace("[CẢNH BÁO] ", "").replace("[LỖI] ", ""))
+        elif "[CẢNH BÁO]" in text or "[LỖI]" in text or "[NGHIÊM TRỌNG]" in text:
+            _progress(name, text.split("]", 1)[-1].strip() if "]" in text else text)
+
     generator = AIGenerator(
         api_keys=keys,
         model_name=config["model_name"],
         prompt_template=config.get("prompt") or "",
-        log_func=lambda _msg: None,
+        log_func=on_ai_log,
     )
     raw = generator.generate_batch_content(
         [{"name": page["name"], "ai_keyword": topic}],
@@ -206,23 +214,7 @@ def _content_for(page, config, check):
     return text, image_keyword
 
 
-def _image_file(keyword, pixabay_key, page_name=""):
-    from modules.module_05_page_manager.image_downloader import get_image_from_internet
-
-    subject = page_name or "Ảnh"
-
-    def on_image_log(message):
-        text = str(message or "")
-        if "Chưa có Pixabay" in text:
-            _progress(subject, "Bỏ qua ảnh (chưa có Pixabay key)")
-        elif "Đang tìm ảnh trên Pixabay" in text:
-            _progress(subject, "Đang tải ảnh minh họa từ Pixabay...")
-        elif "không tìm thấy" in text.lower() or "[LỖI]" in text or "[!]" in text:
-            _progress(subject, "Không tìm được ảnh, đăng không kèm ảnh")
-
-    url = get_image_from_internet(keyword, pixabay_key, on_image_log)
-    if not url:
-        return None
+def _download_to_temp(url: str):
     try:
         response = httpx.get(url, follow_redirects=True, timeout=20)
     except httpx.HTTPError:
@@ -234,6 +226,73 @@ def _image_file(keyword, pixabay_key, page_name=""):
     with open(path, "wb") as handle:
         handle.write(response.content)
     return path
+
+
+def _placeholder_image_file(page_name=""):
+    """Ảnh tạm khi Pixabay không ra — không để bài đăng không có ảnh."""
+    # 1) Ảnh random public (không cần API key).
+    for url in (
+        "https://picsum.photos/1200/800",
+        "https://images.unsplash.com/photo-1540555700478-4be289fbecef?w=1200&q=80",
+    ):
+        path = _download_to_temp(url)
+        if path:
+            return path
+    # 2) Tự vẽ JPG đơn giản bằng PIL.
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+
+        img = Image.new("RGB", (1200, 800), (240, 248, 255))
+        draw = ImageDraw.Draw(img)
+        title = (page_name or "Fanpage").strip()[:40] or "Fanpage"
+        draw.rectangle((40, 40, 1160, 760), outline=(37, 99, 235), width=4)
+        try:
+            font = ImageFont.truetype("arial.ttf", 48)
+        except Exception:
+            font = ImageFont.load_default()
+        draw.text((80, 340), title, fill=(15, 23, 42), font=font)
+        draw.text((80, 420), "Anh minh hoa tam", fill=(100, 116, 139), font=font)
+        handle, path = tempfile.mkstemp(suffix=".jpg")
+        os.close(handle)
+        img.save(path, format="JPEG", quality=90)
+        return path
+    except Exception:
+        return None
+
+
+def _image_file(keyword, pixabay_key, page_name=""):
+    from modules.module_05_page_manager.image_downloader import get_image_from_internet
+
+    subject = page_name or "Ảnh"
+    seen = set()
+
+    def on_image_log(message):
+        text = str(message or "")
+        if text in seen:
+            return
+        seen.add(text)
+        if "Chưa có Pixabay" in text:
+            _progress(subject, "Chưa có Pixabay key — dùng ảnh tạm")
+        elif "Đang tìm ảnh trên Pixabay" in text:
+            _progress(subject, "Đang tải ảnh minh họa từ Pixabay...")
+        elif "giới hạn" in text.lower():
+            _progress(subject, "Pixabay giới hạn lượt — dùng ảnh tạm")
+        elif "ảnh tạm" in text.lower() or "[!]" in text or "[LỖI]" in text:
+            _progress(subject, "Pixabay không ra ảnh — dùng ảnh tạm")
+
+    url = get_image_from_internet(keyword, pixabay_key, on_image_log)
+    if url:
+        path = _download_to_temp(url)
+        if path:
+            return path
+
+    _progress(subject, "Đang lấy ảnh tạm để đăng kèm bài...")
+    path = _placeholder_image_file(page_name)
+    if path:
+        _progress(subject, "Đã có ảnh tạm")
+        return path
+    _progress(subject, "Không lấy được ảnh tạm — đăng chữ thôi")
+    return None
 
 
 def _record(page, uid, caption, ok, error=""):
@@ -329,7 +388,11 @@ def _post_round(owner, uid, pages, config):
             caption, keyword = _content_for(page, config, lambda: not _stopped())
             image = _image_file(keyword, config.get("pixabay_key") or "", page["name"])
             try:
-                _progress(page["name"], "Đang đăng bài lên Facebook...")
+                if image:
+                    _progress(page["name"], "Có ảnh — sẽ gắn vào bài")
+                else:
+                    _progress(page["name"], "Không có ảnh — đăng chữ thôi")
+                _progress(page["name"], f"Đang mở page và đăng bài... ({(page.get('url') or '')[:70]})")
                 ok = post_on_page(driver, page["url"], caption, image, page_id=page_id)
                 _record(page, uid, caption, ok)
                 _progress(page["name"], "Đăng thành công ✓" if ok else "Đăng thất bại")

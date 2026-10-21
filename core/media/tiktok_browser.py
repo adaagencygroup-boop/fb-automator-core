@@ -132,9 +132,11 @@ def get_tiktok_auth_status() -> Dict[str, Any]:
   data = get_session_data()
   cookies = data.get("cookies", []) if data.get("connected") else []
   is_logged = bool(data.get("connected") and any(c.get("name") in ["sessionid", "sessionid_ss", "sid_tt"] and c.get("value") for c in cookies))
+  raw_user = data.get("username", "") if is_logged else ""
+  safe_user = "" if raw_user.lower().startswith("user_") else raw_user
   return {
     "connected": is_logged,
-    "username": data.get("username", "") if is_logged else "",
+    "username": safe_user,
     "updated_at": data.get("updated_at") if is_logged else None,
     "is_opening": _is_opening
   }
@@ -177,11 +179,6 @@ def _watch_tiktok_login(driver: webdriver.Chrome):
         u_match = re.search(r'tiktok\.com/@([a-zA-Z0-9_.-]+)', curr_url)
         if u_match:
           username = u_match.group(1)
-        if not username:
-          for c in cookies:
-            if c.get("name") == "uid_tt" and c.get("value"):
-              username = f"user_{c.get('value')[:8]}"
-              break
         os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
         session_info = {
           "connected": True,
@@ -286,13 +283,14 @@ def search_tiktok_via_browser(keywords: str, count: int = 15) -> List[Dict[str, 
       pass
     encoded = urllib.parse.quote_plus(clean_kw)
     driver.get(f"https://www.tiktok.com/search?q={encoded}")
+    extract_js = "var m = document.querySelector('main') || document; return Array.from(m.querySelectorAll('a[href*=\"/video/\"]')).filter(function(a){ return !a.closest('header, [class*=\"Header\"], [class*=\"header\"], [inbox-notifications], [inbox-list], nav, aside'); }).map(function(a){ return a.href; });"
     for _ in range(12):
       time.sleep(1.0)
-      raw_links = driver.execute_script("return Array.from(document.querySelectorAll(\"a[href*='/video/']\")).map(function(a){return a.href;});")
+      raw_links = driver.execute_script(extract_js)
       if raw_links:
         break
     for _ in range(5):
-      raw_links = driver.execute_script("return Array.from(document.querySelectorAll(\"a[href*='/video/']\")).map(function(a){return a.href;});") or []
+      raw_links = driver.execute_script(extract_js) or []
       for href in raw_links:
         m = re.search(r'tiktok\.com/@([a-zA-Z0-9_.-]+)/video/(\d+)', href or "")
         if m:

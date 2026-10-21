@@ -1,0 +1,42 @@
+<!doctype html>
+<!-- Trang giả: nút Like bài viết kiểu mới của Facebook (chỉ có icon, div like_button rỗng, nút bật/tắt).
+     ?mode=unliked | liked | dead. window.__clicks = số lần nút nhận click, window.__liked = đã thích chưa. -->
+<html><head><meta charset="utf-8"><style>
+  .x1d69dk1 { filter: grayscale(1); }
+  .xliked { filter: hue-rotate(200deg); }
+  #dock { display: none; position: absolute; top: 0; left: 140px; border: 1px solid #ccc; background: #fff; padding: 4px; }
+  #dock div { display: inline-block; width: 40px; height: 30px; }
+</style></head>
+<body style="color: rgb(8, 8, 9)">
+<p>Bài viết thử</p>
+<div style="position: relative; padding-top: 50px">
+  <div id="likeBtn" role="button" aria-label="Like" tabindex="0" style="display: inline-block; padding: 4px 16px">
+    <div class="x9f619"><div class="x9f619 x1n2onr6"><span class="x3nfvp2"><i id="icon" data-visualcompletion="css-img" class="x15mokao x1d69dk1" style="background-position: 0px -441px; width: 20px; height: 20px; display: inline-block; background-color: #888"></i></span><div data-ad-rendering-role="like_button"></div></div></div>
+    <span id="count">7</span>
+    <div role="none" data-visualcompletion="ignore" style="position: absolute; inset: 0; pointer-events: none"></div>
+  </div>
+  <div id="dock" role="toolbar"><div role="button" aria-label="Like" id="dockLike">👍</div><div role="button" aria-label="Love">❤️</div></div>
+</div>
+<script>
+  const mode = new URLSearchParams(location.search).get('mode') || 'unliked';
+  const btn = document.getElementById('likeBtn'), icon = document.getElementById('icon');
+  window.__clicks = 0; window.__liked = false;
+  function render() {   // Facebook đổi class của icon (không đổi style) và nhãn khi đã thích
+    icon.classList.toggle('x1d69dk1', !window.__liked);
+    icon.classList.toggle('xliked', window.__liked);
+    btn.setAttribute('aria-label', window.__liked ? 'Remove Like' : 'Like');
+  }
+  if (mode === 'liked') { window.__liked = true; render(); }
+  btn.addEventListener('click', () => {
+    window.__clicks++;
+    if (mode === 'dead') return;
+    window.__liked = !window.__liked; render();
+  });
+  btn.addEventListener('mouseenter', () => { document.getElementById('dock').style.display = 'block'; });
+  document.getElementById('dockLike').addEventListener('click', () => {
+    if (mode === 'dead') return;
+    window.__liked = true; render();   // chọn Like trong khay: luôn là đã thích
+    document.getElementById('dock').style.display = 'none';
+  });
+</script>
+</body></html>
