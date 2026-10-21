@@ -7,6 +7,11 @@ import {
   getMessages,
   getNotifications,
   resyncChatData,
+  friendlyFbError,
+  toUtcIso,
+  parseAttachmentText,
+  messagePreview,
+  attachmentLabel,
   sendMessage,
   setConversationStarred,
   setConversationTags,
@@ -15,8 +20,11 @@ import {
   reactToMessage,
 } from "./service";
 import PageList from "./components/PageList";
+import PageSwitcher from "./components/PageSwitcher";
 import ConversationList from "./components/ConversationList";
-import ChatWindow, { ChatPlaceholder } from "./components/ChatWindow";
+import ChatWindow from "./components/ChatWindow";
+import NotificationDetail from "./components/NotificationDetail";
+import { useResizableWidth, ResizeHandle } from "@/lib/use-resizable-width";
 
 // Figma: "Quản lý chat Page" (1072:11951) — OmnichannelPanels (1072:12081)
 // 3 cột: (1) Danh sách Page · (2) Khung chat (1072:12415) · (3) Hội thoại / Thông báo
@@ -24,6 +32,34 @@ import ChatWindow, { ChatPlaceholder } from "./components/ChatWindow";
 async function fetchAll() {
   const [p, c, n] = await Promise.all([getChatPages(), getConversations(), getNotifications()]);
   return { p, c, n };
+}
+
+/**
+ * Dưới ngưỡng này (độ rộng vùng 3 cột) thì chuyển sang bố cục 2 cột:
+ * cột Page + cột thứ hai đổi qua lại giữa Danh sách hội thoại/thông báo và Chi tiết.
+ */
+/**
+ * Hẹp hơn mức này thì không đủ cho 2 cột (chi tiết 360 + hội thoại 320 + nút Page)
+ * -> chuyển bố cục 1 cột, đi lần lượt:
+ * Danh sách Page -> Hội thoại/Thông báo -> Chi tiết (mỗi cấp có nút quay lại).
+ */
+const COMPACT_LAYOUT_WIDTH = 760;
+
+/** Đo độ rộng thật của hàng cột để quyết định bố cục (chính xác hơn dựa theo viewport) */
+function useRowWidth() {
+  const ref = useRef(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect?.width ?? 0;
+      if (w > 0) setWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return { ref, width };
 }
 
 const normalize = (s) =>
@@ -41,7 +77,10 @@ export default function OmnichannelChatModule() {
   const [notifications, setNotifications] = useState([]);
   const [isMock, setIsMock] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [resetting, setResetting] = useState(false);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [compactShowList, setCompactShowList] = useState(false); // bố cục 1 cột: đã vào Hội thoại chưa
 
   const [activePageId, setActivePageId] = useState(null); // null = tất cả các trang
   const [search, setSearch] = useState("");
@@ -49,11 +88,18 @@ export default function OmnichannelChatModule() {
   const [filter, setFilter] = useState("all");
   const [sort, setSort] = useState("newest");
   const [activeConversationId, setActiveConversationId] = useState(null);
+  const [openedNotificationId, setOpenedNotificationId] = useState(null); // thông báo đang mở chi tiết
   const [notificationType, setNotificationType] = useState("interaction");
   const [notificationFilter, setNotificationFilter] = useState("all");
   // Tin nhắn đã tải, theo id hội thoại (chưa có key = chưa tải)
   const [messagesByConversation, setMessagesByConversation] = useState({});
   const loadingMessages = useRef(new Set());
+  const activeConvRef = useRef(null); // hội thoại đang mở, cho WS đọc mà không phải reconnect
+  const wsOpenRef = useRef(false); // WS đang mở hay không, để tắt polling khi realtime khoẻ
+
+  useEffect(() => {
+    activeConvRef.current = activeConversationId;
+  }, [activeConversationId]);
 
   const applyData = ({ p, c, n }) => {
     setPages(p.pages || []);
@@ -61,7 +107,15 @@ export default function OmnichannelChatModule() {
     setConversations(c.conversations || []);
     setNotifications(n.notifications || []);
     setIsMock(Boolean(p.isMock || c.isMock));
+    // Chỉ coi là lỗi khi tải Page/Hội thoại hỏng (thông báo lỗi nhẹ hơn, không chặn)
+    setLoadError(p.error || c.error || "");
     setLoading(false);
+  };
+
+  const reload = () => {
+    setLoading(true);
+    setLoadError("");
+    fetchAll().then(applyData);
   };
 
   useEffect(() => {
@@ -86,6 +140,7 @@ export default function OmnichannelChatModule() {
         ws = new WebSocket(`${proto}//${host}:28129/api/facebook/ws/all`);
 
         ws.onopen = () => {
+          wsOpenRef.current = true;
           timer = setInterval(() => {
             if (ws && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: "ping" }));
@@ -99,25 +154,56 @@ export default function OmnichannelChatModule() {
             if (payload.type === "message" && payload.data) {
               const msgData = payload.data;
               const convId = `${msgData.page_id}_${msgData.sender_id}`;
+              // Bóc tiền tố "[image] ..." thành đính kèm, tránh hiện nguyên link dưới dạng text
+              const parsed = parseAttachmentText(msgData.text);
               const incomingMsg = {
                 id: String(msgData.id || msgData.facebook_message_id),
                 direction: msgData.direction === "outbound" ? "out" : "in",
-                text: msgData.text || "",
-                createdAt: msgData.created_at || new Date().toISOString(),
+                text: parsed.text,
+                attachment: parsed.attachment,
+                createdAt: toUtcIso(msgData.created_at) || new Date().toISOString(),
               };
 
-              // Thêm tin nhắn mới vào cuộc hội thoại
+              // Thêm tin nhắn mới vào cuộc hội thoại (chống trùng với tin optimistic mình vừa gửi)
               setMessagesByConversation((all) => {
                 const currentList = all[convId] || [];
+                // Đã có đúng tin này theo id thật -> bỏ qua
                 if (currentList.some((m) => m.id === incomingMsg.id)) return all;
+                // Tin do mình vừa gửi (id local-..., cùng chiều & nội dung) -> gắn id thật thay vì thêm bản mới
+                if (incomingMsg.direction === "out") {
+                  const idx = currentList.findIndex(
+                    (m) =>
+                      String(m.id).startsWith("local-") &&
+                      m.direction === "out" &&
+                      (m.text || "") === (incomingMsg.text || ""),
+                  );
+                  if (idx !== -1) {
+                    const next = currentList.slice();
+                    next[idx] = {
+                      ...next[idx],
+                      id: incomingMsg.id,
+                      status: undefined,
+                      // Đổi ảnh xem trước (blob:) sang URL công khai thật do server trả về.
+                      // Bản echo không mang tên tệp gốc -> giữ lại tên của tin optimistic.
+                      attachment: incomingMsg.attachment
+                        ? {
+                            ...incomingMsg.attachment,
+                            name: incomingMsg.attachment.name || next[idx].attachment?.name,
+                          }
+                        : next[idx].attachment,
+                    };
+                    return { ...all, [convId]: next };
+                  }
+                }
                 return { ...all, [convId]: [...currentList, incomingMsg] };
               });
 
               // Cập nhật thẻ hội thoại ở sidebar
               setConversations((list) => {
                 const exists = list.some((c) => c.id === convId);
-                const isCurrentActive = activeConversationId === convId;
-                const snippet = msgData.text || "[Hình ảnh/Tệp đính kèm]";
+                const isCurrentActive = activeConvRef.current === convId;
+                // Xem trước ở danh sách hội thoại: đính kèm thì ghi nhãn, không in link
+                const snippet = messagePreview(msgData.text) || attachmentLabel();
                 const lastMsgText = msgData.direction === "outbound" ? `Bạn: ${snippet}` : snippet;
 
                 if (exists) {
@@ -170,6 +256,7 @@ export default function OmnichannelChatModule() {
         };
 
         ws.onclose = () => {
+          wsOpenRef.current = false;
           clearInterval(timer);
           if (!destroyed) {
             setTimeout(connectWs, 3000);
@@ -188,17 +275,20 @@ export default function OmnichannelChatModule() {
 
     return () => {
       destroyed = true;
+      wsOpenRef.current = false;
       clearInterval(timer);
       if (ws) ws.close();
     };
-  }, [activeConversationId]);
+  }, []);
 
-  const handleReset = async () => {
+  const confirmReset = async () => {
+    setResetConfirmOpen(false);
     setResetting(true);
     await resyncChatData();
     applyData(await fetchAll());
     setActivePageId(null);
     setActiveConversationId(null);
+    setOpenedNotificationId(null);
     setMessagesByConversation({});
     loadingMessages.current.clear();
     setResetting(false);
@@ -243,10 +333,11 @@ export default function OmnichannelChatModule() {
       .finally(() => loadingMessages.current.delete(id));
   };
 
-  // Đồng bộ định kỳ tin nhắn của hội thoại đang mở (fallback 3s)
+  // Fallback: chỉ hỏi lại tin nhắn khi WS realtime KHÔNG hoạt động (tránh tải trùng)
   useEffect(() => {
     if (!activeConversationId) return;
     const interval = setInterval(() => {
+      if (wsOpenRef.current) return; // WS đang khoẻ -> tin mới đã về qua realtime, bỏ qua
       getMessages(activeConversationId).then((res) => {
         if (res?.messages && res.messages.length > 0) {
           setMessagesByConversation((all) => {
@@ -266,6 +357,7 @@ export default function OmnichannelChatModule() {
   }, [activeConversationId]);
 
   const selectConversation = (id) => {
+    setOpenedNotificationId(null); // mở hội thoại thì đóng chi tiết thông báo
     setActiveConversationId(id);
     // Mở hội thoại -> coi như đã xem
     updateConversation(id, { unread: false });
@@ -278,7 +370,9 @@ export default function OmnichannelChatModule() {
     if (isMock) return;
     patchMessage(conversationId, message.id, { status: "sending" });
     sendMessage(conversationId, { text: message.text, attachment: message.attachment, replyToId: message.replyTo?.id })
-      .then((res) => patchMessage(conversationId, message.id, { ...(res?.message || {}), id: message.id, status: undefined }))
+      // Giữ nguyên id local-... (KHÔNG gắn message_id của HTTP = Facebook mid), chỉ bỏ cờ "sending".
+      // WS echo dùng id DB (trùng với getMessages) sẽ tự reconcile tin local-... này -> tránh trùng.
+      .then(() => patchMessage(conversationId, message.id, { status: undefined }))
       .catch(() => patchMessage(conversationId, message.id, { status: "failed" }));
   };
 
@@ -293,7 +387,7 @@ export default function OmnichannelChatModule() {
       status: isMock ? undefined : "sending",
     };
     setThread(conversationId, (list) => [...list, message]);
-    const preview = text || (attachment?.type === "image" ? "[Hình ảnh]" : "[Tệp đính kèm]");
+    const preview = text || attachmentLabel(attachment?.type);
     updateConversation(conversationId, { replied: true, unread: false, lastMessage: `Bạn: ${preview}`, updatedAt: message.createdAt });
     deliver(conversationId, message);
   };
@@ -312,72 +406,250 @@ export default function OmnichannelChatModule() {
   };
 
   const openNotification = (id) => {
+    const target = notifications.find((n) => n.id === id) || null;
     setNotifications((list) => list.map((n) => (n.id === id ? { ...n, unread: false } : n)));
-    if (!isMock) markNotificationRead(id).catch(() => {});
+    if (!isMock) markNotificationRead(target?.rawId || id).catch(() => {});
+    setActiveConversationId(null); // mở chi tiết thông báo thì đóng khung chat
+    setOpenedNotificationId(id);
   };
+
+  const openedNotification = notifications.find((n) => n.id === openedNotificationId) || null;
+
+  // Bố cục theo độ rộng thật: đủ rộng -> 2 cột (chi tiết + hội thoại, Page thu thành nút);
+  // hẹp (compact) -> 1 cột đi lần lượt
+  const { ref: rowRef, width: rowWidth } = useRowWidth();
+  const compact = rowWidth > 0 && rowWidth < COMPACT_LAYOUT_WIDTH;
+
+  // Kéo dãn độ rộng 2 cột (giống thanh sidebar), nhớ lại bằng localStorage.
+  // getAvailableMax chặn không cho kéo quá chỗ trống còn lại → không tràn ngang cả trang.
+  const MIDDLE_MIN = 360; // khớp min-w của khung chat ở giữa
+  const SECOND_COL_MIN = 420; // bố cục 2 cột: chỗ tối thiểu cho khung chat / danh sách (ô nhập + thanh lọc)
+  const GAP = 12; // gap-3
+  const { ref: pageColRef, handleProps: pageColHandleProps, dragging: pageColDragging } = useResizableWidth({
+    min: 240,
+    max: 480,
+    default: 317,
+    storageKey: "fb-automator.chat.pagelist-width",
+    side: "right",
+    getAvailableMax: (el) => {
+      const row = el.parentElement;
+      if (!row) return Infinity;
+      if (row.children.length >= 3) {
+        // 3 cột: chừa chỗ cho khung giữa (min) + cột Hội thoại hiện tại
+        const convW = row.lastElementChild?.getBoundingClientRect().width ?? 440;
+        return row.clientWidth - convW - MIDDLE_MIN - GAP * 2;
+      }
+      // 2 cột: chừa đủ chỗ cho cột thứ hai (khung chat / danh sách) khỏi bị cắt nội dung
+      return row.clientWidth - SECOND_COL_MIN - GAP;
+    },
+  });
+  const {
+    ref: convColRef,
+    handleProps: convColHandleProps,
+    dragging: convColDragging,
+    reclamp: reclampConvCol,
+  } = useResizableWidth({
+    min: 320,
+    max: 680,
+    default: 440,
+    storageKey: "fb-automator.chat.convlist-width",
+    side: "left",
+    getAvailableMax: (el) => {
+      const row = el.parentElement;
+      if (!row) return Infinity;
+      const pageW = row.firstElementChild?.getBoundingClientRect().width ?? 317;
+      return row.clientWidth - pageW - MIDDLE_MIN - GAP * 2;
+    },
+  });
+
+  // Đổi bố cục (mở/đóng chi tiết, vào/ra chế độ 1 cột) -> số cột đổi nhưng bề rộng hàng không đổi,
+  // nên ResizeObserver không kích hoạt; phải chủ động kẹp lại cột Hội thoại cho vừa chỗ trống mới.
+  useEffect(() => {
+    reclampConvCol();
+  }, [reclampConvCol, activeConversationId, openedNotificationId, compact]);
+
+  // Có panel giữa (khung chat / chi tiết thông báo) hay không
+  const detailPanel = activeConversation ? (
+    <ChatWindow
+      key={activeConversation.id}
+      conversation={activeConversation}
+      pageName={pagesById[activeConversation.pageId]?.name}
+      messages={messagesByConversation[activeConversation.id]}
+      onSend={(payload) => handleSend(activeConversation.id, payload)}
+      onRetry={(message) => deliver(activeConversation.id, message)}
+      onReact={(messageId, emoji) => {
+        setThread(activeConversation.id, (list) =>
+          list.map((m) => (m.id === messageId ? { ...m, reaction: m.reaction === emoji ? null : emoji } : m)),
+        );
+        if (!isMock) reactToMessage(activeConversation.id, messageId, emoji).catch(() => {});
+      }}
+      onToggleStar={() => handleToggleStar(activeConversation)}
+      onToggleTag={(tagId) => handleToggleTag(activeConversation, tagId)}
+      onMarkUnread={() => {
+        updateConversation(activeConversation.id, { unread: true });
+        setActiveConversationId(null);
+      }}
+      onClose={() => setActiveConversationId(null)}
+      // Bố cục hẹp: chi tiết thay chỗ danh sách -> cần nút quay lại
+      onBack={compact ? () => setActiveConversationId(null) : undefined}
+    />
+  ) : openedNotification ? (
+    <NotificationDetail
+      key={openedNotification.id}
+      notification={openedNotification}
+      page={pagesById[openedNotification.pageId]}
+      pageName={pagesById[openedNotification.pageId]?.name}
+      onBack={() => setOpenedNotificationId(null)}
+    />
+  ) : null;
+
+  // Một bản PageList dùng chung cho cột cố định (1 cột drill-down hoặc 2 cột)
+  const pageListEl = (className, onPicked) => (
+    <PageList
+      className={className}
+      pages={visiblePages}
+      total={totalPages}
+      activePageId={activePageId}
+      onSelectPage={(id) => {
+        setActivePageId(id);
+        setActiveConversationId(null);
+        setOpenedNotificationId(null);
+        onPicked?.();
+      }}
+      search={search}
+      onSearchChange={setSearch}
+      onReset={() => setResetConfirmOpen(true)}
+      resetting={resetting}
+    />
+  );
+
+  // Một bản ConversationList dùng chung; đổi className tuỳ 2 cột hay 3 cột
+  const conversationList = (extraClass, onBack) => (
+    <ConversationList
+      className={extraClass}
+      onBack={onBack}
+      tab={tab}
+      onTabChange={setTab}
+      filter={filter}
+      onFilterChange={setFilter}
+      sort={sort}
+      onSortChange={setSort}
+      conversations={visibleConversations}
+      notifications={notifications}
+      pagesById={pagesById}
+      activeConversationId={activeConversationId}
+      onSelectConversation={selectConversation}
+      notificationType={notificationType}
+      onNotificationTypeChange={setNotificationType}
+      notificationFilter={notificationFilter}
+      onNotificationFilterChange={setNotificationFilter}
+      onOpenNotification={openNotification}
+    />
+  );
 
   return (
     <div className="h-full min-h-[520px] flex flex-col gap-2">
-      <div className="flex-1 min-h-0 flex gap-3">
-        <PageList
-          className="w-[260px] 2xl:w-[317px]"
-          pages={visiblePages}
-          total={totalPages}
-          activePageId={activePageId}
-          onSelectPage={(id) => {
-            setActivePageId(id);
-            setActiveConversationId(null);
-          }}
-          search={search}
-          onSearchChange={setSearch}
-          onReset={handleReset}
-          resetting={resetting}
-        />
-        {activeConversation ? (
-          <ChatWindow
-            key={activeConversation.id}
-            conversation={activeConversation}
-            pageName={pagesById[activeConversation.pageId]?.name}
-            messages={messagesByConversation[activeConversation.id]}
-            onSend={(payload) => handleSend(activeConversation.id, payload)}
-            onRetry={(message) => deliver(activeConversation.id, message)}
-            onReact={(messageId, emoji) => {
-              setThread(activeConversation.id, (list) =>
-                list.map((m) => (m.id === messageId ? { ...m, reaction: m.reaction === emoji ? null : emoji } : m)),
-              );
-              if (!isMock) reactToMessage(activeConversation.id, messageId, emoji).catch(() => {});
-            }}
-            onToggleStar={() => handleToggleStar(activeConversation)}
-            onToggleTag={(tagId) => handleToggleTag(activeConversation, tagId)}
-            onMarkUnread={() => {
-              updateConversation(activeConversation.id, { unread: true });
-              setActiveConversationId(null);
-            }}
-            onClose={() => setActiveConversationId(null)}
-          />
+      {/* #7: báo lỗi tải dữ liệu rõ ràng + nút thử lại (thay vì im lặng trả rỗng) */}
+      {loadError && !loading && (
+        <div className="shrink-0 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-700">
+          <span className="min-w-0 truncate" title={loadError}>{friendlyFbError(loadError)}</span>
+          <button
+            type="button"
+            onClick={reload}
+            className="shrink-0 rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100"
+          >
+            Thử lại
+          </button>
+        </div>
+      )}
+      <div ref={rowRef} className="relative flex-1 min-h-0 min-w-0 flex gap-3 overflow-hidden">
+        {compact ? (
+          // Bố cục 1 cột: Danh sách Page -> Hội thoại/Thông báo -> Chi tiết (mỗi cấp có nút quay lại)
+          detailPanel ? (
+            detailPanel
+          ) : compactShowList ? (
+            conversationList("flex-1 min-w-0", () => setCompactShowList(false))
+          ) : (
+            pageListEl("flex-1 min-w-0 w-auto", () => setCompactShowList(true))
+          )
+        ) : !detailPanel ? (
+          // Chưa mở chi tiết: 2 cột như Figma — Page (kéo đổi độ rộng) + Hội thoại giãn đầy
+          <>
+            <div ref={pageColRef} style={{ width: 317 }} className="relative shrink-0 h-full">
+              {pageListEl("w-full")}
+              <ResizeHandle handleProps={pageColHandleProps} dragging={pageColDragging} side="right" />
+            </div>
+            {conversationList("flex-1 min-w-0")}
+          </>
         ) : (
-          <ChatPlaceholder />
+          // Đang mở chi tiết: ẩn cột Page, chỉ còn nút icon mở sheet -> nhường chỗ cho nội dung
+          <>
+            <div className="shrink-0 pt-1">
+              <PageSwitcher
+                pages={visiblePages}
+                total={totalPages}
+                activePageId={activePageId}
+                activePage={activePageId ? pagesById[activePageId] : null}
+                onSelectPage={(id) => {
+                  setActivePageId(id);
+                  setActiveConversationId(null);
+                  setOpenedNotificationId(null);
+                }}
+                search={search}
+                onSearchChange={setSearch}
+                onReset={() => setResetConfirmOpen(true)}
+                resetting={resetting}
+              />
+            </div>
+
+            {/* Cột trái: chi tiết (chiếm phần còn lại) */}
+            {detailPanel}
+
+            {/* Cột phải: Hội thoại & Thông báo — cố định, kéo đổi độ rộng ở mép trái */}
+            <div ref={convColRef} style={{ width: 440 }} className="relative shrink-0 h-full">
+              <ResizeHandle handleProps={convColHandleProps} dragging={convColDragging} side="left" />
+              {conversationList("w-full")}
+            </div>
+          </>
         )}
-        <ConversationList
-          className="flex-none w-[320px] xl:w-[360px] 2xl:w-[440px]"
-          tab={tab}
-          onTabChange={setTab}
-          filter={filter}
-          onFilterChange={setFilter}
-          sort={sort}
-          onSortChange={setSort}
-          conversations={visibleConversations}
-          notifications={notifications}
-          pagesById={pagesById}
-          activeConversationId={activeConversationId}
-          onSelectConversation={selectConversation}
-          notificationType={notificationType}
-          onNotificationTypeChange={setNotificationType}
-          notificationFilter={notificationFilter}
-          onNotificationFilterChange={setNotificationFilter}
-          onOpenNotification={openNotification}
-        />
+
       </div>
+
+      {/* #4: xác nhận trước khi xoá/đồng bộ lại toàn bộ dữ liệu chat */}
+      {resetConfirmOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setResetConfirmOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-bold text-slate-900">Reset dữ liệu chat?</h3>
+            <p className="mt-2 text-sm leading-5 text-slate-600">
+              Thao tác này sẽ <strong>xoá toàn bộ</strong> Page, hội thoại, tin nhắn và thông báo đã đồng bộ của bạn, rồi đồng bộ lại từ Facebook. Không thể hoàn tác.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setResetConfirmOpen(false)}
+                className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Huỷ
+              </button>
+              <button
+                type="button"
+                onClick={confirmReset}
+                className="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
+              >
+                Xoá & đồng bộ lại
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

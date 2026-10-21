@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { useIncrementalList } from "@/lib/use-incremental-list";
 
 // Figma: Section - COLUMN 1: DANH SÁCH PAGE (1072:12082)
 
@@ -72,6 +73,7 @@ export default function PageList({
   resetting,
   className,
 }) {
+  const { slice, sentinelRef, hasMore } = useIncrementalList(pages, 40);
   return (
     <section
       aria-label="Danh sách Page"
@@ -141,7 +143,7 @@ export default function PageList({
         {pages.length === 0 && (
           <li className="px-3 py-6 text-center text-xs text-slate-400">Không tìm thấy Page phù hợp.</li>
         )}
-        {pages.map((page) => {
+        {slice.map((page) => {
           const active = page.id === activePageId;
           return (
             <li key={page.id}>
@@ -171,6 +173,7 @@ export default function PageList({
             </li>
           );
         })}
+        {hasMore && <li ref={sentinelRef} aria-hidden="true" className="h-4 shrink-0" />}
       </ul>
     </section>
   );

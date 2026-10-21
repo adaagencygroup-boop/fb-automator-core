@@ -29,7 +29,13 @@ from modules.module_06_omnichannel_chat.models import Message, Page, Account, Sy
 
 router = APIRouter(prefix="/api/facebook", tags=["Messages"])
 
+from urllib.parse import quote
+
 UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../uploads"))
+
+# Facebook phai TAI DUOC file dinh kem tu Internet, nen URL gui cho Graph API phai la dia chi cong khai.
+# Chay local thi dat PUBLIC_MEDIA_BASE_URL tro toi tunnel (ngrok/cloudflared) cua engine nay.
+PUBLIC_MEDIA_BASE_URL = os.getenv("PUBLIC_MEDIA_BASE_URL", "https://phanmemchat.online").rstrip("/")
 
 @router.get("/messages", response_model=List[MessageOut])
 def get_messages(
@@ -316,8 +322,8 @@ async def send_attachment_file(
     with open(filepath, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    local_file_url = f"/uploads/{filename}"
-    public_url = f"https://phanmemchat.online{local_file_url}"
+    local_file_url = f"/uploads/{quote(filename)}"  # ten file co dau cach/ngoac -> phai encode
+    public_url = f"{PUBLIC_MEDIA_BASE_URL}{local_file_url}"
 
     try:
         res = await sync_service.send_attachment_by_url(
@@ -343,8 +349,8 @@ async def upload_media(
     with open(filepath, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    local_file_url = f"/uploads/{filename}"
-    public_url = f"https://phanmemchat.online{local_file_url}"
+    local_file_url = f"/uploads/{quote(filename)}"  # ten file co dau cach/ngoac -> phai encode
+    public_url = f"{PUBLIC_MEDIA_BASE_URL}{local_file_url}"
 
     return {"success": True, "url": public_url}
 
