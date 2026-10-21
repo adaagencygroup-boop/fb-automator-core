@@ -11,6 +11,7 @@ import json
 import os
 import sys
 from urllib.parse import unquote
+from uuid import uuid4
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -172,6 +173,8 @@ _PUBLIC_API = {
     "/api/facebook/webhook",
     "/api/facebook/config",
     "/api/groups/source/template",
+    "/oauth/meta/callback",
+    "/api/pages/web-oauth/callback-submit",
 }
 
 
@@ -249,6 +252,10 @@ if farm_router:
     app.include_router(farm_router)
 
 
+# Đổi mỗi lần process engine khởi động. Video chào chỉ hiện lại khi start.py chạy lại.
+ENGINE_BOOT_ID = uuid4().hex
+
+
 # ==================== SYSTEM & HEALTH CHECK ====================
 @app.get("/api/health")
 def health_check():
@@ -257,6 +264,7 @@ def health_check():
         "app": "Facebook Automator Pro",
         "version": "2.0.0",
         "port": 28129,
+        "boot_id": ENGINE_BOOT_ID,
     }
 
 
@@ -367,9 +375,12 @@ app.include_router(creator_router)
 from modules.module_05_page_manager.routes_reels import router as reels_router
 app.include_router(reels_router, prefix="/api")
 
+from modules.module_05_page_manager.routes_download import router as download_router
+app.include_router(download_router, prefix="/api")
 from modules.module_05_page_manager.routes_pages import router as page_manager_router
 app.include_router(page_manager_router, prefix="/api")
-
+from modules.module_05_page_manager.routes_oauth_callback import router as oauth_callback_router
+app.include_router(oauth_callback_router)
 from modules.module_05_page_manager.routes import router as ai_post_router
 app.include_router(ai_post_router)
 

@@ -115,6 +115,31 @@ class TestReelsPoster(unittest.TestCase):
         self.assertEqual(len(st["recent_logs"]), 1)
         self.assertIn("Test log entry message", st["recent_logs"][0]["message"])
 
+    def test_normalize_schedule_times(self):
+        """Kiểm tra hàm chuẩn hóa khung giờ sang 2 chữ số HH:MM"""
+        runner = ReelsTaskRunner()
+        input_times = ["9:00", "09:30", "5:15", "18:0", "20:30", "invalid", "25:00", "12:65"]
+        # Notice "18:0" -> parts[1]=0 -> 18:00
+        normalized = runner._normalize_schedule_times(input_times)
+        self.assertIn("09:00", normalized)
+        self.assertIn("09:30", normalized)
+        self.assertIn("05:15", normalized)
+        self.assertIn("18:00", normalized)
+        self.assertIn("20:30", normalized)
+        self.assertNotIn("invalid", normalized)
+        self.assertNotIn("25:00", normalized)
+        self.assertNotIn("12:65", normalized)
+
+    def test_scheduler_next_slot(self):
+        """Kiểm tra hàm tính slot tiếp theo và trạng thái ngày mai"""
+        runner = ReelsTaskRunner()
+        schedule = ["08:00", "11:30", "18:00", "20:30"]
+        next_slot = runner._get_next_slot(schedule)
+        self.assertIsNotNone(next_slot)
+        self.assertIn(next_slot["time"], schedule)
+        self.assertGreaterEqual(next_slot["diff_minutes"], 0)
+        self.assertIn("is_tomorrow", next_slot)
+
 
 if __name__ == "__main__":
     unittest.main()

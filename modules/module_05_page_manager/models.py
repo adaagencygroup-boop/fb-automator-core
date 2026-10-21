@@ -160,6 +160,7 @@ COLUMN_MIGRATIONS = [
     "ALTER TABLE pages ADD COLUMN IF NOT EXISTS account_uid VARCHAR(100)",
     "ALTER TABLE pages ADD COLUMN IF NOT EXISTS ai_keyword TEXT",
     "ALTER TABLE pages ADD COLUMN IF NOT EXISTS tiktok_keyword TEXT",
+    "ALTER TABLE pages ADD COLUMN IF NOT EXISTS tiktok_url TEXT",
     "ALTER TABLE pages ADD COLUMN IF NOT EXISTS youtube_keyword TEXT",
     "ALTER TABLE pages ADD COLUMN IF NOT EXISTS youtube_url TEXT",
     "ALTER TABLE posting_history ADD COLUMN IF NOT EXISTS account_uid VARCHAR(100)",
@@ -196,6 +197,17 @@ def init_models():
     db.execute("UPDATE downloaded_videos SET source = 'TIKTOK' WHERE source IS NULL")
     db.execute("ALTER TABLE downloaded_videos ALTER COLUMN source SET NOT NULL")
     db.execute("UPDATE downloaded_videos SET object_path = link WHERE object_path IS NULL AND link IS NOT NULL")
+    db.execute("""
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'unique_page_source_video'
+        ) THEN
+          ALTER TABLE downloaded_videos DROP CONSTRAINT IF EXISTS unique_page_video;
+          ALTER TABLE downloaded_videos ADD CONSTRAINT unique_page_source_video UNIQUE (page_id, source, video_id);
+        END IF;
+      END $$;
+    """)
 
 
     db.execute("CREATE TABLE IF NOT EXISTS module5_migrations (version TEXT PRIMARY KEY)")

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useEffectEvent, useRef, useMemo, useCallback } from "react";
 import {
   FolderOpen,
   Clock,
@@ -19,8 +19,10 @@ import {
   Info,
   FolderCheck,
   FolderX,
-  RotateCcw
+  RotateCcw,
+  Check
 } from "lucide-react";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   getReelsAccountsPages,
   scanReelsFolders,
@@ -87,56 +89,27 @@ export default function ReelsPoster() {
 
   // Runner & Console logs states
   const [isRunning, setIsRunning] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [runnerStatus, setRunnerStatus] = useState("IDLE");
+  const [runnerNextSlot, setRunnerNextSlot] = useState(null);
+  const [currentTimeMinutes, setCurrentTimeMinutes] = useState(() => {
+    const d = new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  });
   const [stats, setStats] = useState({ total_pages: 0, processed: 0, success: 0, failed: 0, current_page: "" });
   const [logs, setLogs] = useState([]);
   const logBoxRef = useRef(null);
-  const eventSourceRef = useRef(null);
   const folderInputRef = useRef(null);
   const isInitializedRef = useRef(false);
 
-  // 1. Khôi phục cấu hình đã lưu từ localStorage khi khởi chạy
+  // Cập nhật phút hiện tại định kỳ để hiển thị đếm ngược chính xác
   useEffect(() => {
-    let targetScanDir = DEFAULT_REELS_CONFIG.rootDir;
-    try {
-      if (typeof window !== "undefined") {
-        const saved = localStorage.getItem(STORAGE_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed.rootDir) {
-            setRootDir(parsed.rootDir);
-            targetScanDir = parsed.rootDir;
-          }
-          if (parsed.scheduleEnabled !== undefined) {
-            setScheduleEnabled(Boolean(parsed.scheduleEnabled));
-          }
-          if (Array.isArray(parsed.scheduleTimes) && parsed.scheduleTimes.length > 0) {
-            setScheduleTimes(parsed.scheduleTimes);
-          }
-          if (parsed.sleepMin !== undefined) {
-            setSleepMin(Number(parsed.sleepMin));
-          }
-          if (parsed.sleepMax !== undefined) {
-            setSleepMax(Number(parsed.sleepMax));
-          }
-          if (parsed.pageFolderOverrides && typeof parsed.pageFolderOverrides === "object") {
-            setPageFolderOverrides(parsed.pageFolderOverrides);
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("Lỗi đọc cấu hình từ localStorage:", e);
-    }
-
-    // Quét thư mục tương ứng cấu hình đã lưu
-    handleScanFolders(targetScanDir, false);
-
-    // Kích hoạt cờ Auto-save sau khi các state đã nạp xong (tránh race condition ghi đè giá trị mặc định)
-    const timer = setTimeout(() => {
-      isInitializedRef.current = true;
-    }, 250);
-
-    return () => clearTimeout(timer);
+    const ticker = setInterval(() => {
+      const d = new Date();
+      setCurrentTimeMinutes(d.getHours() * 60 + d.getMinutes());
+    }, 15000);
+    return () => clearInterval(ticker);
   }, []);
 
   // 2. Tự động lưu ngầm vào localStorage (Auto-save) khi người dùng thay đổi cấu hình
@@ -225,7 +198,7 @@ export default function ReelsPoster() {
       handleScanFolders(determinedPath, true);
     }
   };
-  const loadAccountsAndPages = async () => {
+  const loadAccountsAndPages = useCallback(async () => {
     setLoadingData(true);
     try {
       const data = await getReelsAccountsPages();
@@ -245,7 +218,7 @@ export default function ReelsPoster() {
     } finally {
       setLoadingData(false);
     }
-  };
+  }, []);
 
   // Quét thư mục gốc kèm phản hồi toàn diện (Nút xoay, Toast, Terminal logs)
   const handleScanFolders = async (dirToScan, isManual = false) => {
@@ -360,26 +333,69 @@ export default function ReelsPoster() {
     }
   };
 
+  const scanInitialFolders = useEffectEvent((dir) => handleScanFolders(dir, false));
+
+  // 1. Khôi phục cấu hình đã lưu từ localStorage khi khởi chạy
   useEffect(() => {
-    loadAccountsAndPages();
-    fetchStatus();
-    setupSSE();
+    let cancelled = false;
+    let timer;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      let targetScanDir = DEFAULT_REELS_CONFIG.rootDir;
+      try {
+        if (typeof window !== "undefined") {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed.rootDir) {
+              setRootDir(parsed.rootDir);
+              targetScanDir = parsed.rootDir;
+            }
+            if (parsed.scheduleEnabled !== undefined) {
+              setScheduleEnabled(Boolean(parsed.scheduleEnabled));
+            }
+            if (Array.isArray(parsed.scheduleTimes) && parsed.scheduleTimes.length > 0) {
+              setScheduleTimes(parsed.scheduleTimes);
+            }
+            if (parsed.sleepMin !== undefined) {
+              setSleepMin(Number(parsed.sleepMin));
+            }
+            if (parsed.sleepMax !== undefined) {
+              setSleepMax(Number(parsed.sleepMax));
+            }
+            if (parsed.pageFolderOverrides && typeof parsed.pageFolderOverrides === "object") {
+              setPageFolderOverrides(parsed.pageFolderOverrides);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Lỗi đọc cấu hình từ localStorage:", e);
+      }
+
+      // Quét thư mục tương ứng cấu hình đã lưu
+      scanInitialFolders(targetScanDir);
+
+      // Kích hoạt cờ Auto-save sau khi các state đã nạp xong (tránh race condition ghi đè giá trị mặc định)
+      timer = setTimeout(() => {
+        isInitializedRef.current = true;
+      }, 250);
+    });
 
     return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
+      cancelled = true;
+      clearTimeout(timer);
     };
   }, []);
 
   // Fetch status định kỳ
-  const fetchStatus = async () => {
+  const fetchStatus = useCallback(async () => {
     try {
       const st = await getReelsStatus();
       if (st) {
         setIsRunning(st.is_running);
         setRunnerStatus(st.status);
         if (st.stats) setStats(st.stats);
+        if (st.next_slot !== undefined) setRunnerNextSlot(st.next_slot);
         if (Array.isArray(st.recent_logs) && st.recent_logs.length > 0) {
           setLogs((prev) => {
             const existingKeys = new Set(prev.map((l) => `${l.timestamp}_${l.message}`));
@@ -391,7 +407,17 @@ export default function ReelsPoster() {
     } catch (e) {
       // ignore
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (cancelled) return;
+      void loadAccountsAndPages();
+      void fetchStatus();
+    });
+    return () => { cancelled = true; };
+  }, [loadAccountsAndPages, fetchStatus]);
 
   // Polling fallback: tự động thăm dò mỗi 2s khi tiến trình đang chạy (đảm bảo log & status luôn cập nhật)
   useEffect(() => {
@@ -400,38 +426,54 @@ export default function ReelsPoster() {
       fetchStatus();
     }, 2000);
     return () => clearInterval(interval);
-  }, [isRunning]);
+  }, [isRunning, fetchStatus]);
 
   // Setup SSE stream for console logs
-  const setupSSE = () => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-    }
-    const streamUrl = `${API_BASE}/api/pages/reels/logs/stream`;
-    const es = new EventSource(streamUrl, { withCredentials: true });
-    eventSourceRef.current = es;
+  useEffect(() => {
+    let disposed = false;
+    let reconnectTimer;
+    let source;
+    const setupSSE = () => {
+      if (disposed) return;
+      const streamUrl = `${API_BASE}/api/pages/reels/logs/stream`;
+      const es = new EventSource(streamUrl, { withCredentials: true });
+      source = es;
 
-    es.onmessage = (event) => {
-      try {
-        if (!event.data || event.data.trim() === "ping") return;
-        const entry = JSON.parse(event.data);
-        if (entry && entry.message) {
-          setLogs((prev) => {
-            const key = `${entry.timestamp}_${entry.message}`;
-            if (prev.some((l) => `${l.timestamp}_${l.message}` === key)) return prev;
-            return [...prev, entry];
-          });
+      es.onmessage = (event) => {
+        try {
+          if (!event.data || event.data.trim() === "ping") return;
+          const entry = JSON.parse(event.data);
+          if (entry && entry.message) {
+            setLogs((prev) => {
+              const key = `${entry.timestamp}_${entry.message}`;
+              if (prev.some((l) => `${l.timestamp}_${l.message}` === key)) return prev;
+              return [...prev, entry];
+            });
+          }
+        } catch (err) {
+          // ignore parse error
         }
-      } catch (err) {
-        // ignore parse error
+      };
+
+      es.onerror = () => {
+        es.close();
+        if (!disposed) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(setupSSE, 5000);
+        }
+      };
+    };
+    setupSSE();
+    return () => {
+      disposed = true;
+      clearTimeout(reconnectTimer);
+      if (source) {
+        source.onmessage = null;
+        source.onerror = null;
+        source.close();
       }
     };
-
-    es.onerror = () => {
-      es.close();
-      setTimeout(setupSSE, 5000);
-    };
-  };
+  }, []);
 
   // Tự động cuộn console log xuống cuối
   useEffect(() => {
@@ -440,19 +482,69 @@ export default function ReelsPoster() {
     }
   }, [logs]);
 
-  // Thêm khung giờ hẹn
-  const handleAddTime = () => {
-    const val = newTimeInput.trim();
-    if (/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(val)) {
-      if (!scheduleTimes.includes(val)) {
-        setScheduleTimes([...scheduleTimes, val].sort());
+  // Thêm khung giờ hẹn (tự động chuẩn hóa 2 chữ số HH:MM)
+  const handleAddTime = (customVal) => {
+    const val = (customVal !== undefined ? customVal : newTimeInput || "09:00").trim();
+    if (!val) return;
+    const match = val.match(/^([01]?[0-9]|2[0-3]):([0-5][0-9])$/);
+    if (match) {
+      const h = match[1].padStart(2, "0");
+      const m = match[2];
+      const normalized = `${h}:${m}`;
+      if (!scheduleTimes.includes(normalized)) {
+        setScheduleTimes([...scheduleTimes, normalized].sort());
       }
       setNewTimeInput("");
       setShowAddTime(false);
     } else {
-      alert("Định dạng giờ không hợp lệ. Vui lòng nhập dạng HH:MM (Ví dụ: 14:30)");
+      alert("Định dạng giờ không hợp lệ. Vui lòng chọn dạng HH:MM (Ví dụ: 09:30 hoặc 18:00)");
     }
   };
+
+  // Tính toán khung giờ hẹn gần nhất tiếp theo
+  const getNextScheduledInfo = () => {
+    if (!scheduleEnabled || scheduleTimes.length === 0) return null;
+    const now = new Date();
+    const currentM = now.getHours() * 60 + now.getMinutes();
+
+    let nextSlot = null;
+    let minDiff = Infinity;
+
+    for (const t of scheduleTimes) {
+      if (!t || !t.includes(":")) continue;
+      const [h, m] = t.split(":").map(Number);
+      const slotMin = h * 60 + m;
+      if (slotMin > currentM) {
+        const diff = slotMin - currentM;
+        if (diff < minDiff) {
+          minDiff = diff;
+          nextSlot = { time: t, diffMinutes: diff, isTomorrow: false };
+        }
+      }
+    }
+
+    if (!nextSlot && scheduleTimes.length > 0) {
+      const sorted = [...scheduleTimes].sort();
+      if (sorted[0] && sorted[0].includes(":")) {
+        const [h, m] = sorted[0].split(":").map(Number);
+        const slotMin = h * 60 + m;
+        const diff = 1440 - currentM + slotMin;
+        nextSlot = { time: sorted[0], diffMinutes: diff, isTomorrow: true };
+      }
+    }
+
+    return nextSlot;
+  };
+
+  const formatTimeRemaining = (mins) => {
+    if (!mins || mins <= 0) return "dưới 1 phút";
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    if (h > 0) return `${h} giờ ${m} phút`;
+    return `${m} phút`;
+  };
+
+  const nextSlotInfo = runnerNextSlot || getNextScheduledInfo();
 
   // Xóa khung giờ hẹn
   const handleRemoveTime = (timeToRemove) => {
@@ -508,20 +600,76 @@ export default function ReelsPoster() {
   };
 
   // Lấy tên thư mục video hiện tại của một Page
-  const getPageFolder = (page) => {
+  const getPageFolder = useCallback((page) => {
     const pid = String(page.page_id);
     return pageFolderOverrides[pid] !== undefined ? pageFolderOverrides[pid] : (page.reels_folder || page.page_name || "");
-  };
+  }, [pageFolderOverrides]);
 
   // Kiểm tra một Page đã được gán thư mục video hợp lệ chưa
-  const isPageAssigned = (page) => {
+  const isPageAssigned = useCallback((page) => {
     const folder = getPageFolder(page);
     if (!folder) return false;
     if (availableFolders.length > 0) {
       return availableFolders.some((f) => f.folder_name === folder);
     }
     return Boolean(folder);
-  };
+  }, [getPageFolder, availableFolders]);
+
+  // Lọc tài khoản theo dropdown & trạng thái gán thư mục
+  const [selectedAccountUid, setSelectedAccountUid] = useState("ALL");
+  const [filterFolderStatus, setFilterFolderStatus] = useState("ALL"); // "ALL" | "ASSIGNED" | "UNASSIGNED"
+  const lastClickedIndexRef = useRef(null);
+  const isDraggingRef = useRef(false);
+  const dragSelectModeRef = useRef(true);
+
+  // Lắng nghe sự kiện thả chuột toàn window để ngắt trạng thái kéo chọn
+  useEffect(() => {
+    const handleMouseUp = () => {
+      isDraggingRef.current = false;
+    };
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => window.removeEventListener("mouseup", handleMouseUp);
+  }, []);
+
+  // Danh sách phẳng tất cả Fanpage
+  const allPages = useMemo(() => accounts
+    .filter((acc) => selectedAccountUid === "ALL" || (acc.group_key || acc.account_uid) === selectedAccountUid)
+    .flatMap((acc) => (acc.pages || []).map((p) => ({
+      ...p,
+      account_name: acc.account_name,
+      account_uid: acc.account_uid,
+      avatar_url: acc.avatar_url,
+    }))), [accounts, selectedAccountUid]);
+
+  // Đếm số lượng Page đã gán và chưa gán
+  const assignedPagesCount = useMemo(() => {
+    return allPages.filter((p) => isPageAssigned(p)).length;
+  }, [allPages, isPageAssigned]);
+
+  const unassignedPagesCount = allPages.length - assignedPagesCount;
+
+  // Lọc Fanpage theo từ khóa tìm kiếm (tên, ID, tài khoản) và trạng thái gán thư mục
+  const filteredPages = useMemo(() => {
+    let result = allPages;
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      result = result.filter((p) => {
+        const nameMatch = (p.page_name || "").toLowerCase().includes(q);
+        const idMatch = String(p.page_id || "").toLowerCase().includes(q);
+        const accMatch = (p.account_name || "").toLowerCase().includes(q);
+        return nameMatch || idMatch || accMatch;
+      });
+    }
+
+    if (filterFolderStatus === "ASSIGNED") {
+      result = result.filter((p) => isPageAssigned(p));
+    } else if (filterFolderStatus === "UNASSIGNED") {
+      result = result.filter((p) => !isPageAssigned(p));
+    }
+
+    return result;
+  }, [allPages, searchQuery, filterFolderStatus, isPageAssigned]);
 
   // Kích hoạt tiến trình đăng Reels thật qua Backend API
   const handleStart = async () => {
@@ -594,6 +742,7 @@ export default function ReelsPoster() {
       setSelectedPageIds(next);
     }
 
+    setIsStarting(true);
     try {
       const payload = {
         root_dir: rootDir.trim(),
@@ -640,29 +789,45 @@ export default function ReelsPoster() {
           message: `Lỗi kết nối khi bắt đầu: ${errMsg}`
         }
       ]);
+    } finally {
+      setIsStarting(false);
     }
   };
 
-  // Dừng luồng qua Backend API
+  // Dừng luồng qua Backend API kèm xác nhận dừng hoàn tất
   const handleStop = async () => {
+    setIsStopping(true);
     try {
       const res = await stopReelsJob();
       if (res?.success) {
-        toast.info("Đã gửi yêu cầu dừng tiến trình đăng Reels.", "DỪNG LUỒNG");
+        toast.info("Đã gửi yêu cầu dừng tiến trình đăng Reels. Đang đợi luồng kết thúc an toàn...", "DỪNG LUỒNG");
+      }
+      setLogs((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString("vi-VN"),
+          level: "WARNING",
+          message: "Đang gửi tín hiệu dừng tiến trình đăng theo yêu cầu của người dùng... Vui lòng đợi hoàn tất."
+        }
+      ]);
+
+      // Kiểm tra trạng thái Backend cho đến khi thread dừng hẳn (thử tối đa 10 lần x 500ms = 5s)
+      for (let i = 0; i < 10; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const st = await getReelsStatus();
+        if (st && !st.is_running) {
+          setIsRunning(false);
+          setRunnerStatus(st.status || "STOPPED");
+          break;
+        }
       }
     } catch (e) {
       console.warn("Lỗi khi dừng luồng:", e);
+    } finally {
+      setIsRunning(false);
+      setRunnerStatus("STOPPED");
+      setIsStopping(false);
     }
-    setIsRunning(false);
-    setRunnerStatus("STOPPED");
-    setLogs((prev) => [
-      ...prev,
-      {
-        timestamp: new Date().toLocaleTimeString("vi-VN"),
-        level: "WARNING",
-        message: "Đã gửi tín hiệu dừng tiến trình đăng theo yêu cầu của người dùng."
-      }
-    ]);
   };
 
   // Xóa console log
@@ -674,73 +839,6 @@ export default function ReelsPoster() {
     }
     setLogs([]);
   };
-
-  // Lọc tài khoản theo dropdown & trạng thái gán thư mục
-  const [selectedAccountUid, setSelectedAccountUid] = useState("ALL");
-  const [filterFolderStatus, setFilterFolderStatus] = useState("ALL"); // "ALL" | "ASSIGNED" | "UNASSIGNED"
-  const lastClickedIndexRef = useRef(null);
-  const isDraggingRef = useRef(false);
-  const dragSelectModeRef = useRef(true);
-
-  // Lắng nghe sự kiện thả chuột toàn window để ngắt trạng thái kéo chọn
-  useEffect(() => {
-    const handleMouseUp = () => {
-      isDraggingRef.current = false;
-    };
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => window.removeEventListener("mouseup", handleMouseUp);
-  }, []);
-
-  // Danh sách phẳng tất cả Fanpage
-  const allPages = useMemo(() => {
-    const list = [];
-    accounts.forEach((acc) => {
-      if (selectedAccountUid !== "ALL" && (acc.group_key || acc.account_uid) !== selectedAccountUid) {
-        return;
-      }
-      (acc.pages || []).forEach((p) => {
-        list.push({
-          ...p,
-          account_name: acc.account_name,
-          account_uid: acc.account_uid,
-          avatar_url: acc.avatar_url,
-        });
-      });
-    });
-    return list;
-  }, [accounts, selectedAccountUid]);
-
-  // Đếm số lượng Page đã gán và chưa gán
-  const assignedPagesCount = useMemo(() => {
-    return allPages.filter((p) => isPageAssigned(p)).length;
-  }, [allPages, pageFolderOverrides, availableFolders]);
-
-  const unassignedPagesCount = useMemo(() => {
-    return allPages.length - assignedPagesCount;
-  }, [allPages.length, assignedPagesCount]);
-
-  // Lọc Fanpage theo từ khóa tìm kiếm (tên, ID, tài khoản) và trạng thái gán thư mục
-  const filteredPages = useMemo(() => {
-    let result = allPages;
-
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim();
-      result = result.filter((p) => {
-        const nameMatch = (p.page_name || "").toLowerCase().includes(q);
-        const idMatch = String(p.page_id || "").toLowerCase().includes(q);
-        const accMatch = (p.account_name || "").toLowerCase().includes(q);
-        return nameMatch || idMatch || accMatch;
-      });
-    }
-
-    if (filterFolderStatus === "ASSIGNED") {
-      result = result.filter((p) => isPageAssigned(p));
-    } else if (filterFolderStatus === "UNASSIGNED") {
-      result = result.filter((p) => !isPageAssigned(p));
-    }
-
-    return result;
-  }, [allPages, searchQuery, filterFolderStatus, pageFolderOverrides, availableFolders]);
 
   // Kiểm tra chọn tất cả
   const isAllPagesSelected = filteredPages.length > 0 && filteredPages.every((p) => selectedPageIds.has(String(p.page_id)));
@@ -829,8 +927,35 @@ export default function ReelsPoster() {
 
           {/* Field 2: Thư mục gốc chứa video */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-[12px] font-medium text-[#334155] flex items-center gap-1">
-              Thư mục gốc chứa video <Info className="w-3.5 h-3.5 text-[#94A3B8]" />
+            <label className="text-[12px] font-medium text-[#334155] flex items-center gap-1.5">
+              <span>Thư mục gốc chứa video</span>
+              <Tooltip
+                variant="light"
+                position="bottom"
+                containerClassName="inline-flex items-center"
+                align="left"
+                content={
+                  <div className="text-left space-y-1.5 leading-relaxed">
+                    <p className="font-semibold text-slate-900 text-[12px] border-b border-slate-100 pb-1 flex items-center gap-1">
+                      <span>📂 Cấu trúc thư mục chứa video Reels:</span>
+                    </p>
+                    <p className="text-slate-600">
+                      Thư mục gốc chứa các thư mục con tương ứng với tên từng Fanpage. Bên trong mỗi thư mục Fanpage có thể chứa:
+                    </p>
+                    <div className="bg-slate-50 p-2 rounded-md border border-slate-200/80 space-y-1.5 text-[11px]">
+                      <p className="text-slate-700">
+                        <strong className="text-blue-600 font-semibold">• Cách 1:</strong> Thư mục con đánh số <code className="bg-white px-1 py-0.5 rounded border border-slate-200 text-amber-700 font-mono font-medium">1</code>, <code className="bg-white px-1 py-0.5 rounded border border-slate-200 text-amber-700 font-mono font-medium">2</code>, <code className="bg-white px-1 py-0.5 rounded border border-slate-200 text-amber-700 font-mono font-medium">3...</code> (bên trong có 1 file video và file <code className="bg-white px-1 py-0.5 rounded border border-slate-200 text-amber-700 font-mono font-medium">caption.txt</code>).
+                      </p>
+                      <p className="text-slate-700">
+                        <strong className="text-blue-600 font-semibold">• Cách 2:</strong> Các file video trực tiếp (kèm file <code className="bg-white px-1 py-0.5 rounded border border-slate-200 text-amber-700 font-mono font-medium">.txt</code> cùng tên để làm caption).
+                      </p>
+                    </div>
+                  </div>
+                }
+                className="max-w-[340px] p-3 shadow-xl"
+              >
+                <Info className="w-3.5 h-3.5 text-[#94A3B8] hover:text-[#2563EB] cursor-pointer transition-colors" />
+              </Tooltip>
             </label>
             <div className="flex items-center gap-2">
               <div className="relative flex-1 min-w-0">
@@ -893,8 +1018,30 @@ export default function ReelsPoster() {
           {/* Field 3: Hẹn giờ đăng Reels */}
           <div className="flex flex-col gap-2.5">
             <div className="flex items-center justify-between">
-              <label className="text-[12px] font-medium text-[#334155] flex items-center gap-1">
-                Hẹn giờ đăng Reels <Info className="w-3.5 h-3.5 text-[#94A3B8]" />
+              <label className="text-[12px] font-medium text-[#334155] flex items-center gap-1.5">
+                <span>Hẹn giờ đăng Reels</span>
+                <Tooltip
+                  variant="light"
+                  position="bottom"
+                  containerClassName="inline-flex items-center"
+                  align="left"
+                  content={
+                    <div className="text-left space-y-1 leading-relaxed">
+                      <p className="font-semibold text-slate-900 text-[12px] border-b border-slate-100 pb-1 flex items-center gap-1">
+                        <span>⏰ Chế độ hẹn giờ đăng Reels:</span>
+                      </p>
+                      <p className="text-slate-600">
+                        Bật để hệ thống tự động quét và đăng video lên các Page đúng các khung giờ đã chọn trong ngày (định dạng 24h).
+                      </p>
+                      <p className="text-slate-500 text-[10.5px]">
+                        • Nếu tắt: Hệ thống sẽ đăng ngay lập tức khi bấm Kích hoạt.
+                      </p>
+                    </div>
+                  }
+                  className="max-w-[300px] p-2.5 shadow-xl"
+                >
+                  <Info className="w-3.5 h-3.5 text-[#94A3B8] hover:text-[#2563EB] cursor-pointer transition-colors" />
+                </Tooltip>
               </label>
               {/* Toggle switch */}
               <div className="flex items-center gap-2">
@@ -914,8 +1061,8 @@ export default function ReelsPoster() {
               </div>
             </div>
 
-            {/* Time Badges */}
-            <div className="flex flex-wrap items-center gap-2 pt-1">
+            {/* Time Badges & Input */}
+            <div className={`flex flex-wrap items-center gap-2 pt-1 ${!scheduleEnabled ? "opacity-50 pointer-events-none" : ""}`}>
               {scheduleTimes.map((t) => (
                 <div
                   key={t}
@@ -927,6 +1074,7 @@ export default function ReelsPoster() {
                     type="button"
                     onClick={() => handleRemoveTime(t)}
                     className="hover:text-red-500 text-[#94A3B8] ml-0.5"
+                    title="Xóa giờ này"
                   >
                     <X className="w-3 h-3" />
                   </button>
@@ -934,46 +1082,76 @@ export default function ReelsPoster() {
               ))}
 
               {showAddTime ? (
-                <div className="inline-flex items-center gap-1">
+                <div className="inline-flex items-center gap-1 bg-white p-1 border border-blue-300 rounded-md shadow-xs">
                   <input
-                    type="text"
-                    value={newTimeInput}
+                    type="time"
+                    value={newTimeInput || "09:00"}
                     onChange={(e) => setNewTimeInput(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleAddTime()}
-                    placeholder="HH:MM"
-                    className="w-16 px-2 py-0.5 text-[12px] border border-[#BFDBFE] rounded bg-white text-center"
+                    className="px-1.5 py-0.5 text-[12px] border border-slate-200 rounded bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 font-mono"
                     autoFocus
                   />
                   <button
-                    onClick={handleAddTime}
-                    className="px-2 py-0.5 bg-[#2563EB] text-white rounded text-[11px] font-bold"
+                    type="button"
+                    onClick={() => handleAddTime()}
+                    className="px-2 py-0.5 bg-[#2563EB] hover:bg-blue-700 text-white rounded text-[11px] font-bold transition-colors"
                   >
-                    OK
+                    Thêm
                   </button>
                   <button
+                    type="button"
                     onClick={() => setShowAddTime(false)}
-                    className="p-1 text-[#94A3B8] hover:text-red-500"
+                    className="p-1 text-[#94A3B8] hover:text-red-500 rounded"
+                    title="Hủy"
                   >
-                    <X className="w-3 h-3" />
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
               ) : (
                 <button
                   type="button"
-                  onClick={() => setShowAddTime(true)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#EFF6FF] border border-[#BFDBFE] rounded-md text-[12px] font-medium text-[#2563EB] hover:bg-blue-100"
+                  onClick={() => {
+                    if (!newTimeInput) setNewTimeInput("09:00");
+                    setShowAddTime(true);
+                  }}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#EFF6FF] border border-[#BFDBFE] rounded-md text-[12px] font-medium text-[#2563EB] hover:bg-blue-100 transition-colors"
                 >
                   <Plus className="w-3 h-3" />
-                  Thêm giờ
+                  Thêm giờ khác
                 </button>
               )}
             </div>
+
+            {scheduleEnabled && (
+              <p className="text-[11px] text-slate-400 italic">
+                *Hệ thống tự động quét và đăng bài khi máy tính chạy đến đúng các khung giờ trên.
+              </p>
+            )}
           </div>
 
           {/* Field 4: Giãn cách đăng ngẫu nhiên */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-[12px] font-medium text-[#334155] flex items-center gap-1">
-              Giãn cách đăng ngẫu nhiên <Info className="w-3.5 h-3.5 text-[#94A3B8]" />
+            <label className="text-[12px] font-medium text-[#334155] flex items-center gap-1.5">
+              <span>Giãn cách đăng ngẫu nhiên</span>
+              <Tooltip
+                variant="light"
+                position="bottom"
+                containerClassName="inline-flex items-center"
+                align="left"
+                content={
+                  <div className="text-left space-y-1 leading-relaxed">
+                    <p className="font-semibold text-slate-900 text-[12px] border-b border-slate-100 pb-1 flex items-center gap-1">
+                      <span>⏳ Giãn cách đăng an toàn:</span>
+                    </p>
+                    <p className="text-slate-600">
+                      Khoảng thời gian nghỉ ngẫu nhiên (tính bằng giây) giữa 2 lần đăng liên tiếp trên các Fanpage nhằm mô phỏng thao tác người dùng thật, tránh bị Facebook đánh dấu spam hoặc checkpoint.
+                    </p>
+                  </div>
+                }
+                className="max-w-[300px] p-2.5 shadow-xl"
+              >
+                <Info className="w-3.5 h-3.5 text-[#94A3B8] hover:text-[#2563EB] cursor-pointer transition-colors" />
+              </Tooltip>
             </label>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -1003,29 +1181,51 @@ export default function ReelsPoster() {
           <div className="grid grid-cols-2 gap-3 pt-2">
             <button
               type="button"
-              disabled={isRunning}
+              disabled={isRunning || isStarting || isStopping}
               onClick={handleStart}
               className={`py-2.5 px-4 rounded-lg font-bold text-[12px] tracking-wider uppercase flex items-center justify-center gap-2 shadow-sm transition-all ${
-                isRunning
+                isStarting
+                  ? "bg-blue-600 text-white cursor-wait opacity-90 shadow-none"
+                  : isRunning || isStopping
                   ? "bg-slate-300 text-slate-500 cursor-not-allowed"
                   : "bg-[#2563EB] text-white hover:bg-blue-700 active:scale-[0.98]"
               }`}
             >
-              <Play className="w-3.5 h-3.5 fill-current" />
-              KÍCH HOẠT
+              {isStarting ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span className="text-[10px] ">ĐANG KÍCH HOẠT...</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>KÍCH HOẠT</span>
+                </>
+              )}
             </button>
             <button
               type="button"
-              disabled={!isRunning}
+              disabled={!isRunning || isStarting || isStopping}
               onClick={handleStop}
               className={`py-2.5 px-4 rounded-lg font-bold text-[12px] tracking-wider uppercase flex items-center justify-center gap-2 shadow-sm transition-all ${
-                !isRunning
+                isStopping
+                  ? "bg-rose-600 text-white cursor-wait opacity-90 shadow-none"
+                  : !isRunning || isStarting
                   ? "bg-slate-200 text-slate-400 cursor-not-allowed"
                   : "bg-[#F43F5E] text-white hover:bg-rose-600 active:scale-[0.98]"
               }`}
             >
-              <Square className="w-3.5 h-3.5 fill-current" />
-              DỪNG LUỒNG
+              {isStopping ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>ĐANG DỪNG...</span>
+                </>
+              ) : (
+                <>
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>DỪNG LUỒNG</span>
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -1297,8 +1497,12 @@ export default function ReelsPoster() {
 
             {/* Trạng thái hoạt động */}
             <span
-              className={`ml-2 px-2 py-0.5 text-[10px] font-semibold rounded-full uppercase tracking-wider ${
-                isRunning
+              className={`ml-2 px-2.5 py-0.5 text-[10px] font-semibold rounded-full uppercase tracking-wider flex items-center gap-1.5 ${
+                isStarting
+                  ? "bg-blue-100 text-blue-700 animate-pulse"
+                  : isStopping
+                  ? "bg-rose-100 text-rose-700 animate-pulse"
+                  : isRunning
                   ? "bg-blue-100 text-blue-700 animate-pulse"
                   : runnerStatus === "COMPLETED"
                   ? "bg-emerald-100 text-emerald-700"
@@ -1307,7 +1511,16 @@ export default function ReelsPoster() {
                   : "bg-slate-100 text-slate-600"
               }`}
             >
-              {isRunning ? "● Đang chạy" : runnerStatus}
+              {(isStarting || isStopping) && <RefreshCw className="w-2.5 h-2.5 animate-spin" />}
+              <span>
+                {isStarting
+                  ? "Đang kích hoạt..."
+                  : isStopping
+                  ? "Đang dừng..."
+                  : isRunning
+                  ? "● Đang chạy"
+                  : runnerStatus}
+              </span>
             </span>
           </div>
 
@@ -1334,6 +1547,29 @@ export default function ReelsPoster() {
             </button>
           </div>
         </div>
+
+        {/* Live waiting countdown banner when scheduler is running */}
+        {isRunning && scheduleEnabled && nextSlotInfo && (
+          <div className="px-3.5 py-2.5 bg-blue-50/90 border border-blue-200 rounded-lg flex items-center justify-between text-[12px] text-blue-900 shadow-2xs">
+            <div className="flex items-center gap-2.5">
+              <span className="relative flex h-2.5 w-2.5 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#2563EB]"></span>
+              </span>
+              <div>
+                <span className="font-semibold text-blue-950">Chế độ hẹn giờ: </span>
+                <span className="text-blue-900">
+                  Khung giờ đăng tiếp theo là <strong className="font-mono text-[13px] bg-blue-100/80 px-1.5 py-0.5 rounded text-blue-950">{nextSlotInfo.time}</strong>
+                  {nextSlotInfo.isTomorrow ? " (ngày mai)" : ""} — còn <strong className="text-blue-950">{formatTimeRemaining(nextSlotInfo.diffMinutes)}</strong> nữa.
+                </span>
+              </div>
+            </div>
+            <div className="text-[11px] text-blue-700 font-medium bg-blue-100/70 px-2.5 py-1 rounded-md border border-blue-200/60 shrink-0 flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-[#2563EB]" />
+              <span>Đang ở trạng thái chờ tự động...</span>
+            </div>
+          </div>
+        )}
 
         {/* Console Log Box */}
         <div

@@ -163,6 +163,8 @@ function getOrCreateEventSource() {
 
         window.dispatchEvent(new CustomEvent("local_engine_event", { detail: data }));
 
+        if (data.event === "account_operation_updated") return;
+
         const currentLogs = loadFromStorage();
         const newMsg = {
           timestamp: data.time || formatVietnamTime(),
@@ -217,6 +219,8 @@ function getOrCreateWebSocket() {
         if (isHeartbeat(data)) return;
 
         window.dispatchEvent(new CustomEvent("local_engine_event", { detail: data }));
+
+        if (data.event === "account_operation_updated") return;
 
         const currentLogs = loadFromStorage();
         const newMsg = {

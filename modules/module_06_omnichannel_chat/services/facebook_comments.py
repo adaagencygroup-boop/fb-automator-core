@@ -214,3 +214,46 @@ class FacebookCommentService:
             print(f"[React Comment DB Update Error] {err}", flush=True)
 
         return response_json
+
+    async def hide_comment(self, comment_id: str, page_id: str, is_hidden: bool = True) -> Dict[str, Any]:
+        page = self.page_repo.get_by_page_id(page_id)
+        if not page or not page.page_access_token:
+            raise ValueError(f"Page or page access token not found for Page ID {page_id}")
+
+        url = f"https://graph.facebook.com/{FACEBOOK_API_VERSION}/{comment_id}"
+        params = {
+            "is_hidden": str(is_hidden).lower(),
+            "access_token": page.page_access_token
+        }
+
+        try:
+            response = await asyncio.to_thread(
+                requests.post, url, params=params, timeout=15
+            )
+            response_json = response.json()
+        except Exception as e:
+            raise FacebookAPIError(f"Network error updating comment visibility via Facebook: {str(e)}")
+
+        self.auth_service.handle_api_errors(response_json)
+        return response_json
+
+    async def delete_comment(self, comment_id: str, page_id: str) -> Dict[str, Any]:
+        page = self.page_repo.get_by_page_id(page_id)
+        if not page or not page.page_access_token:
+            raise ValueError(f"Page or page access token not found for Page ID {page_id}")
+
+        url = f"https://graph.facebook.com/{FACEBOOK_API_VERSION}/{comment_id}"
+        params = {
+            "access_token": page.page_access_token
+        }
+
+        try:
+            response = await asyncio.to_thread(
+                requests.delete, url, params=params, timeout=15
+            )
+            response_json = response.json()
+        except Exception as e:
+            raise FacebookAPIError(f"Network error deleting comment via Facebook: {str(e)}")
+
+        self.auth_service.handle_api_errors(response_json)
+        return response_json

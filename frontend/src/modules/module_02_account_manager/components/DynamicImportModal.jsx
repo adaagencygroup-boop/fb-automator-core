@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useToast } from "@/components/ui/toast";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { checkExistingUids } from "../service";
-import { DEFAULT_MAPPING, normalizeImportedValue, detectColumnMapping, isValidProxy } from "../utils/import-mapping.mjs";
+import { DEFAULT_MAPPING, mapImportedRow, detectColumnMapping, isValidProxy } from "../utils/import-mapping.mjs";
 import {
   Braces, Check, ChevronDown, CircleCheck, Eye, EyeOff, Info, ListFilter,
   ShieldCheck, Sparkles, Trash2, Upload, UserRoundPlus, X,
@@ -90,24 +90,7 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
     const parsed = [];
     const seen = new Set();
     for (const line of lines) {
-      const values = line.split(delimiter).map(normalizeImportedValue);
-      const account = { uid: "" };
-      values.forEach((value, index) => {
-        const field = columnMap[index];
-        if (field && field !== "ignore") account[field] = value;
-      });
-      // Tự động phát hiện nếu Token Hotmail bị gán nhầm vào mail_recovery
-      if (
-        account.mail_recovery &&
-        (account.mail_recovery.length > 150 ||
-          account.mail_recovery.includes("MsaArtifacts") ||
-          /^(?:M\.C\d+_|EwB)/i.test(account.mail_recovery))
-      ) {
-        if (!account.token_hotmail) {
-          account.token_hotmail = account.mail_recovery;
-        }
-        delete account.mail_recovery;
-      }
+      const account = mapImportedRow(line, delimiter, columnMap);
       if (!account.uid || seen.has(account.uid)) continue;
       seen.add(account.uid);
       parsed.push(account);
@@ -239,13 +222,8 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
     const uidRegex = /^[1-9][0-9]{3,19}$/;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      const values = line.split(delimiter).map(normalizeImportedValue);
       const rowNumber = i + 1;
-      const acc = {};
-      values.forEach((value, index) => {
-        const field = columnMap[index];
-        if (field && field !== "ignore") acc[field] = value;
-      });
+      const acc = mapImportedRow(line, delimiter, columnMap);
 
       const rowUid = (acc.uid || "").trim();
       const rowPassword = (acc.password || "").trim();

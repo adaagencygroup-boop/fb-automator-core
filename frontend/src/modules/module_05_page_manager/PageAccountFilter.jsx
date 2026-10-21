@@ -82,3 +82,5 @@ export default function PageAccountFilter({ value, options, onChange }) {
     </div>
   );
 }
+
+export { PageAccountFilter };

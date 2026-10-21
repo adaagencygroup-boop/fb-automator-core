@@ -86,7 +86,7 @@ def get_managed_pages(request: Request):
 
     try:
         pages_raw = db.fetch_all(
-            "SELECT id, page_id, page_name, category, status, account_uid, reels_folder, created_at, token_metadata, web_connection_id FROM pages WHERE user_id = %s ORDER BY id DESC",
+            "SELECT id, page_id, page_name, category, status, account_uid, reels_folder, created_at, token_metadata, web_connection_id, tiktok_keyword, tiktok_url, youtube_keyword, youtube_url FROM pages WHERE user_id = %s ORDER BY id DESC",
             (owner,)
         )
     except Exception as e:
@@ -146,7 +146,11 @@ def get_managed_pages(request: Request):
                 "manager_avatar_url": mgr_avatar,
                 "reels_folder": r.get("reels_folder") or "",
                 "created_at": str(r.get("created_at") or ""),
-                "token_metadata": r.get("token_metadata") or {}
+                "token_metadata": r.get("token_metadata") or {},
+                "tiktok_keyword": r.get("tiktok_keyword") or "",
+                "tiktok_url": r.get("tiktok_url") or "",
+                "youtube_keyword": r.get("youtube_keyword") or "",
+                "youtube_url": r.get("youtube_url") or ""
             })
 
         return {"pages": pages}
@@ -174,6 +178,7 @@ def _web_call(fn, owner, *args):
 
 class WebOAuthStartBody(BaseModel):
     reason: Literal["connect", "switch"] = "connect"
+    open_browser: bool = False
 
 
 class WebOAuthCompleteBody(BaseModel):
@@ -184,7 +189,14 @@ class WebOAuthCompleteBody(BaseModel):
 
 @router.post("/web-oauth/start", status_code=202)
 def web_oauth_start(body: WebOAuthStartBody, request: Request):
-    return _web_call(meta_web.start, require_owner(request), body.reason)
+    res = _web_call(meta_web.start, require_owner(request), body.reason)
+    if body.open_browser and isinstance(res, dict) and res.get("authorization_url"):
+        import webbrowser
+        try:
+            webbrowser.open(res["authorization_url"])
+        except Exception:
+            pass
+    return res
 
 
 @router.post("/web-oauth/complete", status_code=202)
@@ -233,9 +245,11 @@ def delete_managed_page(page_identifier: str, request: Request):
     """
     Xóa Fanpage khỏi bảng `pages`, có ràng buộc chặt chẽ theo `user_id` của người dùng hiện tại.
     """
+    if page_identifier in ("all-videos", "bulk-keywords", "managed", "oauth-config", "check-folder"):
+      raise HTTPException(status_code=404, detail="Không Tìm Thấy Trang")
     owner = get_current_owner(request)
     if not owner:
-        raise HTTPException(status_code=401, detail="Phiên đăng nhập không hợp lệ.")
+      raise HTTPException(status_code=401, detail="Phiên Đăng Nhập Không Hợp Lệ.")
 
     try:
         if page_identifier.isdigit() and len(page_identifier) < 10:

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+import { createRefreshQueue, mergeAccountRows, publicChanges } from "../utils/account-realtime.mjs";
 
 // Exercise request orchestration with controlled network promises and hook state.
 function harness({ statsFailure = false } = {}) {
@@ -9,6 +10,7 @@ function harness({ statsFailure = false } = {}) {
   let cursor = 0, selected = ["old"], query = {}, cleanup;
   const tableRef = { current: { capture: () => ({ uid: "1", offset: 20 }), restore: anchor => anchors.push(anchor), reset: () => anchors.push("reset") } };
   const context = {
+    createRefreshQueue, mergeAccountRows, publicChanges,
     useState(initial) {
       const index = cursor++;
       if (!(index in slots)) slots[index] = initial;
@@ -162,5 +164,34 @@ test("isRefreshing is true during background refresh and false upon completion",
   assert.equal(h.render().isRefreshing, true);
   h.calls[1].resolve(result(1)); await refresh;
   assert.equal(h.render().isRefreshing, false);
+});
+
+test("an older refresh or append cannot overwrite newer account events", async () => {
+  const h = harness();
+  const first = h.render().fetchAccounts(true);
+  h.calls[0].resolve(result(1)); await first;
+  let hook = h.render();
+  const refresh = hook.fetchAccounts();
+  hook.applyAccountPatches([{ uid: "1", changes: { login_status: "logged_in", profile_name: "Updated" } }]);
+  h.calls[1].resolve(result(1)); await refresh;
+  hook = h.render();
+  assert.equal(hook.accounts[0].login_status, "logged_in");
+  assert.equal(hook.accounts[0].profile_name, "Updated");
+  const more = hook.loadMore();
+  hook.applyAccountPatches([{ uid: "11", changes: { login_status: "failed" } }]);
+  h.calls[2].resolve(result(11)); await more;
+  assert.equal(h.render().accounts.find(row => row.uid === "11").login_status, "failed");
+});
+
+test("patch removes rows that no longer match filters without resetting the table", async () => {
+  const h = harness();
+  const first = h.render({ login_status: "not_logged_in" }).fetchAccounts(true);
+  h.calls[0].resolve(result(1)); await first;
+  const resets = h.anchors.length;
+  h.render().applyAccountPatches([{ uid: "1", changes: { login_status: "logged_in" } }]);
+  const hook = h.render();
+  assert.equal(hook.accounts.length, 9);
+  assert.equal(h.anchors.length, resets);
+  assert.equal(hook.isInitialLoading, false);
 });
 

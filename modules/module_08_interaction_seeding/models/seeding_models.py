@@ -78,9 +78,21 @@ class SeedingCampaign(Base):
     def target_summary(self) -> str:
         """Tóm tắt mục tiêu hiển thị trên UI Lịch sử."""
         if self.campaign_targets and len(self.campaign_targets) > 0:
-            target = self.campaign_targets[0].target
-            if target:
-                return target.display_name or target.url
+            ct = self.campaign_targets[0]
+            if ct.display_name:
+                return ct.display_name
+            if ct.target and ct.target.display_name:
+                return ct.target.display_name
+            if ct.target_url:
+                return ct.target_url
+            if ct.target and ct.target.url:
+                return ct.target.url
+        if self.tasks and len(self.tasks) > 0:
+            tk = self.tasks[0]
+            if tk.display_name:
+                return tk.display_name
+            if tk.target_url:
+                return tk.target_url
         return ""
 
 
@@ -90,7 +102,9 @@ class SeedingCampaignTarget(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     campaign_id = Column(Integer, ForeignKey("seeding_campaigns.id", ondelete="CASCADE"), nullable=False)
-    target_id = Column(Integer, ForeignKey("seeding_targets.id"), nullable=False)
+    target_id = Column(Integer, ForeignKey("seeding_targets.id", ondelete="SET NULL"), nullable=True)
+    display_name = Column(String(255), nullable=True)       # Tên mục tiêu snapshot cố định
+    target_url = Column(Text, nullable=True)                # Đường dẫn mục tiêu snapshot cố định
     note = Column(Text, nullable=True)                      # Ghi chú hoặc nhãn nội dung trong file Excel
     source = Column(String(10), default="MANUAL")           # 'MANUAL' | 'EXCEL'
     planned_count = Column(Integer, default=0)              # Lịch sử: cột "Số lượng"
@@ -133,13 +147,14 @@ class SeedingTask(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     campaign_id = Column(Integer, ForeignKey("seeding_campaigns.id", ondelete="CASCADE"), nullable=False)
     campaign_target_id = Column(Integer, ForeignKey("seeding_campaign_targets.id", ondelete="CASCADE"), nullable=False)
-    target_id = Column(Integer, ForeignKey("seeding_targets.id"), nullable=False)
+    target_id = Column(Integer, ForeignKey("seeding_targets.id", ondelete="SET NULL"), nullable=True)
+    display_name = Column(String(255), nullable=True)       # Tên mục tiêu snapshot cố định
+    target_url = Column(Text, nullable=True)                # Đường dẫn mục tiêu snapshot cố định
     account_uid = Column(String(100), nullable=False)       # accounts.uid (Module 2) - tham chiếu logic, không có FK
     action = Column(String(20), nullable=False)             # 'FOLLOW' | 'REACT' | 'COMMENT' | 'SHARE'
     reaction = Column(String(10), nullable=True)            # 'LIKE,LOVE,CARE,HAHA,WOW,SAD,ANGRY' (chỉ cho REACT)
     comment_id = Column(Integer, ForeignKey("seeding_comments.id", ondelete="SET NULL"), nullable=True)
     status = Column(String(20), default="PENDING")          # 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED'
-    attempts = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
     scheduled_at = Column(DateTime, default=vn_now)        # Thời điểm sớm nhất được phép chạy (giãn cách)
     started_at = Column(DateTime, nullable=True)

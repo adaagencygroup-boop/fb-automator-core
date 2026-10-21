@@ -28,11 +28,15 @@ class ConversationRepository:
         """Tạo hoặc cập nhật nhanh trạng thái danh bạ hội thoại (Tải Sidebar mượt gấp 100 lần)."""
         conv = self.get_conversation(page_id, customer_psid)
         msg_time = last_message_at or datetime.utcnow()
+        if msg_time and getattr(msg_time, "tzinfo", None) is not None:
+            msg_time = msg_time.replace(tzinfo=None)
+
         if conv:
             if customer_name: conv.customer_name = customer_name
             if customer_avatar: conv.customer_avatar = customer_avatar
             if last_message: conv.last_message = last_message
-            if not conv.last_message_at or (last_message_at and last_message_at > conv.last_message_at):
+            conv_time = conv.last_message_at.replace(tzinfo=None) if (conv.last_message_at and getattr(conv.last_message_at, "tzinfo", None) is not None) else conv.last_message_at
+            if not conv_time or (msg_time and msg_time >= conv_time):
                 conv.last_message_at = msg_time
             conv.is_read = is_read
             conv.is_replied = is_replied

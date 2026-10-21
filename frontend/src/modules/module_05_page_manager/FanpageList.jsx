@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertCircle,
@@ -40,12 +40,12 @@ import { toast } from "@/lib/toast";
 import { getSessionUserId } from "@/services/sessionIdentity.mjs";
 import { useSession } from "@/components/SessionContext";
 import { tokenExpiryLabel } from "./tokenExpiry.mjs";
-import { cachedTokenStatuses, readTokenCache, tokenCacheKey, tokenStorage, TOKEN_CACHE_TTL_MS } from "./tokenStatusCache.mjs";
+import { cachedTokenStatuses, readTokenCache, tokenCacheKey, tokenStorage } from "./tokenStatusCache.mjs";
 import useWebFacebookConnection from "./useWebFacebookConnection";
 import useSyncAccounts from "./useSyncAccounts";
 import { WebConnectionButton } from "./WebFacebookConnection";
 import styles from "./FanpageList.module.css";
-import PageAccountFilter from "./PageAccountFilter";
+import PageAccountFilter from "./PageAccountFilter.jsx";
 import { ALL_ACCOUNTS, matchesPageAccount, pageAccountOptions } from "./pageAccountFilter.mjs";
 import {
   deleteManagedPage,
@@ -267,6 +267,8 @@ function OwnedFanpageList({ owner }) {
   const pagesRevision = useRef(0);
   const verifyingUids = useRef(new Set());
   const tokenRevision = useRef({});
+  const modalOpen = useRef(null);
+  const [accountsReadyForOpen, setAccountsReadyForOpen] = useState(null);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const selectedAccUid = accountList[0]?.uid || "";
   const [customToken, setCustomToken] = useState("");
@@ -303,30 +305,30 @@ function OwnedFanpageList({ owner }) {
   }, []);
 
   // Kiểm tra trạng thái sống/chết thực tế của Token qua Meta Graph API (hỗ trợ Cache TTL 15 phút)
-  const handleVerifyTokens = async (targetUids = null, force = false) => {
+  const handleVerifyTokens = useCallback(async (targetUids = null, force = false, silent = false) => {
     const cacheKey = tokenCacheKey(owner);
     const allUids = targetUids && targetUids.length > 0
       ? targetUids
       : accountList.filter((a) => a.has_token).map((a) => a.uid);
 
     if (allUids.length === 0) {
-      if (!targetUids) toast.info("Không có tài khoản nào có Token để kiểm tra.");
+      if (!silent && !targetUids) toast.info("Không có tài khoản nào có Token để kiểm tra.");
       return;
     }
 
     // Đọc cache từ localStorage
     let cache = readTokenCache(tokenStorage(), owner);
 
-    const now = Date.now();
+    const cachedStatuses = cachedTokenStatuses(tokenStorage(), owner);
     const uidsToCall = [];
 
     // Nếu không force: phục hồi các token còn hạn cache (TTL 15 phút)
     if (!force) {
       const cachedStatusUpdates = {};
       allUids.forEach((uid) => {
-        const item = cache[uid];
-        if (item && item.status && (now - item.timestamp < TOKEN_CACHE_TTL_MS)) {
-          cachedStatusUpdates[uid] = item.status;
+        if (verifyingUids.current.has(uid)) return;
+        if (cachedStatuses[uid]) {
+          cachedStatusUpdates[uid] = cachedStatuses[uid];
         } else {
           uidsToCall.push(uid);
         }
@@ -337,7 +339,7 @@ function OwnedFanpageList({ owner }) {
       }
 
       if (uidsToCall.length === 0) {
-        if (targetUids && targetUids.length === 1) {
+        if (!silent && targetUids && targetUids.length === 1) {
           toast.info("Đã khôi phục trạng thái token từ bộ nhớ đệm (15 phút). Bấm nút để check lại.");
         }
         return;
@@ -385,6 +387,8 @@ function OwnedFanpageList({ owner }) {
 
         setTokenStatusMap((prev) => ({ ...prev, ...newStatus }));
 
+        if (silent) return;
+
         const liveCount = Object.values(results).filter((r) => r.status === "LIVE").length;
         const expiredCount = Object.values(results).filter((r) => r.status === "EXPIRED").length;
         const rateLimitCount = Object.values(results).filter((r) => r.status === "RATE_LIMITED").length;
@@ -415,19 +419,35 @@ function OwnedFanpageList({ owner }) {
     } catch (err) {
       if (alive.current) {
         setTokenStatusMap((prev) => ({ ...prev, ...Object.fromEntries(currentUids().map((uid) => [uid, "ERROR"])) }));
-        toast.error("Lỗi kiểm tra Token Meta: " + (err.message || "Không gọi được API"));
+        if (!silent) toast.error("Lỗi kiểm tra Token Meta: " + (err.message || "Không gọi được API"));
       }
     } finally {
       requested.forEach((uid) => verifyingUids.current.delete(uid));
       if (alive.current) setVerifyingTokens(verifyingUids.current.size > 0);
     }
-  };
+  }, [accountList, owner]);
 
   useEffect(() => {
-    if (adding) loadAccounts();
+    if (!adding) return;
+    const opening = modalOpen.current;
+    // Wait for this opening's refresh, even when older account rows are available.
+    void loadAccounts().then(() => {
+      if (alive.current && modalOpen.current === opening) setAccountsReadyForOpen(opening);
+    });
   }, [adding, loadAccounts]);
 
+  useEffect(() => {
+    const opening = modalOpen.current;
+    if (!adding || !opening || opening.checked || accountsReadyForOpen !== opening ||
+        loadingAccounts || !accountsLoaded || accountsError) return;
+    // Consume before starting: state updates and Strict Mode cannot repeat this pass.
+    opening.checked = true;
+    void handleVerifyTokens(null, false, true);
+  }, [adding, accountsReadyForOpen, loadingAccounts, accountsLoaded, accountsError, handleVerifyTokens]);
+
   function changeAdding(open) {
+    if (open && !adding) modalOpen.current = { checked: false };
+    if (!open) modalOpen.current = null;
     setAdding(open);
     if (open) setTokenStatusMap((prev) => ({ ...cachedTokenStatuses(tokenStorage(), owner), ...Object.fromEntries(Object.entries(prev).filter(([uid]) => verifyingUids.current.has(uid))) }));
     if (!open) { setCustomToken(""); setShowCustomToken(false); }
@@ -799,8 +819,8 @@ function OwnedFanpageList({ owner }) {
       </section>
 
       <Dialog open={adding} onOpenChange={changeAdding}>
-        <DialogContent className="max-w-6xl w-full min-w-0 p-4 sm:p-6 rounded-2xl bg-white shadow-2xl">
-          <DialogHeader className="pb-3 border-b border-slate-100">
+        <DialogContent className="max-w-6xl w-full min-w-0 p-4 sm:p-6 rounded-2xl bg-white shadow-2xl flex flex-col max-h-[92vh] overflow-hidden">
+          <DialogHeader className="pb-3 border-b border-slate-100 shrink-0">
             <div className="flex items-center justify-between">
               <DialogTitle className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 <span className="p-1.5 rounded-lg bg-blue-50 text-[#1877F2]">
@@ -810,17 +830,17 @@ function OwnedFanpageList({ owner }) {
               </DialogTitle>
             </div>
             <DialogDescription className="text-xs text-slate-500 pt-0.5">
-              Cấp Token và quét Fanpage tự động qua dàn nick Clone (cột bên trái) hoặc Đăng nhập trực tiếp trên trình duyệt (cột bên phải).
+              Cấp Token và quét Fanpage tự động qua danh sách tài khoản (cột bên trái) hoặc Đăng nhập trực tiếp trên trình duyệt (cột bên phải).
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)] gap-5 pt-2">
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)] gap-5 pt-2 flex-1 min-h-0 overflow-y-auto pr-1">
             {/* BẢNG DANH SÁCH TÀI KHOẢN */}
             <div className="min-w-0 flex flex-col rounded-xl border border-slate-200/90 bg-slate-50/50 p-3.5 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
                   <span className="flex size-4 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white font-bold">1</span>
-                  Dàn nick Clone ({filteredAccounts.length}/{accountList.length})
+                  Danh sách tài khoản ({filteredAccounts.length}/{accountList.length})
                 </span>
                 <button
                   type="button"
@@ -920,6 +940,7 @@ function OwnedFanpageList({ owner }) {
 
                           const isLoggedIn = acc.login_status === "logged_in";
                           const isProcessing = Boolean(accountJobs[acc.uid]);
+                          const isActionDisabled = isProcessing || verifyingTokens || isCheckingToken;
 
                           return (
                             <tr key={acc.uid} className="hover:bg-slate-50/80 transition-colors">
@@ -1025,7 +1046,7 @@ function OwnedFanpageList({ owner }) {
                                     <button
                                       type="button"
                                       onClick={() => handleProfileOAuth(acc.uid)}
-                                      disabled={isProcessing}
+                                      disabled={isActionDisabled}
                                       className="h-7 px-2.5 rounded-md bg-amber-600 hover:bg-amber-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
                                       title="Token đã hết hạn. Mở Chrome Profile để cấp lại Token mới!"
                                     >
@@ -1040,7 +1061,7 @@ function OwnedFanpageList({ owner }) {
                                     <button
                                       type="button"
                                       onClick={() => handleProfileOAuth(acc.uid)}
-                                      disabled={isProcessing}
+                                      disabled={isActionDisabled}
                                       className="h-7 px-2 rounded-md bg-blue-600 hover:bg-blue-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
                                       title="Mở Chrome Profile của nick này để tự động cấp Token và nạp Fanpage"
                                     >
@@ -1049,16 +1070,17 @@ function OwnedFanpageList({ owner }) {
                                       ) : (
                                         <Zap className="w-3 h-3 text-amber-300 fill-amber-300" />
                                       )}
-                                      {isLiveToken ? "Cấp lại" : "Cấp Token"}
+                                      {rawHasToken ? "Cấp lại" : "Cấp Token"}
                                     </button>
                                   )}
 
-                                  {rawHasToken ? (
+                                  {/* Token chết/hết hạn thì không quét. Chỉ quét khi token LIVE hoặc có token chưa check */}
+                                  {rawHasToken && !isExpiredToken ? (
                                     <button
                                       type="button"
                                       onClick={() => handleSyncPages(acc.uid)}
-                                      disabled={isProcessing}
-                                      className="h-7 px-2 rounded-md border border-slate-200 bg-white hover:bg-slate-50 font-medium text-[10.5px] text-slate-700 flex items-center gap-1 transition-all disabled:opacity-50"
+                                      disabled={isActionDisabled}
+                                      className="h-7 px-2.5 rounded-md border border-slate-200 bg-white hover:bg-slate-50 font-medium text-[10.5px] text-slate-700 flex items-center gap-1 transition-all disabled:opacity-50"
                                       title="Quét bằng token đã lưu; hệ thống xác thực trước khi đồng bộ"
                                     >
                                       {accountJobs[acc.uid]?.kind === "sync" ? (
@@ -1105,8 +1127,14 @@ function OwnedFanpageList({ owner }) {
                   Thời hạn và quyền truy cập token được cập nhật từ Meta.
                 </p>
                 {Object.keys(accountJobs).length > 0 && (
-                  <div className="space-y-2 border-t border-slate-100 pt-3 text-xs text-slate-600">
-                    {Object.entries(accountJobs).map(([uid, job]) => <p key={uid} role="status">{uid}: {job.message}</p>)}
+                  <div className="space-y-1.5 border-t border-slate-100 pt-2.5 text-xs text-slate-600 max-h-24 overflow-y-auto pr-1">
+                    {Object.entries(accountJobs).map(([uid, job]) => (
+                      <div key={uid} role="status" className="flex items-center gap-1.5 bg-blue-50/70 px-2 py-1.5 rounded-lg border border-blue-100">
+                        <Loader2 className="w-3 h-3 animate-spin text-blue-600 shrink-0" />
+                        <span className="font-mono font-semibold text-[11px] text-blue-900 shrink-0">{uid}:</span>
+                        <span className="text-[11px] text-slate-700 truncate">{job.message}</span>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -1133,7 +1161,7 @@ function OwnedFanpageList({ owner }) {
             </div>
           </div>
 
-          <DialogFooter className="pt-3 border-t border-slate-100 mt-2">
+          <DialogFooter className="pt-3 border-t border-slate-100 mt-2 shrink-0">
             <button
               type="button"
               onClick={() => changeAdding(false)}

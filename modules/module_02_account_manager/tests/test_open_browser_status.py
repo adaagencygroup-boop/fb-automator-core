@@ -14,6 +14,7 @@ class OpenBrowserStatusTests(unittest.TestCase):
         with patch("modules.module_02_account_manager.database.connection.SessionLocal") as session_local, \
              patch("modules.module_02_account_manager.database.repository.AccountRepository.get_by_uid", return_value=account), \
              patch("modules.module_02_account_manager.database.repository.AccountRepository.update_login_status") as update_status, \
+             patch("modules.module_02_account_manager.database.repository.AccountRepository.update_identity") as update_identity, \
              patch("modules.module_02_account_manager.automation.browser_manager.create_driver"), \
              patch("modules.module_02_account_manager.automation.browser_manager.human_sleep"), \
              patch("modules.module_02_account_manager.automation.login_flow._check_logged_in", return_value=True), \
@@ -23,7 +24,8 @@ class OpenBrowserStatusTests(unittest.TestCase):
             _open_live_browser_worker("123")
         decrypt.assert_not_called()
         identity.assert_called_once()
-        update_status.assert_called_once_with(session_local.return_value, "123", "logged_in", "", avatar_url="https://scontent.fbcdn.net/avatar.png")
+        update_status.assert_called_once_with(session_local.return_value, "123", "logged_in")
+        update_identity.assert_called_once_with(session_local.return_value, "123", "", avatar_url="https://scontent.fbcdn.net/avatar.png")
 
     def test_manual_login_updates_status_after_browser_opens(self):
         driver = Mock(current_url="https://www.facebook.com/")
@@ -33,9 +35,11 @@ class OpenBrowserStatusTests(unittest.TestCase):
              patch("modules.module_02_account_manager.automation.login_flow._check_logged_in", side_effect=[False, True, True]), \
              patch("modules.module_02_account_manager.automation.login_flow._get_account_identity", return_value={"profile_name": "Example Person", "avatar_url": "https://scontent.fbcdn.net/manual.png"}), \
              patch("modules.module_02_account_manager.database.repository.AccountRepository.update_login_status") as update_status, \
+             patch("modules.module_02_account_manager.database.repository.AccountRepository.update_identity") as update_identity, \
              patch("modules.module_02_account_manager.services.browser_service.broadcast"):
             _watch_open_browser_login(driver, "123", checks=3, interval=0)
-        update_status.assert_called_once_with(mock_db, "123", "logged_in", "Example Person", avatar_url="https://scontent.fbcdn.net/manual.png")
+        update_status.assert_called_once_with(mock_db, "123", "logged_in")
+        update_identity.assert_called_once_with(mock_db, "123", "Example Person", avatar_url="https://scontent.fbcdn.net/manual.png")
 
     def test_checkpoint_in_open_browser_is_login_failure(self):
         driver = Mock(current_url="https://www.facebook.com/checkpoint/123/?next=/me")

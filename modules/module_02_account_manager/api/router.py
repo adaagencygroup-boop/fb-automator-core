@@ -9,6 +9,7 @@ from ..database.repository import AccountRepository as Repo
 from ..services import account_service as accounts, status_service, login_service
 from ..services.browser_service import queue_open_browser
 from ..services.events import event_stream
+from ..services import operations
 from ..utils.paths import validate_uid
 from .schemas import SingleAccountInput, ImportRequest, UidsRequest, DeleteAccountsRequest, LoginRequest, OpenBrowserRequest, TestProxyRequest
 
@@ -175,8 +176,9 @@ async def test_proxy(req: TestProxyRequest):
 async def login(req: LoginRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     for uid in req.uids:
         accounts.require_account(db, uid)
-    background_tasks.add_task(run_owned, owner_context.get(), login_service.login_batch, req.uids, req.threads)
-    return {"started": True, "count": len(req.uids)}
+    operation_id = operations.create("login", req.uids)
+    background_tasks.add_task(run_owned, owner_context.get(), login_service.login_batch, req.uids, req.threads, operation_id)
+    return {"started": True, "count": len(req.uids), "operation_id": operation_id}
 
 @router.post("/open-browser")
 async def open_browser(req: OpenBrowserRequest, db: Session = Depends(get_db)):
@@ -186,6 +188,10 @@ async def open_browser(req: OpenBrowserRequest, db: Session = Depends(get_db)):
 @router.get("/stream")
 async def stream():
     return StreamingResponse(stream_owned(owner_context.get(), event_stream), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+@router.get("/operations/{operation_id}")
+async def operation_progress(operation_id: str):
+    return operations.read(operation_id)
 
 @router.post("/{uid}/sync-cookies")
 async def sync_cookies(uid: str, db: Session = Depends(get_db)):

@@ -14,6 +14,8 @@ export function Tooltip({
   align = "center",
   delay = 120,
   className = "",
+  containerClassName = "w-full",
+  variant = "dark",
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const timeoutRef = useRef(null);
@@ -39,6 +41,8 @@ export function Tooltip({
 
   if (!content) return children;
 
+  const isLight = variant === "light";
+
   // Alignment classes for popover box
   const alignClasses = {
     center: "left-1/2 -translate-x-1/2",
@@ -49,13 +53,13 @@ export function Tooltip({
   // Arrow alignment
   const arrowAlignClasses = {
     center: "left-1/2 -translate-x-1/2",
-    left: "left-4",
-    right: "right-4",
+    left: "left-2.5",
+    right: "right-2.5",
   }[align] || "left-1/2 -translate-x-1/2";
 
   return (
     <div
-      className="relative w-full"
+      className={cn("relative", containerClassName)}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onFocus={handleMouseEnter}
@@ -77,7 +81,10 @@ export function Tooltip({
         >
           <div
             className={cn(
-              "w-max max-w-[280px] rounded-lg bg-slate-900/95 px-3 py-1.5 text-center text-[11px] font-normal text-slate-100 shadow-xl backdrop-blur-xs ring-1 ring-white/10 leading-relaxed",
+              "w-max max-w-[280px] rounded-lg px-3 py-2 text-center text-[11px] leading-relaxed shadow-xl",
+              isLight
+                ? "bg-white text-slate-700 border border-slate-200/90 shadow-slate-300/40 ring-1 ring-slate-900/5 font-normal"
+                : "bg-slate-900/95 text-slate-100 ring-1 ring-white/10 backdrop-blur-xs font-normal",
               className
             )}
           >
@@ -87,11 +94,15 @@ export function Tooltip({
           {/* Mũi tên tooltip */}
           <div
             className={cn(
-              "absolute size-2 rotate-45 bg-slate-900",
+              "absolute size-2 rotate-45",
               arrowAlignClasses,
               position === "top"
-                ? "-bottom-1"
-                : "-top-1"
+                ? isLight
+                  ? "-bottom-1 bg-white border-b border-r border-slate-200/90"
+                  : "-bottom-1 bg-slate-900"
+                : isLight
+                  ? "-top-1 bg-white border-t border-l border-slate-200/90"
+                  : "-top-1 bg-slate-900"
             )}
           />
         </div>

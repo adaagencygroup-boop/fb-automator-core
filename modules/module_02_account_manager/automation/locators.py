@@ -7,6 +7,12 @@ Hỗ trợ song ngữ hoàn hảo (Việt - Anh) kết hợp ID tĩnh Facebook H
 # ─────────────── UC-03: LOGIN FLOW ───────────────
 
 LOGIN = {
+    "saved_account_switch": [
+        '//button[contains(., "Dùng trang cá nhân khác") or contains(., "Đăng nhập bằng tài khoản khác") or contains(., "Dùng tài khoản khác") or contains(., "Use another profile") or contains(., "Log into another account")]',
+        '//div[@role="button" and (contains(., "Dùng trang cá nhân khác") or contains(., "Đăng nhập bằng tài khoản khác") or contains(., "Dùng tài khoản khác") or contains(., "Use another profile") or contains(., "Log into another account"))]',
+        '//a[contains(., "Dùng trang cá nhân khác") or contains(., "Đăng nhập bằng tài khoản khác") or contains(., "Dùng tài khoản khác") or contains(., "Use another profile") or contains(., "Log into another account")]',
+        '//span[contains(text(), "Dùng trang cá nhân khác") or contains(text(), "Đăng nhập bằng tài khoản khác") or contains(text(), "Log into another account")]/ancestor::*[@role="button" or self::button or self::a][1]',
+    ],
     "email_input": [
         '//input[@id="email"]',
         '//input[@name="email"]',
@@ -106,4 +112,3 @@ LOGIN = {
         '//span[contains(@class, "x1n2onr6")]',
     ],
 }
-

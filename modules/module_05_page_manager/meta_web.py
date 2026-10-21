@@ -125,6 +125,42 @@ def complete(owner, state, token, error=""):
         return {"job_id": job["job_id"], "status": "QUEUED"}
 
 
+def complete_by_state(state, token, error="", auto_confirm=True):
+    app_id, _ = credentials()
+    with sync._lock:
+        with db.session() as cur:
+            cur.execute("""UPDATE meta_oauth_states SET consumed_at = NOW()
+                WHERE state_hash = %s AND app_id = %s AND flow = 'web_standalone'
+                AND consumed_at IS NULL AND expires_at > NOW() RETURNING job_id, user_id""",
+                (hashlib.sha256(state.encode()).hexdigest(), app_id))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("OAuth state sai, đã hết hạn hoặc đã sử dụng.")
+        owner = str(row["user_id"])
+        job_id = row["job_id"]
+        snapshot = sync.status(owner, job_id)
+        job = sync._jobs.get(job_id)
+        if not job or snapshot["status"] != "AWAITING_OAUTH" or job.get("kind") != "web":
+            raise ValueError("Tác vụ OAuth đã kết thúc hoặc bị hủy.")
+        if error or not token.strip():
+            job.update(status="FAILED", error="Bạn đã hủy/từ chối quyền OAuth hoặc Meta không trả token.",
+                       message="Kết nối Facebook chưa thay đổi.")
+            return {"job_id": job["job_id"], "status": "FAILED", "owner": owner}
+        job["status"] = "QUEUED"
+        def task(current_job):
+            prepared = sync.prepare_token(token.strip())
+            if current_job["reason"] == "switch" and prepared["identity"]["id"] == current_job.get("previous_identity_id"):
+                sync._update(current_job, error_code="SAME_FACEBOOK_IDENTITY")
+                raise ValueError(f"Meta vẫn trả về tài khoản {prepared['identity']['name']}. Hãy chọn Facebook khác rồi thử lại; kết nối hiện tại được giữ nguyên.")
+            if auto_confirm:
+                return _save(owner, prepared, current_job)
+            sync._update(current_job, status="AWAITING_CONFIRMATION", prepared=prepared,
+                         identity=prepared["identity"], expires=time.time() + 600,
+                         message="Chờ chấp nhận đăng nhập trong cửa sổ OAuth.")
+        sync._executor.submit(sync._run, job, task)
+        return {"job_id": job["job_id"], "status": "QUEUED", "owner": owner}
+
+
 def _save(owner, prepared, job):
     with sync._lock:
         job.update(status="COMMITTING", message="Đang lưu kết nối và Page…")

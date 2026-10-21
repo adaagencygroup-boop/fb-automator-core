@@ -19,13 +19,17 @@ import {
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/lib/toast";
-import { getAiAccounts, getAiPostStatus, loginAiAccount, openAiPage, startAiPost, stopAiPost, testAiKeys } from "./service";
+import { getAiAccounts, getAiPostStatus, loginAiAccount, openAiPage, startAiPost, stopAiPost, testAiKeys, testPixabayKey } from "./service";
 
 const MODELS = [
+  { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview" },
   { value: "gemini-3.8-flash", label: "Gemini 3.8 Flash" },
-  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-  { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
-  { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash" },
+  { value: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" },
+  { value: "gemini-flash-latest", label: "Gemini Flash Latest" },
+  { value: "gemini-3.1-flash-lite-preview", label: "Gemini 3.1 Flash Lite" },
+  { value: "gemini-flash-lite-latest", label: "Gemini Flash Lite Latest" },
+  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash (cũ)" },
+  { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash (cũ)" },
 ];
 const GRAPH_VERSIONS = ["v18.0", "v19.0", "v20.0", "v21.0", "v22.0"];
 const PROMPT_LIMIT = 2000;
@@ -43,6 +47,7 @@ function readDraft() {
     }
     return {
       geminiKey: typeof raw.geminiKey === "string" ? raw.geminiKey : "",
+      pixabayKey: typeof raw.pixabayKey === "string" ? raw.pixabayKey : "",
       prompt: typeof raw.prompt === "string" ? raw.prompt.slice(0, PROMPT_LIMIT) : "",
       keywords,
     };
@@ -68,25 +73,26 @@ function pictureUrl(uid) {
   return `https://graph.facebook.com/${uid}/picture?type=square&width=80&height=80`;
 }
 
-function Photo({ src, name, tone = "#0284C7" }) {
+function Photo({ src, name, tone = "#0284C7", size = 28 }) {
   const [failed, setFailed] = useState(false);
   if (src && !failed) {
     return (
       <img
         src={src}
         alt=""
-        width={28}
-        height={28}
+        width={size}
+        height={size}
         referrerPolicy="no-referrer"
         onError={() => setFailed(true)}
-        className="size-7 rounded-full border border-[#E2E8F0] object-cover"
+        className="rounded-full border border-[#E2E8F0] object-cover"
+        style={{ width: size, height: size }}
       />
     );
   }
   return (
     <span
-      className="flex size-7 items-center justify-center rounded-full text-[11px] font-bold text-white"
-      style={{ backgroundColor: tone }}
+      className="flex items-center justify-center rounded-full font-bold text-white"
+      style={{ backgroundColor: tone, width: size, height: size, fontSize: size > 30 ? 13 : 11 }}
     >
       {(name || "?").trim().charAt(0).toUpperCase()}
     </span>
@@ -141,7 +147,8 @@ export default function AiPost() {
   const [testingKey, setTestingKey] = useState(false);
   const [pixabayKey, setPixabayKey] = useState("");
   const [showPixabay, setShowPixabay] = useState(false);
-  const [modelName, setModelName] = useState("gemini-3.8-flash");
+  const [testingPixabay, setTestingPixabay] = useState(false);
+  const [modelName, setModelName] = useState("gemini-3-flash-preview");
   const [fbVersion, setFbVersion] = useState("v22.0");
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [times, setTimes] = useState(["09:00", "15:00", "21:00"]);
@@ -213,6 +220,7 @@ export default function AiPost() {
     const draft = readDraft();
     if (draft) {
       setGeminiKey(draft.geminiKey);
+      setPixabayKey(draft.pixabayKey || "");
       setPrompt(draft.prompt);
       setKeywords(draft.keywords);
     }
@@ -221,8 +229,8 @@ export default function AiPost() {
 
   useEffect(() => {
     if (!draftReady) return;
-    writeDraft({ geminiKey, prompt, keywords });
-  }, [draftReady, geminiKey, prompt, keywords]);
+    writeDraft({ geminiKey, pixabayKey, prompt, keywords });
+  }, [draftReady, geminiKey, pixabayKey, prompt, keywords]);
 
   const visible = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -256,8 +264,8 @@ export default function AiPost() {
       const next = { ...current };
       let changed = false;
       fanpages.forEach((page) => {
-        if (next[page.key] == null) {
-          next[page.key] = page.category || "";
+        if (next[page.key] == null || String(next[page.key]).trim() === "") {
+          next[page.key] = page.name || "";
           changed = true;
         }
       });
@@ -291,16 +299,37 @@ export default function AiPost() {
     }
     setTestingKey(true);
     try {
+      // Chỉ kiểm tra Gemini — không gửi Pixabay (có nút riêng).
       const result = await testAiKeys({
         api_key: key,
         model_name: modelName,
-        pixabay_key: pixabayKey.trim(),
+        pixabay_key: "",
       });
+      if (result.model_name && result.model_name !== modelName) {
+        setModelName(result.model_name);
+      }
       toast.success(result.message || "Gemini key dùng được.");
     } catch (error) {
       toast.error(error.message || "Key không dùng được.");
     } finally {
       setTestingKey(false);
+    }
+  };
+
+  const testPixabay = async () => {
+    const key = pixabayKey.trim();
+    if (key.length < 10) {
+      toast.warning("Pixabay API key quá ngắn hoặc đang để trống.");
+      return;
+    }
+    setTestingPixabay(true);
+    try {
+      const result = await testPixabayKey({ pixabay_key: key });
+      toast.success(result.message || "Pixabay key dùng được.");
+    } catch (error) {
+      toast.error(error.message || "Pixabay key không dùng được.");
+    } finally {
+      setTestingPixabay(false);
     }
   };
 
@@ -451,24 +480,34 @@ export default function AiPost() {
           </Field>
 
           <div className="mt-4">
-            <Field label="Pixabay API key" hint="Dùng để tải ảnh cho bài. Không có thì bỏ qua.">
-              <span className="relative block">
-                <input
-                  type={showPixabay ? "text" : "password"}
-                  value={pixabayKey}
-                  onChange={(event) => setPixabayKey(event.target.value)}
-                  placeholder="Nhập Pixabay API Key..."
-                  className={`${inputClass} pr-9`}
-                />
+            <Field label="Pixabay API key" hint="Có ảnh thì gắn vào bài. Không có / lỗi thì đăng chữ thôi.">
+              <div className="flex items-center gap-2">
+                <span className="relative min-w-0 flex-1">
+                  <input
+                    type={showPixabay ? "text" : "password"}
+                    value={pixabayKey}
+                    onChange={(event) => setPixabayKey(event.target.value)}
+                    placeholder="Nhập Pixabay API Key..."
+                    className={`${inputClass} pr-9 font-mono`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPixabay((value) => !value)}
+                    aria-label={showPixabay ? "Ẩn Pixabay key" : "Hiện Pixabay key"}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#94A3B8]"
+                  >
+                    {showPixabay ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </span>
                 <button
                   type="button"
-                  onClick={() => setShowPixabay((value) => !value)}
-                  aria-label={showPixabay ? "Ẩn Pixabay key" : "Hiện Pixabay key"}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#94A3B8]"
+                  onClick={testPixabay}
+                  disabled={testingPixabay}
+                  className="inline-flex h-[29px] shrink-0 items-center rounded-lg bg-[#EFF6FF] px-3 text-xs font-semibold text-[#2563EB] disabled:opacity-60"
                 >
-                  {showPixabay ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  {testingPixabay ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Kiểm tra Key"}
                 </button>
-              </span>
+              </div>
             </Field>
           </div>
 
@@ -696,12 +735,12 @@ export default function AiPost() {
         </section>
 
         <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+          <div className="px-5 py-4">
             <div className="flex items-center gap-2">
               <LayoutGrid className="h-4 w-4 text-[#2563EB]" />
               <h2 className="text-sm font-bold text-[#0F172A]">Danh sách Fanpage</h2>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => setSelectedPages(new Set(fanpages.map((page) => page.key)))}
@@ -727,9 +766,9 @@ export default function AiPost() {
               <thead>
                 <tr className="border-y border-[#E2E8F0] text-[11px] font-semibold text-[#94A3B8]">
                   <th className="w-12 px-4 py-2.5" />
-                  <th className="w-24 px-2 py-2.5">Chạy AI</th>
+                  <th className="w-24 px-2 py-2.5 text-center">Chạy AI</th>
                   <th className="px-3 py-2.5">Tên Fanpage</th>
-                  <th className="w-[240px] px-5 py-2.5">Từ khóa tìm kiếm ảnh / Chủ đề viết bài</th>
+                  <th className="w-[240px] px-5 py-2.5 leading-4">Từ khóa tìm kiếm ảnh /<br />Chủ đề viết bài</th>
                 </tr>
               </thead>
               <tbody>
@@ -758,43 +797,42 @@ export default function AiPost() {
                                 return next;
                               })
                             }
-                            className={`flex size-5 items-center justify-center rounded-md ${
+                            className={`mx-auto flex size-5 items-center justify-center rounded-[5px] ${
                               checked ? "bg-[#22C55E] text-white" : "border border-[#CBD5E1] bg-white"
                             }`}
                           >
-                            {checked ? <Check className="h-3 w-3" /> : null}
+                            {checked ? <Check className="h-3 w-3" strokeWidth={3} /> : null}
                           </button>
                         </td>
                         <td className="px-3 py-3">
-                          <div className="flex items-center gap-2.5">
+                          <div className="flex items-center gap-3">
                             <Photo
                               src={page.avatarUrl}
                               name={page.name}
                               tone={PAGE_TONES[index % PAGE_TONES.length]}
+                              size={36}
                             />
                             <div className="min-w-0">
                               <button
                                 type="button"
                                 onClick={() => openPage(page)}
                                 disabled={openingKey === page.key}
-                                className="block max-w-full truncate text-left text-sm font-bold text-[#2563EB] hover:underline disabled:opacity-60"
+                                className="block max-w-full truncate text-left text-sm font-bold text-[#0F172A] hover:underline disabled:opacity-60"
                               >
                                 {openingKey === page.key ? "Đang mở..." : page.name}
                               </button>
-                              <p className="truncate text-[11px] text-[#94A3B8]">
-                                {page.category ? page.category : `Nick: ${page.ownerName}`}
-                              </p>
+                              <p className="truncate text-[11px] text-[#94A3B8]">Nick: {page.ownerName}</p>
                             </div>
                           </div>
                         </td>
                         <td className="px-5 py-3">
                           <input
-                            value={keywords[page.key] ?? ""}
+                            value={keywords[page.key] ?? page.name}
                             onChange={(event) =>
                               setKeywords((current) => ({ ...current, [page.key]: event.target.value }))
                             }
-                            placeholder="Nhập từ khóa, chủ đề"
-                            className="h-8 w-full rounded-lg border border-[#E2E8F0] px-3 text-xs text-[#334155] outline-none placeholder:text-[#CBD5E1] focus:border-[#2563EB]"
+                            placeholder={page.name}
+                            className="h-9 w-full rounded-lg border border-[#E2E8F0] px-3 text-xs text-[#334155] outline-none placeholder:text-[#94A3B8] focus:border-[#2563EB]"
                           />
                         </td>
                       </tr>

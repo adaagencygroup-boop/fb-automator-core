@@ -33,6 +33,30 @@ def is_checkpoint_url(url: str) -> bool:
     return path == "/checkpoint" or path.startswith("/checkpoint/")
 
 
+def _handle_saved_account_screen(driver: webdriver.Chrome, sleep_before_click: float = 10.0) -> bool:
+    """
+    Nếu vào phải trang lưu tài khoản (có nút 'Dùng trang cá nhân khác' / 'Đăng nhập bằng tài khoản khác'):
+    Chờ khoảng 10s rồi click nút đó để Facebook quay về form đăng nhập chuẩn.
+    """
+    locators = LOGIN.get("saved_account_switch", [])
+    for loc in locators:
+        try:
+            elements = driver.find_elements(By.XPATH, loc)
+            for el in elements:
+                if el.is_displayed():
+                    logger.info(f"Phát hiện màn hình lưu nick; chờ {sleep_before_click}s rồi bấm nút chuyển tài khoản...")
+                    time.sleep(sleep_before_click)
+                    try:
+                        el.click()
+                    except Exception:
+                        driver.execute_script("arguments[0].click();", el)
+                    time.sleep(2.0)
+                    return True
+        except Exception:
+            pass
+    return False
+
+
 def _check_logged_in(driver: webdriver.Chrome) -> bool:
     """Only an authenticated Facebook session outside login/checkpoint is valid."""
     try:
@@ -682,6 +706,8 @@ def run_login(uid: str, password: str, two_fa: str = None, cookie: str = None, p
         driver.get(FB_HOME)
         human_sleep(2.0, 3.5)
 
+        _handle_saved_account_screen(driver)
+
         email_el = wait_and_find(driver, LOGIN["email_input"])
         human_type(email_el, uid)
         human_sleep(0.3, 0.8)
@@ -843,6 +869,8 @@ def ensure_logged_in(
     try:
         driver.get(FB_HOME)
         human_sleep(2.0, 3.5)
+
+        _handle_saved_account_screen(driver)
 
         email_el = wait_and_find(driver, LOGIN["email_input"], timeout=8)
         human_type(email_el, uid)

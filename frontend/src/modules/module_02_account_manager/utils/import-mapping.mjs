@@ -31,6 +31,20 @@ export function normalizeImportedValue(value) {
   return markdownEmail?.[1] || normalized;
 }
 
+export function isFacebookToken(value) {
+  return /^EAA/i.test(normalizeImportedValue(value));
+}
+
+// Preview, validation and submission must respect the selected column mapping.
+export function mapImportedRow(line, delimiter, columnMap) {
+  const account = { uid: "" };
+  line.split(delimiter).map(normalizeImportedValue).forEach((value, index) => {
+    const field = columnMap[index];
+    if (field && field !== "ignore") account[field] = value;
+  });
+  return account;
+}
+
 export function detectColumnMapping(lines, delimiter, columnCount) {
   // null can still be inferred; "ignore" must survive every later fallback.
   const mapping = Array.from({ length: columnCount }).fill(null);
@@ -64,10 +78,14 @@ export function detectColumnMapping(lines, delimiter, columnCount) {
 
   // 3. Token FB
   samplesByColumn.forEach((samples, index) => {
-    if (!samples.length || mapping[index] !== null || assignedFields.has("token")) return;
-    if (allMatch(samples, /^EAAA/i)) {
+    if (mapping[index] !== null || !samples.some(isFacebookToken)) return;
+    if (samples.every(isFacebookToken) && !assignedFields.has("token")) {
       mapping[index] = "token";
       assignedFields.add("token");
+    } else {
+      // Mixed token types and duplicate Facebook columns need an explicit choice.
+      // Protect them from Hotmail/password and positional fallbacks.
+      mapping[index] = "ignore";
     }
   });
 
@@ -109,7 +127,7 @@ export function detectColumnMapping(lines, delimiter, columnCount) {
     if (
       someMatch(samples, /^(?:M\.C\d+_|MsaArtifacts|EwB)/i) ||
       someMatch(samples, /MsaArtifacts/i) ||
-      samples.some((v) => v.length > 80 && !v.startsWith("EAAA") && !/(?:^|;)\s*c_user=/i.test(v))
+      samples.some((v) => v.length > 80 && !isFacebookToken(v) && !/(?:^|;)\s*c_user=/i.test(v))
     ) {
       mapping[index] = "token_hotmail";
       assignedFields.add("token_hotmail");

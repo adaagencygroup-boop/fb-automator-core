@@ -16,7 +16,7 @@ export default function IntroMusic() {
     let cancelled = false;
 
     const start = async () => {
-      if (cancelled || started) return;
+      if (cancelled || started || window.__fbIntroVideoOpen) return;
       try {
         el.volume = 0.85;
         el.currentTime = 0;
@@ -37,7 +37,13 @@ export default function IntroMusic() {
     };
 
     const onInteract = () => {
+      if (window.__fbIntroVideoOpen) return;
       if (started && !el.paused) return;
+      started = false;
+      void start();
+    };
+
+    const onVideoClosed = () => {
       started = false;
       void start();
     };
@@ -47,6 +53,7 @@ export default function IntroMusic() {
     const t1 = window.setTimeout(() => void start(), 300);
     const t2 = window.setTimeout(() => void start(), 1200);
 
+    window.addEventListener("fb-intro-video-closed", onVideoClosed);
     window.addEventListener("pointerdown", onInteract, true);
     window.addEventListener("keydown", onInteract, true);
     window.addEventListener("touchstart", onInteract, true);
@@ -55,6 +62,7 @@ export default function IntroMusic() {
       cancelled = true;
       window.clearTimeout(t1);
       window.clearTimeout(t2);
+      window.removeEventListener("fb-intro-video-closed", onVideoClosed);
       window.removeEventListener("pointerdown", onInteract, true);
       window.removeEventListener("keydown", onInteract, true);
       window.removeEventListener("touchstart", onInteract, true);

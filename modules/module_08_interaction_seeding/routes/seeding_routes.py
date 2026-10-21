@@ -24,7 +24,7 @@ from fastapi import (
     Request,
 )
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from modules.module_02_account_manager.automation.browser_manager import (
@@ -57,6 +57,9 @@ _active_seeding_campaigns = {}  # campaign_id -> {"stop_requested": bool, "runni
 _batch_campaign_chains: dict[
     int, list[int]
 ] = {}  # campaign_id -> [camp1_id, camp2_id, ...]
+# Lô đang được bộ chạy lô (_execute_campaign_runner) chạy thật: campaign đầu lô -> chuỗi chiến dịch.
+# Mỗi lúc mỗi user chỉ được chạy 1 lô seeding (mọi loại trang) vì các lô dùng chung nick / Chrome profile.
+_running_batches: dict[int, list[int]] = {}
 
 
 def broadcast(
@@ -316,8 +319,9 @@ def extract_fb_id(url: str, target_type: str = "") -> str:
     if m:
         return m.group(1)
 
-    # 1. Post ID từ permalink: story_fbid=(\d+) hoặc fbid=(\d+)
-    m = re.search(r"[?&](?:story_fbid|fbid)=(\d+)", clean)
+    # 1. Post ID từ permalink: story_fbid / fbid là số hoặc chuỗi pfbid... (link kiểu mới).
+    #    Phải lấy trước [?&]id= vì id= trong permalink là ID của Page, không phải của bài viết.
+    m = re.search(r"[?&](?:story_fbid|fbid)=([A-Za-z0-9]+)", clean)
     if m:
         return m.group(1)
 
@@ -405,10 +409,14 @@ def vn_date_bound(date_str: str, end_of_day: bool = False) -> datetime:
 
 def share_range_per_post(total: int, parts: int) -> tuple:
     """Khoảng số lượt chia sẻ mỗi bài: ±20% quanh mức chia đều (vd 50 lượt / 4 bài -> 10..15).
+    Mỗi bài luôn có ít nhất 1 lượt: đủ nick thì tối thiểu 1, ít nick hơn số bài thì mỗi bài đúng 1 lượt
+    (bài không được chia sẽ được giao thêm cho nick đang share ít nhất, xem create_seeding_campaign).
     Dùng số nguyên để tránh sai số float. Frontend (PostSummaryCards.jsx) hiển thị cùng công thức."""
     if parts <= 1:
         return (total, total)
-    return ((4 * total) // (5 * parts), -(-6 * total // (5 * parts)))
+    if total < parts:
+        return (1, 1)
+    return (max(1, (4 * total) // (5 * parts)), -(-6 * total // (5 * parts)))
 
 
 def _split_share_accounts(uids: list[str], post_count: int) -> list[list[str]]:
@@ -519,20 +527,23 @@ async def list_seeding_targets(
         if not is_admin:
             query = query.filter(SeedingTarget.created_by == current_user["id"])
 
-    # Loại trừ các link đã từng chạy (COMPLETED / FAILED / STOPPED / RUNNING) hoặc đã có kết quả
+    # Chỉ loại trừ các link đã chạy THÀNH CÔNG (COMPLETED)
+    # Các link chưa chạy hoặc chạy thất bại (FAILED), bị dừng (STOPPED) vẫn tiếp tục hiển thị
     if not include_completed:
-        executed_stmt = (
+        completed_stmt = (
             select(SeedingCampaignTarget.target_id)
             .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
             .where(
                 or_(
-                    SeedingCampaign.status.in_(["COMPLETED", "FAILED", "STOPPED", "RUNNING"]),
-                    SeedingCampaignTarget.success_count > 0,
-                    SeedingCampaignTarget.failed_count > 0,
+                    SeedingCampaign.status == "COMPLETED",
+                    and_(
+                        SeedingCampaignTarget.success_count > 0,
+                        SeedingCampaignTarget.failed_count == 0,
+                    ),
                 )
             )
         )
-        query = query.filter(~SeedingTarget.id.in_(executed_stmt))
+        query = query.filter(~SeedingTarget.id.in_(completed_stmt))
 
     targets = query.order_by(SeedingTarget.id.asc()).all()
     return {
@@ -632,25 +643,28 @@ async def validate_targets(
 
     db.commit()
 
-    # Lấy toàn bộ danh sách các link CHƯA CHẠY của user này trong DB để đồng bộ giao diện
+    # Lấy toàn bộ danh sách các link CHƯA HOÀN THÀNH THÀNH CÔNG của user này trong DB để đồng bộ giao diện
     all_current_q = db.query(SeedingTarget).filter(
         SeedingTarget.target_type == camp_type
     )
     if user_id is not None:
         all_current_q = all_current_q.filter(SeedingTarget.created_by == user_id)
 
-    executed_stmt = (
+    # CHỈ ẨN CÁC LINK ĐÃ CHẠY THÀNH CÔNG (COMPLETED)
+    completed_stmt = (
         select(SeedingCampaignTarget.target_id)
         .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
         .where(
             or_(
-                SeedingCampaign.status.in_(["COMPLETED", "FAILED", "STOPPED", "RUNNING"]),
-                SeedingCampaignTarget.success_count > 0,
-                SeedingCampaignTarget.failed_count > 0,
+                SeedingCampaign.status == "COMPLETED",
+                and_(
+                    SeedingCampaignTarget.success_count > 0,
+                    SeedingCampaignTarget.failed_count == 0,
+                ),
             )
         )
     )
-    all_current_q = all_current_q.filter(~SeedingTarget.id.in_(executed_stmt))
+    all_current_q = all_current_q.filter(~SeedingTarget.id.in_(completed_stmt))
     all_current = all_current_q.order_by(SeedingTarget.id.asc()).all()
 
     return {
@@ -677,7 +691,9 @@ async def delete_target_by_url(
     authorization: str | None = Header(None),
     db: Session = Depends(get_db),
 ):
-    """Xóa mục tiêu theo URL khỏi database (chỉ xóa mục tiêu chưa chạy để bảo vệ toàn vẹn lịch sử)."""
+    """Xóa mục tiêu theo URL khỏi database của user.
+    Dữ liệu lịch sử đã được lưu trực tiếp display_name và target_url vào seeding_tasks và seeding_campaign_targets nên vẫn bảo toàn 100%.
+    """
     current_user = get_current_user_info(request, authorization)
     query = db.query(SeedingTarget).filter(SeedingTarget.url == url.strip())
     if target_type:
@@ -691,10 +707,14 @@ async def delete_target_by_url(
 
     targets = query.all()
     for t in targets:
-        # Nếu target chưa từng chạy trong chiến dịch nào -> xóa an toàn
-        is_used = db.query(SeedingCampaignTarget).filter(SeedingCampaignTarget.target_id == t.id).first()
-        if not is_used:
-            db.delete(t)
+        # Ngắt tham chiếu target_id ở tasks và campaign_targets để không lỗi FK và bảo toàn lịch sử
+        db.query(SeedingTask).filter(SeedingTask.target_id == t.id).update(
+            {SeedingTask.target_id: None}, synchronize_session=False
+        )
+        db.query(SeedingCampaignTarget).filter(SeedingCampaignTarget.target_id == t.id).update(
+            {SeedingCampaignTarget.target_id: None}, synchronize_session=False
+        )
+        db.delete(t)
     db.commit()
     return {"success": True}
 
@@ -706,8 +726,8 @@ async def clear_seeding_targets(
     authorization: str | None = Header(None),
     db: Session = Depends(get_db),
 ):
-    """Xóa toàn bộ mục tiêu CHƯA CHẠY của target_type thuộc về user hiện tại khỏi database.
-    Bảo toàn 100% các mục tiêu đã chạy trong lịch sử (seeding_campaign_targets & seeding_tasks).
+    """Xóa toàn bộ mục tiêu theo loại của user hiện tại khỏi database.
+    Dữ liệu lịch sử đã được lưu trực tiếp display_name và target_url vào seeding_tasks và seeding_campaign_targets nên vẫn bảo toàn 100%.
     """
     current_user = get_current_user_info(request, authorization)
     query = db.query(SeedingTarget)
@@ -720,11 +740,29 @@ async def clear_seeding_targets(
         if role not in ("admin", "superadmin", "administrator"):
             query = query.filter(SeedingTarget.created_by == current_user["id"])
 
-    # Chỉ xóa những targets CHƯA từng được đưa vào bất kỳ chiến dịch nào trong lịch sử
-    used_stmt = select(SeedingCampaignTarget.target_id).distinct()
-    unrun_targets = query.filter(~SeedingTarget.id.in_(used_stmt)).all()
-    deleted_count = len(unrun_targets)
-    for t in unrun_targets:
+    # Chỉ xóa những targets chưa thành công khỏi danh sách hiển thị của user
+    completed_stmt = (
+        select(SeedingCampaignTarget.target_id)
+        .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
+        .where(
+            or_(
+                SeedingCampaign.status == "COMPLETED",
+                and_(
+                    SeedingCampaignTarget.success_count > 0,
+                    SeedingCampaignTarget.failed_count == 0,
+                ),
+            )
+        )
+    )
+    targets_to_clear = query.filter(~SeedingTarget.id.in_(completed_stmt)).all()
+    deleted_count = len(targets_to_clear)
+    for t in targets_to_clear:
+        db.query(SeedingTask).filter(SeedingTask.target_id == t.id).update(
+            {SeedingTask.target_id: None}, synchronize_session=False
+        )
+        db.query(SeedingCampaignTarget).filter(SeedingCampaignTarget.target_id == t.id).update(
+            {SeedingCampaignTarget.target_id: None}, synchronize_session=False
+        )
         db.delete(t)
     db.commit()
     return {"success": True, "deleted": deleted_count}
@@ -875,6 +913,12 @@ async def create_seeding_campaign(
                     created_by_int = u_row[0]
             except Exception:
                 created_by_int = None
+
+    # Mỗi lúc chỉ chạy 1 lô seeding (mọi loại trang): các lô dùng chung nick / Chrome profile
+    running = _find_running_campaign(db, created_by_int)
+    if running:
+        raise HTTPException(status_code=409, detail=_running_conflict_detail(running))
+
     if req.campaign_type.upper() == "POST":
         chosen_actions = {a.upper().strip() for a in (req.actions or [])}
         if "REACT" in chosen_actions and not any(
@@ -956,6 +1000,14 @@ async def create_seeding_campaign(
         if "SHARE" in post_actions
         else []
     )
+    share_load = {u: 0 for u in used_uids}   # số bài mỗi nick đang được giao share
+    for group in share_groups:
+        for u in group:
+            share_load[u] += 1
+
+    # Thời gian nghỉ: không âm, nhập ngược (vd 20 - 10) thì đảo lại cho đúng thứ tự
+    delay_min = max(0, min(req.delay_seconds_min, req.delay_seconds_max))
+    delay_max = max(0, req.delay_seconds_min, req.delay_seconds_max)
 
     for idx, item in enumerate(req.targets):
         fb_id = item.fb_id or extract_fb_id(item.url, camp_type)
@@ -1005,8 +1057,8 @@ async def create_seeding_campaign(
             actions=actions_str,
             reactions=",".join(req.reactions) if req.reactions else None,
             account_count=actual_account_count,
-            delay_seconds_min=req.delay_seconds_min,
-            delay_seconds_max=req.delay_seconds_max,
+            delay_seconds_min=delay_min,
+            delay_seconds_max=delay_max,
             status="PENDING",
             total_planned=actual_account_count,
             total_success=0,
@@ -1030,6 +1082,8 @@ async def create_seeding_campaign(
         camp_target = SeedingCampaignTarget(
             campaign_id=camp.id,
             target_id=target.id,
+            display_name=target.display_name or auto_display_name,
+            target_url=target.url,
             note=item.note,
             source=item.source or "MANUAL",
             planned_count=actual_account_count,
@@ -1074,8 +1128,13 @@ async def create_seeding_campaign(
                 comment_uids = set(used_uids)
 
         share_uids = set(share_groups[idx]) if share_groups else set()
-        if "SHARE" in post_actions and not share_uids:
-            share_uids = set(used_uids)
+        if "SHARE" in post_actions and not share_uids and used_uids:
+            # Ít nick hơn số bài: bài không được chia lượt nào vẫn có đúng 1 nick share (nick đang share ít nhất),
+            # không để cả loạt nick cùng share 1 bài.
+            least = min(share_load.values())
+            pick = random.choice([u for u, n in share_load.items() if n == least])
+            share_load[pick] += 1
+            share_uids = {pick}
 
         planned_uids = set()
         uids_with_pending = set()
@@ -1117,12 +1176,13 @@ async def create_seeding_campaign(
                         campaign_id=camp.id,
                         campaign_target_id=camp_target.id,
                         target_id=target.id,
+                        display_name=target.display_name or auto_display_name,
+                        target_url=target.url,
                         account_uid=uid,
                         action=act,
                         reaction=None,
                         comment_id=None,
                         status="FAILED",
-                        attempts=0,
                         error_message=f"Tài khoản đã {act_label} {type_text} này rồi",
                         started_at=vn_now(),
                         finished_at=vn_now(),
@@ -1156,12 +1216,13 @@ async def create_seeding_campaign(
                     campaign_id=camp.id,
                     campaign_target_id=camp_target.id,
                     target_id=target.id,
+                    display_name=target.display_name or auto_display_name,
+                    target_url=target.url,
                     account_uid=uid,
                     action=act,
                     reaction=assigned_reaction,
                     comment_id=assigned_comment_id,
                     status="PENDING",
-                    attempts=0,
                 )
                 db.add(task)
                 planned_uids.add(uid)
@@ -1251,6 +1312,8 @@ def _process_account_tasks(
     owner: str | None = None,
 ):
     """Xử lý toàn bộ tác vụ của một tài khoản trên trình duyệt Chrome riêng biệt."""
+    # Thời gian nghỉ lưu từ trước có thể bị ngược / âm: random.randint(20, 10) sẽ lỗi và làm sập luồng của nick
+    delay_min, delay_max = sorted((max(0, delay_min or 0), max(0, delay_max or 0)))
     token = owner_context.set(owner) if owner else None
     db = SessionLocal()
     driver = None
@@ -1290,26 +1353,23 @@ def _process_account_tasks(
                     "error",
                     f"[{uid}] ❌ Không thể đăng nhập Facebook. Đánh dấu thất bại các tác vụ của nick này.",
                 )
+                failed_any = False
                 for tid in task_ids:
                     t = db.query(SeedingTask).filter(SeedingTask.id == tid).first()
                     if t and t.status == "PENDING":
                         t.status = "FAILED"
                         t.error_message = "Không thể đăng nhập Facebook"
                         t.finished_at = vn_now()
-                        camp_tar = (
-                            db.query(SeedingCampaignTarget)
-                            .filter(SeedingCampaignTarget.id == t.campaign_target_id)
-                            .first()
-                        )
-                        if camp_tar:
-                            camp_tar.failed_count += 1
-                        camp = (
-                            db.query(SeedingCampaign)
-                            .filter(SeedingCampaign.id == campaign_id)
-                            .first()
-                        )
-                        if camp:
-                            camp.total_failed += 1
+                        failed_any = True
+                if failed_any:
+                    # Mỗi nick = 1 lượt (giống cách đếm ở cuối hàm), cộng bằng UPDATE trong DB để không mất lượt
+                    db.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).update(
+                        {SeedingCampaign.total_failed: SeedingCampaign.total_failed + 1}, synchronize_session=False
+                    )
+                    db.query(SeedingCampaignTarget).filter(SeedingCampaignTarget.campaign_id == campaign_id).update(
+                        {SeedingCampaignTarget.failed_count: SeedingCampaignTarget.failed_count + 1},
+                        synchronize_session=False,
+                    )
                 db.commit()
                 return
         else:
@@ -1370,6 +1430,7 @@ def _process_account_tasks(
 
             success = False
             msg = ""
+            comment_text = None
 
             if ut.action in ("FOLLOW", "LIKE_PAGE"):
                 acc_label = (
@@ -1417,6 +1478,19 @@ def _process_account_tasks(
                     target.url, callback=lambda m: broadcast("info", f"[{uid}] {m}")
                 )
 
+            # Bấm xong chưa chắc Facebook đã ghi nhận: có lúc Facebook hiện cảnh báo rồi hoàn tác thao tác.
+            # Đợi một lúc rồi kiểm tra lại; bị cảnh báo / hoàn tác thì ghi thất bại thay vì thành công.
+            # Bỏ qua khi thao tác đã có từ trước (bot không bấm gì).
+            if success and "từ trước" not in (msg or ""):
+                kept, why = bot.verify_action_kept(
+                    ut.action,
+                    target_type=target.target_type or "POST",
+                    comment_text=comment_text,
+                    callback=lambda m: broadcast("info", f"[{uid}] {m}"),
+                )
+                if not kept:
+                    success, msg = False, why
+
             ut.finished_at = vn_now()
             ut.error_message = msg
             if success:
@@ -1445,27 +1519,20 @@ def _process_account_tasks(
                 # Đã hoàn thành toàn bộ tác vụ của nick, nghỉ 1.5s rồi đóng trình duyệt an toàn
                 time.sleep(1.5)
 
-        # Cập nhật kết quả số tài khoản thành công / thất bại cho chiến dịch (mỗi nick = 1 lượt)
-        # Chỉ cập nhật nếu không có yêu cầu dừng (khi dừng, _fail_remaining_campaign_tasks sẽ đồng bộ chuẩn xác)
-        if not _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested"):
-            camp = (
-                db.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).first()
-            )
-            camp_tar = (
-                db.query(SeedingCampaignTarget)
-                .filter(SeedingCampaignTarget.campaign_id == campaign_id)
-                .first()
-            )
-            if camp:
-                if not account_has_failure:
-                    camp.total_success += 1
-                    if camp_tar:
-                        camp_tar.success_count += 1
-                else:
-                    camp.total_failed += 1
-                    if camp_tar:
-                        camp_tar.failed_count += 1
-                db.commit()
+        # Cập nhật kết quả số tài khoản thành công / thất bại cho chiến dịch (mỗi nick = 1 lượt).
+        # Cộng bằng 1 câu UPDATE trong DB (cột = cột + 1), không đọc lên rồi cộng trong Python:
+        # 2 nick chạy song song (2 luồng) cùng đọc total_failed = 0 rồi cùng ghi 1 -> mất 1 lượt.
+        camp_col = SeedingCampaign.total_success if not account_has_failure else SeedingCampaign.total_failed
+        tar_col = (
+            SeedingCampaignTarget.success_count if not account_has_failure else SeedingCampaignTarget.failed_count
+        )
+        db.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).update(
+            {camp_col: camp_col + 1}, synchronize_session=False
+        )
+        db.query(SeedingCampaignTarget).filter(SeedingCampaignTarget.campaign_id == campaign_id).update(
+            {tar_col: tar_col + 1}, synchronize_session=False
+        )
+        db.commit()
 
     except Exception as e:
         logger.error(f"Error in _process_account_tasks for {uid}: {e}")
@@ -1616,8 +1683,9 @@ def _run_single_campaign(campaign_id: int):
             tasks_by_uid.setdefault(t.account_uid, []).append(t.id)
 
         has_tasks = True
-        delay_min = campaign.delay_seconds_min or 30
-        delay_max = campaign.delay_seconds_max or 60
+        # Dùng `is None` thay vì `or`: nghỉ 0 giây là giá trị hợp lệ, không được biến thành 30
+        delay_min = 30 if campaign.delay_seconds_min is None else campaign.delay_seconds_min
+        delay_max = 60 if campaign.delay_seconds_max is None else campaign.delay_seconds_max
     finally:
         db.close()
 
@@ -1724,13 +1792,14 @@ def _rest_before_next_post(chain: list[int], next_cid: int) -> bool:
         camp = db.query(SeedingCampaign).filter(SeedingCampaign.id == next_cid).first()
         if not camp or camp.campaign_type != "POST":
             return True
-        lo = camp.delay_seconds_min or 30
-        hi = camp.delay_seconds_max or 60
+        lo = 30 if camp.delay_seconds_min is None else camp.delay_seconds_min
+        hi = 60 if camp.delay_seconds_max is None else camp.delay_seconds_max
         owner = str(camp.created_by) if camp.created_by is not None else None
     finally:
         db.close()
 
-    delay_s = random.randint(min(lo, hi), max(lo, hi))
+    lo, hi = sorted((max(0, lo), max(0, hi)))
+    delay_s = random.randint(lo, hi)
     broadcast("info", f"⏳ Nghỉ an toàn {delay_s}s trước khi sang bài viết tiếp theo...", owner=owner)
     for sec in range(delay_s):
         if any(_active_seeding_campaigns.get(c, {}).get("stop_requested", False) for c in chain):
@@ -1742,42 +1811,73 @@ def _rest_before_next_post(chain: list[int], next_cid: int) -> bool:
     return True
 
 
+SEEDING_TYPE_LABELS = {"POST": "Bài viết", "PAGE": "Page", "PROFILE": "Trang cá nhân"}
+
+
+def _find_running_campaign(db: Session, user_id: int | None, campaign_type: str | None = None):
+    """Chiến dịch đang chạy (hoặc đang chờ tới lượt) trong các lô mà engine này đang chạy, của user, có thể lọc loại trang.
+    Chỉ xét lô đang chạy thật (_running_batches): chiến dịch bị kẹt RUNNING / PENDING từ lần chạy trước (engine đã tắt
+    giữa chừng) hoặc mới tạo mà chưa chạy thì không tính."""
+    ids = [cid for chain in list(_running_batches.values()) for cid in chain]
+    if not ids:
+        return None
+    q = db.query(SeedingCampaign).filter(
+        SeedingCampaign.id.in_(ids), SeedingCampaign.status.in_(["RUNNING", "PENDING"])
+    )
+    if campaign_type:
+        q = q.filter(SeedingCampaign.campaign_type == campaign_type.upper())
+    if user_id is not None:
+        q = q.filter(SeedingCampaign.created_by == user_id)
+    return q.order_by(SeedingCampaign.id.asc()).first()
+
+
+def _running_conflict_detail(camp: SeedingCampaign) -> str:
+    label = SEEDING_TYPE_LABELS.get(camp.campaign_type, camp.campaign_type)
+    return f"Đang chạy seeding {label} #{camp.id}. Hãy dừng lô đó trước khi bắt đầu seeding mới."
+
+
 def _execute_campaign_runner(initial_campaign_id: int):
     """Hàm chạy nền điều phối tuần tự các chiến dịch trong cùng một batch."""
     chain = _batch_campaign_chains.get(initial_campaign_id, [initial_campaign_id])
-    for idx, cid in enumerate(chain):
-        if idx > 0 and not _rest_before_next_post(chain, cid):
-            break
-        # Kiểm tra nếu có yêu cầu dừng toàn batch
+    # Đánh dấu lô đang chạy: khoá không cho bắt đầu lô seeding khác cùng lúc (xem _find_running_campaign)
+    _running_batches[initial_campaign_id] = chain
+    try:
+        for idx, cid in enumerate(chain):
+            if idx > 0 and not _rest_before_next_post(chain, cid):
+                break
+            # Kiểm tra nếu có yêu cầu dừng toàn batch
+            stop_req = any(
+                _active_seeding_campaigns.get(c, {}).get("stop_requested", False)
+                for c in chain
+            )
+            if stop_req:
+                break
+            # Cờ stop_requested mất khi chiến dịch trước chạy xong, nên các chiến dịch kế tiếp
+            # phải dựa vào trạng thái STOPPED mà API dừng đã ghi vào DB.
+            if idx > 0 and _campaign_status(cid) == "STOPPED":
+                break
+            _run_single_campaign(cid)
+
+        # Nếu chuỗi bị dừng dở chừng, đảm bảo mọi chiến dịch còn lại trong chuỗi được hoàn tất trạng thái FAILED/STOPPED
         stop_req = any(
             _active_seeding_campaigns.get(c, {}).get("stop_requested", False)
             for c in chain
         )
         if stop_req:
-            break
-        # Cờ stop_requested mất khi chiến dịch trước chạy xong, nên các chiến dịch kế tiếp
-        # phải dựa vào trạng thái STOPPED mà API dừng đã ghi vào DB.
-        if idx > 0 and _campaign_status(cid) == "STOPPED":
-            break
-        _run_single_campaign(cid)
+            db_cleanup = SessionLocal()
+            try:
+                for cid in chain:
+                    _fail_remaining_campaign_tasks(
+                        db_cleanup,
+                        cid,
+                        reason="Người dùng yêu cầu dừng chiến dịch (Đã dừng thủ công)",
+                    )
+                db_cleanup.commit()
+            finally:
+                db_cleanup.close()
 
-    # Nếu chuỗi bị dừng dở chừng, đảm bảo mọi chiến dịch còn lại trong chuỗi được hoàn tất trạng thái FAILED/STOPPED
-    stop_req = any(
-        _active_seeding_campaigns.get(c, {}).get("stop_requested", False)
-        for c in chain
-    )
-    if stop_req:
-        db_cleanup = SessionLocal()
-        try:
-            for cid in chain:
-                _fail_remaining_campaign_tasks(
-                    db_cleanup,
-                    cid,
-                    reason="Người dùng yêu cầu dừng chiến dịch (Đã dừng thủ công)",
-                )
-            db_cleanup.commit()
-        finally:
-            db_cleanup.close()
+    finally:
+        _running_batches.pop(initial_campaign_id, None)
 
 
 @router.post("/campaigns/{campaign_id}/start")
@@ -1815,6 +1915,11 @@ async def start_seeding_campaign(
         campaign_id
     ].get("running"):
         return {"message": "Chiến dịch đang chạy", "status": "RUNNING"}
+
+    # Đang có lô seeding khác (của user này) chạy thì không cho chạy thêm lô thứ hai
+    running = _find_running_campaign(db, campaign.created_by)
+    if running and running.id not in _batch_campaign_chains.get(campaign_id, [campaign_id]):
+        raise HTTPException(status_code=409, detail=_running_conflict_detail(running))
 
     background_tasks.add_task(_execute_campaign_runner, campaign_id)
     return {
@@ -1951,6 +2056,27 @@ async def stop_all_seeding(
 # ─────────────────────────────────────────────────────────────
 # 4. DANH SÁCH LỊCH SỬ SEEDING (CHO TRANG LỊCH SỬ)
 # ─────────────────────────────────────────────────────────────
+@router.get("/campaigns/active")
+async def get_active_seeding_campaign(
+    campaign_type: str | None = Query(None, description="PAGE | PROFILE | POST, bỏ trống = mọi loại"),
+    request: Request = None,
+    authorization: str | None = Header(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Lô seeding đang chạy (hoặc đang chờ tới lượt) của user hiện tại trên engine này.
+    Giao diện các trang Seeding gọi định kỳ (không truyền loại trang):
+    - Lô của chính trang đó: giữ nút "Dừng seeding" khi chuyển trang rồi quay lại.
+    - Lô của trang khác: khoá nút "Bắt đầu seeding", nút Dừng dừng lô đó (mỗi lúc chỉ chạy 1 lô).
+    """
+    current_user = get_current_user_info(request, authorization)
+    user_id = current_user.get("id") if current_user else None
+    camp = _find_running_campaign(db, user_id, campaign_type)
+    if not camp:
+        return {"campaign_id": None, "campaign_type": None, "name": None}
+    return {"campaign_id": camp.id, "campaign_type": camp.campaign_type, "name": camp.target_summary}
+
+
 @router.get("/campaigns")
 async def list_seeding_campaigns(
     campaign_type: str | None = Query(None, description="PAGE | PROFILE | POST | ALL"),
@@ -1963,8 +2089,11 @@ async def list_seeding_campaigns(
     user_id: int | None = Query(
         None, description="Lọc theo created_by (dành cho Admin)"
     ),
+    all_records: bool = Query(
+        False, description="Lấy toàn bộ bản ghi theo bộ lọc không giới hạn phân trang (dành cho xuất Excel)"
+    ),
     page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
+    page_size: int = Query(10, ge=1, le=100000),
     request: Request = None,
     authorization: str | None = Header(None),
     db: Session = Depends(get_db),
@@ -1992,54 +2121,66 @@ async def list_seeding_campaigns(
         if user_id is not None:
             q = q.filter(SeedingCampaign.created_by == user_id)
 
-    if campaign_type and campaign_type.upper() not in ("ALL", "TẤT CẢ"):
-        q = q.filter(SeedingCampaign.campaign_type == campaign_type.upper())
+    if campaign_type and campaign_type.upper().strip() not in ("ALL", "TẤT CẢ", "TAT_CA", ""):
+        q = q.filter(SeedingCampaign.campaign_type == campaign_type.upper().strip())
 
-    if status and status.upper() not in ("ALL", "TẤT CẢ"):
-        clean_status = status.upper()
-        if clean_status in ("HOÀN THÀNH", "COMPLETED"):
+    if status and status.upper().strip() not in ("ALL", "TẤT CẢ", "TAT_CA", ""):
+        clean_status = status.upper().strip()
+        if clean_status in ("HOÀN THÀNH", "COMPLETED", "SUCCESS"):
             q = q.filter(SeedingCampaign.status == "COMPLETED")
         elif clean_status in ("ĐANG CHẠY", "RUNNING"):
             q = q.filter(SeedingCampaign.status == "RUNNING")
-        elif clean_status in ("KHÔNG HOÀN THÀNH", "FAILED", "STOPPED"):
+        elif clean_status in ("KHÔNG HOÀN THÀNH", "FAILED", "STOPPED", "THẤT BẠI"):
             q = q.filter(SeedingCampaign.status.in_(["FAILED", "STOPPED"]))
 
     if search and search.strip():
-        term = f"%{search.strip()}%"
-        target_subquery = (
+        raw_search = search.strip()
+        term = f"%{raw_search}%"
+        clean_num = raw_search.lstrip("#")
+        id_filters = []
+        if clean_num.isdigit():
+            id_filters.append(SeedingCampaign.id == int(clean_num))
+
+        target_campaign_ids = (
             db.query(SeedingCampaignTarget.campaign_id)
-            .join(SeedingTarget, SeedingCampaignTarget.target_id == SeedingTarget.id)
+            .outerjoin(SeedingTarget, SeedingCampaignTarget.target_id == SeedingTarget.id)
             .filter(
                 or_(
                     SeedingTarget.display_name.ilike(term),
                     SeedingTarget.url.ilike(term),
                     SeedingTarget.fb_id.ilike(term),
+                    SeedingCampaignTarget.display_name.ilike(term),
+                    SeedingCampaignTarget.target_url.ilike(term),
+                    SeedingCampaignTarget.note.ilike(term),
                 )
             )
-            .subquery()
         )
-        q = q.filter(SeedingCampaign.id.in_(target_subquery))
+        q = q.filter(
+            or_(
+                SeedingCampaign.id.in_(target_campaign_ids),
+                *id_filters,
+            )
+        )
 
     # from_date / to_date là ngày theo giờ Việt Nam ('YYYY-MM-DD'), lấy trọn ngày to_date
-    if from_date:
+    if from_date and from_date.strip():
         try:
-            q = q.filter(SeedingCampaign.created_at >= vn_date_bound(from_date))
-        except ValueError:
+            q = q.filter(SeedingCampaign.created_at >= vn_date_bound(from_date.strip()))
+        except Exception:
             pass
 
-    if to_date:
+    if to_date and to_date.strip():
         try:
-            q = q.filter(SeedingCampaign.created_at < vn_date_bound(to_date, end_of_day=True))
-        except ValueError:
+            q = q.filter(SeedingCampaign.created_at < vn_date_bound(to_date.strip(), end_of_day=True))
+        except Exception:
             pass
 
     total = q.count()
-    items = (
-        q.order_by(SeedingCampaign.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
+    ordered_q = q.order_by(SeedingCampaign.created_at.desc(), SeedingCampaign.id.desc())
+    if all_records:
+        items = ordered_q.all()
+    else:
+        items = ordered_q.offset((page - 1) * page_size).limit(page_size).all()
 
     results = []
     for c in items:
@@ -2080,7 +2221,7 @@ async def list_seeding_campaigns(
             }
         )
 
-    return {"total": total, "page": page, "page_size": page_size, "items": results}
+    return {"total": total, "page": page, "page_size": page_size if not all_records else total, "items": results}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2142,22 +2283,39 @@ async def get_seeding_campaign_detail(
     targets_data = []
     for ct in campaign.campaign_targets:
         t = ct.target
+        target_id = t.id if t else ct.target_id
+        target_type = (t.target_type if t else None) or campaign.campaign_type
+        fb_id = t.fb_id if t else None
+        url = (t.url if t else None) or ct.target_url
+        display_name = (t.display_name if t else None) or ct.display_name
+
+        # Nếu chưa có url hoặc display_name, fallback từ các task thuộc ct
+        if not url or not display_name:
+            first_task = next(
+                (tk for tk in ct.tasks if tk.display_name or tk.target_url), None
+            )
+            if first_task:
+                display_name = display_name or first_task.display_name
+                url = url or first_task.target_url
+
         targets_data.append(
             {
-                "target_id": t.id,
-                "target_type": t.target_type,
-                "fb_id": t.fb_id,
-                "url": t.url,
-                "display_name": t.display_name
+                "target_id": target_id,
+                "target_type": target_type,
+                "fb_id": fb_id,
+                "url": url,
+                "display_name": display_name
                 or (
-                    f"Page {t.fb_id}"
-                    if t.target_type == "PAGE"
+                    f"Page {fb_id}"
+                    if target_type == "PAGE"
                     else (
-                        f"Trang cá nhân {t.fb_id}"
-                        if t.target_type == "PROFILE"
-                        else f"Bài viết {t.fb_id}"
+                        f"Trang cá nhân {fb_id}"
+                        if target_type == "PROFILE"
+                        else f"Bài viết {fb_id}"
                     )
-                ),
+                )
+                if fb_id
+                else (display_name or "Mục tiêu"),
                 "note": ct.note,
                 "source": ct.source,
                 "planned_count": ct.planned_count,
@@ -2227,6 +2385,10 @@ async def get_seeding_campaign_detail(
                 "task_id": tk.id,
                 "account_uid": tk.account_uid,
                 "account_name": acc_name,
+                "target_id": tk.target_id,
+                "display_name": tk.display_name
+                or (tk.target.display_name if tk.target else None),
+                "target_url": tk.target_url or (tk.target.url if tk.target else None),
                 "action": tk.action,
                 "action_display": action_disp,
                 "reaction": tk.reaction,
@@ -2283,9 +2445,16 @@ async def get_seeding_campaign_detail(
         )
     )
 
-    primary_target_url = targets_data[0]["url"] if targets_data else None
+    first_task = campaign.tasks[0] if campaign.tasks else None
+    primary_target_url = (
+        (targets_data[0]["url"] if targets_data else None)
+        or (first_task.target_url if first_task else None)
+        or ""
+    )
     primary_target_name = (
-        targets_data[0]["display_name"] if targets_data else campaign.target_summary
+        (targets_data[0]["display_name"] if targets_data else None)
+        or (first_task.display_name if first_task else None)
+        or campaign.target_summary
     )
 
     return {
