@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { useIncrementalList } from "@/lib/use-incremental-list";
 import NotificationList from "./NotificationList";
 import StatusFilter from "./StatusFilter";
 
@@ -15,13 +16,26 @@ const formatTime = (iso) =>
 /** "KH: 29224347..." — rút gọn mã khách hàng như Figma */
 const shortCustomer = (id) => (String(id).length > 8 ? `${String(id).slice(0, 8)}...` : id);
 
-function Tabs({ tab, onTabChange, notificationCount }) {
+function Tabs({ tab, onTabChange, notificationCount, onBack }) {
   const tabs = [
     { id: "conversations", label: "Hội thoại" },
     { id: "notifications", label: `Thông báo (${notificationCount})`, dot: notificationCount > 0 },
   ];
   return (
     <div role="tablist" aria-label="Hội thoại và thông báo" className="flex border-b border-slate-200 shrink-0">
+      {/* Bố cục 1 cột: quay lại Danh sách Page */}
+      {onBack && (
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Quay lại danh sách Page"
+          className={cn("shrink-0 px-3 text-slate-600 hover:bg-slate-50", FOCUS)}
+        >
+          <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M12.5 15.5L7 10l5.5-5.5" />
+          </svg>
+        </button>
+      )}
       {tabs.map((t) => {
         const active = tab === t.id;
         return (
@@ -85,8 +99,12 @@ function ConversationItem({ conversation, pageName, active, first, onSelect }) {
         <span className="w-full flex items-center justify-between">
           <span className="flex items-center gap-1.5 min-w-0">
             <img src="/icons/icon_facebook_source.svg" alt="Facebook" width={11.625} height={11.5547} className="block shrink-0" />
-            <span className="truncate text-xs leading-4 font-bold text-slate-900">
-              KH: {shortCustomer(conversation.customer)}
+            {/* Ưu tiên tên thật của khách; chưa có tên mới lùi về mã PSID rút gọn */}
+            <span
+              className="truncate text-xs leading-4 font-bold text-slate-900"
+              title={conversation.customerName || `KH: ${conversation.customer}`}
+            >
+              {conversation.customerName || `KH: ${shortCustomer(conversation.customer)}`}
             </span>
           </span>
           <time dateTime={conversation.updatedAt} className="shrink-0 text-[10px] leading-5 text-slate-400">
@@ -125,8 +143,10 @@ export default function ConversationList({
   notificationFilter,
   onNotificationFilterChange,
   onOpenNotification,
+  onBack,
   className,
 }) {
+  const { slice: convSlice, sentinelRef: convSentinel, hasMore: convHasMore } = useIncrementalList(conversations, 30);
   return (
     <section
       aria-label="Hội thoại và thông báo"
@@ -135,7 +155,12 @@ export default function ConversationList({
         className,
       )}
     >
-      <Tabs tab={tab} onTabChange={onTabChange} notificationCount={notifications.filter((n) => n.unread).length} />
+      <Tabs
+        tab={tab}
+        onTabChange={onTabChange}
+        notificationCount={notifications.filter((n) => n.unread).length}
+        onBack={onBack}
+      />
 
       {tab === "conversations" ? (
         <>
@@ -144,7 +169,7 @@ export default function ConversationList({
             {conversations.length === 0 && (
               <li className="px-3 py-10 text-center text-xs text-slate-400">Không có hội thoại nào.</li>
             )}
-            {conversations.map((c, i) => (
+            {convSlice.map((c, i) => (
               <ConversationItem
                 key={c.id}
                 conversation={c}
@@ -154,6 +179,7 @@ export default function ConversationList({
                 onSelect={() => onSelectConversation(c.id)}
               />
             ))}
+            {convHasMore && <li ref={convSentinel} aria-hidden="true" className="h-4" />}
           </ul>
         </>
       ) : (

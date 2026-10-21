@@ -10,6 +10,7 @@ page_jobs        Một lần bấm Kích hoạt (AI, REEL, TIKTOK, YOUTUBE).
 page_job_items   Trạng thái của từng Page trong job đó.
 ai_page_scans    Lần đếm page gần nhất của từng nick, còn sau khi tắt app.
 ai_managed_pages Từng fanpage đếm được, để không phải đăng nhập lại.
+ai_post_settings Cấu hình màn đăng bài AI của từng user: key, model, prompt, hẹn giờ, giãn cách, từ khóa.
 """
 import json
 
@@ -138,8 +139,33 @@ DDL_STATEMENTS = [
         page_name VARCHAR(255) NOT NULL,
         page_url TEXT,
         category VARCHAR(200) DEFAULT '',
+        avatar_url TEXT DEFAULT '',
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT uq_ai_managed_page UNIQUE (owner_username, account_uid, page_key)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ai_post_settings (
+        owner_username VARCHAR(100) PRIMARY KEY,
+        gemini_key TEXT NOT NULL DEFAULT '',
+        pixabay_key TEXT NOT NULL DEFAULT '',
+        model_name VARCHAR(100) NOT NULL DEFAULT 'gemini-3-flash-preview',
+        prompt TEXT NOT NULL DEFAULT '',
+        schedule_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        schedule_times TEXT NOT NULL DEFAULT '',
+        sleep_min INT NOT NULL DEFAULT 600,
+        sleep_max INT NOT NULL DEFAULT 900,
+        keywords_json TEXT NOT NULL DEFAULT '{}',
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ai_page_avatars (
+        owner_username VARCHAR(100) NOT NULL,
+        page_key VARCHAR(200) NOT NULL,
+        avatar_url TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (owner_username, page_key)
     );
     """,
     """
@@ -157,6 +183,7 @@ DDL_STATEMENTS = [
 
 # Cột nghiệp vụ thêm lên bảng đã có trên production. Không xóa cột cũ.
 COLUMN_MIGRATIONS = [
+    "ALTER TABLE ai_managed_pages ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT ''",
     "ALTER TABLE pages ADD COLUMN IF NOT EXISTS account_uid VARCHAR(100)",
     "ALTER TABLE pages ADD COLUMN IF NOT EXISTS ai_keyword TEXT",
     "ALTER TABLE pages ADD COLUMN IF NOT EXISTS tiktok_keyword TEXT",

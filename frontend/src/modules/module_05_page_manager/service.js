@@ -64,6 +64,12 @@ export async function clearReelsLogs() {
 export async function getAiAccounts() {
   return api.get("/api/pages/ai/accounts");
 }
+export async function getAiSettings() {
+  return api.get("/api/pages/ai/settings");
+}
+export async function saveAiSettings(payload) {
+  return api.put("/api/pages/ai/settings", payload);
+}
 export async function loginAiAccount(uid) {
   return api.post("/api/pages/ai/login", { uid });
 }

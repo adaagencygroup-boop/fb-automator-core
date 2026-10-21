@@ -112,13 +112,14 @@ function ExportMenu({ exporting, onExport }) {
         disabled={exporting}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="flex h-9 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-sm font-semibold text-emerald-700 shadow-subtle hover:bg-emerald-100 disabled:opacity-60"
+        className="flex h-9 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 text-xs sm:text-sm font-semibold text-emerald-700 shadow-2xs hover:bg-emerald-100 transition-all cursor-pointer disabled:opacity-60"
       >
-        <Download className="h-4 w-4" /> {exporting ? "Đang xuất..." : "Xuất Excel / CSV"}
-        <ChevronDown className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} />
+        <Download className="h-4 w-4 text-emerald-600" />
+        <span>{exporting ? "Đang xuất..." : "Xuất Excel / CSV"}</span>
+        <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div role="menu" className="absolute right-0 z-20 mt-1 w-60 overflow-hidden rounded-lg border border-border bg-white py-1 shadow-lg">
+        <div role="menu" className="absolute right-0 z-30 mt-1 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg animate-in fade-in zoom-in-95 duration-100">
           {EXPORT_FORMATS.map((item) => (
             <button
               key={item.format}
@@ -128,9 +129,9 @@ function ExportMenu({ exporting, onExport }) {
                 setOpen(false);
                 onExport(item);
               }}
-              className="flex w-full flex-col px-3.5 py-2 text-left hover:bg-slate-50"
+              className="flex w-full flex-col px-3.5 py-2 text-left hover:bg-slate-50 transition-colors cursor-pointer"
             >
-              <span className="text-sm font-semibold text-slate-800">{item.label}</span>
+              <span className="text-xs sm:text-sm font-semibold text-slate-800">{item.label}</span>
               <span className="text-[11px] text-slate-400">{item.hint}</span>
             </button>
           ))}
@@ -198,25 +199,26 @@ function InteractionHistory() {
 
   useEffect(() => {
     const onCleanup = () => setCleanupOpen(true);
-    const onExport = () => exportCsv();
+    const onExport = (e) => {
+      const fmt = e?.detail?.format || "xlsx";
+      if (fmt === "csv") {
+        exportFile(EXPORT_FORMATS[1]);
+      } else {
+        exportFile(EXPORT_FORMATS[0]);
+      }
+    };
     window.addEventListener("trigger-farm-cleanup", onCleanup);
     window.addEventListener("trigger-farm-export", onExport);
     return () => {
       window.removeEventListener("trigger-farm-cleanup", onCleanup);
       window.removeEventListener("trigger-farm-export", onExport);
     };
-  }, [exportCsv]);
+  }, [exportFile]);
 
   const totalPages = Math.max(1, Math.ceil((data.total || 0) / PAGE_SIZE));
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        <button type="button" onClick={() => setCleanupOpen(true)} className="flex h-9 items-center gap-2 rounded-lg border border-border bg-white px-4 text-sm font-medium text-slate-700 shadow-subtle hover:bg-slate-50">
-          <Eraser className="h-4 w-4" /> Dọn dẹp nhật ký
-        </button>
-        <ExportMenu exporting={exporting} onExport={exportFile} />
-      </div>
       <div className="flex flex-col gap-2 rounded-2xl border border-border bg-white p-4 shadow-subtle lg:flex-row lg:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary" />
@@ -376,7 +378,7 @@ export default function FarmHistory() {
           ))}
         </div>
 
-        {/* Nút hành động chuẩn theo thiết kế Figma 1613:1804 */}
+        {/* Nút hành động chuẩn dùng chung cho cả 2 tab */}
         <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             type="button"
@@ -392,20 +394,15 @@ export default function FarmHistory() {
             <Eraser className="h-4 w-4 text-slate-600" />
             <span>Dọn dẹp nhật ký</span>
           </button>
-          <button
-            type="button"
-            onClick={() => {
+          <ExportMenu
+            onExport={(item) => {
               if (tab === "post") {
-                window.dispatchEvent(new CustomEvent("trigger-post-export"));
+                window.dispatchEvent(new CustomEvent("trigger-post-export", { detail: { format: item.format } }));
               } else {
-                window.dispatchEvent(new CustomEvent("trigger-farm-export"));
+                window.dispatchEvent(new CustomEvent("trigger-farm-export", { detail: { format: item.format } }));
               }
             }}
-            className="flex h-9 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 text-xs sm:text-sm font-semibold text-emerald-700 shadow-2xs hover:bg-emerald-100 transition-all cursor-pointer"
-          >
-            <Download className="h-4 w-4 text-emerald-600" />
-            <span>Xuất Excel / CSV</span>
-          </button>
+          />
         </div>
       </div>
 

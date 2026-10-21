@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { useIncrementalList } from "@/lib/use-incremental-list";
 import StatusFilter from "./StatusFilter";
 
 // Figma: "Thông báo" (CSS all layers, 1593:2028) — sub-tab Bình luận / Tương tác bài viết + thẻ thông báo
@@ -148,13 +149,15 @@ export default function NotificationList({
   if (filter === "unreplied") list = list.filter((n) => !n.replied);
   list = [...list].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
+  const { slice, sentinelRef, hasMore } = useIncrementalList(list, 25);
+
   return (
     <>
       <SubTabs type={type} onTypeChange={onTypeChange} counts={counts} />
       <StatusFilter filter={filter} onFilterChange={onFilterChange} label="Lọc thông báo" />
       <ul className="flex-1 min-h-0 overflow-y-auto p-3.5 flex flex-col gap-3 bg-slate-50/50">
         {list.length === 0 && <li className="py-10 text-center text-xs text-slate-400">Chưa có thông báo.</li>}
-        {list.map((n) => (
+        {slice.map((n) => (
           <NotificationCard
             key={n.id}
             notification={n}
@@ -162,6 +165,7 @@ export default function NotificationList({
             onOpen={() => onOpenNotification(n.id)}
           />
         ))}
+        {hasMore && <li ref={sentinelRef} aria-hidden="true" className="h-4" />}
       </ul>
     </>
   );

@@ -228,36 +228,44 @@ def _download_to_temp(url: str):
     return path
 
 
-def _placeholder_image_file(page_name=""):
-    """Ảnh tạm khi Pixabay không ra — không để bài đăng không có ảnh."""
-    # 1) Ảnh random public (không cần API key).
-    for url in (
-        "https://picsum.photos/1200/800",
-        "https://images.unsplash.com/photo-1540555700478-4be289fbecef?w=1200&q=80",
-    ):
-        path = _download_to_temp(url)
-        if path:
-            return path
-    # 2) Tự vẽ JPG đơn giản bằng PIL.
-    try:
-        from PIL import Image, ImageDraw, ImageFont
+def _draw_placeholder(page_name=""):
+    """JPEG 1200×800 do PIL vẽ khi Picsum không trả ảnh."""
+    from PIL import Image, ImageDraw, ImageFont
 
-        img = Image.new("RGB", (1200, 800), (240, 248, 255))
-        draw = ImageDraw.Draw(img)
-        title = (page_name or "Fanpage").strip()[:40] or "Fanpage"
-        draw.rectangle((40, 40, 1160, 760), outline=(37, 99, 235), width=4)
-        try:
-            font = ImageFont.truetype("arial.ttf", 48)
-        except Exception:
-            font = ImageFont.load_default()
-        draw.text((80, 340), title, fill=(15, 23, 42), font=font)
-        draw.text((80, 420), "Anh minh hoa tam", fill=(100, 116, 139), font=font)
-        handle, path = tempfile.mkstemp(suffix=".jpg")
-        os.close(handle)
-        img.save(path, format="JPEG", quality=90)
-        return path
+    img = Image.new("RGB", (1200, 800), (240, 248, 255))
+    draw = ImageDraw.Draw(img)
+    title = (page_name or "Fanpage").strip()[:40] or "Fanpage"
+    draw.rectangle((40, 40, 1160, 760), outline=(37, 99, 235), width=4)
+    try:
+        font = ImageFont.truetype("arial.ttf", 48)
     except Exception:
-        return None
+        font = ImageFont.load_default()
+    draw.text((80, 340), title, fill=(15, 23, 42), font=font)
+    draw.text((80, 420), "Anh minh hoa tam", fill=(100, 116, 139), font=font)
+    handle, path = tempfile.mkstemp(suffix=".jpg")
+    os.close(handle)
+    img.save(path, format="JPEG", quality=90)
+    return path
+
+
+def _placeholder_image_file(page_name="", progress=None):
+    """Pixabay không có ảnh: Picsum trước, lỗi thì tự vẽ."""
+    if progress:
+        progress("Pixabay không có ảnh. Đang gọi Picsum...")
+    path = _download_to_temp("https://picsum.photos/1200/800")
+    if path:
+        if progress:
+            progress("Đã lấy ảnh ngẫu nhiên từ Picsum")
+        return path
+    if progress:
+        progress("Picsum lỗi. Đang tự vẽ ảnh...")
+    try:
+        path = _draw_placeholder(page_name)
+    except Exception:
+        path = None
+    if path and progress:
+        progress("Đã tự vẽ ảnh tạm")
+    return path
 
 
 def _image_file(keyword, pixabay_key, page_name=""):
@@ -271,14 +279,12 @@ def _image_file(keyword, pixabay_key, page_name=""):
         if text in seen:
             return
         seen.add(text)
-        if "Chưa có Pixabay" in text:
-            _progress(subject, "Chưa có Pixabay key — dùng ảnh tạm")
-        elif "Đang tìm ảnh trên Pixabay" in text:
+        if "Đang tìm ảnh trên Pixabay" in text:
             _progress(subject, "Đang tải ảnh minh họa từ Pixabay...")
         elif "giới hạn" in text.lower():
-            _progress(subject, "Pixabay giới hạn lượt — dùng ảnh tạm")
-        elif "ảnh tạm" in text.lower() or "[!]" in text or "[LỖI]" in text:
-            _progress(subject, "Pixabay không ra ảnh — dùng ảnh tạm")
+            _progress(subject, "Pixabay giới hạn lượt gọi.")
+        elif "Chưa có Pixabay" in text or "không có ảnh phù hợp" in text.lower() or "[LỖI]" in text:
+            _progress(subject, "Pixabay không ra ảnh.")
 
     url = get_image_from_internet(keyword, pixabay_key, on_image_log)
     if url:
@@ -286,13 +292,7 @@ def _image_file(keyword, pixabay_key, page_name=""):
         if path:
             return path
 
-    _progress(subject, "Đang lấy ảnh tạm để đăng kèm bài...")
-    path = _placeholder_image_file(page_name)
-    if path:
-        _progress(subject, "Đã có ảnh tạm")
-        return path
-    _progress(subject, "Không lấy được ảnh tạm — đăng chữ thôi")
-    return None
+    return _placeholder_image_file(page_name, lambda message: _progress(subject, message))
 
 
 def _record(page, uid, caption, ok, error=""):
@@ -317,6 +317,11 @@ def _record(page, uid, caption, ok, error=""):
         pass
 
 
+def _has_later_page(pages, index) -> bool:
+    """Chỉ page phía sau còn link mới cần nghỉ. Page cuối xong là báo xong."""
+    return any(str((item or {}).get("url") or "").strip() for item in pages[index + 1 :])
+
+
 def _sleep(seconds):
     for _ in range(max(0, int(seconds))):
         if _stopped():
@@ -336,7 +341,7 @@ def _post_round(owner, uid, pages, config):
     from modules.module_02_account_manager.database.repository import AccountRepository as Repo
     from modules.module_02_account_manager.security.hwid_collector import get_hwid
     from modules.module_02_account_manager.services.credentials import decrypt
-    from modules.module_05_page_manager.page_poster import post_on_page
+    from modules.module_05_page_manager.page_poster import PostInterrupted, post_on_page
 
     db = SessionLocal()
     driver = None
@@ -377,7 +382,7 @@ def _post_round(owner, uid, pages, config):
         except Exception:
             pass
         _set_account(uid, status="RUNNING", page_count=len(pages), message="Đang đăng bài")
-        for page in pages:
+        for index, page in enumerate(pages):
             if _stopped():
                 _set_account(uid, status="STOPPED", message="Đã dừng")
                 return
@@ -393,15 +398,27 @@ def _post_round(owner, uid, pages, config):
                 else:
                     _progress(page["name"], "Không có ảnh — đăng chữ thôi")
                 _progress(page["name"], f"Đang mở page và đăng bài... ({(page.get('url') or '')[:70]})")
-                ok = post_on_page(driver, page["url"], caption, image, page_id=page_id)
+                ok = post_on_page(driver, page["url"], caption, image, page_id=page_id, should_stop=_stopped)
                 _record(page, uid, caption, ok)
                 _progress(page["name"], "Đăng thành công ✓" if ok else "Đăng thất bại")
+            except PostInterrupted as exc:
+                if exc.kind == "stopped":
+                    _record(page, uid, caption, False, "Đã dừng")
+                    _progress(page["name"], "Đã dừng, bỏ bài đang soạn")
+                    _set_account(uid, status="STOPPED", message="Đã dừng")
+                else:
+                    _record(page, uid, caption, False, "Quá thời gian đăng bài")
+                    _progress(page["name"], "Quá thời gian đăng bài này")
+                    _set_account(uid, status="FAILED", message="Quá thời gian đăng bài")
+                return
             except Exception as exc:
                 _record(page, uid, caption, False, str(exc))
                 _progress(page["name"], f"Đăng thất bại: {exc}")
             finally:
                 if image and os.path.exists(image):
                     os.remove(image)
+            if not _has_later_page(pages, index):
+                continue
             delay = random.randint(config["sleep_min"], config["sleep_max"])
             _progress(page["name"], f"Nghỉ {delay} giây trước page tiếp theo...")
             if not _sleep(delay):
@@ -421,13 +438,17 @@ def _post_round(owner, uid, pages, config):
                     pass
 
 
-def _due(times, fired):
-    now = datetime.now().strftime("%H:%M")
-    today = datetime.now().strftime("%Y-%m-%d")
-    if now in times and f"{today} {now}" not in fired:
-        fired.add(f"{today} {now}")
-        return True
-    return False
+def due_slot(times, fired, now: datetime | None = None):
+    """Khung hôm nay đã tới giờ và chưa chạy. Trễ phút thì vẫn trả về để chạy bù."""
+    now = now or datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    current = now.strftime("%H:%M")
+    ready = [slot for slot in times if slot <= current and f"{today} {slot}" not in fired]
+    if not ready:
+        return None, False
+    slot = min(ready)
+    fired.add(f"{today} {slot}")
+    return slot, slot < current
 
 
 def start_job(owner, config, grouped):
@@ -447,14 +468,18 @@ def start_job(owner, config, grouped):
                 fired = set()
                 while not _stopped():
                     if config["schedule_enabled"]:
-                        if not _due(config["schedule_times"], fired):
-                            slot, remain = _next_slot(config["schedule_times"], fired)
-                            if slot is not None:
-                                _wait_countdown(slot, remain)
+                        slot, late = due_slot(config["schedule_times"], fired)
+                        if slot is None:
+                            upcoming, remain = _next_slot(config["schedule_times"], fired)
+                            if upcoming is not None:
+                                _wait_countdown(upcoming, remain)
                             if not _sleep(1):
                                 break
                             continue
-                        _progress("Hẹn giờ", f"Đến khung {datetime.now().strftime('%H:%M')}, bắt đầu đăng...")
+                        if late:
+                            _progress("Hẹn giờ", f"Chạy bù khung {slot}")
+                        else:
+                            _progress("Hẹn giờ", f"Đến khung {slot}, bắt đầu đăng...")
                     for uid, pages in grouped.items():
                         if _stopped():
                             break

@@ -13,17 +13,8 @@ export const CONVERSATION_TAGS = [
   { id: "spam", label: "Spam", className: "bg-slate-100 text-slate-600 border-slate-200" },
 ];
 
-/** Câu trả lời mẫu (nút mặt cười màu xanh bên trái ô nhập) */
-export const QUICK_REPLIES = [
-  "Dạ chào bạn, page có thể hỗ trợ gì cho bạn ạ?",
-  "Bạn vui lòng để lại số điện thoại, bên mình sẽ gọi lại tư vấn chi tiết nhé ạ.",
-  "Dạ page đã nhận được thông tin, bạn chờ bên mình kiểm tra chút nhé ạ.",
-  "Cảm ơn bạn đã quan tâm, chúc bạn một ngày tốt lành ạ!",
-];
-
-/** Cảm xúc nhanh cho tin nhắn + bảng emoji trong ô nhập */
+/** 6 cảm xúc thả vào tin nhắn — đúng bộ của Messenger (bảng emoji ô nhập dùng emoji-picker-react) */
 export const REACTIONS = ["👍", "❤️", "😆", "😮", "😢", "😡"];
-export const EMOJIS = ["😀", "😁", "😂", "😊", "😍", "😘", "😉", "😎", "🤔", "😅", "😭", "😡", "👍", "👏", "🙏", "💪", "❤️", "🔥", "🎉", "✅"];
 
 /** Facebook chỉ cho Page nhắn tin tự do trong 24 giờ kể từ tin nhắn cuối của khách */
 export const REPLY_WINDOW_MS = 24 * 60 * 60 * 1000;

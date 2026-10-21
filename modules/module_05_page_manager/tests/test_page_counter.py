@@ -3,6 +3,7 @@ import unittest
 from modules.module_05_page_manager.page_counter import (
     anchor_key,
     is_profile_picture_label,
+    keep_saved_avatars,
     keep_saved_categories,
     page_name_from_anchor_text,
     pages_from_anchors,
@@ -42,6 +43,14 @@ class PageCounterTests(unittest.TestCase):
         )
         self.assertEqual(pages[0]["category"], "du lịch biển")
         self.assertEqual(pages[1]["category"], "mới")
+
+    def test_keeps_avatar_already_saved_for_the_same_page(self):
+        pages = keep_saved_avatars(
+            [{"id": "111", "avatar_url": ""}, {"id": "222", "avatar_url": "https://new.example/a.jpg"}],
+            {"111": "https://scontent.xx.fbcdn.net/old.jpg"},
+        )
+        self.assertEqual(pages[0]["avatar_url"], "https://scontent.xx.fbcdn.net/old.jpg")
+        self.assertEqual(pages[1]["avatar_url"], "https://new.example/a.jpg")
 
     def test_switcher_rows_are_pages_except_the_personal_profile(self):
         names = switcher_page_names([

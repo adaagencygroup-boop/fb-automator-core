@@ -780,7 +780,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
   const selectedCount = accounts.filter((a) => a.selected).length;
 
   return (
-    <div className="space-y-6 max-w-6xl pb-20">
+    <div className="space-y-6 pb-20">
       {/* ── BƯỚC 1: THIẾT LẬP CẤU HÌNH THƯ MỤC NGUỒN (FIGMA 1338:7 / 1357:4440) ── */}
       <div className="space-y-3">
         <div className="flex items-center gap-2.5">
