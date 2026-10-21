@@ -6,13 +6,12 @@ import Sidebar from "@/components/Sidebar";
 import Header from "@/components/Header";
 import ConsoleTerminal from "@/components/ConsoleTerminal";
 import AuthGate from "@/components/AuthGate";
-import IntroMusic from "@/components/IntroMusic";
-import IntroVideo from "@/components/IntroVideo";
 import { SessionContext } from "@/components/SessionContext";
 import api from "@/services/api";
 import { WS_BASE } from "@/config/constants";
 import { findNavItem, findNavItemByPath, pathOf } from "@/config/navigation";
 import { usePersistentBoolean } from "@/lib/usePersistentBoolean";
+import { MiniProgress } from "@/components/MiniProgress";
 
 // Khung "Nhật ký hệ thống realtime" ở cuối màn hình — đang ẩn. Đổi thành true để hiện lại.
 const SHOW_SYSTEM_LOG = false;
@@ -24,12 +23,7 @@ const SHOW_SYSTEM_LOG = false;
 export default function AppShell({ children }) {
   const pathname = usePathname();
   if (pathname.replace(/\/$/, "") === "/oauth/meta/callback") return children;
-  return (
-    <>
-      <IntroVideo />
-      <AuthGate>{(session) => <Workspace session={session}>{children}</Workspace>}</AuthGate>
-    </>
-  );
+  return <AuthGate>{(session) => <Workspace session={session}>{children}</Workspace>}</AuthGate>;
 }
 
 function Workspace({ session, children }) {
@@ -72,7 +66,6 @@ function Workspace({ session, children }) {
 
   return (
     <div className="flex h-screen w-screen bg-background text-foreground antialiased overflow-hidden">
-      <IntroMusic />
       <Sidebar activeTab={activeTab} open={sidebarOpen} />
 
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
@@ -105,6 +98,9 @@ function Workspace({ session, children }) {
         </main>
 
         {SHOW_SYSTEM_LOG && <ConsoleTerminal logs={logs} engineOnline={engineOnline} />}
+
+        {/* Global floating mini progress widget */}
+        <MiniProgress />
       </div>
     </div>
   );

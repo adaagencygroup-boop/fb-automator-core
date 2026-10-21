@@ -72,9 +72,9 @@ export const NAV_ITEMS = [
       {
         id: "interact.history",
         label: "Lịch sử",
-        title: "Lịch sử đăng bài & tương tác",
-        description: "Nhật ký đăng bài và tương tác của các tài khoản.",
-        moduleId: null,
+        title: "Lịch sử đăng bài",
+        description: "Nhật ký đăng bài của các tài khoản Facebook.",
+        moduleId: "farm",
         icon: HISTORY_ICON,
       },
     ],

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { ChevronDown, Download, Eraser, Info, Search } from "lucide-react";
 import CustomSelect from "@/components/ui/custom-select";
 import Pagination from "@/components/ui/pagination";
@@ -9,6 +9,7 @@ import { formatVietnamDateTime } from "@/lib/date-utils";
 import { ACTION_FULL_LABELS, FINAL_STATUSES, FRIEND_SOURCE_LABELS, PROXY_MODE_LABELS, RUN_STATUS } from "../constants";
 import { cleanupFarmHistory, downloadFarmHistoryCsv, downloadFarmHistoryXlsx, getFarmHistory } from "../service";
 import HistoryDetail from "./HistoryDetail";
+import { HistoryView } from "./HistoryView";
 import { ActionChip, NumberInput, PageTitle, RunStatusBadge, UidCopy, formatDuration } from "./parts";
 
 const PAGE_SIZE = 10;
@@ -182,7 +183,7 @@ function InteractionHistory() {
     setPage(1);
   };
 
-  const exportFile = async ({ download }) => {
+  const exportFile = useCallback(async ({ download }) => {
     setExporting(true);
     try {
       await download(filters);
@@ -191,7 +192,20 @@ function InteractionHistory() {
     } finally {
       setExporting(false);
     }
-  };
+  }, [filters]);
+
+  const exportCsv = useCallback(() => exportFile(EXPORT_FORMATS[1]), [exportFile]);
+
+  useEffect(() => {
+    const onCleanup = () => setCleanupOpen(true);
+    const onExport = () => exportCsv();
+    window.addEventListener("trigger-farm-cleanup", onCleanup);
+    window.addEventListener("trigger-farm-export", onExport);
+    return () => {
+      window.removeEventListener("trigger-farm-cleanup", onCleanup);
+      window.removeEventListener("trigger-farm-export", onExport);
+    };
+  }, [exportCsv]);
 
   const totalPages = Math.max(1, Math.ceil((data.total || 0) / PAGE_SIZE));
 
@@ -203,7 +217,6 @@ function InteractionHistory() {
         </button>
         <ExportMenu exporting={exporting} onExport={exportFile} />
       </div>
-
       <div className="flex flex-col gap-2 rounded-2xl border border-border bg-white p-4 shadow-subtle lg:flex-row lg:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary" />
@@ -333,7 +346,7 @@ function InteractionHistory() {
 }
 
 export default function FarmHistory() {
-  const [tab, setTab] = useState("interact");
+  const [tab, setTab] = useState("post");
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-5">
@@ -342,29 +355,64 @@ export default function FarmHistory() {
         description="Tự động tương tác Newsfeed, xem Watch, kết bạn, tham gia nhóm và đăng bài đa kênh giữ trust profile Facebook bền vững."
       />
 
-      <div className="inline-flex rounded-xl border border-border bg-white p-1 shadow-subtle">
-        {[
-          ["post", "Đăng Facebook"],
-          ["interact", "Tương tác tài khoản"],
-        ].map(([value, label]) => (
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="inline-flex rounded-xl border border-slate-200/60 bg-slate-100 p-1 shadow-2xs">
+          {[
+            ["post", "Đăng Facebook"],
+            ["interact", "Tương tác tài khoản"],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setTab(value)}
+              className={`rounded-lg px-5 py-2 text-xs sm:text-sm font-bold transition-all cursor-pointer ${
+                tab === value
+                  ? "bg-[#1877F2] text-white shadow-xs"
+                  : "text-slate-600 hover:text-slate-900"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Nút hành động chuẩn theo thiết kế Figma 1613:1804 */}
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <button
-            key={value}
             type="button"
-            onClick={() => setTab(value)}
-            className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${tab === value ? "bg-primary text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"}`}
+            onClick={() => {
+              if (tab === "post") {
+                window.dispatchEvent(new CustomEvent("trigger-post-cleanup"));
+              } else {
+                window.dispatchEvent(new CustomEvent("trigger-farm-cleanup"));
+              }
+            }}
+            className="flex h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs sm:text-sm font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 transition-all cursor-pointer"
           >
-            {label}
+            <Eraser className="h-4 w-4 text-slate-600" />
+            <span>Dọn dẹp nhật ký</span>
           </button>
-        ))}
+          <button
+            type="button"
+            onClick={() => {
+              if (tab === "post") {
+                window.dispatchEvent(new CustomEvent("trigger-post-export"));
+              } else {
+                window.dispatchEvent(new CustomEvent("trigger-farm-export"));
+              }
+            }}
+            className="flex h-9 items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 text-xs sm:text-sm font-semibold text-emerald-700 shadow-2xs hover:bg-emerald-100 transition-all cursor-pointer"
+          >
+            <Download className="h-4 w-4 text-emerald-600" />
+            <span>Xuất Excel / CSV</span>
+          </button>
+        </div>
       </div>
 
       {tab === "interact" ? (
         <InteractionHistory />
       ) : (
-        // Lịch sử Đăng bài thuộc Tab 2 (Đăng bài viết Facebook), làm riêng
-        <div className="rounded-2xl border border-dashed border-border bg-white px-6 py-12 text-center text-sm text-slate-400">
-          Lịch sử Đăng bài viết Facebook đang được phát triển.
-        </div>
+        <HistoryView />
       )}
     </div>
   );

@@ -110,7 +110,8 @@ src-tauri/binaries/*.exe
 htmlcov/
 test-results/
 
-
+#11. Upload
+uploads/
 
 # private
 AGENTS.md
