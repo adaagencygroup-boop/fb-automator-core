@@ -11,6 +11,7 @@ import api from "@/services/api";
 import { WS_BASE } from "@/config/constants";
 import { findNavItem, findNavItemByPath, pathOf } from "@/config/navigation";
 import { usePersistentBoolean } from "@/lib/usePersistentBoolean";
+import { MiniProgress } from "@/components/MiniProgress";
 
 // Khung "Nhật ký hệ thống realtime" ở cuối màn hình — đang ẩn. Đổi thành true để hiện lại.
 const SHOW_SYSTEM_LOG = false;
@@ -97,6 +98,9 @@ function Workspace({ session, children }) {
         </main>
 
         {SHOW_SYSTEM_LOG && <ConsoleTerminal logs={logs} engineOnline={engineOnline} />}
+
+        {/* Global floating mini progress widget */}
+        <MiniProgress />
       </div>
     </div>
   );

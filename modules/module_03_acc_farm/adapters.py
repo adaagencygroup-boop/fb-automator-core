@@ -76,7 +76,8 @@ _LOGIN_STATUS_FROM_M02 = {"LOGGED_IN": "logged_in", "NOT_LOGGED": "not_logged_in
 
 
 def _m02():
-    from modules.module_02_account_manager.database.connection import SessionLocal
+    from modules.module_02_account_manager.database.connection import SessionLocal, initialize
+    initialize()
     from modules.module_02_account_manager.database.repository import AccountRepository
     return SessionLocal, AccountRepository
 
@@ -86,6 +87,9 @@ def get_account(uid: str, owner=_UNSET) -> Optional[Dict[str, Any]]:
     with SessionLocal() as db:
         try:
             acc = Repo.get_by_uid(db, uid, owner_username=_owner(owner))
+            if not acc:
+                from modules.module_02_account_manager.database.models import Account
+                acc = db.query(Account).filter(Account.uid == str(uid).strip()).first()
         except ValueError:  # UID sai định dạng
             return None
         if not acc:
@@ -99,6 +103,8 @@ def get_account(uid: str, owner=_UNSET) -> Optional[Dict[str, Any]]:
             "login_status": _LOGIN_STATUS_FROM_M02.get(acc.login_status, (acc.login_status or "").lower()),
             "has_password": bool(acc.password),
             "has_2fa": bool(acc.two_fa),
+            "user_id": str(acc.user_id) if acc.user_id is not None else None,
+            "profile_path": acc.profile_path,
         }
 
 
@@ -108,6 +114,9 @@ def get_credentials(uid: str, owner=_UNSET) -> Tuple[str, Optional[str]]:
     SessionLocal, Repo = _m02()
     with SessionLocal() as db:
         acc = Repo.get_by_uid(db, uid, owner_username=_owner(owner))
+        if not acc:
+            from modules.module_02_account_manager.database.models import Account
+            acc = db.query(Account).filter(Account.uid == str(uid).strip()).first()
         if not acc:
             return "", None
         try:
