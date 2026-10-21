@@ -1,4 +1,5 @@
 import math
+import re
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, or_
@@ -11,6 +12,32 @@ from modules.module_06_omnichannel_chat.routers.pages import resolve_current_use
 from modules.module_06_omnichannel_chat.models import Notification, Page, Account, SystemUser
 
 router = APIRouter(prefix="/api/facebook", tags=["Notifications"])
+
+def extract_post_and_comment_id(facebook_notification_id: str, link: Optional[str], notification_type: str):
+    post_id = None
+    comment_id = None
+    fb_id = str(facebook_notification_id or "")
+    link_str = str(link or "")
+
+    if fb_id.startswith("post_created_"):
+        post_id = fb_id.replace("post_created_", "")
+    elif fb_id.startswith("react_sum_"):
+        post_id = fb_id.replace("react_sum_", "")
+    elif fb_id.startswith("react_"):
+        parts = fb_id.split("_")
+        if len(parts) >= 2:
+            post_id = parts[1]
+    elif "_" in fb_id and notification_type == "comment":
+        parts = fb_id.split("_")
+        post_id = parts[0]
+        comment_id = parts[1]
+
+    if not post_id and link_str:
+        m = re.search(r"facebook\.com/(?:reel/|.*?permalink/)?(\d+(?:_\d+)?)", link_str)
+        if m:
+            post_id = m.group(1)
+
+    return post_id, comment_id
 
 @router.get("/notifications", response_model=Union[PaginatedNotificationsOut, List[NotificationOut]])
 def get_notifications(
@@ -125,11 +152,14 @@ def get_notifications(
 
     notif_list = []
     for notif in results:
+        pid, cid = extract_post_and_comment_id(notif.facebook_notification_id, notif.link, notif.notification_type)
         data = {
             "id": notif.id,
             "facebook_notification_id": notif.facebook_notification_id,
             "page_id": notif.page_id,
             "page_name": getattr(notif, "page_name", None) or page_dict.get(str(notif.page_id)) or "Trang Facebook",
+            "post_id": pid,
+            "comment_id": cid,
             "title": notif.title,
             "link": notif.link,
             "created_time": notif.created_time,

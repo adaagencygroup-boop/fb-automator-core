@@ -433,8 +433,8 @@ def run_newsfeed(driver, ctl: FarmControl, total_seconds: float, delay_min: floa
             if scrolls % 5 == 0:
                 report(f"Lướt Newsfeed: {timer.elapsed() / 60:.1f}/{total_seconds / 60:.1f} phút, {scrolls} lần cuộn")
             ctl.sleep(min(random.uniform(delay_min, delay_max), max(timer.remaining(), 0)))
-    except FarmStopped as e:
-        # Bị Dừng giữa chừng: giữ lại phần đã lướt để lịch sử không ghi 0 giây
+    except Exception as e:
+        # Dừng / tài khoản chết / trình duyệt treo giữa chừng: giữ lại phần đã lướt để lịch sử không ghi 0 giây
         e.partial = {"seconds": int(timer.elapsed()), "scrolls": scrolls}
         raise
     check_account_state(driver)
@@ -633,8 +633,8 @@ def run_watch(driver, ctl: FarmControl, total_seconds: float, view_min: float, v
             check_account_state(driver)
             _advance_video(driver, video, 0)
             ctl.sleep(min(random.uniform(1.0, 2.5), max(timer.remaining(), 0)))
-    except FarmStopped as e:
-        # Bị Dừng giữa chừng: giữ lại phần đã xem để lịch sử không ghi 0 giây / 0 video
+    except Exception as e:
+        # Dừng / tài khoản chết / trình duyệt treo giữa chừng: giữ lại phần đã xem để lịch sử không ghi 0 giây / 0 video
         e.partial = {"seconds": int(timer.elapsed()), "quantity": watched}
         raise
 
@@ -899,8 +899,8 @@ def run_join_groups(driver, ctl: FarmControl, target: int, keywords: Optional[li
                     clicked_ids.clear()
                 if joined < target:
                     _pause_between(driver, ctl, delay, report, f"Tham gia nhóm {joined}/{target}")
-    except FarmStopped as e:
-        # Bị Dừng giữa chừng: giữ lại các từ khóa đã dùng để lịch sử vẫn ghi được
+    except Exception as e:
+        # Dừng / lỗi giữa chừng: giữ lại các từ khóa đã dùng để lịch sử vẫn ghi được
         e.partial = {"keywords": list(used)}
         raise
 

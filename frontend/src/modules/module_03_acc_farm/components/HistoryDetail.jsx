@@ -22,7 +22,14 @@ import {
 } from "lucide-react";
 import { formatVietnamDateTime } from "@/lib/date-utils";
 import { cn } from "@/lib/utils";
-import { ACTION_FULL_LABELS, ACTION_STATUS, FINGERPRINT_LABELS, FRIEND_SOURCE_LABELS, PROXY_MODE_LABELS } from "../constants";
+import {
+  ACTION_FULL_LABELS,
+  ACTION_STATUS,
+  FINGERPRINT_HINTS,
+  FINGERPRINT_LABELS,
+  FRIEND_SOURCE_LABELS,
+  PROXY_MODE_LABELS,
+} from "../constants";
 import { getFarmHistoryDetail } from "../service";
 import { RunStatusBadge, UidCopy, formatDuration } from "./parts";
 
@@ -100,14 +107,14 @@ function SectionTitle({ icon: Icon, children }) {
   );
 }
 
-function InfoRow({ icon: Icon, label, children, tone = "text-slate-800" }) {
+function InfoRow({ icon: Icon, label, children, tone = "text-slate-800", title }) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-dashed border-slate-100 py-2 last:border-0">
       <span className="flex items-center gap-2 text-xs text-slate-500">
         <Icon className="h-3.5 w-3.5 text-slate-400" />
         {label}
       </span>
-      <span className={cn("text-right text-xs font-semibold", tone)}>{children}</span>
+      <span title={title} className={cn("text-right text-xs font-semibold", tone, title && "cursor-help")}>{children}</span>
     </div>
   );
 }
@@ -257,9 +264,12 @@ export default function HistoryDetail({ id, onClose }) {
                   <InfoRow icon={ShieldCheck} label="Chế độ" tone={hasProxy ? "text-emerald-600" : "text-amber-600"}>
                     {PROXY_MODE_LABELS[h.proxy_mode] || h.proxy_mode || "—"}
                   </InfoRow>
-                  <InfoRow icon={Fingerprint} label="Fingerprint" tone={h.fingerprint_mode === "native" ? "text-violet-600" : "text-slate-700"}>
-                    {FINGERPRINT_LABELS[h.fingerprint_mode] || h.fingerprint_mode || "—"}
-                  </InfoRow>
+                  {/* Nick mới luôn có fingerprint giả lập riêng: chỉ hiện khi nick không được giả lập (bất thường) */}
+                  {h.fingerprint_mode === "legacy" && (
+                    <InfoRow icon={Fingerprint} label="Fingerprint" tone="text-amber-600" title={FINGERPRINT_HINTS.legacy}>
+                      {FINGERPRINT_LABELS.legacy}
+                    </InfoRow>
+                  )}
                   <InfoRow icon={Cookie} label="Lưu cookie cuối phiên" tone={h.cookie_saved ? "text-emerald-600" : "text-slate-400"}>
                     {h.cookie_saved ? "Đã lưu" : "Không"}
                   </InfoRow>
