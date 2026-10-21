@@ -1,11 +1,12 @@
 import time
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+import math
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Union
 from modules.module_06_omnichannel_chat.database import get_db
 from modules.module_06_omnichannel_chat.config import settings
-from modules.module_06_omnichannel_chat.schemas import PageOut, TokenInput, SyncByTokenResponse
+from modules.module_06_omnichannel_chat.schemas import PageOut, TokenInput, SyncByTokenResponse, PaginatedPagesOut
 from modules.module_06_omnichannel_chat.repositories import PageRepository, AccountRepository
 from modules.module_06_omnichannel_chat.services import FacebookSyncService, FacebookAuthError, FacebookAPIError
 from modules.module_06_omnichannel_chat.services.sync_service import sync_executor
@@ -55,11 +56,16 @@ def get_config():
         "facebook_api_version": settings.FACEBOOK_API_VERSION
     }
 
-@router.get("/pages", response_model=List[PageOut])
+@router.get("/pages", response_model=Union[PaginatedPagesOut, List[PageOut]])
 def get_local_pages(
     request: Request,
     facebook_user_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    page: Optional[int] = Query(None, ge=1, description="Số trang (1-indexed)"),
+    page_size: Optional[int] = Query(None, ge=1, le=100, description="Số lượng mục trên 1 trang"),
+    limit: Optional[int] = Query(None, ge=1, le=100, description="Số lượng mục cần lấy"),
+    offset: Optional[int] = Query(None, ge=0, description="Vị trí bắt đầu"),
+    search: Optional[str] = Query(None, description="Tìm kiếm theo tên hoặc ID Page"),
     db: Session = Depends(get_db),
     current_user: Optional[SystemUser] = Depends(get_current_user_optional)
 ):
@@ -136,18 +142,44 @@ def get_local_pages(
     except Exception as sync_trigger_err:
         print(f"[Warning] Trigger sync_historical_data note: {sync_trigger_err}")
 
-    # 4. Trả về định dạng PageOut
+    # 4. Trả về định dạng PageOut & Phân trang
+    p_page = page if isinstance(page, int) else None
+    p_size = page_size if isinstance(page_size, int) else None
+    p_limit = limit if isinstance(limit, int) else None
+    p_offset = offset if isinstance(offset, int) else None
+    s_query = search.strip().lower() if isinstance(search, str) else ""
+
     results = []
     for r in rows:
+        p_name = r["page_name"] or ""
+        p_id = str(r["page_id"])
+        if s_query and (s_query not in p_name.lower() and s_query not in p_id.lower()):
+            continue
         avatar = r.get("avatar_url") or f"https://graph.facebook.com/v19.0/{r['page_id']}/picture?type=large"
         results.append(PageOut(
             id=r["id"],
-            page_id=str(r["page_id"]),
-            page_name=r["page_name"] or "",
+            page_id=p_id,
+            page_name=p_name,
             avatar_url=avatar,
             status=(r.get("status") or "active").lower(),
             facebook_user_id=str(r.get("facebook_user_id") or "")
         ))
+
+    total = len(results)
+    if p_page is not None or p_limit is not None or p_offset is not None or p_size is not None:
+        effective_page_size = p_size or p_limit or 20
+        effective_page = p_page or ((p_offset // effective_page_size) + 1 if p_offset is not None else 1)
+        effective_offset = p_offset if p_offset is not None else (effective_page - 1) * effective_page_size
+        sliced = results[effective_offset : effective_offset + effective_page_size]
+        total_pages = math.ceil(total / effective_page_size) if effective_page_size else 1
+        return PaginatedPagesOut(
+            items=sliced,
+            pages=sliced,
+            total=total,
+            page=effective_page,
+            page_size=effective_page_size,
+            total_pages=total_pages
+        )
 
     return results
 
