@@ -177,12 +177,14 @@ async def process_webhook_event(event: Dict[str, Any]):
                         # Update Conversation & Customer tables for instant sidebar
                         try:
                             conv_repo = ConversationRepository(db)
+                            msg_dt = datetime.utcfromtimestamp(timestamp / 1000) if timestamp else datetime.utcnow()
                             conv_repo.upsert_conversation(
                                 page_id=page_id,
                                 customer_psid=active_customer_id,
                                 customer_name=real_customer_name,
                                 customer_avatar=customer_avatar,
                                 last_message=text,
+                                last_message_at=msg_dt,
                                 is_read=(direction == "outbound"),
                                 is_replied=(direction == "outbound"),
                             )

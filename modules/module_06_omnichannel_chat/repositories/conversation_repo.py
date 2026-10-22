@@ -34,12 +34,13 @@ class ConversationRepository:
         if conv:
             if customer_name: conv.customer_name = customer_name
             if customer_avatar: conv.customer_avatar = customer_avatar
-            if last_message: conv.last_message = last_message
             conv_time = conv.last_message_at.replace(tzinfo=None) if (conv.last_message_at and getattr(conv.last_message_at, "tzinfo", None) is not None) else conv.last_message_at
             if not conv_time or (msg_time and msg_time >= conv_time):
                 conv.last_message_at = msg_time
-            conv.is_read = is_read
-            conv.is_replied = is_replied
+                if last_message is not None:
+                    conv.last_message = last_message
+                conv.is_read = is_read
+                conv.is_replied = is_replied
         else:
             conv = Conversation(
                 page_id=page_id,
