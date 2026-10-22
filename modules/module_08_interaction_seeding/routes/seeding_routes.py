@@ -1309,6 +1309,21 @@ def _fail_remaining_campaign_tasks(
     return count
 
 
+def _count_account_result(db: Session, campaign_id: int, success: bool):
+    """Cộng kết quả của 1 nick vào chiến dịch (mỗi nick = 1 lượt thành công hoặc thất bại).
+    Cộng bằng 1 câu UPDATE trong DB (cột = cột + 1), không đọc lên rồi cộng trong Python:
+    2 nick chạy song song (2 luồng) cùng đọc total_failed = 0 rồi cùng ghi 1 -> mất 1 lượt."""
+    camp_col = SeedingCampaign.total_success if success else SeedingCampaign.total_failed
+    tar_col = SeedingCampaignTarget.success_count if success else SeedingCampaignTarget.failed_count
+    db.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).update(
+        {camp_col: camp_col + 1}, synchronize_session=False
+    )
+    db.query(SeedingCampaignTarget).filter(SeedingCampaignTarget.campaign_id == campaign_id).update(
+        {tar_col: tar_col + 1}, synchronize_session=False
+    )
+    db.commit()
+
+
 def _process_account_tasks(
     campaign_id: int,
     uid: str,
@@ -1323,6 +1338,7 @@ def _process_account_tasks(
     token = owner_context.set(owner) if owner else None
     db = SessionLocal()
     driver = None
+    account_counted = False   # đã cộng lượt thành công / thất bại của nick này vào chiến dịch chưa
     try:
         if _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested"):
             for tid in task_ids:
@@ -1367,16 +1383,10 @@ def _process_account_tasks(
                         t.error_message = "Không thể đăng nhập Facebook"
                         t.finished_at = vn_now()
                         failed_any = True
-                if failed_any:
-                    # Mỗi nick = 1 lượt (giống cách đếm ở cuối hàm), cộng bằng UPDATE trong DB để không mất lượt
-                    db.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).update(
-                        {SeedingCampaign.total_failed: SeedingCampaign.total_failed + 1}, synchronize_session=False
-                    )
-                    db.query(SeedingCampaignTarget).filter(SeedingCampaignTarget.campaign_id == campaign_id).update(
-                        {SeedingCampaignTarget.failed_count: SeedingCampaignTarget.failed_count + 1},
-                        synchronize_session=False,
-                    )
                 db.commit()
+                if failed_any:
+                    _count_account_result(db, campaign_id, success=False)
+                    account_counted = True
                 return
         else:
             broadcast("success", f"[{uid}] ✓ Phiên đăng nhập Facebook sẵn sàng.")
@@ -1526,20 +1536,9 @@ def _process_account_tasks(
                 # Đã hoàn thành toàn bộ tác vụ của nick, nghỉ 1.5s rồi đóng trình duyệt an toàn
                 time.sleep(1.5)
 
-        # Cập nhật kết quả số tài khoản thành công / thất bại cho chiến dịch (mỗi nick = 1 lượt).
-        # Cộng bằng 1 câu UPDATE trong DB (cột = cột + 1), không đọc lên rồi cộng trong Python:
-        # 2 nick chạy song song (2 luồng) cùng đọc total_failed = 0 rồi cùng ghi 1 -> mất 1 lượt.
-        camp_col = SeedingCampaign.total_success if not account_has_failure else SeedingCampaign.total_failed
-        tar_col = (
-            SeedingCampaignTarget.success_count if not account_has_failure else SeedingCampaignTarget.failed_count
-        )
-        db.query(SeedingCampaign).filter(SeedingCampaign.id == campaign_id).update(
-            {camp_col: camp_col + 1}, synchronize_session=False
-        )
-        db.query(SeedingCampaignTarget).filter(SeedingCampaignTarget.campaign_id == campaign_id).update(
-            {tar_col: tar_col + 1}, synchronize_session=False
-        )
-        db.commit()
+        # Cập nhật kết quả số tài khoản thành công / thất bại cho chiến dịch (mỗi nick = 1 lượt)
+        _count_account_result(db, campaign_id, success=not account_has_failure)
+        account_counted = True
 
     except Exception as e:
         logger.error(f"Error in _process_account_tasks for {uid}: {e}")
@@ -1556,6 +1555,7 @@ def _process_account_tasks(
             broadcast("error", f"[{uid}] Lỗi luồng: {str(e)[:80]}", owner=owner)
 
         try:
+            db.rollback()   # lỗi có thể đến từ DB: phải rollback thì session mới dùng tiếp được
             err_msg = (
                 "Người dùng yêu cầu dừng chiến dịch (Đã dừng thủ công)"
                 if is_stopped
@@ -1568,8 +1568,12 @@ def _process_account_tasks(
                     rem_t.error_message = err_msg
                     rem_t.finished_at = vn_now()
             db.commit()
-        except Exception:
-            pass
+            # Trước đây chỗ này không cộng lượt: nick lỗi luồng thì Lịch sử ghi 0 thất bại và "Hoàn thành"
+            if not account_counted:
+                _count_account_result(db, campaign_id, success=False)
+                account_counted = True
+        except Exception as cleanup_error:
+            logger.error(f"Không ghi được kết quả lỗi luồng của {uid}: {cleanup_error}")
     finally:
         if driver:
             try:
