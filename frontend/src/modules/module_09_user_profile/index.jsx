@@ -1,5 +1,6 @@
 ﻿"use client";
 
+import AiCredentialsSection from "./AiCredentialsSection";
 import { useState } from "react";
 import { Check, Copy, Eye, EyeOff, ExternalLink, Headset, Monitor, Phone, RefreshCw, Save, Send, UserRound } from "lucide-react";
 import { useSession } from "@/components/SessionContext";
@@ -74,7 +75,8 @@ export default function UserProfileModule() {
     <Section title="3. Bản quyền & Gói cước">
       <div className="rounded-xl border border-blue-100 bg-[#f7f9ff] p-5"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-[10px] font-semibold uppercase tracking-wide text-blue-600">Ngày hết hạn bản quyền</p><p className="mt-1 text-3xl font-bold tracking-tight">{expiry && Number.isFinite(expiry.getTime()) ? expiry.toLocaleDateString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" }) : "Chưa thiết lập"}</p><p className={`mt-1 text-xs ${active ? "text-emerald-600" : "text-amber-700"}`}>● {license.tone === "expired" ? "Bản quyền đã hết hạn" : license.days !== null ? `Thời hạn còn lại: ${license.days} ngày` : "Chưa có thời hạn bản quyền"}</p></div><button type="button" onClick={() => setRenewalOpen(true)} className="inline-flex items-center gap-2 rounded-lg border border-blue-500 bg-white px-3 py-2 text-xs font-semibold text-blue-600 hover:bg-blue-50"><RefreshCw size={14} />Gia hạn gói</button></div><div className="mt-4 border-t border-slate-100 pt-3"><p className="mb-2 text-xs text-slate-400">{usedDays !== null ? `Đã sử dụng: ${usedDays} ngày` : "Chưa có dữ liệu thời gian sử dụng"}</p><div role="progressbar" aria-label="Thời gian bản quyền đã sử dụng" aria-valuenow={Math.round(usedPercent)} aria-valuemin={0} aria-valuemax={100} className="h-1.5 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-blue-600" style={{ width: `${usedPercent}%` }} /></div></div></div>
     </Section>
-    <Section title="4. Hỗ trợ kỹ thuật"><div className="grid gap-4 sm:grid-cols-2"><SupportCard href={SUPPORT.telegram.url} icon={Send} label="Kênh hỗ trợ nhanh" title="Telegram CSKH" detail={SUPPORT.telegram.display} /><SupportCard href={SUPPORT.zalo.url} icon={Headset} label="Đường dây nóng kỹ thuật" title="Hỗ trợ kỹ thuật / Zalo" detail={SUPPORT.zalo.display} green /></div></Section>
+    <AiCredentialsSection />
+    <Section title="5. Hỗ trợ kỹ thuật"><div className="grid gap-4 sm:grid-cols-2"><SupportCard href={SUPPORT.telegram.url} icon={Send} label="Kênh hỗ trợ nhanh" title="Telegram CSKH" detail={SUPPORT.telegram.display} /><SupportCard href={SUPPORT.zalo.url} icon={Headset} label="Đường dây nóng kỹ thuật" title="Hỗ trợ kỹ thuật / Zalo" detail={SUPPORT.zalo.display} green /></div></Section>
     {renewalOpen && <RenewalContactDialog onClose={() => setRenewalOpen(false)} />}
   </div>;
 }

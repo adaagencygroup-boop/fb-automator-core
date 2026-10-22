@@ -9,6 +9,7 @@ from ..services.campaign import campaign_manager
 from ..services.media_service import MediaStorageError, resolve_media_paths
 from ..schemas.request import CampaignInput
 from ..schemas.response import CampaignStartedResponse, CampaignStatusResponse
+from .settings import _resolved_key
 
 
 router = APIRouter(prefix="/campaign", tags=["Module 07: Campaign"])
@@ -18,6 +19,8 @@ router = APIRouter(prefix="/campaign", tags=["Module 07: Campaign"])
 async def start_group_campaign(item: CampaignInput, owner: str | None = Depends(scoped_owner)):
     if not item.groups:
         raise HTTPException(400, "Chưa chọn nhóm Facebook nào để chạy chiến dịch")
+    if item.settings.get("credential_id"):
+        _resolved_key(item.settings.get("model", ""), None, item.settings["credential_id"])
     try:
         payload = item.model_dump()
         payload["media"] = resolve_media_paths(item.media)

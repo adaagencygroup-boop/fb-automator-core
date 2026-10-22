@@ -41,12 +41,10 @@ import {
   generateGroupPosts,
   getCurrentGroupCampaign,
   getGroupCampaign,
-  getGeminiModels,
   getGroupSettings,
   runGroupCampaign,
   saveGroupSettings,
   stopGroupCampaign,
-  testGroupAiConnection,
   uploadGroupMedia,
 } from "../service";
 import {
@@ -60,6 +58,7 @@ import {
   normalizeAccount,
 } from "../shared/components";
 import GroupAccountSection from "./components/GroupAccountSection";
+import useSavedApis from "../shared/useSavedApis";
 import GroupSettingsSection from "./components/GroupSettingsSection";
 import GroupSourceSection from "./components/GroupSourceSection";
 
@@ -147,16 +146,17 @@ export default function GroupPostModule() {
   const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
-  const [model, setModel] = useState("gpt-4o");
-  const [apiKey, setApiKey] = useState("");
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [providerStatus, setProviderStatus] = useState({});
-  const [geminiModels, setGeminiModels] = useState(DEFAULT_GEMINI_MODELS);
+  const apiSource = useSavedApis();
+  const model = apiSource.selected?.model || "gpt-4o";
+  const geminiModels = DEFAULT_GEMINI_MODELS;
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsAction, setSettingsAction] = useState("");
   const [settingsFeedback, setSettingsFeedback] = useState(null);
   const [isAccountLocked, setIsAccountLocked] = useState(false);
   const [isSettingsLocked, setIsSettingsLocked] = useState(false);
+  const [confirmedApi, setConfirmedApi] = useState("");
+  const apiSignature = JSON.stringify(apiSource.selected);
+  const settingsConfirmed = isSettingsLocked && confirmedApi === apiSignature;
   const [threads, setThreads] = useState("2");
   const [restMinutes, setRestMinutes] = useState("10");
   const [maxPosts, setMaxPosts] = useState("10");
@@ -226,21 +226,10 @@ export default function GroupPostModule() {
     Promise.resolve().then(getGroupSettings)
       .then((data) => {
         if (cancelled) return;
-        setModel(data.model);
-        if (data.model?.startsWith("gemini-")) {
-          setGeminiModels((current) => current.some((item) => item.id === data.model)
-            ? current
-            : [{ id: data.model, name: data.model }, ...current]);
-        }
         setThreads(String(data.threads));
         setRestMinutes(String(data.rest_minutes));
         setMaxPosts(String(data.max_posts));
-        setProviderStatus(data.providers || {});
-        const activeProv = getProvider(data.model);
-        setApiKey("");
-        if (data.providers?.[activeProv]?.configured) {
-          setIsSettingsLocked(true);
-        }
+
       })
       .catch((error) => {
         if (cancelled) return;
@@ -317,9 +306,7 @@ export default function GroupPostModule() {
   const generatedCount = posts.filter((post) => post.trim()).length;
   const activePostLength = String(posts[activePost] || "").replace(/<[^>]*>/g, "").length;
   const totalPlanned = Math.min(Number(maxPosts) || 0, activeGroupsCount * Math.max(selectedAccounts.length, 1));
-  const activeProvider = getProvider(model);
-  const savedKey = providerStatus[activeProvider];
-  const hasApiKey = Boolean(apiKey.trim() || savedKey?.configured);
+  const hasApiKey = Boolean(apiSource.selected) && !apiSource.loading;
 
   const liveAccountsCount = useMemo(() => {
     return selectedAccounts.filter((acc) => acc.status === "LIVE").length;
@@ -340,7 +327,7 @@ export default function GroupPostModule() {
   const normalizedSettings = () => {
     const values = {
       model,
-      api_key: apiKey.trim() || null,
+      credential_id: apiSource.selectedId,
       threads: Number(threads),
       rest_minutes: Number(restMinutes),
       max_posts: Number(maxPosts),
@@ -354,32 +341,19 @@ export default function GroupPostModule() {
     if (!Number.isInteger(values.max_posts) || values.max_posts < 1 || values.max_posts > 1000) {
       throw new Error("Max bài phải là số nguyên từ 1 đến 1000");
     }
-    if (!values.api_key && !providerStatus[activeProvider]?.configured) {
-      const provName = activeProvider === "deepseek" ? "DeepSeek" : activeProvider === "gemini" ? "Google Gemini" : "OpenAI";
-      throw new Error(`Vui lòng nhập API Key cho ${provName} trước khi lưu cấu hình.`);
-    }
+    if (!hasApiKey) throw new Error("Hãy chọn API đã cấu hình trong Hồ sơ cá nhân.");
     return values;
-  };
-
-  const handleModelChange = (event) => {
-    const newModel = event?.target?.value || event;
-    setModel(newModel);
-    setApiKey("");
-    setShowApiKey(false);
-    setSettingsFeedback(null);
   };
 
   const handleSaveSettings = async (shouldScroll = true) => {
     setSettingsAction("saving");
     setSettingsFeedback(null);
     try {
-      const result = await saveGroupSettings(normalizedSettings());
-      setProviderStatus(result.providers || {});
-      setApiKey("");
-      setShowApiKey(false);
+      await saveGroupSettings(normalizedSettings());
       setSettingsFeedback({ type: "success", message: "Đã lưu cấu hình trên máy này" });
       toast.success("Đã lưu cấu hình trên máy này thành công.", "LƯU THÀNH CÔNG");
       setIsSettingsLocked(true);
+      setConfirmedApi(apiSignature);
 
       if (shouldScroll) {
         setTimeout(() => {
@@ -394,49 +368,6 @@ export default function GroupPostModule() {
     } catch (error) {
       setSettingsFeedback({ type: "error", title: "Lỗi lưu cấu hình", message: error.message || "Không thể lưu cấu hình" });
       return false;
-    } finally {
-      setSettingsAction("");
-    }
-  };
-
-  const handleTestApi = async () => {
-    setSettingsAction("testing");
-    setSettingsFeedback(null);
-    try {
-      if (!hasApiKey) throw new Error("Hãy nhập API Key trước khi kiểm tra");
-      const result = await testGroupAiConnection({ model, api_key: apiKey.trim() || null });
-      setSettingsFeedback({ type: "success", message: result.message || "Kết nối API thành công" });
-      toast.success(result.message || "Kết nối API thành công!", "KIỂM TRA THÀNH CÔNG");
-    } catch (error) {
-      setSettingsFeedback({ type: "error", title: "Lỗi kiểm tra API", message: error.message || "API Key không hợp lệ" });
-    } finally {
-      setSettingsAction("");
-    }
-  };
-
-  const handleLoadGeminiModels = async () => {
-    setSettingsAction("loading-models");
-    setSettingsFeedback(null);
-    try {
-      if (!apiKey.trim() && !providerStatus.gemini?.configured) {
-        throw new Error("Hãy nhập Google AI Studio API Key trước khi tải model");
-      }
-      const result = await getGeminiModels({ api_key: apiKey.trim() || null });
-      setGeminiModels(result.models);
-      if (!result.models.some((item) => item.id === model)) {
-        setModel(result.models[0].id);
-      }
-      setSettingsFeedback({
-        type: "success",
-        message: `Đã tải ${result.count} model khả dụng từ Google AI Studio`,
-      });
-      toast.success(`Đã tải ${result.count} model khả dụng từ Google AI Studio.`, "TẢI MODEL THÀNH CÔNG");
-    } catch (error) {
-      setSettingsFeedback({
-        type: "error",
-        title: "Lỗi tải model Google",
-        message: error.message || "Không tải được danh sách model Google",
-      });
     } finally {
       setSettingsAction("");
     }
@@ -483,7 +414,7 @@ export default function GroupPostModule() {
     try {
       const result = await generateGroupPosts({
         model,
-        api_key: apiKey.trim() || null,
+        credential_id: apiSource.selectedId,
         prompt: prompt.trim(),
         count: amount,
       });
@@ -595,7 +526,7 @@ export default function GroupPostModule() {
   };
 
   const handleStart = async () => {
-    if (!selectedAccounts.length || !hasGroups) return;
+    if (!selectedAccounts.length || !hasGroups || !hasApiKey) return;
     setRunState("starting");
     setCampaignProgress({
       status: "QUEUED",
@@ -606,7 +537,7 @@ export default function GroupPostModule() {
       }],
     });
     try {
-      if (!isSettingsLocked) {
+      if (!settingsConfirmed) {
         appendCampaignLog("INFO", "Đang kiểm tra và lưu cấu hình Module 7...");
         const saved = await handleSaveSettings(false);
         if (!saved) throw new Error("Cấu hình chưa hợp lệ");
@@ -638,6 +569,7 @@ export default function GroupPostModule() {
         media: savedMediaPaths.length ? savedMediaPaths : mediaFiles.map((file) => file.name),
         settings: {
           model,
+          credential_id: apiSource.selectedId,
           threads: Number(threads),
           rest_minutes: Number(restMinutes),
           max_posts: Number(maxPosts),
@@ -701,34 +633,10 @@ export default function GroupPostModule() {
 
       {/* Bước 2: Cấu hình API & thông số chung */}
       <div id="step-2-settings" className="scroll-mt-6">
-        <GroupSettingsSection
-          model={model}
-          setModel={setModel}
-          apiKey={apiKey}
-          setApiKey={setApiKey}
-          showApiKey={showApiKey}
-          setShowApiKey={setShowApiKey}
-          threads={threads}
-          setThreads={setThreads}
-          restMinutes={restMinutes}
-          setRestMinutes={setRestMinutes}
-          maxPosts={maxPosts}
-          setMaxPosts={setMaxPosts}
-          geminiModels={geminiModels}
-          setGeminiModels={setGeminiModels}
-          providerStatus={providerStatus}
-          setProviderStatus={setProviderStatus}
-          settingsLoading={settingsLoading}
-          settingsAction={settingsAction}
-          setSettingsAction={setSettingsAction}
-          settingsFeedback={settingsFeedback}
-          setSettingsFeedback={setSettingsFeedback}
-          onSaveSettings={handleSaveSettings}
-          onTestApi={handleTestApi}
-          onLoadGeminiModels={handleLoadGeminiModels}
-          onModelChange={handleModelChange}
-          isLocked={isSettingsLocked}
-          setIsLocked={setIsSettingsLocked}
+        <GroupSettingsSection apiSource={apiSource}
+          threads={threads} setThreads={setThreads} restMinutes={restMinutes} setRestMinutes={setRestMinutes}
+          settingsLoading={settingsLoading} settingsAction={settingsAction} settingsFeedback={settingsFeedback}
+          onSaveSettings={handleSaveSettings} isLocked={settingsConfirmed} setIsLocked={setIsSettingsLocked}
         />
       </div>
 
