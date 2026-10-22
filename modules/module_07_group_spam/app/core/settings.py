@@ -10,36 +10,7 @@ from typing import Any
 
 from config.constants import DATA_DIR
 from modules.module_02_account_manager.security.encryption import decrypt_data, encrypt_data
-
-
-MODEL_SPECS = {
-    "gpt-4o": {"provider": "openai", "api_model": "gpt-4o"},
-    "gpt-4o-mini": {"provider": "openai", "api_model": "gpt-4o-mini"},
-    # Google AI Studio models. The API also accepts dynamically discovered
-    # gemini-* model IDs returned by models.list for the user's own key.
-    "gemini-3.8-flash": {"provider": "gemini", "api_model": "gemini-3.8-flash"},
-    "gemini-3.7-flash": {"provider": "gemini", "api_model": "gemini-3.7-flash"},
-    "gemini-3.6-flash": {"provider": "gemini", "api_model": "gemini-3.6-flash"},
-    "gemini-3.5-flash": {"provider": "gemini", "api_model": "gemini-3.5-flash"},
-    "gemini-3.5-flash-lite": {"provider": "gemini", "api_model": "gemini-3.5-flash-lite"},
-    "gemini-3.1-pro-preview": {"provider": "gemini", "api_model": "gemini-3.1-pro-preview"},
-    "gemini-2.5-flash": {"provider": "gemini", "api_model": "gemini-2.5-flash"},
-    "gemini-2.5-flash-lite": {"provider": "gemini", "api_model": "gemini-2.5-flash-lite"},
-    "gemini-2.5-pro": {"provider": "gemini", "api_model": "gemini-2.5-pro"},
-    # DeepSeek models
-    "deepseek-v4-flash": {"provider": "deepseek", "api_model": "deepseek-flash"},
-    "deepseek-flash": {"provider": "deepseek", "api_model": "deepseek-flash"},
-    # Backward compatibility for settings saved by the first Module 7 version.
-    "gemini": {"provider": "gemini", "api_model": "gemini-2.5-flash"},
-}
-
-DEFAULT_SETTINGS = {
-    "model": "gpt-4o",
-    "threads": 2,
-    "rest_minutes": 10,
-    "max_posts": 10,
-    "api_keys": {},
-}
+from .constants import DEFAULT_SETTINGS, MODEL_SPECS
 
 
 def model_spec(model: str) -> dict[str, str]:
@@ -110,10 +81,8 @@ class GroupSettingsStore:
                 providers[provider] = {
                     "configured": bool(key),
                     "hint": f"••••{key[-4:]}" if key else "",
-                    "key": key or "",
                 }
             current_provider = model_spec(data["model"])["provider"]
-            current_key = self._decrypt_key(data["api_keys"].get(current_provider))
             return {
                 "model": data["model"],
                 "threads": int(data["threads"]),
@@ -121,7 +90,6 @@ class GroupSettingsStore:
                 "max_posts": int(data["max_posts"]),
                 "api_key_configured": providers[current_provider]["configured"],
                 "api_key_hint": providers[current_provider]["hint"],
-                "api_key": current_key or "",
                 "providers": providers,
             }
 

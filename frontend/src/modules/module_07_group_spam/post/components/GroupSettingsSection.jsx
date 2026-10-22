@@ -71,13 +71,6 @@ export default function GroupSettingsSection({
     setInternalLocked(val);
   };
 
-  // Tự động nạp API key đã lưu nếu state apiKey đang rỗng
-  useEffect(() => {
-    if (!apiKey && savedKey?.key) {
-      setApiKey(savedKey.key);
-    }
-  }, [savedKey?.key, activeProvider]);
-
   const [errorDialog, setErrorDialog] = useState(null);
 
   // Tự động mở Modal Dialog khi có lỗi
@@ -102,9 +95,7 @@ export default function GroupSettingsSection({
     }
     const newModel = event.target.value;
     setModel(newModel);
-    const newProvider = getProvider(newModel);
-    const existingKey = providerStatus?.[newProvider]?.key || "";
-    setApiKey(existingKey);
+    setApiKey("");
     if (setShowApiKey) setShowApiKey(false);
     if (setSettingsFeedback) setSettingsFeedback(null);
   };
@@ -189,9 +180,7 @@ export default function GroupSettingsSection({
       };
       const result = await saveGroupSettings(payload);
       if (setProviderStatus) setProviderStatus(result.providers || {});
-      const activeProv = getProvider(model);
-      const savedKeyVal = result.api_key || result.providers?.[activeProv]?.key || apiKey.trim();
-      setApiKey(savedKeyVal);
+      setApiKey("");
       if (setShowApiKey) setShowApiKey(false);
       if (setSettingsFeedback) {
         setSettingsFeedback({ type: "success", message: "Đã lưu cấu hình trên máy này" });

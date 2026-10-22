@@ -1,9 +1,10 @@
 import unittest
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
-from modules.module_07_group_spam.api.router import router
-from modules.module_07_group_spam.group_source import (
+from modules.module_07_group_spam.app.routes.router import router
+from modules.module_07_group_spam.app.services.group_source import (
     clean_group_url,
     extract_group_identifier,
     is_valid_group_entry,
@@ -51,7 +52,18 @@ class GroupSourceUnitTests(unittest.TestCase):
         self.assertEqual(result["groups"][0]["url"], "facebook.com/groups/group_a")
 
     def test_search_facebook_groups(self):
-        results = search_facebook_groups("việc làm", max_results=3)
+        scraped = [
+            {"key": f"group_{index}", "name": f"Group {index}",
+             "url": f"facebook.com/groups/{index}", "uid": str(index),
+             "frequency": "20 posts/day", "members": "100K", "mem_num": 100.0,
+             "privacy": "public", "already_posted": False}
+            for index in range(3)
+        ]
+        with patch(
+            "modules.module_07_group_spam.app.services.group_source.search_facebook_via_browser",
+            return_value=scraped,
+        ):
+            results = search_facebook_groups("việc làm", max_results=3)
         self.assertEqual(len(results), 3)
         self.assertTrue(all("url" in r and "key" in r for r in results))
 
@@ -78,10 +90,21 @@ class GroupSourceApiTests(unittest.TestCase):
         self.assertEqual(data["dedup_count"], 1)
 
     def test_api_search_source(self):
-        response = self.client.post(
-            "/api/groups/source/search",
-            json={"keyword": "tuyển dụng", "max_results": 4},
-        )
+        groups = [
+            {"id": f"{index:02d}", "key": f"g{index}", "name": f"Group {index}",
+             "url": f"facebook.com/groups/{index}", "uid": str(index),
+             "frequency": "20 posts/day", "members": "100K", "privacy": "public",
+             "already_posted": False}
+            for index in range(1, 5)
+        ]
+        with patch(
+            "modules.module_07_group_spam.app.routes.group_source.search_facebook_groups",
+            return_value=groups,
+        ):
+            response = self.client.post(
+                "/api/groups/source/search",
+                json={"keyword": "tuyển dụng", "max_results": 4},
+            )
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["count"], 4)

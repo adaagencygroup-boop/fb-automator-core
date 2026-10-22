@@ -1,0 +1,48 @@
+"""Campaign lifecycle endpoints for Module 7."""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from modules.module_02_account_manager.api.router import scoped_owner
+
+from ..services.campaign import campaign_manager
+from ..services.media_service import MediaStorageError, resolve_media_paths
+from ..schemas.request import CampaignInput
+from ..schemas.response import CampaignStartedResponse, CampaignStatusResponse
+
+
+router = APIRouter(prefix="/campaign", tags=["Module 07: Campaign"])
+
+
+@router.post("", response_model=CampaignStartedResponse)
+async def start_group_campaign(item: CampaignInput, owner: str | None = Depends(scoped_owner)):
+    if not item.groups:
+        raise HTTPException(400, "Chưa chọn nhóm Facebook nào để chạy chiến dịch")
+    try:
+        payload = item.model_dump()
+        payload["media"] = resolve_media_paths(item.media)
+        job = campaign_manager.start(payload, owner)
+        return {**job, "success_count": job.get("success", 0), "success": True}
+    except (MediaStorageError, RuntimeError, ValueError) as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/current", response_model=CampaignStatusResponse, response_model_exclude_unset=True)
+async def get_current_group_campaign(owner: str | None = Depends(scoped_owner)):
+    return campaign_manager.current(owner) or {"status": "IDLE"}
+
+
+@router.get("/{job_id}", response_model=CampaignStatusResponse)
+async def get_group_campaign(job_id: str, owner: str | None = Depends(scoped_owner)):
+    job = campaign_manager.get(job_id, owner)
+    if not job:
+        raise HTTPException(404, "Không tìm thấy chiến dịch")
+    return job
+
+
+@router.post("/{job_id}/stop", response_model=CampaignStatusResponse)
+async def stop_group_campaign(job_id: str, owner: str | None = Depends(scoped_owner)):
+    job = campaign_manager.stop(job_id, owner)
+    if not job:
+        raise HTTPException(404, "Không tìm thấy chiến dịch")
+    return job

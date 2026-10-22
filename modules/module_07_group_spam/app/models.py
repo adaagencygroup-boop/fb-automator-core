@@ -81,6 +81,7 @@ DDL_STATEMENTS = [
         )
     );
     """,
+    "ALTER TABLE group_session_logs ADD COLUMN IF NOT EXISTS account_id INT REFERENCES accounts(id) ON DELETE SET NULL;",
     "CREATE INDEX IF NOT EXISTS idx_group_sessions_history ON group_sessions (owner_key, finished_at);",
     "CREATE INDEX IF NOT EXISTS idx_group_sessions_status ON group_sessions (owner_key, status, finished_at);",
     "CREATE INDEX IF NOT EXISTS idx_group_session_logs_status ON group_session_logs (session_id, status, finished_at);",
@@ -91,18 +92,12 @@ DDL_STATEMENTS = [
 
 
 def init_models():
-    """Khởi tạo schema log tối giản trên PostgreSQL hoặc SQLite fallback."""
+    """Initialize the PostgreSQL schema and fail startup when DDL cannot be applied."""
+    errors = []
     for statement in DDL_STATEMENTS:
         try:
-            if db._is_postgres:
-                clean_statement = statement
-            else:
-                clean_statement = statement.replace(
-                    "SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT"
-                )
-                clean_statement = clean_statement.replace(
-                    "BOOLEAN NOT NULL DEFAULT FALSE", "INTEGER NOT NULL DEFAULT 0"
-                )
-            db.execute(clean_statement)
+            db.execute(statement)
         except Exception as exc:
-            print(f"[Module 7 DB] DDL error: {exc}")
+            errors.append(str(exc))
+    if errors:
+        raise RuntimeError("Module 7 database initialization failed: " + "; ".join(errors))

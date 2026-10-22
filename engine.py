@@ -28,7 +28,7 @@ from core.media.tiktok_scraper import tiktok_scraper
 from core.media.youtube_scraper import youtube_scraper
 from core.network.proxy_manager import proxy_manager
 from modules.module_02_account_manager.api.router import router as account_router, alias_router as account_alias_router
-from modules.module_07_group_spam.api import router as group_router
+from modules.module_07_group_spam.app.routes import router as group_router
 from modules.module_02_account_manager import initialize as initialize_accounts, shutdown as shutdown_accounts
 from core.startup import startup_step
 from modules import load_backend_modules
@@ -129,7 +129,7 @@ async def lifespan(app: FastAPI):
 
         init_page_models()
     with startup_step("Module 07 group posting"):
-        from modules.module_07_group_spam.models import init_models as init_group_models
+        from modules.module_07_group_spam.app.models import init_models as init_group_models
 
         init_group_models()
     with startup_step("Backend module imports"):
