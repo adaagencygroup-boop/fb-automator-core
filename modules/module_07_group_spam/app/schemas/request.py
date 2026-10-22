@@ -18,6 +18,7 @@ from ..core.settings import model_spec
 
 
 class SettingsInput(BaseModel):
+    credential_id: str | None = Field(default=None, max_length=100)
     model: str
     api_key: str | None = Field(default=None, max_length=512)
     threads: int = Field(ge=MIN_THREADS, le=MAX_THREADS)
@@ -37,6 +38,7 @@ class SettingsInput(BaseModel):
 
 
 class ConnectionTestInput(BaseModel):
+    credential_id: str | None = Field(default=None, max_length=100)
     model: str
     api_key: str | None = Field(default=None, max_length=512)
 
@@ -53,7 +55,19 @@ class GeneratePostsInput(ConnectionTestInput):
 
 
 class ModelListInput(BaseModel):
+    credential_id: str | None = Field(default=None, max_length=100)
     api_key: str | None = Field(default=None, max_length=512)
+
+
+class CredentialInput(ConnectionTestInput):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def nonblank_name(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("Tên API không được để trống")
+        return value.strip() if value is not None else None
 
 
 class ParseFileInput(BaseModel):

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import threading
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +48,66 @@ class GroupSettingsStore:
         }
         if merged["model"] == "gemini":
             merged["model"] = "gemini-2.5-flash"
+        if "credentials" not in merged:
+            defaults = {"openai": "gpt-4o", "gemini": "gemini-2.5-flash", "deepseek": "deepseek-v4-flash"}
+            merged["credentials"] = [
+                {"id": f"legacy-{provider}", "name": f"{provider} (đã lưu)",
+                 "model": merged["model"] if model_spec(merged["model"])["provider"] == provider else defaults[provider],
+                 "encrypted_key": key}
+                for provider, key in merged["api_keys"].items() if key and provider in defaults
+            ]
         return merged
+
+    def credentials(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [self._public_credential(item) for item in self._load_unlocked()["credentials"]]
+
+    def _public_credential(self, item):
+        key = self._decrypt_key(item["encrypted_key"])
+        return {"id": item["id"], "name": item["name"], "model": item["model"],
+                "provider": model_spec(item["model"])["provider"], "configured": bool(key),
+                "hint": f"••••{key[-4:]}" if len(key) > 4 else "••••"}
+
+    def credential_key(self, credential_id: str, model: str, *, exact_model: bool = True) -> str:
+        with self._lock:
+            item = next((item for item in self._load_unlocked()["credentials"] if item["id"] == credential_id), None)
+            if not item:
+                raise KeyError("API đã bị xóa hoặc không tồn tại. Vui lòng chọn lại API.")
+            if model_spec(item["model"])["provider"] != model_spec(model)["provider"] or (exact_model and item["model"] != model):
+                raise ValueError("Cấu hình API đã thay đổi. Vui lòng tải lại và chọn lại API.")
+            return self._decrypt_key(item["encrypted_key"])
+
+    def save_credential(self, *, name: str, model: str, api_key: str | None, credential_id: str | None = None):
+        provider = model_spec(model)["provider"]
+        with self._lock:
+            data = self._load_unlocked()
+            item = next((item for item in data["credentials"] if item["id"] == credential_id), None)
+            if credential_id and not item:
+                raise KeyError("API không tồn tại")
+            key = (api_key or "").strip()
+            if not key and (not item or model_spec(item["model"])["provider"] != provider or not self._decrypt_key(item["encrypted_key"])):
+                raise ValueError("Hãy nhập API Key cho cấu hình mới hoặc khi đổi nhà cung cấp")
+            if not item:
+                item = {"id": uuid.uuid4().hex}
+                data["credentials"].append(item)
+            item.update(name=name.strip(), model=model)
+            if key:
+                item["encrypted_key"] = encrypt_data(key)
+            self._save_unlocked(data)
+            return self._public_credential(item)
+
+    def delete_credential(self, credential_id: str):
+        with self._lock:
+            data = self._load_unlocked()
+            item = next((item for item in data["credentials"] if item["id"] == credential_id), None)
+            if not item:
+                raise KeyError("API không tồn tại")
+            data["credentials"].remove(item)
+            if credential_id.startswith("legacy-"):
+                data["api_keys"].pop(credential_id.removeprefix("legacy-"), None)
+            if data.get("credential_id") == credential_id:
+                data["credential_id"] = None
+            self._save_unlocked(data)
 
     def _save_unlocked(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -83,22 +143,30 @@ class GroupSettingsStore:
                     "hint": f"••••{key[-4:]}" if key else "",
                 }
             current_provider = model_spec(data["model"])["provider"]
+            credentials = self.credentials()
+            selected = next((item for item in credentials if item["id"] == data.get("credential_id")), None)
             return {
                 "model": data["model"],
                 "threads": int(data["threads"]),
                 "rest_minutes": int(data["rest_minutes"]),
                 "max_posts": int(data["max_posts"]),
-                "api_key_configured": providers[current_provider]["configured"],
-                "api_key_hint": providers[current_provider]["hint"],
+                "api_key_configured": selected["configured"] if selected else providers[current_provider]["configured"],
+                "api_key_hint": selected["hint"] if selected else providers[current_provider]["hint"],
                 "providers": providers,
+                "credentials": credentials,
+                "credential_id": data.get("credential_id"),
             }
 
     def save(self, *, model: str, threads: int, rest_minutes: int, max_posts: int,
-             api_key: str | None = None) -> dict[str, Any]:
+             api_key: str | None = None, credential_id: str | None = None) -> dict[str, Any]:
         provider = model_spec(model)["provider"]
         with self._lock:
             data = self._load_unlocked()
+            if credential_id:
+                if not self.credential_key(credential_id, model):
+                    raise ValueError("Khóa API không khả dụng")
             data.update({
+                "credential_id": credential_id,
                 "model": model,
                 "threads": threads,
                 "rest_minutes": rest_minutes,
@@ -106,6 +174,9 @@ class GroupSettingsStore:
             })
             if api_key and api_key.strip():
                 data["api_keys"][provider] = encrypt_data(api_key.strip())
+                legacy_id = f"legacy-{provider}"
+                data["credentials"] = [item for item in data["credentials"] if item["id"] != legacy_id]
+                data["credentials"].append({"id": legacy_id, "name": f"{provider} (đã lưu)", "model": model, "encrypted_key": data["api_keys"][provider]})
             self._save_unlocked(data)
             return self.public()
 

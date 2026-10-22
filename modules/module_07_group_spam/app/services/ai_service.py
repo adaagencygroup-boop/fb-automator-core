@@ -195,7 +195,7 @@ def list_gemini_models(api_key: str) -> list[dict[str, str]]:
     return sorted(unique.values(), key=lambda item: item["id"], reverse=True)
 
 
-def generate_posts(model: str, api_key: str, topic: str, count: int) -> list[str]:
+def generate_posts(model: str, api_key: str, topic: str, count: int, *, comment: bool = False) -> list[str]:
     marker = "===BAI_DANG_MOI==="
     prompt = (
         "Bạn là chuyên gia nội dung Facebook bằng tiếng Việt. "
@@ -204,6 +204,12 @@ def generate_posts(model: str, api_key: str, topic: str, count: int) -> list[str
         f"Chỉ trả về các bài viết, phân cách mỗi bài bằng một dòng `{marker}`.\n\n"
         f"CHỦ ĐỀ:\n{topic.strip()}"
     )
+    if comment:
+        prompt = (
+            f"Viết đúng {count} bình luận Facebook bằng tiếng Việt dựa trên nội dung bên dưới. "
+            "Mỗi bình luận ngắn gọn, tự nhiên, không bịa thông tin, không hashtag. "
+            f"Chỉ trả về các bình luận, phân cách bằng một dòng `{marker}`.\n\n{topic.strip()}"
+        )
     raw = call_model(model, api_key, prompt)
     cleaned = raw.strip()
     if cleaned.startswith("```"):
