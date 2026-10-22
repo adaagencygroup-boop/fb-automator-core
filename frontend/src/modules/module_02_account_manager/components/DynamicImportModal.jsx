@@ -1,14 +1,17 @@
 "use client";
 
-import React, { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useToast } from "@/components/ui/toast";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { checkExistingUids } from "../service";
+import { CategoryEditor } from "./CategoryDialogs";
+import CategorySelect from "./CategorySelect";
+import { withImportCategory } from "../utils/import-categories.mjs";
 import { DEFAULT_MAPPING, mapImportedRow, detectColumnMapping, isValidProxy } from "../utils/import-mapping.mjs";
 import {
-  Braces, Check, ChevronDown, CircleCheck, Eye, EyeOff, Info, ListFilter,
-  ShieldCheck, Sparkles, Trash2, Upload, UserRoundPlus, X,
+  Braces, Check, ChevronDown, Loader2, Eye, EyeOff, Info, ListFilter,
+  Plus, ShieldCheck, Sparkles, Trash2, Upload, UserRoundPlus, X,
 } from "lucide-react";
 
 const FIELD_OPTIONS = [
@@ -39,7 +42,7 @@ function truncateValue(value, visible = 16) {
   return text.length > visible ? `${text.slice(0, visible)}...` : text;
 }
 
-export default function DynamicImportModal({ isOpen, onClose, onImport }) {
+export default function DynamicImportModal({ isOpen, onClose, onImport, categories = [], categoriesLoading = false, categoriesError = null, onRetryCategories, onCreateCategory }) {
   const toast = useToast();
   const mounted = useSyncExternalStore(
     () => () => {},
@@ -47,13 +50,17 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
     () => false
   );
   const [rawText, setRawText] = useState("");
+  const [previewEnabled, setPreviewEnabled] = useState(false);
+  const lineNumbersRef = useRef(null);
   const [delimiter, setDelimiter] = useState("|");
   const [manualColumnMap, setManualColumnMap] = useState(null);
   const [skipDuplicates, setSkipDuplicates] = useState(true);
   const [showOverwriteConfirm, setShowOverwriteConfirm] = useState(false);
   const [checkAfterImport, setCheckAfterImport] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
+  const [assignCategory, setAssignCategory] = useState(false);
+  const [categoryId, setCategoryId] = useState(null);
+  const [showCategoryEditor, setShowCategoryEditor] = useState(false);
 
   const handleToggleSkipDuplicates = (checked) => {
     if (!checked) {
@@ -67,6 +74,7 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
     () => rawText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 100),
     [rawText],
   );
+  const showPreview = previewEnabled && lines.length > 0;
 
   const detectedColumnCount = useMemo(() => {
     if (!lines.length) return DEFAULT_MAPPING.length;
@@ -147,8 +155,7 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
   useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (event) => {
-      if (event.key === "Escape" && !isImporting) {
-        setShowPreview(false);
+      if (event.key === "Escape" && !event.defaultPrevented && !isImporting && !showCategoryEditor && !showOverwriteConfirm) {
         onClose();
       }
     };
@@ -159,22 +166,29 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [isImporting, isOpen, onClose]);
+  }, [isImporting, isOpen, onClose, showCategoryEditor, showOverwriteConfirm]);
 
   if (!isOpen || !mounted) return null;
 
   const handleClose = () => {
-    setShowPreview(false);
+    setShowCategoryEditor(false);
     onClose();
   };
 
   const resetForm = () => {
     setRawText("");
+    setPreviewEnabled(false);
     setManualColumnMap(null);
-    setShowPreview(false);
+    setAssignCategory(false);
+    setCategoryId(null);
   };
 
   const handleImport = async () => {
+    if (isImporting || showCategoryEditor) return;
+    if (assignCategory && (categoriesLoading || categoriesError)) {
+      toast.error("Danh sách danh mục chưa sẵn sàng. Vui lòng thử tải lại trước khi import.", "DANH MỤC");
+      return;
+    }
     if (!rawText.trim() || !lines.length) {
       toast.error("Vui lòng dán dữ liệu tài khoản vào khung nhập!", "LỖI NHẬP TÀI KHOẢN");
       return;
@@ -268,10 +282,14 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
 
     setIsImporting(true);
     try {
-      const success = await onImport(parsedAccounts, 0, skipDuplicates);
-      if (success) {
+      const payload = withImportCategory(parsedAccounts, assignCategory, categoryId, categories);
+      const result = await onImport(payload, 0, skipDuplicates);
+      if (result === true || result?.success === true) {
         resetForm();
         handleClose();
+      } else if (result?.failedUids?.length) {
+        const failed = new Set(result.failedUids);
+        setRawText(lines.filter(line => failed.has(mapImportedRow(line, delimiter, columnMap).uid)).join("\n"));
       }
     } catch (err) {
       toast.error(err.message || "Lỗi khi lưu danh sách tài khoản", "LỖI IMPORT");
@@ -322,9 +340,9 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
           <div className="grid gap-4 xl:grid-cols-[1.2fr_.8fr]">
             {/* Cột trái: Section - Cột Trái: Nhập Dữ Liệu Raw Text (Figma Node 1010-3775) */}
             <section className="flex min-h-[380px] flex-col justify-between rounded-xl border border-[#E2E8F0] bg-white p-4 sm:p-5 shadow-[0_1px_2px_0_rgba(0,0,0,0.04)]">
-              <div>
+              <div className="flex min-h-0 flex-1 flex-col">
                 {/* Tiêu đề & Badge đếm dòng */}
-                <div className="mb-3 flex items-center justify-between border-b border-[#F1F5F9] pb-2.5">
+                <div className="mb-3 flex shrink-0 items-center justify-between border-b border-[#F1F5F9] pb-2.5">
                   <div className="flex items-center gap-2">
                     <span className="font-mono font-bold text-sm text-[#2563EB] tracking-tight">
                       {"{ }"}
@@ -339,12 +357,13 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
                 </div>
 
                 {/* Trình nhập code / Textarea giả lập IDE với số dòng - Chuẩn Figma #F8FAFC */}
-                <div className="flex min-h-[260px] overflow-hidden rounded-lg border border-[#E2E8F0]/90 bg-[#F8FAFC] focus-within:border-[#2563EB] focus-within:ring-2 focus-within:ring-[#2563EB]/15 transition-all">
+                <div className="relative min-h-[260px] flex-1 overflow-hidden rounded-lg border border-[#E2E8F0]/90 bg-[#F8FAFC] focus-within:border-[#2563EB] focus-within:ring-2 focus-within:ring-[#2563EB]/15 transition-all">
                   {/* Cột số dòng (01, 02, 03...) */}
                   <div
                     aria-hidden="true"
-                    className="w-10 shrink-0 select-none border-r border-[#E2E8F0]/80 bg-[#F8FAFC] py-3 text-right font-mono text-[11px] leading-[19.5px] text-[#94A3B8]"
+                    className="absolute inset-y-0 left-0 w-10 select-none overflow-hidden border-r border-[#E2E8F0]/80 bg-[#F8FAFC] py-3 text-right font-mono text-[11px] leading-[19.5px] text-[#94A3B8]"
                   >
+                    <div ref={lineNumbersRef}>
                     {Array.from(
                       { length: Math.max(8, rawText.split(/\r?\n/).length) },
                       (_, index) => (
@@ -353,21 +372,26 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
                         </div>
                       )
                     )}
+                    </div>
                   </div>
 
                   {/* Vùng nhập text */}
                   <textarea
                     value={rawText}
                     onChange={(event) => setRawText(event.target.value)}
+                    onScroll={event => {
+                      if (lineNumbersRef.current) lineNumbersRef.current.style.transform = `translateY(-${event.currentTarget.scrollTop}px)`;
+                    }}
                     spellCheck={false}
+                    wrap="off"
                     placeholder="...dán thêm tài khoản tại đây..."
-                    className="min-h-[260px] w-full flex-1 resize-none bg-transparent p-3 font-mono text-xs leading-[19.5px] text-[#334155] outline-none placeholder:text-[#94A3B8] placeholder:font-mono placeholder:italic"
+                    className="absolute inset-y-0 left-10 h-full w-[calc(100%_-_2.5rem)] resize-none overflow-auto bg-transparent p-3 font-mono text-xs leading-[19.5px] text-[#334155] outline-none placeholder:text-[#94A3B8] placeholder:font-mono placeholder:italic"
                   />
                 </div>
               </div>
 
               {/* Tùy biến dấu phân cách & Nút thao tác nhanh */}
-              <div className="mt-3.5 flex flex-col gap-2.5 border-t border-[#F1F5F9] pt-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="mt-3.5 flex shrink-0 flex-col gap-2.5 border-t border-[#F1F5F9] pt-3 sm:flex-row sm:items-center sm:justify-between">
                 <label className="flex min-w-0 flex-1 items-center gap-2 text-xs text-[#475569]">
                   <span className="shrink-0 font-normal">Ký tự phân cách:</span>
                   <span className="relative min-w-0 max-w-[210px] flex-1">
@@ -390,6 +414,7 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
                 </label>
 
                 <div className="flex shrink-0 items-center gap-2">
+
                   <button
                     type="button"
                     onClick={resetForm}
@@ -401,12 +426,10 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setShowPreview((prev) => !prev)}
-                    className={`flex h-8 shrink-0 whitespace-nowrap items-center gap-1.5 rounded-lg border px-3 text-xs font-normal transition-colors cursor-pointer shadow-2xs ${
-                      showPreview
-                        ? "border-[#CBD5E1] bg-slate-100 text-[#334155] hover:bg-slate-200"
-                        : "border-[#BFDBFE] bg-[#EFF6FF] text-[#2563EB] hover:bg-blue-100/70"
-                    }`}
+                    onClick={() => setPreviewEnabled(value => !value)}
+                    disabled={!lines.length || isImporting}
+                    aria-pressed={showPreview}
+                    className="flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-blue-200 bg-blue-50 px-3 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {showPreview ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                     <span>{showPreview ? "Ẩn xem trước" : "Xem trước"}</span>
@@ -416,6 +439,7 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
             </section>
 
             {/* Cột phải: Field Mapping */}
+            <div className="flex min-w-0 flex-col gap-3">
             <section className="flex min-h-[380px] flex-col justify-between rounded-xl border border-[#E2E8F0] bg-white p-4 sm:p-5 shadow-[0_1px_2px_0_rgba(0,0,0,0.04)]">
               <div>
                 <div className="mb-3 flex items-center justify-between border-b border-[#F1F5F9] pb-2.5">
@@ -477,10 +501,39 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
                 </p>
               )}
             </section>
+            <section aria-label="Gán danh mục khi import" className="rounded-xl border border-blue-100 bg-blue-50/30 p-3 text-xs">
+              <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700">
+                <input type="checkbox" checked={assignCategory} disabled={isImporting}
+                  onChange={event => setAssignCategory(event.target.checked)} className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-blue-600 disabled:cursor-not-allowed" />
+                Gán vào danh mục tài khoản
+              </label>
+              <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
+                <div className="min-w-[140px] flex-1">
+                  <CategorySelect categories={categories} value={categoryId} onChange={setCategoryId}
+                    disabled={!assignCategory || isImporting || categoriesLoading || Boolean(categoriesError)}
+                    placeholder={categoriesLoading ? "Đang tải danh mục…" : "Chọn danh mục"} ariaLabel="Danh mục cho tài khoản import" />
+                </div>
+                <button type="button" disabled={!assignCategory || isImporting || !onCreateCategory}
+                  onClick={event => setShowCategoryEditor(event.currentTarget)}
+                  className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-blue-200 bg-white px-2 text-xs font-medium text-blue-600 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50">
+                  <Plus className="h-3.5 w-3.5" />Tạo mới
+                </button>
+              </div>
+              {assignCategory && categoriesError && <p role="alert" className="mt-2 text-xs text-red-600">{categoriesError}{" "}
+                <button type="button" disabled={isImporting || categoriesLoading} onClick={onRetryCategories} className="underline">Thử lại</button>
+              </p>}
+              {assignCategory && !categoriesLoading && !categoriesError && !categories.length && <p className="mt-2 text-xs text-slate-500">Chưa có danh mục. Bấm “Tạo mới” để thêm danh mục trước khi import.</p>}
+              {assignCategory && categoryId !== null && !categoriesLoading && !categoriesError && !categories.some(category => category.id === categoryId) && <p role="alert" className="mt-2 text-xs text-red-600">Danh mục đã chọn không còn tồn tại. Vui lòng chọn lại.</p>}
+            </section>
+            </div>
           </div>
 
           {/* Phần xem trước Preview Table */}
-          <section className="mt-4">
+          <section
+            aria-hidden={!showPreview}
+            className={`grid transition-[grid-template-rows,opacity,margin] duration-300 ease-in-out motion-reduce:transition-none ${showPreview ? "mt-4 grid-rows-[1fr] opacity-100" : "mt-0 grid-rows-[0fr] opacity-0 pointer-events-none"}`}
+          >
+            <div className="min-h-0 overflow-hidden">
             <div className={`${showPreview ? "mb-2.5" : ""} flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-xs`}>
               <h3 className="flex items-center gap-2 font-bold text-slate-800">
                 <Eye className="h-4 w-4 text-primary" />Xem trước cấu trúc 11 trường (3 dòng đầu)
@@ -531,7 +584,6 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
               </div>
             </div>
 
-            {showPreview && (
               <div className="overflow-x-auto rounded-xl border border-border bg-white shadow-subtle [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:bg-[#4B8EFF]/60 hover:[&::-webkit-scrollbar-thumb]:bg-[#2563EB] [&::-webkit-scrollbar-thumb]:rounded-full">
                 <table className="w-full min-w-[1180px] text-left border-collapse text-xs">
                   <thead className="h-9 border-b border-border bg-slate-50 font-bold uppercase text-[11px] text-slate-600">
@@ -589,7 +641,7 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
                   </tbody>
                 </table>
               </div>
-            )}
+            </div>
           </section>
 
           {/* Tuỳ chọn Checkbox */}
@@ -635,12 +687,12 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
             <button
               type="button"
               onClick={handleImport}
-              disabled={isImporting || !rawText.trim()}
+              disabled={isImporting || !rawText.trim() || (assignCategory && (categoriesLoading || Boolean(categoriesError) || !categories.some(category => category.id === categoryId)))}
               className="flex h-9 min-w-[140px] items-center justify-center gap-1.5 rounded-md bg-primary hover:bg-primary-hover px-4 text-xs font-semibold text-white shadow-sm transition cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 active:scale-95"
             >
               {isImporting ? (
                 <>
-                  <CircleCheck className="h-4 w-4 animate-spin" />
+                  <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
                   <span>Đang import...</span>
                 </>
               ) : (
@@ -653,6 +705,14 @@ export default function DynamicImportModal({ isOpen, onClose, onImport }) {
           </div>
         </footer>
       </div>
+
+      {showCategoryEditor && <CategoryEditor anchor={showCategoryEditor} category={null} onClose={() => setShowCategoryEditor(false)} onSave={async data => {
+        const category = await onCreateCategory(data);
+        setCategoryId(category.id);
+        setAssignCategory(true);
+        setShowCategoryEditor(false);
+        toast.success(`Đã tạo danh mục “${category.name}”.`, "DANH MỤC");
+      }} />}
 
       <ConfirmDialog
         isOpen={showOverwriteConfirm}

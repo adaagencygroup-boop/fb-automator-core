@@ -14,7 +14,7 @@ P = "modules.module_02_account_manager"
 class OperationTests(unittest.TestCase):
     def test_snapshot_is_scoped_public_ordered_and_expires(self):
         account = SimpleNamespace(login_status="LOGGED_IN", status="LIVE", status_checked_at=datetime.now(),
-                                  last_login_at=datetime.now(), profile_name="Name", avatar_url=None,
+                                  last_login_at=datetime.now(), first_login_at=datetime.now(), profile_name="Name", avatar_url=None,
                                   cookie="secret", password="secret", token="secret")
         with owner_scope("alice"), patch(P + ".services.events.broadcast") as broadcast:
             op = operations.create("login", ["123", "456"])

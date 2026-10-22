@@ -15,6 +15,7 @@ _FIELDS = ("cookie", "token", "email", "mail_recovery", "token_hotmail", "client
 def serialize(account, detail=False):
     result = {"id": account.id, "owner_username": account.user_id, "user_id": account.user_id, "uid": account.uid}
     result["avatar_url"] = account.avatar_url or None
+    result["category_id"] = account.category_id
     for name in _FIELDS:
         result[name] = getattr(account, name) or ""
     for name in ("password", "two_fa", "pass_mail"):
@@ -26,6 +27,7 @@ def serialize(account, detail=False):
     result["login_status"] = {"LOGGED_IN": "logged_in", "ERROR": "failed"}.get(account.login_status, "not_logged_in")
     result["status"] = account.status.lower() if account.status_checked_at and account.status in ("LIVE", "DIE") else None
     result["last_login_at"] = account.last_login_at.replace(tzinfo=timezone.utc).isoformat() if account.last_login_at else None
+    result["first_login_at"] = account.first_login_at.replace(tzinfo=timezone.utc).isoformat() if account.first_login_at else None
     return result
 
 def require_account(db, uid):
@@ -79,6 +81,8 @@ def save_single_account(db, item):
                 old_path.rename(new_path)
                 moved = True
         data = item.model_dump(exclude_unset=True, exclude={"owner_username", "original_uid"})
+        from ..database.category_repository import CategoryRepository
+        CategoryRepository.validate_assignment(db, data)
         data["profile_path"] = str(profile_path(item.uid))
         Repo.apply_fields(account, data)
         account.uid = item.uid

@@ -9,9 +9,9 @@ from ..database.repository import AccountRepository as Repo
 from ..services import account_service as accounts, status_service, login_service
 from ..services.browser_service import queue_open_browser
 from ..services.events import event_stream
-from ..services import operations
+from ..services import operations, category_service as categories
 from ..utils.paths import validate_uid
-from .schemas import SingleAccountInput, ImportRequest, UidsRequest, DeleteAccountsRequest, LoginRequest, OpenBrowserRequest, TestProxyRequest
+from .schemas import SingleAccountInput, ImportRequest, UidsRequest, DeleteAccountsRequest, LoginRequest, OpenBrowserRequest, TestProxyRequest, CategoryCreate, CategoryUpdate, BulkSetCategoryRequest
 
 router = APIRouter(prefix="/api/accounts", tags=["Module 02: Account Manager"])
 
@@ -38,7 +38,7 @@ async def scoped_owner(request: Request):
         request.query_params.get("user_id"),
         request.query_params.get("owner_username"),
     ]
-    if request.method == "POST":
+    if request.method in ("POST", "PATCH"):
         try:
             body = await request.json()
         except Exception:
@@ -77,14 +77,16 @@ def checked_uid(uid):
 
 @router.get("")
 @router.get("/", include_in_schema=False)
-async def list_accounts(db: Session = Depends(get_db)):
-    return [accounts.serialize(a) for a in Repo.get_all(db)]
+async def list_accounts(db: Session = Depends(get_db), category_id: int | None = Query(None, ge=1), uncategorized: bool = False):
+    query = categories.filter_accounts(db, Repo.query(db), category_id, uncategorized)
+    from ..database.models import Account
+    return [accounts.serialize(a) for a in query.order_by(Account.id.desc()).all()]
 
 @router.get("/page")
-async def page_accounts(limit: int = Query(10, ge=1), cursor: int | None = Query(None, ge=1), search: str = "", status: str = "all", login_status: str = "all", active_only: bool = False, db: Session = Depends(get_db)):
+async def page_accounts(limit: int = Query(10, ge=1), cursor: int | None = Query(None, ge=1), search: str = "", status: str = "all", login_status: str = "all", active_only: bool = False, db: Session = Depends(get_db), category_id: int | None = Query(None, ge=1), uncategorized: bool = False):
     from sqlalchemy import and_, or_, func
     from ..database.models import Account
-    query = Repo.query(db)
+    query = categories.filter_accounts(db, Repo.query(db), category_id, uncategorized)
     if active_only:
         # Match the farm picker: a checked LIVE profile OR a logged-in session.
         query = query.filter(or_(
@@ -113,11 +115,31 @@ async def page_accounts(limit: int = Query(10, ge=1), cursor: int | None = Query
     return {"accounts": [accounts.serialize(row) for row in rows], "total": total, "next_cursor": rows[-1].id if rows and has_more else None, "has_more": has_more}
 
 @router.get("/stats")
-async def account_stats(db: Session = Depends(get_db)):
+async def account_stats(db: Session = Depends(get_db), category_id: int | None = Query(None, ge=1), uncategorized: bool = False):
     from ..database.models import Account
-    query = Repo.query(db)
+    query = categories.filter_accounts(db, Repo.query(db), category_id, uncategorized)
     checked = query.filter(Account.status_checked_at.isnot(None))
     return {"total": query.count(), "live": checked.filter(Account.status == "LIVE").count(), "die": checked.filter(Account.status == "DIE").count()}
+
+@router.get("/categories")
+async def list_categories(db: Session = Depends(get_db)):
+    return categories.list_categories(db)
+
+@router.post("/categories", status_code=201)
+async def create_category(req: CategoryCreate, db: Session = Depends(get_db)):
+    return categories.save_category(db, req)
+
+@router.patch("/categories/{category_id}")
+async def update_category(category_id: int, req: CategoryUpdate, db: Session = Depends(get_db)):
+    return categories.save_category(db, req, category_id)
+
+@router.delete("/categories/{category_id}")
+async def delete_category(category_id: int, db: Session = Depends(get_db)):
+    return categories.delete_category(db, category_id)
+
+@router.post("/bulk-set-category")
+async def bulk_set_category(req: BulkSetCategoryRequest, db: Session = Depends(get_db)):
+    return categories.bulk_set_category(db, req)
 
 @router.post("/existing-uids")
 async def existing_uids(req: UidsRequest, db: Session = Depends(get_db)):
@@ -228,8 +250,8 @@ async def stream_alias():
 
 @alias_router.get("/accounts")
 @alias_router.get("/accounts/", include_in_schema=False)
-async def list_accounts_alias(db: Session = Depends(get_db)):
-    return await list_accounts(db)
+async def list_accounts_alias(db: Session = Depends(get_db), category_id: int | None = Query(None, ge=1), uncategorized: bool = False):
+    return await list_accounts(db, category_id, uncategorized)
 
 @alias_router.post("/accounts/import")
 async def import_accounts_alias(req: ImportRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
