@@ -117,3 +117,4 @@ uploads/
 AGENTS.md
 .agents
 ngrok.exe
+.next/
