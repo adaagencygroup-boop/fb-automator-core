@@ -73,16 +73,21 @@ class VerifyAfterActionTests(SeedingTestCase):
 
 
 class PauseTests(SeedingTestCase):
-    def test_same_post_actions_only_pause_briefly(self):
+    def test_same_post_actions_rest_with_the_configured_delay(self):
+        # "Thời gian nghỉ giữa 2 lần tương tác" áp dụng cả giữa Like -> Bình luận -> Chia sẻ trên cùng 1 bài
         self.add_accounts(1)
         cid = self.create("POST", ["https://web.facebook.com/share/p/AAAA1111"], actions=["REACT", "COMMENT", "SHARE"],
                           reactions=["LIKE"], comments=["Hay"], account_count=1,
-                          delay_seconds_min=30, delay_seconds_max=60)["campaign_ids"][0]
+                          delay_seconds_min=10, delay_seconds_max=20)["campaign_ids"][0]
         sleeps = []
         with patch.object(R.time, "sleep", sleeps.append):
-            R._process_account_tasks(cid, self.tasks(cid)[0].account_uid, [t.id for t in self.tasks(cid)], 30, 60)
+            R._process_account_tasks(cid, self.tasks(cid)[0].account_uid, [t.id for t in self.tasks(cid)], 10, 20)
         self.assertEqual([a for a, _ in FakeBot.calls], ["REACT", "COMMENT", "SHARE"])
-        self.assertTrue(all(s <= 4 for s in sleeps), sleeps)
+        self.assertEqual(len(sleeps), 3, sleeps)
+        self.assertTrue(all(10 <= s <= 20 for s in sleeps[:2]), sleeps)   # 2 lần nghỉ giữa 3 thao tác
+        self.assertEqual(sleeps[2], 1.5)                                    # xong hết: nghỉ ngắn rồi đóng Chrome
+        rest_logs = [m for _, m in self.logs if "trước thao tác tiếp theo trên bài viết này" in m]
+        self.assertEqual(len(rest_logs), 2)
 
     def test_backwards_delay_does_not_crash_the_account_thread(self):
         self.add_accounts(1)

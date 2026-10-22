@@ -1509,18 +1509,19 @@ def _process_account_tasks(
 
             db.commit()
 
-            # Còn tác vụ tiếp theo: cùng bài viết thì làm tiếp ngay trên trang đang mở (chỉ nghỉ ngắn như người thật);
-            # sang bài viết khác mới nghỉ an toàn delay_min..delay_max giây.
+            # Còn tác vụ tiếp theo: nghỉ ngẫu nhiên delay_min..delay_max giây theo cấu hình "Thời gian nghỉ giữa
+            # 2 lần tương tác", kể cả giữa các thao tác trên cùng 1 bài viết (Like -> Bình luận -> Chia sẻ).
+            # Cùng bài viết thì bot vẫn ở nguyên trang đang mở, không mở lại bài (xem PostSeedingFlow._open_post).
             if idx < len(sorted_task_ids) - 1:
                 next_task = task_by_id.get(sorted_task_ids[idx + 1])
-                if next_task and next_task.target_id == ut.target_id:
-                    time.sleep(random.uniform(2.0, 4.0))
-                else:
-                    delay_s = random.randint(delay_min, delay_max)
-                    broadcast(
-                        "info", f"[{uid}] Nghỉ an toàn {delay_s}s trước tác vụ tiếp theo..."
-                    )
-                    time.sleep(delay_s)
+                same_post = next_task is not None and next_task.target_id == ut.target_id
+                delay_s = random.randint(delay_min, delay_max)
+                broadcast(
+                    "info",
+                    f"[{uid}] Nghỉ an toàn {delay_s}s trước "
+                    + ("thao tác tiếp theo trên bài viết này..." if same_post else "tác vụ tiếp theo..."),
+                )
+                time.sleep(delay_s)
             else:
                 # Đã hoàn thành toàn bộ tác vụ của nick, nghỉ 1.5s rồi đóng trình duyệt an toàn
                 time.sleep(1.5)
@@ -1790,8 +1791,8 @@ def _campaign_status(campaign_id: int) -> str | None:
 
 
 def _rest_before_next_post(chain: list[int], next_cid: int) -> bool:
-    """Nghỉ delay_seconds_min..max giây (cấu hình của chiến dịch) trước khi sang bài viết tiếp theo trong lô,
-    vì trong cùng 1 bài viết các nick chỉ nghỉ ngắn giữa Like / Bình luận / Chia sẻ.
+    """Nghỉ delay_seconds_min..max giây (cấu hình của chiến dịch) trước khi sang bài viết tiếp theo trong lô
+    (mỗi bài là 1 chiến dịch, các nick mở Chrome lại cho bài sau).
     Kiểm tra yêu cầu dừng trong lúc nghỉ. Trả về False nếu lô bị dừng."""
     db = SessionLocal()
     try:
