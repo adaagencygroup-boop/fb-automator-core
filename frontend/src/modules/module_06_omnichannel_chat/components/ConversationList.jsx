@@ -17,10 +17,10 @@ const formatTime = (iso) =>
 /** "KH: 29224347..." — rút gọn mã khách hàng như Figma */
 const shortCustomer = (id) => (String(id).length > 8 ? `${String(id).slice(0, 8)}...` : id);
 
-function Tabs({ tab, onTabChange, notificationCount, onBack }) {
+function Tabs({ tab, onTabChange, notificationCount, hasUnread = false, onBack }) {
   const tabs = [
     { id: "conversations", label: "Hội thoại" },
-    { id: "notifications", label: `Thông báo (${notificationCount})`, dot: notificationCount > 0 },
+    { id: "notifications", label: `Thông báo (${notificationCount})`, dot: hasUnread },
   ];
   return (
     <div role="tablist" aria-label="Hội thoại và thông báo" className="flex border-b border-slate-200 shrink-0">
@@ -199,7 +199,8 @@ export default function ConversationList({
       <Tabs
         tab={tab}
         onTabChange={onTabChange}
-        notificationCount={notifications.filter((n) => n.unread).length}
+        notificationCount={notifications.length}
+        hasUnread={notifications.some((n) => n.unread)}
         onBack={onBack}
       />
 

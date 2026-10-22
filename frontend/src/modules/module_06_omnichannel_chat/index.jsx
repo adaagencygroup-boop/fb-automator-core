@@ -322,6 +322,12 @@ export default function OmnichannelChatModule() {
     return [...list].sort((a, b) => dir * (new Date(a.updatedAt) - new Date(b.updatedAt)));
   }, [conversations, activePageId, filter, starOnly, selectedTag, sort]);
 
+  const visibleNotifications = useMemo(() => {
+    let list = notifications;
+    if (activePageId) list = list.filter((n) => String(n.pageId) === String(activePageId));
+    return list;
+  }, [notifications, activePageId]);
+
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null;
 
   const updateConversation = (id, patch) =>
@@ -601,7 +607,7 @@ export default function OmnichannelChatModule() {
       sort={sort}
       onSortChange={setSort}
       conversations={visibleConversations}
-      notifications={notifications}
+      notifications={visibleNotifications}
       pagesById={pagesById}
       activeConversationId={activeConversationId}
       onSelectConversation={selectConversation}
