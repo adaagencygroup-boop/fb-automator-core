@@ -91,7 +91,7 @@ def is_valid_group_entry(line: str) -> bool:
     return False
 
 
-def get_posted_group_keys() -> Set[str]:
+def get_posted_group_keys(owner: str | None = None) -> Set[str]:
     """
     Lấy danh sách các group_key đã đăng thành công trong lịch sử từ DB (tránh spam trùng).
     Tương tự history_file trong FaceBook_Post_Group.py.
@@ -101,7 +101,12 @@ def get_posted_group_keys() -> Set[str]:
         from core.database.connection import db
 
         rows = db.fetch_all(
-            "SELECT DISTINCT group_key, group_url FROM group_session_logs WHERE status IN ('SUCCESS', 'PENDING_APPROVAL')"
+            """SELECT DISTINCT log.group_key, log.group_url
+               FROM group_session_logs log
+               JOIN group_sessions session ON session.id = log.session_id
+               WHERE session.owner_key IS NOT DISTINCT FROM ?
+                 AND log.status IN ('SUCCESS', 'PENDING_APPROVAL')""",
+            (owner,),
         )
         for r in rows or []:
             if r.get("group_key"):
@@ -111,11 +116,13 @@ def get_posted_group_keys() -> Set[str]:
                 posted.add(cleaned.lower())
     except Exception as exc:
         # Nếu bảng chưa khởi tạo hoặc lỗi kết nối, bỏ qua không làm crash
-        pass
+        logger.warning("Cannot read posted-group history", exc_info=True)
     return posted
 
 
-def parse_group_file_content(content: str, filter_posted: bool = False) -> Dict[str, Any]:
+def parse_group_file_content(
+    content: str, filter_posted: bool = False, owner: str | None = None
+) -> Dict[str, Any]:
     """
     Phân tích nội dung file link nhóm (.txt, .csv).
     - Tách từng dòng
@@ -170,7 +177,7 @@ def parse_group_file_content(content: str, filter_posted: bool = False) -> Dict[
             invalid_count += 1
 
     # Kiểm tra lịch sử đã đăng nếu yêu cầu
-    posted_set = get_posted_group_keys() if filter_posted else set()
+    posted_set = get_posted_group_keys(owner) if filter_posted else set()
     already_posted_count = 0
 
     parsed_groups: List[Dict[str, Any]] = []
@@ -229,7 +236,7 @@ def remove_accents(input_str: str) -> str:
     return "".join(c for c in nfkd if not unicodedata.combining(c)).lower().replace("đ", "d").replace("Đ", "d")
 
 
-def get_posted_group_records() -> List[Dict[str, Any]]:
+def get_posted_group_records(owner: str | None = None) -> List[Dict[str, Any]]:
     """
     Lấy danh sách chi tiết các nhóm Facebook thực tế đã từng chạy thành công từ bảng group_session_logs.
     """
@@ -238,10 +245,18 @@ def get_posted_group_records() -> List[Dict[str, Any]]:
         from core.database.connection import db
 
         rows = db.fetch_all(
-            """SELECT DISTINCT group_key, group_url, group_name, member_count, status, finished_at 
-               FROM group_session_logs 
-               WHERE status IN ('SUCCESS', 'PENDING_APPROVAL')
-               ORDER BY finished_at DESC LIMIT 100"""
+            """SELECT * FROM (
+                   SELECT DISTINCT ON (log.group_key)
+                       log.group_key, log.group_url, log.group_name, log.member_count,
+                       log.status, log.finished_at
+                   FROM group_session_logs log
+                   JOIN group_sessions session ON session.id = log.session_id
+                   WHERE session.owner_key IS NOT DISTINCT FROM ?
+                     AND log.status IN ('SUCCESS', 'PENDING_APPROVAL')
+                   ORDER BY log.group_key, log.finished_at DESC
+               ) latest
+               ORDER BY finished_at DESC LIMIT 100""",
+            (owner,),
         ) or []
         for idx, r in enumerate(rows, 1):
             url = clean_group_url(str(r.get("group_url") or ""))
@@ -259,7 +274,7 @@ def get_posted_group_records() -> List[Dict[str, Any]]:
                 "already_posted": True,
             })
     except Exception:
-        pass
+        logger.warning("Cannot read detailed group history", exc_info=True)
     return records
 
 
@@ -269,7 +284,9 @@ def get_posted_group_records() -> List[Dict[str, Any]]:
 # =============================================================================
 
 
-def get_scraping_account(account_uid: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_scraping_account(
+    account_uid: Optional[str] = None, owner: str | None = None
+) -> Optional[Dict[str, Any]]:
     """
     Lấy thông tin tài khoản dùng để cào dữ liệu nhóm thật:
     - Nếu có account_uid truyền vào, ưu tiên lấy tài khoản đó.
@@ -280,20 +297,26 @@ def get_scraping_account(account_uid: Optional[str] = None) -> Optional[Dict[str
 
         if account_uid and str(account_uid).strip():
             acc = db.fetch_one(
-                "SELECT id, uid, user_id, cookie, proxy, profile_name, status FROM accounts WHERE uid = %s LIMIT 1",
-                (str(account_uid).strip(),),
+                """SELECT id, uid, user_id, cookie, proxy, profile_name, status
+                   FROM accounts WHERE uid = ? AND user_id IS NOT DISTINCT FROM ? LIMIT 1""",
+                (str(account_uid).strip(), owner),
             )
             if acc:
                 return acc
         # Ưu tiên tài khoản đầu tiên có cookie hợp lệ và trạng thái LIVE/NEW
         acc = db.fetch_one(
-            "SELECT id, uid, user_id, cookie, proxy, profile_name, status FROM accounts WHERE cookie IS NOT NULL AND status != 'DIE' ORDER BY id ASC LIMIT 1"
+            """SELECT id, uid, user_id, cookie, proxy, profile_name, status FROM accounts
+               WHERE user_id IS NOT DISTINCT FROM ? AND cookie IS NOT NULL AND status != 'DIE'
+               ORDER BY id ASC LIMIT 1""",
+            (owner,),
         )
         if acc:
             return acc
         # Fallback bất kỳ tài khoản đầu tiên nào trong DB
         return db.fetch_one(
-            "SELECT id, uid, user_id, cookie, proxy, profile_name, status FROM accounts ORDER BY id ASC LIMIT 1"
+            """SELECT id, uid, user_id, cookie, proxy, profile_name, status FROM accounts
+               WHERE user_id IS NOT DISTINCT FROM ? ORDER BY id ASC LIMIT 1""",
+            (owner,),
         )
     except Exception as e:
         logger.warning(f"Lỗi khi truy vấn tài khoản cào nhóm từ CSDL: {e}")
@@ -304,6 +327,7 @@ def search_facebook_via_browser(
     keyword: str,
     account_uid: Optional[str] = None,
     max_results: int = 50,
+    owner: str | None = None,
 ) -> List[Dict[str, Any]]:
     """
     Quét trực tiếp nhóm Facebook bằng tài khoản thật qua Chrome.
@@ -316,7 +340,7 @@ def search_facebook_via_browser(
     if not clean_keyword:
         return []
 
-    account = get_scraping_account(account_uid)
+    account = get_scraping_account(account_uid, owner)
     if not account:
         logger.warning("Không tìm thấy tài khoản Facebook nào trong CSDL để cào dữ liệu nhóm.")
         return []
@@ -564,6 +588,10 @@ def search_facebook_via_browser(
                 pass
 
 
+# Search results must come from Facebook. Empty scraping results stay empty.
+REAL_FACEBOOK_GROUPS: tuple[dict[str, Any], ...] = ()
+
+
 def search_facebook_groups(
     keyword: str,
     max_results: int = 50,
@@ -571,6 +599,7 @@ def search_facebook_groups(
     group_type: str = "all",
     frequency_filter: str = "all",
     account_uid: Optional[str] = None,
+    owner: str | None = None,
 ) -> List[Dict[str, Any]]:
     """
     Tìm kiếm nhóm Facebook thật theo từ khóa và bộ lọc.
@@ -583,7 +612,7 @@ def search_facebook_groups(
         return []
 
     # 1. Cào trực tiếp nhóm Facebook thật bằng trình duyệt Chrome qua tài khoản đầu tiên / chỉ định
-    browser_results = search_facebook_via_browser(clean_keyword, account_uid, max_results * 2)
+    browser_results = search_facebook_via_browser(clean_keyword, account_uid, max_results * 2, owner)
     if browser_results:
         filtered: List[Dict[str, Any]] = []
         for grp in browser_results:
@@ -625,7 +654,7 @@ def search_facebook_groups(
             return filtered
 
     # 2. Dự phòng: Tìm kiếm nhóm Facebook từ kho dữ liệu nhóm đã chuẩn hóa (nếu cào trực tiếp không có kết quả)
-    posted_set = get_posted_group_keys()
+    posted_set = get_posted_group_keys(owner)
     norm_kw = remove_accents(clean_keyword)
     kw_tokens = [t.strip() for t in re.split(r"[,;\s]+", norm_kw) if len(t.strip()) >= 2]
 
@@ -710,24 +739,6 @@ def search_facebook_groups(
             results.append(grp)
         if len(results) >= max_results:
             break
-
-    # Nếu từ khóa quá đặc thù không khớp nhóm có sẵn trong danh mục, tạo thực thể định danh sạch theo URL thật
-    if not results and clean_keyword:
-        slug_base = re.sub(r"[^\w\s-]", "", clean_keyword, flags=re.UNICODE).strip().replace(" ", "")
-        if not slug_base:
-            slug_base = "group"
-        url = f"facebook.com/groups/{slug_base}"
-        results.append({
-            "id": "01",
-            "key": f"group_{slug_base}",
-            "name": f"Hội {clean_keyword.title()}",
-            "url": url,
-            "uid": slug_base,
-            "frequency": "15 bài viết/ngày",
-            "members": "50.0K",
-            "privacy": "public",
-            "already_posted": f"group_{slug_base}".lower() in posted_set or url.lower() in posted_set,
-        })
 
     return results
 

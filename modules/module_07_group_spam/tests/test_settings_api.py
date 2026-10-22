@@ -7,9 +7,9 @@ from unittest.mock import Mock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from modules.module_07_group_spam.api.router import router
-from modules.module_07_group_spam.ai_service import list_gemini_models
-from modules.module_07_group_spam.settings import GroupSettingsStore, group_settings
+from modules.module_07_group_spam.app.routes.router import router
+from modules.module_07_group_spam.app.services.ai_service import list_gemini_models
+from modules.module_07_group_spam.app.core.settings import GroupSettingsStore, group_settings
 
 
 class GroupSettingsStoreTests(unittest.TestCase):
@@ -17,8 +17,8 @@ class GroupSettingsStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
             store = GroupSettingsStore(path)
-            with patch("modules.module_07_group_spam.settings.encrypt_data", return_value="encrypted-value"), \
-                 patch("modules.module_07_group_spam.settings.decrypt_data", return_value="sk-real-secret"):
+            with patch("modules.module_07_group_spam.app.core.settings.encrypt_data", return_value="encrypted-value"), \
+                 patch("modules.module_07_group_spam.app.core.settings.decrypt_data", return_value="sk-real-secret"):
                 public = store.save(
                     model="gpt-4o", api_key="sk-real-secret",
                     threads=3, rest_minutes=12, max_posts=25,
@@ -33,8 +33,8 @@ class GroupSettingsStoreTests(unittest.TestCase):
     def test_dynamic_gemini_model_is_supported(self):
         with tempfile.TemporaryDirectory() as directory:
             store = GroupSettingsStore(Path(directory) / "settings.json")
-            with patch("modules.module_07_group_spam.settings.encrypt_data", return_value="cipher"), \
-                 patch("modules.module_07_group_spam.settings.decrypt_data", return_value="google-key"):
+            with patch("modules.module_07_group_spam.app.core.settings.encrypt_data", return_value="cipher"), \
+                 patch("modules.module_07_group_spam.app.core.settings.decrypt_data", return_value="google-key"):
                 public = store.save(
                     model="gemini-custom-preview-01", api_key="google-key",
                     threads=1, rest_minutes=0, max_posts=1,
@@ -50,7 +50,7 @@ class GeminiModelDiscoveryTests(unittest.TestCase):
             {"name": "models/gemini-embedding-001", "displayName": "Embedding", "supportedGenerationMethods": ["embedContent"]},
             {"name": "models/gemini-3.8-flash-tts", "displayName": "TTS", "supportedGenerationMethods": ["generateContent"]},
         ]}
-        with patch("modules.module_07_group_spam.ai_service.requests.get", return_value=response):
+        with patch("modules.module_07_group_spam.app.services.ai_service.requests.get", return_value=response):
             models = list_gemini_models("google-key")
         self.assertEqual(models, [{"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"}])
 
@@ -69,8 +69,8 @@ class GroupSettingsApiTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_round_trip_settings_without_exposing_key(self):
-        with patch("modules.module_07_group_spam.settings.encrypt_data", return_value="cipher"), \
-             patch("modules.module_07_group_spam.settings.decrypt_data", return_value="AIza-example-key"):
+        with patch("modules.module_07_group_spam.app.core.settings.encrypt_data", return_value="cipher"), \
+             patch("modules.module_07_group_spam.app.core.settings.decrypt_data", return_value="AIza-example-key"):
             response = self.client.put("/api/groups/settings", json={
                 "model": "gemini-3.8-flash",
                 "api_key": "AIza-example-key",
@@ -82,11 +82,12 @@ class GroupSettingsApiTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["model"], "gemini-3.8-flash")
         self.assertTrue(body["api_key_configured"])
-        self.assertEqual(body["api_key"], "AIza-example-key")
+        self.assertNotIn("api_key", body)
+        self.assertNotIn("key", body["providers"]["gemini"])
 
     def test_deepseek_v4_flash_model_is_supported(self):
-        with patch("modules.module_07_group_spam.settings.encrypt_data", return_value="cipher"), \
-             patch("modules.module_07_group_spam.settings.decrypt_data", return_value="sk-deepseek-key"):
+        with patch("modules.module_07_group_spam.app.core.settings.encrypt_data", return_value="cipher"), \
+             patch("modules.module_07_group_spam.app.core.settings.decrypt_data", return_value="sk-deepseek-key"):
             response = self.client.put("/api/groups/settings", json={
                 "model": "deepseek-v4-flash",
                 "api_key": "sk-deepseek-key",
@@ -119,15 +120,15 @@ class GroupSettingsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
 
     def test_connection_check_uses_saved_or_supplied_key(self):
-        with patch("modules.module_07_group_spam.api.router.group_settings.get_api_key", return_value="secret"), \
-             patch("modules.module_07_group_spam.api.router.test_connection") as check:
+        with patch("modules.module_07_group_spam.app.routes.settings.group_settings.get_api_key", return_value="secret"), \
+             patch("modules.module_07_group_spam.app.routes.settings.test_connection") as check:
             response = self.client.post("/api/groups/settings/test", json={"model": "gpt-4o"})
         self.assertEqual(response.status_code, 200)
         check.assert_called_once_with("gpt-4o", "secret")
 
     def test_generate_posts_returns_provider_output(self):
-        with patch("modules.module_07_group_spam.api.router.group_settings.get_api_key", return_value="secret"), \
-             patch("modules.module_07_group_spam.api.router.generate_posts", return_value=["Bài một", "Bài hai"]):
+        with patch("modules.module_07_group_spam.app.routes.settings.group_settings.get_api_key", return_value="secret"), \
+             patch("modules.module_07_group_spam.app.routes.settings.generate_posts", return_value=["Bài một", "Bài hai"]):
             response = self.client.post("/api/groups/ai/generate-posts", json={
                 "model": "gpt-4o-mini", "prompt": "Chủ đề kiểm thử", "count": 2,
             })
@@ -136,8 +137,8 @@ class GroupSettingsApiTests(unittest.TestCase):
 
     def test_lists_models_visible_to_google_ai_studio_key(self):
         visible = [{"id": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"}]
-        with patch("modules.module_07_group_spam.api.router.group_settings.get_api_key", return_value="secret"), \
-             patch("modules.module_07_group_spam.api.router.list_gemini_models", return_value=visible):
+        with patch("modules.module_07_group_spam.app.routes.settings.group_settings.get_api_key", return_value="secret"), \
+             patch("modules.module_07_group_spam.app.routes.settings.list_gemini_models", return_value=visible):
             response = self.client.post("/api/groups/ai/gemini-models", json={})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"models": visible, "count": 1})

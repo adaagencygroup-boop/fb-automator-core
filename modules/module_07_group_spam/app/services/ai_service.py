@@ -7,12 +7,8 @@ from typing import Any
 
 import requests
 
-from .settings import model_spec
-
-
-OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
-GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
+from ..core.constants import DEEPSEEK_API_URL, GEMINI_API_BASE, OPENAI_RESPONSES_URL
+from ..core.settings import model_spec
 
 
 class AIProviderError(RuntimeError):
@@ -121,7 +117,7 @@ def call_model(model: str, api_key: str, prompt: str, timeout: int = 90) -> str:
         return _call_gemini(spec["api_model"], api_key, prompt, timeout)
     except requests.Timeout as exc:
         raise AIProviderError("Kết nối AI quá thời gian chờ") from exc
-    except requests.ConnectionError as exc:
+    except requests.RequestException as exc:
         raise AIProviderError("Không thể kết nối tới nhà cung cấp AI") from exc
 
 
@@ -148,7 +144,7 @@ def test_connection(model: str, api_key: str) -> None:
             )
     except requests.Timeout as exc:
         raise AIProviderError("Kiểm tra API quá thời gian chờ") from exc
-    except requests.ConnectionError as exc:
+    except requests.RequestException as exc:
         raise AIProviderError("Không thể kết nối tới nhà cung cấp AI") from exc
     if response.status_code != 200:
         raise _request_error(response)
@@ -193,7 +189,7 @@ def list_gemini_models(api_key: str) -> list[dict[str, str]]:
                 break
     except requests.Timeout as exc:
         raise AIProviderError("Tải danh sách model Google quá thời gian chờ") from exc
-    except requests.ConnectionError as exc:
+    except requests.RequestException as exc:
         raise AIProviderError("Không thể kết nối tới Google AI") from exc
     unique = {item["id"]: item for item in models}
     return sorted(unique.values(), key=lambda item: item["id"], reverse=True)

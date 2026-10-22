@@ -12,13 +12,11 @@ import uuid
 from typing import Any, Callable
 
 from modules.module_02_account_manager.context import owner_scope
-
-
-TERMINAL_STATES = {"COMPLETED", "PARTIAL", "STOPPED", "FAILED"}
+from ..core.constants import BLOCK_TAGS, TERMINAL_STATES
 
 
 class _TextExtractor(HTMLParser):
-    block_tags = {"p", "div", "h1", "h2", "h3", "blockquote", "li", "br", "hr"}
+    block_tags = BLOCK_TAGS
 
     def __init__(self):
         super().__init__()
@@ -403,6 +401,9 @@ class CampaignManager:
 
     def start(self, payload: dict[str, Any], owner: str | None) -> dict[str, Any]:
         with self.lock:
+            terminal_ids = [job_id for job_id, item in self.jobs.items() if item.status in TERMINAL_STATES]
+            for stale_id in terminal_ids[:-100]:
+                self.jobs.pop(stale_id, None)
             active_id = self.active_by_owner.get(owner)
             active = self.jobs.get(active_id) if active_id else None
             if active and active.status not in TERMINAL_STATES:
@@ -582,7 +583,7 @@ class CampaignManager:
                         result = poster.post(group, posts[post_index], media)
                         result["join_status"] = join_result["status"]
                         self._advance_step(job)
-                        self._record_result(job, uid, group, result)
+                        self._record_result(job, account, group, result)
                     except InterruptedError:
                         raise
                     except Exception as exc:
@@ -590,7 +591,7 @@ class CampaignManager:
                             self._advance_step(job, 2)
                         else:
                             self._advance_step(job)
-                        self._record_result(job, uid, group, {
+                        self._record_result(job, account, group, {
                             "status": "FAILED", "message": str(exc),
                             "join_status": join_result.get("status") if join_result else "FAILED",
                         })
@@ -602,11 +603,17 @@ class CampaignManager:
         except InterruptedError:
             raise
         except Exception as exc:
-            remaining = groups if not job.cancel.is_set() else []
+            completed_keys = {
+                result["group_key"] for result in job.results
+                if result["account_uid"] == uid
+            }
+            remaining = [
+                group for group in groups if _group_key(group) not in completed_keys
+            ] if not job.cancel.is_set() else []
             job.log("ERROR", f"[{uid}] {exc}")
             for group in remaining:
                 self._advance_step(job, 2)
-                self._record_result(job, uid, group, {"status": "FAILED", "message": str(exc)})
+                self._record_result(job, account, group, {"status": "FAILED", "message": str(exc)})
 
     @staticmethod
     def _advance_step(job: CampaignJob, count: int = 1) -> None:
@@ -628,9 +635,13 @@ class CampaignManager:
         job.log(level, f"[{uid}] {group_name}: {result.get('message', '')}")
 
     @staticmethod
-    def _record_result(job: CampaignJob, uid: str, group: dict[str, Any], result: dict[str, Any]) -> None:
+    def _record_result(
+        job: CampaignJob, account: dict[str, Any], group: dict[str, Any], result: dict[str, Any]
+    ) -> None:
+        uid = account["uid"]
         item = {
             "account_uid": uid,
+            "account_id": account.get("id"),
             "group_key": _group_key(group),
             "group_name": group.get("name"),
             "group_url": _group_url(group),
@@ -656,29 +667,32 @@ class CampaignManager:
         try:
             from core.database.connection import db
             final_status = job.status if job.status in {"COMPLETED", "PARTIAL", "STOPPED", "FAILED"} else "FAILED"
-            session = db.fetch_one(
-                """INSERT INTO group_sessions
+            with db.session() as cursor:
+                cursor.execute(
+                    db._normalize_query("""INSERT INTO group_sessions
                    (owner_key, action_type, status, total_planned, total_success,
                     total_pending_approval, total_failed, total_skipped, started_at, finished_at)
-                   VALUES (?, 'POST', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
-                (
-                    job.owner, final_status, job.total, job.success, 0, job.failed, job.skipped,
-                    job.started_at, job.finished_at,
-                ),
-            )
-            if not session:
-                return
-            for result in job.results:
-                status = result["status"] if result["status"] in {"SUCCESS", "PENDING_APPROVAL", "FAILED", "SKIPPED"} else "FAILED"
-                db.execute(
-                    """INSERT INTO group_session_logs
-                       (session_id, account_uid, group_key, group_url, group_name, status, result_message)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, 'POST', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"""),
                     (
-                        session["id"], result["account_uid"], result["group_key"], result["group_url"],
-                        result.get("group_name"), status, (result.get("message") or "")[:255],
+                        job.owner, final_status, job.total, job.success, 0, job.failed, job.skipped,
+                        job.started_at, job.finished_at,
                     ),
                 )
+                session = cursor.fetchone()
+                if not session:
+                    return
+                for result in job.results:
+                    status = result["status"] if result["status"] in {"SUCCESS", "PENDING_APPROVAL", "FAILED", "SKIPPED"} else "FAILED"
+                    cursor.execute(
+                        db._normalize_query("""INSERT INTO group_session_logs
+                           (session_id, account_uid, account_id, group_key, group_url, group_name, status, result_message)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""),
+                        (
+                            session["id"], result["account_uid"], result.get("account_id"),
+                            result["group_key"], result["group_url"], result.get("group_name"),
+                            status, (result.get("message") or "")[:255],
+                        ),
+                    )
         except Exception as exc:
             job.log("WARNING", f"Không thể lưu lịch sử chiến dịch: {exc}")
 

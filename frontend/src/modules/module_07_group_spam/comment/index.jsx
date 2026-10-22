@@ -59,12 +59,6 @@ import {
   normalizeAccount,
 } from "../shared/components";
 
-const getProvider = (m) => {
-  if (m === "gemini" || m?.startsWith("gemini-")) return "gemini";
-  if (m?.startsWith("deepseek")) return "deepseek";
-  return "openai";
-};
-
 export default function GroupCommentModule() {
   const mediaInputRef = useRef(null);
   const groupFileInputRef = useRef(null);
@@ -129,9 +123,7 @@ export default function GroupCommentModule() {
     getGroupSettings().then((data) => {
       if (!data) return;
       if (data.model) setModel(data.model);
-      const activeProv = getProvider(data.model);
-      const key = data.api_key || data.providers?.[activeProv]?.key;
-      if (key) setApiKey(key);
+      setApiKey("");
       if (data.threads) setThreads(String(data.threads));
       if (data.rest_minutes) setRestMinutes(String(data.rest_minutes));
     }).catch(() => {});

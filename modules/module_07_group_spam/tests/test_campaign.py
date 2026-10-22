@@ -3,7 +3,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from modules.module_07_group_spam.campaign import CampaignManager, FacebookGroupPoster, html_to_facebook_text
+from modules.module_07_group_spam.app.services.campaign import CampaignManager, FacebookGroupPoster, html_to_facebook_text
 
 
 class FakePoster:

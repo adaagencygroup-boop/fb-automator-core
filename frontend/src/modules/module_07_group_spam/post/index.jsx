@@ -237,10 +237,7 @@ export default function GroupPostModule() {
         setMaxPosts(String(data.max_posts));
         setProviderStatus(data.providers || {});
         const activeProv = getProvider(data.model);
-        const initialKey = data.api_key || data.providers?.[activeProv]?.key || "";
-        if (initialKey) {
-          setApiKey(initialKey);
-        }
+        setApiKey("");
         if (data.providers?.[activeProv]?.configured) {
           setIsSettingsLocked(true);
         }
@@ -367,9 +364,7 @@ export default function GroupPostModule() {
   const handleModelChange = (event) => {
     const newModel = event?.target?.value || event;
     setModel(newModel);
-    const newProvider = getProvider(newModel);
-    const existingKey = providerStatus?.[newProvider]?.key || "";
-    setApiKey(existingKey);
+    setApiKey("");
     setShowApiKey(false);
     setSettingsFeedback(null);
   };
@@ -380,9 +375,7 @@ export default function GroupPostModule() {
     try {
       const result = await saveGroupSettings(normalizedSettings());
       setProviderStatus(result.providers || {});
-      const activeProv = getProvider(model);
-      const savedKeyVal = result.api_key || result.providers?.[activeProv]?.key || apiKey.trim();
-      setApiKey(savedKeyVal);
+      setApiKey("");
       setShowApiKey(false);
       setSettingsFeedback({ type: "success", message: "Đã lưu cấu hình trên máy này" });
       toast.success("Đã lưu cấu hình trên máy này thành công.", "LƯU THÀNH CÔNG");
