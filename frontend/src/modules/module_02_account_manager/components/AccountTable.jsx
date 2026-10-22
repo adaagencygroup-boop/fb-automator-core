@@ -4,6 +4,8 @@ import { isAccountBusy, PHASE_LABELS } from "../utils/account-realtime.mjs";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { attachDragSelection } from "../utils/drag-selection.mjs";
 import AccountDetailPanel from "./AccountDetailPanel";
+import AccountCategoryDropdown from "./AccountCategoryDropdown";
+import styles from "./AccountTable.module.css";
 import CustomSelect from "@/components/ui/custom-select";
 import {
   Check,
@@ -12,12 +14,14 @@ import {
   Eye,
   EyeOff,
   Globe,
+  FolderInput,
   Loader2,
   LogIn,
   Search,
   Trash2,
 } from "lucide-react";
 import { formatVietnamDateTime } from "@/lib/date-utils";
+import { farmingDays } from "../utils/farming-days.mjs";
 
 function CheckStatusIcon({ className = "w-3 h-3 shrink-0" }) {
   return (
@@ -106,7 +110,7 @@ function DetailRow({ account, isClosing, onClosed, onClose }) {
   return (
     <tr className="bg-slate-50/50">
       <td
-        colSpan={8}
+        colSpan={10}
         className={`p-0 overflow-hidden transition-[border-color] ${
           show
             ? "border-b border-[#E2E8F0] duration-[240ms]"
@@ -136,6 +140,7 @@ function DetailRow({ account, isClosing, onClosed, onClose }) {
 }
 
 export default function AccountTable({
+  categories = [], onMoveCategory, onChangeAccountCategory, categoryUnavailable = false,
   accounts = [],
   tableRef, total = 0, hasMore = false, isLoadingMore = false, moreError, onLoadMore, onRetryMore,
   searchTerm, setSearchTerm, accountFilter, setAccountFilter, loginFilter, setLoginFilter,
@@ -163,6 +168,18 @@ export default function AccountTable({
   const [expandedUids, setExpandedUids] = useState(new Set());
   const [closingUids, setClosingUids] = useState(new Set());
   const [copiedUid, setCopiedUid] = useState(null);
+  const [now, setNow] = useState(null);
+  useEffect(() => {
+    const update = () => setNow(Date.now());
+    const timer = setInterval(update, 60000);
+    const onVisibility = () => { if (!document.hidden) update(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    Promise.resolve().then(update);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
   const scrollRef = useRef(null);
   const selectedUidsRef = useRef(selectedUids);
   const sentinelRef = useRef(null);
@@ -272,23 +289,24 @@ export default function AccountTable({
   return (
     <section className="w-full flex flex-col rounded-2xl bg-white border border-[#E2E8F0] shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] overflow-hidden select-none">
       {/* 1. Section - Filter / Toolbar */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 p-5 border-b border-[#E2E8F0] bg-white">
+      <div className={styles.toolbarContainer}>
+      <div className={`${styles.toolbar} gap-3 p-3 border-b border-[#E2E8F0] bg-white`}>
         {/* Search & Dropdowns Container */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1 max-w-3xl">
+        <div className={styles.filters}>
           {/* Search Input */}
-          <div className="relative flex-1 min-w-[220px]">
+          <div className={styles.search}>
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#94A3B8]" />
             <input
               type="text"
               value={searchTerm}
               onChange={handleSearchChange}
               placeholder="Tìm kiếm theo UID, Tên tài khoản..."
-              className="w-full h-10 pl-10 pr-3.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-[#1E293B] placeholder-[#6B7280] text-sm focus:outline-none focus:bg-white focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/15 transition-all"
+              className="w-full h-10 pl-10 pr-3.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-[#1E293B] placeholder-[#6B7280] text-xs font-normal focus:outline-none focus:bg-white focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/15 transition-all"
             />
           </div>
 
           {/* Account Status Filter Dropdown */}
-          <div className="w-full sm:w-48 shrink-0">
+          <div className="min-w-0">
             <CustomSelect
               value={accountFilter}
               onChange={handleAccountFilterChange}
@@ -298,7 +316,7 @@ export default function AccountTable({
           </div>
 
           {/* Login Status Filter Dropdown */}
-          <div className="w-full sm:w-44 shrink-0">
+          <div className="min-w-0">
             <CustomSelect
               value={loginFilter}
               onChange={handleLoginFilterChange}
@@ -309,19 +327,27 @@ export default function AccountTable({
         </div>
 
         {/* Toolbar Action Buttons (Check trạng thái & Xóa) */}
-        <div className="flex items-center gap-2.5 shrink-0 self-end lg:self-auto">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <button type="button" onClick={onMoveCategory}
+            disabled={isLoading || categoryUnavailable || selectedUids.length === 0}
+            title={`Chuyển mục cho ${selectedUids.length} tài khoản đã chọn`}
+            className="flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40">
+            <FolderInput className="h-3.5 w-3.5 shrink-0" />
+            <span>Chuyển mục
+              {selectedUids.length > 0 && <span className="tabular-nums"> ({selectedUids.length})</span>}
+            </span>
+          </button>
           {/* Check Status Button */}
           <button
             type="button"
             onClick={onRefresh}
             disabled={isLoading || isCheckingStatus || selectedUids.length === 0}
-            className="flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] hover:bg-[#D1FAE5] px-3.5 text-xs font-semibold text-[#047857] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
+            className="flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] hover:bg-[#D1FAE5] px-2 text-xs font-semibold text-[#047857] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
             title="Kiểm tra trạng thái Live/Die của các tài khoản đã chọn"
           >
             <CheckStatusIcon className={`w-3 h-3 ${isCheckingStatus ? "animate-spin [animation-direction:reverse]" : ""}`} />
-            <span>
-              {isCheckingStatus ? "Đang kiểm tra..." : "Check trạng thái"}
-              {selectedUids.length > 0 ? ` (${selectedUids.length})` : ""}
+            <span>{isCheckingStatus ? "Đang kiểm tra..." : "Check trạng thái"}
+              {selectedUids.length > 0 && <span className="tabular-nums"> ({selectedUids.length})</span>}
             </span>
           </button>
 
@@ -330,28 +356,34 @@ export default function AccountTable({
             type="button"
             onClick={onBulkDelete}
             disabled={isLoading || selectedUids.length === 0}
-            className="flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#FECDD3] bg-[#FFF1F2] hover:bg-[#FFE4E6] px-3.5 text-xs font-semibold text-[#BE123C] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
+            className="flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[#FECDD3] bg-[#FFF1F2] hover:bg-[#FFE4E6] px-2 text-xs font-semibold text-[#BE123C] transition disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-2xs"
             title="Xóa các tài khoản đã chọn"
           >
-            <Trash2 className="w-4 h-4" />
-            <span>Xóa {selectedUids.length > 0 ? `(${selectedUids.length})` : ""}</span>
+            <Trash2 className="w-4 h-4 shrink-0" />
+            <span>Xóa
+              {selectedUids.length > 0 && <span className="tabular-nums"> ({selectedUids.length})</span>}
+            </span>
           </button>
         </div>
+      </div>
       </div>
 
       {/* 2. Section - Data Table (Khung cuộn hiển thị 10 dòng tài khoản) */}
       <div className="relative w-full">
-        <div ref={scrollRef} className="w-full overflow-x-auto max-h-[605px] overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#4B8EFF]/60 hover:[&::-webkit-scrollbar-thumb]:bg-[#2563EB] [&::-webkit-scrollbar-thumb]:rounded-full">
-          <table aria-busy={isLoading || isRefreshing} className="w-full table-fixed border-collapse min-w-[960px]">
+        {isRefreshing && <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 z-20 h-0.5 bg-blue-100"><div className="h-full bg-blue-500 motion-safe:animate-pulse" /></div>}
+        <div ref={scrollRef} data-account-viewport className="w-full overflow-x-auto max-h-[605px] overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#4B8EFF]/60 hover:[&::-webkit-scrollbar-thumb]:bg-[#2563EB] [&::-webkit-scrollbar-thumb]:rounded-full">
+          <table aria-busy={isLoading || isRefreshing} className={`${styles.compactTable} w-full table-fixed border-collapse min-w-[960px]`}>
           <colgroup>
-            <col className="w-[4%]" />
-            <col className="w-[5%]" />
-            <col className="w-[16%]" />
-            <col className="w-[23%]" />
-            <col className="w-[13%]" />
-            <col className="w-[14%]" />
-            <col className="w-[11%]" />
-            <col className="w-[14%]" />
+            <col className="w-[30px]" />
+            <col className="w-[34px]" />
+            <col className={styles.uidColumn} />
+            <col className={styles.nameColumn} />
+            <col className={styles.categoryColumn} />
+            <col className={styles.statusColumn} />
+            <col className={styles.loginColumn} />
+            <col className={styles.daysColumn} />
+            <col className={styles.lastLoginColumn} />
+            <col className="w-[122px]" />
           </colgroup>
 
           <thead className="sticky top-0 z-10 bg-[#F8FAFC] shadow-[0_1px_0_0_#E2E8F0]">
@@ -369,12 +401,13 @@ export default function AccountTable({
               <th className="px-1 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center bg-[#F8FAFC]">
                 STT
               </th>
-              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-left bg-[#F8FAFC]">
-                UID
+              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center bg-[#F8FAFC]">
+                <div className="pr-[20px]">UID</div>
               </th>
               <th className="px-3 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-left bg-[#F8FAFC]">
                 TÊN TÀI KHOẢN
               </th>
+              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center bg-[#F8FAFC]">DANH MỤC</th>
               <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center whitespace-nowrap bg-[#F8FAFC]">
                 <span className="block leading-tight">TRẠNG THÁI</span>
                 <span className="block text-[10px] text-[#94A3B8] leading-tight">TÀI KHOẢN</span>
@@ -382,6 +415,10 @@ export default function AccountTable({
               <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center whitespace-nowrap bg-[#F8FAFC]">
                 <span className="block leading-tight">TRẠNG THÁI</span>
                 <span className="block text-[10px] text-[#94A3B8] leading-tight">ĐĂNG NHẬP</span>
+              </th>
+              <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center bg-[#F8FAFC]">
+                <span className="block leading-tight">SỐ NGÀY</span>
+                <span className="block leading-tight">NUÔI</span>
               </th>
               <th className="px-2 py-2 font-bold text-[11px] uppercase tracking-wider text-[#64748B] text-center bg-[#F8FAFC]">
                 LAST LOGIN
@@ -408,8 +445,10 @@ export default function AccountTable({
                       </div>
                     </div>
                   </td>
+                  <td className="px-2 py-2"><div className="h-5 w-20 rounded bg-slate-200/70" /></td>
                   <td className="px-2 py-2"><div className="mx-auto h-5 w-14 rounded-full bg-slate-200/70" /></td>
                   <td className="px-2 py-2"><div className="mx-auto h-5 w-24 rounded-full bg-slate-200/70" /></td>
+                  <td className="px-1 py-2"><div className="mx-auto h-3 w-8 rounded bg-slate-200/70" /></td>
                   <td className="px-2 py-2"><div className="mx-auto h-3 w-16 rounded bg-slate-200/70" /></td>
                   <td className="px-2 py-2">
                     <div className="flex justify-center gap-1.5">
@@ -420,14 +459,14 @@ export default function AccountTable({
               ))
             ) : loadError ? (
               <tr>
-                <td colSpan={8} className="px-4 py-14 text-center">
+                <td colSpan={10} className="px-4 py-14 text-center">
                   <p role="alert" className="text-sm text-red-600">Không thể tải tài khoản: {loadError}</p>
                   <button type="button" onClick={onRetry} className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">Thử lại</button>
                 </td>
               </tr>
             ) : filteredAccounts.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-14 text-center text-slate-500">
+                <td colSpan={10} className="px-4 py-14 text-center text-slate-500">
                   <div className="flex flex-col items-center justify-center gap-2 max-w-sm mx-auto">
                     <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
                       <Search className="w-5 h-5" />
@@ -447,6 +486,7 @@ export default function AccountTable({
               filteredAccounts.map((account, index) => {
                 const initial = (account.profile_name || account.uid).trim().charAt(0).toUpperCase();
                 const isSelected = selectedUids.includes(account.uid);
+                const days = now === null ? null : farmingDays(account.first_login_at, now);
                 const progress = accountProgress[account.uid];
                 const isBusy = isAccountBusy(progress);
                 const progressLabel = progress ? PHASE_LABELS[progress.phase] || "Không xác định được kết quả" : "";
@@ -477,9 +517,9 @@ export default function AccountTable({
 
                       {/* 3. UID */}
                       <td className="px-2 py-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
+                        <div className="flex items-center justify-center gap-0.5 min-w-0">
                           <span
-                            className="font-mono font-semibold text-[#1E293B] truncate tracking-tight text-xs"
+                            className="min-w-0 text-center font-mono font-semibold text-[#1E293B] truncate tracking-tight text-xs"
                             title={account.uid}
                           >
                             {account.uid}
@@ -487,7 +527,7 @@ export default function AccountTable({
                           <button
                             type="button"
                             onClick={() => handleCopyUid(account.uid)}
-                            className="p-1 rounded hover:bg-slate-200/60 text-[#94A3B8] hover:text-[#1E293B] transition-colors cursor-pointer shrink-0"
+                            className="p-0.5 rounded hover:bg-slate-200/60 text-[#94A3B8] hover:text-[#1E293B] transition-colors cursor-pointer shrink-0"
                             title="Sao chép UID"
                           >
                             {copiedUid === account.uid ? (
@@ -501,7 +541,7 @@ export default function AccountTable({
 
                       {/* 4. Tên tài khoản */}
                       <td className="px-3 py-2">
-                        <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0">
                           <AccountAvatar url={account.avatar_url} initial={initial}
                             color={avatarColors[index % avatarColors.length]} />
                           <div className="flex flex-col justify-center min-w-0 overflow-hidden">
@@ -524,14 +564,18 @@ export default function AccountTable({
                       </td>
 
                       {/* 5. Trạng thái tài khoản (Badge pill với chấm tròn) */}
+                      <td className="px-2 py-2">
+                        <AccountCategoryDropdown account={account} categories={categories}
+                          disabled={categoryUnavailable || isLoading} onChange={onChangeAccountCategory} />
+                      </td>
                       <td className="px-2 py-2 text-center whitespace-nowrap">
                         {account.status === "live" ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857]">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857]">
                             <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
                             Live
                           </span>
                         ) : account.status === "die" ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#FFF1F2] border border-[#FECDD3] text-[#BE123C]">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold bg-[#FFF1F2] border border-[#FECDD3] text-[#BE123C]">
                             <span className="w-1.5 h-1.5 rounded-full bg-[#F43F5E]" />
                             Die
                           </span>
@@ -543,17 +587,17 @@ export default function AccountTable({
                       {/* 6. Trạng thái đăng nhập (Badge pill với chấm tròn) */}
                       <td className="px-2 py-2 text-center whitespace-nowrap">
                         {account.login_status === "logged_in" ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857]">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold bg-[#ECFDF5] border border-[#A7F3D0] text-[#047857]">
                             <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
                             Đã đăng nhập
                           </span>
                         ) : account.login_status === "failed" ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#FFF1F2] border border-[#FECDD3] text-[#BE123C]">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold bg-[#FFF1F2] border border-[#FECDD3] text-[#BE123C]">
                             <span className="w-1.5 h-1.5 rounded-full bg-[#F43F5E]" />
                             Đăng nhập lỗi
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#F1F5F9] border border-[#E2E8F0] text-[#475569]">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-semibold bg-[#F1F5F9] border border-[#E2E8F0] text-[#475569]">
                             <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8]" />
                             Chưa đăng nhập
                           </span>
@@ -561,6 +605,10 @@ export default function AccountTable({
                       </td>
 
                       {/* 7. Last login (2 dòng: Ngày / Giờ hoặc --) */}
+                      <td className="px-1 py-2 text-center text-xs font-medium tabular-nums text-slate-700"
+                        title={days === null ? "Chưa ghi nhận ngày bắt đầu nuôi" : `Bắt đầu nuôi: ${formatVietnamDateTime(account.first_login_at).full}`}>
+                        {days === null ? "—" : days}
+                      </td>
                       <td className="px-2 py-2 text-center">
                         {account.last_login_at ? (
                           (() => {
@@ -584,14 +632,14 @@ export default function AccountTable({
 
                       {/* 8. Hành động: 4 nút vuông chuẩn Figma [Mắt] → [Bút chì] → [Địa cầu] → [Thùng rác] */}
                       <td className="px-2 py-2 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
+                        <div className="flex items-center justify-center gap-1">
                           {/* Nút 1: Xem/Ẩn chi tiết 11 trường (Mắt) */}
                           <button
                             type="button"
                             onClick={() => toggleDetail(account.uid)}
                             aria-expanded={expandedUids.has(account.uid) && !closingUids.has(account.uid)}
                             title={expandedUids.has(account.uid) && !closingUids.has(account.uid) ? "Đóng chi tiết" : "Xem chi tiết 11 trường"}
-                            className={`flex items-center justify-center w-7 h-7 rounded-md transition-colors border cursor-pointer shadow-2xs ${
+                            className={`flex items-center justify-center w-6 h-6 rounded-md transition-colors border cursor-pointer shadow-2xs ${
                               expandedUids.has(account.uid) && !closingUids.has(account.uid)
                                 ? "bg-blue-50 border-blue-200 text-[#2563EB]"
                                 : "border-[#E2E8F0] bg-white hover:bg-blue-50 hover:border-blue-200 text-[#94A3B8] hover:text-[#2563EB]"
@@ -609,7 +657,7 @@ export default function AccountTable({
                             type="button"
                             onClick={() => onEditAccount(account.uid)}
                             title="Chỉnh sửa thông tin"
-                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-amber-50 hover:border-amber-200 text-[#94A3B8] hover:text-amber-600 transition-colors cursor-pointer shadow-2xs"
+                            className="flex items-center justify-center w-6 h-6 rounded-md border border-[#E2E8F0] bg-white hover:bg-amber-50 hover:border-amber-200 text-[#94A3B8] hover:text-amber-600 transition-colors cursor-pointer shadow-2xs"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
@@ -622,7 +670,7 @@ export default function AccountTable({
                             aria-busy={isBusy}
                             aria-label={`${isBusy ? progressLabel : "Mở trình duyệt Profile Chrome"} — ${account.uid}`}
                             title={progressLabel ? `${progressLabel} — Mở trình duyệt Profile Chrome` : "Mở trình duyệt Profile Chrome"}
-                            className={`flex items-center justify-center w-7 h-7 rounded-md border transition-colors shadow-2xs ${
+                            className={`flex items-center justify-center w-6 h-6 rounded-md border transition-colors shadow-2xs ${
                               isBusy
                                 ? "border-emerald-200 bg-emerald-50 text-[#059669] cursor-wait"
                                 : "border-[#E2E8F0] bg-white hover:bg-emerald-50 hover:border-emerald-200 text-[#94A3B8] hover:text-[#059669] cursor-pointer"
@@ -640,7 +688,7 @@ export default function AccountTable({
                             type="button"
                             onClick={() => onDeleteAccount(account.uid)}
                             title="Xóa tài khoản"
-                            className="flex items-center justify-center w-7 h-7 rounded-md border border-[#E2E8F0] bg-white hover:bg-rose-50 hover:border-rose-200 text-[#94A3B8] hover:text-[#BE123C] transition-colors cursor-pointer shadow-2xs"
+                            className="flex items-center justify-center w-6 h-6 rounded-md border border-[#E2E8F0] bg-white hover:bg-rose-50 hover:border-rose-200 text-[#94A3B8] hover:text-[#BE123C] transition-colors cursor-pointer shadow-2xs"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -673,7 +721,9 @@ export default function AccountTable({
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 p-4 border-t border-[#E2E8F0] bg-[#F8FAFC]/80 text-xs">
         {/* Cụm trái: Đã chọn X trên Y tài khoản */}
         <div className="flex flex-wrap items-center gap-2">
-          <span className="basis-full text-sm text-slate-600">Đã tải {accounts.length} / {total} tài khoản</span>
+          <span role="status" className="flex h-5 basis-full items-center gap-1.5 text-sm text-slate-600">
+            {isRefreshing ? <><Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />Đang cập nhật…</> : <>Đã tải {accounts.length} / {total} tài khoản</>}
+          </span>
           <span className="w-2 h-2 rounded-full bg-[#2563EB]" />
           <span className="text-[#475569] text-sm">
             Đã chọn{" "}

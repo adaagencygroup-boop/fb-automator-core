@@ -1,5 +1,6 @@
 """Owner-scoped persistence. Plaintext is encrypted exactly once on write."""
 from datetime import datetime, timezone
+from sqlalchemy import func
 from .models import Account
 try:
     from ..context import owner_context, normalize_owner
@@ -46,6 +47,13 @@ class AccountRepository:
 
     @staticmethod
     def upsert(db, data, owner_username=_UNSET, user_id=_UNSET):
+        from .category_repository import CategoryRepository
+        # Resolve assignment against the same explicit/context owner as the account.
+        from ..context import owner_scope
+        assignment_owner = user_id if user_id is not _UNSET else owner_username
+        assignment_owner = owner_context.get() if assignment_owner is _UNSET else normalize_owner(assignment_owner)
+        with owner_scope(assignment_owner):
+            CategoryRepository.validate_assignment(db, data)
         uid = validate_uid(data["uid"])
         query = AccountRepository.query(db, owner_username, user_id)
         account = query.filter(Account.uid == uid).first()
@@ -61,7 +69,7 @@ class AccountRepository:
 
     @staticmethod
     def apply_fields(account, data):
-        writable = {"password", "two_fa", "cookie", "token", "email", "pass_mail", "mail_recovery", "token_hotmail", "client_id", "proxy", "profile_path"}
+        writable = {"password", "two_fa", "cookie", "token", "email", "pass_mail", "mail_recovery", "token_hotmail", "client_id", "proxy", "profile_path", "category_id"}
         for key in writable & data.keys():
             value = data[key]
             if key in {"password", "two_fa", "pass_mail"} and value:
@@ -79,12 +87,20 @@ class AccountRepository:
             if account.login_status == "LOGGED_IN":
                 if avatar_url:
                     account.avatar_url = avatar_url
-                account.last_login_at = utc_now()
+                now = utc_now()
+                account.last_login_at = now
+                # COALESCE is evaluated by the database, not a stale ORM snapshot.
+                AccountRepository.query(db, owner_username).filter(Account.id == account.id).update(
+                    {Account.first_login_at: func.coalesce(Account.first_login_at, now)},
+                    synchronize_session=False,
+                )
                 account.status = "LIVE"
-                account.status_checked_at = utc_now()
+                account.status_checked_at = now
             if profile_name:
                 account.profile_name = profile_name
             db.commit()
+            # Production sessions keep ORM objects after commit; reload the atomic timestamp.
+            db.refresh(account)
         return account
 
     @staticmethod

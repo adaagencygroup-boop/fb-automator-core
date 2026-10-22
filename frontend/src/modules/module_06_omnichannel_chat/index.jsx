@@ -93,6 +93,8 @@ export default function OmnichannelChatModule() {
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("conversations");
   const [filter, setFilter] = useState("all");
+  const [starOnly, setStarOnly] = useState(false);
+  const [selectedTag, setSelectedTag] = useState(null);
   const [sort, setSort] = useState("newest");
   const [activeConversationId, setActiveConversationId] = useState(null);
   const [openedNotificationId, setOpenedNotificationId] = useState(null); // thông báo đang mở chi tiết
@@ -314,9 +316,11 @@ export default function OmnichannelChatModule() {
     if (activePageId) list = list.filter((c) => c.pageId === activePageId);
     if (filter === "unread") list = list.filter((c) => c.unread);
     if (filter === "unreplied") list = list.filter((c) => !c.replied);
+    if (filter === "starred" || starOnly) list = list.filter((c) => c.starred);
+    if (selectedTag) list = list.filter((c) => Array.isArray(c.tags) && c.tags.includes(selectedTag));
     const dir = sort === "newest" ? -1 : 1;
     return [...list].sort((a, b) => dir * (new Date(a.updatedAt) - new Date(b.updatedAt)));
-  }, [conversations, activePageId, filter, sort]);
+  }, [conversations, activePageId, filter, starOnly, selectedTag, sort]);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null;
 
@@ -590,6 +594,10 @@ export default function OmnichannelChatModule() {
       onTabChange={setTab}
       filter={filter}
       onFilterChange={setFilter}
+      starOnly={starOnly}
+      onToggleStar={() => setStarOnly((v) => !v)}
+      selectedTag={selectedTag}
+      onSelectTag={setSelectedTag}
       sort={sort}
       onSortChange={setSort}
       conversations={visibleConversations}

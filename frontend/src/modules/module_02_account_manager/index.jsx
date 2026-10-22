@@ -9,7 +9,14 @@ import {
   checkAccountStatuses,
   loginAccounts,
   openLiveBrowser,
+  setAccountCategory,
+  saveCategory,
 } from "./service";
+import CategorySidebar from "./components/CategorySidebar";
+import { MoveCategoryDialog } from "./components/CategoryDialogs";
+import { useAccountCategories } from "./hooks/useAccountCategories";
+import { categoryQuery, moveAccountBatches } from "./utils/categories.mjs";
+import { importOutcome } from "./utils/import-categories.mjs";
 import { useAccountPages } from "./hooks/useAccountPages";
 import useAccountRealtime from "./hooks/useAccountRealtime";
 import { isAccountBusy } from "./utils/account-realtime.mjs";
@@ -78,6 +85,25 @@ function HighlightedLogMessage({ message = "" }) {
 }
 
 export default function AccountManagerModule() {
+  const accountLayoutRef = useRef(null);
+  const accountPanelRef = useRef(null);
+  useEffect(() => {
+    const layout = accountLayoutRef.current;
+    const table = accountPanelRef.current?.querySelector("section");
+    const viewport = table?.querySelector("[data-account-viewport]");
+    if (!layout || !table || !viewport) return;
+    const updateLimit = () => {
+      const maxViewportHeight = parseFloat(getComputedStyle(viewport).maxHeight);
+      if (Number.isFinite(maxViewportHeight)) {
+        layout.style.setProperty("--category-max-height", `${table.getBoundingClientRect().height - viewport.getBoundingClientRect().height + maxViewportHeight}px`);
+      }
+    };
+    const observer = new ResizeObserver(updateLimit);
+    observer.observe(table);
+    observer.observe(viewport);
+    updateLimit();
+    return () => observer.disconnect();
+  }, []);
   const toast = useToast();
   const [isExpired, setIsExpired] = useState(() => {
     if (typeof window !== "undefined") {
@@ -108,12 +134,55 @@ export default function AccountManagerModule() {
   const [search, setSearch] = useState("");
   const [accountFilter, setAccountFilter] = useState("all");
   const [loginFilter, setLoginFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [moveUids, setMoveUids] = useState(null);
+  const [isMoving, setIsMoving] = useState(false);
+  const moveLock = useRef(false);
   useEffect(() => {
     const timer = setTimeout(() => setSearch(searchTerm.trim()), 300);
     return () => clearTimeout(timer);
   }, [searchTerm]);
-  const query = useMemo(() => ({ search, status: accountFilter, login_status: loginFilter }), [search, accountFilter, loginFilter]);
+  const query = useMemo(() => ({ search, status: accountFilter, login_status: loginFilter, ...categoryQuery(categoryFilter) }), [search, accountFilter, loginFilter, categoryFilter]);
   const { accounts, setAccounts, stats, total, has_more: hasMore, isInitialLoading, isRefreshing, isLoadingMore, loadError, moreError, fetchAccounts, loadMore, retryMore, applyAccountPatches, requestRefresh } = useAccountPages(query, !isExpired, tableRef, setSelectedUids);
+  const categoryData = useAccountCategories(!isExpired);
+  const refreshCategoriesAndAccounts = async () => {
+    await Promise.all([categoryData.refresh(), fetchAccounts(false)]);
+  };
+  const handleMoveCategory = async categoryId => {
+    if (moveLock.current || !moveUids?.length) return;
+    moveLock.current = true;
+    setIsMoving(true);
+    try {
+      const result = await moveAccountBatches(moveUids, categoryId, setAccountCategory);
+      const remainingSelection = result.remaining;
+      setSelectedUids(remainingSelection);
+      setMoveUids(null);
+      if (result.error) toast.error(`Đã chuyển ${result.completed}/${moveUids.length} tài khoản. ${result.error.message}`, "CHUYỂN DANH MỤC");
+      else toast.success(`Đã chuyển ${result.completed} tài khoản.`, "CHUYỂN DANH MỤC");
+      await Promise.all([categoryData.refresh(), fetchAccounts(false, remainingSelection)]);
+    } finally {
+      moveLock.current = false;
+      setIsMoving(false);
+    }
+  };
+  const handleChangeAccountCategory = async (account, categoryId) => {
+    if (moveLock.current) return false;
+    moveLock.current = true;
+    setIsMoving(true);
+    try {
+      await setAccountCategory([account.uid], categoryId);
+      applyAccountPatches([{ uid: account.uid, changes: { category_id: categoryId } }]);
+      toast.success(`Đã cập nhật danh mục cho tài khoản ${account.uid}.`, "DANH MỤC");
+      await Promise.all([categoryData.refresh(), fetchAccounts(false)]);
+      return true;
+    } catch (error) {
+      toast.error(error.message, "KHÔNG THỂ ĐỔI DANH MỤC");
+      return false;
+    } finally {
+      moveLock.current = false;
+      setIsMoving(false);
+    }
+  };
   const realtime = useAccountRealtime({
     enabled: !isExpired, applyAccountPatches, requestRefresh,
     onUnknown: () => toast.warning("Không xác định được kết quả thao tác. Đã yêu cầu đồng bộ dữ liệu mới nhất.", "ĐỒNG BỘ"),
@@ -179,28 +248,18 @@ export default function AccountManagerModule() {
   const handleImportBulk = async (accountsToImport, skippedCount = 0, skipExisting = false) => {
     try {
       const res = await importAccounts(accountsToImport, false, skipExisting);
-      skippedCount += res.skipped_count || 0;
-      const added = res.added_count ?? res.imported ?? 0;
-      const updated = res.updated_count ?? 0;
-
-      let msg = "";
-      if (added > 0 && updated > 0) {
-        msg = `Đã thêm mới ${added} tài khoản, cập nhật đè ${updated} tài khoản thành công.`;
-      } else if (updated > 0) {
-        msg = `Đã cập nhật đè ${updated} tài khoản thành công.`;
-      } else {
-        msg = `Đã thêm mới ${added} tài khoản thành công.`;
+      const outcome = importOutcome(res, skippedCount);
+      toast[outcome.level](outcome.message, outcome.complete ? "NHẬP THÀNH CÔNG" : "KẾT QUẢ IMPORT");
+      if (outcome.added > 0 || (outcome.updated > 0 && accountsToImport.some(account => Object.hasOwn(account, "category_id")))) {
+        categoryData.refresh();
       }
-      if (skippedCount > 0) {
-        msg += ` (Đã bỏ qua ${skippedCount} tài khoản trùng lặp).`;
+      if (outcome.added + outcome.updated > 0) {
+        tableRef.current?.reset();
+        fetchAccounts(true).catch((err) => {
+          toast.warning("Không thể đồng bộ danh sách mới nhất: " + (err.message || String(err)), "CẢNH BÁO");
+        });
       }
-
-      toast.success(msg, "NHẬP THÀNH CÔNG");
-      tableRef.current?.reset();
-      fetchAccounts(true).catch((err) => {
-        toast.warning("Không thể đồng bộ danh sách mới nhất: " + (err.message || String(err)), "CẢNH BÁO");
-      });
-      return true;
+      return { success: outcome.complete, failedUids: outcome.failedUids };
     } catch (error) {
       toast.error("Không thể nhập tài khoản: " + error.message, "LỖI NHẬP FILE");
       return false;
@@ -255,6 +314,7 @@ export default function AccountManagerModule() {
         successfulUids = result.deleted_uids;
       }
       const errors = result.errors || [];
+      if (successfulUids.length) categoryData.refresh();
       setSelectedUids((prev) => prev.filter((id) => !successfulUids.includes(id)));
       const pageMessage = result.pages_deleted > 0
         ? ` Đã xóa ${result.pages_deleted} Fanpage liên quan.`
@@ -452,7 +512,15 @@ export default function AccountManagerModule() {
       </div>
 
       {/* 3. Section - FilterAndTableContainer (Toolbar + Table + Bottom Action Bar) */}
+      <div ref={accountLayoutRef} className="flex min-w-0 flex-col items-stretch gap-4 lg:flex-row">
+      <CategorySidebar {...categoryData} value={categoryFilter} onChange={setCategoryFilter}
+        onRetry={categoryData.refresh} onChanged={refreshCategoriesAndAccounts} disabled={isMoving} />
+      <div ref={accountPanelRef} className="min-w-0 flex-1">
       <AccountTable
+        categories={categoryData.categories}
+        onMoveCategory={() => setMoveUids([...selectedUids])}
+        onChangeAccountCategory={handleChangeAccountCategory}
+        categoryUnavailable={categoryData.loading || Boolean(categoryData.error) || isMoving}
         tableRef={tableRef}
         searchTerm={searchTerm} setSearchTerm={setSearchTerm}
         accountFilter={accountFilter} setAccountFilter={setAccountFilter}
@@ -485,6 +553,8 @@ export default function AccountManagerModule() {
         handleLogin={handleLogin}
         isLoggingIn={isLoggingIn}
       />
+      </div>
+      </div>
 
       {/* 4. Section - LiveLogsPanel (Nhật ký hoạt động Terminal Dark Theme) */}
       <section className="w-full flex flex-col rounded-2xl bg-white border border-[#E2E8F0] shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] overflow-hidden">
@@ -598,10 +668,22 @@ export default function AccountManagerModule() {
       </section>
 
       {/* Modals */}
+      {moveUids && <MoveCategoryDialog categories={categoryData.categories} count={moveUids.length} busy={isMoving}
+        onClose={() => { if (!moveLock.current) setMoveUids(null); }} onMove={handleMoveCategory} />}
       <DynamicImportModal
         isOpen={isDynamicImportOpen}
         onClose={() => setIsDynamicImportOpen(false)}
         onImport={handleImportBulk}
+        categories={categoryData.categories}
+        categoriesLoading={categoryData.loading}
+        categoriesError={categoryData.error}
+        onRetryCategories={categoryData.refresh}
+        onCreateCategory={async data => {
+          const category = await saveCategory(data);
+          categoryData.upsertCategory(category);
+          categoryData.refresh();
+          return category;
+        }}
         existingAccounts={accounts}
       />
 
@@ -610,6 +692,7 @@ export default function AccountManagerModule() {
         editUid={editUid}
         onClose={() => setIsSingleModalOpen(false)}
         onSuccess={({ originalUid, uid, isEdit, savedData }) => {
+          if (!isEdit) categoryData.refresh();
           setSelectedUids((current) => Array.from(new Set(current.map((selected) => selected === originalUid ? uid : selected))));
           if (isEdit) {
             setAccounts((prev) =>
