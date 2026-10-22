@@ -1,0 +1,67 @@
+import api from "@/services/api";
+import { API_BASE } from "@/config/constants";
+
+// ── SOURCE: HASHTAG SEARCH (Section 10) ──
+export async function searchPagesByHashtag(payload) {
+  return api.post("/api/page-scanner/source/hashtag-search", payload);
+}
+
+// ── SOURCE: SEARCH ──
+export async function searchPages(payload) {
+  return api.post("/api/page-scanner/source/search", payload);
+}
+
+// ── SOURCE: PARSE (dán link trực tiếp) ──
+export async function parsePageLinks(payload) {
+  return api.post("/api/page-scanner/source/parse", payload);
+}
+
+// ── SOURCE: UPLOAD FILE .txt/.csv ──
+export async function uploadPageFile(formData) {
+  return api.post("/api/page-scanner/source/upload", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    params: { save_to_db: true },
+  });
+}
+
+// ── TEMPLATE ──
+export function getPageTemplateUrl() {
+  return `${API_BASE}/api/page-scanner/source/template`;
+}
+
+export async function downloadPageTemplate() {
+  try {
+    const res = await api.get("/api/page-scanner/source/template", {
+      responseType: "blob",
+    });
+    const blob = new Blob([res], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "mau_danh_sach_fanpage_fb.txt";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  } catch {
+    window.open(`${API_BASE}/api/page-scanner/source/template`, "_blank");
+  }
+}
+
+// ── SESSIONS ──
+export async function getScanSessions(params = {}) {
+  return api.get("/api/page-scanner/sessions", { params });
+}
+
+export async function getScanSessionDetail(sessionId) {
+  return api.get(`/api/page-scanner/sessions/${sessionId}`);
+}
+
+export async function stopScanSession(sessionId) {
+  return api.post(`/api/page-scanner/sessions/${sessionId}/stop`);
+}
+
+// ── PAGES ──
+export async function getScannedPages(params = {}) {
+  return api.get("/api/page-scanner/pages", { params });
+}

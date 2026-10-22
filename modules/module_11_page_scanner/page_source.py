@@ -1,0 +1,541 @@
+"""
+=============================================================================
+MODULE 11: FACEBOOK PAGE SCANNER - PAGE SOURCE & URL STANDARDIZATION
+=============================================================================
+Xử lý làm sạch, chuẩn hóa định danh page_key, chống lặp và parse file input.
+Tuân thủ nghiêm ngặt nguyên tắc Section 3 & 4 của Module 11 detail plan.
+"""
+from __future__ import annotations
+
+import csv
+import io
+import logging
+import re
+from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import parse_qs, urlparse
+
+logger = logging.getLogger(__name__)
+
+# Các slug hệ thống của Facebook không phải là Fanpage cá nhân/doanh nghiệp
+SYSTEM_SLUGS = {
+    "search", "watch", "marketplace", "gaming", "events", "help",
+    "login", "messages", "friends", "groups", "reel", "stories",
+    "share", "settings", "photo", "photos", "video", "videos",
+    "hashtag", "bookmarks", "notifications", "saved", "pages",
+}
+
+# Các sub-path con thường gặp trên trang Page
+SUB_PATHS = {
+    "about", "photos", "videos", "reviews", "followers", "posts",
+    "community", "events", "reels", "services", "shop", "offers",
+    "mentions", "subscribers",
+}
+
+
+def clean_page_url(raw_url: str) -> str:
+    """
+    Chuẩn hóa URL Facebook Page về dạng chuẩn duy nhất:
+    - Host luôn là https://www.facebook.com
+    - Giữ lại query id nếu là profile.php?id=...
+    - Cắt bỏ mọi query tracking: mibextid, ref, fref, tsid, ...
+    - Cắt các sub-path con (/about, /photos, /posts, ...) về link gốc của Page
+    - Bỏ dấu / cuối cùng.
+    """
+    if not raw_url:
+        return ""
+    text = raw_url.strip()
+
+    # Bỏ khoảng trắng và dấu quote bọc ngoài nếu có
+    text = text.strip("\"' ")
+
+    # Chuẩn hóa nếu user chỉ nhập UID số thuần (VD: 100084729103941)
+    if re.match(r"^\d{6,25}$", text):
+        return f"https://www.facebook.com/profile.php?id={text}"
+
+    # Bỏ hash fragment
+    text = text.split("#")[0].strip()
+
+    # Thêm protocol nếu thiếu
+    if not re.match(r"^https?://", text, flags=re.IGNORECASE):
+        # Kiểm tra xem có bắt đầu bằng domain không
+        if text.startswith("facebook.com") or text.startswith("fb.com") or text.startswith("m.facebook.com"):
+            text = "https://" + text
+        else:
+            # Nếu chỉ là path /username hoặc username
+            text = "https://www.facebook.com/" + text.lstrip("/")
+
+    parsed = urlparse(text)
+    host = parsed.netloc.lower()
+
+    # Chuẩn hóa subdomain thành www.facebook.com
+    if any(host == d or host.endswith("." + d) for d in ["facebook.com", "fb.com"]):
+        norm_host = "www.facebook.com"
+    else:
+        # Giữ nguyên host nếu không phải facebook (sẽ bị coi là invalid sau đó)
+        norm_host = host
+
+    path = parsed.path.strip()
+
+    # Trường hợp 1: profile.php?id=123456
+    if "profile.php" in path:
+        q = parse_qs(parsed.query)
+        profile_ids = q.get("id") or []
+        if profile_ids and profile_ids[0].strip().isdigit():
+            return f"https://{norm_host}/profile.php?id={profile_ids[0].strip()}"
+        return f"https://{norm_host}/profile.php"
+
+    # Trường hợp 2: /pages/Tên-Page/123456789...
+    pages_match = re.search(r"^/pages/(?:[^/?#]+/)?(\d{6,25})(?:/.*)?$", path, flags=re.IGNORECASE)
+    if pages_match:
+        page_id = pages_match.group(1)
+        return f"https://{norm_host}/pages/{page_id}"
+
+    # Trường hợp 3: /<username>[/sub-path]
+    parts = [p for p in path.split("/") if p]
+    if not parts:
+        return f"https://{norm_host}"
+
+    first_segment = parts[0]
+    first_lower = first_segment.lower()
+
+    # Nếu segment đầu là system slug
+    if first_lower in SYSTEM_SLUGS:
+        # Nếu là /pages/... nhưng không match regex số ở trên
+        if first_lower == "pages" and len(parts) >= 2:
+            last_part = parts[-1]
+            if last_part.isdigit():
+                return f"https://{norm_host}/pages/{last_part}"
+            return f"https://{norm_host}/pages/{parts[1]}"
+        return f"https://{norm_host}/{first_segment}"
+
+    # Cắt các sub-path con nếu segment thứ 2 là about, photos, ...
+    if len(parts) >= 2 and parts[1].lower() in SUB_PATHS:
+        return f"https://{norm_host}/{first_segment}"
+
+    # Link chuẩn 1 segment: /username
+    return f"https://{norm_host}/{first_segment}"
+
+
+def extract_page_identifier(url: str) -> Tuple[str, str]:
+    """
+    Trích xuất định danh chuẩn (page_key) và chất lượng (quality: 'high' | 'weak'):
+    - profile.php?id=123456 -> ('id:123456', 'high')
+    - /pages/<id> hoặc /pages/<name>/<id> -> ('id:<id>', 'high')
+    - /username -> ('user:<username_lowercase>', 'high')
+    - Không tách được -> ('url:<normalized_url>', 'weak')
+    """
+    cleaned = clean_page_url(url)
+    if not cleaned:
+        return ("", "weak")
+
+    # 1. profile.php?id=...
+    match_id = re.search(r"profile\.php\?id=(\d+)", cleaned)
+    if match_id:
+        return (f"id:{match_id.group(1)}", "high")
+
+    # 2. pages/<id>
+    match_pages = re.search(r"/pages/(\d+)", cleaned)
+    if match_pages:
+        return (f"id:{match_pages.group(1)}", "high")
+
+    # 3. UID số thuần
+    match_pure_id = re.search(r"facebook\.com/(\d{6,25})$", cleaned)
+    if match_pure_id:
+        return (f"id:{match_pure_id.group(1)}", "high")
+
+    parsed = urlparse(cleaned)
+    parts = [p for p in parsed.path.split("/") if p]
+
+    if parts:
+        slug = parts[0]
+        slug_lower = slug.lower()
+        if slug_lower not in SYSTEM_SLUGS and re.match(r"^[a-zA-Z0-9._\-]+$", slug):
+            return (f"user:{slug_lower}", "high")
+
+    # Fallback cho link lạ hoặc không tách được
+    return (f"url:{cleaned.replace('https://', '').replace('http://', '').lower()}", "weak")
+
+
+def is_valid_page_entry(line: str) -> bool:
+    """Kiểm tra một dòng có phải là định danh hoặc link Page hợp lệ không."""
+    if not line:
+        return False
+    lower = line.lower().strip()
+
+    # Loại bỏ các link tìm kiếm, nhóm, reel, watch, login...
+    if any(bad in lower for bad in [
+        "/search", "/groups/", "/groups", "/reel/", "/stories/",
+        "/events/", "/marketplace/", "/login", "/messages/",
+    ]):
+        return False
+
+    # UID số thuần
+    if re.match(r"^\d{6,25}$", lower):
+        return True
+
+    # Link facebook / fb
+    if "facebook.com" in lower or "fb.com" in lower:
+        return True
+
+    # Slug đơn giản nếu nhập dạng username (ít nhất 3 ký tự, không dấu cách)
+    if re.match(r"^[a-zA-Z0-9._\-]{3,50}$", lower) and lower not in SYSTEM_SLUGS:
+        return True
+
+    return False
+
+
+def parse_follower_count(text: Optional[str]) -> Tuple[Optional[int], str]:
+    """
+    Phân tích chuỗi số lượng người theo dõi thành số nguyên:
+    - '1,2 nghìn người theo dõi' -> (1200, text)
+    - '15K followers' -> (15000, text)
+    - '3,4 triệu người theo dõi' -> (3400000, text)
+    - '520 người theo dõi' -> (520, text)
+    """
+    if not text:
+        return (None, "")
+    clean_text = str(text).strip()
+    if not clean_text:
+        return (None, "")
+
+    lower = clean_text.lower()
+    # Tìm đoạn số có thể kèm dấu chấm hoặc dấu phẩy
+    # VD: 1,2 nghìn, 1.2K, 3,4 triệu, 3.4M, 500
+    match = re.search(r"([\d\.,]+)\s*([kKmMnghìn|triệu|tr|followers|người theo dõi]*)", lower)
+    if not match:
+        return (None, clean_text)
+
+    num_str = match.group(1).replace(",", ".")
+    unit_str = match.group(2).strip()
+
+    try:
+        # Nếu có nhiều hơn 1 dấu chấm, có thể là phân cách hàng nghìn kiểu '1.200.000'
+        if num_str.count(".") > 1:
+            val = float(num_str.replace(".", ""))
+        else:
+            val = float(num_str)
+
+        if "triệu" in unit_str or "tr" in unit_str or "m" in unit_str:
+            val *= 1_000_000
+        elif "nghìn" in unit_str or "k" in unit_str:
+            val *= 1_000
+
+        return (int(val), clean_text)
+    except (ValueError, TypeError):
+        return (None, clean_text)
+
+
+def parse_page_file_content(
+    content: str,
+    filter_existing: bool = False,
+    owner_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Phân tích nội dung file import (.txt, .csv) hoặc danh sách link dán trực tiếp.
+    Khử trùng bằng page_key chuẩn hóa.
+    Tùy chọn đối chiếu DB để thống kê số Page đã tồn tại trước đó.
+    """
+    if not content:
+        return {
+            "pages": [],
+            "total_lines": 0,
+            "valid_count": 0,
+            "dedup_count": 0,
+            "invalid_count": 0,
+            "already_existing_count": 0,
+        }
+
+    lines = [line.strip() for line in content.splitlines()]
+    non_empty = [l for l in lines if l and not l.startswith("#")]
+    total_lines = len(non_empty)
+
+    raw_candidates: List[str] = []
+
+    # Kiểm tra xem có phải định dạng CSV có header không
+    is_csv = False
+    if non_empty:
+        header_candidate = non_empty[0].lower()
+        if "," in header_candidate and any(col in header_candidate for col in ["page_url", "link", "url", "fanpage"]):
+            is_csv = True
+
+    if is_csv:
+        reader = csv.DictReader(io.StringIO("\n".join(non_empty)))
+        for row in reader:
+            val = (
+                row.get("page_url")
+                or row.get("link")
+                or row.get("url")
+                or row.get("fanpage")
+                or ""
+            )
+            if val and val.strip():
+                raw_candidates.append(val.strip())
+    else:
+        for line in non_empty:
+            # Tách dòng nếu có phẩy hoặc tab
+            parts = re.split(r"[\t,]", line)
+            if parts and parts[0].strip():
+                raw_candidates.append(parts[0].strip())
+
+    seen_keys: Set[str] = set()
+    pages: List[Dict[str, Any]] = []
+    dedup_count = 0
+    invalid_count = 0
+
+    for raw in raw_candidates:
+        if not is_valid_page_entry(raw):
+            invalid_count += 1
+            continue
+
+        cleaned_url = clean_page_url(raw)
+        page_key, quality = extract_page_identifier(cleaned_url)
+
+        if not page_key:
+            invalid_count += 1
+            continue
+
+        if page_key in seen_keys:
+            dedup_count += 1
+            continue
+
+        seen_keys.add(page_key)
+        pages.append({
+            "page_key": page_key,
+            "page_url": cleaned_url,
+            "raw_input": raw,
+            "identifier_quality": quality,
+        })
+
+    valid_count = len(pages)
+    already_existing_count = 0
+
+    if filter_existing and owner_key and pages:
+        try:
+            from core.database.connection import db
+            # Lấy danh sách page_key đã có trong kho scanned_pages của owner
+            keys = [p["page_key"] for p in pages]
+            placeholders = ",".join(["%s"] * len(keys))
+            query = f"SELECT page_key FROM scanned_pages WHERE owner_key = %s AND page_key IN ({placeholders})"
+            existing_rows = db.fetch_all(query, (owner_key, *keys))
+            existing_set = {r["page_key"] for r in (existing_rows or [])}
+            already_existing_count = len(existing_set)
+            for p in pages:
+                p["is_existing"] = p["page_key"] in existing_set
+        except Exception as exc:
+            logger.warning(f"[PageSource] Lỗi kiểm tra trùng DB: {exc}")
+
+    return {
+        "pages": pages,
+        "total_lines": total_lines,
+        "valid_count": valid_count,
+        "dedup_count": dedup_count,
+        "invalid_count": invalid_count,
+        "already_existing_count": already_existing_count,
+    }
+
+
+def get_sample_template() -> str:
+    """Tạo nội dung mẫu cho file danh sách Fanpage."""
+    return (
+        "# DANH SÁCH FANPAGE FACEBOOK MẪU CHO MODULE 11 (PAGE SCANNER)\n"
+        "# Mỗi dòng có thể là link Page, link profile.php, hoặc UID số của Page\n"
+        "# Các liên kết con như /about, /photos hay tham số theo dõi (?ref=...) sẽ được tự động lọc bỏ\n"
+        "https://www.facebook.com/innisfreevietnam\n"
+        "https://www.facebook.com/biluxuryvn\n"
+        "https://www.facebook.com/profile.php?id=1098642819\n"
+        "https://www.facebook.com/pages/Gia-Dung-Thong-Minh/1098642820\n"
+        "1098642821\n"
+    )
+
+
+# =============================================================================
+# HASHTAG SOURCE EXTENSIONS (Section 10 of Detail Plan)
+# =============================================================================
+
+
+def normalize_hashtag(raw_tag: str) -> str:
+    """
+    Chuẩn hoá hashtag đầu vào (Section 10.2):
+    - Bỏ dấu #, bỏ khoảng trắng ở 2 đầu
+    - Chuyển thành chữ thường để làm khóa gộp
+    - Không tự ý gộp biến thể có dấu/không dấu (người dùng nhập gì quét nấy)
+    """
+    if not raw_tag:
+        return ""
+    tag = raw_tag.strip()
+    tag = re.sub(r"^[#\s]+", "", tag)
+    tag = re.sub(r"\s+", "", tag)
+    return tag.lower()
+
+
+def parse_hashtags_input(raw_input: Any) -> List[str]:
+    """
+    Nhận chuỗi hoặc danh sách hashtag, chuẩn hoá và loại bỏ trùng lặp.
+    Hỗ trợ phân cách bằng dấu phẩy, khoảng trắng, hoặc xuống dòng.
+    """
+    if not raw_input:
+        return []
+
+    if isinstance(raw_input, (list, tuple, set)):
+        items = [str(x) for x in raw_input]
+    else:
+        items = re.split(r"[,\s\n]+", str(raw_input))
+
+    result: List[str] = []
+    seen: Set[str] = set()
+    for item in items:
+        norm = normalize_hashtag(item)
+        if norm and norm not in seen:
+            seen.add(norm)
+            result.append(norm)
+    return result
+
+
+def classify_post_author(
+    author_name: str,
+    author_url: str,
+    author_subtitle: str = "",
+    post_context: str = "",
+) -> Tuple[str, str]:
+    """
+    Phân loại tác giả bài viết: PAGE / PROFILE / GROUP (Section 10.4).
+    - Tầng nhanh trên thẻ:
+      * Dấu hiệu loại trừ: link/ngữ cảnh thuộc Group -> GROUP
+      * Dấu hiệu Page: subtitle có 'Trang', 'Page', 'người theo dõi', 'Followers', 'Thích'... -> PAGE
+      * Dấu hiệu Profile: 'Bạn bè', 'Bạn chung', 'Add friend' -> PROFILE
+    """
+    auth_url_lower = (author_url or "").lower()
+    post_ctx_lower = (post_context or "").lower()
+    subtitle_lower = (author_subtitle or "").lower()
+
+    if "/groups/" in auth_url_lower or "trong nhóm" in post_ctx_lower or "in group" in post_ctx_lower:
+        return ("GROUP", "Bài viết đăng trong Group hoặc tác giả là Group")
+
+    if any(k in subtitle_lower for k in ["bạn bè", "bạn chung", "mutual friends", "thêm bạn bè", "add friend"]):
+        return ("PROFILE", "Tác giả mang dấu hiệu Profile cá nhân")
+
+    if any(k in subtitle_lower for k in [
+        "trang", "page", "người theo dõi", "followers", "thích", "likes",
+        "doanh nghiệp", "công ty", "bán lẻ", "dịch vụ", "thương mại", "sáng tạo"
+    ]):
+        return ("PAGE", "Tác giả mang dấu hiệu Fanpage (hạng mục / follower / thích)")
+
+    cleaned = clean_page_url(author_url)
+    page_key, _ = extract_page_identifier(cleaned)
+    if not page_key:
+        return ("PROFILE", "Không trích xuất được page_key hợp lệ")
+
+    return ("PAGE", "Đạt chuẩn liên kết trang Fanpage ứng viên")
+
+
+def strip_accents_and_spaces(text: str) -> str:
+    """Loại bỏ dấu tiếng Việt và khoảng trắng để so khớp hashtag với tên Page."""
+    if not text:
+        return ""
+    import unicodedata
+    nfkd = unicodedata.normalize('NFKD', text)
+    unaccented = "".join([c for c in nfkd if not unicodedata.combining(c)])
+    unaccented = unaccented.replace('đ', 'd').replace('Đ', 'D')
+    return re.sub(r"[\s\-_]+", "", unaccented.lower())
+
+
+def calculate_page_relevance_score(
+    hashtag_post_count: int,
+    matched_hashtags: List[str],
+    page_name: str = "",
+    category: str = "",
+    context_keywords: Optional[List[str]] = None,
+    min_posts: int = 2,
+    latest_post_at: str = "",
+) -> Tuple[int, str, List[str]]:
+    """
+    Chấm điểm liên quan (Relevance Score) của Page theo Section 10.5:
+    Thang điểm 100:
+    - Tần suất: +10/bài khớp, tối đa +40.
+    - Có bài ở >= 2 hashtag khác nhau: +15.
+    - Tên Page chứa hashtag hoặc từ khóa ngữ cảnh: +20.
+    - Hạng mục / giới thiệu chứa từ khóa ngữ cảnh: +15.
+    - Bài khớp gần nhất trong thời gian gần: +10.
+
+    Ngưỡng phân loại:
+    - Điều kiện cứng: hashtag_post_count >= min_posts (mặc định 2).
+      (Ngoại lệ: nếu tên Page chứa hashtag hoặc từ khóa ngữ cảnh thì được tính dù chỉ có 1 bài).
+    - Score >= 40: RELEVANT (Liên quan)
+    - 20 <= Score < 40: REVIEW (Cần xem lại)
+    - Score < 20 hoặc không qua điều kiện cứng: EXCLUDED (Bị loại)
+    """
+    score = 0
+    reasons: List[str] = []
+    page_name_lower = (page_name or "").lower()
+    page_name_normalized = strip_accents_and_spaces(page_name)
+    cat_lower = (category or "").lower()
+    cat_normalized = strip_accents_and_spaces(category)
+    context_kws = [k.strip().lower() for k in (context_keywords or []) if k.strip()]
+
+    # 1. Điểm tần suất bài viết
+    freq_pts = min(40, hashtag_post_count * 10)
+    score += freq_pts
+    if freq_pts > 0:
+        reasons.append(f"+{freq_pts}đ: {hashtag_post_count} bài viết khớp hashtag")
+
+    # 2. Xuất hiện ở nhiều hashtag khác nhau
+    if len(set(matched_hashtags)) >= 2:
+        score += 15
+        reasons.append("+15đ: Xuất hiện ở >= 2 hashtag khác nhau")
+
+    # 3. Tên Page chứa hashtag hoặc từ khóa ngữ cảnh
+    name_matched = False
+    for tag in matched_hashtags:
+        clean_tag = tag.lower().lstrip("#")
+        clean_tag_norm = strip_accents_and_spaces(clean_tag)
+        if clean_tag in page_name_lower or (clean_tag_norm and clean_tag_norm in page_name_normalized):
+            name_matched = True
+            break
+    if not name_matched:
+        for kw in context_kws:
+            kw_norm = strip_accents_and_spaces(kw)
+            if kw in page_name_lower or (kw_norm and kw_norm in page_name_normalized):
+                name_matched = True
+                break
+
+    if name_matched:
+        score += 20
+        reasons.append("+20đ: Tên Page chứa hashtag hoặc từ khóa ngữ cảnh")
+
+    # 4. Hạng mục / giới thiệu chứa từ khóa ngữ cảnh
+    cat_matched = False
+    for kw in context_kws:
+        if kw in cat_lower:
+            cat_matched = True
+            break
+    if cat_matched:
+        score += 15
+        reasons.append("+15đ: Ngành nghề/mô tả chứa từ khóa ngữ cảnh")
+
+    # 5. Bài khớp gần nhất
+    recent_markers = ["giờ", "phút", "hôm qua", "ngày", "vừa xong", "hour", "min", "yesterday", "day"]
+    if any(m in (latest_post_at or "").lower() for m in recent_markers) or not latest_post_at:
+        score += 10
+        reasons.append("+10đ: Có bài đăng hoạt động gần đây")
+
+    score = min(100, score)
+
+    # Điều kiện cứng (Hard gate)
+    passed_hard_gate = False
+    if hashtag_post_count >= min_posts:
+        passed_hard_gate = True
+    elif name_matched and hashtag_post_count >= 1:
+        passed_hard_gate = True
+        reasons.append(f"Miễn điều kiện min_posts ({min_posts}) do tên Page khớp ngữ cảnh")
+    else:
+        reasons.append(f"Không đạt điều kiện cứng (có {hashtag_post_count}/{min_posts} bài)")
+
+    if not passed_hard_gate or score < 20:
+        status = "EXCLUDED"
+    elif score >= 40:
+        status = "RELEVANT"
+    else:
+        status = "REVIEW"
+
+    return (score, status, reasons)
+

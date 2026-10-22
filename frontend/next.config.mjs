@@ -1,3 +1,8 @@
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // The build helper opts in without rewriting this watched config file.
@@ -5,6 +10,7 @@ const nextConfig = {
     ? { experimental: { workerThreads: true, cpus: 2 } }
     : {}),
   output: "export",
+  outputFileTracingRoot: path.resolve(__dirname, "./"),
   images: {
     unoptimized: true,
   },
