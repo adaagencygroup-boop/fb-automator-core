@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 FACEBOOK_BASE_URL = f"https://graph.facebook.com/{os.getenv('FACEBOOK_GRAPH_API_VERSION', 'v19.0')}"
 
-from modules.module_06_omnichannel_chat.repositories import PageRepository, MessageRepository
+from modules.module_06_omnichannel_chat.repositories import PageRepository, MessageRepository, ConversationRepository
 from modules.module_06_omnichannel_chat.models import Message
 from modules.module_06_omnichannel_chat.websocket import manager
 from modules.module_06_omnichannel_chat.services.facebook_auth import FacebookAPIError, FacebookAuthService
@@ -17,6 +17,7 @@ class FacebookChatService:
         self.db = db
         self.page_repo = PageRepository(db)
         self.message_repo = MessageRepository(db)
+        self.conv_repo = ConversationRepository(db)
         self.auth_service = FacebookAuthService(db)
 
     async def send_message_reply(
@@ -80,6 +81,18 @@ class FacebookChatService:
                 is_read=True,
                 reply_to_message_id=reply_to_message_id
             )
+
+            try:
+                self.conv_repo.upsert_conversation(
+                    page_id=page_id,
+                    customer_psid=recipient_id,
+                    last_message=text,
+                    last_message_at=saved_msg.created_at,
+                    is_read=True,
+                    is_replied=True
+                )
+            except Exception as conv_err:
+                print(f"[Warning] Update conversation on reply error: {conv_err}")
 
             asyncio.create_task(manager.broadcast_to_user(
                 page.facebook_user_id,
@@ -164,6 +177,18 @@ class FacebookChatService:
                 is_read=True,
                 reply_to_message_id=reply_to_message_id
             )
+
+            try:
+                self.conv_repo.upsert_conversation(
+                    page_id=page_id,
+                    customer_psid=recipient_id,
+                    last_message=media_text,
+                    last_message_at=saved_msg.created_at,
+                    is_read=True,
+                    is_replied=True
+                )
+            except Exception as conv_err:
+                print(f"[Warning] Update conversation on attachment send error: {conv_err}")
 
             asyncio.create_task(manager.broadcast_to_user(
                 page.facebook_user_id,

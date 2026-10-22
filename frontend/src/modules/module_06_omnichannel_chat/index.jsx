@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   getChatPages,
+  getChatStatus,
   getConversations,
   getMessages,
   getNotifications,
@@ -30,8 +31,13 @@ import { useResizableWidth, ResizeHandle } from "@/lib/use-resizable-width";
 // 3 cột: (1) Danh sách Page · (2) Khung chat (1072:12415) · (3) Hội thoại / Thông báo
 
 async function fetchAll() {
-  const [p, c, n] = await Promise.all([getChatPages(), getConversations(), getNotifications()]);
-  return { p, c, n };
+  const [p, c, n, status] = await Promise.all([
+    getChatPages(),
+    getConversations(),
+    getNotifications(),
+    getChatStatus(),
+  ]);
+  return { p, c, n, status };
 }
 
 /**
@@ -78,6 +84,7 @@ export default function OmnichannelChatModule() {
   const [isMock, setIsMock] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [chatStatus, setChatStatus] = useState(null); // { has_accounts, accounts_count, has_pages, pages_count }
   const [resetting, setResetting] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [compactShowList, setCompactShowList] = useState(false); // bố cục 1 cột: đã vào Hội thoại chưa
@@ -101,7 +108,7 @@ export default function OmnichannelChatModule() {
     activeConvRef.current = activeConversationId;
   }, [activeConversationId]);
 
-  const applyData = ({ p, c, n }) => {
+  const applyData = ({ p, c, n, status }) => {
     setPages(p.pages || []);
     setTotalPages(p.total ?? (p.pages || []).length);
     setConversations(c.conversations || []);
@@ -109,6 +116,7 @@ export default function OmnichannelChatModule() {
     setIsMock(Boolean(p.isMock || c.isMock));
     // Chỉ coi là lỗi khi tải Page/Hội thoại hỏng (thông báo lỗi nhẹ hơn, không chặn)
     setLoadError(p.error || c.error || "");
+    if (status) setChatStatus(status);
     setLoading(false);
   };
 
@@ -328,6 +336,19 @@ export default function OmnichannelChatModule() {
       .then((res) => {
         if (res?.messages) {
           setMessagesByConversation((all) => ({ ...all, [id]: res.messages }));
+          if (res.messages.length > 0) {
+            const lastM = res.messages[res.messages.length - 1];
+            const rawSnippet = messagePreview(lastM.text) || (lastM.attachment ? attachmentLabel(lastM.attachment.type) : "");
+            const isOut = lastM.direction === "out" || lastM.direction === "outbound";
+            const lastText = isOut && rawSnippet
+              ? (rawSnippet.startsWith("Bạn: ") ? rawSnippet : `Bạn: ${rawSnippet}`)
+              : rawSnippet;
+            updateConversation(id, {
+              lastMessage: lastText,
+              updatedAt: lastM.createdAt || new Date().toISOString(),
+              replied: isOut,
+            });
+          }
         }
       })
       .finally(() => loadingMessages.current.delete(id));
@@ -350,11 +371,46 @@ export default function OmnichannelChatModule() {
             }
             return all;
           });
+          const lastM = res.messages[res.messages.length - 1];
+          const rawSnippet = messagePreview(lastM.text) || (lastM.attachment ? attachmentLabel(lastM.attachment.type) : "");
+          const isOut = lastM.direction === "out" || lastM.direction === "outbound";
+          const lastText = isOut && rawSnippet
+            ? (rawSnippet.startsWith("Bạn: ") ? rawSnippet : `Bạn: ${rawSnippet}`)
+            : rawSnippet;
+          updateConversation(activeConversationId, {
+            lastMessage: lastText,
+            updatedAt: lastM.createdAt || new Date().toISOString(),
+            replied: isOut,
+          });
         }
       });
     }, 3000);
     return () => clearInterval(interval);
   }, [activeConversationId]);
+
+  // Định kỳ đồng bộ danh sách hội thoại để luôn hiển thị tin nhắn mới nhất
+  useEffect(() => {
+    const refreshConversations = () => {
+      getConversations().then((res) => {
+        if (res?.conversations && res.conversations.length > 0) {
+          setConversations((prev) => {
+            const newMap = new Map(res.conversations.map((c) => [c.id, c]));
+            return prev.map((c) => {
+              const fresh = newMap.get(c.id);
+              if (fresh) {
+                newMap.delete(c.id);
+                return { ...c, ...fresh };
+              }
+              return c;
+            }).concat(Array.from(newMap.values()));
+          });
+        }
+      }).catch(() => {});
+    };
+
+    const interval = setInterval(refreshConversations, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   const selectConversation = (id) => {
     setOpenedNotificationId(null); // mở hội thoại thì đóng chi tiết thông báo
@@ -520,6 +576,8 @@ export default function OmnichannelChatModule() {
       onSearchChange={setSearch}
       onReset={() => setResetConfirmOpen(true)}
       resetting={resetting}
+      loading={loading}
+      chatStatus={chatStatus}
     />
   );
 
@@ -544,6 +602,7 @@ export default function OmnichannelChatModule() {
       notificationFilter={notificationFilter}
       onNotificationFilterChange={setNotificationFilter}
       onOpenNotification={openNotification}
+      loading={loading}
     />
   );
 
@@ -599,6 +658,8 @@ export default function OmnichannelChatModule() {
                 onSearchChange={setSearch}
                 onReset={() => setResetConfirmOpen(true)}
                 resetting={resetting}
+                loading={loading}
+                chatStatus={chatStatus}
               />
             </div>
 

@@ -144,6 +144,7 @@ export default function ConversationList({
   onNotificationFilterChange,
   onOpenNotification,
   onBack,
+  loading = false,
   className,
 }) {
   const { slice: convSlice, sentinelRef: convSentinel, hasMore: convHasMore } = useIncrementalList(conversations, 30);
@@ -166,10 +167,15 @@ export default function ConversationList({
         <>
           <FilterBar filter={filter} onFilterChange={onFilterChange} sort={sort} onSortChange={onSortChange} />
           <ul className="flex-1 min-h-0 overflow-y-auto">
-            {conversations.length === 0 && (
+            {loading ? (
+              <li className="px-3 py-16 text-center flex flex-col items-center justify-center gap-2">
+                <div className="size-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                <span className="text-xs text-slate-500 font-medium">Đang tải dữ liệu...</span>
+              </li>
+            ) : conversations.length === 0 ? (
               <li className="px-3 py-10 text-center text-xs text-slate-400">Không có hội thoại nào.</li>
-            )}
-            {convSlice.map((c, i) => (
+            ) : null}
+            {!loading && convSlice.map((c, i) => (
               <ConversationItem
                 key={c.id}
                 conversation={c}
@@ -179,7 +185,7 @@ export default function ConversationList({
                 onSelect={() => onSelectConversation(c.id)}
               />
             ))}
-            {convHasMore && <li ref={convSentinel} aria-hidden="true" className="h-4" />}
+            {!loading && convHasMore && <li ref={convSentinel} aria-hidden="true" className="h-4" />}
           </ul>
         </>
       ) : (

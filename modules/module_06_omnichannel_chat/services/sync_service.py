@@ -205,17 +205,8 @@ class FacebookSyncService:
                                             db.add(new_msg)
                                             db.commit()
 
-                                        # Cập nhật bảng v_conversations và v_customers
+                                        # Cập nhật bảng v_customers
                                         customer_repo.upsert_customer(psid=sender_id, name=customer_name)
-                                        conv_repo.upsert_conversation(
-                                            page_id=page_id,
-                                            customer_psid=sender_id,
-                                            customer_name=customer_name,
-                                            last_message=text,
-                                            last_message_at=dt,
-                                            is_read=True,
-                                            is_replied=(direction == "outbound")
-                                        )
                                     except Exception as msg_err:
                                         db.rollback()
                                         print(f"[Historical Message Save Warning] {fb_message_id}: {msg_err}")
@@ -226,6 +217,22 @@ class FacebookSyncService:
                                 db.rollback()
                                 print(f"[Historical Messages Sync Error] {e}")
                                 break
+
+                        # Cập nhật v_conversations theo đúng tin nhắn mới nhất thực tế trong database
+                        try:
+                            latest_msg_record = message_repo.get_latest_message(page_id, sender_id)
+                            if latest_msg_record:
+                                conv_repo.upsert_conversation(
+                                    page_id=page_id,
+                                    customer_psid=sender_id,
+                                    customer_name=customer_name,
+                                    last_message=latest_msg_record.text,
+                                    last_message_at=latest_msg_record.created_at,
+                                    is_read=True,
+                                    is_replied=(latest_msg_record.direction == "outbound")
+                                )
+                        except Exception as conv_sync_err:
+                            print(f"[Warning] Sync conversation preview error: {conv_sync_err}")
 
                     conv_paging = conv_json.get("paging", {})
                     conv_next_url = conv_paging.get("next")

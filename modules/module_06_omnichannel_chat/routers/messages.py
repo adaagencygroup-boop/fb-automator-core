@@ -162,20 +162,45 @@ def get_conversations(
         results = []
         for c in db_convs:
             p_name = page_dict.get(str(c.page_id)) or "Trang Facebook"
+            latest_msg = c.last_message
+            latest_time = c.last_message_at
+            is_replied = c.is_replied
+            direction = "outbound" if is_replied else "inbound"
+
+            # Cross-check với v_messages để đảm bảo luôn lấy đúng tin nhắn mới nhất
+            latest_db_msg = db.query(Message.text, Message.created_at, Message.direction)\
+                .filter(Message.page_id == c.page_id, Message.sender_id == c.customer_psid)\
+                .order_by(Message.created_at.desc(), Message.id.desc())\
+                .first()
+
+            if latest_db_msg:
+                latest_msg = latest_db_msg.text
+                latest_time = latest_db_msg.created_at
+                direction = latest_db_msg.direction or ("outbound" if is_replied else "inbound")
+                is_replied = (direction == "outbound")
+                if c.last_message != latest_msg or c.is_replied != is_replied:
+                    c.last_message = latest_msg
+                    c.last_message_at = latest_time
+                    c.is_replied = is_replied
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+
             results.append({
                 "page_id": c.page_id,
                 "page_name": p_name,
                 "avatar_url": c.customer_avatar or f"https://graph.facebook.com/v19.0/{c.page_id}/picture?type=large",
                 "sender_id": c.customer_psid,
                 "customer_name": c.customer_name or f"Khách hàng {c.customer_psid[:8]}",
-                "last_message": c.last_message,
-                "timestamp": int(c.last_message_at.timestamp() * 1000) if c.last_message_at else 0,
-                "direction": "outbound" if c.is_replied else "inbound",
+                "last_message": latest_msg,
+                "timestamp": int(latest_time.timestamp() * 1000) if latest_time else 0,
+                "direction": direction,
                 "is_read": c.is_read,
-                "is_replied": c.is_replied,
+                "is_replied": is_replied,
                 "is_starred": c.is_starred,
                 "tags": c.tags or "",
-                "created_at": c.last_message_at.isoformat() if c.last_message_at else ""
+                "created_at": latest_time.isoformat() if latest_time else ""
             })
 
         if is_paginated:
