@@ -160,8 +160,14 @@ def get_local_pages(
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     sql = text(f"""
-        SELECT DISTINCT p.id, p.page_id, p.page_name, p.page_access_token, p.avatar_url, p.status, p.facebook_user_id
+        SELECT p.id, p.page_id, p.page_name, p.page_access_token, p.avatar_url, p.status, p.facebook_user_id,
+               COALESCE(notif.cnt, 0) as notif_count
         FROM v_pages p
+        LEFT JOIN (
+            SELECT page_id, COUNT(*) as cnt
+            FROM v_notifications
+            GROUP BY page_id
+        ) notif ON p.page_id = notif.page_id
         LEFT JOIN v_accounts va ON p.facebook_user_id = va.facebook_user_id
         LEFT JOIN accounts a ON (
             p.facebook_user_id = a.uid 
@@ -170,7 +176,8 @@ def get_local_pages(
             OR (va.name IS NOT NULL AND va.name != '' AND va.name = a.profile_name)
         )
         {where_sql}
-        ORDER BY p.id DESC
+        GROUP BY p.id, p.page_id, p.page_name, p.page_access_token, p.avatar_url, p.status, p.facebook_user_id, notif.cnt
+        ORDER BY notif_count DESC, p.id DESC
     """)
 
     rows = db.execute(sql, params).mappings().all()
