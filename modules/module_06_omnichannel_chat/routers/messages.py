@@ -67,6 +67,8 @@ def get_conversations(
     offset: Optional[int] = Query(None, ge=0, description="Vị trí bắt đầu"),
     search: Optional[str] = Query(None, description="Tìm kiếm theo tên khách, nội dung, hoặc PSID"),
     filter: Optional[str] = Query(None, description="Lọc: all, unread, replied, unreplied, starred"),
+    starred: Optional[bool] = Query(None, description="Lọc: có gắn sao (true) hoặc không (false)"),
+    tag: Optional[str] = Query(None, description="Lọc theo nhãn (ví dụ: potential, ordered, callback, spam)"),
     sort: Optional[str] = Query("newest", description="Sắp xếp: newest hoặc oldest"),
     db: Session = Depends(get_db),
     current_user: Optional[SystemUser] = Depends(get_current_user_optional)
@@ -144,6 +146,15 @@ def get_conversations(
         query = query.filter(Conversation.is_replied == True)
     elif s_filter == "unreplied":
         query = query.filter(Conversation.is_replied == False)
+
+    if starred is True:
+        query = query.filter(Conversation.is_starred == True)
+    elif starred is False:
+        query = query.filter(Conversation.is_starred == False)
+
+    if tag and tag.strip():
+        t = f"%{tag.strip()}%"
+        query = query.filter(Conversation.tags.like(t))
 
     total_convs = query.count()
     if total_convs > 0 or not s_query:
