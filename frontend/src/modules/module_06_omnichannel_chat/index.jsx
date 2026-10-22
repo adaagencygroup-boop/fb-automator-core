@@ -306,10 +306,28 @@ export default function OmnichannelChatModule() {
 
   const pagesById = useMemo(() => Object.fromEntries(pages.map((p) => [p.id, p])), [pages]);
 
+  const notifCountByPage = useMemo(() => {
+    const map = {};
+    for (const n of notifications) {
+      const pid = String(n.pageId);
+      map[pid] = (map[pid] || 0) + 1;
+    }
+    return map;
+  }, [notifications]);
+
+  const sortedPages = useMemo(() => {
+    return [...pages].sort((a, b) => {
+      const countA = notifCountByPage[String(a.id)] || 0;
+      const countB = notifCountByPage[String(b.id)] || 0;
+      if (countB !== countA) return countB - countA;
+      return 0;
+    });
+  }, [pages, notifCountByPage]);
+
   const visiblePages = useMemo(() => {
     const q = normalize(search.trim());
-    return q ? pages.filter((p) => normalize(p.name).includes(q)) : pages;
-  }, [pages, search]);
+    return q ? sortedPages.filter((p) => normalize(p.name).includes(q)) : sortedPages;
+  }, [sortedPages, search]);
 
   const visibleConversations = useMemo(() => {
     let list = conversations;
