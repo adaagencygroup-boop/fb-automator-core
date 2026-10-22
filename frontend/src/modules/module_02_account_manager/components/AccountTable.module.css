@@ -1,0 +1,129 @@
+.toolbarContainer {
+  container-type: inline-size;
+}
+
+.categoryScroll {
+  scrollbar-width: thin;
+  scrollbar-color: #4b8eff transparent;
+}
+
+.categoryScroll::-webkit-scrollbar {
+  width: 3px;
+}
+
+.categoryScroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.categoryScroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #4b8eff;
+}
+
+.categoryScroll::-webkit-scrollbar-thumb:hover {
+  background: #2563eb;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  .categoryScroll {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+}
+
+@media (min-width: 1024px) {
+  .categorySidebar {
+    max-height: var(--category-max-height, 800px);
+    overflow: hidden;
+  }
+
+  .categorySidebar > div:first-child {
+    flex: 0 1 auto;
+    max-height: calc(var(--category-max-height, 800px) - 26px);
+  }
+
+  .categorySidebar nav {
+    margin-right: -9px;
+    padding-right: 8px;
+  }
+}
+
+.compactTable > thead > tr > th,
+.compactTable > tbody > tr > td {
+  padding-inline: 4px;
+}
+
+.compactTable > thead > tr > th {
+  letter-spacing: 0;
+}
+
+/* Give variable text the extra room; short statuses and dates stay compact. */
+.uidColumn {
+  width: 144px;
+}
+
+.nameColumn {
+  width: calc(70% - 484px);
+}
+
+.categoryColumn {
+  width: calc(30% - 176px);
+}
+
+.statusColumn {
+  width: 70px;
+}
+
+.loginColumn {
+  width: 124px;
+}
+
+.daysColumn {
+  width: 52px;
+}
+
+.lastLoginColumn {
+  width: 84px;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px 160px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.search {
+  position: relative;
+  min-width: 0;
+}
+
+/* Switch the whole action group, never an individual filter, to another row. */
+@container (min-width: 1040px) {
+  .toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+@container (max-width: 559px) {
+  .filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .search {
+    grid-column: 1 / -1;
+  }
+}
+
+@container (max-width: 359px) {
+  .filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

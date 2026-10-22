@@ -11,6 +11,7 @@ class OwnerRequest(BaseModel):
 class AccountInput(OwnerRequest):
     model_config = ConfigDict(populate_by_name=True)
     uid: str
+    category_id: Optional[int] = Field(None, ge=1)
     password: str = ""
     two_fa: Optional[str] = Field(None, validation_alias=AliasChoices("two_fa", "twofa_secret"))
     cookie: Optional[str] = None
@@ -77,6 +78,32 @@ class UidsRequest(OwnerRequest):
 
 class DeleteAccountsRequest(UidsRequest):
     delete_pages: bool = False
+
+
+class CategoryCreate(OwnerRequest):
+    name: str = Field(min_length=1, max_length=100)
+    color: Optional[str] = Field(None, pattern=r"^#[0-9a-fA-F]{6}$")
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def trim_name(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class CategoryUpdate(CategoryCreate):
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def name_not_null(cls, value):
+        if value is None:
+            raise ValueError("Name cannot be null")
+        return value
+
+
+class BulkSetCategoryRequest(UidsRequest):
+    uids: list[str] = Field(min_length=1, max_length=100)
+    category_id: Optional[int] = Field(..., ge=1)
 
 class LoginRequest(UidsRequest):
     threads: int = Field(3, ge=1, le=10)

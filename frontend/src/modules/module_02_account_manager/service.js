@@ -1,5 +1,6 @@
 import api from "@/services/api";
 import { API_BASE } from "@/config/constants";
+import { parseCategoriesResponse } from "./utils/categories.mjs";
 
 export const FIELD_LABEL_MAP = {
   threads: "Số luồng",
@@ -19,6 +20,8 @@ export const FIELD_LABEL_MAP = {
 export function translateErrorMessage(msg) {
   if (!msg) return "Dữ liệu không hợp lệ";
   const trimmed = String(msg).trim();
+  if (trimmed === "Category name already exists") return "Tên danh mục đã tồn tại.";
+  if (trimmed === "Category not found") return "Danh mục không còn tồn tại. Vui lòng tải lại danh sách.";
 
   if (/input should be a valid integer/i.test(trimmed)) {
     return "Yêu cầu nhập số nguyên hợp lệ";
@@ -172,6 +175,28 @@ export async function getAccountsPage(query = {}) {
 }
 export async function getAccountsStats() {
   try { return await api.get("/api/accounts/stats"); }
+  catch (error) { throw new Error(formatApiError(error)); }
+}
+
+export async function getCategories() {
+  try { return parseCategoriesResponse(await api.get("/api/accounts/categories")); }
+  catch (error) { throw new Error(formatApiError(error)); }
+}
+
+export async function saveCategory(data, id = null) {
+  try {
+    return id === null ? await api.post("/api/accounts/categories", data)
+      : await api.patch(`/api/accounts/categories/${id}`, data);
+  } catch (error) { throw new Error(formatApiError(error)); }
+}
+
+export async function deleteCategory(id) {
+  try { return await api.delete(`/api/accounts/categories/${id}`); }
+  catch (error) { throw new Error(formatApiError(error)); }
+}
+
+export async function setAccountCategory(uids, categoryId) {
+  try { return await api.post("/api/accounts/bulk-set-category", { uids, category_id: categoryId }); }
   catch (error) { throw new Error(formatApiError(error)); }
 }
 export async function checkExistingUids(uids) {
