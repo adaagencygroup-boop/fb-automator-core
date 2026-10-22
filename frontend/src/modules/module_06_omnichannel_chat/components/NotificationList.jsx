@@ -49,12 +49,13 @@ const formatDateTime = (iso) => {
   });
 };
 
-function SubTabs({ type, onTypeChange, counts }) {
+function SubTabs({ type, onTypeChange, counts, unreadCounts = {} }) {
   return (
     <div role="tablist" aria-label="Loại thông báo" className="flex border-t border-gray-100 shrink-0">
       {NOTIFICATION_TYPES.map((t) => {
         const active = type === t.id;
         const count = counts[t.id] || 0;
+        const unread = unreadCounts[t.id] || 0;
         return (
           <button
             key={t.id}
@@ -63,13 +64,16 @@ function SubTabs({ type, onTypeChange, counts }) {
             aria-selected={active}
             onClick={() => onTypeChange(t.id)}
             className={cn(
-              "flex-1 min-w-0 flex items-center justify-center px-3 pt-2.5 pb-[11px] -mb-px border-b-2 text-[13px] leading-5 whitespace-nowrap transition-colors",
+              "flex-1 min-w-0 flex items-center justify-center gap-1.5 px-3 pt-2.5 pb-[11px] -mb-px border-b-2 text-[13px] leading-5 whitespace-nowrap transition-colors",
               active ? "border-primary text-primary font-semibold" : "border-transparent text-gray-600 font-medium hover:text-gray-800",
               FOCUS,
             )}
           >
-            {t.label}
-            {count > 0 && ` (${count})`}
+            <span>{t.label}</span>
+            {count > 0 && <span className="text-xs">({count})</span>}
+            {unread > 0 && (
+              <span className="size-2 rounded-full bg-red-500" title={`${unread} chưa đọc`} aria-hidden="true" />
+            )}
           </button>
         );
       })}
@@ -140,8 +144,17 @@ export default function NotificationList({
   onFilterChange,
   onOpenNotification,
 }) {
-  const counts = Object.fromEntries(
+  const unreadCounts = Object.fromEntries(
     NOTIFICATION_TYPES.map((t) => [t.id, notifications.filter((n) => n.type === t.id && n.unread).length]),
+  );
+
+  const counts = Object.fromEntries(
+    NOTIFICATION_TYPES.map((t) => {
+      let filtered = notifications.filter((n) => n.type === t.id);
+      if (filter === "unread") filtered = filtered.filter((n) => n.unread);
+      if (filter === "unreplied") filtered = filtered.filter((n) => !n.replied);
+      return [t.id, filtered.length];
+    }),
   );
 
   let list = notifications.filter((n) => n.type === type);
@@ -153,7 +166,7 @@ export default function NotificationList({
 
   return (
     <>
-      <SubTabs type={type} onTypeChange={onTypeChange} counts={counts} />
+      <SubTabs type={type} onTypeChange={onTypeChange} counts={counts} unreadCounts={unreadCounts} />
       <StatusFilter filter={filter} onFilterChange={onFilterChange} label="Lọc thông báo" />
       <ul className="flex-1 min-h-0 overflow-y-auto p-3.5 flex flex-col gap-3 bg-slate-50/50">
         {list.length === 0 && <li className="py-10 text-center text-xs text-slate-400">Chưa có thông báo.</li>}
