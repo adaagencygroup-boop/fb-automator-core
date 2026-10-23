@@ -212,7 +212,8 @@ export default function GroupScanInfoPage() {
   const [rotateAfter, setRotateAfter] = useState(50);
   const [delayMin, setDelayMin] = useState(5);
   const [delayMax, setDelayMax] = useState(10);
-  const [publicOnly, setPublicOnly] = useState(true);
+  const [publicOnly, setPublicOnly] = useState(false);
+  const [privateOnly, setPrivateOnly] = useState(false);
   const [minMembers, setMinMembers] = useState(1000);
   const [minMembersEnabled, setMinMembersEnabled] = useState(true);
 
@@ -385,7 +386,9 @@ export default function GroupScanInfoPage() {
       keywords: payloadKeywords,
       delay_min: Math.max(0, Number(delayMin) || 0),
       delay_max: Math.max(Number(delayMin) || 0, Number(delayMax) || 0),
+      // Cả hai tick (hoặc không tick) = Public + Private; chỉ tick 1 = lọc đúng loại đó
       public_only: Boolean(publicOnly),
+      private_only: Boolean(privateOnly),
       min_members: minMembersEnabled ? Math.max(0, Number(minMembers) || 0) : null,
       force: true,
     };
@@ -931,14 +934,38 @@ export default function GroupScanInfoPage() {
                 onCheckedChange={(value) => {
                   const on = Boolean(value);
                   setPublicOnly(on);
+                  const both = on && privateOnly;
+                  const none = !on && !privateOnly;
                   toast.info(
-                    on
-                      ? "Đã bật: chỉ quét nhóm công khai (Public)."
-                      : "Đã tắt lọc công khai — nhận cả nhóm riêng tư nếu có.",
+                    both || none
+                      ? "Đang quét cả công khai và riêng tư."
+                      : on
+                        ? "Đã bật: chỉ quét nhóm công khai (Public)."
+                        : "Đã tắt lọc công khai — chỉ còn lọc riêng tư.",
                   );
                 }}
               />
               Chỉ quét nhóm đang ở chế độ công khai
+            </label>
+
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-[#0F172A]">
+              <Checkbox
+                checked={privateOnly}
+                onCheckedChange={(value) => {
+                  const on = Boolean(value);
+                  setPrivateOnly(on);
+                  const both = on && publicOnly;
+                  const none = !on && !publicOnly;
+                  toast.info(
+                    both || none
+                      ? "Đang quét cả công khai và riêng tư."
+                      : on
+                        ? "Đã bật: chỉ quét nhóm riêng tư (Private) — ghi chú Chưa vào nhóm."
+                        : "Đã tắt lọc riêng tư — chỉ còn lọc công khai.",
+                  );
+                }}
+              />
+              Chỉ quét nhóm đang ở chế độ riêng tư
             </label>
 
             <label className="flex flex-wrap items-center gap-2 text-xs text-[#0F172A]">
