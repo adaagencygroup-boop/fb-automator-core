@@ -40,6 +40,7 @@ export default function GroupAccountSection({
   onConfirm,
   isLocked,
   setIsLocked,
+  stepNumber = "2",
 }) {
   const effectiveAccounts = accounts || [];
 
@@ -140,7 +141,7 @@ export default function GroupAccountSection({
 
   return (
     <SectionCard
-      number="1"
+      number={stepNumber}
       title="Chọn tài khoản"
       description="Chọn danh sách tài khoản Facebook sẽ thực hiện đăng bài và tương tác"
       aside={

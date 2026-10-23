@@ -60,6 +60,7 @@ export default function GroupSourceSection({
   setCustomGroups,
   selectedAccountKeys = [],
   accounts = [],
+  stepNumber = "4",
 }) {
   const groupFileInputRef = useRef(null);
   const [maxResults, setMaxResults] = useState("50");
@@ -437,7 +438,7 @@ export default function GroupSourceSection({
 
   return (
     <SectionCard
-      number="3"
+      number={stepNumber}
       title="Nguồn nhóm"
       description="Chọn hình thức cấp nguồn nhóm: quét tìm theo từ khóa Facebook hoặc nạp từ file danh sách link nhóm (.txt, .csv)"
       aside={

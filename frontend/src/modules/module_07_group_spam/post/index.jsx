@@ -28,6 +28,9 @@ import {
   X,
   Film,
   Trash2,
+  AlertTriangle,
+  FolderPlus,
+  Hash,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -61,6 +64,7 @@ import GroupAccountSection from "./components/GroupAccountSection";
 import useSavedApis from "../shared/useSavedApis";
 import GroupSettingsSection from "./components/GroupSettingsSection";
 import GroupSourceSection from "./components/GroupSourceSection";
+import CampaignInfoSection from "../shared/CampaignInfoSection";
 
 const DEFAULT_GEMINI_MODELS = [
   { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
@@ -189,8 +193,53 @@ export default function GroupPostModule() {
   const [scheduleTime, setScheduleTime] = useState("08:00");
   const [runState, setRunState] = useState("idle");
   const [campaignId, setCampaignId] = useState(null);
+  const [campaignName, setCampaignName] = useState("");
+  const [campaignDescription, setCampaignDescription] = useState("");
+  const [campaignLocked, setCampaignLocked] = useState(false);
+  const [isRerun, setIsRerun] = useState(false);
   const [campaignProgress, setCampaignProgress] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem("fb_rerun_campaign");
+      if (stored) {
+        const data = JSON.parse(stored);
+        if (data.campaign_id) setCampaignId(data.campaign_id);
+        if (data.name) setCampaignName(data.name);
+        if (data.description) setCampaignDescription(data.description);
+        setIsRerun(true);
+
+        const cfg = data.config || {};
+        if (cfg.account_uids?.length) {
+          setSelectedAccountKeys(cfg.account_uids);
+        }
+        if (cfg.groups?.length) {
+          setCustomGroups(cfg.groups);
+          setSelectedGroupKeys(cfg.groups.map((g) => g.key || g.url));
+        }
+        if (cfg.posts?.length) {
+          setPosts(cfg.posts);
+        }
+        if (cfg.settings) {
+          if (cfg.settings.threads) setThreads(String(cfg.settings.threads));
+          if (cfg.settings.rest_minutes) setRestMinutes(String(cfg.settings.rest_minutes));
+          if (cfg.settings.delay_min) setDelayMin(String(cfg.settings.delay_min));
+          if (cfg.settings.delay_max) setDelayMax(String(cfg.settings.delay_max));
+        }
+        // Theo SRS: "Hẹn giờ cũ đã qua phải chọn lại"
+        setScheduleEnabled(false);
+        setScheduleDate("");
+
+        toast.info(
+          `Đã nạp lại cấu hình từ chiến dịch "${data.name}". Vui lòng rà soát lại các bước trước khi bắt đầu.`,
+          "CHẾ ĐỘ CHẠY LẠI"
+        );
+      }
+    } catch (e) {
+      console.warn("Lỗi đọc cấu hình chạy lại:", e);
+    }
+  }, []);
 
   useEffect(() => {
     postsRef.current = posts;
@@ -526,14 +575,37 @@ export default function GroupPostModule() {
   };
 
   const handleStart = async () => {
-    if (!selectedAccounts.length || !hasGroups || !hasApiKey) return;
+    const trimmedCampaignName = (campaignName || "").trim();
+    if (!trimmedCampaignName) {
+      toast.warning("Vui lòng nhập Tên chiến dịch ở Bước 1 trước khi bắt đầu!", "THIẾU TÊN CHIẾN DỊCH");
+      const el = document.getElementById("step-1-campaign");
+      if (el) el.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+
+    if (!selectedAccounts.length || !hasGroups || !hasApiKey) {
+      toast.warning("Vui lòng chọn tài khoản, nguồn nhóm và cấu hình API trước khi bắt đầu!", "THIẾU CẤU HÌNH");
+      return;
+    }
+
+    const activeGroups = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
+    if (selectedAccounts.length > activeGroups.length) {
+      toast.error(
+        `Chưa đủ số lượng nhóm. Bạn đã chọn ${selectedAccounts.length} tài khoản nhưng chỉ có ${activeGroups.length} nhóm. Vui lòng chọn thêm nhóm hoặc giảm số tài khoản để số tài khoản không lớn hơn số nhóm.`,
+        "QUY TẮC PHÂN BỔ (A ≤ G)"
+      );
+      const el = document.getElementById("step-4-group-source");
+      if (el) el.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+
     setRunState("starting");
     setCampaignProgress({
       status: "QUEUED",
       logs: [{
         time: new Date().toISOString().slice(0, 19),
         level: "INFO",
-        message: "Đã nhận lệnh bắt đầu, đang chuẩn bị cấu hình chiến dịch...",
+        message: `Đã nhận lệnh bắt đầu chiến dịch "${trimmedCampaignName}", đang chuẩn bị cấu hình...`,
       }],
     });
     try {
@@ -558,9 +630,11 @@ export default function GroupPostModule() {
         }
       }
 
-      const activeGroups = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
       appendCampaignLog("INFO", `Đang gửi chiến dịch ${selectedAccounts.length} tài khoản × ${activeGroups.length} nhóm tới worker...`);
       const campaign = await runGroupCampaign({
+        campaign_id: campaignId || undefined,
+        name: trimmedCampaignName,
+        description: campaignDescription || undefined,
         action_type: "POST",
         account_ids: selectedAccounts.map((account) => account.id),
         account_uids: selectedAccounts.map((account) => account.uid),
@@ -585,6 +659,8 @@ export default function GroupPostModule() {
       setCampaignId(campaign.job_id);
       setCampaignProgress(campaign);
       setRunState(campaign.status === "QUEUED" ? "starting" : "running");
+      sessionStorage.removeItem("fb_rerun_campaign");
+      setIsRerun(false);
       toast.success("Đã khởi động chiến dịch đăng bài nhóm thành công!", "BẮT ĐẦU CHIẾN DỊCH");
     } catch (error) {
       appendCampaignLog("ERROR", error.message || "Không thể bắt đầu chiến dịch");
@@ -618,9 +694,27 @@ export default function GroupPostModule() {
         </p>
       </div>
 
-      {/* Bước 1: Chọn tài khoản / người dùng đi seeding */}
-      <div id="step-1-accounts" className="scroll-mt-6">
+      {/* Bước 1: Tạo chiến dịch */}
+      <CampaignInfoSection
+        campaignName={campaignName}
+        setCampaignName={setCampaignName}
+        campaignDescription={campaignDescription}
+        setCampaignDescription={setCampaignDescription}
+        campaignId={campaignId}
+        isLocked={campaignLocked}
+        setIsLocked={setCampaignLocked}
+        isRerun={isRerun}
+        stepNumber="1"
+        onContinue={() => {
+          const el = document.getElementById("step-2-accounts");
+          if (el) el.scrollIntoView({ behavior: "smooth" });
+        }}
+      />
+
+      {/* Bước 2: Chọn tài khoản / người dùng đi seeding */}
+      <div id="step-2-accounts" className="scroll-mt-6">
         <GroupAccountSection
+          stepNumber="2"
           accounts={accounts}
           accountsLoading={accountsLoading}
           selectedAccountKeys={selectedAccountKeys}
@@ -631,18 +725,21 @@ export default function GroupPostModule() {
         />
       </div>
 
-      {/* Bước 2: Cấu hình API & thông số chung */}
-      <div id="step-2-settings" className="scroll-mt-6">
-        <GroupSettingsSection apiSource={apiSource}
+      {/* Bước 3: Cấu hình API & thông số chung */}
+      <div id="step-3-settings" className="scroll-mt-6">
+        <GroupSettingsSection
+          stepNumber="3"
+          apiSource={apiSource}
           threads={threads} setThreads={setThreads} restMinutes={restMinutes} setRestMinutes={setRestMinutes}
           settingsLoading={settingsLoading} settingsAction={settingsAction} settingsFeedback={settingsFeedback}
           onSaveSettings={handleSaveSettings} isLocked={settingsConfirmed} setIsLocked={setIsSettingsLocked}
         />
       </div>
 
-      {/* Bước 3: Nguồn nhóm */}
-      <div id="step-3-group-source" className="scroll-mt-6">
+      {/* Bước 4: Nguồn nhóm */}
+      <div id="step-4-group-source" className="scroll-mt-6">
         <GroupSourceSection
+          stepNumber="4"
           groupSource={groupSource}
           setGroupSource={setGroupSource}
           groupFile={groupFile}
@@ -658,11 +755,54 @@ export default function GroupPostModule() {
           selectedAccountKeys={selectedAccountKeys}
           accounts={accounts}
         />
+
+        {/* Cảnh báo A > G theo quy tắc nghiệp vụ 1.4.4 & SG-BR-05 */}
+        {selectedAccounts.length > activeGroupsCount && (
+          <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50/90 p-4 shadow-xs">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="size-5 shrink-0 text-amber-600 mt-0.5" />
+              <div className="flex-1 text-xs">
+                <p className="font-bold text-amber-900">
+                  Chưa đủ số lượng nhóm. Bạn đã chọn {selectedAccounts.length} tài khoản nhưng chỉ có {activeGroupsCount} nhóm.
+                </p>
+                <p className="mt-1 text-amber-800 leading-relaxed">
+                  Vui lòng chọn thêm nhóm hoặc giảm số tài khoản để số tài khoản không lớn hơn số nhóm (A ≤ G).
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      const el = document.getElementById("step-4-group-source");
+                      if (el) el.scrollIntoView({ behavior: "smooth" });
+                    }}
+                    className="border-amber-300 bg-white text-xs font-semibold text-amber-800 hover:bg-amber-100"
+                  >
+                    + Chọn thêm nhóm
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      const trimmed = selectedAccountKeys.slice(0, activeGroupsCount);
+                      setSelectedAccountKeys(trimmed);
+                      toast.info(`Đã tự động giảm số tài khoản xuống ${trimmed.length} tài khoản để bằng số nhóm.`, "ĐIỀU CHỈNH SỐ LƯỢNG");
+                    }}
+                    className="bg-amber-600 text-xs font-semibold text-white hover:bg-amber-700"
+                  >
+                    - Giảm số tài khoản
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Bước 4 */}
-      <div id="step-4-media" className="scroll-mt-6">
-        <SectionCard number="4" title="Chọn media (ảnh/video)">
+      {/* Bước 5 */}
+      <div id="step-5-media" className="scroll-mt-6">
+        <SectionCard number="5" title="Chọn media (ảnh/video)">
           <div className="mb-4 flex h-9 items-center justify-center rounded-md bg-primary text-xs font-semibold text-white">
             <ImageIcon className="mr-2 size-4" /> Hình ảnh + Video
           </div>
@@ -785,9 +925,9 @@ export default function GroupPostModule() {
         </SectionCard>
       </div>
 
-      {/* Bước 5 */}
-      <div id="step-5-content" className="scroll-mt-6">
-        <SectionCard number="5" title="Tạo nội dung bằng AI">
+      {/* Bước 6 */}
+      <div id="step-6-content" className="scroll-mt-6">
+        <SectionCard number="6" title="Tạo nội dung bằng AI">
           <div className="grid gap-4 md:grid-cols-[1fr_320px]">
             <Field label="Nội dung gốc chủ đề/mô tả">
               <div className="relative">
@@ -908,9 +1048,9 @@ export default function GroupPostModule() {
         </SectionCard>
       </div>
 
-      {/* Bước 6 */}
-      <div id="step-6-posting" className="scroll-mt-6">
-        <SectionCard number="6" title="Cài đặt đăng bài">
+      {/* Bước 7 */}
+      <div id="step-7-posting" className="scroll-mt-6">
+        <SectionCard number="7" title="Cài đặt đăng bài">
           <div className="flex flex-wrap gap-x-8 gap-y-3">
             <CheckLabel checked={scheduleEnabled} onCheckedChange={setScheduleEnabled}>
               Bật hẹn giờ đăng bài
@@ -971,82 +1111,95 @@ export default function GroupPostModule() {
         </SectionCard>
       </div>
 
-      {/* Thông tin tác vụ cấu hình */}
-      <SectionCard title="Thông tin tác vụ cấu hình" aside={<Info className="size-4 text-primary" />}>
-        <div className="grid gap-x-10 gap-y-3 text-[11px] md:grid-cols-2">
-          {[
-            [
-              <Users key="a" className="size-3.5" />,
-              "Tài khoản",
-              selectedAccounts.length
-                ? `${selectedAccounts.length} tài khoản đã chọn${liveAccountsCount > 0 ? ` (${liveAccountsCount} Live)` : ""}`
-                : "Chưa chọn tài khoản",
-            ],
-            [
-              <ListFilter key="b" className="size-3.5" />,
-              "Hạn bài",
-              `${maxPosts} bài (kế hoạch ${totalPlanned} bài)`,
-            ],
-            [
-              <Sparkles key="c" className="size-3.5" />,
-              "API Key",
-              hasApiKey ? `Đã cấu hình (${modelDisplayName})` : "Chưa cấu hình",
-            ],
-            [
-              <Sparkles key="d" className="size-3.5" />,
-              "Số bài AI",
-              `${generatedCount} / ${posts.length} bài`,
-            ],
-            [
-              <Search key="e" className="size-3.5" />,
-              "Nguồn nhóm",
-              groupSource === "search"
-                ? (groupSearch ? `Từ khóa "${groupSearch}" (${activeGroupsCount} nhóm)` : `Tìm theo từ khóa (${activeGroupsCount} nhóm)`)
-                : (groupFile?.name ? `${groupFile.name} (${activeGroupsCount} nhóm)` : `Từ file link nhóm (${activeGroupsCount} nhóm)`),
-            ],
-            [
-              <ImageIcon key="f" className="size-3.5" />,
-              "Min / Max media",
-              mediaFiles.length
-                ? `${mediaFiles.length} tệp đã chọn (${minMedia} – ${maxMedia} ảnh/bài)`
-                : `${minMedia} – ${maxMedia} ảnh`,
-            ],
-            [<RefreshCw key="g" className="size-3.5" />, "Luồng chạy", `${threads} luồng`],
-            [<Clock3 key="h" className="size-3.5" />, "Giãn cách đăng", `${delayMin} – ${delayMax} giây`],
-            [<Clock3 key="i" className="size-3.5" />, "Nghỉ", `${restMinutes} phút`],
-            [
-              <CalendarDays key="j" className="size-3.5" />,
-              "Hẹn giờ",
-              scheduleEnabled ? (scheduleDate ? `${scheduleDate} ${scheduleTime}` : "Đã kích hoạt") : "Đã tắt",
-            ],
-          ].map(([icon, label, value]) => (
-            <div key={label} className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-              <span className="flex items-center gap-2 text-slate-500">
-                {icon}
-                {label}
-              </span>
-              <strong
-                className={
-                  value?.startsWith?.("Đã cấu hình") || (label === "Hẹn giờ" && scheduleEnabled)
-                    ? "text-emerald-600"
-                    : value === "Chưa cấu hình" || value === "Chưa chọn tài khoản"
-                    ? "text-amber-600"
-                    : "text-slate-700"
-                }
-              >
-                {value}
-              </strong>
-            </div>
-          ))}
-        </div>
-      </SectionCard>
+      {/* Bước 8: Thông tin cấu hình tổng hợp */}
+      <div id="step-8-summary" className="scroll-mt-6">
+        <SectionCard number="8" title="Thông tin cấu hình tổng hợp" aside={<Info className="size-4 text-primary" />}>
+          <div className="grid gap-x-10 gap-y-3 text-[11px] md:grid-cols-2">
+            {[
+              [
+                <FolderPlus key="camp" className="size-3.5" />,
+                "Chiến dịch",
+                campaignName ? campaignName : "Chưa đặt tên",
+              ],
+              [
+                <Hash key="cid" className="size-3.5" />,
+                "Mã chiến dịch",
+                campaignId || "Tự động tạo mới",
+              ],
+              [
+                <Users key="a" className="size-3.5" />,
+                "Tài khoản",
+                selectedAccounts.length
+                  ? `${selectedAccounts.length} tài khoản đã chọn${liveAccountsCount > 0 ? ` (${liveAccountsCount} Live)` : ""}`
+                  : "Chưa chọn tài khoản",
+              ],
+              [
+                <ListFilter key="b" className="size-3.5" />,
+                "Hạn bài",
+                `${maxPosts} bài (kế hoạch ${totalPlanned} bài)`,
+              ],
+              [
+                <Sparkles key="c" className="size-3.5" />,
+                "API Key",
+                hasApiKey ? `Đã cấu hình (${modelDisplayName})` : "Chưa cấu hình",
+              ],
+              [
+                <Sparkles key="d" className="size-3.5" />,
+                "Số bài AI",
+                `${generatedCount} / ${posts.length} bài`,
+              ],
+              [
+                <Search key="e" className="size-3.5" />,
+                "Nguồn nhóm",
+                groupSource === "search"
+                  ? (groupSearch ? `Từ khóa "${groupSearch}" (${activeGroupsCount} nhóm)` : `Tìm theo từ khóa (${activeGroupsCount} nhóm)`)
+                  : (groupFile?.name ? `${groupFile.name} (${activeGroupsCount} nhóm)` : `Từ file link nhóm (${activeGroupsCount} nhóm)`),
+              ],
+              [
+                <ImageIcon key="f" className="size-3.5" />,
+                "Min / Max media",
+                mediaFiles.length
+                  ? `${mediaFiles.length} tệp đã chọn (${minMedia} – ${maxMedia} ảnh/bài)`
+                  : `${minMedia} – ${maxMedia} ảnh`,
+              ],
+              [<RefreshCw key="g" className="size-3.5" />, "Luồng chạy", `${threads} luồng`],
+              [<Clock3 key="h" className="size-3.5" />, "Giãn cách đăng", `${delayMin} – ${delayMax} giây`],
+              [<Clock3 key="i" className="size-3.5" />, "Nghỉ", `${restMinutes} phút`],
+              [
+                <CalendarDays key="j" className="size-3.5" />,
+                "Hẹn giờ",
+                scheduleEnabled ? (scheduleDate ? `${scheduleDate} ${scheduleTime}` : "Đã kích hoạt") : "Đã tắt",
+              ],
+            ].map(([icon, label, value]) => (
+              <div key={label} className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                <span className="flex items-center gap-2 text-slate-500">
+                  {icon}
+                  {label}
+                </span>
+                <strong
+                  className={
+                    value?.startsWith?.("Đã cấu hình") || (label === "Hẹn giờ" && scheduleEnabled)
+                      ? "text-emerald-600"
+                      : value === "Chưa cấu hình" || value === "Chưa chọn tài khoản"
+                      ? "text-amber-600"
+                      : "text-slate-700"
+                  }
+                >
+                  {value}
+                </strong>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      </div>
 
-      {/* Tiến trình */}
-      <Card className="min-h-64 border-slate-200 p-5 shadow-sm">
-        <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
-          <span className="flex size-5 items-center justify-center rounded bg-emerald-50 text-emerald-600">▥</span>
-          Theo dõi tiến trình
-        </div>
+      {/* Bước 9: Tiến trình */}
+      <div id="step-9-progress" className="scroll-mt-6">
+        <Card className="min-h-64 border-slate-200 p-5 shadow-sm">
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+            <span className="flex size-5 items-center justify-center rounded bg-primary/10 font-bold text-[11px] text-primary">9</span>
+            Theo dõi tiến trình
+          </div>
         {runState !== "idle" || campaignProgress ? (
           <div className="mt-4 max-h-72 min-h-48 space-y-1 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/50 p-2">
             {campaignProgress?.logs?.length ? campaignProgress.logs.slice().reverse().map((log, index) => (
@@ -1068,6 +1221,7 @@ export default function GroupPostModule() {
           </div>
         )}
       </Card>
+      </div>
 
       {/* Sticky Bottom Action Bar */}
       <Card className="sticky bottom-0 z-20 flex flex-col items-center justify-between gap-4 border-slate-200 bg-white/95 px-6 py-4 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur sm:flex-row">

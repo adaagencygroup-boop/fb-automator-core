@@ -4,7 +4,20 @@
   "rest_minutes": 10,
   "max_posts": 10,
   "api_keys": {
-    "gemini": "CA/Ve1Ap62SHFI7viHEVGz5GiWBgT+oGOLLIiL0oDALNMPVpG8/7IlUIGJPDZjJXzdUDGb15ajhd3fgQaIPibg==",
-    "deepseek": "TRdDvKacV85cJoO6x83cDuYi5ciLCY7Jc2bRHfjRYhabHMxWHgU70/uXpFaxTBfPK+5pAFWHd8AOwl99AMxOJg=="
-  }
+    "gemini": "CA/Ve1Ap62SHFI7viHEVGz5GiWBgT+oGOLLIiL0oDALNMPVpG8/7IlUIGJPDZjJXzdUDGb15ajhd3fgQaIPibg=="
+  },
+  "credentials": [
+    {
+      "id": "legacy-gemini",
+      "name": "gemini (đã lưu)",
+      "model": "gemini-2.5-flash",
+      "encrypted_key": "CA/Ve1Ap62SHFI7viHEVGz5GiWBgT+oGOLLIiL0oDALNMPVpG8/7IlUIGJPDZjJXzdUDGb15ajhd3fgQaIPibg=="
+    },
+    {
+      "id": "7de0eeae4de64082b813715dad39bbbe",
+      "name": "deepseek-v4-flash",
+      "model": "deepseek-v4-flash",
+      "encrypted_key": "zXjbGDJHqzo7DTeebSmiQbD0MZrvgSiVcDKVMjHtCQDzVYBOYKX6sug7/gwcwd23n+U9KOUuMDmSTfdfqgmprA=="
+    }
+  ]
 }
