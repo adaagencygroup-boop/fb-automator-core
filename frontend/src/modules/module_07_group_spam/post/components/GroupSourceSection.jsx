@@ -76,10 +76,12 @@ export default function GroupSourceSection({
   const [memberFilter, setMemberFilter] = useState("all");
   const [groupTypeFilter, setGroupTypeFilter] = useState("all");
   const [frequencyFilter, setFrequencyFilter] = useState("all");
+  const [membershipFilter, setMembershipFilter] = useState("all");
   const [isFileProcessing, setIsFileProcessing] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [isQuantityDialogOpen, setIsQuantityDialogOpen] = useState(false);
+  const [showSearchFilters, setShowSearchFilters] = useState(false);
   const [showResultFilters, setShowResultFilters] = useState(false);
 
   // Mặc định dùng tài khoản đầu tiên đã chọn ở Bước 2 để quét nhóm.
@@ -125,6 +127,13 @@ export default function GroupSourceSection({
       if (groupTypeFilter === "public") matchType = group.privacy === "public";
       else if (groupTypeFilter === "private") matchType = group.privacy === "private";
 
+      let matchMembership = true;
+      if (membershipFilter === "joined") {
+        matchMembership = group.membership_status === "joined";
+      } else if (membershipFilter === "not_joined") {
+        matchMembership = group.membership_status === "not_joined";
+      }
+
       // Lọc theo tần suất bài viết / ngày (ví dụ: "10+ bài viết/ngày", "25 bài/ngày")
       let matchFrequency = true;
       if (frequencyFilter !== "all") {
@@ -136,9 +145,9 @@ export default function GroupSourceSection({
         }
       }
 
-      return matchQuery && matchMember && matchType && matchFrequency;
+      return matchQuery && matchMember && matchType && matchMembership && matchFrequency;
     });
-  }, [baseGroups, groupFilter, memberFilter, groupTypeFilter, frequencyFilter]);
+  }, [baseGroups, groupFilter, memberFilter, groupTypeFilter, membershipFilter, frequencyFilter]);
 
   // Ẩn bảng danh sách nhóm và các thanh thao tác khi ở chế độ tìm kiếm nhưng chưa thực hiện tìm kiếm từ khóa nào
   const isSearchIdle =
@@ -147,9 +156,13 @@ export default function GroupSourceSection({
     !isSearching &&
     (!customGroups || customGroups.length === 0);
 
-  const activeResultFilterCount = [memberFilter, groupTypeFilter, frequencyFilter].filter(
-    (value) => value !== "all"
-  ).length;
+  const activeResultFilterCount = [
+    memberFilter,
+    groupTypeFilter,
+    frequencyFilter,
+    membershipFilter,
+  ].filter((value) => value !== "all").length;
+  const activeSearchFilterCount = activeResultFilterCount + (maxResults !== "50" ? 1 : 0);
 
   // Toggle chọn 1 nhóm
   const toggleGroup = (key, checked) => {
@@ -191,11 +204,6 @@ export default function GroupSourceSection({
   // Chọn tất cả nhóm trong kết quả lọc
   const handleSelectAll = () => {
     setSelectedGroupKeys(filteredGroups.map((g) => g.key));
-  };
-
-  // Bỏ chọn tất cả nhóm
-  const handleClearAll = () => {
-    setSelectedGroupKeys([]);
   };
 
   // Xóa 1 nhóm khỏi danh sách
@@ -259,6 +267,7 @@ export default function GroupSourceSection({
         member_filter: memberFilter,
         group_type: groupTypeFilter,
         frequency_filter: frequencyFilter,
+        membership_filter: membershipFilter,
         account_uid: activeScrapingAccount.uid,
       });
       const foundGroups = res?.groups || [];
@@ -391,6 +400,88 @@ export default function GroupSourceSection({
     }
     toast.info("Đã xóa file danh sách nhóm", "THÔNG BÁO");
   };
+
+  const renderGroupFilters = (className, includeMaxResults = false) => (
+    <div className={className}>
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+        Lọc kết quả
+      </span>
+      {includeMaxResults && (
+        <div className="min-w-[135px] flex-1 sm:flex-none">
+          <SelectField
+            value={maxResults}
+            onChange={(event) => setMaxResults(event.target.value)}
+            className="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
+          >
+            {[10, 20, 30, 50, 100, 150, 200].map((value) => (
+              <option key={value} value={value}>Tối đa {value} nhóm</option>
+            ))}
+          </SelectField>
+        </div>
+      )}
+      <div className="min-w-[145px] flex-1 sm:flex-none">
+        <SelectField
+          value={memberFilter}
+          onChange={(event) => setMemberFilter(event.target.value)}
+          className="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
+        >
+          <option value="all">Mọi quy mô</option>
+          <option value="10k">Trên 10K thành viên</option>
+          <option value="50k">Trên 50K thành viên</option>
+          <option value="100k">Trên 100K thành viên</option>
+        </SelectField>
+      </div>
+      <div className="min-w-[135px] flex-1 sm:flex-none">
+        <SelectField
+          value={frequencyFilter}
+          onChange={(event) => setFrequencyFilter(event.target.value)}
+          className="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
+        >
+          <option value="all">Mọi tần suất</option>
+          <option value="5">5+ bài/ngày</option>
+          <option value="10">10+ bài/ngày</option>
+          <option value="20">20+ bài/ngày</option>
+        </SelectField>
+      </div>
+      <div className="min-w-[125px] flex-1 sm:flex-none">
+        <SelectField
+          value={groupTypeFilter}
+          onChange={(event) => setGroupTypeFilter(event.target.value)}
+          className="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
+        >
+          <option value="all">Mọi loại nhóm</option>
+          <option value="public">Công khai</option>
+          <option value="private">Kiểm duyệt</option>
+        </SelectField>
+      </div>
+      <div className="min-w-[135px] flex-1 sm:flex-none">
+        <SelectField
+          value={membershipFilter}
+          onChange={(event) => setMembershipFilter(event.target.value)}
+          className="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
+        >
+          <option value="all">Mọi trạng thái tham gia</option>
+          <option value="joined">Đã tham gia</option>
+          <option value="not_joined">Chưa tham gia</option>
+        </SelectField>
+      </div>
+      {(activeResultFilterCount > 0 || (includeMaxResults && maxResults !== "50")) && (
+        <button
+          type="button"
+          onClick={() => {
+            if (includeMaxResults) setMaxResults("50");
+            setMemberFilter("all");
+            setGroupTypeFilter("all");
+            setFrequencyFilter("all");
+            setMembershipFilter("all");
+          }}
+          className="inline-flex h-7 items-center gap-1 px-1 text-[10px] font-medium text-slate-500 hover:text-red-600"
+        >
+          <RotateCw className="size-3" /> Đặt lại
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <SectionCard
@@ -541,17 +632,24 @@ export default function GroupSourceSection({
                 className="h-9 pl-9 text-xs"
               />
             </div>
-            <div className="w-full shrink-0 sm:w-36">
-              <SelectField
-                value={maxResults}
-                onChange={(e) => setMaxResults(e.target.value)}
-                className="h-9 border-slate-200 bg-white text-xs"
-              >
-                {[10, 20, 30, 50, 100, 150, 200].map((value) => (
-                  <option key={value} value={value}>Tối đa {value} nhóm</option>
-                ))}
-              </SelectField>
-            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setShowSearchFilters((current) => !current)}
+              className={`h-9 shrink-0 px-3 text-xs ${
+                showSearchFilters || activeSearchFilterCount > 0
+                  ? "border-primary/40 bg-blue-50 text-primary"
+                  : ""
+              }`}
+            >
+              <ListFilter className="mr-1.5 size-3.5" /> Bộ lọc
+              {activeSearchFilterCount > 0 && (
+                <span className="ml-1 rounded-full bg-primary px-1.5 py-0.5 text-[9px] leading-none text-white">
+                  {activeSearchFilterCount}
+                </span>
+              )}
+            </Button>
             <Button
               type="button"
               size="sm"
@@ -567,6 +665,12 @@ export default function GroupSourceSection({
               {isSearching ? "Đang quét..." : "Quét nhóm"}
             </Button>
           </div>
+
+          {(showSearchFilters || activeSearchFilterCount > 0) &&
+            renderGroupFilters(
+              "mt-2 flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50/60 px-2.5 py-2",
+              true
+            )}
 
         </div>
       )}
@@ -615,71 +719,13 @@ export default function GroupSourceSection({
               >
                 <Check className="mr-1 size-3" /> Chọn tất cả
               </Button>
-              <button
-                type="button"
-                onClick={handleClearAll}
-                className="whitespace-nowrap px-1 text-[11px] font-medium text-slate-500 hover:text-red-600"
-              >
-                Bỏ chọn
-              </button>
             </div>
           </div>
 
-          {(showResultFilters || activeResultFilterCount > 0) && (
-            <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-2.5 py-2">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                Lọc kết quả
-              </span>
-              <div className="min-w-[145px] flex-1 sm:flex-none">
-                <SelectField
-                  value={memberFilter}
-                  onChange={(event) => setMemberFilter(event.target.value)}
-                  className="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
-                >
-                  <option value="all">Mọi quy mô</option>
-                  <option value="10k">Trên 10K thành viên</option>
-                  <option value="50k">Trên 50K thành viên</option>
-                  <option value="100k">Trên 100K thành viên</option>
-                </SelectField>
-              </div>
-              <div className="min-w-[135px] flex-1 sm:flex-none">
-                <SelectField
-                  value={frequencyFilter}
-                  onChange={(event) => setFrequencyFilter(event.target.value)}
-                  className="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
-                >
-                  <option value="all">Mọi tần suất</option>
-                  <option value="5">5+ bài/ngày</option>
-                  <option value="10">10+ bài/ngày</option>
-                  <option value="20">20+ bài/ngày</option>
-                </SelectField>
-              </div>
-              <div className="min-w-[125px] flex-1 sm:flex-none">
-                <SelectField
-                  value={groupTypeFilter}
-                  onChange={(event) => setGroupTypeFilter(event.target.value)}
-                  className="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
-                >
-                  <option value="all">Mọi loại nhóm</option>
-                  <option value="public">Công khai</option>
-                  <option value="private">Kiểm duyệt</option>
-                </SelectField>
-              </div>
-              {activeResultFilterCount > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMemberFilter("all");
-                    setGroupTypeFilter("all");
-                    setFrequencyFilter("all");
-                  }}
-                  className="inline-flex h-7 items-center gap-1 px-1 text-[10px] font-medium text-slate-500 hover:text-red-600"
-                >
-                  <RotateCw className="size-3" /> Đặt lại
-                </button>
-              )}
-            </div>
-          )}
+          {(showResultFilters || activeResultFilterCount > 0) &&
+            renderGroupFilters(
+              "flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-2.5 py-2"
+            )}
 
           <div ref={tableContainerRef} className="max-h-[320px] overflow-auto">
               <table className="w-full min-w-[620px] text-left text-[11px]">

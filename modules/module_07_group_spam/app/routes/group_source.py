@@ -61,6 +61,7 @@ async def search_groups(item: SearchGroupInput, owner: str | None = Depends(scop
             item.frequency_filter,
             item.account_uid,
             owner,
+            item.membership_filter,
         )
         return {"groups": results, "count": len(results)}
     except Exception as exc:

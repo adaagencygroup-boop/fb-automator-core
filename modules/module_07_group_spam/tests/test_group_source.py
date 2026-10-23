@@ -105,6 +105,45 @@ class GroupSourceUnitTests(unittest.TestCase):
         self.assertEqual(results[0]["name"], "Cộng đồng Liên Minh Huyền Thoại Việt Nam")
         self.assertEqual(results[0]["uid"], "grouplienminh")
 
+    def test_search_filters_group_membership_status(self):
+        scraped = [
+            {
+                "key": "group_joined",
+                "name": "Liên minh game thủ Việt Nam",
+                "url": "facebook.com/groups/lienminhjoined",
+                "uid": "lienminhjoined",
+                "frequency": "20 posts/day",
+                "members": "100K",
+                "mem_num": 100.0,
+                "privacy": "public",
+                "membership_status": "joined",
+                "already_posted": False,
+            },
+            {
+                "key": "group_not_joined",
+                "name": "Cộng đồng Liên Minh Việt",
+                "url": "facebook.com/groups/lienminhnew",
+                "uid": "lienminhnew",
+                "frequency": "20 posts/day",
+                "members": "100K",
+                "mem_num": 100.0,
+                "privacy": "public",
+                "membership_status": "not_joined",
+                "already_posted": False,
+            },
+        ]
+        with patch(
+            "modules.module_07_group_spam.app.services.group_source.search_facebook_via_browser",
+            return_value=scraped,
+        ):
+            results = search_facebook_groups(
+                "liên minh",
+                max_results=10,
+                membership_filter="not_joined",
+            )
+
+        self.assertEqual([item["uid"] for item in results], ["lienminhnew"])
+
     def test_get_sample_template(self):
         template = get_sample_template()
         self.assertIn("DANH SÁCH LINK NHÓM FACEBOOK", template)

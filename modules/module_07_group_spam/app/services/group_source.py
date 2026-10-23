@@ -533,6 +533,7 @@ def search_facebook_via_browser(
             if (menuNames.includes(rawName)) continue;
             
             let privacy = 'public';
+            let membershipStatus = 'unknown';
             let members = '—';
             let frequency = '—';
             
@@ -543,6 +544,15 @@ def search_facebook_via_browser(
                 }
                 if (lower.includes('công khai') || lower.includes('public')) {
                     privacy = 'public';
+                }
+                if (lower.includes('đã tham gia') || lower === 'joined') {
+                    membershipStatus = 'joined';
+                } else if (
+                    lower.includes('chưa tham gia') || lower.includes('not joined') ||
+                    lower.includes('tham gia nhóm') || lower.includes('join group') ||
+                    lower === 'tham gia' || lower === 'join'
+                ) {
+                    membershipStatus = 'not_joined';
                 }
                 // Tìm số thành viên (vd: 120K thành viên, 50 nghìn thành viên, 1.2M members)
                 const memMatch = line.match(/([\\d]+([.,][\\d]+)?\\s*(k|triệu|nghìn|tr|m)?)\\s*(thành viên|members)/i);
@@ -561,6 +571,7 @@ def search_facebook_via_browser(
                 url: fullHref,
                 name: name || 'Nhóm Facebook',
                 privacy: privacy,
+                membership_status: membershipStatus,
                 members: members,
                 frequency: frequency
             });
@@ -621,6 +632,7 @@ def search_facebook_via_browser(
                 "frequency": item.get("frequency") or "—",
                 "members": f"{mem_k:.1f}K" if mem_k else str(mem_raw),
                 "privacy": item.get("privacy") or "public",
+                "membership_status": item.get("membership_status") or "unknown",
                 "already_posted": is_already_posted,
                 "mem_num": mem_k,
             }
@@ -658,6 +670,7 @@ def search_facebook_groups(
     frequency_filter: str = "all",
     account_uid: Optional[str] = None,
     owner: str | None = None,
+    membership_filter: str = "all",
 ) -> List[Dict[str, Any]]:
     """
     Tìm kiếm nhóm Facebook thật theo từ khóa và bộ lọc.
@@ -684,6 +697,7 @@ def search_facebook_groups(
             mem_num = float(grp.get("mem_num") or 0.0)
             privacy = grp.get("privacy", "public")
             freq = grp.get("frequency", "")
+            membership_status = grp.get("membership_status", "unknown")
 
             # Áp dụng bộ lọc số lượng thành viên
             if member_filter == "10k" and mem_num < 10:
@@ -697,6 +711,12 @@ def search_facebook_groups(
             if group_type == "public" and privacy != "public":
                 continue
             if group_type == "private" and privacy != "private":
+                continue
+
+            # Áp dụng bộ lọc trạng thái tham gia nhóm
+            if membership_filter == "joined" and membership_status != "joined":
+                continue
+            if membership_filter == "not_joined" and membership_status != "not_joined":
                 continue
 
             # Áp dụng bộ lọc tần suất bài viết
@@ -751,6 +771,7 @@ def search_facebook_groups(
             mem_num = grp["mem_num"]
             privacy = grp["privacy"]
             freq = grp["frequency"]
+            membership_status = grp.get("membership_status", "unknown")
 
             # Áp dụng bộ lọc số lượng thành viên
             if member_filter == "10k" and mem_num < 10:
@@ -764,6 +785,11 @@ def search_facebook_groups(
             if group_type == "public" and privacy != "public":
                 continue
             if group_type == "private" and privacy != "private":
+                continue
+
+            if membership_filter == "joined" and membership_status != "joined":
+                continue
+            if membership_filter == "not_joined" and membership_status != "not_joined":
                 continue
 
             # Áp dụng bộ lọc tần suất bài viết
@@ -787,6 +813,7 @@ def search_facebook_groups(
                 "frequency": freq,
                 "members": f"{mem_num:.1f}K",
                 "privacy": privacy,
+                "membership_status": membership_status,
                 "already_posted": is_already_posted,
             }
             matched_groups.append((score, item))
