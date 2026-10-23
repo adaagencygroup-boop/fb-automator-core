@@ -337,7 +337,20 @@ const normalizePath = (p = "/") => {
 /** Tìm mục menu theo đường dẫn (bỏ qua dấu "/" cuối). Không khớp -> null */
 export function findNavItemByPath(pathname) {
   const target = normalizePath(pathname);
-  return NAV_ROUTES.find((item) => pathOf(item) === target) || null;
+  const exact = NAV_ROUTES.find((item) => pathOf(item) === target);
+  if (exact) return exact;
+
+  // Nếu là trang con (ví dụ /groups/campaigns/camp-001 -> khớp với /groups/campaigns)
+  const matches = NAV_ROUTES.filter((item) => {
+    const p = pathOf(item);
+    return p !== "/" && target.startsWith(p);
+  });
+  if (matches.length > 0) {
+    // Sắp xếp lấy route dài nhất
+    matches.sort((a, b) => pathOf(b).length - pathOf(a).length);
+    return matches[0];
+  }
+  return null;
 }
 
 /** metadata (tiêu đề tab trình duyệt) cho trang của một mục menu — dùng trong các file src/app/.../page.js */
