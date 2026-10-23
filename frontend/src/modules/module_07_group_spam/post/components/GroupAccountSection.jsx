@@ -19,10 +19,11 @@ import { toast } from "@/lib/toast";
 import { SectionCard, initialsOf } from "../../shared/components";
 import { AVATAR_COLORS } from "../../shared/constants";
 import { attachDragSelection } from "../../shared/drag-selection";
+import ConfirmDialog from "@/components/ui/confirm-dialog";
 
 /**
  * ============================================================================
- * MODULE 07 - BƯỚC 1: CHỌN TÀI KHOẢN / NGƯỜI DÙNG ĐI SEEDING (GroupAccountSection)
+ * MODULE 07 - BƯỚC 2: CHỌN TÀI KHOẢN / NGƯỜI DÙNG ĐI SEEDING (GroupAccountSection)
  * Kế thừa nghiệp vụ từ FaceBook_Post_Group.py:
  * 1. Quản lý & nạp danh sách tài khoản Facebook thực tế từ Module 2 (Quản lý tài khoản)
  * 2. Tìm kiếm nhanh tài khoản theo UID, Tên người dùng, Email
@@ -38,11 +39,13 @@ export default function GroupAccountSection({
   setSelectedAccountKeys,
   onRefreshAccounts,
   onConfirm,
+  onContinue,
   isLocked,
   setIsLocked,
+  isStep1Completed = true,
   stepNumber = "2",
 }) {
-  const effectiveAccounts = accounts || [];
+  const effectiveAccounts = useMemo(() => accounts || [], [accounts]);
 
   const [internalLocked, setInternalLocked] = useState(false);
   const locked = isLocked !== undefined ? isLocked : internalLocked;
@@ -52,6 +55,8 @@ export default function GroupAccountSection({
   };
 
   const [accountSearch, setAccountSearch] = useState("");
+  const [showNoAccountWarning, setShowNoAccountWarning] = useState(false);
+  const [showStep1Warning, setShowStep1Warning] = useState(false);
 
   // Lọc tài khoản theo từ khóa tìm kiếm
   const filteredAccounts = useMemo(() => {
@@ -64,9 +69,12 @@ export default function GroupAccountSection({
 
   const tableContainerRef = useRef(null);
   const rowsRef = useRef(filteredAccounts);
-  rowsRef.current = filteredAccounts;
   const selectedKeysRef = useRef(selectedAccountKeys);
-  selectedKeysRef.current = selectedAccountKeys;
+
+  useEffect(() => {
+    rowsRef.current = filteredAccounts;
+    selectedKeysRef.current = selectedAccountKeys;
+  }, [filteredAccounts, selectedAccountKeys]);
 
   // Gắn cơ chế drag-to-select (giữ chuột kéo để chọn nhiều dòng liên tục)
   useEffect(() => {
@@ -110,18 +118,20 @@ export default function GroupAccountSection({
     if (onRefreshAccounts) onRefreshAccounts();
   };
 
-  // Xác nhận tài khoản và cuộn xuống Bước 2 (ràng buộc: phải chọn ít nhất 1 tài khoản)
+  // Xác nhận tài khoản và chuyển sang Bước 3 (ràng buộc: phải hoàn thành Bước 1 và chọn ít nhất 1 tài khoản)
   const handleConfirmAccounts = () => {
+    if (!isStep1Completed) {
+      setShowStep1Warning(true);
+      return;
+    }
+
     if (!selectedAccountKeys || selectedAccountKeys.length === 0) {
-      toast.warning(
-        "Vui lòng chọn ít nhất 1 tài khoản Facebook ở bảng trên trước khi tiếp tục!",
-        "CHƯA CHỌN TÀI KHOẢN"
-      );
+      setShowNoAccountWarning(true);
       return;
     }
 
     toast.success(
-      `Đã xác nhận ${selectedAccountKeys.length} tài khoản Facebook. Đang chuyển sang Bước 2...`,
+      `Đã xác nhận ${selectedAccountKeys.length} tài khoản Facebook. Đang chuyển sang Bước 3...`,
       "XÁC NHẬN THÀNH CÔNG"
     );
 
@@ -131,12 +141,16 @@ export default function GroupAccountSection({
       onConfirm(selectedAccountKeys);
     }
 
-    setTimeout(() => {
-      const step2El = document.getElementById("step-2-settings");
-      if (step2El) {
-        step2El.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-    }, 120);
+    if (onContinue) {
+      onContinue();
+    } else {
+      setTimeout(() => {
+        const step3El = document.getElementById("step-3-settings");
+        if (step3El) {
+          step3El.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      }, 120);
+    }
   };
 
   return (
@@ -148,12 +162,12 @@ export default function GroupAccountSection({
         locked ? (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 border border-emerald-200/60">
             <Check className="size-3 text-emerald-600" />
-            Đã chọn {selectedAccountKeys.length}/{effectiveAccounts.length} tài khoản
+            Đã xác nhận
           </span>
         ) : (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700 border border-amber-200/60">
             <Edit3 className="size-3 text-amber-600" />
-            Đang chọn ({selectedAccountKeys.length}/{effectiveAccounts.length})
+            Đang thiết lập
           </span>
         )
       }
@@ -330,28 +344,19 @@ export default function GroupAccountSection({
           className={`text-[11px] ${
             locked
               ? "text-emerald-600 font-medium"
-              : selectedAccountKeys.length > 0
-                ? "text-slate-500"
-                : "text-amber-600 font-medium"
+              : "text-slate-500"
           }`}
         >
           {locked
             ? `Đã xác nhận ${selectedAccountKeys.length} tài khoản Facebook. Bấm Chỉnh sửa nếu muốn thay đổi.`
             : selectedAccountKeys.length > 0
-              ? `Đã chọn ${selectedAccountKeys.length}/${effectiveAccounts.length} tài khoản. Bấm Xác nhận tài khoản để tiếp tục.`
-              : "Chưa chọn tài khoản nào (Bắt buộc chọn ít nhất 1 tài khoản để tiếp tục sang Bước 2 và phục vụ Bước 3)"}
+              ? `Đã chọn ${selectedAccountKeys.length}/${effectiveAccounts.length} tài khoản`
+              : "Chưa chọn tài khoản nào"}
         </div>
         <div className="flex gap-2">
           {locked ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setLocked(false)}
-              className="cursor-pointer text-xs flex items-center gap-1.5 border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-medium shadow-2xs"
-            >
-              <Edit3 className="size-3.5 text-slate-600" />
-              Chỉnh sửa
+            <Button type="button" variant="outline" size="sm" onClick={() => setLocked(false)}>
+              <Edit3 className="mr-1.5 size-3.5" /> Chỉnh sửa
             </Button>
           ) : (
             <Button
@@ -359,13 +364,43 @@ export default function GroupAccountSection({
               size="sm"
               disabled={accountsLoading}
               onClick={handleConfirmAccounts}
-              className="cursor-pointer text-xs bg-slate-900 text-white hover:bg-slate-800"
+              className="bg-primary text-white hover:bg-primary/90"
             >
-              Xác nhận tài khoản
+              <Check className="mr-1.5 size-3.5" /> Xác nhận
             </Button>
           )}
         </div>
       </div>
+
+      {/* Popup cảnh báo khi chưa thực hiện Bước 1 mà ấn xác nhận Bước 2 */}
+      <ConfirmDialog
+        isOpen={showStep1Warning}
+        onClose={() => setShowStep1Warning(false)}
+        onConfirm={() => {
+          setShowStep1Warning(false);
+          const step1El = document.getElementById("step-1-campaign");
+          if (step1El) {
+            step1El.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        }}
+        title="Chưa hoàn thành Bước 1"
+        description="Bạn chưa thực hiện Bước 1 (Tạo chiến dịch). Vui lòng nhập tên chiến dịch và bấm Xác nhận ở Bước 1 trước khi xác nhận danh sách tài khoản ở Bước 2."
+        confirmText="Đến Bước 1"
+        cancelText="Đóng"
+        variant="warning"
+      />
+
+      {/* Popup cảnh báo khi chưa chọn tài khoản mà ấn xác nhận */}
+      <ConfirmDialog
+        isOpen={showNoAccountWarning}
+        onClose={() => setShowNoAccountWarning(false)}
+        onConfirm={() => setShowNoAccountWarning(false)}
+        title="Chưa chọn tài khoản Facebook"
+        description="Bạn chưa chọn tài khoản Facebook nào. Vui lòng chọn ít nhất 1 tài khoản ở danh sách trên trước khi xác nhận để tiếp tục sang Bước 3."
+        confirmText="Đã hiểu"
+        variant="warning"
+        hideCancel
+      />
     </SectionCard>
   );
 }

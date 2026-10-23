@@ -1,23 +1,15 @@
 {
-  "model": "deepseek-v4-flash",
+  "model": "gpt-4o",
   "threads": 2,
   "rest_minutes": 10,
   "max_posts": 10,
-  "api_keys": {
-    "gemini": "CA/Ve1Ap62SHFI7viHEVGz5GiWBgT+oGOLLIiL0oDALNMPVpG8/7IlUIGJPDZjJXzdUDGb15ajhd3fgQaIPibg=="
-  },
+  "api_keys": {},
   "credentials": [
     {
-      "id": "legacy-gemini",
-      "name": "gemini (đã lưu)",
-      "model": "gemini-2.5-flash",
-      "encrypted_key": "CA/Ve1Ap62SHFI7viHEVGz5GiWBgT+oGOLLIiL0oDALNMPVpG8/7IlUIGJPDZjJXzdUDGb15ajhd3fgQaIPibg=="
-    },
-    {
-      "id": "7de0eeae4de64082b813715dad39bbbe",
+      "id": "002104e856214aea948f095898a7fabc",
       "name": "deepseek-v4-flash",
       "model": "deepseek-v4-flash",
-      "encrypted_key": "zXjbGDJHqzo7DTeebSmiQbD0MZrvgSiVcDKVMjHtCQDzVYBOYKX6sug7/gwcwd23n+U9KOUuMDmSTfdfqgmprA=="
+      "encrypted_key": "w0GB/Pvf4k6EHiNraAy/TPo8SO4IhBVCe9MuNzOD3wVjiX82cnf389YMc8CFngUjsQMLjd0OZ6GB96ATYtSFGw=="
     }
   ]
 }

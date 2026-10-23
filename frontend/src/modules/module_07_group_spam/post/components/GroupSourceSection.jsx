@@ -143,9 +143,12 @@ export default function GroupSourceSection({
 
   const tableContainerRef = useRef(null);
   const rowsRef = useRef(filteredGroups);
-  rowsRef.current = filteredGroups;
   const selectedKeysRef = useRef(selectedGroupKeys);
-  selectedKeysRef.current = selectedGroupKeys;
+
+  useEffect(() => {
+    rowsRef.current = filteredGroups;
+    selectedKeysRef.current = selectedGroupKeys;
+  }, [filteredGroups, selectedGroupKeys]);
 
   // Gắn cơ chế drag-to-select (giữ chuột kéo để lướt chọn nhiều nhóm liên tục)
   useEffect(() => {
@@ -275,15 +278,15 @@ export default function GroupSourceSection({
 
   // Quét tìm nhóm theo từ khóa qua Backend (dữ liệu nhóm Facebook thật)
   const handleSearchGroups = async () => {
-    // RÀNG BUỘC: Bắt buộc phải chọn ít nhất 1 tài khoản ở Bước 1
+    // RÀNG BUỘC: Bắt buộc phải chọn ít nhất 1 tài khoản ở Bước 2
     if (!selectedAccountKeys || selectedAccountKeys.length === 0) {
       toast.warning(
-        "Vui lòng chọn ít nhất 1 tài khoản Facebook ở Bước 1 để thực hiện quét nhóm thật!",
+        "Vui lòng chọn ít nhất 1 tài khoản Facebook ở Bước 2 để thực hiện quét nhóm thật!",
         "YÊU CẦU CHỌN TÀI KHOẢN"
       );
-      const step1El = document.getElementById("step-1-accounts");
-      if (step1El) {
-        step1El.scrollIntoView({ behavior: "smooth", block: "start" });
+      const step2El = document.getElementById("step-2-accounts");
+      if (step2El) {
+        step2El.scrollIntoView({ behavior: "smooth", block: "start" });
       }
       return;
     }
@@ -617,11 +620,11 @@ export default function GroupSourceSection({
               <button
                 type="button"
                 onClick={() => {
-                  document.getElementById("step-1-accounts")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  document.getElementById("step-2-accounts")?.scrollIntoView({ behavior: "smooth", block: "start" });
                 }}
                 className="text-[11px] text-slate-500 hover:text-primary transition-colors cursor-pointer"
               >
-                Đổi tài khoản ở Bước 1 →
+                Đổi tài khoản ở Bước 2 →
               </button>
             </div>
           ) : (
@@ -629,17 +632,17 @@ export default function GroupSourceSection({
               <div className="flex items-center gap-2">
                 <AlertCircle className="size-4 text-amber-600 shrink-0" />
                 <span className="text-[11px]">
-                  <strong>Chưa chọn tài khoản ở Bước 1.</strong> Hệ thống cần 1 tài khoản Facebook để đăng nhập và cào dữ liệu nhóm thật.
+                  <strong>Chưa chọn tài khoản ở Bước 2.</strong> Hệ thống cần 1 tài khoản Facebook để đăng nhập và cào dữ liệu nhóm thật.
                 </span>
               </div>
               <button
                 type="button"
                 onClick={() => {
-                  document.getElementById("step-1-accounts")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  document.getElementById("step-2-accounts")?.scrollIntoView({ behavior: "smooth", block: "start" });
                 }}
                 className="rounded-md bg-amber-600 px-2.5 py-1 text-[11px] font-semibold text-white shadow-2xs hover:bg-amber-700 cursor-pointer"
               >
-                Lên Bước 1 chọn tài khoản
+                Lên Bước 2 chọn tài khoản
               </button>
             </div>
           )}
