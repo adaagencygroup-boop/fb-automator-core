@@ -237,6 +237,56 @@ def remove_accents(input_str: str) -> str:
     return "".join(c for c in nfkd if not unicodedata.combining(c)).lower().replace("đ", "d").replace("Đ", "d")
 
 
+def normalize_search_text(value: str) -> str:
+    """Chuẩn hóa tên/URL để đối chiếu từ khóa không dấu và theo ranh giới từ."""
+    decoded = urllib.parse.unquote(str(value or ""))
+    normalized = remove_accents(decoded)
+    return re.sub(r"[^a-z0-9]+", " ", normalized).strip()
+
+
+def clean_scraped_group_name(value: str) -> str:
+    """Loại các nhãn trợ năng Facebook bị ghép vào tên nhóm trong DOM."""
+    name = re.sub(r"\s+", " ", str(value or "").replace("\u00a0", " ")).strip()
+    wrapped = re.search(
+        r"(?:unread\s*)?welcome\s+to\s+(.+?)(?:\s+now\s+you\s+can\s+post\b|$)",
+        name,
+        flags=re.IGNORECASE,
+    )
+    if wrapped:
+        name = wrapped.group(1).strip()
+    name = re.sub(r"^unread\s*", "", name, flags=re.IGNORECASE).strip()
+    name = re.sub(
+        r"\s+now\s+you\s+can\s+post,?\s+connect\s+with\s+other\s+members\s+and\s+more\..*$",
+        "",
+        name,
+        flags=re.IGNORECASE,
+    ).strip()
+    return name
+
+
+def is_group_relevant(keyword: str, name: str, url: str = "") -> bool:
+    """Chỉ nhận nhóm có cụm từ khóa hoặc đầy đủ các token trong tên/URL."""
+    normalized_keyword = normalize_search_text(keyword)
+    if not normalized_keyword:
+        return False
+
+    normalized_name = normalize_search_text(name)
+    normalized_url = normalize_search_text(url)
+    haystack = f"{normalized_name} {normalized_url}".strip()
+    if normalized_keyword in haystack:
+        return True
+
+    compact_keyword = normalized_keyword.replace(" ", "")
+    compact_haystack = haystack.replace(" ", "")
+    if len(compact_keyword) >= 3 and compact_keyword in compact_haystack:
+        return True
+
+    tokens = [token for token in normalized_keyword.split() if len(token) >= 2]
+    return bool(tokens) and all(
+        re.search(rf"\b{re.escape(token)}\b", haystack) for token in tokens
+    )
+
+
 def get_posted_group_records(owner: str | None = None) -> List[Dict[str, Any]]:
     """
     Lấy danh sách chi tiết các nhóm Facebook thực tế đã từng chạy thành công từ bảng group_run_tasks.
@@ -406,7 +456,8 @@ def search_facebook_via_browser(
         js_extract_script = """
         const results = [];
         const seen = new Set();
-        const anchors = Array.from(document.querySelectorAll('a[href*="/groups/"]'));
+        const searchRoot = document.querySelector('[role="main"]') || document.querySelector('main') || document;
+        const anchors = Array.from(searchRoot.querySelectorAll('a[href*="/groups/"]'));
         
         for (const a of anchors) {
             const rawHref = a.getAttribute('href') || a.href || '';
@@ -455,15 +506,18 @@ def search_facebook_via_browser(
             
             // Tìm container chứa thông tin thẻ nhóm
             let container = a;
+            let hasGroupMetadata = false;
             for (let i = 0; i < 6; i++) {
                 if (container.parentElement && container.parentElement !== document.body) {
                     container = container.parentElement;
                     const text = container.innerText || '';
                     if (text.includes('thành viên') || text.includes('members') || text.includes('bài viết') || text.includes('posts')) {
+                        hasGroupMetadata = true;
                         break;
                     }
                 }
             }
+            if (!hasGroupMetadata) continue;
             
             const cardText = container.innerText || a.innerText || '';
             const lines = cardText.split('\\n').map(l => l.trim()).filter(Boolean);
@@ -479,8 +533,8 @@ def search_facebook_via_browser(
             if (menuNames.includes(rawName)) continue;
             
             let privacy = 'public';
-            let members = '50K';
-            let frequency = '15 bài viết/ngày';
+            let members = '—';
+            let frequency = '—';
             
             for (const line of lines) {
                 const lower = line.toLowerCase();
@@ -532,20 +586,22 @@ def search_facebook_via_browser(
         for idx, item in enumerate(raw_items, 1):
             clean_url = clean_group_url(item["url"])
             uid = extract_group_identifier(clean_url)
-            name = (item.get("name") or "").strip()
+            name = clean_scraped_group_name(item.get("name") or "")
 
             # Bỏ qua các URL điều hướng, tab tìm kiếm của Facebook
             if not uid or uid.lower() in SYSTEM_GROUP_SLUGS or "/search" in clean_url.lower():
                 continue
             if name.lower() in FORBIDDEN_NAMES:
                 continue
+            if not is_group_relevant(clean_keyword, name, clean_url):
+                continue
 
             group_key = f"group_{uid}"
             is_already_posted = (group_key.lower() in posted_set) or (clean_url.lower() in posted_set)
 
             # Tính toán mem_num float để phục vụ lọc nếu cần
-            mem_raw = item.get("members", "50K")
-            mem_k = 50.0
+            mem_raw = item.get("members") or "—"
+            mem_k = 0.0
             mem_digits = re.search(r"([\d]+([.,][\d]+)?)", str(mem_raw))
             if mem_digits:
                 val = float(mem_digits.group(1).replace(",", "."))
@@ -562,8 +618,8 @@ def search_facebook_via_browser(
                 "name": name or f"Nhóm Facebook [ID: {uid}]",
                 "url": clean_url,
                 "uid": uid,
-                "frequency": item.get("frequency") or "15 bài viết/ngày",
-                "members": f"{mem_k:.1f}K" if mem_k else mem_raw,
+                "frequency": item.get("frequency") or "—",
+                "members": f"{mem_k:.1f}K" if mem_k else str(mem_raw),
                 "privacy": item.get("privacy") or "public",
                 "already_posted": is_already_posted,
                 "mem_num": mem_k,
@@ -618,7 +674,14 @@ def search_facebook_groups(
     if browser_results:
         filtered: List[Dict[str, Any]] = []
         for grp in browser_results:
-            mem_num = grp.get("mem_num", 50.0)
+            clean_name = clean_scraped_group_name(grp.get("name") or "")
+            clean_url = clean_group_url(grp.get("url") or "")
+            if not clean_name or not is_group_relevant(clean_keyword, clean_name, clean_url):
+                continue
+
+            grp["name"] = clean_name
+            grp["url"] = clean_url
+            mem_num = float(grp.get("mem_num") or 0.0)
             privacy = grp.get("privacy", "public")
             freq = grp.get("frequency", "")
 

@@ -53,7 +53,7 @@ class GroupSourceUnitTests(unittest.TestCase):
 
     def test_search_facebook_groups(self):
         scraped = [
-            {"key": f"group_{index}", "name": f"Group {index}",
+            {"key": f"group_{index}", "name": f"Nhóm việc làm {index}",
              "url": f"facebook.com/groups/{index}", "uid": str(index),
              "frequency": "20 posts/day", "members": "100K", "mem_num": 100.0,
              "privacy": "public", "already_posted": False}
@@ -66,6 +66,44 @@ class GroupSourceUnitTests(unittest.TestCase):
             results = search_facebook_groups("việc làm", max_results=3)
         self.assertEqual(len(results), 3)
         self.assertTrue(all("url" in r and "key" in r for r in results))
+
+    def test_search_removes_unrelated_browser_groups_and_cleans_name(self):
+        scraped = [
+            {
+                "key": "group_lienminh",
+                "name": (
+                    "UnreadWelcome to Cộng đồng Liên Minh Huyền Thoại Việt Nam "
+                    "Now you can post, connect with other members and more.1d"
+                ),
+                "url": "facebook.com/groups/grouplienminh",
+                "uid": "grouplienminh",
+                "frequency": "90+ posts a day",
+                "members": "180K",
+                "mem_num": 180.0,
+                "privacy": "public",
+                "already_posted": False,
+            },
+            {
+                "key": "group_vieclam",
+                "name": "UnreadWelcome to TÌM VIỆC LÀM TPHCM Now you can post, connect with other members and more.1d",
+                "url": "facebook.com/groups/vieclamtphcm",
+                "uid": "vieclamtphcm",
+                "frequency": "15 posts/day",
+                "members": "50K",
+                "mem_num": 50.0,
+                "privacy": "public",
+                "already_posted": False,
+            },
+        ]
+        with patch(
+            "modules.module_07_group_spam.app.services.group_source.search_facebook_via_browser",
+            return_value=scraped,
+        ):
+            results = search_facebook_groups("liên minh", max_results=10)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["name"], "Cộng đồng Liên Minh Huyền Thoại Việt Nam")
+        self.assertEqual(results[0]["uid"], "grouplienminh")
 
     def test_get_sample_template(self):
         template = get_sample_template()

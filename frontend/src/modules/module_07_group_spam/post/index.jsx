@@ -1,9 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { AlertTriangle } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import {
@@ -551,51 +549,13 @@ export default function GroupPostModule() {
           customGroups={customGroups}
           setCustomGroups={setCustomGroups}
           selectedAccountKeys={selectedAccountKeys}
+          setSelectedAccountKeys={setSelectedAccountKeys}
           accounts={accounts}
+          onContinue={() => {
+            const el = document.getElementById("step-5-media");
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
         />
-
-        {/* Cảnh báo A > G theo quy tắc nghiệp vụ 1.4.4 & SG-BR-05 */}
-        {selectedAccounts.length > activeGroupsCount && (
-          <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50/90 p-4 shadow-xs">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="size-5 shrink-0 text-amber-600 mt-0.5" />
-              <div className="flex-1 text-xs">
-                <p className="font-bold text-amber-900">
-                  Chưa đủ số lượng nhóm. Bạn đã chọn {selectedAccounts.length} tài khoản nhưng chỉ có {activeGroupsCount} nhóm.
-                </p>
-                <p className="mt-1 text-amber-800 leading-relaxed">
-                  Vui lòng chọn thêm nhóm hoặc giảm số tài khoản để số tài khoản không lớn hơn số nhóm (A ≤ G).
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      const el = document.getElementById("step-4-group-source");
-                      if (el) el.scrollIntoView({ behavior: "smooth" });
-                    }}
-                    className="border-amber-300 bg-white text-xs font-semibold text-amber-800 hover:bg-amber-100"
-                  >
-                    + Chọn thêm nhóm
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => {
-                      const trimmed = selectedAccountKeys.slice(0, activeGroupsCount);
-                      setSelectedAccountKeys(trimmed);
-                      toast.info(`Đã tự động giảm số tài khoản xuống ${trimmed.length} tài khoản để bằng số nhóm.`, "ĐIỀU CHỈNH SỐ LƯỢNG");
-                    }}
-                    className="bg-amber-600 text-xs font-semibold text-white hover:bg-amber-700"
-                  >
-                    - Giảm số tài khoản
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Bước 5: Chọn media */}

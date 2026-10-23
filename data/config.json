@@ -1,0 +1,27 @@
+{
+    "app_name": "Facebook Automator Pro",
+    "version": "2.0.0",
+    "max_threads": 5,
+    "request_timeout": 30,
+    "anti_spam": {
+        "delay_min_seconds": 300,
+        "delay_max_seconds": 600,
+        "max_posts_per_page_day": 5
+    },
+    "gemini": {
+        "model_name": "gemini-3.8-flash",
+        "batch_size": 10,
+        "timeout_seconds": 120,
+        "temperature": 0.7
+    },
+    "scrapers": {
+        "tiktok_max_workers": 4,
+        "youtube_quality": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "use_browser_cookies": "chrome"
+    },
+    "google_sheets": {
+        "enabled": false,
+        "credentials_path": "",
+        "sheet_id": ""
+    }
+}
