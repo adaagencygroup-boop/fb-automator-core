@@ -50,6 +50,7 @@ export default function ConfirmDialog({
   onSecondaryConfirm,
   confirmDisabled = false,
   hideConfirm = false,
+  hideCancel = false,
   loadingAction = "confirm",
   icon,
 }) {
@@ -118,15 +119,17 @@ export default function ConfirmDialog({
         </div>
 
         <div className="mt-6 flex flex-wrap items-center justify-end gap-2.5">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onClose}
-            disabled={loading}
-          >
-            {cancelText}
-          </Button>
+          {!hideCancel && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onClose}
+              disabled={loading}
+            >
+              {cancelText}
+            </Button>
+          )}
 
           {secondaryText && !hideConfirm && (
             <Button

@@ -85,6 +85,7 @@ class SearchGroupInput(BaseModel):
 
 
 class CampaignInput(BaseModel):
+    campaign_id: str | None = Field(default=None, max_length=100)
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
     action_type: str = ActionType.POST.value
@@ -97,10 +98,10 @@ class CampaignInput(BaseModel):
 
     @field_validator("action_type")
     @classmethod
-    def post_campaign_only(cls, value: str) -> str:
+    def post_or_comment(cls, value: str) -> str:
         value = value.strip().upper()
-        if value != ActionType.POST.value:
-            raise ValueError("Luồng này chỉ hỗ trợ chiến dịch đăng bài")
+        if value not in {ActionType.POST.value, ActionType.COMMENT.value}:
+            raise ValueError("Chỉ hỗ trợ chiến dịch Đăng bài (POST) hoặc Bình luận (COMMENT)")
         return value
 
     @field_validator("account_uids")
@@ -136,7 +137,7 @@ class CampaignInput(BaseModel):
     @classmethod
     def requires_content(cls, value: list[str]) -> list[str]:
         if not any(str(post).strip() for post in value):
-            raise ValueError("Chưa có nội dung bài đăng")
+            raise ValueError("Chưa có nội dung bài đăng hoặc bình luận")
         return value
 
 

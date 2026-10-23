@@ -190,6 +190,14 @@ export const NAV_ITEMS = [
         moduleId: "groups",
         icon: HISTORY_ICON,
       },
+      {
+        id: "groups.campaigns",
+        label: "Quản lý chiến dịch",
+        title: "Quản lý chiến dịch Spam Group",
+        description: "Theo dõi, tra cứu, xem chi tiết và chạy lại các chiến dịch.",
+        moduleId: "groups",
+        icon: icon("icon_nav_fanpage_list", 24, 10.5),
+      },
     ],
   },
   {

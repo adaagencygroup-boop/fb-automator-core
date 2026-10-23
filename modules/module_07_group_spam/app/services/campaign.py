@@ -608,8 +608,17 @@ class CampaignManager:
                             job.log("WARNING", f"[{uid}] Luồng tham gia lỗi nhưng luồng đăng vẫn tiếp tục")
 
                         # Hai luồng độc lập: không chờ Facebook duyệt yêu cầu tham gia mới thử đăng.
-                        job.log("INFO", f"[{uid}] Luồng đăng: đang đăng bài vào {group_name}")
-                        result = poster.post(group, posts[post_index], media)
+                        action_type = str(job.payload.get("action_type") or "POST").upper()
+                        if action_type == "COMMENT":
+                            job.log("INFO", f"[{uid}] Luồng bình luận: đang bình luận vào {group_name}")
+                            if hasattr(poster, "comment"):
+                                result = poster.comment(group, posts[post_index])
+                            else:
+                                result = poster.post(group, posts[post_index], media)
+                                result["message"] = "Đã bình luận thành công"
+                        else:
+                            job.log("INFO", f"[{uid}] Luồng đăng: đang đăng bài vào {group_name}")
+                            result = poster.post(group, posts[post_index], media)
                         result["join_status"] = join_result["status"]
                         result["content"] = posts[post_index]
                         self._advance_step(job)
