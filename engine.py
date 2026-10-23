@@ -13,6 +13,7 @@ import sys
 from urllib.parse import unquote
 from contextlib import asynccontextmanager
 
+import anyio
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Depends
 from modules.module_02_account_manager.api.router import scoped_owner
@@ -29,6 +30,7 @@ from core.media.youtube_scraper import youtube_scraper
 from core.network.proxy_manager import proxy_manager
 from modules.module_02_account_manager.api.router import router as account_router, alias_router as account_alias_router
 from modules.module_07_group_spam.app.routes import router as group_router
+from modules.module_10_group_scan.router import router as group_scan_router
 from modules.module_02_account_manager import initialize as initialize_accounts, shutdown as shutdown_accounts
 from core.startup import startup_step
 from modules import load_backend_modules
@@ -132,6 +134,10 @@ async def lifespan(app: FastAPI):
         from modules.module_07_group_spam.app.models import init_models as init_group_models
 
         init_group_models()
+    with startup_step("Module 10 group scan"):
+        from modules.module_10_group_scan.models import init_models as init_group_scan_models
+
+        init_group_scan_models()
     with startup_step("Backend module imports"):
         loaded = load_backend_modules()
     print(
@@ -235,7 +241,9 @@ class LicenseMiddleware:
                 if token:
                     auth = f"Bearer {token}"
             try:
-                assert_request_module_access(auth, path, method)
+                # NEVER gọi DB sync trực tiếp trên event loop — sẽ treo cả Engine
+                # (FE poll /me + check-status ~1.7s/lần lên Supabase → "Mất kết nối máy chủ").
+                await anyio.to_thread.run_sync(assert_request_module_access, auth, path, method)
             except HTTPException as exc:
                 body = json.dumps({"detail": exc.detail}).encode()
                 await send(
@@ -270,7 +278,8 @@ if farm_router:
 if post_router:
     app.include_router(post_router)
 @app.get("/api/health")
-def health_check():
+async def health_check():
+    """async: không phụ thuộc threadpool — luôn trả lời được khi Engine còn sống."""
     return {
         "status": "online",
         "app": "Facebook Automator Pro",
@@ -374,6 +383,9 @@ app.include_router(account_alias_router)
 
 # ==================== MODULE 7: GROUP POSTING ====================
 app.include_router(group_router)
+
+# ==================== MODULE 10: GROUP SCAN ====================
+app.include_router(group_scan_router)
 
 # ==================== MODULE 8: INTERACTION SEEDING ====================
 app.include_router(seeding_router, prefix="/api")
