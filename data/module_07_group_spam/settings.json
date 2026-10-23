@@ -1,6 +1,6 @@
 {
-  "model": "gpt-4o",
-  "threads": 2,
+  "model": "deepseek-v4-flash",
+  "threads": 1,
   "rest_minutes": 10,
   "max_posts": 10,
   "api_keys": {},
@@ -11,5 +11,6 @@
       "model": "deepseek-v4-flash",
       "encrypted_key": "w0GB/Pvf4k6EHiNraAy/TPo8SO4IhBVCe9MuNzOD3wVjiX82cnf389YMc8CFngUjsQMLjd0OZ6GB96ATYtSFGw=="
     }
-  ]
+  ],
+  "credential_id": "002104e856214aea948f095898a7fabc"
 }
