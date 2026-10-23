@@ -76,17 +76,17 @@ async def process_webhook_event(event: Dict[str, Any]):
                             msg.reactions = reaction_val
                             db.commit()
 
-                            page_record = db.query(Page).filter(Page.page_id == page_id).first()
-                            if page_record:
-                                ws_payload = {
-                                    "type": "reaction",
-                                    "page_id": page_id,
-                                    "data": {
-                                        "facebook_message_id": mid,
-                                        "reactions": reaction_val,
-                                    },
-                                }
-                                await manager.send_personal_message(ws_payload, page_record.facebook_user_id)
+                            page_record = db.query(Page).filter(Page.page_id == str(page_id)).first()
+                            fb_user_id = page_record.facebook_user_id if page_record else "all"
+                            ws_payload = {
+                                "type": "reaction",
+                                "page_id": str(page_id),
+                                "data": {
+                                    "facebook_message_id": mid,
+                                    "reactions": reaction_val,
+                                },
+                            }
+                            await manager.send_personal_message(ws_payload, fb_user_id)
 
                 message_obj = messaging.get("message", {})
                 message_id = message_obj.get("mid")
@@ -165,82 +165,90 @@ async def process_webhook_event(event: Dict[str, Any]):
                     )
 
                     # Resolve Page mapping
-                    page_record = db.query(Page).filter(Page.page_id == page_id).first()
+                    page_record = db.query(Page).filter(Page.page_id == str(page_id)).first()
+                    page_name = page_record.page_name if page_record else "Trang Facebook"
+                    fb_user_id = page_record.facebook_user_id if page_record else "all"
+
+                    # Resolve real customer profile from Graph API
+                    real_customer_name = msg_sender_name
+                    customer_avatar = ""
                     if page_record:
-                        # Resolve real customer profile from Graph API
-                        from modules.module_06_omnichannel_chat.services import FacebookSyncService
-                        sync_service = FacebookSyncService(db)
-                        profile_info = await sync_service.get_customer_profile(active_customer_id, page_id)
-                        real_customer_name = profile_info.get("name") or msg_sender_name
-                        customer_avatar = profile_info.get("avatar_url", "")
-
-                        # Update Conversation & Customer tables for instant sidebar
                         try:
-                            conv_repo = ConversationRepository(db)
-                            msg_dt = datetime.utcfromtimestamp(timestamp / 1000) if timestamp else datetime.utcnow()
-                            conv_repo.upsert_conversation(
-                                page_id=page_id,
-                                customer_psid=active_customer_id,
-                                customer_name=real_customer_name,
-                                customer_avatar=customer_avatar,
-                                last_message=text,
-                                last_message_at=msg_dt,
-                                is_read=(direction == "outbound"),
-                                is_replied=(direction == "outbound"),
+                            from modules.module_06_omnichannel_chat.services import FacebookSyncService
+                            sync_service = FacebookSyncService(db)
+                            profile_info = await sync_service.get_customer_profile(active_customer_id, str(page_id))
+                            real_customer_name = profile_info.get("name") or msg_sender_name
+                            customer_avatar = profile_info.get("avatar_url", "")
+                        except Exception as prof_err:
+                            print(f"[Profile Resolve Warning] {prof_err}")
+
+                    # Update Conversation & Customer tables for instant sidebar
+                    try:
+                        conv_repo = ConversationRepository(db)
+                        msg_dt = datetime.utcfromtimestamp(timestamp / 1000) if timestamp else datetime.utcnow()
+                        conv_repo.upsert_conversation(
+                            page_id=str(page_id),
+                            customer_psid=active_customer_id,
+                            customer_name=real_customer_name,
+                            customer_avatar=customer_avatar,
+                            last_message=text,
+                            last_message_at=msg_dt,
+                            is_read=(direction == "outbound"),
+                            is_replied=(direction == "outbound"),
+                        )
+                        cust_repo = CustomerRepository(db)
+                        cust_repo.upsert_customer(
+                            psid=active_customer_id,
+                            name=real_customer_name,
+                            avatar_url=customer_avatar,
+                        )
+                    except Exception as cache_err:
+                        print(f"[Conversation Upsert Warning] {cache_err}")
+
+                    # Broadcast message packet to WebSocket clients
+                    ws_payload = {
+                        "type": "message",
+                        "page_id": str(page_id),
+                        "page_name": page_name,
+                        "facebook_user_id": fb_user_id,
+                        "data": {
+                            "id": saved_msg.id,
+                            "facebook_message_id": saved_msg.facebook_message_id,
+                            "page_id": saved_msg.page_id,
+                            "sender_id": saved_msg.sender_id,
+                            "text": saved_msg.text,
+                            "timestamp": saved_msg.timestamp,
+                            "direction": saved_msg.direction,
+                            "created_at": saved_msg.created_at.isoformat(),
+                            "sender_name": real_customer_name,
+                            "avatar_url": customer_avatar,
+                        },
+                    }
+                    await manager.send_personal_message(ws_payload, fb_user_id)
+
+                    # Trigger native Windows notifications for inbound client messages
+                    if direction == "inbound" and win_notifier:
+                        try:
+                            icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../app_logo.ico"))
+                            icon_to_use = icon_path if os.path.exists(icon_path) else None
+                            msg_preview = text[:50] if text else "[Hình ảnh/Tệp đính kèm]"
+                            await asyncio.to_thread(
+                                win_notifier.notify,
+                                title=f"💬 Tin nhắn từ {real_customer_name} ({page_name})",
+                                message=f"{real_customer_name}: {msg_preview}",
+                                app_name="Hội thoại Đa kênh (Omnichannel)",
+                                app_icon=icon_to_use,
+                                timeout=6,
                             )
-                            cust_repo = CustomerRepository(db)
-                            cust_repo.upsert_customer(
-                                psid=active_customer_id,
-                                name=real_customer_name,
-                                avatar_url=customer_avatar,
-                            )
-                        except Exception as cache_err:
-                            print(f"[Conversation Upsert Warning] {cache_err}")
+                        except Exception as ne:
+                            print(f"[Notifier Error] {str(ne)}")
 
-                        # Broadcast message packet to WebSocket clients
-                        ws_payload = {
-                            "type": "message",
-                            "page_id": page_id,
-                            "page_name": page_record.page_name,
-                            "facebook_user_id": page_record.facebook_user_id,
-                            "data": {
-                                "id": saved_msg.id,
-                                "facebook_message_id": saved_msg.facebook_message_id,
-                                "page_id": saved_msg.page_id,
-                                "sender_id": saved_msg.sender_id,
-                                "text": saved_msg.text,
-                                "timestamp": saved_msg.timestamp,
-                                "direction": saved_msg.direction,
-                                "created_at": saved_msg.created_at.isoformat(),
-                                "sender_name": real_customer_name,
-                                "avatar_url": customer_avatar,
-                            },
-                        }
-                        await manager.send_personal_message(ws_payload, page_record.facebook_user_id)
-
-                        # Trigger native Windows notifications for inbound client messages
-                        if direction == "inbound" and win_notifier:
-                            try:
-                                icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../app_logo.ico"))
-                                icon_to_use = icon_path if os.path.exists(icon_path) else None
-                                msg_preview = text[:50] if text else "[Hình ảnh/Tệp đính kèm]"
-                                await asyncio.to_thread(
-                                    win_notifier.notify,
-                                    title=f"💬 Tin nhắn từ {real_customer_name} ({page_record.page_name})",
-                                    message=f"{real_customer_name}: {msg_preview}",
-                                    app_name="Hội thoại Đa kênh (Omnichannel)",
-                                    app_icon=icon_to_use,
-                                    timeout=6,
-                                )
-                            except Exception as ne:
-                                print(f"[Notifier Error] {str(ne)}")
-
-                        # Trigger Service Worker push notification
-                        if direction == "inbound":
-                            msg_preview = text[:60] if text else "[Hình ảnh/Tệp đính kèm]"
-                            push_title = f"💬 {page_record.page_name}"
-                            push_body = f"Tin nhắn từ {real_customer_name}: \"{msg_preview}\""
-                            await trigger_web_push(db, page_record.facebook_user_id, push_title, push_body)
+                    # Trigger Service Worker push notification
+                    if direction == "inbound" and page_record:
+                        msg_preview = text[:60] if text else "[Hình ảnh/Tệp đính kèm]"
+                        push_title = f"💬 {page_name}"
+                        push_body = f"Tin nhắn từ {real_customer_name}: \"{msg_preview}\""
+                        await trigger_web_push(db, page_record.facebook_user_id, push_title, push_body)
 
             # 2. Parse feed changes (Likes/Comments -> Notifications)
             changes = entry.get("changes", [])
@@ -356,48 +364,51 @@ async def process_webhook_event(event: Dict[str, Any]):
                             db.commit()
                             db.refresh(db_notif)
 
+                            page_name = page_record.page_name if page_record else "Trang Facebook"
+                            fb_user_id = page_record.facebook_user_id if page_record else "all"
+
+                            # Broadcast notification alert to WebSocket
+                            ws_payload = {
+                                "type": "notification",
+                                "page_id": str(page_id),
+                                "page_name": page_name,
+                                "facebook_user_id": fb_user_id,
+                                "data": {
+                                    "id": db_notif.id,
+                                    "facebook_notification_id": db_notif.facebook_notification_id,
+                                    "page_id": db_notif.page_id,
+                                    "page_name": page_name,
+                                    "title": db_notif.title,
+                                    "link": db_notif.link,
+                                    "created_time": db_notif.created_time.isoformat(),
+                                    "unread": db_notif.unread,
+                                    "from_user_id": db_notif.from_user_id,
+                                    "from_user_name": db_notif.from_user_name,
+                                    "from_user_avatar": db_notif.from_user_avatar,
+                                    "notification_type": db_notif.notification_type,
+                                },
+                            }
+                            await manager.send_personal_message(ws_payload, fb_user_id)
+
+                            # Trigger native Windows toast for feed interaction
+                            if win_notifier:
+                                try:
+                                    icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../app_logo.ico"))
+                                    icon_to_use = icon_path if os.path.exists(icon_path) else None
+                                    await asyncio.to_thread(
+                                        win_notifier.notify,
+                                        title=f"🔔 Tương tác mới - {page_name}",
+                                        message=title,
+                                        app_name="Hội thoại Đa kênh (Omnichannel)",
+                                        app_icon=icon_to_use,
+                                        timeout=6,
+                                    )
+                                except Exception as ne:
+                                    print(f"[Notifier Error] {str(ne)}")
+
+                            # Trigger Service Worker push notification
                             if page_record:
-                                # Broadcast notification alert to WebSocket
-                                ws_payload = {
-                                    "type": "notification",
-                                    "page_id": page_id,
-                                    "page_name": page_record.page_name,
-                                    "facebook_user_id": page_record.facebook_user_id,
-                                    "data": {
-                                        "id": db_notif.id,
-                                        "facebook_notification_id": db_notif.facebook_notification_id,
-                                        "page_id": db_notif.page_id,
-                                        "page_name": page_record.page_name,
-                                        "title": db_notif.title,
-                                        "link": db_notif.link,
-                                        "created_time": db_notif.created_time.isoformat(),
-                                        "unread": db_notif.unread,
-                                        "from_user_id": db_notif.from_user_id,
-                                        "from_user_name": db_notif.from_user_name,
-                                        "from_user_avatar": db_notif.from_user_avatar,
-                                        "notification_type": db_notif.notification_type,
-                                    },
-                                }
-                                await manager.send_personal_message(ws_payload, page_record.facebook_user_id)
-
-                                # Trigger native Windows toast for feed interaction
-                                if win_notifier:
-                                    try:
-                                        icon_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../app_logo.ico"))
-                                        icon_to_use = icon_path if os.path.exists(icon_path) else None
-                                        await asyncio.to_thread(
-                                            win_notifier.notify,
-                                            title=f"🔔 Tương tác mới - {page_record.page_name}",
-                                            message=title,
-                                            app_name="Hội thoại Đa kênh (Omnichannel)",
-                                            app_icon=icon_to_use,
-                                            timeout=6,
-                                        )
-                                    except Exception as ne:
-                                        print(f"[Notifier Error] {str(ne)}")
-
-                                # Trigger Service Worker push notification
-                                push_title = f"{prefix} {page_record.page_name}"
+                                push_title = f"{prefix} {page_name}"
                                 push_body = title
                                 push_url = link if is_group_post else "/"
                                 await trigger_web_push(db, page_record.facebook_user_id, push_title, push_body, target_url=push_url)

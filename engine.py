@@ -139,7 +139,9 @@ async def lifespan(app: FastAPI):
     )
     try:
         from modules.module_06_omnichannel_chat.queue_worker import start_queue_worker
+        from modules.module_06_omnichannel_chat.services.sync_service import watch_and_sync_webhook_loop
         asyncio.create_task(start_queue_worker())
+        asyncio.create_task(watch_and_sync_webhook_loop())
     except Exception as qe:
         print(f"[Local Engine] Queue worker note: {qe}")
     if farm_on_startup:
