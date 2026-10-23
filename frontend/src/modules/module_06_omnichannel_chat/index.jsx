@@ -7,6 +7,7 @@ import {
   getConversations,
   getMessages,
   getNotifications,
+  mapNotification,
   resyncChatData,
   friendlyFbError,
   toUtcIso,
@@ -32,11 +33,11 @@ import { useResizableWidth, ResizeHandle } from "@/lib/use-resizable-width";
 // Figma: "Quản lý chat Page" (1072:11951) — OmnichannelPanels (1072:12081)
 // 3 cột: (1) Danh sách Page · (2) Khung chat (1072:12415) · (3) Hội thoại / Thông báo
 
-async function fetchAll() {
+async function fetchAll(notifQuery) {
   const [p, c, n, status] = await Promise.all([
     getChatPages(),
     getConversations(),
-    getNotifications(),
+    getNotifications(notifQuery),
     getChatStatus(),
   ]);
   return { p, c, n, status };
@@ -83,6 +84,11 @@ export default function OmnichannelChatModule() {
   const [totalPages, setTotalPages] = useState(0);
   const [conversations, setConversations] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  // Backend lo loc + phan trang, nen phai giu ca so trang va badge no tra ve
+  const [notifMeta, setNotifMeta] = useState({
+    unreadCounts: {}, typeCounts: {}, page: 1, totalPages: 1, forKey: null,
+  });
+  const [loadingMoreNotif, setLoadingMoreNotif] = useState(false);
   const [isMock, setIsMock] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -107,6 +113,7 @@ export default function OmnichannelChatModule() {
   const loadingMessages = useRef(new Set());
   const activeConvRef = useRef(null); // hội thoại đang mở, cho WS đọc mà không phải reconnect
   const wsOpenRef = useRef(false); // WS đang mở hay không, để tắt polling khi realtime khoẻ
+  const notifQueryRef = useRef(null); // bộ lọc thông báo hiện hành, cho WS đọc
 
   useEffect(() => {
     activeConvRef.current = activeConversationId;
@@ -117,6 +124,13 @@ export default function OmnichannelChatModule() {
     setTotalPages(p.total ?? (p.pages || []).length);
     setConversations(c.conversations || []);
     setNotifications(n.notifications || []);
+    setNotifMeta({
+      unreadCounts: n.unreadCounts || {},
+      typeCounts: n.typeCounts || {},
+      page: n.page || 1,
+      totalPages: n.totalPages || 1,
+      forKey: n.forKey ?? null,
+    });
     setIsMock(Boolean(p.isMock || c.isMock));
     // Chỉ coi là lỗi khi tải Page/Hội thoại hỏng (thông báo lỗi nhẹ hơn, không chặn)
     setLoadError(p.error || c.error || "");
@@ -124,19 +138,98 @@ export default function OmnichannelChatModule() {
     setLoading(false);
   };
 
+  // Lưới an toàn: 3 hàm tải đều tự bắt lỗi, nhưng nếu có gì lọt ra thì vẫn phải
+  // tắt skeleton — để treo mãi còn khó hiểu hơn là danh sách rỗng kèm báo lỗi.
+  const failData = (err) => {
+    setLoadError(err?.message || "Không tải được dữ liệu");
+    setLoading(false);
+  };
+
+  // Bộ lọc thông báo hiện hành — Backend lọc chứ không phải FE nữa
+  const notifQuery = useMemo(
+    () => ({ pageId: activePageId, type: notificationType, filter: notificationFilter }),
+    [activePageId, notificationType, notificationFilter],
+  );
+  const notifQueryKey = `${activePageId || ""}|${notificationType}|${notificationFilter}`;
+
   const reload = () => {
     setLoading(true);
     setLoadError("");
-    fetchAll().then(applyData);
+    fetchAll(notifQuery)
+      .then((data) => applyData({ ...data, n: { ...data.n, forKey: notifQueryKey } }))
+      .catch(failData);
   };
 
   useEffect(() => {
     let cancelled = false;
-    fetchAll().then((data) => !cancelled && applyData(data));
+    fetchAll(notifQuery)
+      .then((data) => !cancelled && applyData({ ...data, n: { ...data.n, forKey: notifQueryKey } }))
+      .catch((err) => !cancelled && failData(err));
     return () => {
       cancelled = true;
     };
+    // Chỉ chạy một lần lúc dựng; đổi bộ lọc đã có effect riêng bên dưới lo
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * Đổi Page / tab / bộ lọc -> hỏi lại Backend từ trang 1.
+   *
+   * Bỏ qua lần đầu vì `fetchAll` ở trên đã tải đúng bộ lọc mặc định rồi, không
+   * thì một lần mở Chat lại gọi thông báo hai lượt.
+   */
+  useEffect(() => {
+    notifQueryRef.current = notifQuery;
+  }, [notifQuery]);
+
+  const firstNotifLoad = useRef(true);
+  useEffect(() => {
+    if (firstNotifLoad.current) {
+      firstNotifLoad.current = false;
+      return undefined;
+    }
+    let cancelled = false;
+    getNotifications({ ...notifQuery, page: 1 }).then((res) => {
+      if (cancelled) return;
+      setNotifications(res.notifications || []);
+      setNotifMeta({
+        unreadCounts: res.unreadCounts || {},
+        typeCounts: res.typeCounts || {},
+        page: res.page || 1,
+        totalPages: res.totalPages || 1,
+        forKey: notifQueryKey,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [notifQuery, notifQueryKey]);
+
+  // Đổi Page/tab/bộ lọc là phải hỏi lại Backend, có độ trễ thật -> hiện khung
+  // xương. So khoá đã tải với khoá đang chọn thay vì giữ thêm một cờ loading.
+  const notificationsLoading = loading || notifMeta.forKey !== notifQueryKey;
+
+  /** Cuộn tới đáy danh sách thông báo -> xin trang kế tiếp, nối vào cuối */
+  const loadMoreNotifications = () => {
+    if (loadingMoreNotif || notifMeta.page >= notifMeta.totalPages) return;
+    setLoadingMoreNotif(true);
+    getNotifications({ ...notifQuery, page: notifMeta.page + 1 })
+      .then((res) => {
+        const fresh = res.notifications || [];
+        setNotifications((prev) => {
+          const seen = new Set(prev.map((x) => x.id));
+          return [...prev, ...fresh.filter((x) => !seen.has(x.id))];
+        });
+        setNotifMeta((m) => ({
+          ...m,
+          unreadCounts: res.unreadCounts || m.unreadCounts,
+          typeCounts: res.typeCounts || m.typeCounts,
+          page: res.page || m.page + 1,
+          totalPages: res.totalPages || m.totalPages,
+        }));
+      })
+      .finally(() => setLoadingMoreNotif(false));
+  };
 
   // Lắng nghe sự kiện Realtime (Tin nhắn & Thông báo mới) từ WebSocket Backend
   useEffect(() => {
@@ -248,19 +341,35 @@ export default function OmnichannelChatModule() {
                 }
               });
             } else if (payload.type === "notification" && payload.data) {
-              const notifData = payload.data;
-              const incomingNotif = {
-                id: String(notifData.id || notifData.facebook_notification_id),
-                actor: notifData.from_user_name || "Khách hàng",
-                text: notifData.title || "",
-                createdAt: notifData.created_time || new Date().toISOString(),
-                unread: notifData.unread !== undefined ? Boolean(notifData.unread) : true,
-                replied: false,
-                pageId: String(notifData.page_id),
-                type: notifData.notification_type === "comment" ? "comment" : "interaction",
-                link: notifData.link || "",
-              };
-              setNotifications((prev) => [incomingNotif, ...prev.filter((n) => n.id !== incomingNotif.id)]);
+              const incomingNotif = mapNotification(payload.data);
+
+              // Danh sách giờ là kết quả lọc của Backend, nên chỉ chèn vào khi cái
+              // vừa tới đúng là thứ đang xem — không thì thông báo của Page khác
+              // sẽ nhảy vào giữa danh sách đã lọc.
+              const q = notifQueryRef.current || {};
+              const matchPage = !q.pageId || incomingNotif.pageId === q.pageId;
+              const matchType = !q.type || incomingNotif.type === q.type;
+              const matchFilter =
+                !q.filter || q.filter === "all"
+                  ? true
+                  : q.filter === "unread"
+                    ? incomingNotif.unread
+                    : !incomingNotif.replied;
+
+              if (matchPage && matchType && matchFilter) {
+                setNotifications((prev) => [incomingNotif, ...prev.filter((n) => n.id !== incomingNotif.id)]);
+              }
+
+              // Badge thì nhích bất kể đang xem tab nào, miễn là đúng Page đang lọc
+              if (incomingNotif.unread && matchPage) {
+                setNotifMeta((m) => ({
+                  ...m,
+                  unreadCounts: {
+                    ...m.unreadCounts,
+                    [incomingNotif.type]: (m.unreadCounts[incomingNotif.type] || 0) + 1,
+                  },
+                }));
+              }
             }
           } catch (err) {
             console.error("[WS Message Error]", err);
@@ -297,7 +406,8 @@ export default function OmnichannelChatModule() {
     setResetConfirmOpen(false);
     setResetting(true);
     await resyncChatData();
-    applyData(await fetchAll());
+    const data = await fetchAll(notifQuery);
+    applyData({ ...data, n: { ...data.n, forKey: notifQueryKey } });
     setActivePageId(null);
     setActiveConversationId(null);
     setOpenedNotificationId(null);
@@ -369,12 +479,6 @@ export default function OmnichannelChatModule() {
     const dir = sort === "newest" ? -1 : 1;
     return [...list].sort((a, b) => dir * (new Date(a.updatedAt) - new Date(b.updatedAt)));
   }, [conversations, activePageId, filter, starOnly, selectedTag, sort]);
-
-  const visibleNotifications = useMemo(() => {
-    let list = notifications;
-    if (activePageId) list = list.filter((n) => String(n.pageId) === String(activePageId));
-    return list;
-  }, [notifications, activePageId]);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null;
 
@@ -661,6 +765,7 @@ export default function OmnichannelChatModule() {
   const conversationList = (extraClass, onBack) => (
     <ConversationList
       className={extraClass}
+      loading={loading}
       onBack={onBack}
       tab={tab}
       onTabChange={setTab}
@@ -673,7 +778,13 @@ export default function OmnichannelChatModule() {
       sort={sort}
       onSortChange={setSort}
       conversations={visibleConversations}
-      notifications={visibleNotifications}
+      notifications={notifications}
+      notificationCounts={notifMeta.unreadCounts}
+      notificationTypeCounts={notifMeta.typeCounts}
+      notificationsLoading={notificationsLoading}
+      onLoadMoreNotifications={loadMoreNotifications}
+      hasMoreNotifications={notifMeta.page < notifMeta.totalPages}
+      loadingMoreNotifications={loadingMoreNotif}
       pagesById={pagesById}
       activeConversationId={activeConversationId}
       onSelectConversation={selectConversation}
@@ -682,7 +793,6 @@ export default function OmnichannelChatModule() {
       notificationFilter={notificationFilter}
       onNotificationFilterChange={setNotificationFilter}
       onOpenNotification={openNotification}
-      loading={loading}
     />
   );
 

@@ -4,8 +4,9 @@ import { cn } from "@/lib/utils";
 import { useIncrementalList } from "@/lib/use-incremental-list";
 import NotificationList from "./NotificationList";
 import StatusFilter from "./StatusFilter";
-import { CONVERSATION_TAGS } from "../constants";
 import { Star } from "lucide-react";
+import { CONVERSATION_TAGS } from "../constants";
+import { ConversationSkeleton } from "./Skeletons";
 
 // Figma: Section - COLUMN 3: CONVERSATION LIST (HỘI THOẠI & THÔNG BÁO) (1072:12294)
 
@@ -182,6 +183,12 @@ export default function ConversationList({
   onSortChange,
   conversations,
   notifications,
+  notificationCounts,
+  notificationTypeCounts,
+  notificationsLoading,
+  onLoadMoreNotifications,
+  hasMoreNotifications,
+  loadingMoreNotifications,
   pagesById,
   activeConversationId,
   onSelectConversation,
@@ -195,6 +202,10 @@ export default function ConversationList({
   className,
 }) {
   const { slice: convSlice, sentinelRef: convSentinel, hasMore: convHasMore } = useIncrementalList(conversations, 30);
+  // Đếm từ Backend chứ không từ danh sách: danh sách giờ chỉ là một trang
+  const unreadNotifications = Object.values(notificationCounts || {}).reduce((a, b) => a + b, 0);
+  const totalNotifications = Object.values(notificationTypeCounts || {}).reduce((a, b) => a + b, 0);
+
   return (
     <section
       aria-label="Hội thoại và thông báo"
@@ -206,8 +217,8 @@ export default function ConversationList({
       <Tabs
         tab={tab}
         onTabChange={onTabChange}
-        notificationCount={notifications.length}
-        hasUnread={notifications.some((n) => n.unread)}
+        notificationCount={totalNotifications}
+        hasUnread={unreadNotifications > 0}
         onBack={onBack}
       />
 
@@ -223,6 +234,9 @@ export default function ConversationList({
             sort={sort}
             onSortChange={onSortChange}
           />
+          {loading ? (
+            <ConversationSkeleton />
+          ) : (
           <ul className="flex-1 min-h-0 overflow-y-auto">
             {loading ? (
               <li className="px-3 py-16 text-center flex flex-col items-center justify-center gap-2">
@@ -249,10 +263,17 @@ export default function ConversationList({
               ))}
             {!loading && convHasMore && <li ref={convSentinel} aria-hidden="true" className="h-4" />}
           </ul>
+          )}
         </>
       ) : (
         <NotificationList
+          loading={notificationsLoading ?? loading}
           notifications={notifications}
+          counts={notificationTypeCounts}
+          unreadCounts={notificationCounts}
+          onLoadMore={onLoadMoreNotifications}
+          hasMore={hasMoreNotifications}
+          loadingMore={loadingMoreNotifications}
           pagesById={pagesById}
           type={notificationType}
           onTypeChange={onNotificationTypeChange}

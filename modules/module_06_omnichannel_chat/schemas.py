@@ -1,5 +1,5 @@
 from pydantic import BaseModel, HttpUrl
-from typing import List, Optional
+from typing import Dict, List, Optional
 from datetime import datetime
 
 # Base schemas
@@ -187,10 +187,17 @@ class CommentReplyInput(BaseModel):
 class CommentReactInput(BaseModel):
     page_id: str
     reaction: str  # LIKE, LOVE, HAHA, WOW, SAD, ANGRY
+    # False = bo thich (DELETE /{comment_id}/likes)
+    liked: bool = True
 
 class CommentHideInput(BaseModel):
     page_id: str
     is_hidden: bool = True
+
+class PostLikeInput(BaseModel):
+    page_id: str
+    # False = bo thich (DELETE /{post_id}/likes)
+    liked: bool = True
 
 class PostCommentInput(BaseModel):
     page_id: str
@@ -216,6 +223,10 @@ class PaginatedConversationsOut(PaginatedResponse):
 class PaginatedNotificationsOut(PaginatedResponse):
     items: List[NotificationOut]
     notifications: Optional[List[NotificationOut]] = None
+    # So chua doc theo tung tab cua FE, khong an theo tab/filter dang chon
+    unread_counts: Dict[str, int] = {}
+    # Tong moi tab, an theo `filter` nhung khong an theo tab
+    type_counts: Dict[str, int] = {}
 
 
 

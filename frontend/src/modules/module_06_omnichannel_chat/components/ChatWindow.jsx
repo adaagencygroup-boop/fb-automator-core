@@ -23,6 +23,7 @@ import { displayMediaUrl } from "../service";
 import { useVoiceRecorder } from "../hooks/useVoiceRecorder";
 import EmojiPickerPanel from "./EmojiPickerPanel";
 import GiphyPicker from "./GiphyPicker";
+import { MessageSkeleton } from "./Skeletons";
 
 // Figma: "giao diện chat" (1072:12415) — Section - COLUMN 2 (giữa Danh sách Page và Hội thoại)
 // Gồm: Header khách hàng · Lịch sử tin nhắn · Banner đếm ngược 24h · Ô soạn tin.
@@ -1054,7 +1055,7 @@ export default function ChatWindow({
         aria-live="polite"
       >
         {messages === undefined ? (
-          <p className="py-10 text-center text-xs text-slate-400">Đang tải tin nhắn...</p>
+          <MessageSkeleton />
         ) : messages.length === 0 ? (
           <p className="py-10 text-center text-xs text-slate-400">Chưa có tin nhắn nào.</p>
         ) : (

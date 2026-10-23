@@ -50,6 +50,7 @@ export default function PageSwitcher({
   chatStatus = null,
 }) {
   const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
   const searchRef = useRef(null);
   const { slice, sentinelRef, hasMore } = useIncrementalList(pages, 40);
 
@@ -63,8 +64,18 @@ export default function PageSwitcher({
     const onKey = (e) => {
       if (e.key === "Escape") setOpen(false);
     };
+    // Bắt cú bấm ra ngoài bằng listener trên document, KHÔNG dùng lớp phủ
+    // `fixed inset-0`: lớp phủ nằm ngay dưới con trỏ nên nuốt luôn cú lăn
+    // chuột, khiến không cuộn được trang trong lúc popover đang mở.
+    const onPointerDown = (e) => {
+      if (!rootRef.current?.contains(e.target)) setOpen(false);
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
   }, [open]);
 
   const pick = (id) => {
@@ -73,7 +84,7 @@ export default function PageSwitcher({
   };
 
   return (
-    <div className="relative shrink-0">
+    <div ref={rootRef} className="relative shrink-0">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -93,9 +104,6 @@ export default function PageSwitcher({
 
       {open && (
         <>
-          {/* Bắt cú bấm ra ngoài để đóng — trong suốt, không làm tối nội dung */}
-          <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setOpen(false)} />
-
           <div
             role="dialog"
             aria-label="Chọn Page"

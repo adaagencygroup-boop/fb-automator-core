@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { useIncrementalList } from "@/lib/use-incremental-list";
+import { PageListSkeleton } from "./Skeletons";
 
 // Figma: Section - COLUMN 1: DANH SÁCH PAGE (1072:12082)
 
@@ -142,6 +143,9 @@ export default function PageList({
       </div>
 
       {/* Scrollable Page List Items */}
+      {loading ? (
+        <PageListSkeleton />
+      ) : (
       <ul className="flex-1 min-h-0 overflow-y-auto px-2 pb-2 flex flex-col gap-0.5">
         {loading ? (
           <li className="flex-1 py-12 flex flex-col items-center justify-center text-center gap-2">
@@ -203,6 +207,7 @@ export default function PageList({
         })}
         {hasMore && <li ref={sentinelRef} aria-hidden="true" className="h-4 shrink-0" />}
       </ul>
+      )}
     </section>
   );
 }

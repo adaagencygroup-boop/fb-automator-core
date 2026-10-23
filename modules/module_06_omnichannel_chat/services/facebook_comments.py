@@ -160,7 +160,8 @@ class FacebookCommentService:
 
         return response_json
 
-    async def react_to_comment(self, comment_id: str, page_id: str, reaction: str) -> Dict[str, Any]:
+    async def react_to_comment(self, comment_id: str, page_id: str, reaction: str,
+                               liked: bool = True) -> Dict[str, Any]:
         page = self.page_repo.get_by_page_id(page_id)
         if not page or not page.page_access_token:
             raise ValueError(f"Page or page access token not found for Page ID {page_id}")
@@ -170,12 +171,15 @@ class FacebookCommentService:
             "access_token": page.page_access_token
         }
 
+        # Cung mot canh /likes: POST de thich, DELETE de bo thich.
+        # Tai lieu ghi ca hai "khong duoc ho tro" nhung thuc te deu chay —
+        # do duoc user_likes=True tren binh luan da bam thich.
         try:
             response = await asyncio.to_thread(
-                requests.post, url, params=params, timeout=15
+                requests.post if liked else requests.delete, url, params=params, timeout=15
             )
             response_json = response.json()
-            print(f"[React Comment] API Response: {response_json}", flush=True)
+            print(f"[React Comment] liked={liked} API Response: {response_json}", flush=True)
         except Exception as e:
             raise FacebookAPIError(f"Network error reacting to comment via Facebook: {str(e)}")
 
