@@ -161,6 +161,20 @@ def get_notifications(
         "interaction": counted.filter(Notification.notification_type != "comment").count(),
     }
 
+    # Tong moi tab (so trong ngoac tren sub-tab), AN theo `filter` dang chon
+    # nhung KHONG an theo tab — doi tab thi so hai ben phai dung yen.
+    typed = db.query(Notification)        .filter(Notification.created_time >= two_weeks_ago)        .filter(Notification.page_id.in_(allowed_page_ids))
+    if s_filter == "unread":
+        typed = typed.filter(Notification.unread == True)
+    elif s_filter == "unreplied":
+        typed = typed.filter(Notification.is_replied == False)
+    elif s_filter == "replied":
+        typed = typed.filter(Notification.is_replied == True)
+    type_counts = {
+        "comment": typed.filter(Notification.notification_type == "comment").count(),
+        "interaction": typed.filter(Notification.notification_type != "comment").count(),
+    }
+
     if is_paginated:
         results = query.offset(effective_offset).limit(effective_page_size).all()
         total_pages = math.ceil(total / effective_page_size) if effective_page_size else 1
@@ -198,6 +212,7 @@ def get_notifications(
             items=notif_list,
             notifications=notif_list,
             unread_counts=unread_counts,
+            type_counts=type_counts,
             total=total,
             page=effective_page,
             page_size=effective_page_size,

@@ -224,7 +224,8 @@ export function mapNotification(n) {
     actor: n.from_user_name || "Khách hàng",
     text: n.title || "",
     createdAt: n.created_time || new Date().toISOString(),
-    unread: Boolean(n.unread),
+    // WebSocket co the khong gui `unread`; thong bao moi thi mac dinh la chua doc
+    unread: n.unread !== undefined ? Boolean(n.unread) : true,
     replied: Boolean(n.is_replied),
     pageId: String(n.page_id),
     type: notificationType(n.notification_type),
@@ -262,6 +263,7 @@ export async function getNotifications({
     return {
       notifications: raw.map(mapNotification),
       unreadCounts: res?.unread_counts || {},
+      typeCounts: res?.type_counts || {},
       total: Number(res?.total ?? raw.length) || 0,
       page: Number(res?.page ?? page) || 1,
       totalPages: Number(res?.total_pages ?? 1) || 1,
@@ -270,7 +272,7 @@ export async function getNotifications({
   } catch (error) {
     console.warn("[getNotifications] Lỗi tải thông báo từ Backend:", error.message);
     return {
-      notifications: [], unreadCounts: {}, total: 0, page: 1, totalPages: 1,
+      notifications: [], unreadCounts: {}, typeCounts: {}, total: 0, page: 1, totalPages: 1,
       isMock: false, error: error.message || "Không tải được thông báo",
     };
   }

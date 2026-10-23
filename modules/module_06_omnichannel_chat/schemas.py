@@ -225,6 +225,8 @@ class PaginatedNotificationsOut(PaginatedResponse):
     notifications: Optional[List[NotificationOut]] = None
     # So chua doc theo tung tab cua FE, khong an theo tab/filter dang chon
     unread_counts: Dict[str, int] = {}
+    # Tong moi tab, an theo `filter` nhung khong an theo tab
+    type_counts: Dict[str, int] = {}
 
 
 
