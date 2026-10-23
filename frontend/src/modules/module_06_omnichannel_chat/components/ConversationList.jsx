@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { useIncrementalList } from "@/lib/use-incremental-list";
 import NotificationList from "./NotificationList";
 import StatusFilter from "./StatusFilter";
+import { ConversationSkeleton } from "./Skeletons";
 
 // Figma: Section - COLUMN 3: CONVERSATION LIST (HỘI THOẠI & THÔNG BÁO) (1072:12294)
 
@@ -135,6 +136,11 @@ export default function ConversationList({
   onSortChange,
   conversations,
   notifications,
+  notificationCounts,
+  notificationsLoading,
+  onLoadMoreNotifications,
+  hasMoreNotifications,
+  loadingMoreNotifications,
   pagesById,
   activeConversationId,
   onSelectConversation,
@@ -144,9 +150,13 @@ export default function ConversationList({
   onNotificationFilterChange,
   onOpenNotification,
   onBack,
+  loading,
   className,
 }) {
   const { slice: convSlice, sentinelRef: convSentinel, hasMore: convHasMore } = useIncrementalList(conversations, 30);
+  // Đếm từ Backend chứ không từ danh sách: danh sách giờ chỉ là một trang
+  const unreadNotifications = Object.values(notificationCounts || {}).reduce((a, b) => a + b, 0);
+
   return (
     <section
       aria-label="Hội thoại và thông báo"
@@ -158,13 +168,16 @@ export default function ConversationList({
       <Tabs
         tab={tab}
         onTabChange={onTabChange}
-        notificationCount={notifications.filter((n) => n.unread).length}
+        notificationCount={unreadNotifications}
         onBack={onBack}
       />
 
       {tab === "conversations" ? (
         <>
           <FilterBar filter={filter} onFilterChange={onFilterChange} sort={sort} onSortChange={onSortChange} />
+          {loading ? (
+            <ConversationSkeleton />
+          ) : (
           <ul className="flex-1 min-h-0 overflow-y-auto">
             {conversations.length === 0 && (
               <li className="px-3 py-10 text-center text-xs text-slate-400">Không có hội thoại nào.</li>
@@ -181,10 +194,16 @@ export default function ConversationList({
             ))}
             {convHasMore && <li ref={convSentinel} aria-hidden="true" className="h-4" />}
           </ul>
+          )}
         </>
       ) : (
         <NotificationList
+          loading={notificationsLoading ?? loading}
           notifications={notifications}
+          counts={notificationCounts}
+          onLoadMore={onLoadMoreNotifications}
+          hasMore={hasMoreNotifications}
+          loadingMore={loadingMoreNotifications}
           pagesById={pagesById}
           type={notificationType}
           onTypeChange={onNotificationTypeChange}

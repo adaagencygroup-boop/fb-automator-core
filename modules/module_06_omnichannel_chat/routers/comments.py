@@ -61,7 +61,8 @@ async def react_comment(
         res = await sync_service.react_to_comment(
             comment_id=comment_id,
             page_id=payload.page_id,
-            reaction=payload.reaction
+            reaction=payload.reaction,
+            liked=payload.liked,
         )
         return {"success": True, "data": res}
     except (FacebookAuthError, FacebookAPIError, ValueError) as e:

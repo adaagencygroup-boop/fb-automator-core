@@ -441,8 +441,10 @@ class FacebookSyncService:
     async def private_reply_to_comment(self, page_id: str, comment_id: str, text: str, attachment_url: str = None):
         return await self.comment_service.private_reply_to_comment(comment_id, page_id, text, attachment_url)
 
-    async def react_to_comment(self, comment_id: str, page_id: str, reaction: str):
-        return await self.comment_service.react_to_comment(comment_id, page_id, reaction)
+    async def react_to_comment(self, comment_id: str, page_id: str, reaction: str,
+                               liked: bool = True):
+        # liked=False -> bo thich (DELETE /{comment_id}/likes)
+        return await self.comment_service.react_to_comment(comment_id, page_id, reaction, liked)
 
     async def hide_comment(self, comment_id: str, page_id: str, is_hidden: bool = True):
         return await self.comment_service.hide_comment(comment_id, page_id, is_hidden)
