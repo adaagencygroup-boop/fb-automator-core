@@ -10,6 +10,8 @@ class ProviderSettingsResponse(BaseModel):
 
 
 class SettingsResponse(BaseModel):
+    credentials: list[dict] = Field(default_factory=list)
+    credential_id: str | None = None
     model: str
     threads: int
     rest_minutes: int

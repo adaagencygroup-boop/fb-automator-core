@@ -74,3 +74,10 @@ class MessageRepository:
             .order_by(Message.created_at.desc())\
             .limit(limit)\
             .all()
+
+    def get_latest_message(self, page_id: str, sender_id: str) -> Optional[Message]:
+        return self.db.query(Message)\
+            .filter(Message.page_id == page_id, Message.sender_id == sender_id)\
+            .order_by(Message.created_at.desc(), Message.id.desc())\
+            .first()
+

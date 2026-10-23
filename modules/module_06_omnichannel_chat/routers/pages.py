@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import List, Optional, Dict, Union
-from modules.module_06_omnichannel_chat.database import get_db
+from modules.module_06_omnichannel_chat.database import get_db, SessionLocal
 from modules.module_06_omnichannel_chat.config import settings
 from modules.module_06_omnichannel_chat.schemas import PageOut, TokenInput, SyncByTokenResponse, PaginatedPagesOut
 from modules.module_06_omnichannel_chat.repositories import PageRepository, AccountRepository
@@ -49,6 +49,51 @@ def resolve_current_user_id(request: Request, current_user: Optional[SystemUser]
 
     return None
 
+@router.get("/status")
+def get_chat_status(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: Optional[SystemUser] = Depends(get_current_user_optional)
+):
+    """Kiểm tra xem Module 2 của user đã import tài khoản Facebook chưa và có Page chưa."""
+    logged_in_uid = resolve_current_user_id(request, current_user)
+    accounts_count = 0
+    pages_count = 0
+    if logged_in_uid:
+        accounts_count = db.execute(
+            text("SELECT count(*) FROM accounts WHERE CAST(user_id AS VARCHAR) = :uid"),
+            {"uid": str(logged_in_uid)}
+        ).scalar() or 0
+        pages_count = db.execute(
+            text("""
+                SELECT count(DISTINCT p.page_id)
+                FROM (
+                    SELECT page_id, facebook_user_id FROM v_pages
+                    UNION
+                    SELECT page_id, account_uid as facebook_user_id FROM pages WHERE page_id IS NOT NULL
+                ) p
+                LEFT JOIN v_accounts va ON p.facebook_user_id = va.facebook_user_id
+                LEFT JOIN accounts a ON (
+                    p.facebook_user_id = a.uid 
+                    OR va.user_access_token = a.token
+                    OR va.facebook_user_id = a.uid
+                    OR (va.name IS NOT NULL AND va.name != '' AND va.name = a.profile_name)
+                )
+                WHERE (CAST(a.user_id AS VARCHAR) = :user_id OR CAST(va.system_user_id AS VARCHAR) = :user_id)
+            """),
+            {"user_id": str(logged_in_uid)}
+        ).scalar() or 0
+    else:
+        accounts_count = db.execute(text("SELECT count(*) FROM accounts")).scalar() or 0
+        pages_count = db.execute(text("SELECT count(*) FROM v_pages")).scalar() or 0
+
+    return {
+        "has_accounts": accounts_count > 0,
+        "accounts_count": accounts_count,
+        "has_pages": pages_count > 0,
+        "pages_count": pages_count,
+    }
+
 @router.get("/config")
 def get_config():
     return {
@@ -75,7 +120,7 @@ def get_local_pages(
     """
     logged_in_uid = (user_id or "").strip() or resolve_current_user_id(request, current_user)
 
-    # 1. Tự động kiểm tra và đồng bộ Fanpage từ Graph API cho các tài khoản Module 2 của user nếu có token
+    # 1. Tự động kiểm tra và đồng bộ Fanpage từ Graph API (chạy ngầm trong executor, không chặn request)
     if logged_in_uid:
         try:
             user_accs = db.execute(
@@ -84,7 +129,6 @@ def get_local_pages(
             ).mappings().all()
 
             now = time.time()
-            sync_service = FacebookSyncService(db)
             sys_uid = int(logged_in_uid) if (logged_in_uid and str(logged_in_uid).isdigit()) else 1
             for acc in user_accs:
                 acc_uid = str(acc["uid"])
@@ -92,10 +136,13 @@ def get_local_pages(
                 # Cooldown 5 phút mỗi tài khoản để tránh gọi Graph API quá nhiều lần
                 if now - _last_synced_accounts.get(acc_uid, 0) > 300:
                     _last_synced_accounts[acc_uid] = now
-                    try:
-                        sync_service.sync_by_token(acc_token, system_user_id=sys_uid)
-                    except Exception as tok_err:
-                        print(f"[Warning] Auto-sync token error for acc {acc_uid}: {tok_err}")
+                    def _bg_sync_token(tok, suid, auid):
+                        try:
+                            with SessionLocal() as bg_db:
+                                FacebookSyncService(bg_db).sync_by_token(tok, system_user_id=suid)
+                        except Exception as tok_err:
+                            print(f"[Warning] Auto-sync token error for acc {auid}: {tok_err}")
+                    sync_executor.submit(_bg_sync_token, acc_token, sys_uid, acc_uid)
         except Exception as e:
             print(f"[Warning] Auto-sync check error: {e}")
 
@@ -113,8 +160,14 @@ def get_local_pages(
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     sql = text(f"""
-        SELECT DISTINCT p.id, p.page_id, p.page_name, p.page_access_token, p.avatar_url, p.status, p.facebook_user_id
+        SELECT p.id, p.page_id, p.page_name, p.page_access_token, p.avatar_url, p.status, p.facebook_user_id,
+               COALESCE(notif.cnt, 0) as notif_count
         FROM v_pages p
+        LEFT JOIN (
+            SELECT page_id, COUNT(*) as cnt
+            FROM v_notifications
+            GROUP BY page_id
+        ) notif ON p.page_id = notif.page_id
         LEFT JOIN v_accounts va ON p.facebook_user_id = va.facebook_user_id
         LEFT JOIN accounts a ON (
             p.facebook_user_id = a.uid 
@@ -123,22 +176,27 @@ def get_local_pages(
             OR (va.name IS NOT NULL AND va.name != '' AND va.name = a.profile_name)
         )
         {where_sql}
-        ORDER BY p.id DESC
+        GROUP BY p.id, p.page_id, p.page_name, p.page_access_token, p.avatar_url, p.status, p.facebook_user_id, notif.cnt
+        ORDER BY notif_count DESC, p.id DESC
     """)
 
     rows = db.execute(sql, params).mappings().all()
 
-    # 3. Kích hoạt chạy ngầm sync_historical_data khi user mở Quản lý Chat Page
+    # 3. Kích hoạt chạy ngầm sync_historical_data cho các trang đầu (tối đa 3 trang để tránh nghẽn thread pool)
     try:
-        sync_service = FacebookSyncService(db)
         now = time.time()
-        for r in rows:
+        for r in rows[:3]:
             p_id = str(r["page_id"])
             p_acc_uid = str(r.get("facebook_user_id") or "")
-            # Cooldown 120s (2 phút) mỗi page để tránh spam Facebook Graph API
-            if now - _last_synced_pages.get(p_id, 0) > 120:
+            if now - _last_synced_pages.get(p_id, 0) > 300:
                 _last_synced_pages[p_id] = now
-                sync_executor.submit(sync_service.sync_historical_data, p_id, p_acc_uid)
+                def _bg_sync_page(page_id, acc_uid):
+                    try:
+                        with SessionLocal() as bg_db:
+                            FacebookSyncService(bg_db).sync_historical_data(page_id, acc_uid)
+                    except Exception as err:
+                        print(f"[Warning] Sync page {page_id} error: {err}")
+                sync_executor.submit(_bg_sync_page, p_id, p_acc_uid)
     except Exception as sync_trigger_err:
         print(f"[Warning] Trigger sync_historical_data note: {sync_trigger_err}")
 

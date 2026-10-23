@@ -131,6 +131,19 @@ export async function getChatPages(facebookUserId = null) {
 }
 
 /**
+ * Kiểm tra trạng thái Module 2 (đã import tài khoản chưa, có Page chưa) (/api/facebook/status)
+ */
+export async function getChatStatus() {
+  try {
+    const res = await api.get("/api/facebook/status");
+    return res || { has_accounts: false, accounts_count: 0, has_pages: false, pages_count: 0 };
+  } catch (error) {
+    console.warn("[getChatStatus] Lỗi kiểm tra trạng thái tài khoản:", error.message);
+    return { has_accounts: false, accounts_count: 0, has_pages: false, pages_count: 0 };
+  }
+}
+
+/**
  * Lấy danh sách các cuộc hội thoại (/api/facebook/conversations)
  */
 export async function getConversations(params = {}) {
@@ -144,6 +157,12 @@ export async function getConversations(params = {}) {
         ? c.tags.split(",").map((t) => t.trim()).filter(Boolean)
         : [];
 
+      const rawSnippet = messagePreview(c.last_message);
+      const isOutbound = c.direction === "outbound" || Boolean(c.is_replied);
+      const formattedSnippet = isOutbound && rawSnippet
+        ? (rawSnippet.startsWith("Bạn: ") ? rawSnippet : `Bạn: ${rawSnippet}`)
+        : rawSnippet;
+
       return {
         id: `${c.page_id}_${c.sender_id}`,
         pageId: String(c.page_id),
@@ -151,7 +170,7 @@ export async function getConversations(params = {}) {
         customer: String(c.sender_id),
         customerName: c.customer_name || `KH ${String(c.sender_id).slice(0, 8)}`,
         avatar: c.avatar_url || null,
-        lastMessage: messagePreview(c.last_message),
+        lastMessage: formattedSnippet,
         updatedAt:
           toUtcIso(c.created_at) ||
           (c.timestamp ? new Date(c.timestamp).toISOString() : new Date().toISOString()),

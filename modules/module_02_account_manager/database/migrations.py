@@ -1,7 +1,7 @@
 """Additive schema migrations and atomic credential-key conversion."""
 from sqlalchemy import inspect, text
 from .connection import Base
-from .models import Account
+from .models import Account, AccountCategory
 
 _SECRET_COLUMNS = ("password", "two_fa", "pass_mail")
 
@@ -86,3 +86,17 @@ def migrate(engine):
             if "avatar_url" not in columns:
                 conn.execute(text("ALTER TABLE accounts ADD COLUMN avatar_url TEXT"))
             conn.execute(text("INSERT INTO account_plugin_schema(version) VALUES (4) ON CONFLICT DO NOTHING"))
+        if 5 not in versions:
+            AccountCategory.__table__.create(conn, checkfirst=True)
+            columns = {column["name"] for column in inspect(conn).get_columns("accounts")}
+            if "category_id" not in columns:
+                conn.execute(text("ALTER TABLE accounts ADD COLUMN category_id INTEGER REFERENCES account_categories(id) ON DELETE SET NULL"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_accounts_user_category ON accounts(user_id, category_id)"))
+            conn.execute(text("INSERT INTO account_plugin_schema(version) VALUES (5) ON CONFLICT DO NOTHING"))
+        if 6 not in versions:
+            columns = {column["name"] for column in inspect(conn).get_columns("accounts")}
+            if "first_login_at" not in columns:
+                conn.execute(text("ALTER TABLE accounts ADD COLUMN first_login_at TIMESTAMP"))
+            if "last_login_at" in columns:
+                conn.execute(text("UPDATE accounts SET first_login_at = last_login_at WHERE first_login_at IS NULL AND last_login_at IS NOT NULL"))
+            conn.execute(text("INSERT INTO account_plugin_schema(version) VALUES (6) ON CONFLICT DO NOTHING"))

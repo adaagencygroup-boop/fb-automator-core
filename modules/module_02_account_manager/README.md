@@ -240,3 +240,78 @@ Test dùng DB/profile tạm, mock Chrome/Facebook/HWID; proxy bridge test dùng 
 Để chạy test PostgreSQL, đặt ACCOUNT_TEST_POSTGRES_URL trỏ vào DB test riêng có quyền
 CREATE SCHEMA. Suite tạo schema ngẫu nhiên và xóa đúng schema đó khi kết thúc, không dùng
 DATABASE_URL của ứng dụng. Nếu chưa cấu hình, ba test PostgreSQL được skip rõ ràng.
+
+
+## V2: Account categories (backend and database)
+
+Categories are a flat, owner-scoped collection. An account belongs to at most one
+category. `category_id: null` means uncategorized; there is no synthetic category row.
+Owner resolution uses the existing authenticated user, headers and explicit owner
+fields. PATCH bodies receive the same owner-conflict checks as POST bodies.
+
+| Method and path | Request | Response |
+| --- | --- | --- |
+| `GET /api/accounts/categories` | Existing owner headers/query | Array of categories ordered by ascending ID, each with `account_count` |
+| `POST /api/accounts/categories` | `{"name":"Main","color":"#2563EB"}` | 201, category with `account_count: 0` |
+| `PATCH /api/accounts/categories/{id}` | Optional `name`, `color`; `color: null` clears the color | 200, updated category and current account count |
+| `DELETE /api/accounts/categories/{id}` | Existing owner headers/query | `{"deleted":true,"unassigned_count":3}` |
+| `POST /api/accounts/bulk-set-category` | `{"uids":["123","456"],"category_id":1}` | `{"updated_count":2}` |
+
+Category response example:
+
+```json
+{
+  "id": 1,
+  "user_id": "42",
+  "name": "Main",
+  "color": "#2563EB",
+  "created_at": "2026-10-22T03:00:00+00:00",
+  "updated_at": "2026-10-22T03:00:00+00:00",
+  "account_count": 2
+}
+```
+
+Names are trimmed, required, at most 100 characters, and unique without regard to
+case within an owner. Colors are optional six-digit HEX strings (`#RRGGBB`).
+PATCH cannot set `name` to null or change category ownership. Deleting a category
+unassigns its accounts without deleting accounts, credentials, profiles or pages.
+Category timestamps use UTC. Account counts include only the current owner's accounts.
+
+Bulk assignment accepts 1?100 UID entries, deduplicates UIDs, and commits atomically.
+Use `category_id: null` to remove assignments. The target category and every account
+must belong to the current owner. An unknown account/category or one belonging to
+another owner returns 404 without partial changes. Invalid input returns 422;
+duplicate category names return 409. `updated_count` counts distinct matched accounts,
+including accounts already assigned to the target.
+
+`POST /api/accounts/single` and each account in `POST /api/accounts/import` accept
+optional `category_id`. Omission preserves an existing assignment; explicit null
+clears it. Newly created accounts default to uncategorized. Import retains its
+existing per-account success/error behavior, including `skip_existing`.
+Account list, page and detail responses include `category_id`.
+
+`GET /api/accounts`, `/api/accounts/page`, `/api/accounts/stats`, and the legacy
+`GET /accounts` accept `category_id=<positive integer>` or `uncategorized=true`.
+Using both returns 422. A category outside the current owner returns 404. Page filters
+compose with the existing search/status/login/active filters; pagination totals and
+stats reflect the category selection. Omitting the new parameters preserves existing
+behavior and response shapes except for the additional account field.
+
+Schema migration 5 creates `account_categories` (`id`, `user_id`, `name`, `color`,
+`created_at`, `updated_at`) and nullable `accounts.category_id` with an indexed
+`(user_id, category_id)` lookup and `ON DELETE SET NULL` foreign key. Two unique
+indexes enforce case-insensitive names for named owners and the legacy null owner.
+Migration is additive and repeatable; existing accounts remain uncategorized.
+The normal plugin startup applies migrations. This change does not require a manual
+production migration or frontend update.
+
+Tests: `tests/test_categories.py` covers category CRUD, owner isolation, validation,
+atomic assignment, import/edit compatibility, query filters, counts and migrations.
+Run the isolated backend suite with:
+
+```powershell
+.venv/Scripts/python.exe -m modules.module_02_account_manager.tests.run_suite
+```
+
+PostgreSQL migration/FK tests require `ACCOUNT_TEST_POSTGRES_URL` and create a temporary
+schema. They never fall back to the application's production database URLs.

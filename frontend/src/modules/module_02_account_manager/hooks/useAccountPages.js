@@ -23,8 +23,8 @@ export function useAccountPages(query, enabled, tableRef, clearSelection) {
   const refreshQueue = useRef(null);
   useLayoutEffect(() => { current.current = { accounts, page }; }, [accounts, page]);
 
-  const fetchAccounts = useCallback(async (reset = false) => {
-    if (!reset && busy.current) { refreshQueue.current?.request(); return; }
+  const fetchAccounts = useCallback(async (reset = false, retainedSelection = null) => {
+    if (!reset && retainedSelection === null && busy.current) { refreshQueue.current?.request(); return; }
     const id = ++generation.current;
     const version = patchVersion.current;
     const requestQuery = queryRef.current;
@@ -63,7 +63,7 @@ export function useAccountPages(query, enabled, tableRef, clearSelection) {
       current.current = { accounts: rows, page: result };
       setAccounts(rows);
       setPage(result);
-      clearSelection(selected => selected.filter(uid => rows.some(row => row.uid === uid)));
+      clearSelection(retainedSelection ?? (selected => selected.filter(uid => rows.some(row => row.uid === uid))));
       setLoadError(null);
       if (anchor) tableRef.current?.restore(anchor);
     } catch (error) {

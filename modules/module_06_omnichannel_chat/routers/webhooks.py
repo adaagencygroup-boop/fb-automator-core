@@ -47,3 +47,10 @@ async def receive_webhook_event(payload: dict):
         return Response(content="EVENT_RECEIVED", status_code=200)
 
     raise HTTPException(status_code=404, detail="Unknown event subscription object")
+
+
+@router.api_route("/sync-webhook", methods=["GET", "POST"])
+def manual_sync_webhook():
+    from modules.module_06_omnichannel_chat.services.sync_service import sync_app_webhook
+    return sync_app_webhook(force=True)
+

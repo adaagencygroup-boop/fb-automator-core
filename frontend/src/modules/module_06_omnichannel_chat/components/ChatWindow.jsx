@@ -949,6 +949,27 @@ export default function ChatWindow({
 }) {
   const [replyTo, setReplyTo] = useState(null);
   const scrollRef = useRef(null);
+  const innerRef = useRef(null);
+  const bottomRef = useRef(null);
+
+  // Theo dõi trạng thái cuộn của người dùng
+  const isNearBottomRef = useRef(true);
+  const hasInitiallyScrolledRef = useRef(false);
+
+  const scrollToBottom = useCallback((behavior = "auto") => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    bottomRef.current?.scrollIntoView({ block: "end", behavior });
+  }, []);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // Nếu cách đáy dưới 120px thì coi như đang ở đáy
+    isNearBottomRef.current = distanceToBottom < 120;
+  }, []);
 
   const rows = useMemo(() => buildRows(messages || []), [messages]);
   const lastInboundAt = useMemo(() => [...(messages || [])].reverse().find((m) => m.direction === "in")?.createdAt, [messages]);
@@ -960,12 +981,52 @@ export default function ChatWindow({
     return last?.direction === "out" ? last.id : undefined;
   }, [messages]);
 
-  // Có tin mới -> cuộn xuống cuối
+  // Khi mở hội thoại hoặc danh sách tin nhắn thay đổi -> cuộn ngay xuống đáy
   const count = messages?.length ?? 0;
   useLayoutEffect(() => {
+    hasInitiallyScrolledRef.current = false;
+    isNearBottomRef.current = true;
+    scrollToBottom("auto");
+    const rafId = requestAnimationFrame(() => {
+      scrollToBottom("auto");
+    });
+    const t1 = setTimeout(() => scrollToBottom("auto"), 50);
+    const t2 = setTimeout(() => scrollToBottom("auto"), 150);
+    const t3 = setTimeout(() => scrollToBottom("auto"), 350);
+    return () => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
+  }, [conversation?.id, count, scrollToBottom]);
+
+  // Theo dõi ResizeObserver và sự kiện load của ảnh/video/sticker để cuộn xuống đáy khi ảnh nở ra
+  useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [count]);
+    const inner = innerRef.current;
+    if (!el || !inner) return undefined;
+
+    const ro = new ResizeObserver(() => {
+      if (isNearBottomRef.current || !hasInitiallyScrolledRef.current) {
+        el.scrollTop = el.scrollHeight;
+        hasInitiallyScrolledRef.current = true;
+      }
+    });
+    ro.observe(inner);
+
+    const onMediaLoad = () => {
+      if (isNearBottomRef.current || !hasInitiallyScrolledRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
+    };
+    el.addEventListener("load", onMediaLoad, true);
+
+    return () => {
+      ro.disconnect();
+      el.removeEventListener("load", onMediaLoad, true);
+    };
+  }, [conversation?.id, count]);
 
   const send = (payload) => {
     onSend(replyTo ? { ...payload, replyTo: { id: replyTo.id, text: previewOf(replyTo) } } : payload);
@@ -986,13 +1047,18 @@ export default function ChatWindow({
         onBack={onBack}
       />
 
-      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto bg-slate-50/50" aria-live="polite">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 min-h-0 overflow-y-auto bg-slate-50/50"
+        aria-live="polite"
+      >
         {messages === undefined ? (
           <p className="py-10 text-center text-xs text-slate-400">Đang tải tin nhắn...</p>
         ) : messages.length === 0 ? (
           <p className="py-10 text-center text-xs text-slate-400">Chưa có tin nhắn nào.</p>
         ) : (
-          <div className="flex flex-col px-6 pb-4">
+          <div ref={innerRef} className="flex flex-col px-6 pb-4">
             {rows.map((row) =>
               row.type === "separator" ? (
                 <div key={row.id} className="flex justify-center pt-4 pb-6">
@@ -1012,6 +1078,7 @@ export default function ChatWindow({
                 />
               ),
             )}
+            <div ref={bottomRef} className="h-0 w-full shrink-0" aria-hidden="true" />
           </div>
         )}
       </div>

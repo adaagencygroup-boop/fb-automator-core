@@ -43,8 +43,10 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
-import { getGroupSettings, runGroupCampaign } from "../service";
+import { generateGroupComments, getGroupSettings, runGroupCampaign } from "../service";
 import Link from "next/link";
+import useSavedApis from "../shared/useSavedApis";
+import SavedApiSelector from "../shared/SavedApiSelector";
 import {
   GROUPS,
   AVATAR_COLORS,
@@ -67,9 +69,11 @@ export default function GroupCommentModule() {
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [accountSearch, setAccountSearch] = useState("");
   const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
-  const [model, setModel] = useState("gpt-4o");
-  const [apiKey, setApiKey] = useState("");
-  const [showApiKey, setShowApiKey] = useState(false);
+  const apiSource = useSavedApis();
+  const model = apiSource.selected?.model || "gpt-4o";
+  const hasApiKey = Boolean(apiSource.selected) && !apiSource.loading;
+  const [aiError, setAiError] = useState("");
+  const [generating, setGenerating] = useState(false);
   const [threads, setThreads] = useState("2");
   const [restMinutes, setRestMinutes] = useState("10");
   const [maxComments, setMaxComments] = useState("20");
@@ -119,13 +123,11 @@ export default function GroupCommentModule() {
   };
 
   useEffect(() => {
-    loadAccounts();
+    Promise.resolve().then(loadAccounts);
     getGroupSettings().then((data) => {
       if (!data) return;
-      if (data.model) setModel(data.model);
-      setApiKey("");
       if (data.threads) setThreads(String(data.threads));
-      if (data.rest_minutes) setRestMinutes(String(data.rest_minutes));
+      if (data.rest_minutes !== undefined) setRestMinutes(String(data.rest_minutes));
     }).catch(() => {});
   }, []);
 
@@ -249,16 +251,16 @@ export default function GroupCommentModule() {
     }
   };
 
-  const generateComments = () => {
+  const generateComments = async () => {
+    if (!hasApiKey || generating) return;
     const amount = Math.max(1, Math.min(10, Number(aiCount) || 1));
-    const source = prompt.trim() || "Quan tâm tuyển dụng CTV, hỏi thông tin chi tiết và xin tư vấn qua tin nhắn.";
-    setComments(
-      Array.from({ length: amount }, (_, index) => {
-        if (INITIAL_COMMENTS[index]) return INITIAL_COMMENTS[index];
-        return `[Bình luận ${index + 1}] ${source} - check tin nhắn giúp mình nhé! 💙`;
-      }),
-    );
-    setActiveComment(0);
+    if (prompt.trim().length < 3) { setAiError("Nhập nội dung gốc ít nhất 3 ký tự."); return; }
+    setGenerating(true); setAiError("");
+    try {
+      const result = await generateGroupComments({ model, credential_id: apiSource.selectedId, prompt: prompt.trim(), count: amount });
+      setComments(result.comments); setActiveComment(0);
+    } catch (error) { setAiError(error.message); }
+    finally { setGenerating(false); }
   };
 
   const updateActiveComment = (value) => {
@@ -266,7 +268,7 @@ export default function GroupCommentModule() {
   };
 
   const handleStart = async () => {
-    if (!selectedAccounts.length || !hasGroups) return;
+    if (!selectedAccounts.length || !hasGroups || !hasApiKey) return;
     setRunState("starting");
     setProgress(4);
     try {
@@ -280,6 +282,7 @@ export default function GroupCommentModule() {
         media: mediaFiles.map((file) => file.name),
         settings: {
           model,
+          credential_id: apiSource.selectedId,
           threads: Number(threads),
           rest_minutes: Number(restMinutes),
           max_posts: Number(maxComments),
@@ -532,39 +535,8 @@ export default function GroupCommentModule() {
       </SectionCard>
 
       {/* Bước 2 */}
-      <SectionCard number="2" title="Cấu hình API & thông số chung">
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Model AI" required>
-            <SelectField value={model} onChange={(event) => setModel(event.target.value)}>
-              <option value="gpt-4o">GPT-4o (OpenAI)</option>
-              <option value="gpt-4o-mini">GPT-4o mini (OpenAI)</option>
-              <option value="gemini">Gemini</option>
-              <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
-            </SelectField>
-            <span className="block text-[10px] font-normal text-slate-400">Chọn mô hình AI tạo nội dung theo phong cách mong muốn.</span>
-          </Field>
-          <Field label="API Key" required>
-            <div className="relative">
-              <Input
-                type={showApiKey ? "text" : "password"}
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                placeholder="sk-ant-api03-••••••••••••••••"
-                className="pr-10 font-mono"
-              />
-              <button
-                type="button"
-                onClick={() => setShowApiKey((prev) => !prev)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 cursor-pointer"
-                title={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
-                aria-label={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
-              >
-                {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-              </button>
-            </div>
-            <span className="block text-[10px] font-normal text-slate-400">Nhập API Key hợp lệ của nhà cung cấp AI đã chọn.</span>
-          </Field>
-        </div>
+      <SectionCard number="2" title="Chọn API & thông số chung">
+        <SavedApiSelector source={apiSource} disabled={runState !== "idle" || generating} />
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <Field label="Luồng">
             <Input type="number" min="1" value={threads} onChange={(event) => setThreads(event.target.value)} />
@@ -933,8 +905,9 @@ export default function GroupCommentModule() {
                 <option value="10">10</option>
               </SelectField>
             </Field>
-            <Button type="button" onClick={generateComments} className="w-full">
-              <Sparkles className="mr-2 size-3.5" /> Tạo nội dung AI
+            {aiError && <p role="alert" className="text-xs text-red-600">{aiError}</p>}
+            <Button type="button" onClick={generateComments} disabled={!hasApiKey || generating} className="w-full">
+              <Sparkles className="mr-2 size-3.5" /> {generating ? "Đang tạo..." : "Tạo nội dung AI"}
             </Button>
           </div>
         </div>
@@ -945,7 +918,7 @@ export default function GroupCommentModule() {
               <p className="text-xs font-bold text-slate-800">Kết quả nội dung bình luận AI ({generatedCount} mẫu)</p>
               <p className="text-[10px] text-slate-400">Bạn có thể chỉnh sửa nội dung từng bình luận trước khi thực thi</p>
             </div>
-            <Button type="button" size="sm" variant="outline" className="text-primary" onClick={generateComments}>
+            <Button type="button" size="sm" variant="outline" className="text-primary" onClick={generateComments} disabled={!hasApiKey || generating}>
               <RotateCcw className="mr-1.5 size-3.5" /> Tạo lại
             </Button>
           </div>
@@ -1054,7 +1027,7 @@ export default function GroupCommentModule() {
           {[
             [<Users key="a" className="size-3.5" />, "Tài khoản", `${selectedAccounts.length} tài khoản đã chọn`],
             [<MessageSquare key="b" className="size-3.5" />, "Hạn bình luận", `${maxComments} bình luận`],
-            [<Sparkles key="c" className="size-3.5" />, "API Key", apiKey ? "Đã nhập" : "Chưa nhập"],
+            [<Sparkles key="c" className="size-3.5" />, "API sử dụng", apiSource.selected ? `${apiSource.selected.model} (${apiSource.selected.hint})` : "Chưa chọn"],
             [<Sparkles key="d" className="size-3.5" />, "Số bình luận AI", `${generatedCount} mẫu`],
             [<Search key="e" className="size-3.5" />, "Nguồn mục tiêu", groupSource === "search" ? "Tìm theo từ khóa" : "Từ file link nhóm / bài viết"],
             [<ImageIcon key="f" className="size-3.5" />, "Min / Max media", `${minMedia} – ${maxMedia} ảnh`],
@@ -1125,7 +1098,7 @@ export default function GroupCommentModule() {
           <Button
             type="button"
             variant="success"
-            disabled={runState !== "idle" || !selectedAccounts.length || !hasGroups}
+            disabled={runState !== "idle" || !selectedAccounts.length || !hasGroups || !hasApiKey}
             onClick={handleStart}
           >
             <Play className="mr-2 size-3.5 fill-current" /> BẮT ĐẦU BÌNH LUẬN

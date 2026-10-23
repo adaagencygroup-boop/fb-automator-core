@@ -205,17 +205,8 @@ class FacebookSyncService:
                                             db.add(new_msg)
                                             db.commit()
 
-                                        # Cập nhật bảng v_conversations và v_customers
+                                        # Cập nhật bảng v_customers
                                         customer_repo.upsert_customer(psid=sender_id, name=customer_name)
-                                        conv_repo.upsert_conversation(
-                                            page_id=page_id,
-                                            customer_psid=sender_id,
-                                            customer_name=customer_name,
-                                            last_message=text,
-                                            last_message_at=dt,
-                                            is_read=True,
-                                            is_replied=(direction == "outbound")
-                                        )
                                     except Exception as msg_err:
                                         db.rollback()
                                         print(f"[Historical Message Save Warning] {fb_message_id}: {msg_err}")
@@ -226,6 +217,22 @@ class FacebookSyncService:
                                 db.rollback()
                                 print(f"[Historical Messages Sync Error] {e}")
                                 break
+
+                        # Cập nhật v_conversations theo đúng tin nhắn mới nhất thực tế trong database
+                        try:
+                            latest_msg_record = message_repo.get_latest_message(page_id, sender_id)
+                            if latest_msg_record:
+                                conv_repo.upsert_conversation(
+                                    page_id=page_id,
+                                    customer_psid=sender_id,
+                                    customer_name=customer_name,
+                                    last_message=latest_msg_record.text,
+                                    last_message_at=latest_msg_record.created_at,
+                                    is_read=True,
+                                    is_replied=(latest_msg_record.direction == "outbound")
+                                )
+                        except Exception as conv_sync_err:
+                            print(f"[Warning] Sync conversation preview error: {conv_sync_err}")
 
                     conv_paging = conv_json.get("paging", {})
                     conv_next_url = conv_paging.get("next")
@@ -456,4 +463,140 @@ class FacebookSyncService:
     @staticmethod
     async def trigger_web_push(db: Session, facebook_user_id: str, title: str, body: str, target_url: str = "/"):
         return await WebPushService.trigger_web_push(db, facebook_user_id, title, body, target_url=target_url)
+
+
+import asyncio
+from pathlib import Path
+from modules.module_06_omnichannel_chat.config import settings
+
+_last_synced_url: Optional[str] = None
+
+
+def _update_env_file(filepath: Path, key: str, value: str):
+    if not filepath.exists():
+        return
+    try:
+        content = filepath.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        found = False
+        new_lines = []
+        for line in lines:
+            if line.strip().startswith(f"{key}=") or line.strip().startswith(f"{key} ="):
+                new_lines.append(f"{key}={value}")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f"{key}={value}")
+        filepath.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    except Exception as e:
+        print(f"[Env Update Warning] Error updating {filepath.name}: {e}")
+
+
+def _update_env_media_url(public_url: str):
+    root_dir = Path(__file__).resolve().parent.parent.parent.parent
+    root_env = root_dir / ".env"
+    frontend_env = root_dir / "frontend" / ".env"
+
+    _update_env_file(root_env, "PUBLIC_MEDIA_BASE_URL", public_url)
+    _update_env_file(root_env, "FACEBOOK_OAUTH_CALLBACK_URL", f"{public_url}/oauth/meta/callback")
+    _update_env_file(frontend_env, "NEXT_PUBLIC_MEDIA_BASE_URL", public_url)
+    os.environ["PUBLIC_MEDIA_BASE_URL"] = public_url
+
+
+def sync_app_webhook(force: bool = False) -> Dict[str, Any]:
+    """Tự động phát hiện ngrok và đồng bộ Webhook URL của Facebook App lên Meta Graph API & cập nhật .env"""
+    global _last_synced_url
+    public_url = None
+    try:
+        r = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=2).json()
+        tunnels = r.get("tunnels", [])
+        for t in tunnels:
+            u = t.get("public_url")
+            if u and u.startswith("https://"):
+                public_url = u
+                break
+    except Exception:
+        pass
+
+    if not public_url:
+        public_url = os.getenv("PUBLIC_MEDIA_BASE_URL") or os.getenv("NEXT_PUBLIC_MEDIA_BASE_URL")
+
+    if not public_url:
+        return {"status": "skipped", "reason": "No public URL found"}
+
+    public_url = public_url.rstrip("/")
+    target_callback = f"{public_url}/api/facebook/webhook"
+
+    if not force and _last_synced_url == public_url:
+        return {"status": "unchanged", "public_url": public_url}
+
+    app_id = settings.FACEBOOK_APP_ID
+    app_secret = settings.FACEBOOK_APP_SECRET
+    if not app_id or not app_secret:
+        return {"status": "skipped", "reason": "FACEBOOK_APP_ID or SECRET not set"}
+
+    app_token = f"{app_id}|{app_secret}"
+    verify_token = settings.FACEBOOK_WEBHOOK_VERIFY_TOKEN
+    version = settings.FACEBOOK_API_VERSION or "v19.0"
+
+    sub_url = f"https://graph.facebook.com/{version}/{app_id}/subscriptions"
+    try:
+        if not force:
+            curr = requests.get(sub_url, params={"access_token": app_token}, timeout=10).json()
+            current_data = curr.get("data", [])
+            page_sub = next((s for s in current_data if s.get("object") == "page"), None)
+            curr_callback = page_sub.get("callback_url") if page_sub else None
+
+            if curr_callback == target_callback:
+                _last_synced_url = public_url
+                _update_env_media_url(public_url)
+                return {"status": "already_synced", "public_url": public_url}
+
+        print(f"[Facebook Webhook] Phat hien ngrok URL moi: {public_url}. Dang tu dong dong bo Webhook len Meta...")
+        requests.post(sub_url, data={
+            "object": "page",
+            "callback_url": target_callback,
+            "fields": "messages,messaging_postbacks,feed",
+            "verify_token": verify_token,
+            "access_token": app_token
+        }, timeout=10)
+
+        requests.post(sub_url, data={
+            "object": "user",
+            "callback_url": target_callback,
+            "fields": "feed",
+            "verify_token": verify_token,
+            "access_token": app_token
+        }, timeout=10)
+
+        _last_synced_url = public_url
+        _update_env_media_url(public_url)
+        print(f"[Facebook Webhook] DA DONG BO THANH CONG Webhook URL len Meta: {target_callback}")
+        return {"status": "success", "public_url": public_url, "callback_url": target_callback}
+    except Exception as e:
+        print(f"[Facebook Webhook Sync Warning] {e}")
+        return {"status": "error", "message": str(e)}
+
+
+async def watch_and_sync_webhook_loop(poll_interval: int = 10):
+    """Vong lap chay ngam tu dong:
+    - O moi truong Local/Dev: Tham do ngrok local API (cong 4040) moi 10s.
+      Bat ky luc nao chay lai 'ngrok http 28129', he thong se tu dong bat URL ngrok moi va cap nhat Meta.
+    - O moi truong Deploy/Production (co ten mien rieng co dinh): Tu dong dong bo ten mien that len Meta va giu on dinh, khong can ngrok.
+    """
+    print("[Facebook Webhook] Da kich hoat tien trinh tu dong theo doi Webhook -> Meta.")
+    while True:
+        try:
+            await asyncio.to_thread(sync_app_webhook)
+            prod_url = os.getenv("PUBLIC_MEDIA_BASE_URL", "")
+            if prod_url.startswith("https://") and "ngrok" not in prod_url and "localtunnel" not in prod_url:
+                # O moi truong production co ten mien that, giu on dinh va chi kiem tra 1 tieng/lan
+                await asyncio.sleep(3600)
+                continue
+        except Exception:
+            pass
+        await asyncio.sleep(poll_interval)
+
+
 
