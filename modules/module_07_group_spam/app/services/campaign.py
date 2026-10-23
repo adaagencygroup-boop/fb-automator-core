@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from html.parser import HTMLParser
+import json
 import random
 import threading
 import time
@@ -52,6 +53,33 @@ def _group_url(group: dict[str, Any]) -> str:
     if value:
         return f"https://www.facebook.com/groups/{value.strip('/')}"
     return ""
+
+
+_SENSITIVE_CONFIG_KEYS = {
+    "api_key",
+    "access_token",
+    "token",
+    "cookie",
+    "password",
+    "pass_mail",
+    "two_fa",
+    "two_factor_secret",
+}
+
+
+def _safe_config(value: Any) -> Any:
+    """Copy campaign configuration without authentication secrets."""
+    if isinstance(value, dict):
+        return {
+            str(key): _safe_config(item)
+            for key, item in value.items()
+            if str(key).lower() not in _SENSITIVE_CONFIG_KEYS
+        }
+    if isinstance(value, list):
+        return [_safe_config(item) for item in value]
+    if isinstance(value, tuple):
+        return [_safe_config(item) for item in value]
+    return value
 
 
 @dataclass
@@ -408,7 +436,7 @@ class CampaignManager:
             active = self.jobs.get(active_id) if active_id else None
             if active and active.status not in TERMINAL_STATES:
                 raise RuntimeError("Đang có một chiến dịch đăng bài chạy cho tài khoản này")
-            job = CampaignJob(id=uuid.uuid4().hex, owner=owner, payload=payload)
+            job = CampaignJob(id=str(uuid.uuid4()), owner=owner, payload=payload)
             self.jobs[job.id] = job
             self.active_by_owner[owner] = job.id
         job.log(
@@ -452,7 +480,8 @@ class CampaignManager:
                 account = AccountRepository.get_by_uid(session, uid)
                 if account:
                     result[uid] = {
-                        "id": account.id, "uid": account.uid, "password": account.password,
+                        "id": account.id, "uid": account.uid, "profile_name": account.profile_name,
+                        "password": account.password,
                         "two_fa": account.two_fa, "cookie": account.cookie, "proxy": account.proxy,
                     }
             return result
@@ -582,6 +611,7 @@ class CampaignManager:
                         job.log("INFO", f"[{uid}] Luồng đăng: đang đăng bài vào {group_name}")
                         result = poster.post(group, posts[post_index], media)
                         result["join_status"] = join_result["status"]
+                        result["content"] = posts[post_index]
                         self._advance_step(job)
                         self._record_result(job, account, group, result)
                     except InterruptedError:
@@ -594,6 +624,7 @@ class CampaignManager:
                         self._record_result(job, account, group, {
                             "status": "FAILED", "message": str(exc),
                             "join_status": join_result.get("status") if join_result else "FAILED",
+                            "content": posts[post_index],
                         })
                     if index < len(groups) - 1 and not job.cancel.is_set():
                         delay = random.randint(delay_min, delay_max)
@@ -642,12 +673,17 @@ class CampaignManager:
         item = {
             "account_uid": uid,
             "account_id": account.get("id"),
+            "account_name": account.get("profile_name"),
             "group_key": _group_key(group),
             "group_name": group.get("name"),
             "group_url": _group_url(group),
             "status": result.get("status", "FAILED"),
             "message": result.get("message", ""),
             "join_status": result.get("join_status"),
+            "content": result.get("content"),
+            "error_code": result.get("error_code"),
+            "error_detail": result.get("error_detail"),
+            "result_url": result.get("result_url") or result.get("group_url"),
         }
         with job.lock:
             job.results.append(item)
@@ -663,38 +699,130 @@ class CampaignManager:
 
     @staticmethod
     def _persist_final_results(job: CampaignJob) -> None:
-        """Write only final outcomes; progress and queues intentionally remain in memory."""
+        """Persist the v2 run, final tasks and transactional sync outbox."""
         try:
-            from core.database.connection import db
-            final_status = job.status if job.status in {"COMPLETED", "PARTIAL", "STOPPED", "FAILED"} else "FAILED"
-            with db.session() as cursor:
+            from ..local_database import local_db
+
+            final_status = (
+                job.status
+                if job.status in {"COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"}
+                else "FAILED"
+            )
+            action_type = str(job.payload.get("action_type") or "POST").upper()
+            campaign_id = str(uuid.uuid4())
+            campaign_name = str(
+                job.payload.get("name")
+                or job.payload.get("campaign_name")
+                or f"{action_type} {job.started_at or job.finished_at or job.id}"
+            )[:200]
+            description = job.payload.get("description")
+            config_json = json.dumps(_safe_config(job.payload), ensure_ascii=False, default=str)
+            run_payload = {
+                "run_id": job.id,
+                "campaign_id": campaign_id,
+                "owner_key": job.owner or "",
+                "campaign_name": campaign_name,
+                "action_type": action_type,
+                "status": final_status,
+                "total_planned": job.total,
+                "total_success": job.success,
+                "total_failed": job.failed,
+                "total_skipped": job.skipped,
+                "started_at": job.started_at,
+                "finished_at": job.finished_at,
+            }
+            with local_db.session() as cursor:
                 cursor.execute(
-                    db._normalize_query("""INSERT INTO group_sessions
-                   (owner_key, action_type, status, total_planned, total_success,
-                    total_pending_approval, total_failed, total_skipped, started_at, finished_at)
-                   VALUES (?, 'POST', ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id"""),
+                    """
+                        INSERT INTO group_campaigns
+                            (id, owner_key, name, description, action_type)
+                        VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (campaign_id, job.owner or "", campaign_name, description, action_type),
+                )
+                cursor.execute(
+                    """
+                        INSERT INTO group_runs
+                            (id, campaign_id, run_number, status, config_json,
+                             total_planned, total_success, total_failed, total_skipped,
+                             started_at, finished_at)
+                        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
                     (
-                        job.owner, final_status, job.total, job.success, 0, job.failed, job.skipped,
-                        job.started_at, job.finished_at,
+                        job.id, campaign_id, final_status, config_json, job.total,
+                        job.success, job.failed, job.skipped, job.started_at,
+                        job.finished_at,
                     ),
                 )
-                session = cursor.fetchone()
-                if not session:
-                    return
+                cursor.execute(
+                    """
+                        INSERT INTO group_sync_outbox
+                            (event_id, data_type, data_id, payload_json, status)
+                        VALUES (?, 'RUN', ?, ?, 'PENDING')
+                    """,
+                    (
+                        str(uuid.uuid4()), job.id,
+                        json.dumps(run_payload, ensure_ascii=False, default=str),
+                    ),
+                )
                 for result in job.results:
-                    status = result["status"] if result["status"] in {"SUCCESS", "PENDING_APPROVAL", "FAILED", "SKIPPED"} else "FAILED"
+                    status = (
+                        result["status"]
+                        if result["status"] in {
+                            "SUCCESS", "PENDING_APPROVAL", "FAILED", "SKIPPED", "CANCELLED"
+                        }
+                        else "FAILED"
+                    )
+                    task_id = str(uuid.uuid4())
+                    task_payload = {
+                        "log_id": task_id,
+                        "run_id": job.id,
+                        "owner_key": job.owner or "",
+                        "action_type": action_type,
+                        "account_uid": result["account_uid"],
+                        "account_name": result.get("account_name"),
+                        "group_key": result["group_key"],
+                        "group_name": result.get("group_name"),
+                        "group_url": result["group_url"],
+                        "content": result.get("content"),
+                        "status": status,
+                        "result_message": result.get("message"),
+                        "error_code": result.get("error_code"),
+                        "error_detail": result.get("error_detail"),
+                        "result_url": result.get("result_url"),
+                        "finished_at": job.finished_at,
+                    }
                     cursor.execute(
-                        db._normalize_query("""INSERT INTO group_session_logs
-                           (session_id, account_uid, account_id, group_key, group_url, group_name, status, result_message)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)"""),
+                        """
+                            INSERT INTO group_run_tasks
+                                (id, run_id, account_id, account_uid, account_name,
+                                 group_key, group_name, group_url, content, status,
+                                 result_message, error_code, error_detail, result_url,
+                                 attempt_count, started_at, finished_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                        """,
                         (
-                            session["id"], result["account_uid"], result.get("account_id"),
-                            result["group_key"], result["group_url"], result.get("group_name"),
-                            status, (result.get("message") or "")[:255],
+                            task_id, job.id, result.get("account_id"), result["account_uid"],
+                            result.get("account_name"), result["group_key"],
+                            result.get("group_name"), result["group_url"],
+                            result.get("content"), status, result.get("message"),
+                            result.get("error_code"), result.get("error_detail"),
+                            result.get("result_url"), job.started_at, job.finished_at,
+                        ),
+                    )
+                    cursor.execute(
+                        """
+                            INSERT INTO group_sync_outbox
+                                (event_id, data_type, data_id, payload_json, status)
+                            VALUES (?, 'LOG', ?, ?, 'PENDING')
+                        """,
+                        (
+                            str(uuid.uuid4()), task_id,
+                            json.dumps(task_payload, ensure_ascii=False, default=str),
                         ),
                     )
         except Exception as exc:
-            job.log("WARNING", f"Không thể lưu lịch sử chiến dịch: {exc}")
+            job.log("WARNING", f"Cannot persist Module 7 campaign history: {exc}")
 
 
 campaign_manager = CampaignManager()

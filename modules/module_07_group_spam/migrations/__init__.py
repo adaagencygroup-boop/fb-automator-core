@@ -2,21 +2,21 @@
 
 
 def up() -> None:
-    """Apply all Module 7 schema migrations in order."""
-    from .migration_001_schema import up as run_001_up
-    from .migration_002_module2_account import up as run_002_up
+    """Create the current Module 7 local and cloud schemas."""
+    from .migration_003_v2_campaign_runtime import up as run_003_up
+    from .migration_004_remove_local_tables_from_cloud import up as run_004_up
 
-    run_001_up()
-    run_002_up()
+    run_003_up()
+    run_004_up()
 
 
 def down() -> None:
-    """Roll back all Module 7 schema migrations in reverse order."""
-    from .migration_001_schema import down as run_001_down
-    from .migration_002_module2_account import down as run_002_down
+    """Remove the current Module 7 local and cloud schemas."""
+    from .migration_003_v2_campaign_runtime import down as run_003_down
+    from .migration_004_remove_local_tables_from_cloud import down as run_004_down
 
-    run_002_down()
-    run_001_down()
+    run_004_down()
+    run_003_down()
 
 
 __all__ = ["up", "down"]
