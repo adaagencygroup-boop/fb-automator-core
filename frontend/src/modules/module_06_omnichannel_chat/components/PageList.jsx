@@ -45,7 +45,7 @@ function PageStatus({ page, active }) {
   if (page.unread > 0) {
     return (
       <span
-        aria-label={`${page.unread} tin chưa đọc`}
+        aria-label={`${page.unread} thông báo chưa đọc`}
         className={cn(
           "shrink-0 rounded-full px-1.5 text-[11px] leading-5 font-bold text-white text-center",
           active ? "min-w-5" : "min-w-[18px]",
@@ -72,7 +72,8 @@ export default function PageList({
   onSearchChange,
   onReset,
   resetting,
-  loading,
+  loading = false,
+  chatStatus = null,
   className,
 }) {
   const { slice, sentinelRef, hasMore } = useIncrementalList(pages, 40);
@@ -86,7 +87,7 @@ export default function PageList({
         <button
           type="button"
           onClick={onReset}
-          disabled={resetting}
+          disabled={resetting || loading}
           className={cn(
             "w-full flex items-center justify-center gap-2 px-[13px] py-[7px] rounded-md border border-blue-200 bg-blue-50 text-blue-600 text-xs leading-4 transition-colors hover:bg-blue-100 disabled:opacity-60",
             FOCUS,
@@ -97,7 +98,7 @@ export default function PageList({
             alt=""
             width={11.25}
             height={10.5}
-            className={cn("block", resetting && "animate-spin")}
+            className={cn("block", (resetting || loading) && "animate-spin")}
           />
           {resetting ? "Đang đồng bộ..." : "Reset dữ liệu"}
         </button>
@@ -117,8 +118,9 @@ export default function PageList({
           Tất cả các trang
         </button>
 
-        <h3 className="font-sans text-xs leading-4 font-bold tracking-[0.6px] text-slate-800 uppercase">
-          Danh sách Page ({total})
+        <h3 className="font-sans text-xs leading-4 font-bold tracking-[0.6px] text-slate-800 uppercase flex items-center justify-between">
+          <span>Danh sách Page {loading ? "" : `(${total})`}</span>
+          {loading && <span className="text-[11px] font-normal lowercase text-slate-400">Đang tải...</span>}
         </h3>
 
         <label className="relative block">
@@ -145,9 +147,34 @@ export default function PageList({
         <PageListSkeleton />
       ) : (
       <ul className="flex-1 min-h-0 overflow-y-auto px-2 pb-2 flex flex-col gap-0.5">
-        {pages.length === 0 && (
-          <li className="px-3 py-6 text-center text-xs text-slate-400">Không tìm thấy Page phù hợp.</li>
-        )}
+        {loading ? (
+          <li className="flex-1 py-12 flex flex-col items-center justify-center text-center gap-2">
+            <div className="size-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            <span className="text-xs text-slate-500 font-medium">Đang tải dữ liệu...</span>
+          </li>
+        ) : pages.length === 0 ? (
+          search.trim() ? (
+            <li className="px-3 py-6 text-center text-xs text-slate-400">Không tìm thấy Page phù hợp.</li>
+          ) : chatStatus && !chatStatus.has_accounts ? (
+            <li className="px-3 py-8 text-center flex flex-col items-center gap-2">
+              <span className="text-xs text-slate-600 font-semibold">Chưa có tài khoản Facebook ở Module 2</span>
+              <span className="text-[11px] text-slate-400">Hãy thêm tài khoản tại Quản lý tài khoản để bắt đầu đồng bộ Page.</span>
+              <a
+                href="/accounts"
+                className="mt-1.5 inline-flex items-center px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition-colors"
+              >
+                Thêm tài khoản
+              </a>
+            </li>
+          ) : chatStatus && chatStatus.has_accounts && !chatStatus.has_pages ? (
+            <li className="px-3 py-8 text-center flex flex-col items-center gap-2">
+              <span className="text-xs text-slate-600 font-semibold">Tài khoản chưa có Fanpage nào</span>
+              <span className="text-[11px] text-slate-400">Tài khoản đã import nhưng chưa tạo hoặc chưa được cấp quyền quản lý Page.</span>
+            </li>
+          ) : (
+            <li className="px-3 py-6 text-center text-xs text-slate-400">Không tìm thấy Page phù hợp.</li>
+          )
+        ) : null}
         {slice.map((page) => {
           const active = page.id === activePageId;
           return (

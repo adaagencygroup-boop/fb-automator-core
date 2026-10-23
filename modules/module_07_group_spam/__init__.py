@@ -1,5 +1,7 @@
-from modules.module_07_group_spam.api import router
-from modules.module_07_group_spam.group_source import (
+"""Public exports for the Module 7 application package."""
+
+from .app.routes import router
+from .app.services.group_source import (
     clean_group_url,
     get_posted_group_keys,
     get_sample_template,
@@ -10,7 +12,7 @@ from modules.module_07_group_spam.group_source import (
 
 def __getattr__(name: str):
     if name == "GroupSpamWorker":
-        from modules.module_07_group_spam.worker import GroupSpamWorker
+        from .app.services.worker import GroupSpamWorker
 
         return GroupSpamWorker
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

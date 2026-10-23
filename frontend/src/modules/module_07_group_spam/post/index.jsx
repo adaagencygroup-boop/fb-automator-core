@@ -1,185 +1,93 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import {
-  Sparkles,
-  RotateCcw,
-  Plus,
-  Play,
-  Square,
-  RefreshCw,
-  Clock3,
-  CalendarDays,
-  ListFilter,
-  Users,
-  Search,
-  Check,
-  Info,
-  ImageIcon,
-  Bold,
-  Italic,
-  Underline,
-  List,
-  Link2,
-  Undo2,
-  Redo2,
-  ListOrdered,
-  Minus,
-  X,
-  Film,
-  Trash2,
-} from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import {
   generateGroupPosts,
   getCurrentGroupCampaign,
   getGroupCampaign,
-  getGeminiModels,
   getGroupSettings,
   runGroupCampaign,
   saveGroupSettings,
   stopGroupCampaign,
-  testGroupAiConnection,
   uploadGroupMedia,
 } from "../service";
-import {
-  INITIAL_POST,
-} from "../shared/constants";
-import {
-  SectionCard,
-  Field,
-  SelectField,
-  CheckLabel,
-  normalizeAccount,
-} from "../shared/components";
+import { INITIAL_POST } from "../shared/constants";
+import { normalizeAccount } from "../shared/components";
+import useSavedApis from "../shared/useSavedApis";
+import CampaignInfoSection from "./components/CampaignInfoSection";
 import GroupAccountSection from "./components/GroupAccountSection";
 import GroupSettingsSection from "./components/GroupSettingsSection";
 import GroupSourceSection from "./components/GroupSourceSection";
-
-const DEFAULT_GEMINI_MODELS = [
-  { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
-  { id: "gemini-3.7-flash", name: "Gemini 3.7 Flash" },
-  { id: "gemini-3.6-flash", name: "Gemini 3.6 Flash" },
-  { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash" },
-  { id: "gemini-3.5-flash-lite", name: "Gemini 3.5 Flash-Lite" },
-  { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" },
-  { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash (quyền truy cập cũ)" },
-  { id: "gemini-2.5-flash-lite", name: "Gemini 2.5 Flash-Lite (quyền truy cập cũ)" },
-  { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro (quyền truy cập cũ)" },
-];
-
-const getProvider = (m) => {
-  if (m === "gemini" || m?.startsWith("gemini-")) return "gemini";
-  if (m?.startsWith("deepseek")) return "deepseek";
-  return "openai";
-};
-
-// Nút toolbar dùng chung, giữ vùng chọn trong editor khi bấm.
-function EditorButton({ label, onClick, children }) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={onClick}
-      className="rounded p-1.5 hover:bg-white hover:text-primary"
-    >
-      {React.cloneElement(children, { className: "size-3.5" })}
-    </button>
-  );
-}
-
-// Chuyển văn bản thường thành HTML và chỉ giữ các thẻ editor hỗ trợ.
-function editorHtml(value = "") {
-  const content = String(value);
-  if (!/<\/?(?:p|div|h[23]|blockquote|ul|ol|li|br|hr|b|strong|i|em|u|a|img)\b/i.test(content)) {
-    return content.split("\n").map((line) => line.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")).join("<br>");
-  }
-  const parsed = new DOMParser().parseFromString(content, "text/html");
-  const allowed = new Set(["P", "DIV", "H2", "H3", "BLOCKQUOTE", "UL", "OL", "LI", "BR", "HR", "B", "STRONG", "I", "EM", "U", "A", "IMG"]);
-  const clean = (node) => {
-    for (const child of Array.from(node.childNodes)) {
-      if (child.nodeType === Node.ELEMENT_NODE) {
-        if (!allowed.has(child.tagName)) {
-          child.replaceWith(...Array.from(child.childNodes));
-          continue;
-        }
-        const originalHref = child.getAttribute("href");
-        const originalSrc = child.getAttribute("src");
-        for (const attr of Array.from(child.attributes)) child.removeAttribute(attr.name);
-        if (child.tagName === "A") {
-          if (originalHref && /^https?:\/\//i.test(originalHref)) {
-            child.setAttribute("href", originalHref);
-            child.setAttribute("target", "_blank");
-            child.setAttribute("rel", "noopener noreferrer");
-          }
-        }
-        if (child.tagName === "IMG") {
-          if (originalSrc && /^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(originalSrc)) {
-            child.setAttribute("src", originalSrc);
-            child.setAttribute("alt", "Ảnh đính kèm");
-          } else {
-            child.remove();
-            continue;
-          }
-        }
-        clean(child);
-      }
-    }
-  };
-  clean(parsed.body);
-  return parsed.body.innerHTML;
-}
+import GroupMediaSection from "./components/GroupMediaSection";
+import GroupContentSection, { editorHtml } from "./components/GroupContentSection";
+import GroupPostingSettingsSection from "./components/GroupPostingSettingsSection";
+import GroupSummarySection from "./components/GroupSummarySection";
+import GroupProgressSection from "./components/GroupProgressSection";
+import GroupActionBar from "./components/GroupActionBar";
 
 export default function GroupPostModule() {
-  const mediaInputRef = useRef(null);
   const editorRef = useRef(null);
-  const inlineImageRef = useRef(null);
 
+  // Bước 1: Chiến dịch
+  const [campaignId, setCampaignId] = useState(null);
+  const [campaignName, setCampaignName] = useState("");
+  const [campaignDescription, setCampaignDescription] = useState("");
+  const [campaignLocked, setCampaignLocked] = useState(false);
+  const [isRerun, setIsRerun] = useState(false);
+
+  // Bước 2: Tài khoản
   const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
-  const [model, setModel] = useState("gpt-4o");
-  const [apiKey, setApiKey] = useState("");
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [providerStatus, setProviderStatus] = useState({});
-  const [geminiModels, setGeminiModels] = useState(DEFAULT_GEMINI_MODELS);
+  const [isAccountLocked, setIsAccountLocked] = useState(false);
+
+  // Khi Bước 1 chưa xác nhận hoặc bị mở khóa, tự động mở khóa Bước 2 để đảm bảo tính tuần tự
+  useEffect(() => {
+    if ((!campaignLocked || !campaignName?.trim()) && isAccountLocked) {
+      setIsAccountLocked(false);
+    }
+  }, [campaignLocked, campaignName, isAccountLocked]);
+
+  // Bước 3: Cấu hình API & thông số chung
+  const apiSource = useSavedApis();
+  const model = apiSource.selected?.model || "gpt-4o";
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsAction, setSettingsAction] = useState("");
   const [settingsFeedback, setSettingsFeedback] = useState(null);
-  const [isAccountLocked, setIsAccountLocked] = useState(false);
   const [isSettingsLocked, setIsSettingsLocked] = useState(false);
+  const [confirmedApi, setConfirmedApi] = useState("");
+  const apiSignature = JSON.stringify(apiSource.selected);
+  const settingsConfirmed = isSettingsLocked && confirmedApi === apiSignature;
   const [threads, setThreads] = useState("2");
   const [restMinutes, setRestMinutes] = useState("10");
   const [maxPosts, setMaxPosts] = useState("10");
+
+  // Bước 4: Nguồn nhóm
   const [groupSource, setGroupSource] = useState("search");
   const [groupFile, setGroupFile] = useState(null);
   const [customGroups, setCustomGroups] = useState([]);
   const [groupSearch, setGroupSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
   const [selectedGroupKeys, setSelectedGroupKeys] = useState([]);
+
+  // Bước 5: Media
   const [mediaFiles, setMediaFiles] = useState([]);
   const [minMedia, setMinMedia] = useState("1");
   const [maxMedia, setMaxMedia] = useState("4");
+
+  // Bước 6: Nội dung AI
   const [prompt, setPrompt] = useState("");
   const [aiCount, setAiCount] = useState("5");
   const [posts, setPosts] = useState(Array.from({ length: 5 }, (_, index) => (index === 0 ? INITIAL_POST : "")));
-  // Giữ bản mới nhất để nạp đúng nội dung khi chuyển tab mà không làm mất caret lúc gõ.
-  const postsRef = useRef(posts);
-  const linkRangeRef = useRef(null);
-  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
-  const [linkUrl, setLinkUrl] = useState("");
-  const [linkText, setLinkText] = useState("");
-  const [linkError, setLinkError] = useState("");
   const [activePost, setActivePost] = useState(0);
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  // Bước 7: Cài đặt đăng bài
   const [avoidDuplicate, setAvoidDuplicate] = useState(false);
   const [shuffleContent, setShuffleContent] = useState(true);
   const [delayMin, setDelayMin] = useState("30");
@@ -187,14 +95,54 @@ export default function GroupPostModule() {
   const [scheduleEnabled, setScheduleEnabled] = useState(true);
   const [scheduleDate, setScheduleDate] = useState("");
   const [scheduleTime, setScheduleTime] = useState("08:00");
-  const [runState, setRunState] = useState("idle");
-  const [campaignId, setCampaignId] = useState(null);
-  const [campaignProgress, setCampaignProgress] = useState(null);
-  const [isGenerating, setIsGenerating] = useState(false);
 
+  // Bước 9: Tiến trình thực thi
+  const [runState, setRunState] = useState("idle");
+  const [campaignProgress, setCampaignProgress] = useState(null);
+
+  // Đọc cấu hình chạy lại từ sessionStorage
   useEffect(() => {
-    postsRef.current = posts;
-  }, [posts]);
+    try {
+      const stored = sessionStorage.getItem("fb_rerun_campaign");
+      if (stored) {
+        const data = JSON.parse(stored);
+        queueMicrotask(() => {
+          if (data.campaign_id) setCampaignId(data.campaign_id);
+          if (data.name) setCampaignName(data.name);
+          if (data.description) setCampaignDescription(data.description);
+          setIsRerun(true);
+
+          const cfg = data.config || {};
+          if (cfg.account_uids?.length) {
+            setSelectedAccountKeys(cfg.account_uids);
+          }
+          if (cfg.groups?.length) {
+            setCustomGroups(cfg.groups);
+            setSelectedGroupKeys(cfg.groups.map((g) => g.key || g.url));
+          }
+          if (cfg.posts?.length) {
+            setPosts(cfg.posts);
+          }
+          if (cfg.settings) {
+            if (cfg.settings.threads) setThreads(String(cfg.settings.threads));
+            if (cfg.settings.rest_minutes) setRestMinutes(String(cfg.settings.rest_minutes));
+            if (cfg.settings.delay_min) setDelayMin(String(cfg.settings.delay_min));
+            if (cfg.settings.delay_max) setDelayMax(String(cfg.settings.delay_max));
+          }
+          // Theo SRS: "Hẹn giờ cũ đã qua phải chọn lại"
+          setScheduleEnabled(false);
+          setScheduleDate("");
+
+          toast.info(
+            `Đã nạp lại cấu hình từ chiến dịch "${data.name}". Vui lòng rà soát lại các bước trước khi bắt đầu.`,
+            "CHẾ ĐỘ CHẠY LẠI"
+          );
+        });
+      }
+    } catch (e) {
+      console.warn("Lỗi đọc cấu hình chạy lại:", e);
+    }
+  }, []);
 
   const loadAccounts = async () => {
     setAccountsLoading(true);
@@ -226,24 +174,9 @@ export default function GroupPostModule() {
     Promise.resolve().then(getGroupSettings)
       .then((data) => {
         if (cancelled) return;
-        setModel(data.model);
-        if (data.model?.startsWith("gemini-")) {
-          setGeminiModels((current) => current.some((item) => item.id === data.model)
-            ? current
-            : [{ id: data.model, name: data.model }, ...current]);
-        }
         setThreads(String(data.threads));
         setRestMinutes(String(data.rest_minutes));
         setMaxPosts(String(data.max_posts));
-        setProviderStatus(data.providers || {});
-        const activeProv = getProvider(data.model);
-        const initialKey = data.api_key || data.providers?.[activeProv]?.key || "";
-        if (initialKey) {
-          setApiKey(initialKey);
-        }
-        if (data.providers?.[activeProv]?.configured) {
-          setIsSettingsLocked(true);
-        }
       })
       .catch((error) => {
         if (cancelled) return;
@@ -272,6 +205,7 @@ export default function GroupPostModule() {
     return () => { cancelled = true; };
   }, []);
 
+  // Polling tiến trình khi có chiến dịch đang chạy
   useEffect(() => {
     if (!campaignId) return undefined;
     let cancelled = false;
@@ -318,11 +252,8 @@ export default function GroupPostModule() {
   const hasGroups = selectedGroups.length > 0 || (groupSource === "file" ? Boolean(groupFile) : false);
   const activeGroupsCount = groupSource === "file" ? (groupFile?.validGroupsCount || selectedGroups.length) : selectedGroups.length;
   const generatedCount = posts.filter((post) => post.trim()).length;
-  const activePostLength = String(posts[activePost] || "").replace(/<[^>]*>/g, "").length;
   const totalPlanned = Math.min(Number(maxPosts) || 0, activeGroupsCount * Math.max(selectedAccounts.length, 1));
-  const activeProvider = getProvider(model);
-  const savedKey = providerStatus[activeProvider];
-  const hasApiKey = Boolean(apiKey.trim() || savedKey?.configured);
+  const hasApiKey = Boolean(apiSource.selected) && !apiSource.loading;
 
   const liveAccountsCount = useMemo(() => {
     return selectedAccounts.filter((acc) => acc.status === "LIVE").length;
@@ -332,18 +263,16 @@ export default function GroupPostModule() {
     if (model === "deepseek-v4-flash" || model === "deepseek-flash") return "DeepSeek V4 Flash";
     if (model === "gpt-4o") return "OpenAI GPT-4o";
     if (model === "gpt-4o-mini") return "OpenAI GPT-4o mini";
-    const found = geminiModels?.find((item) => item.id === model);
-    if (found) return found.name;
     if (model?.startsWith("gemini-")) {
       return model.split("-").map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" ");
     }
-    return model;
-  }, [model, geminiModels]);
+    return apiSource.selected?.hint ? `${model} (${apiSource.selected.hint})` : model;
+  }, [model, apiSource.selected]);
 
   const normalizedSettings = () => {
     const values = {
       model,
-      api_key: apiKey.trim() || null,
+      credential_id: apiSource.selectedId,
       threads: Number(threads),
       rest_minutes: Number(restMinutes),
       max_posts: Number(maxPosts),
@@ -357,40 +286,23 @@ export default function GroupPostModule() {
     if (!Number.isInteger(values.max_posts) || values.max_posts < 1 || values.max_posts > 1000) {
       throw new Error("Max bài phải là số nguyên từ 1 đến 1000");
     }
-    if (!values.api_key && !providerStatus[activeProvider]?.configured) {
-      const provName = activeProvider === "deepseek" ? "DeepSeek" : activeProvider === "gemini" ? "Google Gemini" : "OpenAI";
-      throw new Error(`Vui lòng nhập API Key cho ${provName} trước khi lưu cấu hình.`);
-    }
+    if (!hasApiKey) throw new Error("Hãy chọn API đã cấu hình trong Hồ sơ cá nhân.");
     return values;
-  };
-
-  const handleModelChange = (event) => {
-    const newModel = event?.target?.value || event;
-    setModel(newModel);
-    const newProvider = getProvider(newModel);
-    const existingKey = providerStatus?.[newProvider]?.key || "";
-    setApiKey(existingKey);
-    setShowApiKey(false);
-    setSettingsFeedback(null);
   };
 
   const handleSaveSettings = async (shouldScroll = true) => {
     setSettingsAction("saving");
     setSettingsFeedback(null);
     try {
-      const result = await saveGroupSettings(normalizedSettings());
-      setProviderStatus(result.providers || {});
-      const activeProv = getProvider(model);
-      const savedKeyVal = result.api_key || result.providers?.[activeProv]?.key || apiKey.trim();
-      setApiKey(savedKeyVal);
-      setShowApiKey(false);
+      await saveGroupSettings(normalizedSettings());
       setSettingsFeedback({ type: "success", message: "Đã lưu cấu hình trên máy này" });
       toast.success("Đã lưu cấu hình trên máy này thành công.", "LƯU THÀNH CÔNG");
       setIsSettingsLocked(true);
+      setConfirmedApi(apiSignature);
 
       if (shouldScroll) {
         setTimeout(() => {
-          const step3Element = document.getElementById("step-3-group-source");
+          const step3Element = document.getElementById("step-4-group-source");
           if (step3Element) {
             step3Element.scrollIntoView({ behavior: "smooth", block: "start" });
           }
@@ -404,75 +316,6 @@ export default function GroupPostModule() {
     } finally {
       setSettingsAction("");
     }
-  };
-
-  const handleTestApi = async () => {
-    setSettingsAction("testing");
-    setSettingsFeedback(null);
-    try {
-      if (!hasApiKey) throw new Error("Hãy nhập API Key trước khi kiểm tra");
-      const result = await testGroupAiConnection({ model, api_key: apiKey.trim() || null });
-      setSettingsFeedback({ type: "success", message: result.message || "Kết nối API thành công" });
-      toast.success(result.message || "Kết nối API thành công!", "KIỂM TRA THÀNH CÔNG");
-    } catch (error) {
-      setSettingsFeedback({ type: "error", title: "Lỗi kiểm tra API", message: error.message || "API Key không hợp lệ" });
-    } finally {
-      setSettingsAction("");
-    }
-  };
-
-  const handleLoadGeminiModels = async () => {
-    setSettingsAction("loading-models");
-    setSettingsFeedback(null);
-    try {
-      if (!apiKey.trim() && !providerStatus.gemini?.configured) {
-        throw new Error("Hãy nhập Google AI Studio API Key trước khi tải model");
-      }
-      const result = await getGeminiModels({ api_key: apiKey.trim() || null });
-      setGeminiModels(result.models);
-      if (!result.models.some((item) => item.id === model)) {
-        setModel(result.models[0].id);
-      }
-      setSettingsFeedback({
-        type: "success",
-        message: `Đã tải ${result.count} model khả dụng từ Google AI Studio`,
-      });
-      toast.success(`Đã tải ${result.count} model khả dụng từ Google AI Studio.`, "TẢI MODEL THÀNH CÔNG");
-    } catch (error) {
-      setSettingsFeedback({
-        type: "error",
-        title: "Lỗi tải model Google",
-        message: error.message || "Không tải được danh sách model Google",
-      });
-    } finally {
-      setSettingsAction("");
-    }
-  };
-
-  const handleFiles = (fileList) => {
-    const incoming = Array.from(fileList || []);
-    setMediaFiles((prev) => {
-      const merged = [...prev, ...incoming].slice(0, 10);
-      return merged;
-    });
-  };
-
-  const handleRemoveMedia = (indexToRemove) => {
-    setMediaFiles((prev) => prev.filter((_, idx) => idx !== indexToRemove));
-  };
-
-  const handleClearAllMedia = () => {
-    setMediaFiles([]);
-    if (mediaInputRef.current) {
-      mediaInputRef.current.value = "";
-    }
-  };
-
-  const formatFileSize = (bytes) => {
-    if (!bytes && bytes !== 0) return "";
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   const generatePosts = async () => {
@@ -490,7 +333,7 @@ export default function GroupPostModule() {
     try {
       const result = await generateGroupPosts({
         model,
-        api_key: apiKey.trim() || null,
+        credential_id: apiSource.selectedId,
         prompt: prompt.trim(),
         count: amount,
       });
@@ -505,92 +348,6 @@ export default function GroupPostModule() {
     }
   };
 
-  const updateActivePost = (value) => {
-    setPosts((current) => current.map((post, index) => (index === activePost ? value : post)));
-  };
-
-  // Nạp lại nội dung tương ứng khi người dùng chuyển tab bài viết.
-  useEffect(() => {
-    if (editorRef.current) editorRef.current.innerHTML = editorHtml(postsRef.current[activePost] || "");
-  }, [activePost]);
-
-  // Áp dụng định dạng tại vị trí con trỏ rồi lưu HTML vào bài hiện tại.
-  const runEditorCommand = (command, value = null) => {
-    editorRef.current?.focus();
-    document.execCommand(command, false, value);
-    if (editorRef.current) updateActivePost(editorRef.current.innerHTML);
-  };
-
-  // Lưu vùng chọn để gắn liên kết sau khi người dùng nhập URL trong modal.
-  const openLinkDialog = () => {
-    const selection = window.getSelection();
-    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-    linkRangeRef.current = range && editorRef.current?.contains(range.commonAncestorContainer)
-      ? range.cloneRange()
-      : null;
-    setLinkText(selection?.toString() || "");
-    setLinkUrl("");
-    setLinkError("");
-    setLinkDialogOpen(true);
-  };
-
-  const applyLink = (event) => {
-    event.preventDefault();
-    let parsedUrl;
-    try {
-      parsedUrl = new URL(linkUrl.trim());
-    } catch {
-      setLinkError("Nhập địa chỉ URL hợp lệ.");
-      return;
-    }
-    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-      setLinkError("Liên kết phải bắt đầu bằng http:// hoặc https://.");
-      return;
-    }
-
-    const editor = editorRef.current;
-    const range = linkRangeRef.current;
-    if (!editor) return;
-    editor.focus();
-    const selection = window.getSelection();
-    if (range && editor.contains(range.commonAncestorContainer)) {
-      selection.removeAllRanges();
-      selection.addRange(range);
-    }
-    if (range && !range.collapsed) {
-      document.execCommand("createLink", false, parsedUrl.href);
-    } else {
-      const anchor = document.createElement("a");
-      anchor.href = parsedUrl.href;
-      anchor.textContent = linkText.trim() || parsedUrl.href;
-      const insertionRange = range || document.createRange();
-      if (!range) {
-        insertionRange.selectNodeContents(editor);
-        insertionRange.collapse(false);
-      }
-      insertionRange.deleteContents();
-      insertionRange.insertNode(anchor);
-      insertionRange.setStartAfter(anchor);
-      insertionRange.collapse(true);
-      selection.removeAllRanges();
-      selection.addRange(insertionRange);
-    }
-    updateActivePost(editor.innerHTML);
-    setLinkDialogOpen(false);
-  };
-
-  // Đọc ảnh người dùng chọn thành data URL để chèn trực tiếp vào bài.
-  const insertInlineImage = (file) => {
-    if (!file || !file.type.startsWith("image/")) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      editorRef.current?.focus();
-      document.execCommand("insertImage", false, String(reader.result));
-      if (editorRef.current) updateActivePost(editorRef.current.innerHTML);
-    };
-    reader.readAsDataURL(file);
-  };
-
   const appendCampaignLog = (level, message) => {
     setCampaignProgress((current) => ({
       ...(current || {}),
@@ -602,18 +359,41 @@ export default function GroupPostModule() {
   };
 
   const handleStart = async () => {
-    if (!selectedAccounts.length || !hasGroups) return;
+    const trimmedCampaignName = (campaignName || "").trim();
+    if (!trimmedCampaignName) {
+      toast.warning("Vui lòng nhập Tên chiến dịch ở Bước 1 trước khi bắt đầu!", "THIẾU TÊN CHIẾN DỊCH");
+      const el = document.getElementById("step-1-campaign");
+      if (el) el.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+
+    if (!selectedAccounts.length || !hasGroups || !hasApiKey) {
+      toast.warning("Vui lòng chọn tài khoản, nguồn nhóm và cấu hình API trước khi bắt đầu!", "THIẾU CẤU HÌNH");
+      return;
+    }
+
+    const activeGroups = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
+    if (selectedAccounts.length > activeGroups.length) {
+      toast.error(
+        `Chưa đủ số lượng nhóm. Bạn đã chọn ${selectedAccounts.length} tài khoản nhưng chỉ có ${activeGroups.length} nhóm. Vui lòng chọn thêm nhóm hoặc giảm số tài khoản để số tài khoản không lớn hơn số nhóm.`,
+        "QUY TẮC PHÂN BỔ (A ≤ G)"
+      );
+      const el = document.getElementById("step-4-group-source");
+      if (el) el.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+
     setRunState("starting");
     setCampaignProgress({
       status: "QUEUED",
       logs: [{
         time: new Date().toISOString().slice(0, 19),
         level: "INFO",
-        message: "Đã nhận lệnh bắt đầu, đang chuẩn bị cấu hình chiến dịch...",
+        message: `Đã nhận lệnh bắt đầu chiến dịch "${trimmedCampaignName}", đang chuẩn bị cấu hình...`,
       }],
     });
     try {
-      if (!isSettingsLocked) {
+      if (!settingsConfirmed) {
         appendCampaignLog("INFO", "Đang kiểm tra và lưu cấu hình Module 7...");
         const saved = await handleSaveSettings(false);
         if (!saved) throw new Error("Cấu hình chưa hợp lệ");
@@ -634,9 +414,11 @@ export default function GroupPostModule() {
         }
       }
 
-      const activeGroups = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
       appendCampaignLog("INFO", `Đang gửi chiến dịch ${selectedAccounts.length} tài khoản × ${activeGroups.length} nhóm tới worker...`);
       const campaign = await runGroupCampaign({
+        campaign_id: campaignId || undefined,
+        name: trimmedCampaignName,
+        description: campaignDescription || undefined,
         action_type: "POST",
         account_ids: selectedAccounts.map((account) => account.id),
         account_uids: selectedAccounts.map((account) => account.uid),
@@ -645,6 +427,7 @@ export default function GroupPostModule() {
         media: savedMediaPaths.length ? savedMediaPaths : mediaFiles.map((file) => file.name),
         settings: {
           model,
+          credential_id: apiSource.selectedId,
           threads: Number(threads),
           rest_minutes: Number(restMinutes),
           max_posts: Number(maxPosts),
@@ -660,6 +443,8 @@ export default function GroupPostModule() {
       setCampaignId(campaign.job_id);
       setCampaignProgress(campaign);
       setRunState(campaign.status === "QUEUED" ? "starting" : "running");
+      sessionStorage.removeItem("fb_rerun_campaign");
+      setIsRerun(false);
       toast.success("Đã khởi động chiến dịch đăng bài nhóm thành công!", "BẮT ĐẦU CHIẾN DỊCH");
     } catch (error) {
       appendCampaignLog("ERROR", error.message || "Không thể bắt đầu chiến dịch");
@@ -681,6 +466,8 @@ export default function GroupPostModule() {
     }
   };
 
+  const canStart = runState === "idle" && selectedAccounts.length > 0 && hasGroups && hasApiKey && !settingsLoading;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -693,9 +480,27 @@ export default function GroupPostModule() {
         </p>
       </div>
 
-      {/* Bước 1: Chọn tài khoản / người dùng đi seeding */}
-      <div id="step-1-accounts" className="scroll-mt-6">
+      {/* Bước 1: Tạo chiến dịch */}
+      <CampaignInfoSection
+        campaignName={campaignName}
+        setCampaignName={setCampaignName}
+        campaignDescription={campaignDescription}
+        setCampaignDescription={setCampaignDescription}
+        campaignId={campaignId}
+        isLocked={campaignLocked}
+        setIsLocked={setCampaignLocked}
+        isRerun={isRerun}
+        stepNumber="1"
+        onContinue={() => {
+          const el = document.getElementById("step-2-accounts");
+          if (el) el.scrollIntoView({ behavior: "smooth" });
+        }}
+      />
+
+      {/* Bước 2: Chọn tài khoản / người dùng đi seeding */}
+      <div id="step-2-accounts" className="scroll-mt-6">
         <GroupAccountSection
+          stepNumber="2"
           accounts={accounts}
           accountsLoading={accountsLoading}
           selectedAccountKeys={selectedAccountKeys}
@@ -703,45 +508,36 @@ export default function GroupPostModule() {
           onRefreshAccounts={loadAccounts}
           isLocked={isAccountLocked}
           setIsLocked={setIsAccountLocked}
+          isStep1Completed={Boolean(campaignLocked && campaignName?.trim())}
+          onContinue={() => {
+            const el = document.getElementById("step-3-settings");
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
         />
       </div>
 
-      {/* Bước 2: Cấu hình API & thông số chung */}
-      <div id="step-2-settings" className="scroll-mt-6">
+      {/* Bước 3: Cấu hình API & thông số chung */}
+      <div id="step-3-settings" className="scroll-mt-6">
         <GroupSettingsSection
-          model={model}
-          setModel={setModel}
-          apiKey={apiKey}
-          setApiKey={setApiKey}
-          showApiKey={showApiKey}
-          setShowApiKey={setShowApiKey}
+          stepNumber="3"
+          apiSource={apiSource}
           threads={threads}
           setThreads={setThreads}
           restMinutes={restMinutes}
           setRestMinutes={setRestMinutes}
-          maxPosts={maxPosts}
-          setMaxPosts={setMaxPosts}
-          geminiModels={geminiModels}
-          setGeminiModels={setGeminiModels}
-          providerStatus={providerStatus}
-          setProviderStatus={setProviderStatus}
           settingsLoading={settingsLoading}
           settingsAction={settingsAction}
-          setSettingsAction={setSettingsAction}
           settingsFeedback={settingsFeedback}
-          setSettingsFeedback={setSettingsFeedback}
           onSaveSettings={handleSaveSettings}
-          onTestApi={handleTestApi}
-          onLoadGeminiModels={handleLoadGeminiModels}
-          onModelChange={handleModelChange}
-          isLocked={isSettingsLocked}
+          isLocked={settingsConfirmed}
           setIsLocked={setIsSettingsLocked}
         />
       </div>
 
-      {/* Bước 3: Nguồn nhóm */}
-      <div id="step-3-group-source" className="scroll-mt-6">
+      {/* Bước 4: Nguồn nhóm */}
+      <div id="step-4-group-source" className="scroll-mt-6">
         <GroupSourceSection
+          stepNumber="4"
           groupSource={groupSource}
           setGroupSource={setGroupSource}
           groupFile={groupFile}
@@ -757,481 +553,150 @@ export default function GroupPostModule() {
           selectedAccountKeys={selectedAccountKeys}
           accounts={accounts}
         />
-      </div>
 
-      {/* Bước 4 */}
-      <div id="step-4-media" className="scroll-mt-6">
-        <SectionCard number="4" title="Chọn media (ảnh/video)">
-          <div className="mb-4 flex h-9 items-center justify-center rounded-md bg-primary text-xs font-semibold text-white">
-            <ImageIcon className="mr-2 size-4" /> Hình ảnh + Video
-          </div>
-          <input
-            ref={mediaInputRef}
-            type="file"
-            multiple
-            accept="image/*,video/*"
-            className="hidden"
-            onChange={(event) => handleFiles(event.target.files)}
-          />
-          <button
-            type="button"
-            onClick={() => mediaInputRef.current?.click()}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault();
-              handleFiles(event.dataTransfer.files);
-            }}
-            className="flex min-h-40 w-full flex-col items-center justify-center rounded-lg border border-dashed border-blue-200 bg-slate-50/60 text-center transition-colors hover:bg-blue-50/40"
-          >
-            <span className="flex size-12 items-center justify-center rounded-full bg-blue-100 text-primary">
-              <Plus className="size-5" />
-            </span>
-            <span className="mt-3 text-xs font-bold text-slate-700">
-              {mediaFiles.length ? `Đã chọn ${mediaFiles.length} tệp media` : "Nhấp để tải ảnh lên hoặc kéo thả"}
-            </span>
-            <span className="mt-1 text-[10px] text-slate-400">Hỗ trợ JPG, PNG (tối đa 10 ảnh)</span>
-          </button>
-          {mediaFiles.length > 0 && (
-            <div className="mt-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-700">
-                  Tệp đã chọn ({mediaFiles.length}/10):
-                </span>
-                <button
-                  type="button"
-                  onClick={handleClearAllMedia}
-                  className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-500 transition-colors hover:text-rose-700 hover:underline"
-                >
-                  <Trash2 className="size-3" />
-                  Xoá tất cả
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
-                {mediaFiles.map((file, idx) => {
-                  const isVideo = file.type?.startsWith("video/") || /\.(mp4|mov|avi|mkv)$/i.test(file.name || "");
-                  const previewUrl = file instanceof File ? URL.createObjectURL(file) : null;
-
-                  return (
-                    <div
-                      key={`${file.name}-${idx}`}
-                      className="group relative flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white p-1.5 shadow-xs transition-all hover:border-blue-300 hover:shadow-sm"
-                    >
-                      <div className="relative aspect-square w-full overflow-hidden rounded-md bg-slate-100">
-                        {isVideo && previewUrl ? (
-                          <div className="relative h-full w-full bg-black">
-                            <video
-                              src={previewUrl}
-                              muted
-                              playsInline
-                              controls
-                              className="h-full w-full object-cover"
-                              preload="metadata"
-                            />
-                          </div>
-                        ) : previewUrl ? (
-                          <img
-                            src={previewUrl}
-                            alt={file.name}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center text-slate-400">
-                            <ImageIcon className="size-6" />
-                          </div>
-                        )}
-
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleRemoveMedia(idx);
-                          }}
-                          className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-rose-500/90 text-white opacity-90 shadow-sm transition-transform hover:scale-110 hover:bg-rose-600 sm:opacity-0 sm:group-hover:opacity-100"
-                          title="Xoá tệp này"
-                        >
-                          <X className="size-3" />
-                        </button>
-
-                        <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 py-0.5 text-[8px] font-medium text-white backdrop-blur-xs">
-                          #{idx + 1}
-                        </span>
-                      </div>
-
-                      <div className="mt-1.5 px-0.5">
-                        <p className="truncate text-[10px] font-medium text-slate-700" title={file.name}>
-                          {file.name}
-                        </p>
-                        <p className="text-[9px] text-slate-400">
-                          {formatFileSize(file.size)}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <Field label="Tối thiểu media mỗi bài">
-              <Input type="number" min="0" value={minMedia} onChange={(event) => setMinMedia(event.target.value)} />
-            </Field>
-            <Field label="Tối đa media mỗi bài">
-              <Input type="number" min="0" value={maxMedia} onChange={(event) => setMaxMedia(event.target.value)} />
-            </Field>
-          </div>
-        </SectionCard>
-      </div>
-
-      {/* Bước 5 */}
-      <div id="step-5-content" className="scroll-mt-6">
-        <SectionCard number="5" title="Tạo nội dung bằng AI">
-          <div className="grid gap-4 md:grid-cols-[1fr_320px]">
-            <Field label="Nội dung gốc chủ đề/mô tả">
-              <div className="relative">
-                <Textarea
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  maxLength={2000}
-                  placeholder="Nhập nội dung gốc để AI tạo ra các bài đăng..."
-                  className="min-h-24 resize-none pb-6"
-                />
-                <span className="absolute bottom-2 right-3 text-[9px] text-slate-400">{prompt.length}/2000</span>
-              </div>
-            </Field>
-            <div className="flex flex-col justify-between gap-3">
-              <Field label="Số lượng bài AI tạo ra">
-                <SelectField value={aiCount} onChange={(event) => setAiCount(event.target.value)}>
-                  <option value="3">3</option>
-                  <option value="5">5</option>
-                  <option value="10">10</option>
-                </SelectField>
-              </Field>
-              <Button type="button" onClick={generatePosts} disabled={isGenerating} className="w-full">
-                <Sparkles className="mr-2 size-3.5" /> {isGenerating ? "Đang tạo nội dung..." : "Tạo nội dung AI"}
-              </Button>
-            </div>
-          </div>
-
-          <div className="mt-5 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <div>
-                <p className="text-xs font-bold text-slate-800">Kết quả nội dung AI ({generatedCount} bài)</p>
-                <p className="text-[10px] text-slate-400">Bạn có thể chỉnh sửa nội dung trước khi đăng</p>
-              </div>
-              <Button type="button" size="sm" variant="outline" className="text-primary" disabled={isGenerating} onClick={generatePosts}>
-                <RotateCcw className="mr-1.5 size-3.5" /> Tạo lại
-              </Button>
-            </div>
-            <div className="flex overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-              {posts.map((_, index) => (
-                <button
-                  type="button"
-                  key={index}
-                  onClick={() => setActivePost(index)}
-                  className={`h-9 min-w-20 flex-1 text-[10px] font-semibold ${activePost === index ? "bg-primary text-white" : "text-slate-500 hover:bg-white"
-                    }`}
-                >
-                  Bài {index + 1}
-                </button>
-              ))}
-            </div>
-            <p className="mb-2 mt-4 text-[11px] font-semibold text-slate-600">Nội dung bài {activePost + 1}</p>
-            <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-              <input
-                ref={inlineImageRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(event) => {
-                  insertInlineImage(event.target.files?.[0]);
-                  event.target.value = "";
-                }}
-              />
-              {/* Toolbar định dạng nội dung và chèn các thành phần vào vị trí con trỏ. */}
-              <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50 px-3 py-2 text-slate-500">
-                <EditorButton label="Hoàn tác" onClick={() => runEditorCommand("undo")}><Undo2 /></EditorButton>
-                <EditorButton label="Làm lại" onClick={() => runEditorCommand("redo")}><Redo2 /></EditorButton>
-                <span className="mx-1 h-5 border-l border-slate-200" />
-                <select
-                  aria-label="Kiểu đoạn văn"
-                  defaultValue="p"
-                  onChange={(event) => runEditorCommand("formatBlock", event.target.value)}
-                  className="h-7 rounded border-0 bg-transparent px-1 text-[11px] text-slate-600 outline-none hover:bg-white"
-                >
-                  <option value="p">Đoạn văn</option>
-                  <option value="h2">Tiêu đề 2</option>
-                  <option value="h3">Tiêu đề 3</option>
-                  <option value="blockquote">Trích dẫn</option>
-                </select>
-                <span className="mx-1 h-5 border-l border-slate-200" />
-                <EditorButton label="Đậm" onClick={() => runEditorCommand("bold")}><Bold /></EditorButton>
-                <EditorButton label="Nghiêng" onClick={() => runEditorCommand("italic")}><Italic /></EditorButton>
-                <EditorButton label="Gạch chân" onClick={() => runEditorCommand("underline")}><Underline /></EditorButton>
-                <span className="mx-1 h-5 border-l border-slate-200" />
-                <EditorButton label="Danh sách dấu đầu dòng" onClick={() => runEditorCommand("insertUnorderedList")}><List /></EditorButton>
-                <EditorButton label="Danh sách đánh số" onClick={() => runEditorCommand("insertOrderedList")}><ListOrdered /></EditorButton>
-                <EditorButton label="Đường phân cách" onClick={() => runEditorCommand("insertHorizontalRule")}><Minus /></EditorButton>
-                <span className="mx-1 h-5 border-l border-slate-200" />
-                <EditorButton label="Chèn liên kết" onClick={openLinkDialog}><Link2 /></EditorButton>
-                <EditorButton label="Chèn ảnh" onClick={() => inlineImageRef.current?.click()}><ImageIcon /></EditorButton>
-              </div>
-              {/* Vùng soạn thảo rich text; lưu HTML để giữ định dạng riêng từng bài. */}
-              <div
-                ref={editorRef}
-                contentEditable
-                suppressContentEditableWarning
-                role="textbox"
-                aria-label={`Nội dung bài ${activePost + 1}`}
-                aria-multiline="true"
-                onInput={(event) => updateActivePost(event.currentTarget.innerHTML)}
-                onClick={(event) => {
-                  const anchor = event.target.closest("a[href]");
-                  if (!anchor || !event.currentTarget.contains(anchor)) return;
-                  event.preventDefault();
-                  window.open(anchor.href, "_blank", "noopener,noreferrer");
-                }}
-                onPaste={(event) => {
-                  event.preventDefault();
-                  const text = event.clipboardData.getData("text/plain");
-                  document.execCommand("insertText", false, text);
-                }}
-                className="min-h-24 max-h-80 overflow-y-auto px-3 py-3 text-xs leading-5 text-slate-800 outline-none [&_a]:cursor-pointer [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:text-base [&_h3]:font-semibold [&_img]:my-2 [&_img]:max-h-40 [&_img]:max-w-full [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:list-disc [&_ul]:pl-6"
-              />
-              <div className="px-3 pb-2 text-right text-[9px] text-slate-400">
-                {activePostLength}/2000
-              </div>
-            </div>
-          </div>
-        </SectionCard>
-      </div>
-
-      {/* Bước 6 */}
-      <div id="step-6-posting" className="scroll-mt-6">
-        <SectionCard number="6" title="Cài đặt đăng bài">
-          <div className="flex flex-wrap gap-x-8 gap-y-3">
-            <CheckLabel checked={scheduleEnabled} onCheckedChange={setScheduleEnabled}>
-              Bật hẹn giờ đăng bài
-            </CheckLabel>
-            <CheckLabel checked={avoidDuplicate} onCheckedChange={setAvoidDuplicate}>
-              Không đăng trùng nội dung
-            </CheckLabel>
-            <CheckLabel checked={shuffleContent} onCheckedChange={setShuffleContent}>
-              Đăng ngẫu nhiên nội dung (nếu có nhiều nội dung)
-            </CheckLabel>
-          </div>
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
-            <Field label="Thời gian nghỉ giữa các lần đăng (giây)">
-              <div className="flex items-center gap-3">
-                <Input
-                  type="number"
-                  min="0"
-                  value={delayMin}
-                  onChange={(event) => setDelayMin(event.target.value)}
-                  className="text-center"
-                />
-                <span className="text-slate-400">–</span>
-                <Input
-                  type="number"
-                  min="0"
-                  value={delayMax}
-                  onChange={(event) => setDelayMax(event.target.value)}
-                  className="text-center"
-                />
-                <span className="text-[10px] text-slate-400">giây</span>
-              </div>
-            </Field>
-            <Field label="Thời gian bắt đầu (tùy chọn)">
-              <div className={`grid grid-cols-2 gap-3 transition-opacity ${scheduleEnabled ? "opacity-100" : "pointer-events-none opacity-40"}`}>
-                <div className="relative">
-                  <CalendarDays className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-                  <Input
-                    type="date"
-                    disabled={!scheduleEnabled}
-                    value={scheduleDate}
-                    onChange={(event) => setScheduleDate(event.target.value)}
-                    className="pl-9"
-                  />
-                </div>
-                <div className="relative">
-                  <Clock3 className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-                  <Input
-                    type="time"
-                    disabled={!scheduleEnabled}
-                    value={scheduleTime}
-                    onChange={(event) => setScheduleTime(event.target.value)}
-                    className="pl-9"
-                  />
+        {/* Cảnh báo A > G theo quy tắc nghiệp vụ 1.4.4 & SG-BR-05 */}
+        {selectedAccounts.length > activeGroupsCount && (
+          <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50/90 p-4 shadow-xs">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="size-5 shrink-0 text-amber-600 mt-0.5" />
+              <div className="flex-1 text-xs">
+                <p className="font-bold text-amber-900">
+                  Chưa đủ số lượng nhóm. Bạn đã chọn {selectedAccounts.length} tài khoản nhưng chỉ có {activeGroupsCount} nhóm.
+                </p>
+                <p className="mt-1 text-amber-800 leading-relaxed">
+                  Vui lòng chọn thêm nhóm hoặc giảm số tài khoản để số tài khoản không lớn hơn số nhóm (A ≤ G).
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      const el = document.getElementById("step-4-group-source");
+                      if (el) el.scrollIntoView({ behavior: "smooth" });
+                    }}
+                    className="border-amber-300 bg-white text-xs font-semibold text-amber-800 hover:bg-amber-100"
+                  >
+                    + Chọn thêm nhóm
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      const trimmed = selectedAccountKeys.slice(0, activeGroupsCount);
+                      setSelectedAccountKeys(trimmed);
+                      toast.info(`Đã tự động giảm số tài khoản xuống ${trimmed.length} tài khoản để bằng số nhóm.`, "ĐIỀU CHỈNH SỐ LƯỢNG");
+                    }}
+                    className="bg-amber-600 text-xs font-semibold text-white hover:bg-amber-700"
+                  >
+                    - Giảm số tài khoản
+                  </Button>
                 </div>
               </div>
-            </Field>
-          </div>
-        </SectionCard>
-      </div>
-
-      {/* Thông tin tác vụ cấu hình */}
-      <SectionCard title="Thông tin tác vụ cấu hình" aside={<Info className="size-4 text-primary" />}>
-        <div className="grid gap-x-10 gap-y-3 text-[11px] md:grid-cols-2">
-          {[
-            [
-              <Users key="a" className="size-3.5" />,
-              "Tài khoản",
-              selectedAccounts.length
-                ? `${selectedAccounts.length} tài khoản đã chọn${liveAccountsCount > 0 ? ` (${liveAccountsCount} Live)` : ""}`
-                : "Chưa chọn tài khoản",
-            ],
-            [
-              <ListFilter key="b" className="size-3.5" />,
-              "Hạn bài",
-              `${maxPosts} bài (kế hoạch ${totalPlanned} bài)`,
-            ],
-            [
-              <Sparkles key="c" className="size-3.5" />,
-              "API Key",
-              hasApiKey ? `Đã cấu hình (${modelDisplayName})` : "Chưa cấu hình",
-            ],
-            [
-              <Sparkles key="d" className="size-3.5" />,
-              "Số bài AI",
-              `${generatedCount} / ${posts.length} bài`,
-            ],
-            [
-              <Search key="e" className="size-3.5" />,
-              "Nguồn nhóm",
-              groupSource === "search"
-                ? (groupSearch ? `Từ khóa "${groupSearch}" (${activeGroupsCount} nhóm)` : `Tìm theo từ khóa (${activeGroupsCount} nhóm)`)
-                : (groupFile?.name ? `${groupFile.name} (${activeGroupsCount} nhóm)` : `Từ file link nhóm (${activeGroupsCount} nhóm)`),
-            ],
-            [
-              <ImageIcon key="f" className="size-3.5" />,
-              "Min / Max media",
-              mediaFiles.length
-                ? `${mediaFiles.length} tệp đã chọn (${minMedia} – ${maxMedia} ảnh/bài)`
-                : `${minMedia} – ${maxMedia} ảnh`,
-            ],
-            [<RefreshCw key="g" className="size-3.5" />, "Luồng chạy", `${threads} luồng`],
-            [<Clock3 key="h" className="size-3.5" />, "Giãn cách đăng", `${delayMin} – ${delayMax} giây`],
-            [<Clock3 key="i" className="size-3.5" />, "Nghỉ", `${restMinutes} phút`],
-            [
-              <CalendarDays key="j" className="size-3.5" />,
-              "Hẹn giờ",
-              scheduleEnabled ? (scheduleDate ? `${scheduleDate} ${scheduleTime}` : "Đã kích hoạt") : "Đã tắt",
-            ],
-          ].map(([icon, label, value]) => (
-            <div key={label} className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-              <span className="flex items-center gap-2 text-slate-500">
-                {icon}
-                {label}
-              </span>
-              <strong
-                className={
-                  value?.startsWith?.("Đã cấu hình") || (label === "Hẹn giờ" && scheduleEnabled)
-                    ? "text-emerald-600"
-                    : value === "Chưa cấu hình" || value === "Chưa chọn tài khoản"
-                    ? "text-amber-600"
-                    : "text-slate-700"
-                }
-              >
-                {value}
-              </strong>
             </div>
-          ))}
-        </div>
-      </SectionCard>
-
-      {/* Tiến trình */}
-      <Card className="min-h-64 border-slate-200 p-5 shadow-sm">
-        <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
-          <span className="flex size-5 items-center justify-center rounded bg-emerald-50 text-emerald-600">▥</span>
-          Theo dõi tiến trình
-        </div>
-        {runState !== "idle" || campaignProgress ? (
-          <div className="mt-4 max-h-72 min-h-48 space-y-1 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/50 p-2">
-            {campaignProgress?.logs?.length ? campaignProgress.logs.slice().reverse().map((log, index) => (
-              <div key={`${log.time}-${index}`} className="flex gap-2 rounded px-2 py-1.5 text-[10px] hover:bg-white">
-                <span className="shrink-0 text-slate-400">{log.time?.split("T")[1] || "--:--:--"}</span>
-                <span className={log.level === "ERROR" ? "text-rose-600" : log.level === "SUCCESS" ? "text-emerald-600" : log.level === "WARNING" ? "text-amber-600" : "text-slate-600"}>
-                  {log.message}
-                </span>
-              </div>
-            )) : (
-              <div className="flex min-h-44 items-center justify-center text-[10px] text-slate-300">
-                {runState === "starting" ? "Đang khởi tạo tác vụ..." : "Chưa có nhật ký thực thi"}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="flex min-h-48 items-center justify-center text-xs text-slate-300">
-            Tiến trình sẽ hiển thị sau khi bắt đầu đăng bài.
           </div>
         )}
-      </Card>
+      </div>
+
+      {/* Bước 5: Chọn media */}
+      <div id="step-5-media" className="scroll-mt-6">
+        <GroupMediaSection
+          stepNumber="5"
+          mediaFiles={mediaFiles}
+          setMediaFiles={setMediaFiles}
+          minMedia={minMedia}
+          setMinMedia={setMinMedia}
+          maxMedia={maxMedia}
+          setMaxMedia={setMaxMedia}
+        />
+      </div>
+
+      {/* Bước 6: Tạo nội dung bằng AI */}
+      <div id="step-6-content" className="scroll-mt-6">
+        <GroupContentSection
+          stepNumber="6"
+          prompt={prompt}
+          setPrompt={setPrompt}
+          aiCount={aiCount}
+          setAiCount={setAiCount}
+          posts={posts}
+          setPosts={setPosts}
+          activePost={activePost}
+          setActivePost={setActivePost}
+          isGenerating={isGenerating}
+          onGeneratePosts={generatePosts}
+          editorRef={editorRef}
+        />
+      </div>
+
+      {/* Bước 7: Cài đặt đăng bài */}
+      <div id="step-7-posting" className="scroll-mt-6">
+        <GroupPostingSettingsSection
+          stepNumber="7"
+          scheduleEnabled={scheduleEnabled}
+          setScheduleEnabled={setScheduleEnabled}
+          avoidDuplicate={avoidDuplicate}
+          setAvoidDuplicate={setAvoidDuplicate}
+          shuffleContent={shuffleContent}
+          setShuffleContent={setShuffleContent}
+          delayMin={delayMin}
+          setDelayMin={setDelayMin}
+          delayMax={delayMax}
+          setDelayMax={setDelayMax}
+          scheduleDate={scheduleDate}
+          setScheduleDate={setScheduleDate}
+          scheduleTime={scheduleTime}
+          setScheduleTime={setScheduleTime}
+        />
+      </div>
+
+      {/* Bước 8: Thông tin cấu hình tổng hợp */}
+      <div id="step-8-summary" className="scroll-mt-6">
+        <GroupSummarySection
+          stepNumber="8"
+          campaignName={campaignName}
+          campaignId={campaignId}
+          selectedAccountsCount={selectedAccounts.length}
+          liveAccountsCount={liveAccountsCount}
+          maxPosts={maxPosts}
+          totalPlanned={totalPlanned}
+          hasApiKey={hasApiKey}
+          modelDisplayName={modelDisplayName}
+          generatedCount={generatedCount}
+          postsCount={posts.length}
+          groupSource={groupSource}
+          groupSearch={groupSearch}
+          groupFileName={groupFile?.name}
+          activeGroupsCount={activeGroupsCount}
+          mediaFilesCount={mediaFiles.length}
+          minMedia={minMedia}
+          maxMedia={maxMedia}
+          threads={threads}
+          delayMin={delayMin}
+          delayMax={delayMax}
+          restMinutes={restMinutes}
+          scheduleEnabled={scheduleEnabled}
+          scheduleDate={scheduleDate}
+          scheduleTime={scheduleTime}
+        />
+      </div>
+
+      {/* Bước 9: Tiến trình */}
+      <div id="step-9-progress" className="scroll-mt-6">
+        <GroupProgressSection
+          stepNumber="9"
+          runState={runState}
+          campaignProgress={campaignProgress}
+        />
+      </div>
 
       {/* Sticky Bottom Action Bar */}
-      <Card className="sticky bottom-0 z-20 flex flex-col items-center justify-between gap-4 border-slate-200 bg-white/95 px-6 py-4 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur sm:flex-row">
-        <div className="flex items-center gap-3">
-          <span className="flex size-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
-            <Check className="size-4" />
-          </span>
-          <div>
-            <p className="text-xs font-bold text-slate-700">Sẵn sàng thực thi tiến trình đăng bài</p>
-            <p className="text-[10px] text-slate-400">Hệ thống sẽ chạy tự động theo các thông số đã cấu hình ở trên</p>
-          </div>
-        </div>
-        <div className="flex gap-3">
-          <Button type="button" variant="destructive" disabled={runState === "idle"} onClick={handleStop}>
-            <Square className="mr-2 size-3 fill-current" /> DỪNG ĐĂNG
-          </Button>
-          <Button
-            type="button"
-            variant="success"
-            disabled={runState !== "idle" || !selectedAccounts.length || !hasGroups || !hasApiKey || settingsLoading}
-            onClick={handleStart}
-          >
-            <Play className="mr-2 size-3.5 fill-current" /> BẮT ĐẦU ĐĂNG BÀI
-          </Button>
-        </div>
-      </Card>
-      {linkDialogOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setLinkDialogOpen(false);
-          }}
-        >
-          <form onSubmit={applyLink} className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
-            <h2 className="text-sm font-bold text-slate-800">Chèn liên kết</h2>
-            <p className="mt-1 text-xs text-slate-500">Liên kết sẽ gắn vào phần văn bản đang chọn.</p>
-            <label className="mt-4 block text-xs font-medium text-slate-600">
-              Địa chỉ liên kết
-              <Input
-                autoFocus
-                type="text"
-                inputMode="url"
-                value={linkUrl}
-                onChange={(event) => { setLinkUrl(event.target.value); setLinkError(""); }}
-                placeholder="https://example.com"
-                className="mt-1.5"
-              />
-            </label>
-            <label className="mt-3 block text-xs font-medium text-slate-600">
-              Nội dung hiển thị
-              <Input
-                value={linkText}
-                onChange={(event) => setLinkText(event.target.value)}
-                placeholder="Nhập nội dung liên kết"
-                className="mt-1.5"
-              />
-            </label>
-            {linkError && <p role="alert" className="mt-2 text-xs text-red-600">{linkError}</p>}
-            <div className="mt-5 flex justify-end gap-2">
-              <Button type="button" variant="outline" onClick={() => setLinkDialogOpen(false)}>Hủy</Button>
-              <Button type="submit">Chèn liên kết</Button>
-            </div>
-          </form>
-        </div>
-      )}
+      <GroupActionBar
+        runState={runState}
+        canStart={canStart}
+        onStart={handleStart}
+        onStop={handleStop}
+      />
     </div>
   );
 }

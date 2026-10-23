@@ -1,6 +1,11 @@
 import api from "@/services/api";
 import { API_BASE } from "@/config/constants";
 
+export const getAiCredentials = () => api.get("/api/groups/credentials");
+export const addAiCredential = (data) => api.post("/api/groups/credentials", data);
+export const updateAiCredential = (id, data) => api.put(`/api/groups/credentials/${encodeURIComponent(id)}`, data);
+export const deleteAiCredential = (id) => api.delete(`/api/groups/credentials/${encodeURIComponent(id)}`);
+
 export function getGroupSettings() {
   return api.get("/api/groups/settings");
 }
@@ -20,6 +25,8 @@ export function getGeminiModels(data) {
 export function generateGroupPosts(data) {
   return api.post("/api/groups/ai/generate-posts", data);
 }
+
+export const generateGroupComments = (data) => api.post("/api/groups/ai/generate-comments", data);
 
 export async function runGroupCampaign(data) {
   return api.post("/api/groups/campaign", data);
@@ -84,6 +91,26 @@ export function uploadGroupMedia(formData) {
 
 export function getGroupMediaList() {
   return api.get("/api/groups/media/list");
+}
+
+export function getGroupCampaigns(params) {
+  return api.get("/api/groups/campaigns", { params });
+}
+
+export function getGroupCampaignDetails(campaignId) {
+  return api.get(`/api/groups/campaigns/${encodeURIComponent(campaignId)}/details`);
+}
+
+export function getGroupCampaignRerunConfig(campaignId) {
+  return api.get(`/api/groups/campaigns/${encodeURIComponent(campaignId)}/rerun`);
+}
+
+export function deleteGroupCampaign(campaignId) {
+  return api.delete(`/api/groups/campaigns/${encodeURIComponent(campaignId)}`);
+}
+
+export function getGroupHistoryRecords(params) {
+  return api.get("/api/groups/history", { params });
 }
 
 

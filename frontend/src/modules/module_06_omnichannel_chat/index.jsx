@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   getChatPages,
+  getChatStatus,
   getConversations,
   getMessages,
   getNotifications,
@@ -13,10 +14,12 @@ import {
   parseAttachmentText,
   messagePreview,
   attachmentLabel,
+  formatConversationSnippet,
   sendMessage,
   setConversationStarred,
   setConversationTags,
   markConversationRead,
+  markConversationUnread,
   markNotificationRead,
   reactToMessage,
 } from "./service";
@@ -31,12 +34,13 @@ import { useResizableWidth, ResizeHandle } from "@/lib/use-resizable-width";
 // 3 cột: (1) Danh sách Page · (2) Khung chat (1072:12415) · (3) Hội thoại / Thông báo
 
 async function fetchAll(notifQuery) {
-  const [p, c, n] = await Promise.all([
+  const [p, c, n, status] = await Promise.all([
     getChatPages(),
     getConversations(),
     getNotifications(notifQuery),
+    getChatStatus(),
   ]);
-  return { p, c, n };
+  return { p, c, n, status };
 }
 
 /**
@@ -82,12 +86,13 @@ export default function OmnichannelChatModule() {
   const [notifications, setNotifications] = useState([]);
   // Backend lo loc + phan trang, nen phai giu ca so trang va badge no tra ve
   const [notifMeta, setNotifMeta] = useState({
-    unreadCounts: {}, page: 1, totalPages: 1, forKey: null,
+    unreadCounts: {}, typeCounts: {}, page: 1, totalPages: 1, forKey: null,
   });
   const [loadingMoreNotif, setLoadingMoreNotif] = useState(false);
   const [isMock, setIsMock] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [chatStatus, setChatStatus] = useState(null); // { has_accounts, accounts_count, has_pages, pages_count }
   const [resetting, setResetting] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [compactShowList, setCompactShowList] = useState(false); // bố cục 1 cột: đã vào Hội thoại chưa
@@ -96,6 +101,8 @@ export default function OmnichannelChatModule() {
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("conversations");
   const [filter, setFilter] = useState("all");
+  const [starOnly, setStarOnly] = useState(false);
+  const [selectedTag, setSelectedTag] = useState(null);
   const [sort, setSort] = useState("newest");
   const [activeConversationId, setActiveConversationId] = useState(null);
   const [openedNotificationId, setOpenedNotificationId] = useState(null); // thông báo đang mở chi tiết
@@ -112,13 +119,14 @@ export default function OmnichannelChatModule() {
     activeConvRef.current = activeConversationId;
   }, [activeConversationId]);
 
-  const applyData = ({ p, c, n }) => {
+  const applyData = ({ p, c, n, status }) => {
     setPages(p.pages || []);
     setTotalPages(p.total ?? (p.pages || []).length);
     setConversations(c.conversations || []);
     setNotifications(n.notifications || []);
     setNotifMeta({
       unreadCounts: n.unreadCounts || {},
+      typeCounts: n.typeCounts || {},
       page: n.page || 1,
       totalPages: n.totalPages || 1,
       forKey: n.forKey ?? null,
@@ -126,6 +134,7 @@ export default function OmnichannelChatModule() {
     setIsMock(Boolean(p.isMock || c.isMock));
     // Chỉ coi là lỗi khi tải Page/Hội thoại hỏng (thông báo lỗi nhẹ hơn, không chặn)
     setLoadError(p.error || c.error || "");
+    if (status) setChatStatus(status);
     setLoading(false);
   };
 
@@ -185,6 +194,7 @@ export default function OmnichannelChatModule() {
       setNotifications(res.notifications || []);
       setNotifMeta({
         unreadCounts: res.unreadCounts || {},
+        typeCounts: res.typeCounts || {},
         page: res.page || 1,
         totalPages: res.totalPages || 1,
         forKey: notifQueryKey,
@@ -213,6 +223,7 @@ export default function OmnichannelChatModule() {
         setNotifMeta((m) => ({
           ...m,
           unreadCounts: res.unreadCounts || m.unreadCounts,
+          typeCounts: res.typeCounts || m.typeCounts,
           page: res.page || m.page + 1,
           totalPages: res.totalPages || m.totalPages,
         }));
@@ -294,14 +305,14 @@ export default function OmnichannelChatModule() {
 
               // Cập nhật thẻ hội thoại ở sidebar
               setConversations((list) => {
-                const exists = list.some((c) => c.id === convId);
+                const target = list.find((c) => c.id === convId);
                 const isCurrentActive = activeConvRef.current === convId;
-                // Xem trước ở danh sách hội thoại: đính kèm thì ghi nhãn, không in link
-                const snippet = messagePreview(msgData.text) || attachmentLabel();
-                const lastMsgText = msgData.direction === "outbound" ? `Bạn: ${snippet}` : snippet;
+                const isOut = msgData.direction === "outbound";
+                const custName = msgData.sender_name || target?.customerName || `KH: ${String(msgData.sender_id).slice(0, 8)}`;
+                const rawSnippet = messagePreview(msgData.text) || attachmentLabel();
+                const lastMsgText = formatConversationSnippet(rawSnippet, isOut, custName);
 
-                if (exists) {
-                  const target = list.find((c) => c.id === convId);
+                if (target) {
                   const rest = list.filter((c) => c.id !== convId);
                   const updated = {
                     ...target,
@@ -405,21 +416,69 @@ export default function OmnichannelChatModule() {
     setResetting(false);
   };
 
-  const pagesById = useMemo(() => Object.fromEntries(pages.map((p) => [p.id, p])), [pages]);
+  const unreadNotifsByPage = useMemo(() => {
+    const map = {};
+    for (const n of notifications) {
+      if (n.unread) {
+        const pid = String(n.pageId);
+        map[pid] = (map[pid] || 0) + 1;
+      }
+    }
+    return map;
+  }, [notifications]);
+
+  const unreadConvsByPage = useMemo(() => {
+    const map = {};
+    for (const c of conversations) {
+      if (c.unread) {
+        const pid = String(c.pageId);
+        map[pid] = (map[pid] || 0) + 1;
+      }
+    }
+    return map;
+  }, [conversations]);
+
+  const alertByPage = useMemo(() => {
+    const set = new Set();
+    for (const n of notifications) {
+      if (n.unread && (n.type === "comment" || n.alert)) {
+        set.add(String(n.pageId));
+      }
+    }
+    return set;
+  }, [notifications]);
+
+  const sortedPages = useMemo(() => {
+    return [...pages]
+      .map((p) => {
+        const pid = String(p.id);
+        const unread = (unreadNotifsByPage[pid] || 0) + (unreadConvsByPage[pid] || 0);
+        const alert = alertByPage.has(pid);
+        return { ...p, unread, alert };
+      })
+      .sort((a, b) => {
+        if (b.unread !== a.unread) return b.unread - a.unread;
+        return 0;
+      });
+  }, [pages, unreadNotifsByPage, unreadConvsByPage, alertByPage]);
+
+  const pagesById = useMemo(() => Object.fromEntries(sortedPages.map((p) => [p.id, p])), [sortedPages]);
 
   const visiblePages = useMemo(() => {
     const q = normalize(search.trim());
-    return q ? pages.filter((p) => normalize(p.name).includes(q)) : pages;
-  }, [pages, search]);
+    return q ? sortedPages.filter((p) => normalize(p.name).includes(q)) : sortedPages;
+  }, [sortedPages, search]);
 
   const visibleConversations = useMemo(() => {
     let list = conversations;
     if (activePageId) list = list.filter((c) => c.pageId === activePageId);
     if (filter === "unread") list = list.filter((c) => c.unread);
     if (filter === "unreplied") list = list.filter((c) => !c.replied);
+    if (filter === "starred" || starOnly) list = list.filter((c) => c.starred);
+    if (selectedTag) list = list.filter((c) => Array.isArray(c.tags) && c.tags.includes(selectedTag));
     const dir = sort === "newest" ? -1 : 1;
     return [...list].sort((a, b) => dir * (new Date(a.updatedAt) - new Date(b.updatedAt)));
-  }, [conversations, activePageId, filter, sort]);
+  }, [conversations, activePageId, filter, starOnly, selectedTag, sort]);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId) || null;
 
@@ -439,6 +498,22 @@ export default function OmnichannelChatModule() {
       .then((res) => {
         if (res?.messages) {
           setMessagesByConversation((all) => ({ ...all, [id]: res.messages }));
+          if (res.messages.length > 0) {
+            const lastM = res.messages[res.messages.length - 1];
+            const rawSnippet = messagePreview(lastM.text) || (lastM.attachment ? attachmentLabel(lastM.attachment.type) : "");
+            const isOut = lastM.direction === "out" || lastM.direction === "outbound";
+            setConversations((list) =>
+              list.map((c) => {
+                if (c.id !== id) return c;
+                return {
+                  ...c,
+                  lastMessage: formatConversationSnippet(rawSnippet, isOut, c.customerName),
+                  updatedAt: lastM.createdAt || new Date().toISOString(),
+                  replied: isOut,
+                };
+              })
+            );
+          }
         }
       })
       .finally(() => loadingMessages.current.delete(id));
@@ -461,11 +536,60 @@ export default function OmnichannelChatModule() {
             }
             return all;
           });
+          const lastM = res.messages[res.messages.length - 1];
+          const rawSnippet = messagePreview(lastM.text) || (lastM.attachment ? attachmentLabel(lastM.attachment.type) : "");
+          const isOut = lastM.direction === "out" || lastM.direction === "outbound";
+          setConversations((list) =>
+            list.map((c) => {
+              if (c.id !== activeConversationId) return c;
+              return {
+                ...c,
+                lastMessage: formatConversationSnippet(rawSnippet, isOut, c.customerName),
+                updatedAt: lastM.createdAt || new Date().toISOString(),
+                replied: isOut,
+              };
+            })
+          );
         }
       });
     }, 3000);
     return () => clearInterval(interval);
   }, [activeConversationId]);
+
+  // Định kỳ đồng bộ danh sách hội thoại để luôn hiển thị tin nhắn mới nhất
+  useEffect(() => {
+    const refreshConversations = () => {
+      // Khi WebSocket đang kết nối bình thường, tin nhắn đã về realtime -> bỏ qua polling định kỳ
+      if (wsOpenRef.current) return;
+
+      getConversations().then((res) => {
+        if (res?.conversations && res.conversations.length > 0) {
+          setConversations((prev) => {
+            const newMap = new Map(res.conversations.map((c) => [c.id, c]));
+            return prev.map((c) => {
+              const fresh = newMap.get(c.id);
+              if (fresh) {
+                newMap.delete(c.id);
+                // Giữ nguyên trạng thái unread nếu người dùng chưa mở hội thoại đó
+                const isCurrentActive = activeConvRef.current === c.id;
+                const isUnread = isCurrentActive ? false : Boolean(c.unread || fresh.unread);
+                return { ...c, ...fresh, unread: isUnread };
+              }
+              return c;
+            }).concat(
+              Array.from(newMap.values()).map((c) => ({
+                ...c,
+                unread: activeConvRef.current === c.id ? false : Boolean(c.unread),
+              }))
+            );
+          });
+        }
+      }).catch(() => {});
+    };
+
+    const interval = setInterval(refreshConversations, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   const selectConversation = (id) => {
     setOpenedNotificationId(null); // mở hội thoại thì đóng chi tiết thông báo
@@ -598,6 +722,7 @@ export default function OmnichannelChatModule() {
       onToggleTag={(tagId) => handleToggleTag(activeConversation, tagId)}
       onMarkUnread={() => {
         updateConversation(activeConversation.id, { unread: true });
+        if (!isMock) markConversationUnread(activeConversation.id).catch(() => {});
         setActiveConversationId(null);
       }}
       onClose={() => setActiveConversationId(null)}
@@ -632,6 +757,7 @@ export default function OmnichannelChatModule() {
       onReset={() => setResetConfirmOpen(true)}
       resetting={resetting}
       loading={loading}
+      chatStatus={chatStatus}
     />
   );
 
@@ -645,11 +771,16 @@ export default function OmnichannelChatModule() {
       onTabChange={setTab}
       filter={filter}
       onFilterChange={setFilter}
+      starOnly={starOnly}
+      onToggleStar={() => setStarOnly((v) => !v)}
+      selectedTag={selectedTag}
+      onSelectTag={setSelectedTag}
       sort={sort}
       onSortChange={setSort}
       conversations={visibleConversations}
       notifications={notifications}
       notificationCounts={notifMeta.unreadCounts}
+      notificationTypeCounts={notifMeta.typeCounts}
       notificationsLoading={notificationsLoading}
       onLoadMoreNotifications={loadMoreNotifications}
       hasMoreNotifications={notifMeta.page < notifMeta.totalPages}
@@ -717,6 +848,8 @@ export default function OmnichannelChatModule() {
                 onSearchChange={setSearch}
                 onReset={() => setResetConfirmOpen(true)}
                 resetting={resetting}
+                loading={loading}
+                chatStatus={chatStatus}
               />
             </div>
 

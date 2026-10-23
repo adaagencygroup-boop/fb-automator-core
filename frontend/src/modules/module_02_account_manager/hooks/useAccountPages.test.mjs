@@ -41,6 +41,28 @@ function harness({ statsFailure = false } = {}) {
 const result = (start, length = 10, has_more = true) => ({ accounts: Array.from({ length }, (_, index) => ({ uid: String(start + index) })), total: 37, next_cursor: has_more ? start + length : null, has_more });
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test("changing category invalidates old results and sends the current category on append", async () => {
+  const h = harness();
+  const old = h.render({ category_id: 1 }).fetchAccounts(true);
+  const fresh = h.render({ uncategorized: true, search: "An", status: "live" }).fetchAccounts(true);
+  h.calls[1].resolve(result(20)); await fresh;
+  h.calls[0].resolve(result(1)); await old;
+  assert.equal(h.render().accounts[0].uid, "20");
+  const append = h.render().loadMore();
+  assert.equal(h.calls[2].params.uncategorized, true);
+  assert.equal(h.calls[2].params.search, "An");
+  assert.equal(h.calls[2].params.status, "live");
+  assert.equal(h.calls[2].params.category_id, undefined);
+  h.calls[2].resolve(result(30, 1, false)); await append;
+});
+
+test("move refresh preserves the explicit remaining selection even outside the refreshed extent", async () => {
+  const h = harness();
+  const refresh = h.render().fetchAccounts(false, ["500", "501"]);
+  h.calls[0].resolve(result(1)); await refresh;
+  assert.deepEqual(h.selected(), ["500", "501"]);
+});
+
 test("initial page, one concurrent append, deduplication, failure and retry", async () => {
   const h = harness();
   const initial = h.render().fetchAccounts(true);

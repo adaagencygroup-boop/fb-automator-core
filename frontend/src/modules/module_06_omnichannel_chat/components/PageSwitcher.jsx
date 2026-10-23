@@ -46,6 +46,8 @@ export default function PageSwitcher({
   onSearchChange,
   onReset,
   resetting,
+  loading = false,
+  chatStatus = null,
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
@@ -129,10 +131,28 @@ export default function PageSwitcher({
             </div>
 
             <ul className="min-h-0 max-h-64 overflow-y-auto px-2 pb-2 flex flex-col gap-0.5">
-              {pages.length === 0 && (
-                <li className="px-3 py-6 text-center text-xs text-slate-400">Không tìm thấy Page phù hợp.</li>
-              )}
-              {slice.map((page) => {
+              {loading ? (
+                <li className="py-8 flex flex-col items-center justify-center text-center gap-2">
+                  <div className="size-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                  <span className="text-xs text-slate-500 font-medium">Đang tải dữ liệu...</span>
+                </li>
+              ) : pages.length === 0 ? (
+                search.trim() ? (
+                  <li className="px-3 py-6 text-center text-xs text-slate-400">Không tìm thấy Page phù hợp.</li>
+                ) : chatStatus && !chatStatus.has_accounts ? (
+                  <li className="px-3 py-6 text-center flex flex-col items-center gap-1.5">
+                    <span className="text-xs text-slate-600 font-semibold">Chưa có tài khoản ở Module 2</span>
+                    <span className="text-[11px] text-slate-400">Hãy thêm tài khoản Facebook trước.</span>
+                  </li>
+                ) : chatStatus && chatStatus.has_accounts && !chatStatus.has_pages ? (
+                  <li className="px-3 py-6 text-center flex flex-col items-center gap-1.5">
+                    <span className="text-xs text-slate-600 font-semibold">Tài khoản chưa có Fanpage nào</span>
+                  </li>
+                ) : (
+                  <li className="px-3 py-6 text-center text-xs text-slate-400">Không tìm thấy Page phù hợp.</li>
+                )
+              ) : null}
+              {!loading && slice.map((page) => {
                 const active = page.id === activePageId;
                 return (
                   <li key={page.id}>
@@ -162,7 +182,7 @@ export default function PageSwitcher({
                           aria-label={`${page.unread} tin chưa đọc`}
                           className={cn(
                             "shrink-0 min-w-[18px] rounded-full px-1.5 text-center text-[11px] leading-5 font-bold text-white",
-                            page.alert ? "bg-red-500" : "bg-blue-500",
+                            page.alert ? "bg-red-500" : active ? "bg-blue-600" : "bg-blue-500",
                           )}
                         >
                           {page.unread}

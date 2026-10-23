@@ -1,0 +1,588 @@
+[327][P][heading 1] TỔNG QUAN CHỨC NĂNG
+[328][P][Normal] FB Automation – Nhóm & Fanpage / Đăng bài/Comment
+[329][P][Normal] “Cấu trúc của đăng bài và bình luận giống nhau”
+[330][TABLE]
+  R1: STT || Module || Chức năng chính || Đầu ra
+  R2: 1 || Spam Group – Đăng bài || Chọn tài khoản, cấu hình API, tìm/chọn nhóm, chọn media, tạo nội dung AI, cài đặt lịch, chạy và dừng tác vụ. || Kết quả đăng bài và log tác vụ.
+  R3: 2 || Spam Group – Bình luận || Chọn tài khoản, cấu hình API, tìm/chọn nhóm, nhập hoặc tạo nội dung bình luận, cài đặt lịch, chạy và dừng tác vụ. || Kết quả bình luận và log tác vụ.
+  R4: 3 || Spam Group – Lịch sử || Tìm kiếm, lọc theo loại seeding, trạng thái, thời gian; xem thống kê và danh sách lịch sử. || Danh sách lịch sử đăng bài/bình luận và liên kết liên quan.
+  R5: 4 || Quản lý chiến dịch || Danh sách chiến dịch, Tìm kiếm và lọc, Xem chi tiết, Xóa chiến dịch, Chạy lại chiến dịch. || Trình duyệt
+[332][P][heading 1] CHƯƠNG 1.           TÀI LIỆU CHỨC NĂNG ĐĂNG BÀI
+[333][P][heading 2] 1.1 Thông tin tài liệu
+[334][TABLE]
+  R1: Thuộc tính || Nội dung
+  R2: Module || Nhóm & Fanpage
+  R3: Chức năng || Spam Group – Đăng bài
+  R4: Phiên bản || 1.0 – Dự thảo nghiệp vụ
+  R5: Nguồn || Mô tả và ảnh giao diện do người dùng cung cấp
+  R6: Đối tượng || BA, PO, UI/UX, Developer, QA
+[335][P][heading 2] 1.2 Mục đích và phạm vi
+[336][P][Normal] Tài liệu mô tả quy trình tạo tác vụ đăng bài từ việc chọn tài khoản Facebook có sẵn, cấu hình API/AI, chọn nhóm, chọn media, tạo nội dung, thiết lập lịch, xem thông tin cấu hình, theo dõi tiến trình và dừng tác vụ. Module Quản lý tài khoản Facebook nằm ngoài phạm vi đặc tả sâu.
+[337][P][heading 2] 1.3. Tổng quan các bước
+[338][TABLE]
+  R1: Bước || Khu vực || Mục đích
+  R2: 1 || Chọn tài khoản || Lấy danh sách từ module Quản lý tài khoản FB; chọn tài khoản đủ điều kiện(live).
+  R3: 2 || Cấu hình API & thông số chung || Chọn model AI, API key, luồng, thời gian nghỉ; xác nhận để khóa cấu hình.
+  R4: 3 || Nguồn nhóm || Tìm nhóm bằng từ khóa hoặc tải file link nhóm; lọc, chọn và xác nhận nhóm.
+  R5: 4 || Chọn media || Tải nhiều ảnh/video; đặt số lượng tối thiểu/tối đa mỗi bài.
+  R6: 5 || Tạo nội dung bằng AI || Nhập nội dung gốc, chọn số lượng, xem và sửa từng bài.
+  R7: 6 || Cài đặt đăng bài || Bật/tắt hẹn giờ, thiết lập thời gian nghỉ và thời gian bắt đầu.
+  R8: 7 || Thông tin cấu hình || Tổng hợp thông tin của sáu bước cấu hình.
+  R9: 8 || Tiến trình và điều khiển || Theo dõi tác vụ, bắt đầu hoặc dừng đăng bài.
+[340][P][heading 2] 1.4. Đặc tả tổng quan
+[341][P][heading 3] 1.4.1. Bước 1 – Chọn tài khoản
+[342][P][Normal] ·      Danh sách lấy từ module Quản lý tài khoản Facebook hiện có; không xây dựng lại chức năng tạo/quản trị tài khoản trong module này.
+[343][P][Normal] ·      Hiển thị tên tài khoản, UID, trạng thái; hỗ trợ tìm kiếm, chọn/bỏ chọn, chọn tất cả, phân trang và bộ đếm tài khoản đã chọn.
+[344][P][Normal] ·      Chỉ cho phép chọn tài khoản trong phạm vi người dùng có quyền sử dụng.
+[345][P][heading 3] 1.4.2 Bước 2 – Cấu hình API và thông số chung
+[347][TABLE]
+  R1: Trường || Mô tả và quy tắc
+  R2: Model AI || Chọn một model trong danh sách được hỗ trợ; bắt buộc.
+  R3: API Key || Bắt buộc; giá trị phải được che và không ghi vào log.
+  R4: Luồng || Số luồng xử lý; phải là số hợp lệ trong giới hạn cấu hình.
+  R5: Nghỉ || Thời gian nghỉ theo đơn vị giao diện; phải nằm trong giới hạn cấu hình.
+  R6: Xác nhận || Lưu/xác nhận bộ cấu hình và khóa các trường.
+  R7: Sửa || Chỉ hiển thị sau khi đã xác nhận; mở khóa để sửa. Sau sửa phải xác nhận lại.
+[349][P][Normal] Trạng thái cấu hình: Chưa xác nhận → Đã xác nhận/đã khóa → Sửa cấu hình → cần xác nhận lại. Không cho bắt đầu nếu cấu hình bắt buộc chưa được xác nhận.
+[350][P][heading 3] 1.4.3 Bước 3 – Nguồn nhóm
+[351][TABLE]
+  R1: Phương thức || Mô tả || Dữ liệu hiển thị/kiểm tra
+  R2: Tìm kiếm theo từ khóa || Nhập từ khóa, ví dụ “mua điện thoại”, hệ thống hiển thị nhóm phù hợp. || Tên nhóm, link nhóm, tần suất/ngày nếu có, số thành viên, trạng thái nhóm và thao tác xóa khỏi danh sách chọn.
+  R3: Từ file link nhóm || Tải file .txt/.csv hoặc định dạng được cấu hình, mỗi dòng chứa một URL nhóm. || Kiểm tra định dạng URL và xác minh link nhóm Facebook trong khả năng tích hợp; báo các dòng không hợp lệ.
+[353][P][Normal] ·      Khu vực lọc cho phép chọn khoảng số thành viên mong muốn; chỉ dùng dữ liệu thực tế có sẵn.
+[354][P][Normal] ·      Có thể chọn/bỏ chọn nhóm, xóa nhóm không mong muốn và xem tổng số nhóm tìm thấy/đã chọn.
+[355][P][Normal] ·      Nút “Xác nhận số nhóm” chốt danh sách nhóm. Nếu thay đổi danh sách sau xác nhận, phải xác nhận lại.
+[356][P][Normal] ·      Nếu không có dữ liệu tần suất/ngày hoặc thành viên, hiển thị “Không có dữ liệu”, không tự suy đoán.
+[357][P][heading 3] 1.4.4 Quy tắc số tài khoản và số nhóm
+[358][P][Normal] Ký hiệu A = số tài khoản đã chọn; G = số nhóm đã xác nhận. Theo yêu cầu, mỗi tài khoản được phân bổ tối đa một nhóm trong một tác vụ; do đó điều kiện chặn là A > G.
+[359][TABLE]
+  R1: Điều kiện || Hành vi
+  R2: A < G || Đạt điều kiện A ≤ G; cần chốt với PO cách xử lý nhóm dư.
+  R3: A = G || Đạt điều kiện số lượng.
+  R4: A > G || Chặn bắt đầu; hiển thị số tài khoản A, số nhóm G, lý do và hai nút “Chọn thêm nhóm”, “Giảm số tài khoản”.
+[361][P][Normal] Thông báo gợi ý: “Chưa đủ số lượng nhóm. Bạn đã chọn {A} tài khoản nhưng chỉ có {G} nhóm. Vui lòng chọn thêm nhóm hoặc giảm số tài khoản để số tài khoản không lớn hơn số nhóm.” Nếu nghiệp vụ yêu cầu ghép một-một tất cả tài khoản với nhóm, cần chốt thêm điều kiện A = G.
+[362][P][heading 3] 1.4.5 Bước 4 – Chọn media
+[363][P][Normal] ·      Cho phép tải nhiều ảnh/video qua chọn tệp hoặc kéo-thả; hiển thị danh sách tệp và cho phép xóa từng tệp.
+[364][P][Normal] ·      Có trường media tối thiểu (min) và tối đa (max) cho mỗi bài.
+[365][P][Normal] ·      Kiểm tra min/max là số hợp lệ, min ≤ max và tương thích số media khả dụng.
+[366][P][Normal] ·      Mỗi bài được chọn ngẫu nhiên số lượng media trong khoảng min–max và chọn ngẫu nhiên từ kho media đã tải lên.
+[367][P][Normal] ·      Định dạng, dung lượng và số lượng tệp tuân theo giới hạn hệ thống; báo lỗi rõ nếu tệp không hợp lệ.
+[368][P][heading 3] 1.4.6 Bước 5 – Tạo nội dung bằng AI
+[369][P][Normal] ·      Người dùng nhập nội dung gốc/chủ đề/mô tả và chọn số lượng nội dung muốn tạo.
+[370][P][Normal] ·      Hệ thống gọi model đã cấu hình và hiển thị kết quả riêng từng bài; cho phép chuyển tab và chỉnh sửa độc lập.
+[371][P][Normal] ·      Có thể tạo lại nội dung;
+[372][P][Normal] ·      Khi chạy, các nội dung đã duyệt có thể được phân bổ/xáo trộn ngẫu nhiên theo cấu hình.
+[373][P][heading 3] 1.4.7 Bước 6 – Cài đặt đăng bài
+[374][TABLE]
+  R1: Trường || Quy tắc
+  R2: Bật hẹn giờ đăng bài || Bật/tắt chạy theo lịch.
+  R3: Thời gian nghỉ giữa các lần đăng || Nhập khoảng nghỉ hợp lệ trong giới hạn hệ thống.
+  R4: Thời gian bắt đầu || Bắt buộc khi bật hẹn giờ; phải là thời điểm hợp lệ trong tương lai.
+  R5: Không đăng trùng nội dung || Tùy chọn; chỉ áp dụng khi được bật.
+  R6: Đăng ngẫu nhiên nội dung || Xáo trộn thứ tự nội dung khi có từ hai nội dung hợp lệ trở lên.
+[376][P][heading 3] 1.4.8 Thông tin cấu hình tổng hợp
+[377][P][Normal] ·      Tổng hợp sáu bước: tài khoản, cấu hình API, nguồn nhóm, media, nội dung AI và cài đặt đăng.
+[378][P][Normal] ·      Hiển thị số tài khoản, model/trạng thái API (không lộ API key), số nhóm, luồng/nghỉ, số media và min/max, số nội dung, lịch chạy.
+[379][P][Normal] ·      Nếu một bước thay đổi sau xác nhận, đánh dấu cấu hình tổng thể cần xác nhận lại trước khi chạy.
+[380][P][heading 3] 1.4.9 Theo dõi tiến trình
+[381][P][Normal] ·      Hiển thị trạng thái tổng thể, tiến độ, số lượt hoàn tất, đang xử lý, chưa xử lý, thành công và thất bại.
+[382][P][Normal] ·      Cập nhật tiến trình khi có kết quả; thông báo lỗi không được chứa API key/token/cookie.
+[383][P][Normal] ·      Chỉ ghi nhận thành công khi có kết quả xác nhận từ bước tích hợp tương ứng.
+[384][P][heading 3] 1.4.10 Bắt đầu và dừng
+[385][P][Normal] ·      Nút “Bắt đầu đăng bài” chỉ khả dụng khi các trường bắt buộc hợp lệ, cấu hình API và danh sách nhóm đã xác nhận.
+[386][P][Normal] ·      Nút “Dừng đăng” yêu cầu dừng tác vụ an toàn.
+[387][P][Normal] ·      Khi dừng, lưu log/kết quả của các lượt đã hoàn tất; các lượt chưa chạy được hủy/bỏ qua.
+[388][P][Normal] ·      Lượt đang chạy tại thời điểm dừng không được tự ghi nhận thành công; đánh dấu đã dừng hoặc chưa xác định kết quả nếu không thể xác minh.
+[389][P][Normal] ·      Tác vụ và log vẫn được lưu để tra cứu sau khi dừng.
+[390][P][heading 2] 1.5. Luồng nghiệp vụ
+[391][P][Normal] ·      Chọn danh sách tài khoản từ module Quản lý tài khoản FB.
+[392][P][Normal] ·      Cấu hình Model/API key/Luồng/Nghỉ và xác nhận khóa cấu hình.
+[393][P][Normal] ·      Tìm nhóm theo từ khóa hoặc tải file link; lọc và xác nhận danh sách nhóm.
+[394][P][Normal] ·      Kiểm tra A ≤ G; xử lý cảnh báo nếu số tài khoản lớn hơn số nhóm.
+[395][P][Normal] ·      Tải media, đặt min/max; nhập nội dung gốc, tạo và chỉnh sửa nội dung AI.
+[396][P][Normal] ·      Thiết lập lịch và thời gian nghỉ; kiểm tra phần tổng hợp.
+[397][P][Normal] ·      Bắt đầu tác vụ, theo dõi tiến trình hoặc dừng; lưu lịch sử và kết quả.
+[398][P][heading 2] 1.6. Bảo mật và tuân thủ
+[399][P][Normal] ·      Chỉ thao tác với tài khoản, nhóm và nội dung mà người dùng được phép truy cập.
+[400][P][Normal] ·      Không lưu/ghi log API key, token hoặc cookie ở dạng đầy đủ.
+[401][P][Normal] ·      Áp dụng giới hạn tần suất và dừng an toàn khi nền tảng từ chối hoặc báo giới hạn; không né tránh cơ chế bảo vệ của nền tảng.
+[402][P][heading 1] CHƯƠNG 2.           TÀI LIỆU CHỨC NĂNG LỊCH SỬ
+[403][P][Normal] TÀI LIỆU TỔNG QUAN CHỨC NĂNG
+[404][P][Normal] FB Automation – Spam Group / Bình luận & Lịch sử
+[405][P][heading 2] 1.1. Mục đích
+[406][P][Normal] Tài liệu mô tả tổng quan module Spam Group, gồm tác vụ đăng bài, bình luận và trang Lịch sử hoạt động. Trang Lịch sử tập trung tra cứu các tác vụ đã thực hiện, lọc theo tiêu chí và mở liên kết nhóm tương ứng với bài đăng hoặc bình luận.
+[407][P][heading 2] 2.1 Tổng quan trang Lịch sử
+[408][P][Normal] Trang Lịch sử cho phép người dùng tra cứu lịch sử hoạt động của module Spam Group, bao gồm cả tác vụ đăng bài và bình luận.
+[409][P][heading 3] 2.1.1 Bộ lọc tìm kiếm
+[410][TABLE]
+  R1: Trường/điều khiển || Mô tả || Quy tắc
+  R2: Tìm kiếm || Tìm theo thông tin lịch sử như link bài viết || Không phân biệt hoa/thường nếu backend hỗ trợ; bỏ khoảng trắng thừa.
+  R3: Loại seeding || Hai giá trị: Tất cả, Đăng bài, Bình luận. || Mặc định: Tất cả.
+  R4: Trạng thái || Hai giá trị: Tất cả, Thành công, Thất bại. || Mặc định: Tất cả.
+  R5: Thời gian || Kiểu thời gian, Từ ngày, Đến ngày. || Cho phép chọn khoảng thời gian; Từ ngày không được lớn hơn Đến ngày.
+  R6: Đặt lại || Xóa điều kiện lọc và đưa bộ lọc về mặc định. || Danh sách trở về kết quả mặc định.
+  R7: Lọc || Áp dụng các điều kiện đã nhập. || Cập nhật thống kê và danh sách theo cùng bộ lọc.
+[412][P][heading 3] 2.1.2 Các thẻ thống kê
+[413][TABLE]
+  R1: Thẻ || Nội dung
+  R2: Tổng tác vụ || Tổng số bản ghi lịch sử phù hợp với bộ lọc hiện tại.
+  R3: Thành công || Số tác vụ có trạng thái Thành công; hiển thị tỷ lệ trên tổng tác vụ.
+  R4: Thất bại || Số tác vụ có trạng thái Thất bại; hiển thị tỷ lệ trên tổng tác vụ.
+[415][P][Normal] Các số liệu thống kê phải được tính theo cùng bộ lọc đang áp dụng. Khi tổng tác vụ bằng 0, tỷ lệ phần trăm hiển thị 0% hoặc dấu gạch ngang theo quy ước UI.
+[416][P][heading 3] 2.1.3 Danh sách lịch sử
+[417][TABLE]
+  R1: Cột || Mô tả
+  R2: STT || Số thứ tự theo trang hiện tại.
+  R3: Thời gian || Thời điểm tác vụ được ghi nhận; hiển thị theo múi giờ cấu hình của hệ thống.
+  R4: Loại || Nhãn Đăng bài hoặc Bình luận.
+  R5: Nhóm || Tên nhóm Facebook đích; có thể hiển thị link nhóm.
+  R6: Nội dung || Đoạn trích nội dung bài đăng hoặc bình luận; nội dung dài được rút gọn.
+  R7: Trạng thái || Thành công hoặc Thất bại.
+  R8: Kết quả || Mô tả kết quả: Đã đăng bài, Đã bình luận hoặc Lỗi.
+  R9: Thao tác || Nút mở liên kết nhóm Facebook tương ứng với bài đăng/bình luận.
+[419][P][heading 3] 2.1.4 Quy tắc thao tác mở liên kết
+[420][P][Normal] ·      Nút thao tác mở URL nhóm Facebook đã được lưu cùng bản ghi lịch sử, ưu tiên mở tab mới.
+[421][P][Normal] ·      Với bản ghi đăng bài, nếu có permalink bài đăng thì có thể mở permalink bài đăng; nếu không có, mở link nhóm.
+[422][P][Normal] ·      Với bản ghi bình luận, nếu có permalink bình luận/bài viết chứa bình luận thì có thể mở permalink đó; nếu không có, mở link nhóm.
+[423][P][Normal] ·      Nếu URL không tồn tại hoặc không hợp lệ, nút bị vô hiệu hóa hoặc hiển thị thông báo không có liên kết; không tự dựng URL từ dữ liệu thiếu.
+[424][P][heading 2] 2.2 Yêu cầu chung về dữ liệu và trạng thái
+[425][P][Normal] ·      Mỗi lượt đăng bài/bình luận được ghi nhận thành một bản ghi lịch sử độc lập, có mã bản ghi/tác vụ để truy vết.
+[426][P][Normal] ·      Chỉ trạng thái Thành công và Thất bại được dùng làm bộ lọc trạng thái trên giao diện lịch sử; các trạng thái nội bộ như đang chạy/chưa chạy không được tính thành công hoặc thất bại nếu chưa có kết quả cuối.
+[427][P][Normal] ·      Khi dừng tác vụ, lưu log các lượt đã hoàn tất; lượt chưa chạy được hủy/bỏ qua. Lượt đang chạy mà không xác minh được kết quả phải được lưu trạng thái nội bộ phù hợp, không tự đánh dấu thành công.
+[428][P][Normal] ·      Không hiển thị API key, access token, cookie hoặc thông tin bí mật trong bảng lịch sử.
+[429][P][heading 2] 2.3. Luồng sử dụng
+[430][P][Normal] ·      Người dùng mở Spam Group → Lịch sử.
+[431][P][Normal] ·      Nhập từ khóa, chọn loại seeding, trạng thái và khoảng thời gian.
+[432][P][Normal] ·      Nhấn Lọc để cập nhật số liệu thống kê và bảng danh sách.
+[433][P][Normal] ·      Nhấn Đặt lại để quay về bộ lọc mặc định.
+[434][P][Normal] ·      Xem các cột lịch sử và nhấn nút thao tác để mở nhóm hoặc liên kết bài/bình luận liên quan.
+[435][P][heading 2] 2.4 Trạng thái rỗng và lỗi
+[436][TABLE]
+  R1: Tình huống || Hành vi
+  R2: Không có kết quả || Hiển thị trạng thái rỗng “Không tìm thấy lịch sử phù hợp” và giữ nguyên điều kiện lọc.
+  R3: Khoảng ngày không hợp lệ || Báo lỗi tại trường ngày; không gửi truy vấn lọc.
+  R4: Lỗi tải dữ liệu || Hiển thị thông báo lỗi và cho phép thử lại.
+  R5: Không có URL liên quan || Vô hiệu hóa thao tác mở link hoặc thông báo không có liên kết.
+[438][P][heading 1] CHƯƠNG 3: SRS & USE CASE – SPAM GROUP
+[439][P][Normal] Đặc tả luồng kiểm thử: Đăng bài • Bình luận • Lịch sử
+[440][P][heading 2] 3.1. Mục đích và phạm vi
+[441][P][Normal] Tài liệu dành cho Tester theo dõi các luồng nghiệp vụ và xây dựng test case. Phạm vi gồm đúng ba module: Đăng bài, Bình luận và Lịch sử.
+[442][P][heading 2] 3.2. Module Đăng bài
+[443][P][Normal] SG-POST-01 – Cấu hình và thực hiện tác vụ đăng bài
+[444][TABLE]
+  R1: Trường || Đặc tả
+  R2: ID || SG-POST-01
+  R3: Tên || Cấu hình và thực hiện tác vụ đăng bài
+  R4: Actor || Người dùng
+  R5: Mô tả || Cho phép người dùng chọn tài khoản, cấu hình tác vụ, chọn nhóm, media và nội dung rồi thực hiện đăng bài.
+  R6: Tiền điều kiện || Đã đăng nhập, có quyền truy cập Spam Group; danh sách tài khoản được lấy từ Quản lý tài khoản Facebook.
+  R7: Dữ liệu đầu vào || Tài khoản; Model AI/API Key/luồng/nghỉ; nguồn nhóm; media; nội dung; số lượng nội dung; lịch chạy.
+  R8: Luồng sự kiện chính || 1. Người dùng mở Spam Group → Đăng bài. 2. Hệ thống hiển thị tài khoản Facebook; người dùng chọn tài khoản tham gia. 3. Người dùng cấu hình Model AI, API Key, luồng và thời gian nghỉ; nhấn Xác nhận để khóa cấu hình API. 4. Người dùng tìm nhóm theo từ khóa hoặc nhập/tải file link nhóm. 5. Hệ thống kiểm tra link nhóm và hiển thị danh sách nhóm; người dùng lọc thành viên, xóa nhóm không phù hợp và xác nhận danh sách. 6. Hệ thống kiểm tra số tài khoản và số nhóm theo quy tắc phân phối đã thống nhất. 7. Người dùng tải media và đặt số lượng media tối thiểu/tối đa mỗi bài. 8. Người dùng nhập nội dung gốc, chọn số bài AI tạo ra, tạo và chỉnh sửa từng nội dung. 9. Người dùng cấu hình hẹn giờ và khoảng nghỉ; hệ thống hiển thị cấu hình tổng hợp. 10. Người dùng nhấn Bắt đầu; hệ thống thực thi và cập nhật tiến trình/kết quả. 11. Người dùng có thể nhấn Dừng; hệ thống dừng các lượt còn lại và lưu log theo quy tắc.
+  R9: Luồng sự kiện phụ || 1. Chọn nguồn nhóm bằng file thay vì từ khóa. 2. Bật hẹn giờ và nhập thời điểm bắt đầu. 3. Tạo nhiều nội dung AI và chỉnh sửa từng bài.
+  R10: Luồng ngoại lệ || 1. API Key thiếu/chưa xác nhận → không cho bắt đầu. 2. Không có tài khoản hoặc nhóm hợp lệ → thông báo và không chạy. 3. Min media lớn hơn max media → báo lỗi cấu hình. 4. AI lỗi hoặc tiến trình không tải được → thông báo; không tự ghi nhận thành công.
+  R11: Hậu điều kiện || Lưu kết quả từng lượt đã xử lý để tra cứu trong Lịch sử; lượt chưa chạy không được ghi nhận hoàn thành.
+[445][P][heading 2] 3.3. Module Bình luận
+[446][P][Normal] SG-COM-01 – Cấu hình và thực hiện tác vụ bình luận
+[447][TABLE]
+  R1: Trường || Đặc tả
+  R2: ID || SG-COM-01
+  R3: Tên || Cấu hình và thực hiện tác vụ bình luận
+  R4: Actor || Người dùng
+  R5: Mô tả || Cho phép người dùng thực hiện seeding bình luận trong nhóm Facebook. Cấu trúc thao tác giống Đăng bài, thay nghiệp vụ nội dung và kết quả bằng bình luận.
+  R6: Tiền điều kiện || Đã đăng nhập, có quyền truy cập Spam Group; danh sách tài khoản được lấy từ Quản lý tài khoản Facebook.
+  R7: Dữ liệu đầu vào || Tài khoản; Model AI/API Key/luồng/nghỉ; nguồn nhóm; nội dung bình luận; số lượng nội dung AI; lịch chạy.
+  R8: Luồng sự kiện chính || 1. Người dùng mở Spam Group → Bình luận. 2. Hệ thống hiển thị tài khoản Facebook; người dùng chọn tài khoản tham gia. 3. Người dùng cấu hình Model AI, API Key, luồng và thời gian nghỉ; nhấn Xác nhận để khóa cấu hình API. 4. Người dùng tìm nhóm theo từ khóa hoặc nhập/tải file link nhóm. 5. Hệ thống kiểm tra link nhóm và hiển thị danh sách; người dùng lọc thành viên, xóa nhóm không phù hợp và xác nhận danh sách. 6. Hệ thống kiểm tra số tài khoản và số nhóm theo quy tắc phân phối đã thống nhất. 7. Người dùng nhập nội dung bình luận gốc, chọn số nội dung AI tạo ra, tạo và chỉnh sửa từng nội dung. 8. Người dùng cấu hình hẹn giờ và khoảng nghỉ; hệ thống hiển thị cấu hình tổng hợp. 9. Người dùng nhấn Bắt đầu; hệ thống thực hiện bình luận và cập nhật tiến trình/kết quả. 10. Người dùng có thể nhấn Dừng; hệ thống dừng các lượt còn lại và lưu log theo quy tắc.
+  R9: Luồng sự kiện phụ || 1. Chọn nguồn nhóm bằng file thay vì từ khóa. 2. Tạo nhiều nội dung bình luận AI và chỉnh sửa từng nội dung. 3. Bật hẹn giờ và nhập thời điểm bắt đầu.
+  R10: Luồng ngoại lệ || 1. API Key thiếu/chưa xác nhận → không cho bắt đầu. 2. Không có tài khoản hoặc nhóm hợp lệ → thông báo và không chạy. 3. AI lỗi → thông báo và cho phép thử lại/chỉnh sửa thủ công. 4. Lỗi thực hiện bình luận → ghi nhận thất bại nếu hệ thống xác nhận được lỗi.
+  R11: Hậu điều kiện || Lưu mỗi lượt bình luận thành bản ghi lịch sử, gồm nhóm, nội dung, thời gian, trạng thái, kết quả và URL liên quan nếu có.
+[448][P][heading 2] 3.4. Module Lịch sử
+[449][P][Normal] SG-HIS-01 – Tra cứu lịch sử đăng bài và bình luận
+[450][TABLE]
+  R1: Trường || Đặc tả
+  R2: ID || SG-HIS-01
+  R3: Tên || Tra cứu lịch sử đăng bài và bình luận
+  R4: Actor || Người dùng
+  R5: Mô tả || Cho phép tìm kiếm, lọc, xem thống kê và mở liên kết liên quan đến tác vụ đã ghi nhận.
+  R6: Tiền điều kiện || Đã đăng nhập và có quyền truy cập Spam Group.
+  R7: Dữ liệu đầu vào || Từ khóa; loại seeding; trạng thái; kiểu thời gian; Từ ngày; Đến ngày; số bản ghi/trang.
+  R8: Luồng sự kiện chính || 1. Người dùng mở Spam Group → Lịch sử. 2. Hệ thống tải bộ lọc mặc định và danh sách lịch sử, mặc định mới nhất trước. 3. Người dùng nhập từ khóa nếu cần. 4. Người dùng chọn loại: Tất cả, Đăng bài hoặc Bình luận. 5. Người dùng chọn trạng thái: Tất cả, Thành công hoặc Thất bại. 6. Người dùng chọn kiểu thời gian và khoảng ngày rồi nhấn Lọc. 7. Hệ thống kiểm tra điều kiện, tải danh sách và cập nhật Tổng tác vụ, Thành công, Thất bại cùng tỷ lệ. 8. Hệ thống hiển thị STT, Thời gian, Loại, Nhóm, Nội dung, Trạng thái, Kết quả, Thao tác. 9. Người dùng đổi số dòng/trang hoặc chuyển trang nếu cần. 10. Người dùng nhấn Thao tác để mở permalink bài đăng/bình luận nếu có; nếu không có thì mở link nhóm.
+  R9: Luồng sự kiện phụ || 1. Nhấn Đặt lại để khôi phục bộ lọc mặc định. 2. Lọc chỉ theo loại hoặc trạng thái. 3. Không có kết quả phù hợp.
+  R10: Luồng ngoại lệ || 1. Từ ngày lớn hơn Đến ngày → báo lỗi, không áp dụng lọc. 2. Lỗi tải dữ liệu → hiển thị thông báo và cho phép thử lại. 3. Không có URL hợp lệ → không điều hướng tới URL tự suy đoán. 4. Tổng tác vụ bằng 0 → tỷ lệ hiển thị 0% hoặc theo quy ước UI.
+  R11: Hậu điều kiện || Người dùng xem được danh sách và số liệu theo điều kiện lọc; thao tác mở link không làm thay đổi lịch sử.
+[451][P][heading 2] 3.5. Quy tắc nghiệp vụ dùng chung
+[452][TABLE]
+  R1: ID || Quy tắc
+  R2: SG-BR-01 || Phạm vi gồm ba module: Đăng bài, Bình luận, Lịch sử; không có module Tổng quan riêng.
+  R3: SG-BR-02 || Đăng bài và Bình luận dùng chung cấu trúc thao tác; khác biệt ở nội dung nghiệp vụ và đầu ra.
+  R4: SG-BR-03 || Mỗi lượt đăng bài/bình luận có bản ghi kết quả riêng.
+  R5: SG-BR-04 || Khi dừng, giữ log lượt hoàn tất; bỏ qua lượt chưa chạy; lượt đang chạy chỉ ghi nhận theo kết quả xác minh.
+  R6: SG-BR-05 || Cần chốt quy tắc ghép tài khoản/nhóm. Nếu không cho nhóm dư và mỗi tài khoản xử lý đúng một nhóm thì số tài khoản phải bằng số nhóm.
+  R7: SG-BR-06 || Thống kê và danh sách lịch sử phải áp dụng cùng bộ lọc.
+  R8: SG-BR-07 || Không hiển thị API Key, token hoặc cookie trong lịch sử.
+[459][P][heading 1] ĐẶC TẢ CHỨC NĂNG – FB AUTOMATION (NHÓM & FANPAGE)
+[460][P][Normal] Phiên bản: 2.0 – Cập nhật quản lý chiến dịch Đối tượng: BA, PO, UI/UX, Developer, QA Phạm vi: Bốn module Đăng bài, Bình luận, Lịch sử, Quản lý chiến dịch. Module Quản lý tài khoản Facebook hiện có được sử dụng lại, không xây dựng lại tại đây.
+[461][P][Normal] Nguyên tắc phạm vi: API/model AI phục vụ tạo nội dung vẫn thuộc quy trình Đăng bài/Bình luận. Hệ thống không có API đọc tương tác Facebook để tự phát hiện bình luận hoặc tin nhắn mới. Việc kiểm tra bài viết và phản hồi được người dùng thực hiện thủ công trên trình duyệt bằng tài khoản có quyền truy cập.
+[462][P][heading 2] Tổng quan module
+[463][TABLE]
+  R1: STT || Module || Chức năng chính || Đầu ra
+  R2: 1 || Đăng bài || Tạo chiến dịch (tên, mô tả tùy chọn); chọn tài khoản, cấu hình API AI, chọn nhóm, media, nội dung, lịch chạy, bắt đầu/dừng. || Lượt chạy đăng bài, log, UID/nhóm/link bài viết nếu thu thập được.
+  R3: 2 || Bình luận || Tạo chiến dchọn); chọn tài khoản, API AI, nhóm, nội dung bình luận, lịch chạy, bắt đầu/dừng. || Lượt chạy bình luận và log kết quả.
+  R4: 3 || Lịch sử || Tìm kiếm, lọc và tra cứu các lượt đăng bài/bình luận, thống kê kết quả. || Bản ghi tác vụ và liên kết liên quan.
+  R5: 4 || Quản lý chiến dịch || Danh sách, tìm kiếm/lọc, xem chi tiết UID/nhóm/link bài viết, xóa, chạy lại. || Tra cứu chiến dịch; điều hướng trình duyệt; tạo lượt chạy mới khi xác nhận chạy lại.
+[465][P][heading 1] CHƯƠNG 1. TÀI LIỆU CHỨC NĂNG ĐĂNG BÀI
+[466][P][heading 2] 1.1. Thông tin tài liệu
+[467][TABLE]
+  R1: Thuộc tính || Nội dung
+  R2: Module || Nhóm & Fanpage
+  R3: Chức năng || Spam Group – Đăng bài
+  R4: Phiên bản || 2.0 – Cập nhật chiến dịch
+  R5: Nguồn || Tài liệu nghiệp vụ ban đầu và các yêu cầu bổ sung
+  R6: Đối tượng || BA, PO, UI/UX, Developer, QA
+[468][P][heading 2] 1.2. Mục đích và phạm vi
+[469][P][Normal] Tài liệu mô tả quy trình tạo và thực hiện tác vụ đăng bài. Người dùng đặt tên chiến dịch trước, có thể nhập một đoạn mô tả ngắn (không bắt buộc), sau đó thực hiện các bước cấu hình đăng bài như hiện tại. Thông tin chiến dịch giúp tìm lại các UID, nhóm, bài viết và cấu hình phục vụ chức năng Chạy lại.
+[470][P][heading 2] 1.3. Tổng quan các bước
+[471][TABLE]
+  R1: Bước || Khu vực || Mục đích
+  R2: 1 || Tạo chiến dịch || Nhập Tên chiến dịch (bắt buộc), Mô tả ngắn (không bắt buộc).
+  R3: 2 || Chọn tài khoản || Chọn tài khoản đủ điều kiện từ Quản lý tài khoản Facebook.
+  R4: 3 || Cấu hình API & thông số chung || Model AI, API Key, luồng, thời gian nghỉ; xác nhận cấu hình.
+  R5: 4 || Nguồn nhóm || Tìm nhóm hoặc tải file link nhóm; lọc, chọn, xác nhận.
+  R6: 5 || Chọn media || Tải ảnh/video, thiết lập số lượng tối thiểu/tối đa.
+  R7: 6 || Tạo nội dung bằng AI || Nhập chủ đề/nội dung, tạo và sửa từng bài.
+  R8: 7 || Cài đặt đăng bài || Hẹn giờ, thời gian nghỉ, tùy chọn nội dung.
+  R9: 8 || Thông tin cấu hình || Xem tổng hợp chiến dịch và thông số đã chọn.
+  R10: 9 || Tiến trình và điều khiển || Bắt đầu, theo dõi hoặc dừng; lưu kết quả.
+[472][P][heading 2] 1.4. Đặc tả tổng quan
+[473][P][heading 3] 1.4.1. Bước 1 – Tạo chiến dịch
+[474][TABLE]
+  R1: Trường || Bắt buộc || Quy tắc
+  R2: Tên chiến dịch || Có || Không được để trống hoặc chỉ gồm khoảng trắng; giới hạn độ dài theo cấu hình hệ thống; thông báo rõ khi không hợp lệ.
+  R3: Mô tả ngắn || Không || Có thể để trống; hỗ trợ mô tả mục đích chiến dịch trong vài câu.
+[475][P][Normal] •          Nút Tiếp tục chuyển sang bước Chọn tài khoản khi Tên chiến dịch hợp lệ.
+[476][P][Normal] •          Hệ thống cấp campaign_id riêng để liên kết dữ liệu; tên không dùng làm khóa chính vì có thể trùng.
+[477][P][Normal] •          Tạo chiến dịch trong luồng Đăng bài; không có nút tạo hoặc sửa chiến dịch trong module Quản lý chiến dịch.
+[478][P][Normal] •          Để tránh ghi nhận chiến dịch rỗng, chỉ đưa chiến dịch vào danh sách “đã chạy” khi phát sinh ít nhất một lượt chạy được lưu.
+[479][P][Normal] •          Nếu mở luồng từ nút Chạy lại, hệ thống nạp sẵn tên/mô tả của chiến dịch gốc, tạo lượt chạy mới thay vì tạo bản ghi chiến dịch mới.
+[480][P][heading 3] 1.4.2. Bước 2 – Chọn tài khoản
+[481][P][Normal] ·      Danh sách lấy từ module Quản lý tài khoản Facebook hiện có; không xây dựng lại chức năng tạo/quản trị tài khoản trong module này.
+[482][P][Normal] ·      Hiển thị tên tài khoản, UID, trạng thái; hỗ trợ tìm kiếm, chọn/bỏ chọn, chọn tất cả, phân trang và bộ đếm tài khoản đã chọn.
+[483][P][Normal] ·      Chỉ cho phép chọn tài khoản trong phạm vi người dùng có quyền sử dụng.
+[484][P][heading 3] 1.4.3 Bước 3 – Cấu hình API và thông số chung
+[485][TABLE]
+  R1: Trường || Mô tả và quy tắc
+  R2: Model AI || Chọn một model trong danh sách được hỗ trợ; bắt buộc.
+  R3: API Key || Bắt buộc; giá trị phải được che và không ghi vào log.
+  R4: Luồng || Số luồng xử lý; phải là số hợp lệ trong giới hạn cấu hình.
+  R5: Nghỉ || Thời gian nghỉ theo đơn vị giao diện; phải nằm trong giới hạn cấu hình.
+  R6: Xác nhận || Lưu/xác nhận bộ cấu hình và khóa các trường.
+  R7: Sửa || Chỉ hiển thị sau khi đã xác nhận; mở khóa để sửa. Sau sửa phải xác nhận lại.
+[486][P][Normal] Trạng thái cấu hình: Chưa xác nhận → Đã xác nhận/đã khóa → Sửa cấu hình → cần xác nhận lại. Không cho bắt đầu nếu cấu hình bắt buộc chưa được xác nhận.
+[487][P][heading 3] 1.4.4 Bước 4 – Nguồn nhóm
+[488][TABLE]
+  R1: Phương thức || Mô tả || Dữ liệu hiển thị/kiểm tra
+  R2: Tìm kiếm theo từ khóa || Nhập từ khóa, ví dụ “mua điện thoại”, hệ thống hiển thị nhóm phù hợp. || Tên nhóm, link nhóm, tần suất/ngày nếu có, số thành viên, trạng thái nhóm và thao tác xóa khỏi danh sách chọn.
+  R3: Từ file link nhóm || Tải file .txt/.csv hoặc định dạng được cấu hình, mỗi dòng chứa một URL nhóm. || Kiểm tra định dạng URL và xác minh link nhóm Facebook trong khả năng tích hợp; báo các dòng không hợp lệ.
+[489][P][Normal] ·      Khu vực lọc cho phép chọn khoảng số thành viên mong muốn; chỉ dùng dữ liệu thực tế có sẵn.
+[490][P][Normal] ·      Có thể chọn/bỏ chọn nhóm, xóa nhóm không mong muốn và xem tổng số nhóm tìm thấy/đã chọn.
+[491][P][Normal] ·      Nút “Xác nhận số nhóm” chốt danh sách nhóm. Nếu thay đổi danh sách sau xác nhận, phải xác nhận lại.
+[492][P][Normal] ·      Nếu không có dữ liệu tần suất/ngày hoặc thành viên, hiển thị “Không có dữ liệu”, không tự suy đoán.
+[493][P][heading 3] 1.4.5 Quy tắc số tài khoản và số nhóm
+[494][P][Normal] Ký hiệu A = số tài khoản đã chọn; G = số nhóm đã xác nhận. Theo yêu cầu, mỗi tài khoản được phân bổ tối đa một nhóm trong một tác vụ; do đó điều kiện chặn là A > G.
+[495][TABLE]
+  R1: Điều kiện || Hành vi
+  R2: A < G || Đạt điều kiện A ≤ G; cần chốt với PO cách xử lý nhóm dư.
+  R3: A = G || Đạt điều kiện số lượng.
+  R4: A > G || Chặn bắt đầu; hiển thị số tài khoản A, số nhóm G, lý do và hai nút “Chọn thêm nhóm”, “Giảm số tài khoản”.
+[496][P][Normal] Thông báo gợi ý: “Chưa đủ số lượng nhóm. Bạn đã chọn {A} tài khoản nhưng chỉ có {G} nhóm. Vui lòng chọn thêm nhóm hoặc giảm số tài khoản để số tài khoản không lớn hơn số nhóm.” Nếu nghiệp vụ yêu cầu ghép một-một tất cả tài khoản với nhóm, cần chốt thêm điều kiện A = G.
+[497][P][heading 3] 1.4.6 Bước 5 – Chọn media
+[498][P][Normal] ·      Cho phép tải nhiều ảnh/video qua chọn tệp hoặc kéo-thả; hiển thị danh sách tệp và cho phép xóa từng tệp.
+[499][P][Normal] ·      Có trường media tối thiểu (min) và tối đa (max) cho mỗi bài.
+[500][P][Normal] ·      Kiểm tra min/max là số hợp lệ, min ≤ max và tương thích số media khả dụng.
+[501][P][Normal] ·      Mỗi bài được chọn ngẫu nhiên số lượng media trong khoảng min–max và chọn ngẫu nhiên từ kho media đã tải lên.
+[502][P][Normal] ·      Định dạng, dung lượng và số lượng tệp tuân theo giới hạn hệ thống; báo lỗi rõ nếu tệp không hợp lệ.
+[503][P][heading 3] 1.4.7 Bước 6 – Tạo nội dung bằng AI
+[504][P][Normal] ·      Người dùng nhập nội dung gốc/chủ đề/mô tả và chọn số lượng nội dung muốn tạo.
+[505][P][Normal] ·      Hệ thống gọi model đã cấu hình và hiển thị kết quả riêng từng bài; cho phép chuyển tab và chỉnh sửa độc lập.
+[506][P][Normal] ·      Có thể tạo lại nội dung;
+[507][P][Normal] ·      Khi chạy, các nội dung đã duyệt có thể được phân bổ/xáo trộn ngẫu nhiên theo cấu hình.
+[508][P][heading 3] 1.4.8 Bước 7 – Cài đặt đăng bài
+[509][TABLE]
+  R1: Trường || Quy tắc
+  R2: Bật hẹn giờ đăng bài || Bật/tắt chạy theo lịch.
+  R3: Thời gian nghỉ giữa các lần đăng || Nhập khoảng nghỉ hợp lệ trong giới hạn hệ thống.
+  R4: Thời gian bắt đầu || Bắt buộc khi bật hẹn giờ; phải là thời điểm hợp lệ trong tương lai.
+  R5: Không đăng trùng nội dung || Tùy chọn; chỉ áp dụng khi được bật.
+  R6: Đăng ngẫu nhiên nội dung || Xáo trộn thứ tự nội dung khi có từ hai nội dung hợp lệ trở lên.
+[510][P][heading 3] 1.4.9 Thông tin cấu hình tổng hợp
+[511][P][Normal] ·      Tổng hợp bảy bước cấu hình: thông tin chiến dịch, tài khoản, cấu hình API, nguồn nhóm, media, nội dung AI và cài đặt đăng.
+[512][P][Normal] ·      Hiển thị số tài khoản, model/trạng thái API (không lộ API key), số nhóm, luồng/nghỉ, số media và min/max, số nội dung, lịch chạy.
+[513][P][Normal] ·      Nếu một bước thay đổi sau xác nhận, đánh dấu cấu hình tổng thể cần xác nhận lại trước khi chạy. Hiển thị tên chiến dịch và mã chiến dịch, không hiển thị khóa bí mật.
+[514][P][heading 3] 1.4.10 Theo dõi tiến trình
+[515][P][Normal] ·      Hiển thị trạng thái tổng thể, tiến độ, số lượt hoàn tất, đang xử lý, chưa xử lý, thành công và thất bại.
+[516][P][Normal] ·      Cập nhật tiến trình khi có kết quả; thông báo lỗi không được chứa API key/token/cookie.
+[517][P][Normal] ·      Chỉ ghi nhận thành công khi có kết quả xác nhận từ bước tích hợp tương ứng.
+[518][P][heading 3] 1.4.11 Bắt đầu và dừng
+[519][P][Normal] ·      Nút “Bắt đầu đăng bài” chỉ khả dụng khi các trường bắt buộc hợp lệ, cấu hình API và danh sách nhóm đã xác nhận.
+[520][P][Normal] ·      Nút “Dừng đăng” yêu cầu dừng tác vụ an toàn.
+[521][P][Normal] ·      Khi dừng, lưu log/kết quả của các lượt đã hoàn tất; các lượt chưa chạy được hủy/bỏ qua.
+[522][P][Normal] ·      Lượt đang chạy tại thời điểm dừng không được tự ghi nhận thành công; đánh dấu đã dừng hoặc chưa xác định kết quả nếu không thể xác minh.
+[523][P][Normal] ·      Tác vụ và log vẫn được lưu để tra cứu sau khi dừng.
+[524][P][heading 2] 1.5. Luồng nghiệp vụ
+[525][P][Normal] 1.   Mở Spam Group → Đăng bài; nhập Tên chiến dịch, Mô tả ngắn nếu cần.
+[526][P][Normal] 2.   Chọn tài khoản Facebook từ module Quản lý tài khoản hiện có.
+[527][P][Normal] 3.   Chọn Model AI, nhập API Key và cấu hình luồng/nghỉ; xác nhận.
+[528][P][Normal] 4.   Tìm nhóm bằng từ khóa hoặc tải file; chọn và xác nhận danh sách; kiểm tra quy tắc A ≤ G.
+[529][P][Normal] 5.   Chọn media, min/max; nhập nội dung gốc, tạo/chỉnh sửa nội dung AI.
+[530][P][Normal] 6.   Thiết lập lịch chạy và khoảng nghỉ; xem thông tin tổng hợp có tên chiến dịch.
+[531][P][Normal] 7.   Bắt đầu hoặc lên lịch; theo dõi/dừng tác vụ, lưu cấu hình chụp lại và kết quả từng lượt, gồm link bài viết nếu có.
+[532][P][heading 2] 1.6. Bảo mật và tuân thủ
+[533][P][Normal] •          Chỉ thao tác với tài khoản, nhóm và nội dung mà người dùng có quyền truy cập.
+[534][P][Normal] •          Không ghi log đầy đủ API Key, token, cookie hoặc thông tin đăng nhập nhạy cảm.
+[535][P][Normal] •          Áp dụng giới hạn tần suất và dừng an toàn khi nền tảng từ chối hoặc báo giới hạn; không né tránh cơ chế bảo vệ.
+[536][P][Normal] •          Link bài viết chỉ lưu khi thu được từ kết quả tác vụ hợp lệ; nếu thiếu thì hiển thị “Không có link bài viết”, không tự dựng URL.
+[538][P][heading 1] CHƯƠNG 2. TÀI LIỆU CHỨC NĂNG BÌNH LUẬN
+[539][P][heading 2] 2.1. Mục đích và phạm vi
+[540][P][Normal] Module Bình luận dùng quy trình tương tự Đăng bài, nhưng nội dung và kết quả là bình luận. Bước đầu tiên bổ sung Tạo chiến dịch, gồm Tên chiến dịch bắt buộc và Mô tả ngắn không bắt buộc.
+[541][P][heading 2] 2.2. Tổng quan các bước
+[542][TABLE]
+  R1: Bước || Khu vực || Mục đích
+  R2: 1 || Tạo chiến dịch || Nhập tên chiến dịch và mô tả tùy chọn.
+  R3: 2 || Chọn tài khoản || Chọn UID được phép sử dụng.
+  R4: 3 || Cấu hình API & thông số chung || Model AI, API Key, luồng, thời gian nghỉ và xác nhận.
+  R5: 4 || Nguồn nhóm || Tìm nhóm hoặc nhập file link, lọc và xác nhận.
+  R6: 5 || Tạo nội dung bình luận || Nhập nội dung gốc, số lượng, AI tạo nội dung, xem và sửa.
+  R7: 6 || Cài đặt bình luận || Cấu hình lịch và thời gian nghỉ.
+  R8: 7 || Thông tin cấu hình || Tổng hợp chiến dịch, UID, nhóm, nội dung và lịch.
+  R9: 8 || Tiến trình và điều khiển || Bắt đầu/dừng, theo dõi và lưu log.
+[543][P][heading 2] 2.3. Quy tắc chức năng
+[544][P][Normal] •          Tên chiến dịch không được trống; mô tả có thể bỏ qua. Sử dụng campaign_id để liên kết lượt chạy.
+[545][P][Normal] •          Tài khoản lấy từ Quản lý tài khoản Facebook; chỉ chọn tài khoản có quyền sử dụng và đủ điều kiện.
+[546][P][Normal] •          Cấu hình Model AI, API Key, luồng và thời gian nghỉ phải được xác nhận trước khi chạy; API Key được che và không ghi log.
+[547][P][Normal] •          Nguồn nhóm gồm tìm kiếm theo từ khóa hoặc tải link từ tệp; nhóm chọn phải được xác nhận. Áp dụng quy tắc tài khoản/nhóm của Chương 1.
+[548][P][Normal] •          Cho phép tạo nhiều nội dung bình luận bằng AI, xem và chỉnh sửa từng nội dung, tạo lại nếu cần.
+[549][P][Normal] •          Hỗ trợ hẹn giờ, thời gian nghỉ, theo dõi tiến trình, dừng an toàn; lưu kết quả đã xác minh, không tự đánh dấu thành công khi chưa xác định kết quả.
+[550][P][Normal] •          Lưu UID, nhóm, nội dung, thời gian, trạng thái, kết quả và URL liên quan nếu có, kèm campaign_id, run_id.
+[551][P][Normal] •          Nếu Chạy lại, nạp cấu hình từ lượt chạy được chọn, cho phép kiểm tra và xác nhận trước khi thực hiện.
+[552][P][heading 2] 2.4. Luồng nghiệp vụ
+[553][P][Normal] 1.   Mở Bình luận → nhập Tên chiến dịch và Mô tả ngắn nếu cần.
+[554][P][Normal] 2.   Chọn UID, xác nhận API AI và thông số chung.
+[555][P][Normal] 3.   Chọn nhóm, kiểm tra số lượng tài khoản/nhóm.
+[556][P][Normal] 4.   Nhập hoặc tạo nội dung bình luận và chỉnh sửa.
+[557][P][Normal] 5.   Cài đặt lịch, xem thông tin tổng hợp, xác nhận và bắt đầu tác vụ.
+[558][P][Normal] 6.   Theo dõi tiến trình hoặc dừng; lưu kết quả về Lịch sử, gắn đúng chiến dịch và lượt chạy.
+[560][P][heading 1] CHƯƠNG 3. TÀI LIỆU CHỨC NĂNG LỊCH SỬ
+[561][P][heading 2] 3.1. Mục đích
+[562][P][Normal] Trang Lịch sử tra cứu các bản ghi đăng bài/bình luận từng lượt và kết quả đã xác minh. Không có module Lịch sử chiến dịch riêng: tra cứu chiến dịch và UID/link tập trung ở Quản lý chiến dịch.
+[563][P][heading 2] 3.2. Tổng quan trang Lịch sử
+[564][P][Normal] Trang Lịch sử cho phép người dùng tra cứu lịch sử hoạt động của module Spam Group, bao gồm cả tác vụ đăng bài và bình luận.
+[565][P][heading 3] 3.2.1 Bộ lọc tìm kiếm
+[566][TABLE]
+  R1: Trường/điều khiển || Mô tả || Quy tắc
+  R2: Tìm kiếm || Tìm theo thông tin lịch sử như tên chiến dịch, UID hoặc link bài viết || Không phân biệt hoa/thường nếu backend hỗ trợ; bỏ khoảng trắng thừa.
+  R3: Chiến dịch || Lọc theo tên/mã chiến dịch đã lưu. || Mặc định: Tất cả.
+  R4: Loại seeding || Hai giá trị: Tất cả, Đăng bài, Bình luận. || Mặc định: Tất cả.
+  R5: Trạng thái || Hai giá trị: Tất cả, Thành công, Thất bại. || Mặc định: Tất cả.
+  R6: Thời gian || Kiểu thời gian, Từ ngày, Đến ngày. || Cho phép chọn khoảng thời gian; Từ ngày không được lớn hơn Đến ngày.
+  R7: Đặt lại || Xóa điều kiện lọc và đưa bộ lọc về mặc định. || Danh sách trở về kết quả mặc định.
+  R8: Lọc || Áp dụng các điều kiện đã nhập. || Cập nhật thống kê và danh sách theo cùng bộ lọc.
+[567][P][heading 3] 3.2.2 Các thẻ thống kê
+[568][TABLE]
+  R1: Thẻ || Nội dung
+  R2: Tổng tác vụ || Tổng số bản ghi lịch sử phù hợp với bộ lọc hiện tại.
+  R3: Thành công || Số tác vụ có trạng thái Thành công; hiển thị tỷ lệ trên tổng tác vụ.
+  R4: Thất bại || Số tác vụ có trạng thái Thất bại; hiển thị tỷ lệ trên tổng tác vụ.
+[569][P][Normal] Các số liệu thống kê phải được tính theo cùng bộ lọc đang áp dụng. Khi tổng tác vụ bằng 0, tỷ lệ phần trăm hiển thị 0% hoặc dấu gạch ngang theo quy ước UI.
+[570][P][heading 3] 3.2.3 Danh sách lịch sử
+[571][TABLE]
+  R1: Cột || Mô tả
+  R2: STT || Số thứ tự theo trang hiện tại.
+  R3: Thời gian || Thời điểm tác vụ được ghi nhận; hiển thị theo múi giờ cấu hình của hệ thống.
+  R4: Loại || Nhãn Đăng bài hoặc Bình luận.
+  R5: Chiến dịch || Tên chiến dịch gắn với tác vụ.
+  R6: UID || Tài khoản Facebook thực hiện tác vụ.
+  R7: Nhóm || Tên nhóm Facebook đích; có thể hiển thị link nhóm.
+  R8: Nội dung || Đoạn trích nội dung bài đăng hoặc bình luận; nội dung dài được rút gọn.
+  R9: Trạng thái || Thành công hoặc Thất bại.
+  R10: Kết quả || Mô tả kết quả: Đã đăng bài, Đã bình luận hoặc Lỗi.
+  R11: Thao tác || Nút mở liên kết nhóm Facebook tương ứng với bài đăng/bình luận.
+[572][P][heading 3] 3.2.4 Quy tắc thao tác mở liên kết
+[573][P][Normal] ·      Nút thao tác mở URL nhóm Facebook đã được lưu cùng bản ghi lịch sử, ưu tiên mở tab mới.
+[574][P][Normal] ·      Với bản ghi đăng bài, nếu có permalink bài đăng thì có thể mở permalink bài đăng; nếu không có, mở link nhóm.
+[575][P][Normal] ·      Với bản ghi bình luận, nếu có permalink bình luận/bài viết chứa bình luận thì có thể mở permalink đó; nếu không có, mở link nhóm.
+[576][P][Normal] ·      Nếu URL không tồn tại hoặc không hợp lệ, nút bị vô hiệu hóa hoặc hiển thị thông báo không có liên kết; không tự dựng URL từ dữ liệu thiếu.
+[577][P][heading 2] 3.3. Yêu cầu chung về dữ liệu và trạng thái
+[578][P][Normal] ·      Mỗi lượt đăng bài/bình luận được ghi nhận thành một bản ghi lịch sử độc lập, có mã bản ghi/tác vụ để truy vết.
+[579][P][Normal] ·      Chỉ trạng thái Thành công và Thất bại được dùng làm bộ lọc trạng thái trên giao diện lịch sử; các trạng thái nội bộ như đang chạy/chưa chạy không được tính thành công hoặc thất bại nếu chưa có kết quả cuối.
+[580][P][Normal] ·      Khi dừng tác vụ, lưu log các lượt đã hoàn tất; lượt chưa chạy được hủy/bỏ qua. Lượt đang chạy mà không xác minh được kết quả phải được lưu trạng thái nội bộ phù hợp, không tự đánh dấu thành công.
+[581][P][Normal] ·      Không hiển thị API key, access token, cookie hoặc thông tin bí mật trong bảng lịch sử.
+[582][P][heading 2] 3.4. Luồng sử dụng
+[583][P][Normal] ·      Người dùng mở Spam Group → Lịch sử.
+[584][P][Normal] ·      Nhập từ khóa, chọn loại seeding, trạng thái và khoảng thời gian.
+[585][P][Normal] ·      Nhấn Lọc để cập nhật số liệu thống kê và bảng danh sách.
+[586][P][Normal] ·      Nhấn Đặt lại để quay về bộ lọc mặc định.
+[587][P][Normal] ·      Xem các cột lịch sử và nhấn nút thao tác để mở nhóm hoặc liên kết bài/bình luận liên quan.
+[588][P][heading 2] 3.5. Trạng thái rỗng và lỗi
+[589][TABLE]
+  R1: Tình huống || Hành vi
+  R2: Không có kết quả || Hiển thị trạng thái rỗng “Không tìm thấy lịch sử phù hợp” và giữ nguyên điều kiện lọc.
+  R3: Khoảng ngày không hợp lệ || Báo lỗi tại trường ngày; không gửi truy vấn lọc.
+  R4: Lỗi tải dữ liệu || Hiển thị thông báo lỗi và cho phép thử lại.
+  R5: Không có URL liên quan || Vô hiệu hóa thao tác mở link hoặc thông báo không có liên kết.
+[591][P][heading 1] CHƯƠNG 4. TÀI LIỆU CHỨC NĂNG QUẢN LÝ CHIẾN DỊCH
+[592][P][heading 2] 4.1. Mục đích và phạm vi
+[593][P][Normal] Cho phép người dùng tìm lại chiến dịch đã chạy, xem tài khoản Facebook (UID), nhóm và link bài viết đã lưu, mở link trong trình duyệt để tự kiểm tra bình luận. Nếu cần trả lời, người dùng sao chép UID, chuyển sang module Quản lý tài khoản Facebook hiện có, đăng nhập tài khoản được phép sử dụng và tự trả lời bình luận hoặc tin nhắn trên Facebook.
+[594][P][Normal] Module này không tạo, không chỉnh sửa chiến dịch. Tên và mô tả được nhập ở đầu quy trình Đăng bài/Bình luận.
+[595][P][heading 2] 4.2. Danh sách chức năng
+[596][TABLE]
+  R1: Mã || Chức năng || Mô tả
+  R2: CAMP-01 || Danh sách chiến dịch || Hiển thị tên, loại tác vụ, thời gian chạy gần nhất, trạng thái, tổng UID đã chạy. Mới nhất trước.
+  R3: CAMP-02 || Tìm kiếm và lọc || Tìm theo tên chiến dịch (chấp nhận một phần), thời gian chạy, loại Đăng bài/Bình luận, trạng thái.
+  R4: CAMP-03 || Xem chi tiết || Hiển thị danh sách UID, tên nhóm, link bài viết và nút Copy UID.
+  R5: CAMP-04 || Xóa chiến dịch || Có xác nhận; ưu tiên xóa mềm khỏi danh sách để bảo toàn lịch sử tác vụ.
+  R6: CAMP-05 || Chạy lại chiến dịch || Nạp cấu hình của lượt chạy trước, kiểm tra/sửa, xác nhận rồi mới tạo lượt chạy mới.
+[597][P][heading 2] 4.3. Danh sách và bộ lọc
+[598][TABLE]
+  R1: Trường || Quy tắc
+  R2: Tìm kiếm tên chiến dịch || Không yêu cầu nhớ chính xác tên; tìm theo một phần, bỏ khoảng trắng thừa; không phân biệt hoa/thường.
+  R3: Thời gian chạy || Tất cả (mặc định), Hôm nay, 7 ngày qua, 30 ngày qua, Khoảng ngày tùy chọn.
+  R4: Loại tác vụ || Tất cả, Đăng bài, Bình luận; có thể xuất hiện nhiều lượt chạy khác loại trong cùng một chiến dịch nếu được liên kết.
+  R5: Trạng thái || Tất cả; có thể lọc Hoàn thành, Đã dừng, Thất bại, Đang chạy/Chờ chạy khi có dữ liệu.
+  R6: Đặt lại || Đưa bộ lọc về mặc định.
+  R7: Thứ tự || Theo thời gian chạy gần nhất giảm dần.
+  R8: Tổng nick đã chạy || Đếm số UID khác nhau đã thực hiện ít nhất một lượt tác vụ trong phạm vi chiến dịch; không tính UID chỉ được chọn nhưng chưa chạy.
+[599][P][Normal] Danh sách có các cột: STT, Tên chiến dịch, Loại, Ngày chạy gần nhất, Tổng nick đã chạy, Trạng thái, Thao tác (Xem / Chạy lại / Xóa).
+[600][P][heading 2] 4.4. Xem chi tiết chiến dịch
+[601][P][Normal] Nhấn Xem để mở bảng các tài khoản đã chọn cho chiến dịch. Hiển thị khoảng 5 dòng trên một vùng cuộn, có thể kéo xuống để xem UID còn lại; không cần mở màn hình mới cho từng UID.
+[602][TABLE]
+  R1: Cột || Mô tả
+  R2: STT || Số thứ tự của dòng.
+  R3: Tài khoản (UID) || UID tài khoản Facebook đã chọn cho chiến dịch.
+  R4: Copy UID || Sao chép chính xác UID vào bộ nhớ tạm.
+  R5: Tên nhóm || Tên nhóm Facebook ứng với kết quả/tác vụ.
+  R6: Link bài viết || Đường dẫn bài viết được lưu, nhấn để mở trong trình duyệt.
+[603][P][Normal] Trường hợp đặc biệt:
+[604][P][Normal] •          Một UID có thể gắn nhiều nhóm hoặc nhiều link bài viết; hiển thị thành nhiều dòng hoặc một dòng có danh sách link mở rộng, nhưng không bỏ mất link.
+[605][P][Normal] •          Danh sách chi tiết có thể bao gồm UID đã chọn nhưng chưa chạy; chỉ số “Tổng nick đã chạy” ở danh sách phải được tính riêng theo UID đã thực sự thực hiện tác vụ.
+[606][P][Normal] •          Nếu không có permalink bài đăng, hiển thị “Không có link bài viết”. Đối với lượt bình luận, có thể dùng permalink bình luận/bài liên quan nếu đã lưu; không được tự dựng link.
+[607][P][Normal] •          Bấm link mở trang Facebook trên trình duyệt/tab mới; không tự đọc bình luận hoặc tin nhắn.
+[608][P][heading 2] 4.5. Luồng kiểm tra bình luận và phản hồi thủ công
+[609][P][Normal] 1.   Người dùng mở Quản lý chiến dịch, tìm kiếm/lọc chiến dịch.
+[610][P][Normal] 2.   Nhấn Xem để thấy UID, tên nhóm, link bài viết.
+[611][P][Normal] 3.   Nhấn link bài viết để mở Facebook trong trình duyệt và kiểm tra thủ công.
+[612][P][Normal] 4.   Nếu thấy bình luận cần phản hồi, người dùng đóng/chuyển khỏi trình duyệt, quay lại ứng dụng, nhấn Copy UID.
+[613][P][Normal] 5.   Mở module Quản lý tài khoản Facebook hiện có, tìm tài khoản theo UID.
+[614][P][Normal] 6.   Đăng nhập/mở phiên hợp lệ của đúng tài khoản đã chạy tác vụ.
+[615][P][Normal] 7.   Truy cập lại bài viết để trả lời bình luận; có thể nhắn tin trao đổi thông tin với người dùng nếu Facebook cho phép và phù hợp quyền truy cập.
+[616][P][Normal] Không có tính năng tự thông báo tương tác, tự mở tài khoản, tự trả lời bình luận/tin nhắn hoặc tự xác nhận đã phản hồi.
+[617][P][heading 2] 4.6. Chạy lại chiến dịch – CAMP-RUN-01
+[618][P][heading 3] 4.6.1. Điều kiện
+[619][P][Normal] •          Chiến dịch đã có ít nhất một lượt chạy với cấu hình được lưu.
+[620][P][Normal] •          Người dùng có quyền thực hiện tác vụ và truy cập tài khoản liên quan.
+[621][P][Normal] •          Hệ thống còn dữ liệu cấu hình có thể phục hồi; các phần thiếu phải được yêu cầu nhập lại.
+[622][P][heading 3] 4.6.2. Luồng chính
+[623][P][Normal] 1.   Người dùng nhấn Chạy lại trên chiến dịch đã chọn.
+[624][P][Normal] 2.   Hệ thống lấy cấu hình lượt chạy gần nhất (hoặc lượt do người dùng lựa chọn nếu có hỗ trợ chọn lượt), bao gồm loại tác vụ, UID, nhóm, nội dung, media nếu có, model AI, luồng/nghỉ và lịch.
+[625][P][Normal] 3.   Hệ thống chuyển đến màn hình cấu hình Đăng bài hoặc Bình luận theo loại tác vụ; giữ campaign_id và tên chiến dịch gốc.
+[626][P][Normal] 4.   Tự điền các trường từ cấu hình cũ nếu còn khả dụng; báo trường thiếu hoặc không hợp lệ.
+[627][P][Normal] 5.   Người dùng kiểm tra UID còn dùng được, số nhóm theo quy tắc A ≤ G, media và nội dung; xác nhận lại API AI, thông số, lịch chạy. Hẹn giờ cũ đã qua phải chọn lại.
+[628][P][Normal] 6.   Người dùng sửa các trường cần thiết, xác nhận cấu hình của từng bước.
+[629][P][Normal] 7.   Hệ thống hiển thị Tổng hợp cấu hình chạy lại gồm tên chiến dịch, loại tác vụ, số UID, nhóm, nội dung, thời gian bắt đầu.
+[630][P][Normal] 8.   Người dùng nhấn Xác nhận chạy lại; chỉ lúc này hệ thống tạo lượt chạy mới (run_id, số lần chạy mới) và bắt đầu/chờ lịch.
+[631][P][Normal] 9.   Theo dõi tiến trình, ghi kết quả của lượt mới vào Lịch sử; bảo lưu kết quả các lượt cũ.
+[632][P][heading 3] 4.6.3. Ngoại lệ và quy tắc
+[633][TABLE]
+  R1: Tình huống || Cách xử lý
+  R2: Chưa lưu đủ cấu hình cũ || Cho phép bổ sung lại; không tự chạy.
+  R3: Tài khoản không còn khả dụng || Cảnh báo, yêu cầu bỏ chọn hoặc thay thế.
+  R4: Thiếu nhóm / A > G || Chặn xác nhận và yêu cầu bổ sung nhóm/giảm UID.
+  R5: Media hoặc nội dung không còn || Yêu cầu tải/chọn/tạo lại.
+  R6: API Key thiếu, model không khả dụng || Yêu cầu cung cấp lại thông tin hợp lệ; không lấy API Key từ log.
+  R7: Hẹn giờ đã qua || Phải chọn lịch mới hoặc chạy ngay.
+  R8: Người dùng Hủy || Không tạo lượt chạy mới.
+  R9: Nhấn xác nhận nhiều lần || Hệ thống chống tạo lượt chạy trùng do cùng một lần xác nhận.
+[634][P][heading 3] 4.6.4. Nguyên tắc lưu lịch sử chạy lại
+[635][P][Normal] •          Chiến dịch giữ một campaign_id, mỗi lần chạy có run_id và số lần chạy riêng.
+[636][P][Normal] •          Lưu ảnh chụp cấu hình (run_config) cho từng lượt để lần sau có thể nạp lại.
+[637][P][Normal] •          Không thay đổi dữ liệu, kết quả hoặc link của lượt chạy cũ.
+[638][P][Normal] •          Không khôi phục hoặc ghi lộ API Key, token, cookie từ nhật ký.
+[639][P][heading 2] 4.7. Xóa chiến dịch
+[640][P][Normal] •          Khi nhấn Xóa, hiển thị hộp thoại xác nhận tên chiến dịch.
+[641][P][Normal] •          Đề xuất xóa mềm: ẩn chiến dịch khỏi danh sách thông thường nhưng giữ bản ghi lịch sử, UID, nhóm và kết quả cho mục đích truy vết.
+[642][P][Normal] •          Không xóa tự động các tài khoản Facebook trong module Quản lý tài khoản.
+[643][P][Normal] •          Cần thống nhất quyền xóa và chính sách khôi phục trước khi triển khai.
+[645][P][heading 1] CHƯƠNG 5. SRS & USE CASE – FB AUTOMATION
+[646][P][heading 2] 5.1. Phạm vi
+[647][P][Normal] Đặc tả kiểm thử gồm bốn module: Đăng bài, Bình luận, Lịch sử, Quản lý chiến dịch. Quản lý tài khoản Facebook là module có sẵn và chỉ được liên kết bằng UID.
+[648][P][heading 2] 5.2. SG-POST-01 – Cấu hình và thực hiện đăng bài
+[649][TABLE]
+  R1: Trường || Đặc tả
+  R2: Actor || Người dùng
+  R3: Tiền điều kiện || Đã đăng nhập, có quyền dùng module và tài khoản Facebook.
+  R4: Đầu vào || Tên chiến dịch (bắt buộc), mô tả (tùy chọn); UID, API AI/luồng/nghỉ, nhóm, media, nội dung, lịch chạy.
+  R5: Luồng chính || (1) Nhập tên/mô tả chiến dịch; / (2) chọn UID; / (3) xác nhận API và thông số; / (4) chọn/xác nhận nhóm; / (5) kiểm tra tài khoản/nhóm; / (6) chọn media; / (7) tạo/chỉnh nội dung AI; / (8) cài lịch; / (9) xem tổng hợp; / (10) bắt đầu/theo dõi hoặc dừng; / (11) lưu kết quả theo campaign_id và run_id.
+  R6: Luồng phụ || Nhập nhóm từ file; hẹn giờ; tạo nhiều nội dung AI; chạy lại từ Quản lý chiến dịch.
+  R7: Ngoại lệ || Tên trống; thiếu API xác nhận; UID/nhóm không hợp lệ; min media > max; AI lỗi; không có URL bài đăng; dừng khi kết quả chưa xác minh.
+  R8: Hậu điều kiện || Lưu lịch sử từng kết quả và cấu hình lượt chạy mới, không tự ghi nhận lượt chưa hoàn tất là thành công.
+[650][P][heading 2] 5.3. SG-COM-01 – Cấu hình và thực hiện bình luận
+[651][TABLE]
+  R1: Trường || Đặc tả
+  R2: Actor || Người dùng
+  R3: Tiền điều kiện || Đã đăng nhập, có quyền dùng module và tài khoản Facebook.
+  R4: Đầu vào || Tên chiến dịch (bắt buộc), mô tả (tùy chọn); UID, API AI, nhóm, nội dung bình luận, lịch chạy.
+  R5: Luồng chính || (1) Nhập tên/mô tả; / (2) chọn UID; / (3) cấu hình API và xác nhận; / (4) chọn nhóm/xác nhận; (5) kiểm tra số lượng UID/nhóm; / (6) nhập/tạo/chỉnh sửa nội dung bình luận; / (7) cài lịch; / (8) xem tổng hợp; / (9) bắt đầu/theo dõi hoặc dừng; / (10) lưu kết quả theo chiến dịch/lượt chạy.
+  R6: Luồng phụ || Nhập nhóm từ file; hẹn giờ; tạo lại nội dung; chạy lại từ Quản lý chiến dịch.
+  R7: Ngoại lệ || Tên trống; UID/nhóm không hợp lệ; thiếu API; lỗi tạo nội dung; lỗi thực hiện bình luận.
+  R8: Hậu điều kiện || Lưu từng lượt bình luận, URL nếu có, UID, nhóm, thời gian và trạng thái xác minh.
+[652][P][heading 2] 5.4. SG-HIS-01 – Tra cứu lịch sử đăng bài/bình luận
+[653][TABLE]
+  R1: Trường || Đặc tả
+  R2: Actor || Người dùng
+  R3: Đầu vào || Từ khóa, chiến dịch, loại, trạng thái, từ ngày/đến ngày, số bản ghi/trang.
+  R4: Luồng chính || (1) Mở Lịch sử; / (2) tải danh sách mới nhất; / (3) tìm/lọc; / (4) tính thống kê theo bộ lọc; / (5) xem từng dòng UID, nhóm, nội dung, thời gian, trạng thái; / (6) mở URL được lưu nếu có.
+  R5: Ngoại lệ || Khoảng ngày sai, lỗi tải dữ liệu, thiếu URL, kết quả rỗng.
+  R6: Hậu điều kiện || Dữ liệu không thay đổi khi chỉ xem/lọc/mở URL.
+[654][P][heading 2] 5.5. CAMP-01 – Tra cứu và xem chiến dịch
+[655][TABLE]
+  R1: Trường || Đặc tả
+  R2: Actor || Người dùng
+  R3: Tiền điều kiện || Có chiến dịch đã phát sinh lượt chạy và có quyền xem.
+  R4: Luồng chính || (1) Mở Quản lý chiến dịch; / (2) tìm tên hoặc lọc thời gian/loại/trạng thái; / (3) chọn Xem; / (4) hiển thị bảng cuộn khoảng 5 dòng gồm STT, UID/Copy UID, tên nhóm, link bài; / (5) chọn link mở trình duyệt; / (6) nếu cần, Copy UID và tìm tại Quản lý tài khoản để người dùng tự phản hồi.
+  R5: Ngoại lệ || Không có kết quả, UID/link thiếu, link không truy cập được, thiếu quyền tài khoản.
+  R6: Hậu điều kiện || Không tự tạo bình luận/tin nhắn hoặc thay đổi trạng thái tương tác Facebook.
+[656][P][heading 2] 5.6. CAMP-RUN-01 – Chạy lại chiến dịch
+[657][TABLE]
+  R1: Trường || Đặc tả
+  R2: Actor || Người dùng
+  R3: Tiền điều kiện || Có cấu hình của lượt chạy trước.
+  R4: Luồng chính || (1) Nhấn Chạy lại; / (2) lấy cấu hình cũ; / (3) chuyển Đăng bài/Bình luận; / (4) rà soát dữ liệu; / (5) bổ sung/chỉnh sửa nếu cần; / (6) xác nhận cấu hình; / (7) xác nhận chạy lại; / (8) tạo lượt chạy mới; / (9) lưu lịch sử riêng.
+  R5: Ngoại lệ || Thiếu cấu hình, UID/nhóm lỗi, API Key chưa xác nhận, lịch cũ quá hạn, hủy xác nhận, nhấn xác nhận lặp.
+  R6: Hậu điều kiện || Không ghi đè cấu hình hoặc kết quả cũ.
+[658][P][heading 2] 5.7. CAMP-DEL-01 – Xóa chiến dịch
+[659][TABLE]
+  R1: Trường || Đặc tả
+  R2: Actor || Người dùng có quyền xóa
+  R3: Luồng chính || (1) Chọn chiến dịch; / (2) nhấn Xóa; / (3) hiện hộp thoại xác nhận; / (4) xác nhận xóa mềm; / (5) ẩn chiến dịch khỏi danh sách mặc định.
+  R4: Ngoại lệ || Người dùng hủy, thiếu quyền, xóa lỗi.
+  R5: Hậu điều kiện || Lịch sử tác vụ và tài khoản Facebook không bị xóa tự động.
+[660][P][heading 2] 5.8. Quy tắc nghiệp vụ dùng chung
+[661][TABLE]
+  R1: ID || Quy tắc
+  R2: SG-BR-01 || Hệ thống trong phạm vi tài liệu có 4 module: Đăng bài, Bình luận, Lịch sử, Quản lý chiến dịch.
+  R3: SG-BR-02 || Đăng bài và Bình luận đều bắt đầu bằng Tạo chiến dịch (Tên bắt buộc, Mô tả không bắt buộc).
+  R4: SG-BR-03 || Mỗi kết quả tác vụ phải gắn campaign_id, run_id và UID thực hiện.
+  R5: SG-BR-04 || Dừng tác vụ phải bảo toàn log hoàn tất; lượt chưa chạy không được xem là hoàn thành.
+  R6: SG-BR-05 || Quy tắc hiện tại về số lượng là A ≤ G; cách xử lý nhóm dư cần thống nhất nếu nghiệp vụ đòi ghép 1–1 toàn bộ.
+  R7: SG-BR-06 || Thống kê Lịch sử phải áp dụng cùng điều kiện lọc với danh sách.
+  R8: SG-BR-07 || Không lộ API Key, token, cookie, thông tin đăng nhập nhạy cảm trong log/UI lịch sử.
+  R9: SG-BR-08 || Quản lý chiến dịch chỉ có Danh sách, Tìm kiếm/lọc, Xem, Xóa, Chạy lại; không tạo/sửa tại module này.
+  R10: SG-BR-09 || Danh sách chi tiết hiển thị khoảng 5 dòng trong vùng cuộn và cho phép Copy UID, mở URL đã lưu.
+  R11: SG-BR-10 || Không có tự động nhận bình luận/tin nhắn mới; người dùng kiểm tra và phản hồi thủ công.
+  R12: SG-BR-11 || Chạy lại luôn yêu cầu rà soát và xác nhận trước khi tạo lượt chạy mới.
+  R13: SG-BR-12 || Mỗi lượt chạy giữ cấu hình và kết quả riêng, không ghi đè lịch sử.
+  R14: SG-BR-13 || Tổng nick đã chạy tính theo UID phân biệt đã thực hiện tác vụ; UID chỉ được chọn nhưng chưa chạy vẫn có thể hiển thị ở chi tiết nếu được lưu.
+  R15: SG-BR-14 || Nếu không thu được permalink, hiển thị Không có link bài viết; không tự sinh link Facebook.
+[662][P][heading 2] 5.9. Các điểm cần chốt khi triển khai
+[663][P][Normal] 1.   Xóa mềm là phương án đề xuất; cần xác nhận có cho khôi phục chiến dịch hay không.
+[664][P][Normal] 2.   Nếu chiến dịch được dùng chung cho cả Đăng bài và Bình luận, cần thống nhất UI phân loại và chọn đúng loại lượt chạy để Chạy lại.
+[665][P][Normal] 3.   Cần xác định nơi lưu ảnh chụp cấu hình, media và nội dung để bảo đảm Chạy lại hoạt động khi dữ liệu cũ thay đổi hoặc không còn.
+[666][P][Normal] 4.   Link bài viết chỉ hiển thị nếu cơ chế thực thi hiện có lưu được URL; tài liệu không giả định có API đọc tương tác Facebook.

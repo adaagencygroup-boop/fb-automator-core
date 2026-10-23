@@ -54,6 +54,7 @@ def account_fields(account):
         "login_status": {"LOGGED_IN": "logged_in", "ERROR": "failed"}.get(account.login_status, "not_logged_in"),
         "status": account.status.lower() if account.status_checked_at and account.status in {"LIVE", "DIE"} else None,
         "last_login_at": account.last_login_at.replace(tzinfo=timezone.utc).isoformat() if account.last_login_at else None,
+        "first_login_at": account.first_login_at.replace(tzinfo=timezone.utc).isoformat() if account.first_login_at else None,
         "profile_name": account.profile_name or "", "avatar_url": account.avatar_url or None,
     }
 

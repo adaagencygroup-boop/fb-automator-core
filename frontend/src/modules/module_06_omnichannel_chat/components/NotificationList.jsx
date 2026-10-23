@@ -50,12 +50,13 @@ const formatDateTime = (iso) => {
   });
 };
 
-function SubTabs({ type, onTypeChange, counts }) {
+function SubTabs({ type, onTypeChange, counts, unreadCounts = {} }) {
   return (
     <div role="tablist" aria-label="Loại thông báo" className="flex border-t border-gray-100 shrink-0">
       {NOTIFICATION_TYPES.map((t) => {
         const active = type === t.id;
         const count = counts[t.id] || 0;
+        const unread = unreadCounts[t.id] || 0;
         return (
           <button
             key={t.id}
@@ -64,13 +65,16 @@ function SubTabs({ type, onTypeChange, counts }) {
             aria-selected={active}
             onClick={() => onTypeChange(t.id)}
             className={cn(
-              "flex-1 min-w-0 flex items-center justify-center px-3 pt-2.5 pb-[11px] -mb-px border-b-2 text-[13px] leading-5 whitespace-nowrap transition-colors",
+              "flex-1 min-w-0 flex items-center justify-center gap-1.5 px-3 pt-2.5 pb-[11px] -mb-px border-b-2 text-[13px] leading-5 whitespace-nowrap transition-colors",
               active ? "border-primary text-primary font-semibold" : "border-transparent text-gray-600 font-medium hover:text-gray-800",
               FOCUS,
             )}
           >
-            {t.label}
-            {count > 0 && ` (${count})`}
+            <span>{t.label}</span>
+            {count > 0 && <span className="text-xs">({count})</span>}
+            {unread > 0 && (
+              <span className="size-2 rounded-full bg-red-500" title={`${unread} chưa đọc`} aria-hidden="true" />
+            )}
           </button>
         );
       })}
@@ -142,6 +146,7 @@ function NotificationCard({ notification, pageName, onOpen }) {
 export default function NotificationList({
   notifications,
   counts,
+  unreadCounts,
   onLoadMore,
   hasMore,
   loadingMore,
@@ -173,7 +178,12 @@ export default function NotificationList({
 
   return (
     <>
-      <SubTabs type={type} onTypeChange={onTypeChange} counts={counts || {}} />
+      <SubTabs
+        type={type}
+        onTypeChange={onTypeChange}
+        counts={counts || {}}
+        unreadCounts={unreadCounts || {}}
+      />
       <StatusFilter filter={filter} onFilterChange={onFilterChange} label="Lọc thông báo" />
       {loading ? (
         <NotificationSkeleton />

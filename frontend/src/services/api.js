@@ -88,7 +88,9 @@ function refreshAccess() {
   if (!refreshPromise) {
     refreshPromise = axios
       .post(`${API_BASE}/api/v1/auth/refresh`, {}, {
-        withCredentials: true, timeout: 15000,
+        withCredentials: true,
+        // Không để refresh kéo dài bằng timeout mặc định 60s khi Engine đang restart.
+        timeout: 12000,
         headers: { "X-Auth-Client": "user", ...(getSessionUserId() ? { "X-Auth-User-Id": getSessionUserId() } : {}) },
       })
       .finally(() => {

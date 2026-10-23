@@ -33,6 +33,9 @@ import {
   Users,
   Eye,
   EyeOff,
+  AlertTriangle,
+  FolderPlus,
+  Hash,
 } from "lucide-react";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -42,9 +45,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
-import { getGroupSettings, runGroupCampaign } from "../service";
+import { generateGroupComments, getGroupSettings, runGroupCampaign } from "../service";
 import Link from "next/link";
+import useSavedApis from "../shared/useSavedApis";
+import SavedApiSelector from "../shared/SavedApiSelector";
+import CampaignInfoSection from "../shared/CampaignInfoSection";
 import {
   GROUPS,
   AVATAR_COLORS,
@@ -59,12 +66,6 @@ import {
   normalizeAccount,
 } from "../shared/components";
 
-const getProvider = (m) => {
-  if (m === "gemini" || m?.startsWith("gemini-")) return "gemini";
-  if (m?.startsWith("deepseek")) return "deepseek";
-  return "openai";
-};
-
 export default function GroupCommentModule() {
   const mediaInputRef = useRef(null);
   const groupFileInputRef = useRef(null);
@@ -73,9 +74,11 @@ export default function GroupCommentModule() {
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [accountSearch, setAccountSearch] = useState("");
   const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
-  const [model, setModel] = useState("gpt-4o");
-  const [apiKey, setApiKey] = useState("");
-  const [showApiKey, setShowApiKey] = useState(false);
+  const apiSource = useSavedApis();
+  const model = apiSource.selected?.model || "gpt-4o";
+  const hasApiKey = Boolean(apiSource.selected) && !apiSource.loading;
+  const [aiError, setAiError] = useState("");
+  const [generating, setGenerating] = useState(false);
   const [threads, setThreads] = useState("2");
   const [restMinutes, setRestMinutes] = useState("10");
   const [maxComments, setMaxComments] = useState("20");
@@ -104,6 +107,11 @@ export default function GroupCommentModule() {
   const [progress, setProgress] = useState(0);
   const [accountPage, setAccountPage] = useState(1);
   const [accountPageSize, setAccountPageSize] = useState(10);
+  const [campaignName, setCampaignName] = useState("");
+  const [campaignDescription, setCampaignDescription] = useState("");
+  const [campaignLocked, setCampaignLocked] = useState(false);
+  const [campaignId, setCampaignId] = useState("");
+  const [isRerun, setIsRerun] = useState(false);
 
   const loadAccounts = async () => {
     setAccountsLoading(true);
@@ -125,16 +133,45 @@ export default function GroupCommentModule() {
   };
 
   useEffect(() => {
-    loadAccounts();
+    Promise.resolve().then(loadAccounts);
     getGroupSettings().then((data) => {
       if (!data) return;
-      if (data.model) setModel(data.model);
-      const activeProv = getProvider(data.model);
-      const key = data.api_key || data.providers?.[activeProv]?.key;
-      if (key) setApiKey(key);
       if (data.threads) setThreads(String(data.threads));
-      if (data.rest_minutes) setRestMinutes(String(data.rest_minutes));
+      if (data.rest_minutes !== undefined) setRestMinutes(String(data.rest_minutes));
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    try {
+      const rerunRaw = sessionStorage.getItem("fb_rerun_campaign");
+      if (!rerunRaw) return;
+      const data = JSON.parse(rerunRaw);
+      if (data.action_type === "COMMENT" || (!data.action_type && data.posts)) {
+        if (data.name) setCampaignName(data.name);
+        if (data.description) setCampaignDescription(data.description);
+        if (data.campaign_id) setCampaignId(data.campaign_id);
+        setIsRerun(true);
+        setCampaignLocked(true);
+        if (data.config?.settings) {
+          const s = data.config.settings;
+          if (s.threads) setThreads(String(s.threads));
+          if (s.rest_minutes !== undefined) setRestMinutes(String(s.rest_minutes));
+          if (s.max_posts) setMaxComments(String(s.max_posts));
+          if (s.delay_min) setDelayMin(String(s.delay_min));
+          if (s.delay_max) setDelayMax(String(s.delay_max));
+          if (s.avoid_duplicate !== undefined) setAvoidDuplicate(Boolean(s.avoid_duplicate));
+          if (s.shuffle_content !== undefined) setShuffleContent(Boolean(s.shuffle_content));
+          if (s.auto_like !== undefined) setAutoLikeBeforeComment(Boolean(s.auto_like));
+          if (s.only_recent_posts !== undefined) setOnlyRecentPosts(Boolean(s.only_recent_posts));
+        }
+        setScheduleEnabled(false);
+        setScheduleDate("");
+        setScheduleTime("08:00");
+        toast.info(`Đã nạp cấu hình từ chiến dịch "${data.name || data.campaign_id}" để chạy lại lượt mới.`);
+      }
+    } catch (err) {
+      console.error("Lỗi đọc cấu hình rerun:", err);
+    }
   }, []);
 
   const filteredAccounts = useMemo(() => {
@@ -257,16 +294,16 @@ export default function GroupCommentModule() {
     }
   };
 
-  const generateComments = () => {
+  const generateComments = async () => {
+    if (!hasApiKey || generating) return;
     const amount = Math.max(1, Math.min(10, Number(aiCount) || 1));
-    const source = prompt.trim() || "Quan tâm tuyển dụng CTV, hỏi thông tin chi tiết và xin tư vấn qua tin nhắn.";
-    setComments(
-      Array.from({ length: amount }, (_, index) => {
-        if (INITIAL_COMMENTS[index]) return INITIAL_COMMENTS[index];
-        return `[Bình luận ${index + 1}] ${source} - check tin nhắn giúp mình nhé! 💙`;
-      }),
-    );
-    setActiveComment(0);
+    if (prompt.trim().length < 3) { setAiError("Nhập nội dung gốc ít nhất 3 ký tự."); return; }
+    setGenerating(true); setAiError("");
+    try {
+      const result = await generateGroupComments({ model, credential_id: apiSource.selectedId, prompt: prompt.trim(), count: amount });
+      setComments(result.comments); setActiveComment(0);
+    } catch (error) { setAiError(error.message); }
+    finally { setGenerating(false); }
   };
 
   const updateActiveComment = (value) => {
@@ -274,12 +311,37 @@ export default function GroupCommentModule() {
   };
 
   const handleStart = async () => {
-    if (!selectedAccounts.length || !hasGroups) return;
+    const trimmedCampaignName = (campaignName || "").trim();
+    if (!trimmedCampaignName) {
+      toast.warning("Vui lòng nhập Tên chiến dịch ở Bước 1 trước khi bắt đầu!", "THIẾU TÊN CHIẾN DỊCH");
+      const el = document.getElementById("step-1-campaign");
+      if (el) el.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+
+    if (!selectedAccounts.length || !hasGroups || !hasApiKey) {
+      toast.warning("Vui lòng chọn tài khoản, nguồn nhóm và cấu hình API trước khi bắt đầu!", "THIẾU CẤU HÌNH");
+      return;
+    }
+
+    const activeTargets = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
+    if (selectedAccounts.length > activeTargets.length) {
+      toast.error(
+        `Chưa đủ số lượng nhóm. Bạn đã chọn ${selectedAccounts.length} tài khoản nhưng chỉ có ${activeTargets.length} nhóm/mục tiêu. Vui lòng chọn thêm nhóm hoặc giảm số tài khoản để số tài khoản không lớn hơn số nhóm.`,
+        "QUY TẮC PHÂN BỔ (A ≤ G)"
+      );
+      const el = document.getElementById("step-4-group-source");
+      if (el) el.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+
     setRunState("starting");
     setProgress(4);
     try {
-      const activeTargets = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
-      await runGroupCampaign({
+      const campaign = await runGroupCampaign({
+        campaign_id: campaignId || undefined,
+        name: trimmedCampaignName,
+        description: (campaignDescription || "").trim(),
         action_type: "COMMENT",
         account_ids: selectedAccounts.map((account) => account.id),
         account_uids: selectedAccounts.map((account) => account.uid),
@@ -288,6 +350,7 @@ export default function GroupCommentModule() {
         media: mediaFiles.map((file) => file.name),
         settings: {
           model,
+          credential_id: apiSource.selectedId,
           threads: Number(threads),
           rest_minutes: Number(restMinutes),
           max_posts: Number(maxComments),
@@ -300,11 +363,16 @@ export default function GroupCommentModule() {
           schedule_at: scheduleEnabled && scheduleDate ? `${scheduleDate}T${scheduleTime}` : null,
         },
       });
+      setCampaignId(campaign?.job_id || campaignId);
       setRunState("running");
       setProgress(15);
-    } catch {
+      sessionStorage.removeItem("fb_rerun_campaign");
+      setIsRerun(false);
+      toast.success("Đã khởi động chiến dịch bình luận nhóm thành công!", "BẮT ĐẦU CHIẾN DỊCH");
+    } catch (error) {
       setRunState("idle");
       setProgress(0);
+      toast.error(error.message || "Không thể bắt đầu chiến dịch bình luận", "LỖI KHỞI ĐỘNG");
     }
   };
 
@@ -325,11 +393,28 @@ export default function GroupCommentModule() {
         </p>
       </div>
 
-      {/* Bước 1 */}
-      <SectionCard
-        number="1"
-        title="Chọn tài khoản / người dùng đi seeding bình luận"
-        description="Chọn danh sách tài khoản Facebook sẽ thực hiện bình luận và tương tác bài viết"
+      {/* Bước 1: Tạo chiến dịch */}
+      <CampaignInfoSection
+        campaignName={campaignName}
+        setCampaignName={setCampaignName}
+        campaignDescription={campaignDescription}
+        setCampaignDescription={setCampaignDescription}
+        campaignId={campaignId}
+        isLocked={campaignLocked}
+        setIsLocked={setCampaignLocked}
+        isRerun={isRerun}
+        onContinue={() => {
+          const el = document.getElementById("step-2-accounts");
+          if (el) el.scrollIntoView({ behavior: "smooth" });
+        }}
+      />
+
+      {/* Bước 2 */}
+      <div id="step-2-accounts" className="scroll-mt-6">
+        <SectionCard
+          number="2"
+          title="Chọn tài khoản / người dùng đi seeding bình luận"
+          description="Chọn danh sách tài khoản Facebook sẽ thực hiện bình luận và tương tác bài viết"
         aside={
           <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600">
             + Đã chọn {selectedAccounts.length}/{accounts.length} tài khoản
@@ -538,57 +623,57 @@ export default function GroupCommentModule() {
           </div>
         </div>
       </SectionCard>
-
-      {/* Bước 2 */}
-      <SectionCard number="2" title="Cấu hình API & thông số chung">
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Model AI" required>
-            <SelectField value={model} onChange={(event) => setModel(event.target.value)}>
-              <option value="gpt-4o">GPT-4o (OpenAI)</option>
-              <option value="gpt-4o-mini">GPT-4o mini (OpenAI)</option>
-              <option value="gemini">Gemini</option>
-              <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
-            </SelectField>
-            <span className="block text-[10px] font-normal text-slate-400">Chọn mô hình AI tạo nội dung theo phong cách mong muốn.</span>
-          </Field>
-          <Field label="API Key" required>
-            <div className="relative">
-              <Input
-                type={showApiKey ? "text" : "password"}
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-                placeholder="sk-ant-api03-••••••••••••••••"
-                className="pr-10 font-mono"
-              />
-              <button
-                type="button"
-                onClick={() => setShowApiKey((prev) => !prev)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 cursor-pointer"
-                title={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
-                aria-label={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
-              >
-                {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-              </button>
-            </div>
-            <span className="block text-[10px] font-normal text-slate-400">Nhập API Key hợp lệ của nhà cung cấp AI đã chọn.</span>
-          </Field>
-        </div>
-        <div className="mt-4 grid gap-4 sm:grid-cols-3">
-          <Field label="Luồng">
-            <Input type="number" min="1" value={threads} onChange={(event) => setThreads(event.target.value)} />
-          </Field>
-          <Field label="Nghỉ (phút)">
-            <Input type="number" min="0" value={restMinutes} onChange={(event) => setRestMinutes(event.target.value)} />
-          </Field>
-          <Field label="Max bình luận">
-            <Input type="number" min="1" value={maxComments} onChange={(event) => setMaxComments(event.target.value)} />
-          </Field>
-        </div>
-      </SectionCard>
+      </div>
 
       {/* Bước 3 */}
-      <SectionCard number="3" title="Nguồn nhóm & bài viết cần bình luận">
-        <div className="grid gap-3 md:grid-cols-2">
+      <div id="step-3-settings" className="scroll-mt-6">
+        <SectionCard number="3" title="Chọn API & thông số chung">
+          <SavedApiSelector source={apiSource} disabled={runState !== "idle" || generating} />
+          <div className="mt-4 grid gap-4 sm:grid-cols-3">
+            <Field label="Luồng">
+              <Input type="number" min="1" value={threads} onChange={(event) => setThreads(event.target.value)} />
+            </Field>
+            <Field label="Nghỉ (phút)">
+              <Input type="number" min="0" value={restMinutes} onChange={(event) => setRestMinutes(event.target.value)} />
+            </Field>
+            <Field label="Max bình luận">
+              <Input type="number" min="1" value={maxComments} onChange={(event) => setMaxComments(event.target.value)} />
+            </Field>
+          </div>
+        </SectionCard>
+      </div>
+
+      {/* Bước 4 */}
+      <div id="step-4-group-source" className="scroll-mt-6">
+        <SectionCard number="4" title="Nguồn nhóm & bài viết cần bình luận">
+          {selectedAccounts.length > activeTargetsCount && (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="size-4 shrink-0 text-amber-600 mt-0.5" />
+                <div className="space-y-1">
+                  <p className="font-semibold text-amber-900">
+                    Chưa đủ số lượng nhóm / bài viết (Quy tắc A ≤ G)
+                  </p>
+                  <p className="text-[11px] text-amber-700 leading-relaxed">
+                    Chưa đủ số lượng nhóm. Bạn đã chọn <strong>{selectedAccounts.length}</strong> tài khoản nhưng chỉ có <strong>{activeTargetsCount}</strong> nhóm. Vui lòng chọn thêm nhóm hoặc giảm số tài khoản để số tài khoản không lớn hơn số nhóm.
+                  </p>
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const el = document.getElementById("step-2-accounts");
+                        if (el) el.scrollIntoView({ behavior: "smooth" });
+                      }}
+                      className="rounded bg-white px-2 py-1 text-[10px] font-semibold text-amber-800 shadow-xs border border-amber-200 hover:bg-amber-100"
+                    >
+                      Giảm số tài khoản (Bước 2)
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="grid gap-3 md:grid-cols-2">
           <button
             type="button"
             onClick={() => setGroupSource("search")}
@@ -876,9 +961,11 @@ export default function GroupCommentModule() {
           </>
         )}
       </SectionCard>
+      </div>
 
-      {/* Bước 4 */}
-      <SectionCard number="4" title="Chọn media đính kèm bình luận (ảnh/video)">
+      {/* Bước 5 */}
+      <div id="step-5-media" className="scroll-mt-6">
+        <SectionCard number="5" title="Chọn media đính kèm bình luận (ảnh/video)">
         <div className="mb-4 flex h-9 items-center justify-center rounded-md bg-primary text-xs font-semibold text-white">
           <ImageIcon className="mr-2 size-4" /> Hình ảnh + Video đính kèm
         </div>
@@ -917,9 +1004,11 @@ export default function GroupCommentModule() {
           </Field>
         </div>
       </SectionCard>
+      </div>
 
-      {/* Bước 5 */}
-      <SectionCard number="5" title="Tạo nội dung bình luận bằng AI">
+      {/* Bước 6 */}
+      <div id="step-6-content" className="scroll-mt-6">
+        <SectionCard number="6" title="Tạo nội dung bình luận bằng AI">
         <div className="grid gap-4 md:grid-cols-[1fr_320px]">
           <Field label="Nội dung gốc định hướng / kịch bản bình luận">
             <div className="relative">
@@ -941,8 +1030,9 @@ export default function GroupCommentModule() {
                 <option value="10">10</option>
               </SelectField>
             </Field>
-            <Button type="button" onClick={generateComments} className="w-full">
-              <Sparkles className="mr-2 size-3.5" /> Tạo nội dung AI
+            {aiError && <p role="alert" className="text-xs text-red-600">{aiError}</p>}
+            <Button type="button" onClick={generateComments} disabled={!hasApiKey || generating} className="w-full">
+              <Sparkles className="mr-2 size-3.5" /> {generating ? "Đang tạo..." : "Tạo nội dung AI"}
             </Button>
           </div>
         </div>
@@ -953,7 +1043,7 @@ export default function GroupCommentModule() {
               <p className="text-xs font-bold text-slate-800">Kết quả nội dung bình luận AI ({generatedCount} mẫu)</p>
               <p className="text-[10px] text-slate-400">Bạn có thể chỉnh sửa nội dung từng bình luận trước khi thực thi</p>
             </div>
-            <Button type="button" size="sm" variant="outline" className="text-primary" onClick={generateComments}>
+            <Button type="button" size="sm" variant="outline" className="text-primary" onClick={generateComments} disabled={!hasApiKey || generating}>
               <RotateCcw className="mr-1.5 size-3.5" /> Tạo lại
             </Button>
           </div>
@@ -990,9 +1080,11 @@ export default function GroupCommentModule() {
           </div>
         </div>
       </SectionCard>
+      </div>
 
-      {/* Bước 6 */}
-      <SectionCard number="6" title="Cài đặt bình luận">
+      {/* Bước 7 */}
+      <div id="step-7-settings" className="scroll-mt-6">
+        <SectionCard number="7" title="Cài đặt bình luận">
         <div className="flex flex-wrap gap-x-8 gap-y-3">
           <CheckLabel checked={scheduleEnabled} onCheckedChange={setScheduleEnabled}>
             Bật hẹn giờ bình luận
@@ -1055,65 +1147,72 @@ export default function GroupCommentModule() {
           </Field>
         </div>
       </SectionCard>
+      </div>
 
-      {/* Thông tin tác vụ cấu hình */}
-      <SectionCard title="Thông tin tác vụ cấu hình" aside={<Info className="size-4 text-primary" />}>
-        <div className="grid gap-x-10 gap-y-3 text-[11px] md:grid-cols-2">
-          {[
-            [<Users key="a" className="size-3.5" />, "Tài khoản", `${selectedAccounts.length} tài khoản đã chọn`],
-            [<MessageSquare key="b" className="size-3.5" />, "Hạn bình luận", `${maxComments} bình luận`],
-            [<Sparkles key="c" className="size-3.5" />, "API Key", apiKey ? "Đã nhập" : "Chưa nhập"],
-            [<Sparkles key="d" className="size-3.5" />, "Số bình luận AI", `${generatedCount} mẫu`],
-            [<Search key="e" className="size-3.5" />, "Nguồn mục tiêu", groupSource === "search" ? "Tìm theo từ khóa" : "Từ file link nhóm / bài viết"],
-            [<ImageIcon key="f" className="size-3.5" />, "Min / Max media", `${minMedia} – ${maxMedia} ảnh`],
-            [<RefreshCw key="g" className="size-3.5" />, "Luồng chạy", `${threads} luồng`],
-            [<Clock3 key="h" className="size-3.5" />, "Giãn cách bình luận", `${delayMin} – ${delayMax} giây`],
-            [<Clock3 key="i" className="size-3.5" />, "Nghỉ", `${restMinutes} phút`],
-            [
-              <CalendarDays key="j" className="size-3.5" />,
-              "Hẹn giờ",
-              scheduleEnabled ? (scheduleDate ? `${scheduleDate} ${scheduleTime}` : "Đã kích hoạt") : "Đã tắt",
-            ],
-          ].map(([icon, label, value]) => (
-            <div key={label} className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-              <span className="flex items-center gap-2 text-slate-500">
-                {icon}
-                {label}
-              </span>
-              <strong
-                className={
-                  value === "Đã nhập" || (label === "Hẹn giờ" && scheduleEnabled)
-                    ? "text-emerald-600"
-                    : "text-slate-700"
-                }
-              >
-                {value}
-              </strong>
+      {/* Bước 8: Thông tin cấu hình tổng hợp */}
+      <div id="step-8-summary" className="scroll-mt-6">
+        <SectionCard number="8" title="Thông tin cấu hình tổng hợp" aside={<Info className="size-4 text-primary" />}>
+          <div className="grid gap-x-10 gap-y-3 text-[11px] md:grid-cols-2">
+            {[
+              [<FolderPlus key="camp" className="size-3.5" />, "Chiến dịch", campaignName ? campaignName : "Chưa đặt tên"],
+              [<Hash key="cid" className="size-3.5" />, "Mã chiến dịch", campaignId || "Tự động tạo mới"],
+              [<Users key="a" className="size-3.5" />, "Tài khoản", `${selectedAccounts.length} tài khoản đã chọn`],
+              [<MessageSquare key="b" className="size-3.5" />, "Hạn bình luận", `${maxComments} bình luận`],
+              [<Sparkles key="c" className="size-3.5" />, "API sử dụng", apiSource.selected ? `${apiSource.selected.model} (${apiSource.selected.hint})` : "Chưa chọn"],
+              [<Sparkles key="d" className="size-3.5" />, "Số bình luận AI", `${generatedCount} mẫu`],
+              [<Search key="e" className="size-3.5" />, "Nguồn mục tiêu", groupSource === "search" ? "Tìm theo từ khóa" : "Từ file link nhóm / bài viết"],
+              [<ImageIcon key="f" className="size-3.5" />, "Min / Max media", `${minMedia} – ${maxMedia} ảnh`],
+              [<RefreshCw key="g" className="size-3.5" />, "Luồng chạy", `${threads} luồng`],
+              [<Clock3 key="h" className="size-3.5" />, "Giãn cách bình luận", `${delayMin} – ${delayMax} giây`],
+              [<Clock3 key="i" className="size-3.5" />, "Nghỉ", `${restMinutes} phút`],
+              [
+                <CalendarDays key="j" className="size-3.5" />,
+                "Hẹn giờ",
+                scheduleEnabled ? (scheduleDate ? `${scheduleDate} ${scheduleTime}` : "Đã kích hoạt") : "Đã tắt",
+              ],
+            ].map(([icon, label, value]) => (
+              <div key={label} className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                <span className="flex items-center gap-2 text-slate-500">
+                  {icon}
+                  {label}
+                </span>
+                <strong
+                  className={
+                    value === "Đã nhập" || (label === "Hẹn giờ" && scheduleEnabled)
+                      ? "text-emerald-600"
+                      : "text-slate-700"
+                  }
+                >
+                  {value}
+                </strong>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      </div>
+
+      {/* Bước 9: Tiến trình */}
+      <div id="step-9-progress" className="scroll-mt-6">
+        <Card className="min-h-64 border-slate-200 p-5 shadow-sm">
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+            <span className="flex size-5 items-center justify-center rounded bg-primary/10 font-bold text-[11px] text-primary">9</span> Theo dõi tiến trình
+          </div>
+          {runState !== "idle" ? (
+            <div className="flex min-h-48 flex-col items-center justify-center gap-3">
+              <Progress value={progress} className="max-w-xl" />
+              <p className="text-xs font-semibold text-primary">
+                {runState === "starting"
+                  ? "Đang khởi tạo tác vụ bình luận..."
+                  : `Đang thực hiện ${progress}/${Math.max(totalPlanned, 1)} lượt bình luận`}
+              </p>
             </div>
-          ))}
-        </div>
-      </SectionCard>
-
-      {/* Tiến trình */}
-      <Card className="min-h-64 border-slate-200 p-5 shadow-sm">
-        <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
-          <span className="flex size-5 items-center justify-center rounded bg-emerald-50 text-emerald-600">▥</span> Theo dõi tiến trình
-        </div>
-        {runState !== "idle" ? (
-          <div className="flex min-h-48 flex-col items-center justify-center gap-3">
-            <Progress value={progress} className="max-w-xl" />
-            <p className="text-xs font-semibold text-primary">
-              {runState === "starting"
-                ? "Đang khởi tạo tác vụ bình luận..."
-                : `Đang thực hiện ${progress}/${Math.max(totalPlanned, 1)} lượt bình luận`}
-            </p>
-          </div>
-        ) : (
-          <div className="flex min-h-48 items-center justify-center text-xs text-slate-300">
-            Tiến trình sẽ hiển thị sau khi bắt đầu bình luận.
-          </div>
-        )}
-      </Card>
+          ) : (
+            <div className="flex min-h-48 items-center justify-center text-xs text-slate-300">
+              Tiến trình sẽ hiển thị sau khi bắt đầu bình luận.
+            </div>
+          )}
+        </Card>
+      </div>
 
       {/* Sticky Bottom Action Bar */}
       <Card className="sticky bottom-0 z-20 flex flex-col items-center justify-between gap-4 border-slate-200 bg-white/95 px-6 py-4 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur sm:flex-row">
@@ -1133,7 +1232,7 @@ export default function GroupCommentModule() {
           <Button
             type="button"
             variant="success"
-            disabled={runState !== "idle" || !selectedAccounts.length || !hasGroups}
+            disabled={runState !== "idle" || !selectedAccounts.length || !hasGroups || !hasApiKey}
             onClick={handleStart}
           >
             <Play className="mr-2 size-3.5 fill-current" /> BẮT ĐẦU BÌNH LUẬN

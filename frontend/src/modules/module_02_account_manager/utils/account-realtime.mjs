@@ -10,6 +10,8 @@ export function isAccountBusy(progress) {
 }
 
 export function matchesAccountQuery(account, query) {
+  if (query.category_id != null && account.category_id !== query.category_id) return false;
+  if (query.uncategorized && account.category_id != null) return false;
   if (query.status && query.status !== "all" && account.status !== query.status) return false;
   if (query.login_status && query.login_status !== "all" && account.login_status !== query.login_status) return false;
   const search = (query.search || "").trim().toLowerCase();
@@ -18,7 +20,7 @@ export function matchesAccountQuery(account, query) {
 
 // Only accept public row fields, even when consuming a recovered progress snapshot.
 export function publicChanges(changes = {}) {
-  return Object.fromEntries(["login_status", "status", "last_login_at", "profile_name", "avatar_url"]
+  return Object.fromEntries(["login_status", "status", "last_login_at", "first_login_at", "profile_name", "avatar_url", "category_id"]
     .filter(key => Object.hasOwn(changes, key)).map(key => [key, changes[key]]));
 }
 
