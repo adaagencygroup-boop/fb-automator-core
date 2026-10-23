@@ -93,6 +93,30 @@ export function messagePreview(raw) {
 }
 
 /**
+ * Định dạng dòng xem trước tin nhắn trong danh sách hội thoại:
+ * - Nếu Page gửi (isOutbound) -> "Bạn: [nội dung]"
+ * - Nếu Khách gửi (!isOutbound) -> "[nội dung]" (không gắn tên khách)
+ */
+export function formatConversationSnippet(raw, isOutbound, customerName) {
+  let snippet = messagePreview(raw);
+  if (!snippet) return "";
+
+  // Xóa tiền tố "Bạn: " hoặc "<Tên>: " nếu có để tránh lặp
+  if (snippet.startsWith("Bạn: ")) {
+    snippet = snippet.slice(5).trim();
+  }
+  const custPrefix = customerName ? `${customerName}: ` : "";
+  if (custPrefix && snippet.startsWith(custPrefix)) {
+    snippet = snippet.slice(custPrefix.length).trim();
+  }
+
+  if (isOutbound) {
+    return `Bạn: ${snippet}`;
+  }
+  return snippet;
+}
+
+/**
  * Dịch lỗi Graph API sang thông báo tiếng Việt dễ hiểu + gợi ý xử lý.
  * Token Facebook (user/page access token) có hạn và sẽ hết; khi đó mọi lệnh gọi Graph đều lỗi.
  */
@@ -157,20 +181,19 @@ export async function getConversations(params = {}) {
         ? c.tags.split(",").map((t) => t.trim()).filter(Boolean)
         : [];
 
-      const rawSnippet = messagePreview(c.last_message);
+      const custName = c.customer_name || `KH ${String(c.sender_id).slice(0, 8)}`;
       const isOutbound = c.direction === "outbound" || Boolean(c.is_replied);
-      const formattedSnippet = isOutbound && rawSnippet
-        ? (rawSnippet.startsWith("Bạn: ") ? rawSnippet : `Bạn: ${rawSnippet}`)
-        : rawSnippet;
+      const formattedSnippet = formatConversationSnippet(c.last_message, isOutbound, custName);
 
       return {
         id: `${c.page_id}_${c.sender_id}`,
         pageId: String(c.page_id),
         pageName: c.page_name,
         customer: String(c.sender_id),
-        customerName: c.customer_name || `KH ${String(c.sender_id).slice(0, 8)}`,
+        customerName: custName,
         avatar: c.avatar_url || null,
         lastMessage: formattedSnippet,
+        direction: c.direction || (isOutbound ? "outbound" : "inbound"),
         updatedAt:
           toUtcIso(c.created_at) ||
           (c.timestamp ? new Date(c.timestamp).toISOString() : new Date().toISOString()),
@@ -357,6 +380,18 @@ export async function markConversationRead(conversationId) {
 
   return api.put(`/api/facebook/conversations/${page_id}/${sender_id}/read`);
 }
+
+/**
+ * Đánh dấu hội thoại chưa đọc (/api/facebook/conversations/{page_id}/{sender_id}/unread)
+ */
+export async function markConversationUnread(conversationId) {
+  const parts = String(conversationId || "").split("_");
+  const page_id = parts[0] || "";
+  const sender_id = parts.slice(1).join("_") || "";
+
+  return api.put(`/api/facebook/conversations/${page_id}/${sender_id}/unread`);
+}
+
 
 /**
  * Đánh dấu thông báo đã đọc (/api/facebook/notifications/{notif_id}/read)

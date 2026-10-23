@@ -13,10 +13,12 @@ import {
   parseAttachmentText,
   messagePreview,
   attachmentLabel,
+  formatConversationSnippet,
   sendMessage,
   setConversationStarred,
   setConversationTags,
   markConversationRead,
+  markConversationUnread,
   markNotificationRead,
   reactToMessage,
 } from "./service";
@@ -210,14 +212,14 @@ export default function OmnichannelChatModule() {
 
               // Cập nhật thẻ hội thoại ở sidebar
               setConversations((list) => {
-                const exists = list.some((c) => c.id === convId);
+                const target = list.find((c) => c.id === convId);
                 const isCurrentActive = activeConvRef.current === convId;
-                // Xem trước ở danh sách hội thoại: đính kèm thì ghi nhãn, không in link
-                const snippet = messagePreview(msgData.text) || attachmentLabel();
-                const lastMsgText = msgData.direction === "outbound" ? `Bạn: ${snippet}` : snippet;
+                const isOut = msgData.direction === "outbound";
+                const custName = msgData.sender_name || target?.customerName || `KH: ${String(msgData.sender_id).slice(0, 8)}`;
+                const rawSnippet = messagePreview(msgData.text) || attachmentLabel();
+                const lastMsgText = formatConversationSnippet(rawSnippet, isOut, custName);
 
-                if (exists) {
-                  const target = list.find((c) => c.id === convId);
+                if (target) {
                   const rest = list.filter((c) => c.id !== convId);
                   const updated = {
                     ...target,
@@ -252,7 +254,7 @@ export default function OmnichannelChatModule() {
                 actor: notifData.from_user_name || "Khách hàng",
                 text: notifData.title || "",
                 createdAt: notifData.created_time || new Date().toISOString(),
-                unread: Boolean(notifData.unread),
+                unread: notifData.unread !== undefined ? Boolean(notifData.unread) : true,
                 replied: false,
                 pageId: String(notifData.page_id),
                 type: notifData.notification_type === "comment" ? "comment" : "interaction",
@@ -304,25 +306,53 @@ export default function OmnichannelChatModule() {
     setResetting(false);
   };
 
-  const pagesById = useMemo(() => Object.fromEntries(pages.map((p) => [p.id, p])), [pages]);
-
-  const notifCountByPage = useMemo(() => {
+  const unreadNotifsByPage = useMemo(() => {
     const map = {};
     for (const n of notifications) {
-      const pid = String(n.pageId);
-      map[pid] = (map[pid] || 0) + 1;
+      if (n.unread) {
+        const pid = String(n.pageId);
+        map[pid] = (map[pid] || 0) + 1;
+      }
     }
     return map;
   }, [notifications]);
 
+  const unreadConvsByPage = useMemo(() => {
+    const map = {};
+    for (const c of conversations) {
+      if (c.unread) {
+        const pid = String(c.pageId);
+        map[pid] = (map[pid] || 0) + 1;
+      }
+    }
+    return map;
+  }, [conversations]);
+
+  const alertByPage = useMemo(() => {
+    const set = new Set();
+    for (const n of notifications) {
+      if (n.unread && (n.type === "comment" || n.alert)) {
+        set.add(String(n.pageId));
+      }
+    }
+    return set;
+  }, [notifications]);
+
   const sortedPages = useMemo(() => {
-    return [...pages].sort((a, b) => {
-      const countA = notifCountByPage[String(a.id)] || 0;
-      const countB = notifCountByPage[String(b.id)] || 0;
-      if (countB !== countA) return countB - countA;
-      return 0;
-    });
-  }, [pages, notifCountByPage]);
+    return [...pages]
+      .map((p) => {
+        const pid = String(p.id);
+        const unread = (unreadNotifsByPage[pid] || 0) + (unreadConvsByPage[pid] || 0);
+        const alert = alertByPage.has(pid);
+        return { ...p, unread, alert };
+      })
+      .sort((a, b) => {
+        if (b.unread !== a.unread) return b.unread - a.unread;
+        return 0;
+      });
+  }, [pages, unreadNotifsByPage, unreadConvsByPage, alertByPage]);
+
+  const pagesById = useMemo(() => Object.fromEntries(sortedPages.map((p) => [p.id, p])), [sortedPages]);
 
   const visiblePages = useMemo(() => {
     const q = normalize(search.trim());
@@ -368,14 +398,17 @@ export default function OmnichannelChatModule() {
             const lastM = res.messages[res.messages.length - 1];
             const rawSnippet = messagePreview(lastM.text) || (lastM.attachment ? attachmentLabel(lastM.attachment.type) : "");
             const isOut = lastM.direction === "out" || lastM.direction === "outbound";
-            const lastText = isOut && rawSnippet
-              ? (rawSnippet.startsWith("Bạn: ") ? rawSnippet : `Bạn: ${rawSnippet}`)
-              : rawSnippet;
-            updateConversation(id, {
-              lastMessage: lastText,
-              updatedAt: lastM.createdAt || new Date().toISOString(),
-              replied: isOut,
-            });
+            setConversations((list) =>
+              list.map((c) => {
+                if (c.id !== id) return c;
+                return {
+                  ...c,
+                  lastMessage: formatConversationSnippet(rawSnippet, isOut, c.customerName),
+                  updatedAt: lastM.createdAt || new Date().toISOString(),
+                  replied: isOut,
+                };
+              })
+            );
           }
         }
       })
@@ -402,14 +435,17 @@ export default function OmnichannelChatModule() {
           const lastM = res.messages[res.messages.length - 1];
           const rawSnippet = messagePreview(lastM.text) || (lastM.attachment ? attachmentLabel(lastM.attachment.type) : "");
           const isOut = lastM.direction === "out" || lastM.direction === "outbound";
-          const lastText = isOut && rawSnippet
-            ? (rawSnippet.startsWith("Bạn: ") ? rawSnippet : `Bạn: ${rawSnippet}`)
-            : rawSnippet;
-          updateConversation(activeConversationId, {
-            lastMessage: lastText,
-            updatedAt: lastM.createdAt || new Date().toISOString(),
-            replied: isOut,
-          });
+          setConversations((list) =>
+            list.map((c) => {
+              if (c.id !== activeConversationId) return c;
+              return {
+                ...c,
+                lastMessage: formatConversationSnippet(rawSnippet, isOut, c.customerName),
+                updatedAt: lastM.createdAt || new Date().toISOString(),
+                replied: isOut,
+              };
+            })
+          );
         }
       });
     }, 3000);
@@ -419,6 +455,9 @@ export default function OmnichannelChatModule() {
   // Định kỳ đồng bộ danh sách hội thoại để luôn hiển thị tin nhắn mới nhất
   useEffect(() => {
     const refreshConversations = () => {
+      // Khi WebSocket đang kết nối bình thường, tin nhắn đã về realtime -> bỏ qua polling định kỳ
+      if (wsOpenRef.current) return;
+
       getConversations().then((res) => {
         if (res?.conversations && res.conversations.length > 0) {
           setConversations((prev) => {
@@ -427,10 +466,18 @@ export default function OmnichannelChatModule() {
               const fresh = newMap.get(c.id);
               if (fresh) {
                 newMap.delete(c.id);
-                return { ...c, ...fresh };
+                // Giữ nguyên trạng thái unread nếu người dùng chưa mở hội thoại đó
+                const isCurrentActive = activeConvRef.current === c.id;
+                const isUnread = isCurrentActive ? false : Boolean(c.unread || fresh.unread);
+                return { ...c, ...fresh, unread: isUnread };
               }
               return c;
-            }).concat(Array.from(newMap.values()));
+            }).concat(
+              Array.from(newMap.values()).map((c) => ({
+                ...c,
+                unread: activeConvRef.current === c.id ? false : Boolean(c.unread),
+              }))
+            );
           });
         }
       }).catch(() => {});
@@ -571,6 +618,7 @@ export default function OmnichannelChatModule() {
       onToggleTag={(tagId) => handleToggleTag(activeConversation, tagId)}
       onMarkUnread={() => {
         updateConversation(activeConversation.id, { unread: true });
+        if (!isMock) markConversationUnread(activeConversation.id).catch(() => {});
         setActiveConversationId(null);
       }}
       onClose={() => setActiveConversationId(null)}
