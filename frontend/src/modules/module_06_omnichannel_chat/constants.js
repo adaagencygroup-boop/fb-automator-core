@@ -7,7 +7,7 @@ export const CONVERSATION_FILTERS = [
 
 /** Nhãn gắn cho hội thoại (nút "Tag" trên đầu khung chat) */
 export const CONVERSATION_TAGS = [
-  { id: "potential", label: "Khách tiềm năng", className: "bg-blue-50 text-blue-700 border-blue-200" },
+  { id: "potential", label: "Khách tiềm năng", className: "bg-purple-50 text-purple-700 border-purple-200" },
   { id: "ordered", label: "Đã chốt đơn", className: "bg-emerald-50 text-emerald-700 border-emerald-200" },
   { id: "callback", label: "Cần gọi lại", className: "bg-amber-50 text-amber-700 border-amber-200" },
   { id: "spam", label: "Spam", className: "bg-slate-100 text-slate-600 border-slate-200" },

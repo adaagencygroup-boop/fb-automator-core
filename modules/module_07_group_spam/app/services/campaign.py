@@ -718,7 +718,7 @@ class CampaignManager:
                 else "FAILED"
             )
             action_type = str(job.payload.get("action_type") or "POST").upper()
-            campaign_id = str(job.payload.get("campaign_id") or uuid.uuid4())
+            campaign_id = str(uuid.uuid4())
             campaign_name = str(
                 job.payload.get("name")
                 or job.payload.get("campaign_name")
@@ -741,36 +741,24 @@ class CampaignManager:
                 "finished_at": job.finished_at,
             }
             with local_db.session() as cursor:
-                cursor.execute("SELECT id FROM group_campaigns WHERE id = ?", (campaign_id,))
-                if not cursor.fetchone():
-                    cursor.execute(
-                        """
-                            INSERT INTO group_campaigns
-                                (id, owner_key, name, description, action_type)
-                            VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (campaign_id, job.owner or "", campaign_name, description, action_type),
-                    )
-                else:
-                    cursor.execute(
-                        "UPDATE group_campaigns SET updated_at = CURRENT_TIMESTAMP, deleted_at = NULL WHERE id = ?",
-                        (campaign_id,),
-                    )
                 cursor.execute(
-                    "SELECT COALESCE(MAX(run_number), 0) + 1 FROM group_runs WHERE campaign_id = ?",
-                    (campaign_id,),
+                    """
+                        INSERT INTO group_campaigns
+                            (id, owner_key, name, description, action_type)
+                        VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (campaign_id, job.owner or "", campaign_name, description, action_type),
                 )
-                run_num = cursor.fetchone()[0]
                 cursor.execute(
                     """
                         INSERT INTO group_runs
                             (id, campaign_id, run_number, status, config_json,
                              total_planned, total_success, total_failed, total_skipped,
                              started_at, finished_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        job.id, campaign_id, run_num, final_status, config_json, job.total,
+                        job.id, campaign_id, final_status, config_json, job.total,
                         job.success, job.failed, job.skipped, job.started_at,
                         job.finished_at,
                     ),

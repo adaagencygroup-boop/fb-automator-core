@@ -179,7 +179,7 @@ def get_conversations(
             direction = "outbound" if is_replied else "inbound"
 
             # Cross-check với v_messages để đảm bảo luôn lấy đúng tin nhắn mới nhất
-            latest_db_msg = db.query(Message.text, Message.created_at, Message.direction)\
+            latest_db_msg = db.query(Message.text, Message.created_at, Message.direction, Message.is_read)\
                 .filter(Message.page_id == c.page_id, Message.sender_id == c.customer_psid)\
                 .order_by(Message.created_at.desc(), Message.id.desc())\
                 .first()
@@ -189,10 +189,19 @@ def get_conversations(
                 latest_time = latest_db_msg.created_at
                 direction = latest_db_msg.direction or ("outbound" if is_replied else "inbound")
                 is_replied = (direction == "outbound")
+                need_commit = False
                 if c.last_message != latest_msg or c.is_replied != is_replied:
                     c.last_message = latest_msg
                     c.last_message_at = latest_time
                     c.is_replied = is_replied
+                    need_commit = True
+
+                # Nếu tin nhắn mới nhất từ khách (inbound) chưa đọc thì cập nhật cuộc hội thoại chưa đọc
+                if direction == "inbound" and not latest_db_msg.is_read and c.is_read:
+                    c.is_read = False
+                    need_commit = True
+
+                if need_commit:
                     try:
                         db.commit()
                     except Exception:
@@ -297,6 +306,31 @@ def mark_conversation_read(
 
     db.commit()
     return {"success": True, "message": "Marked as read"}
+
+
+@router.put("/conversations/{page_id}/{sender_id}/unread")
+def mark_conversation_unread(
+    page_id: str,
+    sender_id: str,
+    db: Session = Depends(get_db)
+):
+    conv = db.query(Conversation).filter(
+        Conversation.page_id == page_id,
+        Conversation.customer_psid == sender_id
+    ).first()
+    if conv:
+        conv.is_read = False
+
+    latest_msg = db.query(Message).filter(
+        Message.page_id == page_id,
+        Message.sender_id == sender_id
+    ).order_by(Message.created_at.desc(), Message.id.desc()).first()
+    if latest_msg:
+        latest_msg.is_read = False
+
+    db.commit()
+    return {"success": True, "message": "Marked as unread"}
+
 
 @router.post("/conversations/tag")
 def update_conversation_tags(

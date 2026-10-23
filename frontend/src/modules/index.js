@@ -7,6 +7,7 @@ import OmnichannelChatModule from "./module_06_omnichannel_chat";
 import GroupSpamModule from "./module_07_group_spam";
 import InteractionSeedingModule from "./module_08_interaction_seeding";
 import UserProfileModule from "./module_09_user_profile";
+import GroupScanModule from "./module_10_group_scan";
 
 export const MODULE_REGISTRY = [
   {
@@ -64,6 +65,13 @@ export const MODULE_REGISTRY = [
     label: "Seeding Tương Tác",
     author: "Hưởng, Trường",
     component: InteractionSeedingModule,
+  },
+  {
+    id: "scan",
+    icon: "🔍",
+    label: "Quét nhóm",
+    author: "Ada",
+    component: GroupScanModule,
   },
   {
     id: "settings",
