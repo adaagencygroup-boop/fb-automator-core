@@ -44,7 +44,7 @@ function PageStatus({ page, active }) {
   if (page.unread > 0) {
     return (
       <span
-        aria-label={`${page.unread} tin chưa đọc`}
+        aria-label={`${page.unread} thông báo chưa đọc`}
         className={cn(
           "shrink-0 rounded-full px-1.5 text-[11px] leading-5 font-bold text-white text-center",
           active ? "min-w-5" : "min-w-[18px]",

@@ -151,8 +151,15 @@ async def process_webhook_event(event: Dict[str, Any]):
                     text = "📎 [Tin nhắn đính kèm]"
 
                 if message_id and sender_id and recipient_id:
-                    direction = "outbound" if sender_id == page_id else "inbound"
-                    active_customer_id = sender_id if direction == "inbound" else recipient_id
+                    is_echo = bool(message_obj.get("is_echo"))
+                    is_outbound = (str(sender_id) == str(page_id)) or is_echo
+                    if not is_outbound:
+                        page_in_db = db.query(Page.page_id).filter(Page.page_id == str(sender_id)).first()
+                        if page_in_db:
+                            is_outbound = True
+
+                    direction = "outbound" if is_outbound else "inbound"
+                    active_customer_id = str(recipient_id) if direction == "outbound" else str(sender_id)
 
                     message_repo = MessageRepository(db)
                     saved_msg = message_repo.save_webhook_message(
