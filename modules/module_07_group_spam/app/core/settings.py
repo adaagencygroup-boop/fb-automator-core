@@ -5,6 +5,7 @@ import json
 import os
 import re
 import threading
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -47,8 +48,6 @@ class GroupSettingsStore:
         }
         if merged["model"] == "gemini":
             merged["model"] = "gemini-2.5-flash"
-        return merged
-
         if "credentials" not in merged:
             defaults = {"openai": "gpt-4o", "gemini": "gemini-2.5-flash", "deepseek": "deepseek-v4-flash"}
             merged["credentials"] = [
@@ -151,17 +150,6 @@ class GroupSettingsStore:
                 "threads": int(data["threads"]),
                 "rest_minutes": int(data["rest_minutes"]),
                 "max_posts": int(data["max_posts"]),
-                "api_key_configured": providers[current_provider]["configured"],
-                "api_key_hint": providers[current_provider]["hint"],
-                "providers": providers,
-            }
-
-    def save(self, *, model: str, threads: int, rest_minutes: int, max_posts: int,
-             api_key: str | None = None) -> dict[str, Any]:
-        provider = model_spec(model)["provider"]
-        with self._lock:
-            data = self._load_unlocked()
-            data.update({
                 "api_key_configured": selected["configured"] if selected else providers[current_provider]["configured"],
                 "api_key_hint": selected["hint"] if selected else providers[current_provider]["hint"],
                 "providers": providers,

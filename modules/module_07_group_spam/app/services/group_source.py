@@ -6,7 +6,7 @@ Kế thừa & chuẩn hóa nghiệp vụ từ FaceBook_Post_Group.py:
    - Tách query parameters '?' (line.split('?')[0])
    - Khử trùng lặp (dedup)
    - Lọc bỏ link hỏng/rác
-   - Kiểm tra nhóm đã đăng trong lịch sử (group_session_logs)
+   - Kiểm tra nhóm đã đăng trong lịch sử (group_run_tasks)
 2. Tìm kiếm nhóm theo từ khóa (Keyword Group Search)
    - Tương thích cơ chế quét URL: https://www.facebook.com/groups/search/groups/?q={search_term}
 3. Cung cấp file mẫu link nhóm (Template)
@@ -98,15 +98,16 @@ def get_posted_group_keys(owner: str | None = None) -> Set[str]:
     """
     posted: Set[str] = set()
     try:
-        from core.database.connection import db
+        from ..local_database import local_db
 
-        rows = db.fetch_all(
-            """SELECT DISTINCT log.group_key, log.group_url
-               FROM group_session_logs log
-               JOIN group_sessions session ON session.id = log.session_id
-               WHERE session.owner_key IS NOT DISTINCT FROM ?
-                 AND log.status IN ('SUCCESS', 'PENDING_APPROVAL')""",
-            (owner,),
+        rows = local_db.fetch_all(
+            """SELECT DISTINCT task.group_key, task.group_url
+               FROM group_run_tasks task
+               JOIN group_runs run ON run.id = task.run_id
+               JOIN group_campaigns campaign ON campaign.id = run.campaign_id
+               WHERE campaign.owner_key = ?
+                 AND task.status IN ('SUCCESS', 'PENDING_APPROVAL')""",
+            (owner or "",),
         )
         for r in rows or []:
             if r.get("group_key"):
@@ -238,25 +239,26 @@ def remove_accents(input_str: str) -> str:
 
 def get_posted_group_records(owner: str | None = None) -> List[Dict[str, Any]]:
     """
-    Lấy danh sách chi tiết các nhóm Facebook thực tế đã từng chạy thành công từ bảng group_session_logs.
+    Lấy danh sách chi tiết các nhóm Facebook thực tế đã từng chạy thành công từ bảng group_run_tasks.
     """
     records: List[Dict[str, Any]] = []
     try:
-        from core.database.connection import db
+        from ..local_database import local_db
 
-        rows = db.fetch_all(
+        rows = local_db.fetch_all(
             """SELECT * FROM (
-                   SELECT DISTINCT ON (log.group_key)
-                       log.group_key, log.group_url, log.group_name, log.member_count,
-                       log.status, log.finished_at
-                   FROM group_session_logs log
-                   JOIN group_sessions session ON session.id = log.session_id
-                   WHERE session.owner_key IS NOT DISTINCT FROM ?
-                     AND log.status IN ('SUCCESS', 'PENDING_APPROVAL')
-                   ORDER BY log.group_key, log.finished_at DESC
+                   SELECT DISTINCT ON (task.group_key)
+                        task.group_key, task.group_url, task.group_name,
+                        task.status, task.finished_at
+                    FROM group_run_tasks task
+                    JOIN group_runs run ON run.id = task.run_id
+                    JOIN group_campaigns campaign ON campaign.id = run.campaign_id
+                    WHERE campaign.owner_key = ?
+                      AND task.status IN ('SUCCESS', 'PENDING_APPROVAL')
+                    ORDER BY task.group_key, task.finished_at DESC
                ) latest
                ORDER BY finished_at DESC LIMIT 100""",
-            (owner,),
+            (owner or "",),
         ) or []
         for idx, r in enumerate(rows, 1):
             url = clean_group_url(str(r.get("group_url") or ""))
