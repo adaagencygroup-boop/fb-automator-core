@@ -182,7 +182,7 @@ export default function PageSwitcher({
                           aria-label={`${page.unread} tin chưa đọc`}
                           className={cn(
                             "shrink-0 min-w-[18px] rounded-full px-1.5 text-center text-[11px] leading-5 font-bold text-white",
-                            page.alert ? "bg-red-500" : active ? "bg-blue-600" : "bg-blue-500",
+                            active ? "bg-blue-600" : "bg-blue-500",
                           )}
                         >
                           {page.unread}

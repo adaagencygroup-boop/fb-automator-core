@@ -50,13 +50,12 @@ const formatDateTime = (iso) => {
   });
 };
 
-function SubTabs({ type, onTypeChange, counts, unreadCounts = {} }) {
+function SubTabs({ type, onTypeChange, counts }) {
   return (
     <div role="tablist" aria-label="Loại thông báo" className="flex border-t border-gray-100 shrink-0">
       {NOTIFICATION_TYPES.map((t) => {
         const active = type === t.id;
         const count = counts[t.id] || 0;
-        const unread = unreadCounts[t.id] || 0;
         return (
           <button
             key={t.id}
@@ -72,9 +71,6 @@ function SubTabs({ type, onTypeChange, counts, unreadCounts = {} }) {
           >
             <span>{t.label}</span>
             {count > 0 && <span className="text-xs">({count})</span>}
-            {unread > 0 && (
-              <span className="size-2 rounded-full bg-red-500" title={`${unread} chưa đọc`} aria-hidden="true" />
-            )}
           </button>
         );
       })}
@@ -114,9 +110,7 @@ function NotificationCard({ notification, pageName, onOpen }) {
               </span>
             )}
             <strong className="font-bold text-gray-900">{notification.actor}</strong>{" "}
-            <span className="text-xs leading-4 text-red-500" aria-hidden="true">
-              📌
-            </span>{" "}
+            {" "}
             {notification.text}
           </span>
           <span className="text-xs leading-[15px] text-gray-500 [overflow-wrap:anywhere]">
@@ -146,7 +140,6 @@ function NotificationCard({ notification, pageName, onOpen }) {
 export default function NotificationList({
   notifications,
   counts,
-  unreadCounts,
   onLoadMore,
   hasMore,
   loadingMore,
@@ -178,12 +171,7 @@ export default function NotificationList({
 
   return (
     <>
-      <SubTabs
-        type={type}
-        onTypeChange={onTypeChange}
-        counts={counts || {}}
-        unreadCounts={unreadCounts || {}}
-      />
+      <SubTabs type={type} onTypeChange={onTypeChange} counts={counts || {}} />
       <StatusFilter filter={filter} onFilterChange={onFilterChange} label="Lọc thông báo" />
       {loading ? (
         <NotificationSkeleton />

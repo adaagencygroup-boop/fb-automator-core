@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   MessageCircle,
   Share2,
-  Eye,
   ThumbsUp,
   AlertTriangle,
   ExternalLink,
@@ -519,16 +518,6 @@ function InternalPostView({ post, page, pageName, postId, onReload, sort, onSort
               label="lượt chia sẻ"
               title="Lượt chia sẻ"
             />
-            {/* Chỉ hiện khi Graph thực sự trả về — thiếu quyền read_insights thì
-                `views` không có, hiện "0 lượt xem" là nói dối */}
-            {post?.views?.count > 0 && (
-              <StatItem
-                icon={Eye}
-                value={post.views.count}
-                label="lượt xem"
-                title={`Lượt xem — theo chỉ số ${post.views.metric}`}
-              />
-            )}
           </span>
 
           <ReactionStack

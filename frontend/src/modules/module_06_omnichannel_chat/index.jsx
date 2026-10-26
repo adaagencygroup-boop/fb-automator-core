@@ -86,7 +86,7 @@ export default function OmnichannelChatModule() {
   const [notifications, setNotifications] = useState([]);
   // Backend lo loc + phan trang, nen phai giu ca so trang va badge no tra ve
   const [notifMeta, setNotifMeta] = useState({
-    unreadCounts: {}, typeCounts: {}, page: 1, totalPages: 1, forKey: null,
+    unreadCounts: {}, pageUnread: {}, page: 1, totalPages: 1, forKey: null,
   });
   const [loadingMoreNotif, setLoadingMoreNotif] = useState(false);
   const [isMock, setIsMock] = useState(false);
@@ -126,7 +126,7 @@ export default function OmnichannelChatModule() {
     setNotifications(n.notifications || []);
     setNotifMeta({
       unreadCounts: n.unreadCounts || {},
-      typeCounts: n.typeCounts || {},
+      pageUnread: n.pageUnread || {},
       page: n.page || 1,
       totalPages: n.totalPages || 1,
       forKey: n.forKey ?? null,
@@ -194,7 +194,7 @@ export default function OmnichannelChatModule() {
       setNotifications(res.notifications || []);
       setNotifMeta({
         unreadCounts: res.unreadCounts || {},
-        typeCounts: res.typeCounts || {},
+        pageUnread: res.pageUnread || {},
         page: res.page || 1,
         totalPages: res.totalPages || 1,
         forKey: notifQueryKey,
@@ -223,7 +223,7 @@ export default function OmnichannelChatModule() {
         setNotifMeta((m) => ({
           ...m,
           unreadCounts: res.unreadCounts || m.unreadCounts,
-          typeCounts: res.typeCounts || m.typeCounts,
+          pageUnread: res.pageUnread || m.pageUnread,
           page: res.page || m.page + 1,
           totalPages: res.totalPages || m.totalPages,
         }));
@@ -416,16 +416,14 @@ export default function OmnichannelChatModule() {
     setResetting(false);
   };
 
-  const unreadNotifsByPage = useMemo(() => {
-    const map = {};
-    for (const n of notifications) {
-      if (n.unread) {
-        const pid = String(n.pageId);
-        map[pid] = (map[pid] || 0) + 1;
-      }
-    }
-    return map;
-  }, [notifications]);
+  /**
+   * Số thông báo chưa đọc theo từng Page — lấy từ Backend.
+   *
+   * Trước đây đếm trên mảng `notifications`, đúng khi FE còn tải toàn bộ. Sau
+   * khi phân trang thì mảng đó chỉ còn 25 bản ghi của một trang, đã lọc sẵn theo
+   * Page đang chọn — nên chọn một Page là 97 Page còn lại tụt về 0.
+   */
+  const unreadNotifsByPage = useMemo(() => notifMeta.pageUnread || {}, [notifMeta.pageUnread]);
 
   const unreadConvsByPage = useMemo(() => {
     const map = {};
@@ -438,29 +436,18 @@ export default function OmnichannelChatModule() {
     return map;
   }, [conversations]);
 
-  const alertByPage = useMemo(() => {
-    const set = new Set();
-    for (const n of notifications) {
-      if (n.unread && (n.type === "comment" || n.alert)) {
-        set.add(String(n.pageId));
-      }
-    }
-    return set;
-  }, [notifications]);
-
   const sortedPages = useMemo(() => {
     return [...pages]
       .map((p) => {
         const pid = String(p.id);
         const unread = (unreadNotifsByPage[pid] || 0) + (unreadConvsByPage[pid] || 0);
-        const alert = alertByPage.has(pid);
-        return { ...p, unread, alert };
+        return { ...p, unread };
       })
       .sort((a, b) => {
         if (b.unread !== a.unread) return b.unread - a.unread;
         return 0;
       });
-  }, [pages, unreadNotifsByPage, unreadConvsByPage, alertByPage]);
+  }, [pages, unreadNotifsByPage, unreadConvsByPage]);
 
   const pagesById = useMemo(() => Object.fromEntries(sortedPages.map((p) => [p.id, p])), [sortedPages]);
 
@@ -780,7 +767,6 @@ export default function OmnichannelChatModule() {
       conversations={visibleConversations}
       notifications={notifications}
       notificationCounts={notifMeta.unreadCounts}
-      notificationTypeCounts={notifMeta.typeCounts}
       notificationsLoading={notificationsLoading}
       onLoadMoreNotifications={loadMoreNotifications}
       hasMoreNotifications={notifMeta.page < notifMeta.totalPages}
