@@ -133,22 +133,104 @@ export default function GroupContentSection({
     }
   }, [activePost, posts, hasGeneratedContent, editorRef]);
 
-  const isDuplicateContent = aiCount === "duplicate";
-  const visiblePosts = isDuplicateContent ? posts.slice(0, 1) : posts;
-  const generatedCount = visiblePosts.filter((post) => post.trim()).length;
+  const isDuplicateContent = aiCount === "duplicate" || aiCount === "1" || Number(aiCount) === 1;
+  const numCount = isDuplicateContent ? 1 : Math.max(1, Math.min(10, parseInt(aiCount, 10) || 1));
+  const targetLength = isDuplicateContent ? 1 : numCount;
+  const displayPosts = Array.from({ length: targetLength }, (_, i) => posts[i] ?? "");
   const activePostLength = String(posts[activePost] || "").replace(/<[^>]*>/g, "").length;
 
+  useEffect(() => {
+    if (activePost >= targetLength) {
+      setActivePost(Math.max(0, targetLength - 1));
+    }
+  }, [activePost, targetLength, setActivePost]);
+
   const handleCountChange = (event) => {
-    const nextValue = event.target.value;
-    setAiCount(nextValue);
-    setHasGeneratedContent(false);
-    if (nextValue === "duplicate") setActivePost(0);
+    const rawVal = event.target.value;
+    if (rawVal === "") {
+      setAiCount("");
+      return;
+    }
+    const val = parseInt(rawVal, 10);
+    if (isNaN(val)) return;
+    const clamped = Math.max(1, Math.min(10, val));
+    setAiCount(String(clamped));
+    if (clamped === 1) {
+      setActivePost(0);
+    } else if (activePost >= clamped) {
+      setActivePost(clamped - 1);
+    }
+    if (hasGeneratedContent && posts.length < clamped) {
+      setPosts((current) => {
+        const next = [...current];
+        while (next.length < clamped) {
+          next.push(current[0] || prompt.trim() || "");
+        }
+        return next;
+      });
+    }
+  };
+
+  const handleCountBlur = () => {
+    const val = parseInt(aiCount, 10);
+    if (isNaN(val) || val < 1) {
+      setAiCount("1");
+      setActivePost(0);
+    } else if (val > 10) {
+      setAiCount("10");
+    }
+  };
+
+  const setPresetCount = (preset) => {
+    const strVal = String(preset);
+    setAiCount(strVal);
+    if (preset === 1) {
+      setActivePost(0);
+    } else if (activePost >= preset) {
+      setActivePost(preset - 1);
+    }
+    if (hasGeneratedContent && posts.length < preset) {
+      setPosts((current) => {
+        const next = [...current];
+        while (next.length < preset) {
+          next.push(current[0] || prompt.trim() || "");
+        }
+        return next;
+      });
+    }
+  };
+
+  const handleConfirmOriginalContent = () => {
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      toast.warning("Vui lòng nhập nội dung gốc trước khi xác nhận!", "CHƯA CÓ NỘI DUNG");
+      return;
+    }
+    const count = isDuplicateContent ? 1 : numCount;
+    let nextPosts;
+    if (count === 1) {
+      nextPosts = [trimmed];
+      setActivePost(0);
+      toast.success("Đã áp dụng nội dung gốc (Trùng lặp nội dung 1 bài cho mọi nhóm)!", "XÁC NHẬN NỘI DUNG");
+    } else {
+      nextPosts = Array.from({ length: count }, (_, i) => posts[i]?.trim() || trimmed);
+      toast.success(`Đã áp dụng nội dung gốc cho ${count} bài viết!`, "XÁC NHẬN NỘI DUNG");
+    }
+    setPosts(nextPosts);
+    setHasGeneratedContent(true);
   };
 
   const handleSave = () => {
-    if (!posts[activePost]?.trim()) {
+    const currentPostContent = posts[activePost] || posts[0] || prompt.trim();
+    if (!currentPostContent?.trim()) {
       toast.warning("Vui lòng tạo hoặc nhập nội dung bài viết trước khi lưu!", "CHƯA CÓ NỘI DUNG");
       return;
+    }
+    if (!hasGeneratedContent) {
+      const count = isDuplicateContent ? 1 : numCount;
+      const nextPosts = count === 1 ? [currentPostContent] : Array.from({ length: count }, (_, i) => posts[i]?.trim() || currentPostContent);
+      setPosts(nextPosts);
+      setHasGeneratedContent(true);
     }
     toast.success("Đã lưu cấu hình nội dung bài viết thành công.", "LƯU THÀNH CÔNG");
     setIsLocked?.(true);
@@ -160,7 +242,12 @@ export default function GroupContentSection({
   };
 
   const updateActivePost = (value) => {
-    setPosts((current) => current.map((post, index) => (index === activePost ? value : post)));
+    setPosts((current) => {
+      const next = [...current];
+      while (next.length <= activePost) next.push("");
+      next[activePost] = value;
+      return next;
+    });
   };
 
   // Áp dụng định dạng tại vị trí con trỏ rồi lưu HTML vào bài hiện tại.
@@ -247,7 +334,7 @@ export default function GroupContentSection({
     <>
       <SectionCard
         number={stepNumber}
-        title="Tạo nội dung bằng AI"
+        title="Tạo nội dung bài viết"
         aside={isLocked ? (
           <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200/60 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
             <Check className="size-3 text-emerald-600" />
@@ -261,60 +348,148 @@ export default function GroupContentSection({
         )}
       >
         <div className="grid gap-4 md:grid-cols-[1fr_320px]">
-          <Field label="Nội dung gốc chủ đề/mô tả">
+          <Field
+            label="Nội dung gốc bài viết"
+            hint="Nhập nội dung gốc để đăng bài trực tiếp hoặc làm gợi ý để AI tạo các biến thể."
+          >
             <div className="relative">
               <Textarea
                 value={prompt}
-                onChange={(event) => {
-                  setPrompt(event.target.value);
-                  setHasGeneratedContent(false);
-                }}
+                onChange={(event) => setPrompt(event.target.value)}
                 disabled={isLocked}
                 maxLength={2000}
-                placeholder="Nhập nội dung gốc để AI tạo ra các bài đăng..."
-                className="min-h-24 resize-none pb-6"
+                placeholder="Nhập nội dung gốc của bài viết tại đây..."
+                className="min-h-32 resize-none pb-6 text-xs leading-5"
               />
               <span className="absolute bottom-2 right-3 text-[9px] text-slate-400">{prompt.length}/2000</span>
             </div>
           </Field>
           <div className="flex flex-col justify-between gap-3">
-            <Field label="Số lượng bài AI tạo ra">
-              <SelectField value={aiCount} onChange={handleCountChange} disabled={isLocked}>
-                <option value="duplicate">Trùng lặp nội dung</option>
-                <option value="3">3</option>
-                <option value="5">5</option>
-                <option value="10">10</option>
-              </SelectField>
+            <Field
+              label="Số lượng bài AI tạo ra"
+              hint={
+                isDuplicateContent
+                  ? "Nhập 1: Trùng lặp nội dung (1 bài duy nhất cho tất cả nhóm)"
+                  : `${numCount} bài: Phân bổ nội dung khác nhau cho các nhóm`
+              }
+            >
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={aiCount}
+                    onChange={handleCountChange}
+                    onBlur={handleCountBlur}
+                    disabled={isLocked}
+                    placeholder="1-10"
+                    className="h-9 w-20 text-center font-bold text-slate-800"
+                  />
+                  <div className="flex flex-1 flex-wrap items-center gap-1">
+                    {[1, 3, 5, 10].map((preset) => (
+                      <button
+                        type="button"
+                        key={preset}
+                        disabled={isLocked}
+                        onClick={() => setPresetCount(preset)}
+                        className={`rounded px-2 py-1 text-[11px] font-semibold transition-colors border ${
+                          numCount === preset
+                            ? "bg-primary text-white border-primary shadow-sm"
+                            : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                        }`}
+                      >
+                        {preset === 1 ? "1 (Trùng lặp)" : preset}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {isDuplicateContent && (
+                  <div className="flex items-center gap-1.5 rounded-md bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700 border border-amber-200/60">
+                    <span>⚡ Chế độ trùng lặp nội dung (1 bài cho tất cả nhóm)</span>
+                  </div>
+                )}
+              </div>
             </Field>
-            <Button type="button" onClick={onGeneratePosts} disabled={isLocked || isGenerating || !prompt.trim()} className="w-full">
-              <Sparkles className="mr-2 size-3.5" /> {isGenerating ? "Đang tạo nội dung..." : "Tạo nội dung AI"}
-            </Button>
+
+            <div className="space-y-2 pt-1">
+              {/* Nút xác nhận nội dung gốc chính */}
+              <Button
+                type="button"
+                onClick={handleConfirmOriginalContent}
+                disabled={isLocked || !prompt.trim()}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-sm transition-colors"
+              >
+                <Check className="mr-2 size-4" /> Xác nhận nội dung gốc
+              </Button>
+
+              {/* Nút tạo nội dung AI hỗ trợ */}
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onGeneratePosts}
+                disabled={isLocked || isGenerating || !prompt.trim()}
+                className="w-full border-purple-200 bg-purple-50/50 text-purple-700 hover:bg-purple-100 hover:text-purple-800 transition-colors"
+                title="Tính năng hỗ trợ: Sử dụng AI để sinh biến thể bài viết tự động"
+              >
+                <Sparkles className="mr-2 size-3.5 text-purple-600" />
+                {isGenerating ? "Đang tạo nội dung AI..." : "Tạo nội dung AI (Hỗ trợ)"}
+              </Button>
+            </div>
           </div>
         </div>
 
-        {hasGeneratedContent && prompt.trim() && (
+        {(hasGeneratedContent || posts.some((p) => p && p.trim())) && (
           <div className="mt-5 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
           <div className="mb-3 flex items-center justify-between">
             <div>
               <p className="text-xs font-bold text-slate-800">
-                Kết quả nội dung AI{isDuplicateContent ? "" : ` (${generatedCount} bài)`}
+                {isDuplicateContent
+                  ? "Kết quả nội dung (Trùng lặp nội dung)"
+                  : `Kết quả nội dung (${displayPosts.filter((p) => p && p.trim()).length} bài)`}
+              </p>
+              <p className="text-[10px] text-slate-500">
+                {isDuplicateContent
+                  ? "Nội dung bài viết này sẽ được đăng trùng lặp cho tất cả các nhóm mục tiêu"
+                  : "Mỗi bài viết sẽ được luân phiên hoặc ngẫu nhiên đăng vào các nhóm"}
               </p>
             </div>
-            <Button type="button" size="sm" variant="outline" className="text-primary" disabled={isLocked || isGenerating} onClick={onGeneratePosts}>
-              <RotateCcw className="mr-1.5 size-3.5" /> Tạo lại
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="text-slate-600 hover:text-slate-800"
+                disabled={isLocked || !prompt.trim()}
+                onClick={handleConfirmOriginalContent}
+                title="Áp dụng lại nội dung từ ô nhập phía trên"
+              >
+                <RotateCcw className="mr-1.5 size-3" /> Nạp lại nội dung gốc
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="text-purple-600 border-purple-200 hover:bg-purple-50"
+                disabled={isLocked || isGenerating || !prompt.trim()}
+                onClick={onGeneratePosts}
+                title="Yêu cầu AI sinh lại các bài viết"
+              >
+                <Sparkles className="mr-1.5 size-3" /> Tạo lại bằng AI
+              </Button>
+            </div>
           </div>
           <div className="flex overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-            {visiblePosts.map((_, index) => (
+            {displayPosts.map((_, index) => (
               <button
                 type="button"
                 key={index}
                 onClick={() => setActivePost(index)}
-                className={`h-9 min-w-20 flex-1 text-[10px] font-semibold ${
-                  activePost === index ? "bg-primary text-white" : "text-slate-500 hover:bg-white"
+                className={`h-9 min-w-20 flex-1 text-[10px] font-semibold transition-colors ${
+                  activePost === index ? "bg-primary text-white shadow-sm" : "text-slate-500 hover:bg-white"
                 }`}
               >
-                Bài {index + 1}
+                {isDuplicateContent ? "Bài 1 (Trùng lặp nội dung)" : `Bài ${index + 1}`}
               </button>
             ))}
           </div>
@@ -404,7 +579,7 @@ export default function GroupContentSection({
               type="button"
               size="sm"
               onClick={handleSave}
-              disabled={!hasGeneratedContent || isGenerating}
+              disabled={(!hasGeneratedContent && !posts.some((p) => p && p.trim()) && !prompt.trim()) || isGenerating}
             >
               <Check className="mr-1.5 size-3.5" />
               Lưu cấu hình

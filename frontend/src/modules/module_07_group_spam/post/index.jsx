@@ -100,10 +100,10 @@ export default function GroupPostModule() {
   const [maxMedia, setMaxMedia] = useState("4");
   const [isMediaLocked, setIsMediaLocked] = useState(false);
 
-  // Bước 6: Nội dung AI
+  // Bước 6: Nội dung bài viết (Hỗ trợ AI)
   const [prompt, setPrompt] = useState("");
-  const [aiCount, setAiCount] = useState("5");
-  const [posts, setPosts] = useState(Array.from({ length: 5 }, (_, index) => (index === 0 ? INITIAL_POST : "")));
+  const [aiCount, setAiCount] = useState("1");
+  const [posts, setPosts] = useState([INITIAL_POST]);
   const [activePost, setActivePost] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
@@ -146,6 +146,8 @@ export default function GroupPostModule() {
           }
           if (cfg.posts?.length) {
             setPosts(cfg.posts);
+            setAiCount(String(cfg.posts.length));
+            setHasGeneratedContent(true);
           }
           if (cfg.settings) {
             if (cfg.settings.threads) setThreads(String(cfg.settings.threads));
@@ -349,15 +351,21 @@ export default function GroupPostModule() {
   };
 
   const generatePosts = async () => {
-    const amount = aiCount === "duplicate"
+    const isDup = aiCount === "duplicate" || aiCount === "1" || Number(aiCount) === 1;
+    const amount = isDup
       ? 1
       : Math.max(1, Math.min(10, Number(aiCount) || 1));
     if (!prompt.trim()) {
-      setSettingsFeedback({ type: "error", message: "Hãy nhập chủ đề/mô tả trước khi tạo nội dung" });
+      setSettingsFeedback({ type: "error", message: "Hãy nhập nội dung gốc / mô tả trước khi tạo nội dung AI" });
+      toast.warning("Hãy nhập nội dung gốc trước khi tạo nội dung AI!", "THIẾU NỘI DUNG");
       return;
     }
     if (!hasApiKey) {
-      setSettingsFeedback({ type: "error", message: "Chưa cấu hình API Key cho model đã chọn" });
+      setSettingsFeedback({
+        type: "error",
+        message: "Chưa cấu hình API Key cho model đã chọn. Bạn có thể nhấn 'Xác nhận nội dung gốc' để sử dụng trực tiếp mà không cần AI.",
+      });
+      toast.error("Chưa cấu hình API Key. Bạn có thể bấm 'Xác nhận nội dung gốc' để sử dụng trực tiếp!", "CHƯA CÓ API KEY");
       return;
     }
     setIsGenerating(true);
@@ -369,11 +377,17 @@ export default function GroupPostModule() {
         prompt: prompt.trim(),
         count: amount,
       });
-      setPosts(result.posts);
+      const generatedPosts = isDup ? result.posts.slice(0, 1) : result.posts;
+      setPosts(generatedPosts);
       setActivePost(0);
       setHasGeneratedContent(true);
-      toast.success(`Đã tạo thành công ${result.count} bài viết bằng AI!`, "TẠO NỘI DUNG THÀNH CÔNG");
-      setSettingsFeedback({ type: "success", message: `Đã tạo ${result.count} bài bằng ${model}` });
+      toast.success(
+        isDup
+          ? "Đã tạo thành công 1 bài viết bằng AI (Trùng lặp nội dung)!"
+          : `Đã tạo thành công ${generatedPosts.length} bài viết bằng AI!`,
+        "TẠO NỘI DUNG THÀNH CÔNG"
+      );
+      setSettingsFeedback({ type: "success", message: `Đã tạo ${generatedPosts.length} bài bằng ${model}` });
     } catch (error) {
       toast.error(error.message || "Không thể tạo nội dung AI", "LỖI TẠO NỘI DUNG");
       setSettingsFeedback({ type: "error", message: error.message || "Không thể tạo nội dung AI" });
@@ -460,6 +474,13 @@ export default function GroupPostModule() {
         }
       }
 
+      const isDup = aiCount === "duplicate" || aiCount === "1" || Number(aiCount) === 1;
+      const targetCount = isDup ? 1 : Math.max(1, Math.min(10, Number(aiCount) || 1));
+      const validPosts = isDup
+        ? [posts[0] || prompt.trim()]
+        : posts.slice(0, targetCount).map((p) => p?.trim()).filter(Boolean);
+      const finalPosts = validPosts.length > 0 ? validPosts : [posts[0] || prompt.trim()];
+
       appendCampaignLog("INFO", `Đang gửi chiến dịch ${selectedAccounts.length} tài khoản × ${activeGroups.length} nhóm tới worker...`);
       const campaign = await runGroupCampaign({
         campaign_id: campaignId || undefined,
@@ -469,7 +490,7 @@ export default function GroupPostModule() {
         account_ids: selectedAccounts.map((account) => account.id),
         account_uids: selectedAccounts.map((account) => account.uid),
         groups: activeGroups,
-        posts,
+        posts: finalPosts,
         media: savedMediaPaths.length ? savedMediaPaths : mediaFiles.map((file) => file.name),
         settings: {
           model,
