@@ -138,29 +138,29 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
                 router.push("/groups/campaigns");
               }
             }}
-            className="group inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 transition-colors hover:text-blue-600"
+            className="group inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 transition-colors hover:text-blue-600 cursor-pointer"
           >
             <ArrowLeft className="size-4 transition-transform group-hover:-translate-x-0.5" />
             <span>Quay lại</span>
           </button>
 
           {campaign && (
-            <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600 shadow-2xs">
-              {campaign.action_type === "POST" ? "Đăng bài" : "Bình luận"}
+            <span className="rounded-lg border border-slate-200/80 bg-slate-50/80 px-3.5 py-1 text-xs font-medium text-slate-600">
+              {campaign.action_type === "COMMENT" ? "Comment" : "Đăng bài"}
             </span>
           )}
         </div>
       </div>
 
       {/* 2. Khung Card chính chi tiết chiến dịch */}
-      <Card className="border-slate-200/90 bg-white p-6 shadow-xs sm:p-7">
+      <Card className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-xs sm:p-8">
         {loading ? (
-          <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+          <div className="flex flex-col items-center justify-center py-20 text-slate-400">
             <RotateCcw className="size-6 animate-spin text-blue-600" />
             <p className="mt-3 text-xs font-medium">Đang tải thông tin chiến dịch...</p>
           </div>
         ) : !campaign ? (
-          <div className="py-12 text-center text-slate-400">
+          <div className="py-14 text-center text-slate-400">
             <FileText className="mx-auto size-10 text-slate-300" />
             <p className="mt-3 text-sm font-semibold text-slate-700">Không tìm thấy thông tin chiến dịch</p>
             <p className="mt-1 text-xs">Chiến dịch này có thể đã bị xóa hoặc không tồn tại.</p>
@@ -168,7 +168,10 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => router.push("/groups/campaigns")}
+              onClick={() => {
+                if (onBack) onBack();
+                else router.push("/groups/campaigns");
+              }}
               className="mt-4 text-xs"
             >
               Trở về danh sách
@@ -176,7 +179,7 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
           </div>
         ) : (
           <div className="space-y-6">
-            {/* Header trong Card: Tên chiến dịch, Ngày chạy & Badge số lượng nick */}
+            {/* Header trong Card: Tên chiến dịch, Ngày chạy & Badge số lượng nick đã chọn */}
             <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
               <div>
                 <h2 className="font-heading text-xl font-bold tracking-tight text-slate-900">
@@ -188,8 +191,8 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
               </div>
 
               <div>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600 border border-emerald-100">
-                  {new Set(details.map((item) => item.account_uid)).size} nick đã chọn
+                <span className="inline-flex items-center rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600 border border-emerald-100/80">
+                  {new Set(details.map((item) => item.account_uid)).size || details.length || 0} nick đã chọn
                 </span>
               </div>
             </div>
@@ -197,13 +200,13 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
             {/* Tiêu đề danh sách tài khoản */}
             <div className="flex items-center justify-between border-t border-slate-100 pt-5">
               <h3 className="text-sm font-bold text-slate-900">Danh sách tài khoản</h3>
-              <span className="text-xs text-slate-400">Cuộn để xem thêm</span>
+              <span className="text-xs text-slate-400 font-normal">Cuộn để xem thêm</span>
             </div>
 
             {/* Danh sách thẻ tác vụ của từng tài khoản */}
-            <div className="max-h-[480px] space-y-3.5 overflow-y-auto pr-1">
+            <div className="max-h-[500px] space-y-3 overflow-y-auto pr-1">
               {details.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-200 p-8 text-center text-xs text-slate-400">
+                <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-xs text-slate-400">
                   Chưa có dữ liệu tác vụ nào được lưu lại cho chiến dịch này.
                 </div>
               ) : (
@@ -213,7 +216,7 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
                   return (
                     <div
                       key={item.id || idx}
-                      className="group relative rounded-xl border border-slate-200/90 bg-white p-4 shadow-2xs transition-all hover:border-blue-200 hover:shadow-xs"
+                      className="rounded-xl border border-slate-200/90 bg-white p-4 transition-all hover:border-slate-300 hover:shadow-2xs"
                     >
                       {/* Dòng 1: STT & Nút Copy UID */}
                       <div className="flex items-center justify-between">
@@ -226,9 +229,9 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
                           variant="outline"
                           size="sm"
                           onClick={() => handleCopyUid(item.account_uid)}
-                          className="h-7 gap-1.5 border-slate-200 bg-white px-2.5 text-[11px] font-medium text-slate-700 shadow-2xs hover:bg-slate-50 hover:text-blue-600"
+                          className="h-7 gap-1.5 rounded-lg border-slate-200 bg-white px-2.5 text-[11px] font-medium text-slate-700 shadow-2xs hover:bg-slate-50 hover:text-blue-600 cursor-pointer"
                         >
-                          <Copy className="size-3 text-slate-400 group-hover:text-blue-500" />
+                          <Copy className="size-3 text-slate-400" />
                           Copy UID
                         </Button>
                       </div>
@@ -236,19 +239,19 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
                       {/* Dòng 2 & 3: Tài khoản (UID) & Tên nhóm */}
                       <div className="mt-2 space-y-1 text-xs text-slate-600">
                         <p>
-                          <span className="text-slate-500">Tài khoản (UID):</span>{" "}
-                          <strong className="font-mono text-slate-800">{item.account_uid}</strong>
+                          <span className="text-slate-500 font-normal">Tài khoản (UID):</span>{" "}
+                          <span className="font-mono font-medium text-slate-800">{item.account_uid}</span>
                           {item.account_name ? ` (${item.account_name})` : ""}
                         </p>
                         <p>
-                          <span className="text-slate-500">Tên nhóm:</span>{" "}
+                          <span className="text-slate-500 font-normal">Tên nhóm:</span>{" "}
                           <span className="font-medium text-slate-800">{item.group_name || "Nhóm Facebook"}</span>
                         </p>
                       </div>
 
                       {/* Dòng 4: Link bài viết kèm nút Mở bài viết */}
                       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2.5">
-                        <span className="truncate font-mono text-[11px] text-blue-600 hover:underline max-w-[80%]">
+                        <span className="truncate font-mono text-[11px] text-blue-600 hover:underline max-w-[75%]">
                           {itemUrl || "https://facebook.com/groups/..."}
                         </span>
 
@@ -257,7 +260,7 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
                             href={itemUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:underline"
+                            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
                           >
                             <span>Mở bài viết</span>
                             <ExternalLink className="size-3.5" />
@@ -273,7 +276,7 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
             </div>
 
             {/* Dòng chú thích bên dưới */}
-            <p className="text-xs text-slate-400 italic">
+            <p className="text-xs text-slate-400 font-normal">
               Trong sản phẩm thật, mỗi UID phải hiển thị tất cả các nhóm và link bài viết được lưu của tài khoản đó. Link hợp lệ sẽ mở trong trình duyệt.
             </p>
 
@@ -283,7 +286,7 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
                 type="button"
                 onClick={handleRerun}
                 disabled={rerunLoading}
-                className="h-11 w-full gap-2 bg-blue-600 text-sm font-semibold text-white shadow-xs hover:bg-blue-700"
+                className="h-11 w-full gap-2 rounded-xl bg-blue-600 text-sm font-semibold text-white shadow-xs hover:bg-blue-700 active:scale-[0.99] transition-all cursor-pointer"
               >
                 <RotateCcw className={`size-4 ${rerunLoading ? "animate-spin" : ""}`} />
                 {rerunLoading ? "Đang nạp cấu hình..." : "Chạy lại chiến dịch này"}

@@ -48,10 +48,15 @@ import {
   deleteGroupCampaign,
 } from "../service";
 
+import CampaignDetailModule from "./detail";
+
 const ITEMS_PER_PAGE = 4;
 
 export default function GroupCampaignsModule() {
   const router = useRouter();
+
+  // Xem chi tiết dạng Full Page giống Figma
+  const [activeDetailCampaign, setActiveDetailCampaign] = useState(null);
 
   // Danh sách chiến dịch & loading
   const [campaigns, setCampaigns] = useState([]);
@@ -187,10 +192,10 @@ export default function GroupCampaignsModule() {
     }
   };
 
-  // Xem chi tiết (CAMP-03): chuyển trang sang giao diện chi tiết đầy đủ
+  // Xem chi tiết (CAMP-03): Hiển thị giao diện trang chi tiết đầy đủ giống thiết kế Figma
   const handleViewDetails = (campaign) => {
     if (!campaign) return;
-    router.push(`/groups/campaigns/${encodeURIComponent(campaign.id)}`);
+    setActiveDetailCampaign(campaign);
   };
 
   // Copy UID vào clipboard
@@ -291,6 +296,18 @@ export default function GroupCampaignsModule() {
         );
     }
   };
+
+  if (activeDetailCampaign) {
+    return (
+      <CampaignDetailModule
+        campaignId={activeDetailCampaign.id}
+        onBack={() => {
+          setActiveDetailCampaign(null);
+          loadCampaigns();
+        }}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
