@@ -601,8 +601,6 @@ export default function GroupPostModule() {
           apiSource={apiSource}
           threads={threads}
           setThreads={setThreads}
-          restMinutes={restMinutes}
-          setRestMinutes={setRestMinutes}
           settingsLoading={settingsLoading}
           settingsAction={settingsAction}
           settingsFeedback={settingsFeedback}
@@ -757,7 +755,6 @@ export default function GroupPostModule() {
           delayMin={delayMin}
           delayMax={delayMax}
           delayUnit={delayUnit}
-          restMinutes={restMinutes}
           scheduleEnabled={scheduleEnabled}
           scheduleDate={scheduleDate}
           scheduleTime={scheduleTime}

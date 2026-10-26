@@ -97,7 +97,6 @@ export default function GroupSummarySection({
       "Giãn cách đăng",
       `${delayMin} – ${delayMax} ${delayUnit === "minutes" ? "phút" : "giây"}`,
     ],
-    [<Clock3 key="i" className="size-3.5" />, "Nghỉ", `${restMinutes} phút`],
     [
       <CalendarDays key="j" className="size-3.5" />,
       "Hẹn giờ",
