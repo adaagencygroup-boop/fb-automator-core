@@ -73,6 +73,7 @@ class CredentialInput(ConnectionTestInput):
 class ParseFileInput(BaseModel):
     content: str
     filter_posted: bool = False
+    account_uid: str | None = None
 
 
 class SearchGroupInput(BaseModel):

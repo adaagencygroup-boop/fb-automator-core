@@ -6,7 +6,7 @@ Kế thừa & chuẩn hóa nghiệp vụ từ FaceBook_Post_Group.py:
    - Tách query parameters '?' (line.split('?')[0])
    - Khử trùng lặp (dedup)
    - Lọc bỏ link hỏng/rác
-   - Kiểm tra nhóm đã đăng trong lịch sử (group_run_tasks)
+   - Kiểm tra nhóm đã đăng trong lịch sử cloud (cloud_group_logs)
 2. Tìm kiếm nhóm theo từ khóa (Keyword Group Search)
    - Tương thích cơ chế quét URL: https://www.facebook.com/groups/search/groups/?q={search_term}
 3. Cung cấp file mẫu link nhóm (Template)
@@ -98,15 +98,13 @@ def get_posted_group_keys(owner: str | None = None) -> Set[str]:
     """
     posted: Set[str] = set()
     try:
-        from ..local_database import local_db
+        from core.database.connection import db
 
-        rows = local_db.fetch_all(
-            """SELECT DISTINCT task.group_key, task.group_url
-               FROM group_run_tasks task
-               JOIN group_runs run ON run.id = task.run_id
-               JOIN group_campaigns campaign ON campaign.id = run.campaign_id
-               WHERE campaign.owner_key = ?
-                 AND task.status IN ('SUCCESS', 'PENDING_APPROVAL')""",
+        rows = db.fetch_all(
+            """SELECT DISTINCT log.group_key, log.group_url
+               FROM cloud_group_logs log
+               WHERE log.owner_key = ?
+                 AND log.status IN ('SUCCESS', 'PENDING_APPROVAL')""",
             (owner or "",),
         )
         for r in rows or []:
@@ -121,16 +119,228 @@ def get_posted_group_keys(owner: str | None = None) -> Set[str]:
     return posted
 
 
+def get_cached_scanned_groups(
+    identifiers_or_urls: List[str], owner: str | None = None
+) -> Dict[str, Dict[str, Any]]:
+    """Đọc dữ liệu nhóm thật đã từng quét từ CSDL scanned_groups."""
+    cached: Dict[str, Dict[str, Any]] = {}
+    if not identifiers_or_urls:
+        return cached
+    try:
+        from core.database.connection import db
+
+        clean_ids = [str(x).strip().lower() for x in identifiers_or_urls if str(x).strip()]
+        if not clean_ids:
+            return cached
+        placeholders = ",".join(["?"] * len(clean_ids))
+        query = f"""
+            SELECT group_id, group_url, group_name, privacy, members_label, members_count
+            FROM scanned_groups
+            WHERE LOWER(group_id) IN ({placeholders})
+               OR LOWER(group_url) IN ({placeholders})
+        """
+        rows = db.fetch_all(query, tuple(clean_ids) + tuple(clean_ids)) or []
+        for r in rows:
+            gid = str(r.get("group_id") or "").strip().lower()
+            gurl = str(r.get("group_url") or "").strip().lower()
+            cleaned_u = clean_group_url(gurl).lower() if gurl else ""
+            gdata = {
+                "name": r.get("group_name") or "",
+                "privacy": r.get("privacy") or "public",
+                "members": r.get("members_label") or "Công khai",
+                "members_count": r.get("members_count"),
+                "frequency": "Hoạt động",
+            }
+            if gid:
+                cached[gid] = gdata
+            if gurl:
+                cached[gurl] = gdata
+            if cleaned_u:
+                cached[cleaned_u] = gdata
+    except Exception as e:
+        logger.warning(f"Lỗi khi đọc cache scanned_groups: {e}")
+    return cached
+
+
+def scrape_real_groups_via_browser(
+    groups_to_scrape: List[Dict[str, Any]],
+    account_uid: Optional[str] = None,
+    owner: str | None = None,
+    max_scrape: int = 30,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Quét trực tiếp từng nhóm Facebook bằng trình duyệt thật để lấy tên thật,
+    quyền riêng tư, số lượng thành viên, tần suất hoạt động và trạng thái tham gia.
+    Lưu kết quả vào CSDL `scanned_groups` để tái sử dụng ngay lập tức cho các lần sau.
+    """
+    scraped_map: Dict[str, Dict[str, Any]] = {}
+    if not groups_to_scrape:
+        return scraped_map
+
+    account = get_scraping_account(account_uid, owner)
+    if not account:
+        logger.info("Không có tài khoản phù hợp để quét nhóm trực tiếp.")
+        return scraped_map
+
+    target_uid = str(account.get("uid") or "").strip()
+    if not target_uid:
+        return scraped_map
+
+    owner_val = account.get("user_id") or owner or "admin"
+    cookie_str = account.get("cookie") or ""
+    proxy = account.get("proxy")
+
+    driver = None
+    created_new_driver = False
+    lock = None
+    acquired_lock = False
+
+    try:
+        from core.browser import get_active_drivers, get_profile_lock, load_cookies, open_browser
+
+        active_drivers = get_active_drivers(target_uid, owner=owner_val)
+        if active_drivers:
+            driver = active_drivers[0]
+            logger.info(f"[{target_uid}] Tận dụng trình duyệt Chrome đang mở để quét nhóm từ file.")
+        else:
+            lock = get_profile_lock(target_uid, owner=owner_val)
+            acquired_lock = lock.acquire(timeout=8)
+            if not acquired_lock:
+                logger.warning(f"[{target_uid}] Profile đang bị khóa bởi tiến trình khác.")
+                return scraped_map
+
+            logger.info(f"[{target_uid}] Khởi động Chrome để quét thông tin thật cho {len(groups_to_scrape)} nhóm...")
+            driver = open_browser(
+                uid=target_uid,
+                owner=owner_val,
+                proxy=proxy,
+                scope="group_scraper",
+                headless=True,
+                verify_egress=False,
+                allow_direct_fallback=True,
+            )
+            created_new_driver = True
+
+            if cookie_str:
+                load_cookies(driver, cookie_str)
+
+        js_extract_script = """
+        const res = {};
+        let name = '';
+        const title = document.title || '';
+        if (title && !/error|lỗi|content not found|không tìm thấy|log in|đăng nhập/i.test(title)) {
+          name = title.replace(/^\\(\\d+\\)\\s*/, '').replace(/\\s*\\|\\s*Facebook.*$/i, '').trim();
+        }
+        const h1Elements = Array.from(document.querySelectorAll('h1'));
+        for (const el of h1Elements) {
+          const t = (el.innerText || '').trim();
+          if (t && !/notifications|thông báo/i.test(t)) {
+            name = t.split('\\n')[0].trim();
+            break;
+          }
+        }
+        res.name = name;
+        const mainArea = document.querySelector('[role="main"]') || document.body;
+        const text = mainArea ? mainArea.innerText.slice(0, 4000) : '';
+
+        res.is_private = /riêng tư|private/i.test(text);
+        res.is_public = /công khai|public/i.test(text);
+
+        const memMatch = text.match(/([\\d.,]+\\s*[KMBkmb]?)\\s*(?:members?|thành viên)/i);
+        res.members = memMatch ? memMatch[1].trim() : '';
+
+        const freqMatch = text.match(/([\\d.,]+\\+?\\s*(bài|bài viết|posts)?\\s*(\\/|\\s*mỗi\\s*|\\s*trên\\s*|\\s*a\\s*)(ngày|day|tháng|month))/i) ||
+                          text.match(/([\\d.,]+\\+?\\s*(bài viết mới|bài mới|new posts)\\s*(hôm nay|today))/i);
+        res.frequency = freqMatch ? freqMatch[0].trim() : '';
+
+        res.is_joined = /\\b(joined|đã tham gia)\\b/i.test(text);
+        res.is_not_joined = /\\b(join group|join|tham gia nhóm|tham gia)\\b/i.test(text);
+        return res;
+        """
+
+        for item in groups_to_scrape[:max_scrape]:
+            url = item.get("url") or ""
+            uid = item.get("uid") or ""
+            if not url.startswith("http"):
+                full_url = f"https://www.{url}" if not url.startswith("www.") else f"https://{url}"
+            else:
+                full_url = url
+
+            try:
+                driver.get(full_url)
+                time.sleep(2)
+                data = driver.execute_script(js_extract_script) or {}
+                scraped_name = (data.get("name") or "").strip()
+                forbidden = {"facebook", "error", "lỗi", "log in", "đăng nhập", "login"}
+                if scraped_name and scraped_name.lower() not in forbidden:
+                    privacy = "private" if data.get("is_private") else ("public" if data.get("is_public") else "public")
+                    members_label = data.get("members") or ""
+                    if members_label and not any(members_label.endswith(x) for x in ["K", "M", "B", "k", "m", "b"]):
+                        members_label = f"{members_label} thành viên"
+                    
+                    status = "joined" if data.get("is_joined") else ("not_joined" if data.get("is_not_joined") else "unknown")
+                    frequency = data.get("frequency") or "Hoạt động"
+
+                    entry_result = {
+                        "name": scraped_name,
+                        "privacy": privacy,
+                        "members": members_label or "Công khai",
+                        "frequency": frequency,
+                        "membership_status": status,
+                    }
+                    if uid:
+                        scraped_map[uid.lower()] = entry_result
+                    if url:
+                        scraped_map[clean_group_url(url).lower()] = entry_result
+
+                    # Lưu vào CSDL scanned_groups để các lần sau không cần quét lại
+                    try:
+                        from modules.module_10_group_scan.models import upsert_scanned_group
+                        upsert_scanned_group(
+                            owner=str(owner_val),
+                            keyword="file_import",
+                            group={
+                                "group_id": uid,
+                                "url": full_url,
+                                "name": scraped_name,
+                                "privacy": privacy,
+                                "members_label": members_label or "—",
+                            },
+                            source_uid=target_uid,
+                        )
+                    except Exception as save_err:
+                        logger.debug(f"Không thể lưu nhóm {uid} vào DB scanned_groups: {save_err}")
+            except Exception as scrape_one_err:
+                logger.warning(f"Lỗi khi quét nhóm {url}: {scrape_one_err}")
+
+    except Exception as e:
+        logger.error(f"Lỗi khi quét nhóm Facebook thật qua trình duyệt: {e}")
+    finally:
+        if created_new_driver and driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        if acquired_lock and lock:
+            try:
+                lock.release()
+            except Exception:
+                pass
+
+    return scraped_map
+
+
 def parse_group_file_content(
-    content: str, filter_posted: bool = False, owner: str | None = None
+    content: str,
+    filter_posted: bool = False,
+    owner: str | None = None,
+    account_uid: str | None = None,
 ) -> Dict[str, Any]:
     """
-    Phân tích nội dung file link nhóm (.txt, .csv).
-    - Tách từng dòng
-    - Bỏ dòng trống, comment (#)
-    - Cắt query params '?'
-    - Khử trùng lặp (dedup)
-    - Loại bỏ link rác/lỗi (invalid)
+    Phân tích nội dung file link nhóm (.txt, .csv) và quét thông tin nhóm thật:
+    - Tách từng dòng, loại bỏ rác/lỗi, khử trùng lặp
+    - Tra cứu dữ liệu nhóm thật từ CSDL đã quét (scanned_groups)
+    - Quét trực tiếp qua trình duyệt Facebook bằng tài khoản nick để lấy tên thật, số TV, loại nhóm
     - Tùy chọn lọc nhóm đã đăng trong lịch sử (filter_posted)
     """
     if not content:
@@ -181,10 +391,41 @@ def parse_group_file_content(
     posted_set = get_posted_group_keys(owner) if filter_posted else set()
     already_posted_count = 0
 
-    parsed_groups: List[Dict[str, Any]] = []
-    for idx, raw_group in enumerate(valid_entries, 1):
+    # 1. Thu thập danh sách metadata của từng nhóm
+    items_meta: List[Dict[str, Any]] = []
+    query_identifiers: List[str] = []
+    for raw_group in valid_entries:
         url = clean_group_url(raw_group)
         identifier = extract_group_identifier(url)
+        items_meta.append({"raw": raw_group, "url": url, "uid": identifier})
+        if identifier:
+            query_identifiers.append(identifier)
+        if url:
+            query_identifiers.append(url)
+
+    # 2. Đọc từ CSDL scanned_groups đã có thông tin thật từ trước
+    cached_groups = get_cached_scanned_groups(query_identifiers, owner)
+
+    # 3. Tìm các nhóm chưa có thông tin thật để quét qua trình duyệt
+    uncached_groups = []
+    for it in items_meta:
+        uid_key = it["uid"].lower() if it["uid"] else ""
+        url_key = it["url"].lower() if it["url"] else ""
+        if uid_key not in cached_groups and url_key not in cached_groups:
+            uncached_groups.append(it)
+
+    # 4. Nếu có nhóm chưa có thông tin thật và có tài khoản được chỉ định, thực hiện quét thật qua trình duyệt
+    scraped_groups = {}
+    if uncached_groups and account_uid:
+        scraped_groups = scrape_real_groups_via_browser(
+            uncached_groups, account_uid=account_uid, owner=owner
+        )
+
+    # 5. Tổng hợp dữ liệu thật vào kết quả trả về
+    parsed_groups: List[Dict[str, Any]] = []
+    for idx, it in enumerate(items_meta, 1):
+        url = it["url"]
+        identifier = it["uid"]
         key = f"group_{identifier}"
 
         is_already_posted = (key.lower() in posted_set) or (url.lower() in posted_set)
@@ -194,15 +435,36 @@ def parse_group_file_content(
         if filter_posted and is_already_posted:
             continue
 
-        # Đặt tên nhóm thân thiện và thực tế
-        if identifier.isdigit():
-            group_name = f"Nhóm Facebook [ID: {identifier}]"
+        uid_key = identifier.lower() if identifier else ""
+        url_key = url.lower() if url else ""
+
+        real_data = (
+            scraped_groups.get(uid_key)
+            or scraped_groups.get(url_key)
+            or cached_groups.get(uid_key)
+            or cached_groups.get(url_key)
+        )
+
+        if real_data and real_data.get("name"):
+            group_name = real_data["name"]
+            privacy = real_data.get("privacy") or "public"
+            members = real_data.get("members") or "Công khai"
+            frequency = real_data.get("frequency") or "Hoạt động"
+            membership_status = real_data.get("membership_status") or "unknown"
         else:
-            pretty = identifier.replace("_", " ").replace("-", " ").strip().title()
-            if pretty.lower().startswith(("hội", "nhóm", "cộng đồng", "diễn đàn", "chợ")):
-                group_name = pretty
+            # Fallback tên thân thiện nếu chưa thể quét
+            if identifier.isdigit():
+                group_name = f"Nhóm Facebook [ID: {identifier}]"
             else:
-                group_name = f"Hội {pretty}"
+                pretty = identifier.replace("_", " ").replace("-", " ").strip().title()
+                if pretty.lower().startswith(("hội", "nhóm", "cộng đồng", "diễn đàn", "chợ")):
+                    group_name = pretty
+                else:
+                    group_name = f"Hội {pretty}"
+            privacy = "public"
+            members = "Công khai"
+            frequency = "Hoạt động"
+            membership_status = "unknown"
 
         parsed_groups.append({
             "id": f"{idx:02d}",
@@ -210,9 +472,10 @@ def parse_group_file_content(
             "name": group_name,
             "url": url,
             "uid": identifier,
-            "frequency": "15 bài/ngày",
-            "members": "Công khai",
-            "privacy": "public",
+            "frequency": frequency,
+            "members": members,
+            "privacy": privacy,
+            "membership_status": membership_status,
             "already_posted": is_already_posted,
         })
 
@@ -289,23 +552,21 @@ def is_group_relevant(keyword: str, name: str, url: str = "") -> bool:
 
 def get_posted_group_records(owner: str | None = None) -> List[Dict[str, Any]]:
     """
-    Lấy danh sách chi tiết các nhóm Facebook thực tế đã từng chạy thành công từ bảng group_run_tasks.
+    Lấy danh sách chi tiết các nhóm Facebook đã từng chạy thành công từ cloud_group_logs.
     """
     records: List[Dict[str, Any]] = []
     try:
-        from ..local_database import local_db
+        from core.database.connection import db
 
-        rows = local_db.fetch_all(
+        rows = db.fetch_all(
             """SELECT * FROM (
-                   SELECT DISTINCT ON (task.group_key)
-                        task.group_key, task.group_url, task.group_name,
-                        task.status, task.finished_at
-                    FROM group_run_tasks task
-                    JOIN group_runs run ON run.id = task.run_id
-                    JOIN group_campaigns campaign ON campaign.id = run.campaign_id
-                    WHERE campaign.owner_key = ?
-                      AND task.status IN ('SUCCESS', 'PENDING_APPROVAL')
-                    ORDER BY task.group_key, task.finished_at DESC
+                   SELECT DISTINCT ON (log.group_key)
+                        log.group_key, log.group_url, log.group_name,
+                        log.status, log.finished_at
+                    FROM cloud_group_logs log
+                    WHERE log.owner_key = ?
+                      AND log.status IN ('SUCCESS', 'PENDING_APPROVAL')
+                    ORDER BY log.group_key, log.finished_at DESC
                ) latest
                ORDER BY finished_at DESC LIMIT 100""",
             (owner or "",),

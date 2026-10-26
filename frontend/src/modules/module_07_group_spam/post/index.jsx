@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { LockKeyhole } from "lucide-react";
 
 import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
@@ -29,18 +28,12 @@ import GroupSummarySection from "./components/GroupSummarySection";
 import GroupProgressSection from "./components/GroupProgressSection";
 import GroupActionBar from "./components/GroupActionBar";
 
-function StepGuard({ enabled, requiredStep, children }) {
+function StepGuard({ enabled, children }) {
   if (enabled) return children;
 
   return (
-    <div>
-      <div className="mb-2 flex items-center justify-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-700">
-        <LockKeyhole className="size-3.5 shrink-0" />
-        Hoàn tất và lưu Bước {requiredStep} để mở bước này.
-      </div>
-      <div className="pointer-events-none select-none opacity-50" aria-disabled="true">
-        {children}
-      </div>
+    <div className="pointer-events-none select-none opacity-50" aria-disabled="true">
+      {children}
     </div>
   );
 }

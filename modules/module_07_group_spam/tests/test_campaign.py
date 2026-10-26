@@ -6,6 +6,25 @@ from unittest.mock import patch
 from modules.module_07_group_spam.app.services.campaign import CampaignManager, FacebookGroupPoster, html_to_facebook_text
 
 
+class FakePersistence:
+    def __init__(self):
+        self.events = []
+        self.tasks = []
+        self.updates = []
+
+    def initialize_run(self, **kwargs):
+        return kwargs.get("requested_campaign_id") or "campaign-1", 1
+
+    def record_event(self, run_id, entry):
+        self.events.append((run_id, entry))
+
+    def record_task(self, run_id, item):
+        self.tasks.append((run_id, item))
+
+    def update_run(self, run_id, **values):
+        self.updates.append((run_id, values))
+
+
 class FakePoster:
     def __init__(self, account, cancel, log):
         self.account = account
@@ -39,14 +58,12 @@ def wait_for_job(manager, job_id, timeout=2):
 
 class CampaignTests(unittest.TestCase):
     def setUp(self):
-        self.manager = CampaignManager(poster_factory=FakePoster)
+        self.persistence = FakePersistence()
+        self.manager = CampaignManager(poster_factory=FakePoster, persistence=self.persistence)
         self.accounts = {
             "100": {"id": 1, "uid": "100", "password": "", "two_fa": "", "cookie": "", "proxy": ""},
             "200": {"id": 2, "uid": "200", "password": "", "two_fa": "", "cookie": "", "proxy": ""},
         }
-        self.persist = patch.object(CampaignManager, "_persist_final_results")
-        self.persist.start()
-        self.addCleanup(self.persist.stop)
 
     def payload(self):
         return {
@@ -69,6 +86,9 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual((result["total"], result["completed"]), (3, 3))
         self.assertEqual((result["success"], result["failed"]), (2, 1))
         self.assertEqual((result["completed_steps"], result["total_steps"]), (6, 6))
+        self.assertEqual(len(self.persistence.tasks), 3)
+        self.assertTrue(self.persistence.events)
+        self.assertEqual(self.persistence.updates[-1][1]["status"], "PARTIAL")
 
     def test_pending_join_request_does_not_block_posting(self):
         payload = self.payload()

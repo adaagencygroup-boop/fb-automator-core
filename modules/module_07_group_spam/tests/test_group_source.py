@@ -155,6 +155,31 @@ class GroupSourceApiTests(unittest.TestCase):
         app = FastAPI()
         app.include_router(router)
         self.client = TestClient(app)
+        self.campaign_patch = patch(
+            "modules.module_07_group_spam.app.routes.campaign.campaign_manager.start",
+            return_value={
+                "job_id": "job-test",
+                "status": "QUEUED",
+                "message": "Accepted",
+                "total": 0,
+                "completed": 0,
+                "total_steps": 0,
+                "completed_steps": 0,
+                "success": 0,
+                "failed": 0,
+                "skipped": 0,
+                "joined": 0,
+                "already_member": 0,
+                "pending_approval": 0,
+                "progress": 0,
+                "started_at": None,
+                "finished_at": None,
+                "logs": [],
+                "results": [],
+            },
+        )
+        self.campaign_patch.start()
+        self.addCleanup(self.campaign_patch.stop)
 
     def test_api_parse_source(self):
         response = self.client.post(

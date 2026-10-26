@@ -5,7 +5,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from html.parser import HTMLParser
-import json
 import random
 import threading
 import time
@@ -13,10 +12,13 @@ import uuid
 from typing import Any, Callable
 
 from modules.module_02_account_manager.context import owner_scope
-from ..core.constants import BLOCK_TAGS, TERMINAL_STATES
+from ..core.constants import BLOCK_TAGS, TERMINAL_STATES, LogLevel
 
 
 class _TextExtractor(HTMLParser):
+    """
+    Helper class to extract text from HTML, preserving line breaks between block-level elements.
+    """
     block_tags = BLOCK_TAGS
 
     def __init__(self):
@@ -103,18 +105,32 @@ class CampaignJob:
     finished_at: str | None = None
     logs: list[dict[str, str]] = field(default_factory=list)
     results: list[dict[str, Any]] = field(default_factory=list)
+    campaign_id: str | None = None
+    run_number: int = 1
+    log_sequence: int = 0
+    log_sink: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False)
     cancel: threading.Event = field(default_factory=threading.Event, repr=False)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
-    def log(self, level: str, message: str) -> None:
+    def log(self, level: LogLevel | str, message: str) -> None:
+        try:
+            lvl = level.value if isinstance(level, LogLevel) else LogLevel(str(level).upper()).value
+        except (ValueError, AttributeError):
+            return  # Chỉ ghi nhận các log level đã định nghĩa trong LogLevel
         with self.lock:
-            self.logs.append({
+            self.log_sequence += 1
+            entry = {
                 "time": datetime.now().isoformat(timespec="seconds"),
-                "level": level,
+                "level": lvl,
                 "message": message,
-            })
+            }
+            self.logs.append(entry)
             del self.logs[:-100]
             self.message = message
+            sink = self.log_sink
+            cloud_entry = {**entry, "sequence_number": self.log_sequence}
+        if sink:
+            sink(cloud_entry)
 
     def public(self) -> dict[str, Any]:
         with self.lock:
@@ -421,8 +437,13 @@ class FacebookGroupPoster:
 
 
 class CampaignManager:
-    def __init__(self, poster_factory=FacebookGroupPoster):
+    def __init__(self, poster_factory=FacebookGroupPoster, persistence=None):
+        if persistence is None:
+            from .cloud_history import cloud_history
+
+            persistence = cloud_history
         self.poster_factory = poster_factory
+        self.persistence = persistence
         self.jobs: dict[str, CampaignJob] = {}
         self.active_by_owner: dict[str | None, str] = {}
         self.lock = threading.RLock()
@@ -467,6 +488,7 @@ class CampaignManager:
             job.cancel.set()
             with job.lock:
                 job.status = "STOPPING"
+            self._sync_run(job)
             job.log("WARNING", "Đang dừng chiến dịch sau thao tác hiện tại")
         return job.public()
 
@@ -490,10 +512,52 @@ class CampaignManager:
     def _wait(cancel: threading.Event, seconds: float) -> bool:
         return cancel.wait(max(0, seconds))
 
+    def _initialize_persistence(self, job: CampaignJob) -> None:
+        action_type = str(job.payload.get("action_type") or "POST").upper()
+        campaign_name = str(
+            job.payload.get("name")
+            or job.payload.get("campaign_name")
+            or f"{action_type} {job.id}"
+        )[:200]
+        campaign_id, run_number = self.persistence.initialize_run(
+            run_id=job.id,
+            requested_campaign_id=job.payload.get("campaign_id"),
+            owner=job.owner,
+            campaign_name=campaign_name,
+            description=job.payload.get("description"),
+            action_type=action_type,
+            config=_safe_config(job.payload),
+        )
+        job.campaign_id = campaign_id
+        job.run_number = run_number
+
+        with job.lock:
+            buffered_logs = list(job.logs)
+            first_sequence = job.log_sequence - len(buffered_logs) + 1
+            job.log_sink = lambda entry: self.persistence.record_event(job.id, entry)
+        for offset, entry in enumerate(buffered_logs):
+            self.persistence.record_event(
+                job.id,
+                {**entry, "sequence_number": first_sequence + offset},
+            )
+
+    def _sync_run(self, job: CampaignJob) -> None:
+        self.persistence.update_run(
+            job.id,
+            status=job.status,
+            total_planned=job.total,
+            total_success=job.success,
+            total_failed=job.failed,
+            total_skipped=job.skipped,
+            started_at=job.started_at,
+            finished_at=job.finished_at,
+        )
+
     def _run(self, job: CampaignJob) -> None:
         payload = job.payload
         settings = payload.get("settings") or {}
         try:
+            self._initialize_persistence(job)
             job.log("INFO", "Đang kiểm tra tài khoản và chuẩn bị các phiên Chrome...")
             uids = list(dict.fromkeys(str(uid) for uid in payload.get("account_uids") or [] if uid))
             accounts = self._load_accounts(uids, job.owner)
@@ -515,6 +579,7 @@ class CampaignManager:
             per_account = {uid: items for uid, items in per_account.items() if items}
             job.total = len(tasks)
             job.total_steps = len(tasks) * 2
+            self._sync_run(job)
 
             schedule_at = settings.get("schedule_at")
             if schedule_at:
@@ -522,6 +587,7 @@ class CampaignManager:
                 seconds = (target - datetime.now(target.tzinfo)).total_seconds()
                 if seconds > 0:
                     job.status = "SCHEDULED"
+                    self._sync_run(job)
                     job.log("INFO", f"Đã lên lịch chạy lúc {target.strftime('%d/%m/%Y %H:%M')}")
                     while seconds > 0:
                         wait_chunk = min(seconds, 60)
@@ -531,6 +597,7 @@ class CampaignManager:
 
             job.status = "RUNNING"
             job.started_at = datetime.now().isoformat(timespec="seconds")
+            self._sync_run(job)
             job.log("INFO", f"Bắt đầu {job.total} nhóm với hai luồng độc lập: tham gia nhóm và đăng bài")
             workers = min(max(1, int(settings.get("threads") or 1)), len(per_account))
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="group-post") as pool:
@@ -674,25 +741,29 @@ class CampaignManager:
         level = "WARNING" if status in {"PENDING_APPROVAL", "REQUIRES_ANSWERS", "FAILED"} else "SUCCESS"
         job.log(level, f"[{uid}] {group_name}: {result.get('message', '')}")
 
-    @staticmethod
     def _record_result(
-        job: CampaignJob, account: dict[str, Any], group: dict[str, Any], result: dict[str, Any]
+        self, job: CampaignJob, account: dict[str, Any], group: dict[str, Any], result: dict[str, Any]
     ) -> None:
         uid = account["uid"]
+        status = str(result.get("status") or "FAILED").upper()
+        if status not in {"SUCCESS", "PENDING_APPROVAL", "FAILED", "SKIPPED", "CANCELLED"}:
+            status = "FAILED"
         item = {
+            "id": str(uuid.uuid4()),
             "account_uid": uid,
             "account_id": account.get("id"),
             "account_name": account.get("profile_name"),
             "group_key": _group_key(group),
             "group_name": group.get("name"),
             "group_url": _group_url(group),
-            "status": result.get("status", "FAILED"),
+            "status": status,
             "message": result.get("message", ""),
             "join_status": result.get("join_status"),
             "content": result.get("content"),
             "error_code": result.get("error_code"),
             "error_detail": result.get("error_detail"),
             "result_url": result.get("result_url") or result.get("group_url"),
+            "finished_at": datetime.now().isoformat(timespec="seconds"),
         }
         with job.lock:
             job.results.append(item)
@@ -703,135 +774,16 @@ class CampaignManager:
                 job.skipped += 1
             else:
                 job.failed += 1
+        self.persistence.record_task(job.id, item)
+        self._sync_run(job)
         level = "SUCCESS" if item["status"] == "SUCCESS" else "WARNING" if item["status"] in {"SKIPPED", "PENDING_APPROVAL"} else "ERROR"
         job.log(level, f"[{uid}] {item['group_name'] or item['group_key']}: {item['message']}")
 
-    @staticmethod
-    def _persist_final_results(job: CampaignJob) -> None:
-        """Persist the v2 run, final tasks and transactional sync outbox."""
-        try:
-            from ..local_database import local_db
-
-            final_status = (
-                job.status
-                if job.status in {"COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"}
-                else "FAILED"
-            )
-            action_type = str(job.payload.get("action_type") or "POST").upper()
-            campaign_id = str(uuid.uuid4())
-            campaign_name = str(
-                job.payload.get("name")
-                or job.payload.get("campaign_name")
-                or f"{action_type} {job.started_at or job.finished_at or job.id}"
-            )[:200]
-            description = job.payload.get("description")
-            config_json = json.dumps(_safe_config(job.payload), ensure_ascii=False, default=str)
-            run_payload = {
-                "run_id": job.id,
-                "campaign_id": campaign_id,
-                "owner_key": job.owner or "",
-                "campaign_name": campaign_name,
-                "action_type": action_type,
-                "status": final_status,
-                "total_planned": job.total,
-                "total_success": job.success,
-                "total_failed": job.failed,
-                "total_skipped": job.skipped,
-                "started_at": job.started_at,
-                "finished_at": job.finished_at,
-            }
-            with local_db.session() as cursor:
-                cursor.execute(
-                    """
-                        INSERT INTO group_campaigns
-                            (id, owner_key, name, description, action_type)
-                        VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (campaign_id, job.owner or "", campaign_name, description, action_type),
-                )
-                cursor.execute(
-                    """
-                        INSERT INTO group_runs
-                            (id, campaign_id, run_number, status, config_json,
-                             total_planned, total_success, total_failed, total_skipped,
-                             started_at, finished_at)
-                        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        job.id, campaign_id, final_status, config_json, job.total,
-                        job.success, job.failed, job.skipped, job.started_at,
-                        job.finished_at,
-                    ),
-                )
-                cursor.execute(
-                    """
-                        INSERT INTO group_sync_outbox
-                            (event_id, data_type, data_id, payload_json, status)
-                        VALUES (?, 'RUN', ?, ?, 'PENDING')
-                    """,
-                    (
-                        str(uuid.uuid4()), job.id,
-                        json.dumps(run_payload, ensure_ascii=False, default=str),
-                    ),
-                )
-                for result in job.results:
-                    status = (
-                        result["status"]
-                        if result["status"] in {
-                            "SUCCESS", "PENDING_APPROVAL", "FAILED", "SKIPPED", "CANCELLED"
-                        }
-                        else "FAILED"
-                    )
-                    task_id = str(uuid.uuid4())
-                    task_payload = {
-                        "log_id": task_id,
-                        "run_id": job.id,
-                        "owner_key": job.owner or "",
-                        "action_type": action_type,
-                        "account_uid": result["account_uid"],
-                        "account_name": result.get("account_name"),
-                        "group_key": result["group_key"],
-                        "group_name": result.get("group_name"),
-                        "group_url": result["group_url"],
-                        "content": result.get("content"),
-                        "status": status,
-                        "result_message": result.get("message"),
-                        "error_code": result.get("error_code"),
-                        "error_detail": result.get("error_detail"),
-                        "result_url": result.get("result_url"),
-                        "finished_at": job.finished_at,
-                    }
-                    cursor.execute(
-                        """
-                            INSERT INTO group_run_tasks
-                                (id, run_id, account_id, account_uid, account_name,
-                                 group_key, group_name, group_url, content, status,
-                                 result_message, error_code, error_detail, result_url,
-                                 attempt_count, started_at, finished_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                        """,
-                        (
-                            task_id, job.id, result.get("account_id"), result["account_uid"],
-                            result.get("account_name"), result["group_key"],
-                            result.get("group_name"), result["group_url"],
-                            result.get("content"), status, result.get("message"),
-                            result.get("error_code"), result.get("error_detail"),
-                            result.get("result_url"), job.started_at, job.finished_at,
-                        ),
-                    )
-                    cursor.execute(
-                        """
-                            INSERT INTO group_sync_outbox
-                                (event_id, data_type, data_id, payload_json, status)
-                            VALUES (?, 'LOG', ?, ?, 'PENDING')
-                        """,
-                        (
-                            str(uuid.uuid4()), task_id,
-                            json.dumps(task_payload, ensure_ascii=False, default=str),
-                        ),
-                    )
-        except Exception as exc:
-            job.log("WARNING", f"Cannot persist Module 7 campaign history: {exc}")
+    def _persist_final_results(self, job: CampaignJob) -> None:
+        """Finalize the local run summary and cloud run status."""
+        if job.status not in {"COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"}:
+            job.status = "FAILED"
+        self._sync_run(job)
 
 
 campaign_manager = CampaignManager()

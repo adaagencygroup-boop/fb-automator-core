@@ -313,11 +313,15 @@ export default function GroupSourceSection({
   const processGroupFile = async (file) => {
     if (!file) return;
     setIsFileProcessing(true);
+    const scrapeUid = activeScrapingAccount?.uid || accounts[0]?.uid;
     try {
-      // 1. Thử upload trực tiếp file lên /api/groups/source/upload
+      // 1. Thử upload trực tiếp file lên /api/groups/source/upload và quét thông tin thật
       const formData = new FormData();
       formData.append("file", file);
       formData.append("filter_posted", "false");
+      if (scrapeUid) {
+        formData.append("account_uid", scrapeUid);
+      }
 
       const res = await uploadGroupSourceFile(formData);
       if (res && Array.isArray(res.groups)) {
@@ -334,8 +338,8 @@ export default function GroupSourceSection({
         });
         setSelectedGroupKeys(validGroups.map((g) => g.key));
         toast.success(
-          `Đã nạp ${validGroups.length} nhóm hợp lệ từ file "${file.name}" (Lọc bỏ ${res.dedup_count ?? 0} trùng lặp, ${res.invalid_count ?? 0} link hỏng)`,
-          "NẠP FILE THÀNH CÔNG"
+          `Đã quét được ${validGroups.length} nhóm thật từ file "${file.name}" (Lọc bỏ ${res.dedup_count ?? 0} trùng lặp, ${res.invalid_count ?? 0} link hỏng)`,
+          "QUÉT NHÓM THÀNH CÔNG"
         );
         return;
       }
@@ -343,7 +347,11 @@ export default function GroupSourceSection({
       console.warn("Backend upload error, trying parse text content:", uploadErr);
       try {
         const text = await file.text();
-        const res = await parseGroupFileSource({ content: text, filter_posted: false });
+        const res = await parseGroupFileSource({
+          content: text,
+          filter_posted: false,
+          account_uid: scrapeUid,
+        });
         if (res && Array.isArray(res.groups)) {
           const validGroups = res.groups;
           setGroupFile({
@@ -358,8 +366,8 @@ export default function GroupSourceSection({
           });
           setSelectedGroupKeys(validGroups.map((g) => g.key));
           toast.success(
-            `Đã nạp ${validGroups.length} nhóm hợp lệ từ file "${file.name}"`,
-            "NẠP FILE THÀNH CÔNG"
+            `Đã quét được ${validGroups.length} nhóm thật từ file "${file.name}"`,
+            "QUÉT NHÓM THÀNH CÔNG"
           );
           return;
         }
@@ -548,7 +556,7 @@ export default function GroupSourceSection({
           >
             {isFileProcessing ? (
               <div className="flex items-center justify-center gap-2 py-3 text-xs font-medium text-primary">
-                <Loader2 className="size-4 animate-spin" /> Đang kiểm tra danh sách nhóm...
+                <Loader2 className="size-4 animate-spin" /> Đang đọc file và quét thông tin nhóm thật từ Facebook...
               </div>
             ) : groupFile ? (
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -765,7 +773,7 @@ export default function GroupSourceSection({
                         <Loader2 className="mx-auto mb-2 size-5 animate-spin text-primary" />
                         <p className="text-xs">
                           {isFileProcessing
-                            ? "Đang xử lý file..."
+                            ? "Đang đọc file và quét dữ liệu nhóm thật từ Facebook..."
                             : "Đang quét nhóm Facebook..."}
                         </p>
                       </td>
