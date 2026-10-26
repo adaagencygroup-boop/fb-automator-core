@@ -19,10 +19,26 @@ logger = logging.getLogger(__name__)
 # Các slug hệ thống của Facebook không phải là Fanpage cá nhân/doanh nghiệp
 SYSTEM_SLUGS = {
     "search", "watch", "marketplace", "gaming", "events", "help",
-    "login", "messages", "friends", "groups", "reel", "stories",
-    "share", "settings", "photo", "photos", "video", "videos",
-    "hashtag", "bookmarks", "notifications", "saved", "pages",
+    "login", "messages", "friends", "groups", "reel", "reels",
+    "stories", "story", "share", "settings", "photo", "photos",
+    "video", "videos", "permalink", "hashtag", "bookmarks",
+    "notifications", "saved", "pages",
 }
+
+# Path media — không bao giờ dùng làm link tác giả Page
+MEDIA_PATH_MARKERS = (
+    "/reel/",
+    "/reels/",
+    "/stories/",
+    "/story/",
+    "story.php",
+    "/watch/",
+    "/videos/",
+    "/photos/",
+    "/posts/",
+    "/permalink/",
+    "/share/",
+)
 
 # Các sub-path con thường gặp trên trang Page
 SUB_PATHS = {
@@ -90,6 +106,11 @@ def clean_page_url(raw_url: str) -> str:
         page_id = pages_match.group(1)
         return f"https://{norm_host}/pages/{page_id}"
 
+    # Trường hợp 2b: /people/Name/123456...
+    people_match = re.search(r"^/people/[^/]+/(\d{6,25})/?$", path, flags=re.IGNORECASE)
+    if people_match:
+        return f"https://{norm_host}/profile.php?id={people_match.group(1)}"
+
     # Trường hợp 3: /<username>[/sub-path]
     parts = [p for p in path.split("/") if p]
     if not parts:
@@ -116,16 +137,68 @@ def clean_page_url(raw_url: str) -> str:
     return f"https://{norm_host}/{first_segment}"
 
 
+def is_media_facebook_url(url: str) -> bool:
+    """True nếu URL là reel/story/watch/posts/... — không phải trang tác giả."""
+    if not url:
+        return False
+    lower = str(url).lower()
+    if any(m in lower for m in MEDIA_PATH_MARKERS):
+        return True
+    # /reel /reels /stories /story /watch đứng một mình (sau clean)
+    try:
+        parts = [p for p in urlparse(lower if "://" in lower else f"https://x/{lower}").path.split("/") if p]
+    except Exception:
+        parts = []
+    if parts and parts[0] in (
+        "reel", "reels", "stories", "story", "watch", "share",
+        "photo", "photos", "video", "videos", "permalink",
+    ):
+        return True
+    return False
+
+
+def is_valid_author_candidate_url(url: str) -> Tuple[bool, str, str]:
+    """
+    Kiểm tra URL có đủ điều kiện làm link tác giả trước khi mở tab.
+    Trả về (ok, quality, reason).
+    """
+    if not url or not str(url).strip():
+        return (False, "weak", "empty_url")
+    if is_media_facebook_url(url):
+        return (False, "weak", "media_url")
+
+    cleaned = clean_page_url(url)
+    if not cleaned:
+        return (False, "weak", "clean_failed")
+    if is_media_facebook_url(cleaned):
+        return (False, "weak", "media_after_clean")
+
+    page_key, quality = extract_page_identifier(cleaned)
+    if not page_key:
+        return (False, "weak", "no_page_key")
+    if quality == "weak":
+        return (False, "weak", "weak_identifier")
+    if page_key.startswith("user:") and page_key.split(":", 1)[-1] in SYSTEM_SLUGS:
+        return (False, "weak", f"system_slug:{page_key}")
+    return (True, quality, "ok")
+
+
 def extract_page_identifier(url: str) -> Tuple[str, str]:
     """
     Trích xuất định danh chuẩn (page_key) và chất lượng (quality: 'high' | 'weak'):
     - profile.php?id=123456 -> ('id:123456', 'high')
     - /pages/<id> hoặc /pages/<name>/<id> -> ('id:<id>', 'high')
     - /username -> ('user:<username_lowercase>', 'high')
-    - Không tách được -> ('url:<normalized_url>', 'weak')
+    - Link media / slug hệ thống -> ('', 'weak') hoặc url:… weak — không bao giờ user:reels
     """
+    if is_media_facebook_url(url or ""):
+        return ("", "weak")
+
     cleaned = clean_page_url(url)
     if not cleaned:
+        return ("", "weak")
+
+    if is_media_facebook_url(cleaned):
         return ("", "weak")
 
     # 1. profile.php?id=...
@@ -138,6 +211,11 @@ def extract_page_identifier(url: str) -> Tuple[str, str]:
     if match_pages:
         return (f"id:{match_pages.group(1)}", "high")
 
+    # 2b. /people/Name/<id>
+    match_people = re.search(r"/people/[^/]+/(\d{6,25})", cleaned, flags=re.IGNORECASE)
+    if match_people:
+        return (f"id:{match_people.group(1)}", "high")
+
     # 3. UID số thuần
     match_pure_id = re.search(r"facebook\.com/(\d{6,25})$", cleaned)
     if match_pure_id:
@@ -149,7 +227,10 @@ def extract_page_identifier(url: str) -> Tuple[str, str]:
     if parts:
         slug = parts[0]
         slug_lower = slug.lower()
-        if slug_lower not in SYSTEM_SLUGS and re.match(r"^[a-zA-Z0-9._\-]+$", slug):
+        # Tuyệt đối không trả user:reels / user:stories / user:watch …
+        if slug_lower in SYSTEM_SLUGS:
+            return ("", "weak")
+        if re.match(r"^[a-zA-Z0-9._\-]+$", slug):
             return (f"user:{slug_lower}", "high")
 
     # Fallback cho link lạ hoặc không tách được
@@ -162,11 +243,14 @@ def is_valid_page_entry(line: str) -> bool:
         return False
     lower = line.lower().strip()
 
-    # Loại bỏ các link tìm kiếm, nhóm, reel, watch, login...
+    # Loại bỏ các link tìm kiếm, nhóm, reel/reels/story, watch, login...
     if any(bad in lower for bad in [
-        "/search", "/groups/", "/groups", "/reel/", "/stories/",
+        "/search", "/groups/", "/groups", "/reel/", "/reels/",
+        "/stories/", "/story/", "/watch/",
         "/events/", "/marketplace/", "/login", "/messages/",
     ]):
+        return False
+    if is_media_facebook_url(lower):
         return False
 
     # UID số thuần

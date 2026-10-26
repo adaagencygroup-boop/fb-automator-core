@@ -12,6 +12,7 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote_plus
@@ -26,6 +27,13 @@ from .page_source import (
     classify_header_action,
     normalize_page_candidate_key,
     calculate_page_relevance_score,
+    is_media_facebook_url,
+    is_valid_author_candidate_url,
+)
+from .entity_classify import (
+    build_about_url,
+    classify_page_entity,
+    should_open_about,
 )
 
 logger = logging.getLogger(__name__)
@@ -974,12 +982,198 @@ def start_page_search_background(
 # HASHTAG SEARCH HARVEST FLOW (Section 10 of Detail Plan)
 # =============================================================================
 
+# Ô Search Facebook (cùng bộ locator Module 10 — EN trước, VI sau)
+_FB_SEARCH_INPUT_LOCATORS = [
+    '//input[@aria-label="Search Facebook"]',
+    '//input[@placeholder="Search Facebook"]',
+    '//input[@type="search" and @aria-label="Search Facebook"]',
+    '//input[@role="combobox" and @aria-label="Search Facebook"]',
+    '//input[@aria-label="Tìm kiếm trên Facebook"]',
+    '//input[@placeholder="Tìm kiếm trên Facebook"]',
+    '//input[@type="search" and (@aria-label="Tìm kiếm trên Facebook" or @aria-label="Search Facebook")]',
+    '//input[@role="combobox" and (contains(@aria-label,"Tìm kiếm trên Facebook") or contains(@aria-label,"Search Facebook"))]',
+    '//input[@type="search" and (contains(@aria-label,"Tìm kiếm") or contains(@aria-label,"Search") or contains(@placeholder,"Tìm kiếm") or contains(@placeholder,"Search Facebook"))]',
+]
+
+_FB_POSTS_TAB_LOCATORS = [
+    '//*[@role="list"]//span[normalize-space()="Posts" or normalize-space()="Bài viết"]',
+    '//*[@role="list"]//*[@role="listitem" or @role="link" or @role="button"][.//span[normalize-space()="Posts" or normalize-space()="Bài viết"]]',
+    '//span[normalize-space()="Posts" or normalize-space()="Bài viết"]',
+    '//a[contains(@href,"/search/posts")]//span[contains(.,"Posts") or contains(.,"Bài viết")]',
+    '//*[@role="link" or @role="button"][normalize-space()="Posts" or normalize-space()="Bài viết"]',
+]
+
+
+def _clear_fb_search_input(driver, search_el) -> None:
+    from selenium.webdriver.common.keys import Keys
+
+    try:
+        search_el.click()
+    except Exception:
+        try:
+            driver.execute_script("arguments[0].click();", search_el)
+        except Exception:
+            pass
+    try:
+        search_el.clear()
+    except Exception:
+        pass
+    try:
+        search_el.send_keys(Keys.CONTROL, "a")
+        search_el.send_keys(Keys.BACKSPACE)
+    except Exception:
+        pass
+    try:
+        driver.execute_script(
+            "arguments[0].value='';"
+            "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));",
+            search_el,
+        )
+    except Exception:
+        pass
+
+
+def _click_posts_search_tab(driver, wait_and_find, human_sleep) -> bool:
+    from selenium.webdriver.common.by import By
+
+    human_sleep(1.2, 2.2)
+    try:
+        el = wait_and_find(driver, _FB_POSTS_TAB_LOCATORS, timeout=12)
+    except Exception:
+        return False
+
+    targets = [el]
+    try:
+        parent = el.find_element(
+            By.XPATH, "./ancestor::*[@role='link' or @role='button' or @role='listitem'][1]"
+        )
+        targets.insert(0, parent)
+    except Exception:
+        pass
+
+    for target in targets:
+        try:
+            target.click()
+            human_sleep(1.5, 2.5)
+            return True
+        except Exception:
+            try:
+                driver.execute_script("arguments[0].click();", target)
+                human_sleep(1.5, 2.5)
+                return True
+            except Exception:
+                continue
+    return False
+
+
+def navigate_hashtag_via_search_box(
+    driver,
+    current_tag: str,
+    session_id: int,
+    *,
+    reset_home: bool = True,
+) -> str:
+    """
+    Gõ #tag vào ô Search Facebook → Enter → tab Posts/Bài viết.
+    Fallback lần lượt: /search/posts/?q=%23tag → /hashtag/tag.
+    Trả về kênh đã vào: search_box | search_posts | hashtag_url
+    """
+    from selenium.webdriver.common.keys import Keys
+    from core.browser import wait_and_find, human_sleep, human_type
+
+    tag = (current_tag or "").strip().lstrip("#")
+    query = f"#{tag}"
+
+    if reset_home:
+        append_session_log(session_id, f"Về trang chủ rồi gõ ô Search «{query}»", "info")
+        try:
+            driver.get("https://www.facebook.com/")
+            human_sleep(2.0, 3.0)
+        except Exception as exc:
+            append_session_log(session_id, f"Không về được trang chủ: {exc}", "warn")
+
+    typed = False
+    try:
+        search_el = wait_and_find(driver, _FB_SEARCH_INPUT_LOCATORS, timeout=20)
+        _clear_fb_search_input(driver, search_el)
+        human_sleep(0.25, 0.45)
+        try:
+            search_el = wait_and_find(driver, _FB_SEARCH_INPUT_LOCATORS, timeout=8)
+        except Exception:
+            pass
+        human_type(search_el, query)
+        human_sleep(0.3, 0.6)
+        append_session_log(session_id, f"Đã gõ «{query}» vào ô Search — Enter", "success")
+        search_el.send_keys(Keys.ENTER)
+        human_sleep(2.5, 3.5)
+        typed = True
+    except Exception as exc:
+        append_session_log(session_id, f"Không gõ được ô Search («{query}»): {exc}", "warn")
+
+    if typed:
+        append_session_log(session_id, f"«{query}» — click tab Posts / Bài viết", "info")
+        clicked = _click_posts_search_tab(driver, wait_and_find, human_sleep)
+        if clicked:
+            try:
+                cur = (driver.current_url or "").lower()
+                if "/search/posts" not in cur and "posts" not in cur:
+                    driver.get(f"https://www.facebook.com/search/posts/?q={quote_plus(query)}")
+                    human_sleep(2.0, 3.0)
+            except Exception:
+                pass
+            append_session_log(session_id, f"Đã vào kết quả Posts qua ô Search «{query}»", "success")
+            return "search_box"
+
+        # Đã gõ nhưng không click được tab → URL search posts
+        posts_url = f"https://www.facebook.com/search/posts/?q={quote_plus(query)}"
+        append_session_log(session_id, f"Không click được Posts — mở {posts_url}", "warn")
+        driver.get(posts_url)
+        human_sleep(2.5, 3.5)
+        return "search_posts"
+
+    # Không gõ được ô search → fallback URL
+    posts_url = f"https://www.facebook.com/search/posts/?q={quote_plus(query)}"
+    append_session_log(session_id, f"Fallback search posts: {posts_url}", "warn")
+    try:
+        driver.get(posts_url)
+        human_sleep(2.5, 3.5)
+        if check_search_posts_availability(driver):
+            return "search_posts"
+    except Exception:
+        pass
+
+    hashtag_url = f"https://www.facebook.com/hashtag/{quote_plus(tag)}"
+    append_session_log(session_id, f"Fallback cuối /hashtag/: {hashtag_url}", "warn")
+    driver.get(hashtag_url)
+    human_sleep(2.5, 3.5)
+    return "hashtag_url"
+
+
+def check_search_posts_availability(driver) -> bool:
+    """True nếu đang ở trang search (posts/top) và không hiện lỗi unavailable."""
+    try:
+        curr = (driver.current_url or "").lower()
+        if "facebook.com/search" not in curr:
+            return False
+        page_text = driver.execute_script(
+            "return (document.body ? (document.body.innerText || '') : '');"
+        ).lower()
+        for sig in (
+            "this content isn't available",
+            "isn't available right now",
+            "trang này hiện không khả dụng",
+            "nội dung này hiện không khả dụng",
+        ):
+            if sig in page_text:
+                return False
+        return True
+    except Exception:
+        return True
+
 
 def check_hashtag_page_availability(driver) -> Tuple[bool, str]:
     """
-    Kiểm tra xem trang hashtag có mở được bình thường hay gặp lỗi không (Section 10.3):
-    1. Chuyển hướng ra ngoài facebook.com/hashtag/...
-    2. Gặp lỗi 'This content isn't available right now', 'Trang này hiện không khả dụng', v.v.
+    Kiểm tra trang hashtag (fallback cuối) có mở được không.
     Trả về (is_available, unavailable_reason)
     """
     try:
@@ -1008,16 +1202,68 @@ def check_hashtag_page_availability(driver) -> Tuple[bool, str]:
         return (True, "")
 
 
+def _fold_hashtag_text(text: str) -> str:
+    """Bỏ dấu tiếng Việt để so khớp #thoitrang ≈ #thờitrang."""
+    if not text:
+        return ""
+    norm = unicodedata.normalize("NFD", str(text).lower())
+    return "".join(c for c in norm if unicodedata.category(c) != "Mn")
+
+
+def _post_matches_hashtag(content: str, tags_found: List[str], target_tag: str) -> bool:
+    """True nếu bài có hashtag mục tiêu (kể cả khác dấu / hoa thường)."""
+    tag = (target_tag or "").lower().lstrip("#").strip()
+    if not tag:
+        return False
+    content_l = (content or "").lower()
+    if f"#{tag}" in content_l or tag in [(t or "").lower() for t in tags_found]:
+        return True
+    tag_f = _fold_hashtag_text(tag)
+    content_f = _fold_hashtag_text(content)
+    tags_f = {_fold_hashtag_text(t) for t in tags_found}
+    if f"#{tag_f}" in content_f or tag_f in tags_f:
+        return True
+    # Text cắt ngắn đôi khi mất dấu # nhưng còn token hashtag
+    if tag_f and re.search(rf"(?<![a-z0-9_]){re.escape(tag_f)}(?![a-z0-9_])", content_f):
+        return True
+    return False
+
+
 def extract_hashtag_posts_from_driver(driver, current_tag: str) -> List[Dict[str, Any]]:
     """
-    Bóc tách bài viết feed hashtag / search posts (chỉ dẫn 2.5 bước 1–2).
-    Thêm `header_action`: chữ hành động cạnh tên tác giả (Follow / Join / …).
+    Bóc tách bài viết feed hashtag / search posts.
+    Chỉ lấy link tác giả gốc (/tenpage hoặc profile.php?id=…); loại reel/story/watch.
+    Không click Follow — chỉ đọc href + chữ hành động.
     """
     extracted_posts: List[Dict[str, Any]] = []
     try:
         script = r"""
         const ACTION_RE = /^(Follow|Following|Theo dõi|Đang theo dõi|Join|Tham gia)$/i;
+        const MEDIA_RE = /\/(reels?|stories?|watch|videos?|photos?|posts|permalink|share)(\/|$|\?)|story\.php/i;
         const posts = [];
+
+        function isAuthorHref(href) {
+          if (!href || href.startsWith('#') || href.includes('/hashtag/') || href.includes('/search/')) return false;
+          if (MEDIA_RE.test(href)) return false;
+          try {
+            const u = new URL(href, location.origin);
+            const path = u.pathname || '';
+            if (path.includes('profile.php')) {
+              return !!(new URLSearchParams(u.search).get('id'));
+            }
+            // /people/Name/123456 → id số cuối
+            const people = path.match(/^\/people\/[^/]+\/(\d{6,})\/?$/i);
+            if (people) return true;
+            const parts = path.split('/').filter(Boolean);
+            // Chỉ 1 đoạn path = link gốc tác giả
+            return parts.length === 1;
+          } catch (e) { return false; }
+        }
+
+        function isMediaHref(href) {
+          return !!(href && MEDIA_RE.test(href));
+        }
+
         const articles = Array.from(document.querySelectorAll(
           'div[role="feed"] > div, div[role="article"], div[data-ad-preview="message"]'
         ));
@@ -1029,30 +1275,44 @@ def extract_hashtag_posts_from_driver(driver, current_tag: str) -> List[Dict[str
             const rawText = (el.innerText || '').trim();
             if (rawText.length < 15) continue;
 
-            const links = Array.from(el.querySelectorAll('a[role="link"], a[href]'));
             let authorLink = '';
             let authorName = '';
             let postLink = '';
             let headerAction = '';
 
-            for (const a of links) {
+            // Ưu tiên vùng header: h2/h3/strong + vài link đầu thẻ (không lấy mù toàn thẻ)
+            const headerAnchors = Array.from(el.querySelectorAll(
+              'h2 a[href], h3 a[href], h4 a[href], strong a[href], [data-ad-rendering-role="profile_name"] a[href]'
+            ));
+            const earlyAnchors = Array.from(el.querySelectorAll('a[role="link"][href], a[href]')).slice(0, 12);
+            const ordered = [];
+            const seen = new Set();
+            for (const a of headerAnchors.concat(earlyAnchors)) {
+              const href = a.getAttribute('href') || '';
+              if (!href || seen.has(href)) continue;
+              seen.add(href);
+              ordered.push(a);
+            }
+
+            for (const a of ordered) {
                 const href = a.getAttribute('href') || '';
                 if (!href || href.includes('/hashtag/') || href.includes('/search/') || href.startsWith('#')) continue;
 
-                if (href.includes('/posts/') || href.includes('/photos/') || href.includes('/videos/')
-                    || href.includes('story.php') || href.includes('/permalink/') || href.includes('/reel/')) {
+                if (isMediaHref(href)) {
                     if (!postLink) postLink = href;
                     continue;
                 }
 
                 const txt = (a.innerText || '').trim().replace(/\s+/g, ' ');
-                if (!authorLink && txt.length >= 2 && !ACTION_RE.test(txt)) {
+                if (ACTION_RE.test(txt)) continue; // không lấy nút Follow làm author
+
+                if (!authorLink && isAuthorHref(href) && txt.length >= 2) {
                     authorLink = href;
                     authorName = txt.split('\n')[0].trim();
                 }
             }
 
-            // Chữ hành động gần header: nút/span/link Follow|Join cạnh tên
+            // Chữ hành động gần header — chỉ ĐỌC, không click
             const headerNodes = Array.from(el.querySelectorAll('a, span, div[role="button"]')).slice(0, 40);
             for (const node of headerNodes) {
                 const t = (node.innerText || '').trim().replace(/\s+/g, ' ');
@@ -1061,17 +1321,13 @@ def extract_hashtag_posts_from_driver(driver, current_tag: str) -> List[Dict[str
                     break;
                 }
             }
-            // Fallback: dòng đầu thẻ dạng "Tên · Follow"
             if (!headerAction) {
                 const firstLine = rawText.split('\n').map(l => l.trim()).filter(Boolean)[0] || '';
                 const m = firstLine.match(/[·•|]\s*(Follow|Following|Theo dõi|Đang theo dõi|Join|Tham gia)\s*$/i);
                 if (m) headerAction = m[1];
             }
 
-            if (!authorLink && links.length > 0) {
-                authorLink = links[0].getAttribute('href') || '';
-                authorName = (links[0].innerText || '').trim().split('\n')[0].trim();
-            }
+            // Không fallback sang links[0] mù quáng (thường là reel/story)
             if (!authorLink) continue;
 
             const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
@@ -1095,18 +1351,23 @@ def extract_hashtag_posts_from_driver(driver, current_tag: str) -> List[Dict[str
             content = item.get("content_text") or ""
             tags_found = [t.lower() for t in re.findall(r"#([\w\d_]+)", content, flags=re.UNICODE)]
 
-            exact_match = (
-                f"#{target_tag_lower}" in content.lower()
-                or target_tag_lower in tags_found
-            )
+            exact_match = _post_matches_hashtag(content, tags_found, target_tag_lower)
 
-            post_raw_url = item.get("post_url") or item.get("author_url") or ""
+            author_url = item.get("author_url") or ""
+            # Lọc media còn lọt từ phía Python
+            if is_media_facebook_url(author_url):
+                continue
+            ok, _q, _reason = is_valid_author_candidate_url(author_url)
+            if not ok:
+                continue
+
+            post_raw_url = item.get("post_url") or author_url
             header_action = (item.get("header_action") or "").strip()
 
             extracted_posts.append({
                 "post_url": post_raw_url,
                 "author_name": item.get("author_name") or "",
-                "author_url": item.get("author_url") or "",
+                "author_url": author_url,
                 "author_subtitle": item.get("author_subtitle") or "",
                 "header_action": header_action,
                 "content_text": content[:500],
@@ -1119,141 +1380,491 @@ def extract_hashtag_posts_from_driver(driver, current_tag: str) -> List[Dict[str
     return extracted_posts
 
 
-_VERIFY_PAGE_META_JS = r"""
-const body = (document.body && document.body.innerText) ? document.body.innerText : '';
-const lower = body.toLowerCase();
-const isProfile = /thêm bạn bè|add friend|bạn chung|mutual friends/.test(lower)
-  && !/người theo dõi|followers|thích trang|like page/.test(lower);
-const hasFollowOrLike = /theo dõi|follow|thích|like/.test(lower);
-const hasPageCategory = /trang\s*[·•]|page\s*[·•]|người theo dõi|followers/.test(lower);
-const isPage = !isProfile && (hasFollowOrLike || hasPageCategory);
+# JS chỉ TRÍCH tín hiệu header (không phân loại). Classifier thuần: entity_classify.classify_page_entity
+_VERIFY_EXTRACT_HEADER_JS = r"""
+const href = (location.href || '');
+const mainRoot = document.querySelector('[role="main"]') || document.body;
+
+function exactLabel(el) {
+  const aria = (el.getAttribute('aria-label') || '').trim();
+  const txt = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ');
+  return { aria, txt };
+}
+
+function getAuthorHeaderRoot(h1) {
+  if (!h1) return null;
+  let best = h1.parentElement;
+  let node = h1.parentElement;
+  for (let depth = 0; depth < 7 && node; depth++) {
+    const role = (node.getAttribute && node.getAttribute('role')) || '';
+    if (role === 'main' || role === 'navigation' || role === 'complementary') break;
+    if (node === document.body || node === document.documentElement) break;
+    try {
+      if ((node.innerText || '').length > 12000) break;
+    } catch (e) {}
+    best = node;
+    const hasAction = Array.from(node.querySelectorAll('[role="button"], a[role="link"], a')).slice(0, 60).some(el => {
+      if (el.closest('[role="navigation"]')) return false;
+      const t = ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '')).trim().replace(/\s+/g, ' ');
+      if (t.length < 2 || t.length > 48) return false;
+      return /Theo dõi|Follow|Nhắn tin|Message|Thêm bạn|Add friend|Bạn bè|Friends/i.test(t);
+    });
+    if (hasAction && depth >= 1) return node;
+    node = node.parentElement;
+  }
+  return best;
+}
 
 let pageName = '';
-const h1 = document.querySelector('h1');
+const h1 = (mainRoot && mainRoot.querySelector('h1')) || document.querySelector('h1');
 if (h1) pageName = (h1.innerText || '').trim().split('\n')[0].trim();
 if (!pageName) {
-  const title = document.title || '';
-  pageName = title.replace(/\s*[|·•].*$/, '').trim();
+  pageName = (document.title || '').replace(/\s*[|·•].*$/, '').trim();
 }
 
-let followerText = '';
-// Chỉ bắt followers / người theo dõi; đơn vị gồm N|nghìn|k|triệu|… (không lấy likes)
-const mFl = body.match(
-  /([\d]+(?:[.,][\d]+)*)\s*(nghìn|ngàn|triệu|n|k|tr|m)?\s*(người\s*theo\s*dõi|followers?)\b/i
-);
-if (mFl) followerText = mFl[0];
+const headerRoot = getAuthorHeaderRoot(h1);
+let headerText = '';
+if (headerRoot) headerText = (headerRoot.innerText || '').slice(0, 1500);
+else if (h1) {
+  let node = h1.parentElement;
+  for (let i = 0; i < 4 && node; i++) {
+    headerText += ' ' + (node.innerText || '').slice(0, 400);
+    node = node.parentElement;
+  }
+}
+headerText = headerText.replace(/\s+/g, ' ').trim();
+
+const headerButtons = [];
+const seenBtn = new Set();
+if (headerRoot) {
+  const nodes = Array.from(headerRoot.querySelectorAll(
+    '[role="button"], a[role="link"], a, div[role="button"], [aria-label]'
+  )).slice(0, 100);
+  for (const el of nodes) {
+    if (el.closest('[role="navigation"]')) continue;
+    const { aria, txt } = exactLabel(el);
+    const label = (aria && aria.length <= 48) ? aria : txt;
+    if (!label || label.length < 2 || label.length > 48) continue;
+    const key = label.toLowerCase();
+    if (seenBtn.has(key)) continue;
+    seenBtn.add(key);
+    headerButtons.push(label);
+  }
+}
+
+const headerTabs = [];
+const tabScope = headerRoot || mainRoot;
+Array.from(tabScope.querySelectorAll('[role="tab"]')).slice(0, 24).forEach(t => {
+  const lab = (t.innerText || t.getAttribute('aria-label') || '').trim();
+  if (lab) headerTabs.push(lab.split('\n')[0].trim());
+});
 
 let category = '';
-const catMatch = body.match(/(?:Trang|Page)\s*[·•]\s*([^\n]{2,80})/i);
+const catMatch = headerText.match(/(?:Trang|Page)\s*[·•]\s*([^\n·•|]{2,80})/i);
 if (catMatch) category = catMatch[1].trim();
 
-let isVerified = null;
-if (document.querySelector('[aria-label*="Verified"], [aria-label*="Đã xác minh"], [aria-label*="Xác minh"]')) {
-  isVerified = true;
+let followerText = '';
+const likeFollow = headerText.match(
+  /([\d.,]+)\s*(?:nghìn|ngàn|triệu|k|m)?\s*(?:lượt\s*thích|likes?)\s*[·•]\s*([\d.,]+)\s*(?:nghìn|ngàn|triệu|n|k|m)?\s*(?:người\s*theo\s*dõi|followers?)/i
+);
+if (likeFollow) followerText = likeFollow[0];
+else {
+  const mFl = headerText.match(
+    /([\d]+(?:[.,][\d]+)*)\s*(nghìn|ngàn|triệu|n|k|tr|m)?\s*(người\s*theo\s*dõi|followers?)\b/i
+  );
+  if (mFl) followerText = mFl[0];
 }
 
+const mainSample = ((mainRoot && mainRoot.innerText) || '').slice(0, 3500);
+let isVerified = null;
+if (mainRoot.querySelector('[aria-label*="Verified"], [aria-label*="Đã xác minh"], [aria-label*="Xác minh"]')) {
+  isVerified = true;
+}
 let avatarUrl = null;
-const img = document.querySelector('image, img[src*="scontent"], svg image');
+const img = (headerRoot || mainRoot).querySelector('image, img[src*="scontent"], svg image');
 if (img) {
   avatarUrl = img.getAttribute('xlink:href') || img.getAttribute('href') || img.getAttribute('src') || null;
 }
 
 return {
-  is_page: isPage,
-  is_profile: isProfile,
   page_name: pageName,
-  page_url: location.href,
+  page_url: href,
+  header_text: headerText,
+  header_buttons: headerButtons,
+  header_tabs: headerTabs,
   follower_text: followerText,
   category: category,
+  main_sample: mainSample.slice(0, 2000),
   is_verified: isVerified,
-  avatar_url: avatarUrl
+  avatar_url: avatarUrl,
+  header_root_found: !!headerRoot,
+  h1_found: !!h1
 };
 """
 
 
-def _read_page_meta_from_driver(driver) -> Dict[str, Any]:
+_VERIFY_ABOUT_TEXT_JS = r"""
+const body = (document.body && document.body.innerText) ? document.body.innerText : '';
+let category = '';
+const catMatch = body.match(/(?:Hạng mục|Category)\s*[:\n]\s*([^\n]{2,80})/i);
+if (catMatch) category = catMatch[1].trim();
+return { about_text: body.slice(0, 5000), category: category };
+"""
+
+VERIFY_AUTHOR_DEADLINE_SEC = 15.0
+_FIXTURE_DUMP_PATH = None  # set khi cần dump live
+
+
+def _remaining_timeout(deadline: float, step_cap: float) -> float:
+    left = max(0.05, deadline - time.time())
+    return min(step_cap, left)
+
+
+def _deadline_exceeded(deadline: float) -> bool:
+    return time.time() >= deadline
+
+
+def _read_header_signals(driver) -> Dict[str, Any]:
     try:
-        return driver.execute_script(_VERIFY_PAGE_META_JS) or {}
+        return driver.execute_script(_VERIFY_EXTRACT_HEADER_JS) or {}
     except Exception:
         return {}
 
 
-def _wait_page_meta_ready(driver, timeout_sec: float = 10.0, poll_sec: float = 0.4) -> Dict[str, Any]:
-    """Chờ tên Page và số follower xuất hiện (tối đa ~10s). Profile rõ ràng thì trả sớm."""
-    deadline = time.time() + timeout_sec
+def _wait_header_ready(driver, deadline: float, poll_sec: float = 0.25) -> Dict[str, Any]:
+    """Chờ h1/header xuất hiện — thoát sớm khi đủ tín hiệu, không chờ hết timeout cố định."""
     info: Dict[str, Any] = {}
-    while time.time() < deadline:
-        info = _read_page_meta_from_driver(driver)
-        if info.get("is_profile"):
-            return info
+    while not _deadline_exceeded(deadline):
+        info = _read_header_signals(driver)
         name = (info.get("page_name") or "").strip()
-        fl = (info.get("follower_text") or "").strip()
-        if name and fl:
+        if name and (
+            info.get("follower_text")
+            or info.get("header_buttons")
+            or info.get("category")
+            or info.get("header_root_found")
+        ):
             return info
-        time.sleep(poll_sec)
-    return info or _read_page_meta_from_driver(driver)
+        if name and info.get("h1_found"):
+            # Có tên — đủ để classify (có thể fallback/UNKNOWN)
+            return info
+        time.sleep(min(poll_sec, _remaining_timeout(deadline, poll_sec)))
+    return info or _read_header_signals(driver)
 
 
-def verify_and_extract_page_in_new_tab(driver, author_url: str) -> Optional[Dict[str, Any]]:
+def _fetch_about_text(driver, author_url: str, deadline: float) -> Dict[str, Any]:
+    try:
+        cleaned = clean_page_url(author_url) or author_url
+        about_url = build_about_url(cleaned)
+        if not about_url or _deadline_exceeded(deadline):
+            return {}
+        driver.get(about_url)
+        wait_left = _remaining_timeout(deadline, 3.0)
+        time.sleep(min(0.8, wait_left))
+        if _deadline_exceeded(deadline):
+            return {}
+        return driver.execute_script(_VERIFY_ABOUT_TEXT_JS) or {}
+    except Exception as exc:
+        logger.debug(f"[Scanner] about fetch lỗi: {exc}")
+        return {}
+
+
+def _is_media_current_url(url: str) -> bool:
+    lower = (url or "").lower()
+    return any(
+        x in lower
+        for x in ("/reel", "/stories", "/story", "/watch", "/reels/")
+    )
+
+
+def _cdp_block_heavy_resources(driver) -> bool:
+    """Chặn ảnh/video/font trên tab hiện tại. Trả True nếu bật được."""
+    try:
+        driver.execute_cdp_cmd("Network.enable", {})
+        driver.execute_cdp_cmd(
+            "Network.setBlockedURLs",
+            {
+                "urls": [
+                    "*.png", "*.jpg", "*.jpeg", "*.gif", "*.webp", "*.svg",
+                    "*.mp4", "*.webm", "*.m4v",
+                    "*.woff", "*.woff2", "*.ttf", "*.otf",
+                ]
+            },
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _cdp_unblock_resources(driver) -> None:
+    try:
+        driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": []})
+    except Exception:
+        pass
+
+
+def _dump_classify_fixture(signals: Dict[str, Any], entity: str, reason: str) -> None:
+    """Ghi một mẫu header khi chạy live (append JSONL) để bổ sung fixture."""
+    try:
+        import os
+        dump_dir = os.path.join(os.path.dirname(__file__), "fixtures")
+        os.makedirs(dump_dir, exist_ok=True)
+        path = os.path.join(dump_dir, "classify_headers_live.jsonl")
+        row = {
+            "page_name": signals.get("page_name"),
+            "url": signals.get("page_url"),
+            "header_text": (signals.get("header_text") or "")[:800],
+            "header_buttons": signals.get("header_buttons") or [],
+            "header_tabs": signals.get("header_tabs") or [],
+            "follower_text": signals.get("follower_text") or "",
+            "entity": entity,
+            "reason": reason,
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _cache_lookup(
+    author_cache: Optional[Dict[str, Any]],
+    cleaned_author: str,
+) -> Optional[Dict[str, Any]]:
+    if not author_cache:
+        return None
+    hit = author_cache.get(cleaned_author)
+    if hit is not None:
+        return dict(hit)
+    page_key, _ = extract_page_identifier(cleaned_author)
+    if page_key:
+        for _k, v in author_cache.items():
+            if isinstance(v, dict) and v.get("page_key") == page_key:
+                return dict(v)
+    return None
+
+
+def _cache_store(
+    author_cache: Optional[Dict[str, Any]],
+    cleaned_author: str,
+    result: Dict[str, Any],
+) -> None:
+    if author_cache is None or not cleaned_author:
+        return
+    author_cache[cleaned_author] = dict(result)
+    pk = result.get("page_key")
+    if pk:
+        author_cache[f"page_key:{pk}"] = dict(result)
+
+
+def verify_and_extract_page_in_new_tab(
+    driver,
+    author_url: str,
+    *,
+    author_cache: Optional[Dict[str, Any]] = None,
+    deadline_sec: float = VERIFY_AUTHOR_DEADLINE_SEC,
+    dump_fixture: bool = True,
+) -> Optional[Dict[str, Any]]:
     """
-    Mở link tác giả trong tab phụ, xác minh Page, trích thông tin thật.
-    Trả về:
-    - dict Page hợp lệ (có page_key)
-    - {"_verify_rejected": True, ...} khi đã xác nhận Profile / không phải Page
-    - None khi timeout / lỗi load / chưa đọc được follower (caller được retry, không reject vĩnh viễn)
-    Luôn đóng tab phụ và quay lại tab feed.
+    Mở tab verify (window.open), phân loại bằng classify_page_entity.
+    Deadline cứng ~15s; không retry UNKNOWN; /about chỉ khi thiếu tín hiệu.
+    Cache theo cleaned URL / page_key trong phiên.
     """
     if not author_url:
         return None
+    if is_media_facebook_url(author_url):
+        logger.info(f"[Scanner] verify bỏ qua media url: {author_url}")
+        return None
 
+    cleaned_author = clean_page_url(author_url) or author_url
+    cached = _cache_lookup(author_cache, cleaned_author)
+    if cached is not None:
+        cached["_cache_hit"] = True
+        logger.info(f"[Scanner] verify cache hit: {cleaned_author}")
+        return cached
+
+    deadline = time.time() + max(5.0, float(deadline_sec or VERIFY_AUTHOR_DEADLINE_SEC))
     main_handle = driver.current_window_handle
     new_handle = None
+    cdp_on = False
     try:
         before = set(driver.window_handles)
         driver.execute_script("window.open(arguments[0], '_blank');", author_url)
-        time.sleep(1.0)
-        after = set(driver.window_handles)
-        opened = list(after - before)
+        # Chờ tab xuất hiện, không sleep cố định 1s
+        tab_wait_end = time.time() + _remaining_timeout(deadline, 2.0)
+        opened: List[str] = []
+        while time.time() < tab_wait_end and not opened:
+            opened = list(set(driver.window_handles) - before)
+            if opened:
+                break
+            time.sleep(0.15)
         if not opened:
             handles = driver.window_handles
             if len(handles) <= 1:
-                return None
+                return {
+                    "_soft_fail": True,
+                    "reason": "load",
+                    "detail": "no_new_tab",
+                }
             new_handle = handles[-1]
         else:
             new_handle = opened[0]
 
         driver.switch_to.window(new_handle)
+        cdp_on = _cdp_block_heavy_resources(driver)
 
-        curr = (driver.current_url or "").lower()
-        if "checkpoint" in curr or "/login" in curr:
-            return None
+        if _deadline_exceeded(deadline):
+            return {"_soft_fail": True, "reason": "timeout", "detail": "deadline_before_read"}
 
-        info = _wait_page_meta_ready(driver, timeout_sec=10.0)
+        curr = (driver.current_url or "")
+        logger.info(f"[Scanner] verify tab current_url={curr!r} (from {author_url!r})")
+        curr_l = curr.lower()
+        if "checkpoint" in curr_l or "/login" in curr_l:
+            return {"_soft_fail": True, "reason": "load", "detail": "checkpoint_or_login"}
+        if _is_media_current_url(curr_l):
+            return {"_soft_fail": True, "reason": "wrong_url", "detail": curr}
 
-        if info.get("is_profile"):
-            return {"_verify_rejected": True, "reason": "profile"}
-
-        # Đã chờ đủ mà vẫn không phải Page rõ ràng → loại cứng
-        if info and not info.get("is_page") and (info.get("page_name") or info.get("follower_text")):
-            return {"_verify_rejected": True, "reason": "not_page"}
-
-        # Load chậm / chưa có meta → soft fail (retry)
+        info = _wait_header_ready(driver, deadline)
         page_name = (info.get("page_name") or "").strip()
         follower_raw = (info.get("follower_text") or "").strip()
-        if not info.get("is_page") or not page_name or not follower_raw:
-            return None
+        header_text = info.get("header_text") or ""
+        header_buttons = list(info.get("header_buttons") or [])
+        header_tabs = list(info.get("header_tabs") or [])
+        main_sample = info.get("main_sample") or ""
+
+        load_ok = bool(page_name) or bool(header_text)
+        if not load_ok:
+            return {
+                "_soft_fail": True,
+                "reason": "load",
+                "detail": "no_header",
+                "header_text": header_text[:300],
+                "header_buttons": header_buttons,
+                "follower_text": follower_raw,
+            }
+
+        entity, reason, debug = classify_page_entity(
+            url=info.get("page_url") or author_url,
+            header_text=header_text,
+            header_buttons=header_buttons,
+            header_tabs=header_tabs,
+            about_text="",
+            main_sample=main_sample,
+        )
+
+        # /about chỉ khi thiếu follower VÀ thiếu friend signal
+        if entity == "UNKNOWN" and should_open_about(
+            entity, header_text, header_buttons, header_tabs
+        ):
+            if not _deadline_exceeded(deadline):
+                about = _fetch_about_text(driver, cleaned_author, deadline)
+                about_text = about.get("about_text") or ""
+                if about.get("category") and not info.get("category"):
+                    info["category"] = about["category"]
+                entity, reason, debug = classify_page_entity(
+                    url=info.get("page_url") or author_url,
+                    header_text=header_text,
+                    header_buttons=header_buttons,
+                    header_tabs=header_tabs,
+                    about_text=about_text,
+                    main_sample=main_sample,
+                )
+                # Quay lại trang chính nếu cần follower (còn thời gian)
+                if entity == "PAGE" and not follower_raw and not _deadline_exceeded(deadline):
+                    try:
+                        driver.get(cleaned_author)
+                        time.sleep(min(0.6, _remaining_timeout(deadline, 0.6)))
+                        info2 = _read_header_signals(driver)
+                        if info2.get("follower_text"):
+                            follower_raw = (info2.get("follower_text") or "").strip()
+                            info["follower_text"] = follower_raw
+                        if info2.get("page_name"):
+                            page_name = (info2.get("page_name") or page_name).strip()
+                    except Exception:
+                        pass
+
+        if dump_fixture:
+            _dump_classify_fixture(info, entity, reason)
+
+        elapsed = time.time() - (deadline - max(5.0, float(deadline_sec or VERIFY_AUTHOR_DEADLINE_SEC)))
+        logger.info(
+            f"[Scanner] classify={entity} reason={reason!r} name={page_name!r}"
+            f" elapsed={elapsed:.1f}s buttons={header_buttons[:6]!r}"
+            f" follower={follower_raw!r} header={header_text[:120]!r}"
+        )
+
+        if entity == "PROFILE":
+            out = {
+                "_verify_rejected": True,
+                "reason": f"profile:{reason}",
+                "classify_reason": reason,
+                "friend_button_debug": {
+                    "zone": "header",
+                    "label": debug.get("friend_button"),
+                    "buttons": header_buttons[:10],
+                },
+                "header_text": header_text[:400],
+                "header_buttons": header_buttons,
+                "follower_text": follower_raw,
+            }
+            _cache_store(author_cache, cleaned_author, out)
+            return out
+
+        if entity != "PAGE":
+            return {
+                "_soft_fail": True,
+                "reason": "unknown",
+                "detail": reason,
+                "header_text": header_text[:400],
+                "header_buttons": header_buttons,
+                "header_tabs": header_tabs,
+                "follower_text": follower_raw,
+                "page_name": page_name,
+            }
+
+        if reason == "fallback_page_no_friend_signal":
+            logger.info(
+                f"[Scanner] FALLBACK PAGE: {page_name!r} reason={reason}"
+                f" header={header_text[:200]!r} buttons={header_buttons!r}"
+            )
+
+        if not page_name or not follower_raw:
+            return {
+                "_soft_fail": True,
+                "reason": "load",
+                "detail": "page_missing_name_or_follower",
+                "header_text": header_text[:400],
+                "header_buttons": header_buttons,
+                "follower_text": follower_raw,
+                "page_name": page_name,
+                "classify_reason": reason,
+            }
 
         page_url = clean_page_url(info.get("page_url") or author_url)
+        if is_media_facebook_url(page_url):
+            return {"_soft_fail": True, "reason": "wrong_url", "detail": page_url}
         page_key, quality = extract_page_identifier(page_url)
-        if not page_key:
-            return None
+        if not page_key or quality == "weak":
+            return {
+                "_soft_fail": True,
+                "reason": "unknown",
+                "detail": "weak_page_key",
+                "header_text": header_text[:400],
+                "header_buttons": header_buttons,
+                "follower_text": follower_raw,
+            }
 
         follower_count, follower_text = parse_follower_count(follower_raw)
-        # Đã thấy chuỗi follower nhưng parse thất bại → soft fail để thử lại
         if follower_count is None:
-            return None
+            return {
+                "_soft_fail": True,
+                "reason": "load",
+                "detail": "follower_parse_fail",
+                "follower_text": follower_raw,
+                "header_text": header_text[:400],
+                "header_buttons": header_buttons,
+            }
 
-        return {
+        out = {
             "page_key": page_key,
             "page_name": page_name,
             "page_url": page_url,
@@ -1264,11 +1875,22 @@ def verify_and_extract_page_in_new_tab(driver, author_url: str) -> Optional[Dict
             "is_verified": info.get("is_verified"),
             "is_sponsored": False,
             "identifier_quality": quality,
+            "classify_reason": reason,
+            "header_text": header_text[:400],
+            "header_buttons": header_buttons,
         }
+        _cache_store(author_cache, cleaned_author, out)
+        return out
     except Exception as exc:
         logger.warning(f"[Scanner] Lỗi xác minh Page tab mới ({author_url}): {exc}")
-        return None
+        return {"_soft_fail": True, "reason": "load", "detail": str(exc)[:200]}
     finally:
+        try:
+            if cdp_on and new_handle and new_handle in driver.window_handles:
+                driver.switch_to.window(new_handle)
+                _cdp_unblock_resources(driver)
+        except Exception:
+            pass
         try:
             if new_handle and new_handle in driver.window_handles:
                 driver.switch_to.window(new_handle)
@@ -1413,11 +2035,10 @@ def run_hashtag_search_flow(
 ) -> Dict[str, Any]:
     """
     Quét Fanpage theo Hashtag:
-    1. Feed hashtag (fallback search posts) + exact_match.
-    2. header_action: chỉ loại Join/Group; còn lại đưa tab xác minh.
-    3. Gom ứng viên theo tên+link; tab phụ xác minh Page + follower.
-    4. Chỉ lưu Page có follower_count > min_followers.
-    5. Dừng TARGET_REACHED khi đủ target_pages; idle_timeout_s không có page mới đạt lọc.
+    1. Gõ #tag vào ô Search Facebook → tab Posts (fallback search/posts → /hashtag/).
+    2. exact_match + header_action (chỉ loại Join/Group).
+    3. Tab phụ xác minh Page + follower; chỉ lưu follower_count > min_followers.
+    4. Dừng TARGET_REACHED khi đủ target_pages; idle_timeout_s không có page mới đạt lọc.
     max_posts_per_hashtag chỉ là giới hạn an toàn số bài/tag.
     """
     clean_tags = parse_hashtags_input(hashtags)
@@ -1479,6 +2100,8 @@ def run_hashtag_search_flow(
     candidates: Dict[str, Dict[str, Any]] = {}
     # Chỉ chứa author đã xác nhận Profile / không phải Page
     rejected_author_urls: Set[str] = set()
+    # Cache quyết định verify theo cleaned URL / page_key trong phiên
+    author_verify_cache: Dict[str, Any] = {}
     page_kho: Dict[str, Dict[str, Any]] = {}
     seen_batch_signatures: Set[frozenset] = set()
     batch_no = 0
@@ -1552,26 +2175,18 @@ def run_hashtag_search_flow(
                 )
                 break
 
-            hashtag_url = f"https://www.facebook.com/hashtag/{quote_plus(current_tag)}"
-            logger.info(f"[{target_uid}] Bắt đầu quét hashtag #{current_tag}: {hashtag_url}")
-            append_session_log(session_id, f"Mở feed #{current_tag}", "info")
-            driver.get(hashtag_url)
-            time.sleep(3)
-
-            is_avail, unavail_reason = check_hashtag_page_availability(driver)
-            if not is_avail:
-                logger.warning(
-                    f"[{target_uid}] Trang hashtag #{current_tag} không mở được ({unavail_reason}). "
-                    f"Fallback /search/posts/?q=%23{current_tag}"
-                )
-                append_session_log(
-                    session_id,
-                    f"#{current_tag} unavailable ({unavail_reason}) → search posts",
-                    "warn",
-                )
-                search_posts_url = f"https://www.facebook.com/search/posts/?q=%23{quote_plus(current_tag)}"
-                driver.get(search_posts_url)
-                time.sleep(3)
+            logger.info(f"[{target_uid}] Bắt đầu quét hashtag #{current_tag} qua ô Search")
+            nav_channel = navigate_hashtag_via_search_box(
+                driver,
+                current_tag,
+                session_id,
+                reset_home=True,
+            )
+            append_session_log(
+                session_id,
+                f"#{current_tag} sẵn sàng quét (kênh={nav_channel})",
+                "info",
+            )
 
             tag_posts_count = 0
             no_new_streak = 0
@@ -1613,23 +2228,35 @@ def run_hashtag_search_flow(
                     break
 
                 posts = extract_hashtag_posts_from_driver(driver, current_tag)
+                # Feed search/hashtag đã lọc theo query — text DOM thường cắt "Xem thêm"
+                # nên thiếu #tag dù FB đã match. Cho phép verify khi đang đúng kênh search.
+                if nav_channel in ("search_box", "search_posts", "hashtag_url"):
+                    for _p in posts:
+                        if not _p.get("exact_match") and _p.get("author_url"):
+                            _p["exact_match"] = True
+                            _p["match_reason"] = "search_feed_context"
+
                 new_posts = [p for p in posts if p.get("post_url") and p["post_url"] not in posts_kho]
                 new_posts_count = len(new_posts)
 
                 post_keys = [p["post_url"] for p in posts if p.get("post_url")]
                 signature = frozenset(post_keys)
-                if new_posts_count == 0 and signature and signature in seen_batch_signatures:
-                    stop_reason = "CYCLE_DETECTED"
-                    break
+                # CYCLE chỉ khi lặp chữ ký VÀ đã hết bài mới liên tiếp đủ NO_NEW_LIMIT
+                # (trước đây dừng ngay batch 2 → không kịp mở tab verify)
+                seen_before = bool(signature and signature in seen_batch_signatures)
                 if signature:
                     seen_batch_signatures.add(signature)
 
                 if new_posts_count == 0:
                     no_new_streak += 1
                     if no_new_streak >= NO_NEW_LIMIT:
+                        stop_reason = "CYCLE_DETECTED" if seen_before else "NO_NEW_RESULTS"
                         append_session_log(
                             session_id,
-                            f"#{current_tag}: NO_NEW sau {NO_NEW_LIMIT} batch — chuyển tag",
+                            (
+                                f"#{current_tag}: {stop_reason} sau {NO_NEW_LIMIT} batch"
+                                f" (extract={len(posts)}, chưa mở thêm tab)"
+                            ),
                             "info",
                         )
                         break
@@ -1637,8 +2264,32 @@ def run_hashtag_search_flow(
                     no_new_streak = 0
 
                 batch_verified_pages: List[Dict[str, Any]] = []
+                batch_skip_nomatch = 0
+
+                append_session_log(
+                    session_id,
+                    (
+                        f"#{current_tag} batch#{batch_no}: extract={len(posts)}"
+                        f" · mới={new_posts_count}"
+                        f" · match={sum(1 for x in new_posts if x.get('exact_match'))}"
+                    ),
+                    "info",
+                )
 
                 for p in new_posts:
+                    # Idle giữa các tác giả trong batch — không chờ hết batch
+                    if time.time() - last_qualified_at >= idle_timeout_s:
+                        stop_reason = "NO_NEW_RESULTS"
+                        append_session_log(
+                            session_id,
+                            (
+                                f"Idle {idle_timeout_s:.0f}s không có Page mới đạt lọc"
+                                f" — dừng trong batch (không verify tiếp)"
+                            ),
+                            "warn",
+                        )
+                        break
+
                     if target_pages is not None and len(page_kho) >= target_pages:
                         stop_reason = "TARGET_REACHED"
                         break
@@ -1648,6 +2299,7 @@ def run_hashtag_search_flow(
                     tag_posts_count += 1
 
                     if not p.get("exact_match"):
+                        batch_skip_nomatch += 1
                         continue
                     total_posts_matched += 1
 
@@ -1659,8 +2311,23 @@ def run_hashtag_search_flow(
                     total_authors_seen += 1
                     author_url = p.get("author_url") or ""
                     author_name = p.get("author_name") or ""
-                    cand_key = normalize_page_candidate_key(author_name, author_url)
                     cleaned_author = clean_page_url(author_url) or author_url
+
+                    # Chặn trước khi mở tab: media / system slug / weak
+                    ok_author, _aq, skip_reason = is_valid_author_candidate_url(author_url)
+                    if not ok_author:
+                        append_session_log(
+                            session_id,
+                            (
+                                f"Bỏ qua tách-link (không mở tab): {author_name}"
+                                f" · raw={author_url!r} · cleaned={cleaned_author!r}"
+                                f" · reason={skip_reason}"
+                            ),
+                            "warn",
+                        )
+                        continue
+
+                    cand_key = normalize_page_candidate_key(author_name, cleaned_author)
 
                     if cand_key in candidates:
                         cand = candidates[cand_key]
@@ -1693,44 +2360,124 @@ def run_hashtag_search_flow(
                     if cleaned_author in rejected_author_urls:
                         continue
 
-                    candidates[cand_key] = {
-                        "candidate_key": cand_key,
-                        "author_name": author_name,
-                        "author_url": cleaned_author,
-                        "matched_hashtags": {current_tag},
-                        "hashtag_post_count": 1,
-                        "evidence_posts": [p["post_url"]] if p.get("post_url") else [],
-                        "header_action": p.get("header_action"),
-                        "verified_page_key": None,
-                        "verify_status": "PENDING",
-                    }
+                    # Cache hit — không mở tab
+                    cached = _cache_lookup(author_verify_cache, cleaned_author)
+                    if cached is not None:
+                        append_session_log(
+                            session_id,
+                            f"Verify cache hit: {author_name} · cleaned={cleaned_author!r}",
+                            "info",
+                        )
+                        verified = dict(cached)
+                        verified["_cache_hit"] = True
+                    else:
+                        candidates[cand_key] = {
+                            "candidate_key": cand_key,
+                            "author_name": author_name,
+                            "author_url": cleaned_author,
+                            "matched_hashtags": {current_tag},
+                            "hashtag_post_count": 1,
+                            "evidence_posts": [p["post_url"]] if p.get("post_url") else [],
+                            "header_action": p.get("header_action"),
+                            "verified_page_key": None,
+                            "verify_status": "PENDING",
+                        }
 
-                    # Xác minh tab phụ — soft fail thì thử lại 1 lần; chỉ reject khi chắc chắn
-                    verified = verify_and_extract_page_in_new_tab(driver, cleaned_author)
-                    if verified is None:
-                        verified = verify_and_extract_page_in_new_tab(driver, cleaned_author)
+                        append_session_log(
+                            session_id,
+                            f"Verify mở tab: {author_name} · raw={author_url!r} · cleaned={cleaned_author!r}",
+                            "info",
+                        )
+
+                        # Chỉ retry khi lỗi load thật — không retry UNKNOWN
+                        verified = verify_and_extract_page_in_new_tab(
+                            driver,
+                            cleaned_author,
+                            author_cache=author_verify_cache,
+                        )
+                        if (
+                            verified
+                            and verified.get("_soft_fail")
+                            and verified.get("reason") == "load"
+                        ):
+                            verified = verify_and_extract_page_in_new_tab(
+                                driver,
+                                cleaned_author,
+                                author_cache=author_verify_cache,
+                            )
+
+                    if cand_key not in candidates:
+                        candidates[cand_key] = {
+                            "candidate_key": cand_key,
+                            "author_name": author_name,
+                            "author_url": cleaned_author,
+                            "matched_hashtags": {current_tag},
+                            "hashtag_post_count": 1,
+                            "evidence_posts": [p["post_url"]] if p.get("post_url") else [],
+                            "header_action": p.get("header_action"),
+                            "verified_page_key": None,
+                            "verify_status": "PENDING",
+                        }
 
                     if verified and verified.get("_verify_rejected"):
                         rejected_author_urls.add(cleaned_author)
                         candidates[cand_key]["verify_status"] = "REJECTED"
+                        fdbg = verified.get("friend_button_debug") or {}
                         append_session_log(
                             session_id,
-                            f"Loại ứng viên ({verified.get('reason') or 'not_page'}): {author_name}",
+                            (
+                                f"Phân loại PROFILE — reject: {author_name}"
+                                f" · reason={verified.get('reason')!r}"
+                                f" · friend_zone={fdbg.get('zone')!r}"
+                                f" · buttons={verified.get('header_buttons')!r}"
+                                f" · header={verified.get('header_text')!r}"
+                            ),
                             "info",
                         )
                         continue
 
-                    if not verified or not verified.get("page_key"):
-                        # Timeout / load chậm / chưa đọc follower — không reject vĩnh viễn
+                    if not verified or verified.get("_soft_fail") or not verified.get("page_key"):
                         candidates[cand_key]["verify_status"] = "PENDING"
+                        soft = verified or {}
                         append_session_log(
                             session_id,
-                            f"Chưa xác minh được (sẽ gặp lại nếu còn): {author_name}",
+                            (
+                                f"Soft-fail {soft.get('reason') or 'empty'}:"
+                                f" {author_name}"
+                                f" · detail={soft.get('detail') or soft.get('classify_reason')!r}"
+                                f" · header={soft.get('header_text')!r}"
+                                f" · buttons={soft.get('header_buttons')!r}"
+                                f" · follower={soft.get('follower_text')!r}"
+                                f" · không reject"
+                            ),
                             "warn",
                         )
-                        # Cho phép gặp lại ứng viên này ở batch sau
                         candidates.pop(cand_key, None)
                         continue
+
+                    reason = verified.get("classify_reason") or ""
+                    if reason == "fallback_page_no_friend_signal":
+                        append_session_log(
+                            session_id,
+                            (
+                                f"FALLBACK PAGE: {verified.get('page_name') or author_name}"
+                                f" · reason={reason}"
+                                f" · header={verified.get('header_text')!r}"
+                                f" · buttons={verified.get('header_buttons')!r}"
+                            ),
+                            "warn",
+                        )
+                    else:
+                        append_session_log(
+                            session_id,
+                            (
+                                f"Phân loại PAGE: {verified.get('page_name') or author_name}"
+                                f" · reason={reason!r}"
+                                f" · key={verified.get('page_key')}"
+                                f" · cache={bool(verified.get('_cache_hit'))}"
+                            ),
+                            "info",
+                        )
 
                     fl_count = verified.get("follower_count")
                     if fl_count is None or int(fl_count) <= min_followers:

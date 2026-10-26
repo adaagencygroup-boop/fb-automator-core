@@ -1,0 +1,127 @@
+{
+  "_meta": {
+    "note": "Fixture header cho classifier offline. Các shop lấy từ mẫu header FB đã biết; dump live sẽ ghi đè/ bổ sung khi chạy verify thật.",
+    "dump_via": "verify_and_extract_page_in_new_tab → dump_classify_fixture"
+  },
+  "shops": [
+    {
+      "id": "tutu_store",
+      "name": "TuTu Store",
+      "url": "https://www.facebook.com/tutustore.example",
+      "header_text": "TuTu Store\nTrang · Shopping & retail\nTheo dõi\n12N người theo dõi\nGiới thiệu",
+      "header_buttons": ["Theo dõi", "Nhắn tin"],
+      "header_tabs": ["Bài viết", "Giới thiệu", "Ảnh", "Thêm"],
+      "follower_text": "12N người theo dõi",
+      "about_text": "",
+      "expect": "PAGE"
+    },
+    {
+      "id": "me_thoi_trang",
+      "name": "Mê Thời Trang",
+      "url": "https://www.facebook.com/methoitrang.example",
+      "header_text": "Mê Thời Trang\nPage · Clothing (Brand)\nFollow\n8.5K followers\nAbout",
+      "header_buttons": ["Follow", "Message"],
+      "header_tabs": ["Posts", "About", "Photos", "More"],
+      "follower_text": "8.5K followers",
+      "about_text": "",
+      "expect": "PAGE"
+    },
+    {
+      "id": "thuy_dieu_store_2",
+      "name": "Thúy Diệu Store 2",
+      "url": "https://www.facebook.com/thuydieustore2.example",
+      "header_text": "Thúy Diệu Store 2\n1,2 nghìn lượt thích · 5 nghìn người theo dõi\nTheo dõi\nĐang hoạt động",
+      "header_buttons": ["Theo dõi", "Nhắn tin"],
+      "header_tabs": ["Bài viết", "Giới thiệu", "Đánh giá"],
+      "follower_text": "5 nghìn người theo dõi",
+      "about_text": "",
+      "expect": "PAGE"
+    },
+    {
+      "id": "tram_anh_nguyen",
+      "name": "Trâm Anh Nguyễn",
+      "url": "https://www.facebook.com/tramanhnguyen.shop.example",
+      "header_text": "Trâm Anh Nguyễn\nTrang · Thời trang nữ\nTheo dõi\n3.200 người theo dõi",
+      "header_buttons": ["Theo dõi"],
+      "header_tabs": ["Bài viết", "Giới thiệu", "Ảnh"],
+      "follower_text": "3.200 người theo dõi",
+      "about_text": "",
+      "expect": "PAGE"
+    },
+    {
+      "id": "dam_trung_nien_bao_ngoc",
+      "name": "Đầm Trung Niên Bảo Ngọc",
+      "url": "https://www.facebook.com/pages/123456789012345",
+      "header_text": "Đầm Trung Niên Bảo Ngọc\nTheo dõi\n15N người theo dõi\nCửa hàng quần áo",
+      "header_buttons": ["Theo dõi", "Nhắn tin"],
+      "header_tabs": ["Bài viết", "Giới thiệu", "Cửa hàng"],
+      "follower_text": "15N người theo dõi",
+      "about_text": "",
+      "expect": "PAGE"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "profile_add_friend",
+      "name": "Profile Add Friend",
+      "url": "https://www.facebook.com/profile.php?id=100012345678901",
+      "header_text": "Nguyen Van A\n500 bạn bè · 20 bạn chung\nThêm bạn bè\nNhắn tin",
+      "header_buttons": ["Thêm bạn bè", "Nhắn tin"],
+      "header_tabs": ["Bài viết", "Giới thiệu", "Bạn bè", "Ảnh"],
+      "follower_text": "",
+      "about_text": "",
+      "expect": "PROFILE"
+    },
+    {
+      "id": "profile_already_friends",
+      "name": "Profile Already Friends",
+      "url": "https://www.facebook.com/nguyenvanb.example",
+      "header_text": "Nguyen Van B\n1,2N bạn bè\nBạn bè\nNhắn tin",
+      "header_buttons": ["Bạn bè", "Nhắn tin"],
+      "header_tabs": ["Bài viết", "Bạn bè", "Ảnh"],
+      "follower_text": "",
+      "about_text": "",
+      "expect": "PROFILE"
+    },
+    {
+      "id": "profile_follow_only_with_friends_tab",
+      "name": "Profile Follow-only + tab Bạn bè",
+      "url": "https://www.facebook.com/profile.followonly.example",
+      "header_text": "Creator X\nTheo dõi\n50N người theo dõi\n1,5N bạn bè",
+      "header_buttons": ["Theo dõi", "Nhắn tin"],
+      "header_tabs": ["Bài viết", "Bạn bè", "Ảnh"],
+      "follower_text": "50N người theo dõi",
+      "about_text": "",
+      "expect": "PROFILE",
+      "note": "Có tab Bạn bè → không được fallback PAGE"
+    },
+    {
+      "id": "profile_follow_only_no_friend_signal",
+      "name": "Profile Follow-only NO friend signal (known limit)",
+      "url": "https://www.facebook.com/profile.followonly.limit.example",
+      "header_text": "Creator Y\nTheo dõi\n20N người theo dõi",
+      "header_buttons": ["Theo dõi", "Nhắn tin"],
+      "header_tabs": ["Bài viết", "Ảnh", "Giới thiệu"],
+      "follower_text": "20N người theo dõi",
+      "about_text": "",
+      "expect": "PAGE",
+      "expect_reason": "fallback_page_no_friend_signal",
+      "known_limitation": true,
+      "note": "Giới hạn đã biết: profile chỉ bật Follow, không Friend/tab Bạn bè → lọt fallback PAGE. Không tính PASS độ chính xác."
+    }
+  ],
+  "pages_extra": [
+    {
+      "id": "pages_id_url",
+      "name": "Legacy Pages URL",
+      "url": "https://www.facebook.com/pages/Shop-Ao/987654321000111",
+      "header_text": "Shop Ao\nTheo dõi\n100 người theo dõi",
+      "header_buttons": ["Theo dõi"],
+      "header_tabs": ["Bài viết"],
+      "follower_text": "100 người theo dõi",
+      "about_text": "",
+      "expect": "PAGE",
+      "expect_reason": "url_pages_id"
+    }
+  ]
+}
