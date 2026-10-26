@@ -13,6 +13,17 @@ from ..local_database import local_db
 router = APIRouter(tags=["Module 07: Campaigns & History"])
 
 
+def _campaign(campaign_id: str, owner: str | None) -> dict:
+    local_db.initialize()
+    campaign = local_db.fetch_one(
+        "SELECT * FROM group_campaigns WHERE id = ? AND owner_key = ? AND deleted_at IS NULL",
+        (campaign_id, owner or ""),
+    )
+    if not campaign:
+        raise HTTPException(404, "Không tìm thấy chiến dịch")
+    return campaign
+
+
 @router.get("/campaigns")
 async def list_campaigns(
     q: str | None = Query(None, description="Tìm theo tên chiến dịch"),
@@ -24,17 +35,13 @@ async def list_campaigns(
     owner: str | None = Depends(scoped_owner),
 ):
     """Lấy danh sách các chiến dịch đã lưu và thực thi."""
-    try:
-        local_db.initialize()
-    except Exception:
-        pass
+    local_db.initialize()
 
-    where_clauses = ["c.deleted_at IS NULL"]
-    params: list[Any] = []
+    if from_date and to_date and from_date.strip() > to_date.strip():
+        raise HTTPException(400, "Khoảng ngày không hợp lệ")
 
-    if owner:
-        where_clauses.append("(c.owner_key = ? OR c.owner_key = '')")
-        params.append(owner)
+    where_clauses = ["c.deleted_at IS NULL", "c.owner_key = ?"]
+    params: list[Any] = [owner or ""]
 
     if q and q.strip():
         where_clauses.append("LOWER(c.name) LIKE ?")
@@ -68,35 +75,37 @@ async def list_campaigns(
 
     where_sql = " AND ".join(where_clauses)
     query = f"""
-        SELECT 
+        SELECT
             c.id,
             c.name,
             c.description,
             c.action_type,
             c.created_at,
+            (SELECT COUNT(*) FROM group_run_tasks t JOIN group_runs r ON r.id = t.run_id
+             WHERE r.campaign_id = c.id AND t.status = 'SUCCESS') AS total_interactions,
             (
                 SELECT COALESCE(r2.started_at, r2.created_at)
-                FROM group_runs r2 
-                WHERE r2.campaign_id = c.id 
-                ORDER BY r2.created_at DESC 
+                FROM group_runs r2
+                WHERE r2.campaign_id = c.id
+                ORDER BY r2.run_number DESC
                 LIMIT 1
             ) AS last_run_at,
             (
-                SELECT r3.status 
-                FROM group_runs r3 
-                WHERE r3.campaign_id = c.id 
-                ORDER BY r3.created_at DESC 
+                SELECT r3.status
+                FROM group_runs r3
+                WHERE r3.campaign_id = c.id
+                ORDER BY r3.run_number DESC
                 LIMIT 1
             ) AS latest_status,
             (
-                SELECT COUNT(DISTINCT t.account_uid) 
-                FROM group_run_tasks t 
-                JOIN group_runs r4 ON t.run_id = r4.id 
+                SELECT COUNT(DISTINCT t.account_uid)
+                FROM group_run_tasks t
+                JOIN group_runs r4 ON t.run_id = r4.id
                 WHERE r4.campaign_id = c.id
             ) AS total_accounts_run,
             (
-                SELECT COUNT(r5.id) 
-                FROM group_runs r5 
+                SELECT COUNT(r5.id)
+                FROM group_runs r5
                 WHERE r5.campaign_id = c.id
             ) AS total_runs
         FROM group_campaigns c
@@ -117,7 +126,7 @@ async def list_campaigns(
                 continue
             if status == "FAILED" and st != "FAILED":
                 continue
-            if status == "RUNNING" and st not in {"RUNNING", "QUEUED", "SCHEDULED"}:
+            if status == "RUNNING" and st not in {"RUNNING", "QUEUED", "SCHEDULED", "PAUSED", "STOPPING"}:
                 continue
 
         items.append({
@@ -130,6 +139,7 @@ async def list_campaigns(
             "status": st,
             "total_accounts_run": row["total_accounts_run"] or 0,
             "total_runs": row["total_runs"] or 0,
+            "total_interactions": row["total_interactions"] or 0,
         })
 
     return {"campaigns": items, "count": len(items)}
@@ -141,15 +151,10 @@ async def get_campaign_details(
     owner: str | None = Depends(scoped_owner),
 ):
     """Lấy danh sách các tài khoản, nhóm và link bài viết của chiến dịch (khoảng 5 dòng cuộn, Copy UID)."""
-    campaign = local_db.fetch_one(
-        "SELECT id, name, description, action_type FROM group_campaigns WHERE id = ?",
-        (campaign_id,),
-    )
-    if not campaign:
-        raise HTTPException(404, "Không tìm thấy chiến dịch")
+    campaign = _campaign(campaign_id, owner)
 
     tasks_query = """
-        SELECT 
+        SELECT
             t.id,
             t.account_uid,
             t.account_name,
@@ -196,15 +201,10 @@ async def get_campaign_rerun_config(
     owner: str | None = Depends(scoped_owner),
 ):
     """Nạp cấu hình của lượt chạy trước cho chức năng Chạy lại (CAMP-RUN-01)."""
-    campaign = local_db.fetch_one(
-        "SELECT id, name, description, action_type FROM group_campaigns WHERE id = ?",
-        (campaign_id,),
-    )
-    if not campaign:
-        raise HTTPException(404, "Không tìm thấy chiến dịch để chạy lại")
+    campaign = _campaign(campaign_id, owner)
 
     run = local_db.fetch_one(
-        "SELECT id, config_json, run_number, created_at FROM group_runs WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 1",
+        "SELECT id, config_json, run_number, created_at FROM group_runs WHERE campaign_id = ? ORDER BY run_number DESC LIMIT 1",
         (campaign_id,),
     )
     if not run or not run.get("config_json"):
@@ -231,17 +231,19 @@ async def delete_campaign(
     owner: str | None = Depends(scoped_owner),
 ):
     """Xóa mềm chiến dịch: ẩn khỏi danh sách nhưng giữ lịch sử tác vụ (CAMP-DEL-01)."""
-    campaign = local_db.fetch_one(
-        "SELECT id, name FROM group_campaigns WHERE id = ? AND deleted_at IS NULL",
-        (campaign_id,),
-    )
-    if not campaign:
-        raise HTTPException(404, "Không tìm thấy chiến dịch hoặc đã bị xóa")
+    campaign = _campaign(campaign_id, owner)
 
     with local_db.session() as cursor:
-        cursor.execute(
-            "UPDATE group_campaigns SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
+        cursor.execute("BEGIN IMMEDIATE")
+        active = cursor.execute(
+            "SELECT id FROM group_runs WHERE campaign_id = ? AND status IN ('QUEUED', 'SCHEDULED', 'RUNNING', 'PAUSED', 'STOPPING')",
             (campaign_id,),
+        ).fetchone()
+        if active:
+            raise HTTPException(409, "Hãy dừng lượt chạy trước khi xóa chiến dịch")
+        cursor.execute(
+            "UPDATE group_campaigns SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND owner_key = ?",
+            (campaign_id, owner or ""),
         )
 
     return {
@@ -264,21 +266,14 @@ async def get_group_history_records(
     owner: str | None = Depends(scoped_owner),
 ):
     """Tra cứu lịch sử đăng bài và bình luận theo Chương 3 SRS."""
-    try:
-        local_db.initialize()
-    except Exception:
-        pass
+    local_db.initialize()
 
     # Validate date range: Từ ngày không được lớn hơn Đến ngày
     if from_date and to_date and from_date.strip() > to_date.strip():
         raise HTTPException(400, "Thời gian 'Từ ngày' không được lớn hơn 'Đến ngày'")
 
-    where_clauses = ["1=1"]
-    params: list[Any] = []
-
-    if owner:
-        where_clauses.append("(c.owner_key = ? OR c.owner_key = '')")
-        params.append(owner)
+    where_clauses = ["c.owner_key = ?"]
+    params: list[Any] = [owner or ""]
 
     if q and q.strip():
         term = f"%{q.strip().lower()}%"
@@ -313,7 +308,7 @@ async def get_group_history_records(
 
     # 1. Thống kê theo đúng bộ lọc
     stats_query = f"""
-        SELECT 
+        SELECT
             COUNT(t.id) AS total_count,
             SUM(CASE WHEN t.status = 'SUCCESS' THEN 1 ELSE 0 END) AS success_count,
             SUM(CASE WHEN t.status IN ('FAILED', 'CANCELLED') THEN 1 ELSE 0 END) AS failed_count
@@ -344,7 +339,8 @@ async def get_group_history_records(
 
     # 2. Danh sách chiến dịch để đổ vào dropdown filter
     campaigns_list = local_db.fetch_all(
-        "SELECT id, name FROM group_campaigns ORDER BY created_at DESC LIMIT 100"
+        "SELECT id, name FROM group_campaigns WHERE owner_key = ? ORDER BY created_at DESC LIMIT 100",
+        (owner or "",)
     )
 
     # 3. Phân trang danh sách bản ghi lịch sử
@@ -352,7 +348,7 @@ async def get_group_history_records(
     offset = (page - 1) * page_size
 
     list_query = f"""
-        SELECT 
+        SELECT
             t.id,
             t.run_id,
             c.id AS campaign_id,
@@ -384,7 +380,7 @@ async def get_group_history_records(
     start_index = (page - 1) * page_size + 1
     for i, row in enumerate(rows):
         is_post = row["action_type"] == "POST"
-        st = "SUCCESS" if row["status"] == "SUCCESS" else "FAILED"
+        st = row["status"]
         if st == "SUCCESS":
             result_desc = "Đã đăng bài" if is_post else "Đã bình luận"
         else:

@@ -32,108 +32,27 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
   const [details, setDetails] = useState([]);
   const [rerunLoading, setRerunLoading] = useState(false);
 
-  // Mock data chuẩn theo đúng thiết kế trong hình ảnh để test
-  const MOCK_DETAIL_DATA = {
-    campaign: {
-      id: campaignId || "camp-001",
-      name: "Quảng bá nông sản tháng 10",
-      action_type: "POST",
-      created_at: "2026-10-23T08:30:00Z",
-      last_run_at: "2026-10-23T08:30:00Z",
-      status: "COMPLETED",
-      total_runs: 1,
-      total_accounts_run: 24,
-    },
-    details: [
-      {
-        id: "det-1",
-        stt: 1,
-        account_uid: "100001234567891",
-        account_name: "Nguyễn Văn Tuấn",
-        group_name: "Hội mua bán nông sản Việt Nam",
-        group_url: "https://facebook.com/groups/thucphamsach/posts/1029384",
-        result_url: "https://facebook.com/groups/thucphamsach/posts/1029384",
-        status: "SUCCESS",
-      },
-      {
-        id: "det-2",
-        stt: 2,
-        account_uid: "100001234567892",
-        account_name: "Trần Thị Mai",
-        group_name: "Chợ nông sản Hà Nội",
-        group_url: "https://facebook.com/groups/thucphamsach/posts/1029384",
-        result_url: "https://facebook.com/groups/thucphamsach/posts/1029384",
-        status: "SUCCESS",
-      },
-      {
-        id: "det-3",
-        stt: 3,
-        account_uid: "100001234567893",
-        account_name: "Lê Hoàng Phúc",
-        group_name: "Hội thực phẩm sạch",
-        group_url: "https://facebook.com/groups/thucphamsach/posts/1029384",
-        result_url: "https://facebook.com/groups/thucphamsach/posts/1029384",
-        status: "SUCCESS",
-      },
-      {
-        id: "det-4",
-        stt: 4,
-        account_uid: "100001234567894",
-        account_name: "Phạm Hải Đăng",
-        group_name: "Nông nghiệp hữu cơ Miền Bắc",
-        group_url: "https://facebook.com/groups/thucphamsach/posts/1029384",
-        result_url: "https://facebook.com/groups/thucphamsach/posts/1029384",
-        status: "SUCCESS",
-      },
-      {
-        id: "det-5",
-        stt: 5,
-        account_uid: "100001234567895",
-        account_name: "Vũ Đình Trọng",
-        group_name: "Hội rau củ quả Đà Lạt & Miền Nam",
-        group_url: "https://facebook.com/groups/thucphamsach/posts/1029385",
-        result_url: "https://facebook.com/groups/thucphamsach/posts/1029385",
-        status: "SUCCESS",
-      },
-      {
-        id: "det-6",
-        stt: 6,
-        account_uid: "100001234567896",
-        account_name: "Đặng Thị Thảo",
-        group_name: "Hiệp hội nhà vườn & Nông trại Việt",
-        group_url: "https://facebook.com/groups/thucphamsach/posts/1029386",
-        result_url: "https://facebook.com/groups/thucphamsach/posts/1029386",
-        status: "SUCCESS",
-      },
-    ],
-  };
-
-  // Load chi tiết chiến dịch
-  const loadDetailData = async () => {
-    const targetId = activeCampaignId || campaignId || "camp-001";
-    setLoading(true);
-    try {
-      const res = await getGroupCampaignDetails(targetId);
-      if (res && res.campaign) {
-        setCampaign(res.campaign);
-        setDetails(res.details && res.details.length > 0 ? res.details : MOCK_DETAIL_DATA.details);
-      } else {
-        // Fallback mock data nếu DB chưa có bản ghi
-        setCampaign({ ...MOCK_DETAIL_DATA.campaign, id: targetId });
-        setDetails(MOCK_DETAIL_DATA.details);
-      }
-    } catch (err) {
-      console.warn("API getGroupCampaignDetails error, using mock data:", err);
-      setCampaign({ ...MOCK_DETAIL_DATA.campaign, id: targetId });
-      setDetails(MOCK_DETAIL_DATA.details);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    loadDetailData();
-  }, [activeCampaignId, campaignId]);
+    let cancelled = false;
+    Promise.resolve().then(async () => {
+      if (cancelled) return;
+      setLoading(true);
+      try {
+        const res = await getGroupCampaignDetails(activeCampaignId);
+        if (cancelled) return;
+        setCampaign(res?.campaign || null);
+        setDetails(res?.details || []);
+      } catch (err) {
+        if (cancelled) return;
+        setCampaign(null);
+        setDetails([]);
+        toast.error(err.message || "Không thể tải chi tiết chiến dịch");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [activeCampaignId]);
 
   // Copy UID vào clipboard
   const handleCopyUid = (uid) => {
@@ -195,7 +114,7 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
         <div className="flex items-center gap-3">
           <div className="flex size-11 items-center justify-center rounded-xl bg-blue-50 shadow-xs">
             <svg width="20" height="16" viewBox="0 0 20 16" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
-              <path d="M1 3V13C1 14.1038 1.89617 15 3 15H17C18.1038 15 19 14.1038 19 13V5C19 3.89617 18.1038 3 17 3H11L9 1H3C1.89617 1 1 1.89617 1 3V3" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" stroke="#2563EB"/>
+              <path d="M1 3V13C1 14.1038 1.89617 15 3 15H17C18.1038 15 19 14.1038 19 13V5C19 3.89617 18.1038 3 17 3H11L9 1H3C1.89617 1 1 1.89617 1 3V3" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" stroke="#2563EB" />
             </svg>
           </div>
           <div>
@@ -270,7 +189,7 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
 
               <div>
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-600 border border-emerald-100">
-                  {details.length} nick đã chọn
+                  {new Set(details.map((item) => item.account_uid)).size} nick đã chọn
                 </span>
               </div>
             </div>

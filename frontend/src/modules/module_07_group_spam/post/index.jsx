@@ -35,6 +35,7 @@ export default function GroupPostModule() {
 
   // Bước 1: Chiến dịch
   const [campaignId, setCampaignId] = useState(null);
+  const [jobId, setJobId] = useState(null);
   const [campaignName, setCampaignName] = useState("");
   const [campaignDescription, setCampaignDescription] = useState("");
   const [campaignLocked, setCampaignLocked] = useState(false);
@@ -49,7 +50,7 @@ export default function GroupPostModule() {
   // Khi Bước 1 chưa xác nhận hoặc bị mở khóa, tự động mở khóa Bước 2 để đảm bảo tính tuần tự
   useEffect(() => {
     if ((!campaignLocked || !campaignName?.trim()) && isAccountLocked) {
-      setIsAccountLocked(false);
+      queueMicrotask(() => setIsAccountLocked(false));
     }
   }, [campaignLocked, campaignName, isAccountLocked]);
 
@@ -77,6 +78,7 @@ export default function GroupPostModule() {
 
   // Bước 5: Media
   const [mediaFiles, setMediaFiles] = useState([]);
+  const [savedMedia, setSavedMedia] = useState([]);
   const [minMedia, setMinMedia] = useState("1");
   const [maxMedia, setMaxMedia] = useState("4");
 
@@ -107,6 +109,7 @@ export default function GroupPostModule() {
       if (stored) {
         const data = JSON.parse(stored);
         queueMicrotask(() => {
+          if (data.action_type !== "POST") return;
           if (data.campaign_id) setCampaignId(data.campaign_id);
           if (data.name) setCampaignName(data.name);
           if (data.description) setCampaignDescription(data.description);
@@ -123,11 +126,15 @@ export default function GroupPostModule() {
           if (cfg.posts?.length) {
             setPosts(cfg.posts);
           }
+          setSavedMedia(cfg.media || []);
           if (cfg.settings) {
+            if (cfg.settings.max_posts !== undefined) setMaxPosts(String(cfg.settings.max_posts));
+            if (cfg.settings.avoid_duplicate !== undefined) setAvoidDuplicate(Boolean(cfg.settings.avoid_duplicate));
+            if (cfg.settings.shuffle_content !== undefined) setShuffleContent(Boolean(cfg.settings.shuffle_content));
             if (cfg.settings.threads) setThreads(String(cfg.settings.threads));
-            if (cfg.settings.rest_minutes) setRestMinutes(String(cfg.settings.rest_minutes));
-            if (cfg.settings.delay_min) setDelayMin(String(cfg.settings.delay_min));
-            if (cfg.settings.delay_max) setDelayMax(String(cfg.settings.delay_max));
+            if (cfg.settings.rest_minutes !== undefined) setRestMinutes(String(cfg.settings.rest_minutes));
+            if (cfg.settings.delay_min !== undefined) setDelayMin(String(cfg.settings.delay_min));
+            if (cfg.settings.delay_max !== undefined) setDelayMax(String(cfg.settings.delay_max));
           }
           // Theo SRS: "Hẹn giờ cũ đã qua phải chọn lại"
           setScheduleEnabled(false);
@@ -151,6 +158,11 @@ export default function GroupPostModule() {
       const rawList = Array.isArray(data) ? data : (data?.accounts || []);
       const rows = rawList.map(normalizeAccount);
       setAccounts(rows);
+      const rerun = JSON.parse(sessionStorage.getItem("fb_rerun_campaign") || "null");
+      if (rerun?.action_type === "POST" && rerun.config?.account_uids) {
+        setSelectedAccountKeys(rows.filter((account) => rerun.config.account_uids.includes(account.uid)).map((account) => account.key));
+        return;
+      }
       setSelectedAccountKeys((current) => {
         const validKeys = new Set(rows.map((account) => account.key));
         const filteredCurrent = current.filter((key) => validKeys.has(key));
@@ -174,6 +186,8 @@ export default function GroupPostModule() {
     Promise.resolve().then(getGroupSettings)
       .then((data) => {
         if (cancelled) return;
+        const rerun = JSON.parse(sessionStorage.getItem("fb_rerun_campaign") || "null");
+        if (rerun?.action_type === "POST") return;
         setThreads(String(data.threads));
         setRestMinutes(String(data.rest_minutes));
         setMaxPosts(String(data.max_posts));
@@ -193,11 +207,12 @@ export default function GroupPostModule() {
     let cancelled = false;
     getCurrentGroupCampaign()
       .then((job) => {
-        if (cancelled || !job?.job_id) return;
-        const terminal = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"].includes(job.status);
+        if (cancelled || !job?.job_id || job.action_type !== "POST") return;
+        const terminal = ["COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"].includes(job.status);
         setCampaignProgress(job);
         if (!terminal) {
-          setCampaignId(job.job_id);
+          setJobId(job.job_id);
+          setCampaignId(job.campaign_id);
           setRunState(job.status === "QUEUED" ? "starting" : "running");
         }
       })
@@ -207,18 +222,18 @@ export default function GroupPostModule() {
 
   // Polling tiến trình khi có chiến dịch đang chạy
   useEffect(() => {
-    if (!campaignId) return undefined;
+    if (!jobId) return undefined;
     let cancelled = false;
     let timer;
     const poll = async () => {
       try {
-        const job = await getGroupCampaign(campaignId);
+        const job = await getGroupCampaign(jobId);
         if (cancelled) return;
         setCampaignProgress(job);
-        const terminal = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"].includes(job.status);
+        const terminal = ["COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"].includes(job.status);
         if (terminal) {
           setRunState("idle");
-          setCampaignId(null);
+          setJobId(null);
           if (job.status === "COMPLETED") toast.success(job.message, "HOÀN TẤT CHIẾN DỊCH");
           else if (job.status === "STOPPED") toast.info(job.message, "ĐÃ DỪNG CHIẾN DỊCH");
           else toast.error(job.message, "CHIẾN DỊCH KẾT THÚC");
@@ -238,7 +253,7 @@ export default function GroupPostModule() {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [campaignId]);
+  }, [jobId]);
 
   const currentGroupPool = useMemo(() => {
     if (groupSource === "file" && groupFile?.groups?.length) {
@@ -424,7 +439,7 @@ export default function GroupPostModule() {
         account_uids: selectedAccounts.map((account) => account.uid),
         groups: activeGroups,
         posts,
-        media: savedMediaPaths.length ? savedMediaPaths : mediaFiles.map((file) => file.name),
+        media: [...savedMedia, ...savedMediaPaths],
         settings: {
           model,
           credential_id: apiSource.selectedId,
@@ -440,7 +455,8 @@ export default function GroupPostModule() {
           schedule_at: scheduleEnabled && scheduleDate ? `${scheduleDate}T${scheduleTime}` : null,
         },
       });
-      setCampaignId(campaign.job_id);
+      setJobId(campaign.job_id);
+      setCampaignId(campaign.campaign_id);
       setCampaignProgress(campaign);
       setRunState(campaign.status === "QUEUED" ? "starting" : "running");
       sessionStorage.removeItem("fb_rerun_campaign");
@@ -454,10 +470,10 @@ export default function GroupPostModule() {
   };
 
   const handleStop = async () => {
-    if (!campaignId) return;
+    if (!jobId) return;
     try {
       setRunState("stopping");
-      const job = await stopGroupCampaign(campaignId);
+      const job = await stopGroupCampaign(jobId);
       setCampaignProgress(job);
       toast.info("Hệ thống sẽ dừng sau thao tác Facebook hiện tại.", "ĐANG DỪNG");
     } catch (error) {

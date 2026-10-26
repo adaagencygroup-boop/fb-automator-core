@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Search,
@@ -41,7 +41,6 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "@/lib/toast";
-import CampaignDetailModule from "./detail";
 import {
   getGroupCampaigns,
   getGroupCampaignDetails,
@@ -53,9 +52,6 @@ const ITEMS_PER_PAGE = 4;
 
 export default function GroupCampaignsModule() {
   const router = useRouter();
-
-  // Chế độ xem chi tiết trực tiếp trong trang (tránh lỗi 404 khi dev server chưa compile route động)
-  const [viewingCampaign, setViewingCampaign] = useState(null);
 
   // Danh sách chiến dịch & loading
   const [campaigns, setCampaigns] = useState([]);
@@ -83,62 +79,7 @@ export default function GroupCampaignsModule() {
   const [campaignToDelete, setCampaignToDelete] = useState(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  // Mock data để test giao diện khi DB chưa có dữ liệu
-  const MOCK_CAMPAIGNS = [
-    {
-      id: "camp-001",
-      name: "Quảng bá nông sản tháng 10",
-      action_type: "POST",
-      total_runs: 1,
-      total_accounts_run: 24,
-      status: "COMPLETED",
-      created_at: "2026-10-23T08:30:00Z",
-      last_run_at: "2026-10-23T08:30:00Z",
-    },
-    {
-      id: "camp-002",
-      name: "Rải comment bài viết Bất động sản Hà Nội",
-      action_type: "COMMENT",
-      total_runs: 3,
-      total_accounts_run: 18,
-      status: "COMPLETED",
-      created_at: "2026-10-22T14:15:00Z",
-      last_run_at: "2026-10-22T16:45:00Z",
-    },
-    {
-      id: "camp-003",
-      name: "Chiến dịch đăng bài tuyển dụng IT cuối tuần",
-      action_type: "POST",
-      total_runs: 2,
-      total_accounts_run: 30,
-      status: "COMPLETED",
-      created_at: "2026-10-21T09:00:00Z",
-      last_run_at: "2026-10-21T11:20:00Z",
-    },
-    {
-      id: "camp-004",
-      name: "Tương tác nhóm ẩm thực miền Trung",
-      action_type: "COMMENT",
-      total_runs: 1,
-      total_accounts_run: 12,
-      status: "COMPLETED",
-      created_at: "2026-10-20T10:30:00Z",
-      last_run_at: "2026-10-20T10:30:00Z",
-    },
-    {
-      id: "camp-005",
-      name: "Khuyến mãi thời trang mùa thu",
-      action_type: "POST",
-      total_runs: 4,
-      total_accounts_run: 45,
-      status: "COMPLETED",
-      created_at: "2026-10-18T07:45:00Z",
-      last_run_at: "2026-10-19T15:00:00Z",
-    },
-  ];
-
-  // Load danh sách chiến dịch
-  const loadCampaigns = async () => {
+  const loadCampaigns = useCallback(async () => {
     setLoading(true);
     try {
       const params = {
@@ -150,33 +91,26 @@ export default function GroupCampaignsModule() {
         status: statusFilter,
       };
       const res = await getGroupCampaigns(params);
-      if (res && res.campaigns && res.campaigns.length > 0) {
-        setCampaigns(res.campaigns);
-      } else {
-        // Nếu API trả về rỗng, nạp dữ liệu mẫu để kiểm thử UI
-        setCampaigns(MOCK_CAMPAIGNS);
-      }
+      setCampaigns(res?.campaigns || []);
       setCurrentPage(1);
     } catch (err) {
-      console.warn("API error, fallback to mock campaigns:", err);
-      // Fallback sang mock data nếu API offline hoặc lỗi
-      setCampaigns(MOCK_CAMPAIGNS);
+      setCampaigns([]);
+      toast.error(err.message || "Không thể tải danh sách chiến dịch");
       setCurrentPage(1);
     } finally {
       setLoading(false);
     }
-  };
+  }, [searchQuery, timeFilter, customFromDate, customToDate, actionTypeFilter, statusFilter]);
 
   useEffect(() => {
-    loadCampaigns();
-  }, [timeFilter, actionTypeFilter, statusFilter]);
+    Promise.resolve().then(loadCampaigns);
+  }, [loadCampaigns]);
 
   // Thống kê nhanh từ danh sách
   const stats = useMemo(() => {
     const total = campaigns.length;
     const completed = campaigns.filter((c) => c.status === "COMPLETED").length;
-    // Tính ước lượng tương tác (hoặc tổng nick đã chạy)
-    const totalInteractions = campaigns.reduce((acc, c) => acc + (c.total_accounts_run || 0) * 15, 0);
+    const totalInteractions = campaigns.reduce((acc, c) => acc + (c.total_interactions || 0), 0);
 
     const formatK = (num) => {
       if (num >= 1000) return `${(num / 1000).toFixed(1)}k`;
@@ -186,7 +120,7 @@ export default function GroupCampaignsModule() {
     return {
       total,
       completed,
-      interactions: formatK(totalInteractions || total * 140),
+      interactions: formatK(totalInteractions),
     };
   }, [campaigns]);
 
@@ -256,10 +190,7 @@ export default function GroupCampaignsModule() {
   // Xem chi tiết (CAMP-03): chuyển trang sang giao diện chi tiết đầy đủ
   const handleViewDetails = (campaign) => {
     if (!campaign) return;
-    setViewingCampaign(campaign);
-    if (typeof window !== "undefined") {
-      window.history.pushState(null, "", `/groups/campaigns?id=${encodeURIComponent(campaign.id)}`);
-    }
+    router.push(`/groups/campaigns/${encodeURIComponent(campaign.id)}`);
   };
 
   // Copy UID vào clipboard
@@ -360,21 +291,6 @@ export default function GroupCampaignsModule() {
         );
     }
   };
-
-  // Nếu đang ở chế độ xem chi tiết chiến dịch
-  if (viewingCampaign) {
-    return (
-      <CampaignDetailModule
-        campaignId={viewingCampaign.id}
-        onBack={() => {
-          setViewingCampaign(null);
-          if (typeof window !== "undefined") {
-            window.history.pushState(null, "", "/groups/campaigns");
-          }
-        }}
-      />
-    );
-  }
 
   return (
     <div className="space-y-6">

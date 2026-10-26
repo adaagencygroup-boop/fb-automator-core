@@ -87,6 +87,7 @@ class CampaignJob:
     id: str
     owner: str | None
     payload: dict[str, Any]
+    campaign_id: str | None = None
     status: str = "QUEUED"
     message: str = "Đang chờ khởi tạo chiến dịch"
     total: int = 0
@@ -121,6 +122,8 @@ class CampaignJob:
             percent = round(self.completed_steps * 100 / self.total_steps) if self.total_steps else 0
             return {
                 "job_id": self.id,
+                "campaign_id": self.campaign_id,
+                "action_type": self.payload.get("action_type", "POST"),
                 "status": self.status,
                 "message": self.message,
                 "total": self.total,
@@ -437,6 +440,7 @@ class CampaignManager:
             if active and active.status not in TERMINAL_STATES:
                 raise RuntimeError("Đang có một chiến dịch đăng bài chạy cho tài khoản này")
             job = CampaignJob(id=str(uuid.uuid4()), owner=owner, payload=payload)
+            self._create_run(job)
             self.jobs[job.id] = job
             self.active_by_owner[owner] = job.id
         job.log(
@@ -447,6 +451,59 @@ class CampaignManager:
         accepted = job.public()
         threading.Thread(target=self._run, args=(job,), name=f"group-campaign-{job.id[:8]}", daemon=True).start()
         return accepted
+
+    @staticmethod
+    def _create_run(job: CampaignJob) -> None:
+        from ..local_database import local_db
+
+        local_db.initialize()
+        campaign_id = job.payload.get("campaign_id")
+        action_type = job.payload.get("action_type", "POST")
+        name = str(job.payload.get("name") or f"{action_type} {job.id}").strip()
+        if not name:
+            raise ValueError("Tên chiến dịch không được để trống")
+        with local_db.session() as cursor:
+            cursor.execute("BEGIN IMMEDIATE")
+            if campaign_id:
+                campaign = cursor.execute(
+                    "SELECT action_type FROM group_campaigns WHERE id = ? AND owner_key = ? AND deleted_at IS NULL",
+                    (campaign_id, job.owner or ""),
+                ).fetchone()
+                if not campaign or campaign["action_type"] != action_type:
+                    raise ValueError("Không tìm thấy chiến dịch phù hợp để chạy lại")
+                if cursor.execute(
+                    "SELECT 1 FROM group_runs WHERE campaign_id = ? AND status IN ('QUEUED', 'SCHEDULED', 'RUNNING', 'PAUSED', 'STOPPING')",
+                    (campaign_id,),
+                ).fetchone():
+                    raise ValueError("Chiến dịch đang có lượt chạy chưa kết thúc")
+                cursor.execute(
+                    "UPDATE group_campaigns SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (name, job.payload.get("description"), campaign_id),
+                )
+            else:
+                campaign_id = str(uuid.uuid4())
+                cursor.execute(
+                    "INSERT INTO group_campaigns (id, owner_key, name, description, action_type) VALUES (?, ?, ?, ?, ?)",
+                    (campaign_id, job.owner or "", name, job.payload.get("description"), action_type),
+                )
+            run_number = cursor.execute(
+                "SELECT COALESCE(MAX(run_number), 0) + 1 FROM group_runs WHERE campaign_id = ?", (campaign_id,),
+            ).fetchone()[0]
+            cursor.execute(
+                "INSERT INTO group_runs (id, campaign_id, run_number, status, config_json) VALUES (?, ?, ?, 'QUEUED', ?)",
+                (job.id, campaign_id, run_number, json.dumps(_safe_config(job.payload), ensure_ascii=False)),
+            )
+        job.campaign_id = campaign_id
+
+    @staticmethod
+    def _save_run_state(job: CampaignJob) -> None:
+        from ..local_database import local_db
+
+        with local_db.session() as cursor:
+            cursor.execute(
+                "UPDATE group_runs SET status = ?, total_planned = ?, scheduled_at = ?, started_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (job.status, job.total, (job.payload.get("settings") or {}).get("schedule_at"), job.started_at, job.id),
+            )
 
     def get(self, job_id: str, owner: str | None) -> dict[str, Any] | None:
         with self.lock:
@@ -467,6 +524,7 @@ class CampaignManager:
             job.cancel.set()
             with job.lock:
                 job.status = "STOPPING"
+            self._save_run_state(job)
             job.log("WARNING", "Đang dừng chiến dịch sau thao tác hiện tại")
         return job.public()
 
@@ -522,6 +580,7 @@ class CampaignManager:
                 seconds = (target - datetime.now(target.tzinfo)).total_seconds()
                 if seconds > 0:
                     job.status = "SCHEDULED"
+                    self._save_run_state(job)
                     job.log("INFO", f"Đã lên lịch chạy lúc {target.strftime('%d/%m/%Y %H:%M')}")
                     while seconds > 0:
                         wait_chunk = min(seconds, 60)
@@ -531,6 +590,7 @@ class CampaignManager:
 
             job.status = "RUNNING"
             job.started_at = datetime.now().isoformat(timespec="seconds")
+            self._save_run_state(job)
             job.log("INFO", f"Bắt đầu {job.total} nhóm với hai luồng độc lập: tham gia nhóm và đăng bài")
             workers = min(max(1, int(settings.get("threads") or 1)), len(per_account))
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="group-post") as pool:
@@ -692,7 +752,7 @@ class CampaignManager:
             "content": result.get("content"),
             "error_code": result.get("error_code"),
             "error_detail": result.get("error_detail"),
-            "result_url": result.get("result_url") or result.get("group_url"),
+            "result_url": result.get("result_url"),
         }
         with job.lock:
             job.results.append(item)
@@ -718,14 +778,12 @@ class CampaignManager:
                 else "FAILED"
             )
             action_type = str(job.payload.get("action_type") or "POST").upper()
-            campaign_id = str(uuid.uuid4())
+            campaign_id = job.campaign_id
             campaign_name = str(
                 job.payload.get("name")
                 or job.payload.get("campaign_name")
                 or f"{action_type} {job.started_at or job.finished_at or job.id}"
             )[:200]
-            description = job.payload.get("description")
-            config_json = json.dumps(_safe_config(job.payload), ensure_ascii=False, default=str)
             run_payload = {
                 "run_id": job.id,
                 "campaign_id": campaign_id,
@@ -742,26 +800,11 @@ class CampaignManager:
             }
             with local_db.session() as cursor:
                 cursor.execute(
-                    """
-                        INSERT INTO group_campaigns
-                            (id, owner_key, name, description, action_type)
-                        VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (campaign_id, job.owner or "", campaign_name, description, action_type),
-                )
-                cursor.execute(
-                    """
-                        INSERT INTO group_runs
-                            (id, campaign_id, run_number, status, config_json,
-                             total_planned, total_success, total_failed, total_skipped,
-                             started_at, finished_at)
-                        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        job.id, campaign_id, final_status, config_json, job.total,
-                        job.success, job.failed, job.skipped, job.started_at,
-                        job.finished_at,
-                    ),
+                    """UPDATE group_runs SET status = ?, total_planned = ?, total_success = ?,
+                       total_failed = ?, total_skipped = ?, started_at = ?, finished_at = ?,
+                       updated_at = CURRENT_TIMESTAMP WHERE id = ? AND campaign_id = ?""",
+                    (final_status, job.total, job.success, job.failed, job.skipped,
+                     job.started_at, job.finished_at, job.id, campaign_id),
                 )
                 cursor.execute(
                     """

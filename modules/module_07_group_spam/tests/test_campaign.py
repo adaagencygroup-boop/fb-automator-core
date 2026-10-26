@@ -1,6 +1,9 @@
 import threading
 import time
 import unittest
+import tempfile
+from pathlib import Path
+from modules.module_07_group_spam.app.local_database import local_db
 from unittest.mock import patch
 
 from modules.module_07_group_spam.app.services.campaign import CampaignManager, FacebookGroupPoster, html_to_facebook_text
@@ -39,6 +42,11 @@ def wait_for_job(manager, job_id, timeout=2):
 
 class CampaignTests(unittest.TestCase):
     def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        database_path = patch.object(local_db, "path", Path(directory.name) / "test.db")
+        database_path.start()
+        self.addCleanup(database_path.stop)
         self.manager = CampaignManager(poster_factory=FakePoster)
         self.accounts = {
             "100": {"id": 1, "uid": "100", "password": "", "two_fa": "", "cookie": "", "proxy": ""},

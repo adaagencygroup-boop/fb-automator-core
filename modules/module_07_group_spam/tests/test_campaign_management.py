@@ -1,6 +1,10 @@
 import json
 import unittest
 import uuid
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+from modules.module_02_account_manager.api.router import scoped_owner
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -13,6 +17,13 @@ app.include_router(router)
 
 class CampaignManagementTests(unittest.TestCase):
     def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        db_path = patch.object(local_db, "path", Path(directory.name) / "test.db")
+        db_path.start()
+        self.addCleanup(db_path.stop)
+        app.dependency_overrides[scoped_owner] = lambda: "test_owner"
+        self.addCleanup(app.dependency_overrides.clear)
         self.client = TestClient(app)
         local_db.initialize()
 
