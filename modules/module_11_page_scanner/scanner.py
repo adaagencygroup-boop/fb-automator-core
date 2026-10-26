@@ -995,11 +995,18 @@ _FB_SEARCH_INPUT_LOCATORS = [
     '//input[@type="search" and (contains(@aria-label,"Tìm kiếm") or contains(@aria-label,"Search") or contains(@placeholder,"Tìm kiếm") or contains(@placeholder,"Search Facebook"))]',
 ]
 
+# Tab Posts: ưu tiên href /search/posts (ổn định hơn text), rồi role=tab / span
 _FB_POSTS_TAB_LOCATORS = [
+    '//a[contains(@href,"/search/posts")]',
+    '//a[contains(@href,"search/posts/?q=")]',
+    '//*[@role="tab"][contains(@href,"/search/posts") or .//span[normalize-space()="Posts" or normalize-space()="Bài viết"]]',
+    '//*[@role="tab"][normalize-space()="Posts" or normalize-space()="Bài viết"]',
+    '//div[@role="list"]//a[.//span[normalize-space()="Posts" or normalize-space()="Bài viết"]]',
+    '//div[@role="navigation"]//a[contains(@href,"/search/posts")]',
+    '//span[normalize-space()="Posts" or normalize-space()="Bài viết"]/ancestor::a[1]',
+    '//span[normalize-space()="Posts" or normalize-space()="Bài viết"]/ancestor::*[@role="link" or @role="tab" or @role="button"][1]',
     '//*[@role="list"]//span[normalize-space()="Posts" or normalize-space()="Bài viết"]',
     '//*[@role="list"]//*[@role="listitem" or @role="link" or @role="button"][.//span[normalize-space()="Posts" or normalize-space()="Bài viết"]]',
-    '//span[normalize-space()="Posts" or normalize-space()="Bài viết"]',
-    '//a[contains(@href,"/search/posts")]//span[contains(.,"Posts") or contains(.,"Bài viết")]',
     '//*[@role="link" or @role="button"][normalize-space()="Posts" or normalize-space()="Bài viết"]',
 ]
 
@@ -1034,35 +1041,91 @@ def _clear_fb_search_input(driver, search_el) -> None:
 
 
 def _click_posts_search_tab(driver, wait_and_find, human_sleep) -> bool:
+    """
+    Click tab Posts/Bài viết trên trang kết quả search.
+    Chờ filter bar render (poll ngắn), ưu tiên link /search/posts;
+    xác nhận URL đổi sang posts. Fallback caller giữ search_posts URL.
+    """
     from selenium.webdriver.common.by import By
 
-    human_sleep(1.2, 2.2)
-    try:
-        el = wait_and_find(driver, _FB_POSTS_TAB_LOCATORS, timeout=12)
-    except Exception:
+    # Cho filter bar render — poll thay vì sleep dài cố định
+    human_sleep(0.6, 1.0)
+    el = None
+    last_err = None
+    for attempt_timeout in (4, 6, 8):
+        try:
+            el = wait_and_find(driver, _FB_POSTS_TAB_LOCATORS, timeout=attempt_timeout)
+            if el:
+                break
+        except Exception as exc:
+            last_err = exc
+            human_sleep(0.4, 0.7)
+    if not el:
+        logger.debug(f"[Scanner] Posts tab không tìm thấy: {last_err}")
         return False
 
     targets = [el]
     try:
         parent = el.find_element(
-            By.XPATH, "./ancestor::*[@role='link' or @role='button' or @role='listitem'][1]"
+            By.XPATH,
+            "./ancestor::a[1] | ./ancestor::*[@role='link' or @role='button' or @role='tab' or @role='listitem'][1]",
         )
-        targets.insert(0, parent)
+        if parent and parent not in targets:
+            targets.insert(0, parent)
     except Exception:
         pass
 
+    before_url = (driver.current_url or "").lower()
     for target in targets:
         try:
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center', inline:'nearest'});",
+                target,
+            )
+        except Exception:
+            pass
+        clicked = False
+        try:
             target.click()
-            human_sleep(1.5, 2.5)
-            return True
+            clicked = True
         except Exception:
             try:
                 driver.execute_script("arguments[0].click();", target)
-                human_sleep(1.5, 2.5)
-                return True
+                clicked = True
             except Exception:
                 continue
+        if not clicked:
+            continue
+        # Chờ URL/filter chuyển sang posts (tối đa ~2.5s)
+        deadline = time.time() + 2.5
+        while time.time() < deadline:
+            cur = (driver.current_url or "").lower()
+            if "/search/posts" in cur or ("posts" in cur and "search" in cur):
+                human_sleep(0.4, 0.8)
+                return True
+            # Một số UI đổi filter không đổi URL ngay — kiểm tra aria-selected
+            try:
+                selected = driver.execute_script(
+                    """
+                    const t = arguments[0];
+                    const tab = t.closest('[role="tab"]') || t;
+                    return (tab.getAttribute('aria-selected') === 'true')
+                      || (tab.getAttribute('aria-current') === 'page');
+                    """,
+                    target,
+                )
+                if selected and cur != before_url:
+                    human_sleep(0.4, 0.8)
+                    return True
+                if selected:
+                    human_sleep(0.5, 0.9)
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.2)
+        # Click được nhưng chưa chắc URL — vẫn coi thành công nếu không lỗi
+        human_sleep(0.5, 1.0)
+        return True
     return False
 
 
