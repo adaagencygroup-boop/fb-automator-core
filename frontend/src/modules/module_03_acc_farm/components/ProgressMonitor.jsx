@@ -5,7 +5,7 @@ import { Activity, PauseCircle } from "lucide-react";
 import { ACTION_FULL_LABELS, MONITOR_STATUSES, RUN_STATUS } from "../constants";
 import { ActionChip, RunStatusBadge, formatDuration } from "./parts";
 
-const ACTION_ORDER = ["CHECK_NOTIF", "NEWSFEED", "WATCH", "ADD_FRIEND", "JOIN_GROUP"];
+const ACTION_ORDER = ["CHECK_NOTIF", "NEWSFEED", "WATCH", "STORY", "ADD_FRIEND", "LEAVE_GROUP", "JOIN_GROUP"];
 const COUNT_COLORS = {
   RUNNING: "text-blue-600",
   PAUSED: "text-amber-500",

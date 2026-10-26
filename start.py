@@ -19,8 +19,8 @@ import urllib.parse
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     except Exception:
         pass
 
@@ -47,6 +47,7 @@ MODULE_ENDPOINTS = [
     "/api/v1/auth/me",
     "/api/v1/admin/stats",
     "/api/v1/admin/users",
+    "/api/page-scanner/sessions",
 ]
 
 
@@ -93,12 +94,12 @@ def wait_for_url(url: str, timeout: int = 40, proc: subprocess.Popen = None, ser
         for target_url in urls_to_check:
             try:
                 req = urllib.request.Request(target_url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=2) as response:
+                with urllib.request.urlopen(req, timeout=10) as response:
                     if response.status in (200, 304):
                         return True
             except Exception:
                 pass
-        time.sleep(0.5)
+        time.sleep(1)
 
     if log_file:
         print_log_tail(log_file)
@@ -214,15 +215,15 @@ def run_self_test():
         if path == "/api/modules" and status == 200:
             count = json.loads(payload.decode()).get("count")
             extra = f" count={count}"
-            if count != 9:
+            if count < 9:
                 ok = False
-                extra += " (can 9)"
+                extra += " (toi thieu 9)"
         print(f"  * GET {path} -> HTTP {status}{extra}")
         if status != 200:
             ok = False
 
     if ok:
-        print("\n[PASSED] User UI, Admin UI va backend 9 module deu phan hoi.")
+        print("\n[PASSED] User UI, Admin UI va backend cac module deu phan hoi.")
     else:
         print("\n[FAILED] Self-test chua dat.")
     return ok
@@ -245,7 +246,7 @@ def run_project(self_test_only: bool = False, open_browser: bool = True):
     try:
         print("\n[1/3] Backend Local Engine (Port 28129)...")
         backend_proc = spawn([sys.executable, "-u", "engine.py", "--port", "28129"], BASE_DIR, "engine.log")
-        if wait_for_url(BACKEND_URL, timeout=120, proc=backend_proc, service_name="Backend"):
+        if wait_for_url(BACKEND_URL, timeout=1200, proc=backend_proc, service_name="Backend"):
             print("  [OK] Backend: http://127.0.0.1:28129")
             print("  [OK] Swagger: http://127.0.0.1:28129/docs")
         else:
@@ -269,7 +270,7 @@ def run_project(self_test_only: bool = False, open_browser: bool = True):
 
         print("\n[3/3] Giao dien admin Next.js (Port 3010)...")
         admin_proc = spawn([npm_cmd(), "run", "dev", "--", "--webpack"], ADMIN_DIR, "admin.log")
-        if wait_for_url(ADMIN_URL, timeout=180, proc=admin_proc, service_name="Admin UI"):
+        if wait_for_url(ADMIN_URL, timeout=60, proc=admin_proc, service_name="Admin UI"):
             print("  [OK] Admin UI: http://127.0.0.1:3010")
         else:
             print("  [ERROR] Admin UI khong phan hoi sau 180 giay.")

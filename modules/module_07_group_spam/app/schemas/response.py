@@ -53,6 +53,7 @@ class GroupResponse(BaseModel):
     privacy: str
     already_posted: bool
     mem_num: float | None = None
+    membership_status: str | None = None
 
 
 class ParsedGroupsResponse(BaseModel):
@@ -139,8 +140,8 @@ class CampaignStatusResponse(BaseModel):
 
 
 class CampaignStartedResponse(BaseModel):
-    campaign_id: str
-    action_type: str
+    campaign_id: str = ""
+    action_type: str = "POST"
     job_id: str
     status: str
     message: str

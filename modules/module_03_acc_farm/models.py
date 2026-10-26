@@ -54,10 +54,17 @@ DDL_STATEMENTS = [
         newsfeed_scrolls INT DEFAULT 0,
         watch_seconds INT DEFAULT 0,
         watch_videos INT DEFAULT 0,
+        newsfeed_reactions INT DEFAULT 0,
+        watch_reactions INT DEFAULT 0,
+        story_frames INT DEFAULT 0,
+        story_seconds INT DEFAULT 0,
+        story_reactions INT DEFAULT 0,
         friends_sent INT DEFAULT 0,
         friends_source VARCHAR(20),
         groups_joined INT DEFAULT 0,
+        groups_source VARCHAR(20),
         groups_keyword TEXT,
+        groups_left INT DEFAULT 0,
         notif_checked BOOLEAN DEFAULT FALSE,
         notif_opened BOOLEAN DEFAULT FALSE,
         actions_success INT DEFAULT 0,
@@ -113,6 +120,25 @@ DDL_STATEMENTS = [
         PRIMARY KEY (machine_id, key)
     );
     """,
+
+    # 6. Chủ của nhóm / người trong dàn nick (chia đích): mỗi đích chỉ thuộc 1 nick, nick giành được trước là chủ.
+    #    scope: "owner:<tài khoản đăng nhập tool>" (mọi máy) hoặc "machine:<machine_id>" (nick local).
+    #    1 nhóm có thể có 2 dòng cùng chủ: ID số và tên rút gọn. Nút Dọn dẹp lịch sử không xóa bảng này.
+    """
+    CREATE TABLE IF NOT EXISTS farm_target_owners (
+        id SERIAL PRIMARY KEY,
+        scope VARCHAR(120) NOT NULL,
+        kind VARCHAR(10) NOT NULL,
+        target_key VARCHAR(255) NOT NULL,
+        fb_uid VARCHAR(50) NOT NULL,
+        status VARCHAR(20) NOT NULL,
+        name VARCHAR(150),
+        url VARCHAR(500),
+        created_at TIMESTAMP NOT NULL,
+        updated_at TIMESTAMP NOT NULL,
+        UNIQUE (scope, target_key)
+    );
+    """,
 ]
 
 
@@ -122,6 +148,16 @@ ADDED_COLUMNS = [
     ("farm_run_history", "groups_keyword", "TEXT"),
     # Người / nhóm đã tương tác của 1 hành động (JSON), xem migrations/006_farm_log_targets.sql
     ("farm_interaction_logs", "targets", "TEXT"),
+    # Nguồn nhóm của lượt (keyword / suggested / list), xem migrations/007_farm_history_groups_source.sql
+    ("farm_run_history", "groups_source", "VARCHAR(20)"),
+    # Thả cảm xúc + Xem Story, xem migrations/008_farm_history_reactions_story.sql
+    ("farm_run_history", "newsfeed_reactions", "INT DEFAULT 0"),
+    ("farm_run_history", "watch_reactions", "INT DEFAULT 0"),
+    ("farm_run_history", "story_frames", "INT DEFAULT 0"),
+    ("farm_run_history", "story_seconds", "INT DEFAULT 0"),
+    ("farm_run_history", "story_reactions", "INT DEFAULT 0"),
+    # Rời nhóm, xem migrations/009_farm_history_groups_left.sql
+    ("farm_run_history", "groups_left", "INT DEFAULT 0"),
 ]
 
 

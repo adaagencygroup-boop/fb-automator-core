@@ -3,8 +3,9 @@ import { formatVietnamDateTime, parseToVietnamDate } from "@/lib/date-utils";
 
 // ── Tài khoản (Module 02): Tab 1 đọc nick local, giống adapters.py phía BE ──
 
-export const getFarmAccountsPage = (search = "", cursor) =>
-  api.get("/api/accounts/page", { params: { limit: 10, active_only: true, search, cursor } });
+// filters = { search, category_id | uncategorized } (categoryQuery của Module 02)
+export const getFarmAccountsPage = (filters = {}, cursor) =>
+  api.get("/api/accounts/page", { params: { limit: 10, active_only: true, ...filters, cursor } });
 
 // ── Chạy tương tác ──
 

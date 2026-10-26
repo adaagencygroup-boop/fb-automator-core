@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 
 from config.constants import LOGS_DIR
 
@@ -106,6 +106,24 @@ def get_account(uid: str, owner=_UNSET) -> Optional[Dict[str, Any]]:
             "user_id": str(acc.user_id) if acc.user_id is not None else None,
             "profile_path": acc.profile_path,
         }
+
+
+def list_owner_accounts(owner=_UNSET) -> Dict[str, str]:
+    """
+    UID -> trạng thái Module 02 (NEW / LIVE / DIE / CHECKPOINT) của mọi nick thuộc owner (owner None: mọi nick local,
+    user_id NULL). Dùng cho dàn nick: không kết bạn với nick nhà, trả nhóm / người của nick đã die hoặc đã xóa.
+    Chỉ đọc cột uid + status, không đọc mật khẩu / cookie.
+    """
+    SessionLocal, Repo = _m02()
+    from modules.module_02_account_manager.database.models import Account
+    with SessionLocal() as db:
+        rows = Repo.query(db, _owner(owner)).with_entities(Account.uid, Account.status).all()
+    return {str(row.uid).strip(): (row.status or "").upper() for row in rows if row.uid}
+
+
+def list_owner_uids(owner=_UNSET) -> Set[str]:
+    """UID mọi nick của owner (kể cả nick đã die), để kết bạn không mời trúng nick trong dàn."""
+    return set(list_owner_accounts(owner))
 
 
 def get_credentials(uid: str, owner=_UNSET) -> Tuple[str, Optional[str]]:

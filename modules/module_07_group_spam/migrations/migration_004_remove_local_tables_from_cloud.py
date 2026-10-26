@@ -10,7 +10,7 @@ UP_SQL_PATH = Path(__file__).with_name("004_remove_local_tables_from_cloud.sql")
 
 
 def up() -> None:
-    """Leave only the two cloud_group_* v2 tables in PostgreSQL."""
+    """Remove legacy pre-v2 tables before creating the current cloud schema."""
     _postgres_database().execute(UP_SQL_PATH.read_text(encoding="utf-8"))
 
 

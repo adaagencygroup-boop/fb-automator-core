@@ -260,6 +260,7 @@ def start_keyword_check(
     delay_min: float = 5.0,
     delay_max: float = 10.0,
     public_only: bool = False,
+    private_only: bool = False,
     min_members: Optional[int] = None,
     force: bool = True,
 ) -> dict:
@@ -280,6 +281,11 @@ def start_keyword_check(
         dmax = max(dmin, 10.0)
 
     public_only = bool(public_only)
+    private_only = bool(private_only)
+    # Cả hai True = nhận Public + Private (tắt lọc loại)
+    if public_only and private_only:
+        public_only = False
+        private_only = False
     if min_members is not None:
         try:
             min_members = max(0, int(min_members))
@@ -338,6 +344,7 @@ def start_keyword_check(
             "delay_min": dmin,
             "delay_max": dmax,
             "public_only": public_only,
+            "private_only": private_only,
             "min_members": min_members,
             "control": "run",
             "started_at": time.time(),
@@ -345,7 +352,7 @@ def start_keyword_check(
 
     thread = threading.Thread(
         target=_run_check,
-        args=(owner, uid, items, dmin, dmax, public_only, min_members, key, job_id),
+        args=(owner, uid, items, dmin, dmax, public_only, private_only, min_members, key, job_id),
         daemon=True,
         name=f"group-scan-check-{uid}",
     )
@@ -361,6 +368,7 @@ def start_keyword_check(
         "delay_min": dmin,
         "delay_max": dmax,
         "public_only": public_only,
+        "private_only": private_only,
         "min_members": min_members,
         "max_groups": items[0]["limit"],
     }
@@ -373,6 +381,7 @@ def _run_check(
     delay_min: float,
     delay_max: float,
     public_only: bool,
+    private_only: bool,
     min_members: Optional[int],
     key: str,
     job_id: str,
@@ -384,6 +393,7 @@ def _run_check(
             _check_keywords_on_account(
                 uid, items, delay_min, delay_max, job_id,
                 public_only=public_only,
+                private_only=private_only,
                 min_members=min_members,
             )
     except Exception as exc:
@@ -538,12 +548,15 @@ def _parse_group_meta(meta: str) -> dict[str, Any]:
 def _passes_filters(
     meta: dict[str, Any],
     *,
-    public_only: bool,
-    min_members: Optional[int],
+    public_only: bool = False,
+    private_only: bool = False,
+    min_members: Optional[int] = None,
 ) -> tuple[bool, str]:
-    if public_only and meta.get("type") != "public":
-        why = meta.get("type") or "unknown"
-        return False, f"bỏ (không public: {why})"
+    privacy = meta.get("type") or "unknown"
+    if public_only and privacy != "public":
+        return False, f"bỏ (không public: {privacy})"
+    if private_only and privacy != "private":
+        return False, f"bỏ (không private: {privacy})"
     if min_members is not None and min_members > 0:
         count = meta.get("members_count")
         if count is None:
@@ -631,6 +644,7 @@ def _scrape_groups_from_results(
     already: Optional[list[dict[str, Any]]] = None,
     *,
     public_only: bool = False,
+    private_only: bool = False,
     min_members: Optional[int] = None,
     owner: Optional[str] = None,
     source_uid: Optional[str] = None,
@@ -648,7 +662,7 @@ def _scrape_groups_from_results(
     known = set(known_group_ids or set())
     limit = _clamp_limit(max_groups)
     # Có lọc / bỏ trùng DB → cuộn nhiều hơn
-    max_rounds = 16 if (public_only or (min_members and min_members > 0) or known) else 8
+    max_rounds = 16 if (public_only or private_only or (min_members and min_members > 0) or known) else 8
     skipped = 0
     skipped_dup = 0
 
@@ -749,6 +763,7 @@ def _scrape_groups_from_results(
             ok, reason = _passes_filters(
                 meta_info,
                 public_only=public_only,
+                private_only=private_only,
                 min_members=min_members,
             )
             name = _clean_group_name(row.get("name") or "", url)
@@ -953,6 +968,7 @@ def _check_keywords_on_account(
     job_id: str,
     *,
     public_only: bool = False,
+    private_only: bool = False,
     min_members: Optional[int] = None,
 ) -> None:
     from modules.module_02_account_manager.automation import (
@@ -1027,9 +1043,11 @@ def _check_keywords_on_account(
         filter_bits = []
         if public_only:
             filter_bits.append("chỉ Public")
+        if private_only:
+            filter_bits.append("chỉ Private")
         if min_members:
             filter_bits.append(f">={min_members} thành viên")
-        filter_txt = f", lọc: {', '.join(filter_bits)}" if filter_bits else " (không lọc Public/members)"
+        filter_txt = f", lọc: {', '.join(filter_bits)}" if filter_bits else " (không lọc Public/Private/members)"
         plan = ", ".join(f"«{it['keyword']}»×{it['limit']}" for it in items)
         _append_log(
             job_id,
@@ -1084,6 +1102,7 @@ def _check_keywords_on_account(
                     max_groups=limit,
                     already=all_groups,
                     public_only=public_only,
+                    private_only=private_only,
                     min_members=min_members,
                     owner=owner,
                     source_uid=uid,

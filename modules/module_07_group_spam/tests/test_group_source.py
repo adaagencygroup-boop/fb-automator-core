@@ -53,7 +53,7 @@ class GroupSourceUnitTests(unittest.TestCase):
 
     def test_search_facebook_groups(self):
         scraped = [
-            {"key": f"group_{index}", "name": f"Group {index}",
+            {"key": f"group_{index}", "name": f"Nhóm việc làm {index}",
              "url": f"facebook.com/groups/{index}", "uid": str(index),
              "frequency": "20 posts/day", "members": "100K", "mem_num": 100.0,
              "privacy": "public", "already_posted": False}
@@ -67,6 +67,83 @@ class GroupSourceUnitTests(unittest.TestCase):
         self.assertEqual(len(results), 3)
         self.assertTrue(all("url" in r and "key" in r for r in results))
 
+    def test_search_removes_unrelated_browser_groups_and_cleans_name(self):
+        scraped = [
+            {
+                "key": "group_lienminh",
+                "name": (
+                    "UnreadWelcome to Cộng đồng Liên Minh Huyền Thoại Việt Nam "
+                    "Now you can post, connect with other members and more.1d"
+                ),
+                "url": "facebook.com/groups/grouplienminh",
+                "uid": "grouplienminh",
+                "frequency": "90+ posts a day",
+                "members": "180K",
+                "mem_num": 180.0,
+                "privacy": "public",
+                "already_posted": False,
+            },
+            {
+                "key": "group_vieclam",
+                "name": "UnreadWelcome to TÌM VIỆC LÀM TPHCM Now you can post, connect with other members and more.1d",
+                "url": "facebook.com/groups/vieclamtphcm",
+                "uid": "vieclamtphcm",
+                "frequency": "15 posts/day",
+                "members": "50K",
+                "mem_num": 50.0,
+                "privacy": "public",
+                "already_posted": False,
+            },
+        ]
+        with patch(
+            "modules.module_07_group_spam.app.services.group_source.search_facebook_via_browser",
+            return_value=scraped,
+        ):
+            results = search_facebook_groups("liên minh", max_results=10)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["name"], "Cộng đồng Liên Minh Huyền Thoại Việt Nam")
+        self.assertEqual(results[0]["uid"], "grouplienminh")
+
+    def test_search_filters_group_membership_status(self):
+        scraped = [
+            {
+                "key": "group_joined",
+                "name": "Liên minh game thủ Việt Nam",
+                "url": "facebook.com/groups/lienminhjoined",
+                "uid": "lienminhjoined",
+                "frequency": "20 posts/day",
+                "members": "100K",
+                "mem_num": 100.0,
+                "privacy": "public",
+                "membership_status": "joined",
+                "already_posted": False,
+            },
+            {
+                "key": "group_not_joined",
+                "name": "Cộng đồng Liên Minh Việt",
+                "url": "facebook.com/groups/lienminhnew",
+                "uid": "lienminhnew",
+                "frequency": "20 posts/day",
+                "members": "100K",
+                "mem_num": 100.0,
+                "privacy": "public",
+                "membership_status": "not_joined",
+                "already_posted": False,
+            },
+        ]
+        with patch(
+            "modules.module_07_group_spam.app.services.group_source.search_facebook_via_browser",
+            return_value=scraped,
+        ):
+            results = search_facebook_groups(
+                "liên minh",
+                max_results=10,
+                membership_filter="not_joined",
+            )
+
+        self.assertEqual([item["uid"] for item in results], ["lienminhnew"])
+
     def test_get_sample_template(self):
         template = get_sample_template()
         self.assertIn("DANH SÁCH LINK NHÓM FACEBOOK", template)
@@ -78,6 +155,31 @@ class GroupSourceApiTests(unittest.TestCase):
         app = FastAPI()
         app.include_router(router)
         self.client = TestClient(app)
+        self.campaign_patch = patch(
+            "modules.module_07_group_spam.app.routes.campaign.campaign_manager.start",
+            return_value={
+                "job_id": "job-test",
+                "status": "QUEUED",
+                "message": "Accepted",
+                "total": 0,
+                "completed": 0,
+                "total_steps": 0,
+                "completed_steps": 0,
+                "success": 0,
+                "failed": 0,
+                "skipped": 0,
+                "joined": 0,
+                "already_member": 0,
+                "pending_approval": 0,
+                "progress": 0,
+                "started_at": None,
+                "finished_at": None,
+                "logs": [],
+                "results": [],
+            },
+        )
+        self.campaign_patch.start()
+        self.addCleanup(self.campaign_patch.stop)
 
     def test_api_parse_source(self):
         response = self.client.post(

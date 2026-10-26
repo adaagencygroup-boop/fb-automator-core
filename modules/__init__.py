@@ -49,6 +49,11 @@ MODULE_REGISTRY = [
         "title": "Hồ Sơ & Cài Đặt",
         "author": "Trường, Kiệt",
     },
+    {
+        "id": "module_11_page_scanner",
+        "title": "Quét Dữ Liệu Page",
+        "author": "Trần Cường",
+    },
 ]
 
 __all__ = ["MODULE_REGISTRY", "load_backend_modules"]
