@@ -2,32 +2,18 @@
  * Mục 11 — tách chip, biến thể từ khóa, hashtag suy ra, điểm kết hợp.
  */
 
-/** Chế độ tìm — mã đã chốt: PAGE_LON / NGACH / KET_HOP */
+/** Chỉ còn tìm theo hashtag (đã bỏ Page lớn / Kết hợp). */
 export const SEARCH_MODES = [
   {
-    id: "PAGE_LON",
-    label: "Page lớn",
-    hint: "Tab Trang + biến thể từ khóa · xếp theo follower (tắt hashtag)",
-  },
-  {
     id: "NGACH",
-    label: "Page ngách",
-    hint: "Hashtag / bài viết · xếp theo điểm liên quan",
-  },
-  {
-    id: "KET_HOP",
-    label: "Kết hợp",
-    hint: "Mọi kênh · xếp theo điểm kết hợp (khuyến nghị)",
+    label: "Hashtag",
+    hint: "Hashtag / bài viết → tác giả Page · xếp theo điểm liên quan",
   },
 ];
 
-/** Alias cũ → mã mới (tương thích state tạm) */
-export function normalizeSearchMode(mode) {
-  if (mode === "large") return "PAGE_LON";
-  if (mode === "niche") return "NGACH";
-  if (mode === "hybrid") return "KET_HOP";
-  if (["PAGE_LON", "NGACH", "KET_HOP"].includes(mode)) return mode;
-  return "KET_HOP";
+/** Luôn NGACH — giữ hàm để tương thích chỗ gọi cũ. */
+export function normalizeSearchMode(_mode) {
+  return "NGACH";
 }
 
 export function isHashtagChip(chip) {
@@ -141,24 +127,10 @@ export function collectHashtagsForCampaign(keywords, manualHashtags) {
  * Lập hàng đợi phiên theo chế độ (mục 11.4).
  * Mỗi item: { kind: 'keyword'|'hashtag', query, label, channel, rootKeyword? }
  */
-export function buildCampaignJobs({ searchMode, keywords, manualHashtags }) {
-  const mode = normalizeSearchMode(searchMode);
+export function buildCampaignJobs({ searchMode: _searchMode, keywords, manualHashtags }) {
+  // Chỉ hashtag: suy ra từ từ khóa + hashtag nhập tay
   const jobs = [];
-  const seenKw = new Set();
   const seenTag = new Set();
-
-  const addKeywordJob = (query, channel, rootKeyword) => {
-    const key = query.toLowerCase();
-    if (seenKw.has(key)) return;
-    seenKw.add(key);
-    jobs.push({
-      kind: "keyword",
-      query,
-      label: query,
-      channel,
-      rootKeyword: rootKeyword || query,
-    });
-  };
 
   const addHashtagJob = (tag, channel, rootKeyword) => {
     const n = normalizeHashtag(tag);
@@ -175,31 +147,10 @@ export function buildCampaignJobs({ searchMode, keywords, manualHashtags }) {
     });
   };
 
-  if (mode === "PAGE_LON") {
-    for (const kw of keywords) {
-      addKeywordJob(kw, "pages_search", kw);
-      for (const v of generateKeywordVariants(kw)) {
-        if (v.toLowerCase() === kw.toLowerCase()) continue;
-        addKeywordJob(v, "keyword_variant", kw);
-      }
-    }
-  } else if (mode === "NGACH") {
-    const tags = collectHashtagsForCampaign(keywords, manualHashtags);
-    for (const tag of tags) addHashtagJob(tag, "hashtag", tag);
-    if (!tags.length && manualHashtags?.length) {
-      for (const tag of manualHashtags) addHashtagJob(tag, "hashtag", tag);
-    }
-  } else {
-    // KET_HOP — mọi kênh
-    for (const kw of keywords) {
-      addKeywordJob(kw, "pages_search", kw);
-      for (const v of generateKeywordVariants(kw)) {
-        if (v.toLowerCase() === kw.toLowerCase()) continue;
-        addKeywordJob(v, "keyword_variant", kw);
-      }
-    }
-    const tags = collectHashtagsForCampaign(keywords, manualHashtags);
-    for (const tag of tags) addHashtagJob(tag, "hashtag", tag);
+  const tags = collectHashtagsForCampaign(keywords, manualHashtags);
+  for (const tag of tags) addHashtagJob(tag, "hashtag", tag);
+  if (!tags.length && manualHashtags?.length) {
+    for (const tag of manualHashtags) addHashtagJob(tag, "hashtag", tag);
   }
 
   return jobs;
@@ -280,18 +231,12 @@ export function mergePagesByKey(pageLists, metaBySession = {}) {
 }
 
 export function sortPagesForMode(pages, searchMode, terms) {
-  const mode = normalizeSearchMode(searchMode);
   const scored = pages.map((p) => ({
     ...p,
     hybrid_score: computeHybridScore(p, { terms, channelCount: p.channel_count }),
   }));
-  if (mode === "PAGE_LON") {
-    scored.sort((a, b) => (b.follower_count || 0) - (a.follower_count || 0));
-  } else if (mode === "NGACH") {
-    scored.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
-  } else {
-    scored.sort((a, b) => (b.hybrid_score || 0) - (a.hybrid_score || 0));
-  }
+  // Hashtag-only: xếp theo điểm liên quan
+  scored.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
   return scored;
 }
 
