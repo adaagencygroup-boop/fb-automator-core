@@ -102,6 +102,7 @@ class WatchCountingTests(unittest.TestCase):
         with patch.object(farming_flow, "_open", side_effect=open_page) as self.open_mock, \
              patch.object(farming_flow, "ActiveTimer", FakeTimer), \
              patch.object(farming_flow, "ActionChains", return_value=chains), \
+             patch.object(farming_flow, "hover_element", return_value=True), \
              patch.object(farming_flow, "_find_visible", return_value=[]), \
              patch.object(farming_flow, "human_scroll",
                           side_effect=lambda *a, **k: (self.scrolls.append(k), driver.scroll())), \

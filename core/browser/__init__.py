@@ -23,7 +23,17 @@ from core.browser.driver import (
     wait_and_find,
 )
 from core.browser.fingerprint import BrowserConfig
-from core.browser.human import human_sleep, human_type
+from core.browser.human import (
+    click_point,
+    hover_element,
+    human_click,
+    human_sleep,
+    human_type,
+    mouse_position,
+    mouse_to,
+    point_hits,
+    press_mouse,
+)
 from core.browser.profile import get_profile_lock, get_profile_path
 from core.browser.proxy_bridge import (
     ProxyConnectionError,
@@ -57,6 +67,13 @@ __all__ = [
     "BrowserConfig",
     "human_type",
     "human_sleep",
+    "human_click",
+    "hover_element",
+    "mouse_to",
+    "mouse_position",
+    "press_mouse",
+    "click_point",
+    "point_hits",
     "parse_proxy",
     "test_proxy_connectivity",
     "ProxyError",

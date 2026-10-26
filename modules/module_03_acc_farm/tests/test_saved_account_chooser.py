@@ -62,15 +62,22 @@ class SavedAccountChooserTests(unittest.TestCase):
 
     def test_clicks_actionable_button_again_when_page_does_not_advance(self):
         driver, button, _, _ = chooser_driver(cookie_uid="12345")
-        driver.execute_script.side_effect = [
-            "Example Person\nTiếp tục\nDùng trang cá nhân khác",
-            {"x": 100, "y": 200},
-        ]
         with patch.object(login_flow, "_wait_after_saved_account_continue",
-                          side_effect=[TimeoutException("not advanced"), None]):
+                          side_effect=[TimeoutException("not advanced"), None]), \
+                patch.object(login_flow, "human_click", return_value=True) as click:
+            self.assertTrue(login_flow._advance_saved_account_chooser(driver, "12345"))
+        # Bấm lại bằng chuột giống người, không bắn sự kiện CDP / JS vào giữa nút
+        self.assertEqual([c.args[1] for c in click.call_args_list], [button, button])
+        driver.execute_cdp_cmd.assert_not_called()
+        button.click.assert_not_called()
+
+    def test_human_click_failure_falls_back_to_real_click_never_js(self):
+        driver, button, _, _ = chooser_driver(cookie_uid="12345")
+        with patch.object(login_flow, "_wait_after_saved_account_continue"), \
+                patch.object(login_flow, "human_click", return_value=False):
             self.assertTrue(login_flow._advance_saved_account_chooser(driver, "12345"))
         button.click.assert_called_once_with()
-        self.assertEqual(driver.execute_cdp_cmd.call_count, 3)
+        self.assertFalse(any("click()" in str(c.args[0]) for c in driver.execute_script.call_args_list))
 
     @patch.object(login_flow, "_wait_after_saved_account_continue")
     @patch.object(login_flow, "_wait_after_password_submit")

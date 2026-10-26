@@ -114,7 +114,16 @@ export default function AccountPicker({
       }
     >
       {!readOnly && (
-        <div className="mb-3">
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row">
+          {/* Danh mục tài khoản chờ Module 02 có cột: tạm chỉ hiện ô lọc, chưa lọc được */}
+          <select
+            disabled
+            aria-label="Lọc theo danh mục"
+            title="Sắp có: chờ Quản lý tài khoản có danh mục"
+            className="h-9 rounded-lg border border-border bg-slate-50 px-3 text-xs text-slate-400 sm:w-48"
+          >
+            <option>Tất cả danh mục</option>
+          </select>
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
@@ -143,6 +152,7 @@ export default function AccountPicker({
               <th className="w-14 px-3 py-3 text-left">STT</th>
               <th className="px-3 py-3 text-left">UID Facebook</th>
               <th className="px-3 py-3 text-left">Họ &amp; tên tài khoản</th>
+              <th className="px-3 py-3 text-left">Danh mục</th>
               <th className="px-3 py-3 text-left">Proxy</th>
               <th className="px-3 py-3 text-left">Trạng thái ĐN</th>
               <th className="px-3 py-3 text-left">Trạng thái TK</th>
@@ -180,6 +190,7 @@ export default function AccountPicker({
                     <UidCopy uid={acc.uid} />
                   </td>
                   <td className="px-3 py-3 text-sm font-semibold text-slate-800">{acc.profile_name || "—"}</td>
+                  <td className="px-3 py-3 text-slate-400">—</td>
                   <td className="px-3 py-3 font-mono text-[11px] text-slate-500">{proxyHost(acc.proxy) || "IP máy"}</td>
                   <td className="px-3 py-3">
                     <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-semibold ${login.cls}`}>
@@ -199,7 +210,7 @@ export default function AccountPicker({
             })}
             {!readOnly && loadError && (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-xs text-red-600">
+                <td colSpan={8} className="px-3 py-6 text-center text-xs text-red-600">
                   <p role="alert">{loadError}</p>
                   <button type="button" onClick={refresh} className="mt-2 font-semibold text-primary hover:underline">Thử lại</button>
                 </td>
@@ -207,7 +218,7 @@ export default function AccountPicker({
             )}
             {(!readOnly && loading || !visible.length && !loadError) && (
               <tr>
-                <td colSpan={7} className="px-3 py-10 text-center text-xs text-slate-400">
+                <td colSpan={8} className="px-3 py-10 text-center text-xs text-slate-400">
                   {loading
                     ? "Đang tải danh sách tài khoản..."
                     : search
@@ -218,7 +229,7 @@ export default function AccountPicker({
             )}
             {!readOnly && !loading && !loadError && hasMore && (
               <tr ref={!moreError && !loadingMore ? sentinelRef : undefined}>
-                <td colSpan={7} className="px-3 py-3 text-center text-xs text-slate-500">
+                <td colSpan={8} className="px-3 py-3 text-center text-xs text-slate-500">
                   {loadingMore ? "Đang tải thêm tài khoản..." : moreError ? (
                     <>
                       <span role="alert" className="text-red-600">{moreError}</span>

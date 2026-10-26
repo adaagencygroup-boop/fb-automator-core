@@ -12,8 +12,10 @@ Hai chế độ:
     giữ nguyên dấu vân tay nick đang có. canvas_seed NULL.
   - native: profile mới -> có seed ngẫu nhiên, thêm nhiễu theo seed.
 """
+import hashlib
 import logging
 import os
+import random
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -53,6 +55,49 @@ def _pick_by_seed(seed: int, table: list):
     return table[seed % len(table)]
 
 
+@dataclass(frozen=True)
+class MouseProfile:
+    """
+    Thói quen tay của 1 nick (core.browser.human): mỗi nick 1 bộ cố định, khác nick thì khác, để cả dàn không chung
+    1 khuôn chuyển động chuột (tốc độ, độ cong, đi quá đà, chỉnh hướng, rung, dừng trước khi bấm, giữ chuột, vùng
+    bấm ưa thích).
+    """
+    speed: float = 1.0                       # nhân thời gian rê (> 1 chậm hơn)
+    bend: float = 0.2                        # độ cong tối đa, tỉ lệ quãng đường
+    overshoot: float = 0.15                  # tỉ lệ lần rê dài đi quá đích rồi quay lại
+    submove: float = 0.35                    # tỉ lệ lần rê dài dừng hơi hụt rồi chỉnh thêm 1-2 nhịp nhỏ
+    jitter: float = 0.8                      # rung tay (px)
+    peak: float = 1.0                        # lệch đỉnh vận tốc (< 1 nhanh sớm, > 1 nhanh muộn)
+    hover: Tuple[float, float] = (0.15, 0.6)  # dừng trên nút trước khi bấm (giây)
+    hold: Tuple[float, float] = (0.05, 0.12)  # giữ nút chuột (giây)
+    aim: Tuple[float, float] = (0.5, 0.5)     # vùng bấm ưa thích trong nút (tỉ lệ ngang, dọc)
+    spread: Tuple[float, float] = (0.12, 0.12)  # độ tản quanh vùng ưa thích (độ lệch chuẩn, tỉ lệ)
+
+    @classmethod
+    def from_seed(cls, seed: int) -> "MouseProfile":
+        rng = random.Random(f"mouse::{seed}")
+        hover_lo, hold_lo = rng.uniform(0.1, 0.3), rng.uniform(0.04, 0.09)
+        return cls(
+            speed=round(rng.uniform(0.8, 1.3), 3),
+            bend=round(rng.uniform(0.1, 0.3), 3),
+            overshoot=round(rng.uniform(0.05, 0.25), 3),
+            submove=round(rng.uniform(0.2, 0.6), 3),
+            jitter=round(rng.uniform(0.4, 1.6), 2),
+            peak=round(rng.uniform(0.85, 1.15), 3),
+            hover=(round(hover_lo, 3), round(hover_lo + rng.uniform(0.25, 0.5), 3)),
+            hold=(round(hold_lo, 3), round(hold_lo + rng.uniform(0.03, 0.06), 3)),
+            aim=(round(rng.uniform(0.38, 0.62), 3), round(rng.uniform(0.42, 0.58), 3)),
+            spread=(round(rng.uniform(0.08, 0.16), 3), round(rng.uniform(0.08, 0.14), 3)),
+        )
+
+
+def _mouse_seed(uid: str, fingerprint: dict) -> int:
+    """Seed của nick; nick legacy (canvas_seed NULL, mọi nick cùng seed 1) thì lấy theo UID để vẫn khác nhau."""
+    if fingerprint.get("canvas_seed"):
+        return int(fingerprint["canvas_seed"])
+    return int(hashlib.sha256(f"mouse-uid::{uid}".encode("utf-8")).hexdigest()[:8], 16)
+
+
 @dataclass
 class BrowserConfig:
     """Cấu hình trình duyệt của 1 nick, resolve 1 lần từ seed."""
@@ -64,6 +109,7 @@ class BrowserConfig:
     languages_js: str = "['vi-VN', 'vi', 'en-US', 'en']"
     type_delay: Tuple[float, float] = (0.03, 0.09)
     sleep_factor: float = 1.0
+    mouse: MouseProfile = MouseProfile()
 
     @classmethod
     def from_fingerprint(cls, uid: str, fingerprint: dict) -> "BrowserConfig":
@@ -78,6 +124,7 @@ class BrowserConfig:
             languages_js=locale["languages_js"],
             type_delay=typing["type_delay"],
             sleep_factor=typing["sleep_factor"],
+            mouse=MouseProfile.from_seed(_mouse_seed(str(uid), fingerprint)),
         )
 
 
