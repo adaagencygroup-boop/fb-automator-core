@@ -19,23 +19,27 @@ CLOUD_SQL_PATH = Path(__file__).with_name("003_v2_campaign_runtime.sql")
 CLOUD_DOWN_SQL = """
 BEGIN;
 
-DROP TABLE IF EXISTS public.cloud_group_events;
 DROP TABLE IF EXISTS public.cloud_group_logs;
 DROP TABLE IF EXISTS public.cloud_group_runs;
-DROP TABLE IF EXISTS public.cloud_group_campaigns;
 
 COMMIT;
 """
 
 
 def up() -> None:
-    """Create PostgreSQL campaign, runtime and history tables."""
+    """Create local runtime tables and cloud-only final history tables."""
+    from modules.module_07_group_spam.app.local_database import local_db
+
+    local_db.initialize()
     _postgres_database().execute(CLOUD_SQL_PATH.read_text(encoding="utf-8"))
 
 
 def down() -> None:
-    """Remove the Module 7 PostgreSQL tables."""
+    """Remove the Module 7 v2 local and cloud tables."""
+    from modules.module_07_group_spam.app.local_database import local_db
+
     _postgres_database().execute(CLOUD_DOWN_SQL)
+    local_db.drop_schema()
 
 
 def main() -> None:

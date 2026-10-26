@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from html.parser import HTMLParser
+import json
 import random
 import threading
 import time
@@ -12,13 +13,10 @@ import uuid
 from typing import Any, Callable
 
 from modules.module_02_account_manager.context import owner_scope
-from ..core.constants import BLOCK_TAGS, TERMINAL_STATES, LogLevel
+from ..core.constants import BLOCK_TAGS, TERMINAL_STATES
 
 
 class _TextExtractor(HTMLParser):
-    """
-    Helper class to extract text from HTML, preserving line breaks between block-level elements.
-    """
     block_tags = BLOCK_TAGS
 
     def __init__(self):
@@ -105,23 +103,17 @@ class CampaignJob:
     finished_at: str | None = None
     logs: list[dict[str, str]] = field(default_factory=list)
     results: list[dict[str, Any]] = field(default_factory=list)
-    campaign_id: str | None = None
-    run_number: int = 1
     cancel: threading.Event = field(default_factory=threading.Event, repr=False)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
-    def log(self, level: LogLevel | str, message: str) -> None:
-        try:
-            lvl = level.value if isinstance(level, LogLevel) else LogLevel(str(level).upper()).value
-        except (ValueError, AttributeError):
-            return  # Chỉ ghi nhận các log level đã định nghĩa trong LogLevel
+    def log(self, level: str, message: str) -> None:
         with self.lock:
-            entry = {
+            self.logs.append({
                 "time": datetime.now().isoformat(timespec="seconds"),
-                "level": lvl,
+                "level": level,
                 "message": message,
-            }
-            self.logs.append(entry)
+            })
+            del self.logs[:-100]
             self.message = message
 
     def public(self) -> dict[str, Any]:
@@ -256,20 +248,6 @@ class FacebookGroupPoster:
         raise RuntimeError(error)
 
     @staticmethod
-    def _is_visible(element) -> bool:
-        try:
-            return bool(element.is_displayed() and element.is_enabled())
-        except Exception:
-            return False
-
-    @staticmethod
-    def _is_displayed(element) -> bool:
-        try:
-            return bool(element.is_displayed())
-        except Exception:
-            return False
-
-    @staticmethod
     def _element_is_hidden(element) -> bool:
         try:
             return not element.is_displayed()
@@ -280,7 +258,6 @@ class FacebookGroupPoster:
     def join_group(self, group: dict[str, Any]) -> dict[str, Any]:
         """Open a group and join it when needed before the posting stage."""
         from selenium.webdriver.common.by import By
-
         self._raise_if_cancelled()
         url = _group_url(group)
         if not url:
@@ -300,36 +277,30 @@ class FacebookGroupPoster:
             "contains(@aria-label,'Join group') or normalize-space(.)='Tham gia nhóm' or "
             "normalize-space(.)='Join group' or normalize-space(.)='Tham gia')]"
         )
-        buttons = [b for b in driver.find_elements(By.XPATH, join_xpath) if self._is_displayed(b)]
+        buttons = [button for button in driver.find_elements(By.XPATH, join_xpath) if button.is_displayed()]
         if not buttons:
             return {"status": "ALREADY_MEMBER", "message": "Tài khoản đã là thành viên nhóm"}
 
-        try:
-            driver.execute_script("arguments[0].click()", buttons[0])
-        except Exception:
-            pass
+        driver.execute_script("arguments[0].click()", buttons[0])
         if self.cancel.wait(2):
             self._raise_if_cancelled()
 
-        dialogs = [d for d in driver.find_elements(By.XPATH, "//div[@role='dialog']") if self._is_displayed(d)]
+        dialogs = [dialog for dialog in driver.find_elements(By.XPATH, "//div[@role='dialog']") if dialog.is_displayed()]
         if dialogs:
-            try:
-                dialog_text = " ".join((d.text or "").lower() for d in dialogs)
-                question_markers = ("trả lời câu hỏi", "answer questions", "câu hỏi thành viên", "membership questions")
-                if any(marker in dialog_text for marker in question_markers):
-                    return {"status": "REQUIRES_ANSWERS", "message": "Nhóm yêu cầu trả lời câu hỏi tham gia"}
-            except Exception:
-                pass
+            dialog_text = " ".join((dialog.text or "").lower() for dialog in dialogs)
+            question_markers = ("trả lời câu hỏi", "answer questions", "câu hỏi thành viên", "membership questions")
+            if any(marker in dialog_text for marker in question_markers):
+                return {"status": "REQUIRES_ANSWERS", "message": "Nhóm yêu cầu trả lời câu hỏi tham gia"}
 
         pending_xpath = (
             "//*[@role='button' and (contains(@aria-label,'Hủy yêu cầu') or "
             "contains(@aria-label,'Cancel request') or contains(.,'Đang chờ') or "
             "contains(.,'Pending'))]"
         )
-        if any(self._is_displayed(b) for b in driver.find_elements(By.XPATH, pending_xpath)):
+        if any(button.is_displayed() for button in driver.find_elements(By.XPATH, pending_xpath)):
             return {"status": "PENDING_APPROVAL", "message": "Đã gửi yêu cầu, đang chờ quản trị viên duyệt"}
 
-        remaining = [b for b in driver.find_elements(By.XPATH, join_xpath) if self._is_displayed(b)]
+        remaining = [button for button in driver.find_elements(By.XPATH, join_xpath) if button.is_displayed()]
         if remaining:
             raise RuntimeError("Facebook chưa xác nhận thao tác tham gia nhóm")
         return {"status": "JOINED", "message": "Tham gia nhóm thành công"}
@@ -356,23 +327,17 @@ class FacebookGroupPoster:
             "contains(@aria-label,'Write something') or contains(@aria-label,'Tạo bài viết') or "
             "contains(.,'Bạn viết gì') or contains(.,'Write something')]"
         )
-
-        def open_dialog():
-            try:
-                elements = driver.find_elements(By.XPATH, opener_xpath)
-                for el in elements:
-                    if self._is_visible(el):
-                        driver.execute_script("arguments[0].click()", el)
-                        return True
-            except Exception:
-                pass
-            return False
-
-        self._wait_until(open_dialog, 25, "Không tìm thấy nút mở popup đăng bài")
+        opener = self._wait_until(
+            lambda: next((element for element in driver.find_elements(By.XPATH, opener_xpath)
+                          if element.is_displayed() and element.is_enabled()), None),
+            25,
+            "Không tìm thấy nút mở popup đăng bài",
+        )
+        driver.execute_script("arguments[0].click()", opener)
 
         self._wait_until(
             lambda: next((element for element in driver.find_elements(By.XPATH, "//div[@role='dialog']")
-                          if self._is_displayed(element)), None),
+                          if element.is_displayed()), None),
             15,
             "Popup đăng bài không xuất hiện",
         )
@@ -382,49 +347,43 @@ class FacebookGroupPoster:
         textbox_xpath = (
             "//div[@role='dialog']//*[@contenteditable='true' and "
             "(@role='textbox' or @data-lexical-editor='true' or "
-            """contains(@aria-label,'Bạn đang nghĩ gì') or contains(@aria-label,"What's on your mind"))]"""
+            "contains(@aria-label,'Bạn đang nghĩ gì') or contains(@aria-label,\"What's on your mind\"))]"
         )
 
         def insert_content():
-            try:
-                textbox = next((element for element in driver.find_elements(By.XPATH, textbox_xpath)
-                                if self._is_visible(element)), None)
-                if textbox is None:
-                    return False
-                textbox.click()
-                self._raise_if_cancelled()
-                driver.execute_script(
-                    """
-                    arguments[0].focus();
-                    const selection = window.getSelection();
-                    const range = document.createRange();
-                    range.selectNodeContents(arguments[0]);
-                    range.collapse(false);
-                    selection.removeAllRanges();
-                    selection.addRange(range);
-                    document.execCommand('insertText', false, arguments[1]);
-                    arguments[0].dispatchEvent(new InputEvent('input', {
-                        bubbles: true, inputType: 'insertText', data: arguments[1]
-                    }));
-                    """,
-                    textbox, content,
-                )
-                return True
-            except Exception:
+            textbox = next((element for element in driver.find_elements(By.XPATH, textbox_xpath)
+                            if element.is_displayed() and element.is_enabled()), None)
+            if textbox is None:
                 return False
+            textbox.click()
+            self._raise_if_cancelled()
+            driver.execute_script(
+                """
+                arguments[0].focus();
+                const selection = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(arguments[0]);
+                range.collapse(false);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                document.execCommand('insertText', false, arguments[1]);
+                arguments[0].dispatchEvent(new InputEvent('input', {
+                    bubbles: true, inputType: 'insertText', data: arguments[1]
+                }));
+                """,
+                textbox, content,
+            )
+            return True
 
         self._wait_until(insert_content, 20, "Không tìm thấy hoặc không thể nhập nội dung trong popup")
 
         if media:
             def upload_media():
-                try:
-                    inputs = driver.find_elements(By.XPATH, "//div[@role='dialog']//input[@type='file']")
-                    if not inputs:
-                        return False
-                    inputs[-1].send_keys("\n".join(media))
-                    return True
-                except Exception:
+                inputs = driver.find_elements(By.XPATH, "//div[@role='dialog']//input[@type='file']")
+                if not inputs:
                     return False
+                inputs[-1].send_keys("\n".join(media))
+                return True
 
             self._wait_until(upload_media, 15, "Không tìm thấy vùng tải media của Facebook")
             if self.cancel.wait(2 + min(len(media) * 2, 8)):
@@ -437,43 +396,33 @@ class FacebookGroupPoster:
         )
 
         def click_submit():
-            try:
-                submit = next((element for element in driver.find_elements(By.XPATH, submit_xpath)
-                               if self._is_visible(element)), None)
-                if submit is None:
-                    return False
-                self._raise_if_cancelled()
-                driver.execute_script("arguments[0].click()", submit)
-                return True
-            except Exception:
+            submit = next((element for element in driver.find_elements(By.XPATH, submit_xpath)
+                           if element.is_displayed() and element.is_enabled()), None)
+            if submit is None:
                 return False
+            self._raise_if_cancelled()
+            driver.execute_script("arguments[0].click()", submit)
+            return True
 
         self._wait_until(click_submit, 25, "Nút Đăng chưa sẵn sàng")
+        self._wait_until(
+            lambda: not any(element.is_displayed() for element in driver.find_elements(
+                By.XPATH, "//div[@role='dialog']"
+            )),
+            35,
+            "Facebook chưa đóng popup sau khi gửi bài",
+        )
 
-        def dialog_is_closed():
-            dialogs = driver.find_elements(By.XPATH, "//div[@role='dialog']")
-            return not any(self._is_displayed(d) for d in dialogs)
-
-        self._wait_until(dialog_is_closed, 35, "Facebook chưa đóng popup sau khi gửi bài")
-
-        try:
-            page_text = (driver.find_element(By.TAG_NAME, "body").text or "").lower()
-            blocked = ("tạm thời bị chặn", "temporarily blocked", "giới hạn tần suất", "try again later")
-            if any(message in page_text for message in blocked):
-                raise RuntimeError("Facebook đang giới hạn thao tác đăng bài của tài khoản")
-        except Exception:
-            pass
+        page_text = (driver.find_element(By.TAG_NAME, "body").text or "").lower()
+        blocked = ("tạm thời bị chặn", "temporarily blocked", "giới hạn tần suất", "try again later")
+        if any(message in page_text for message in blocked):
+            raise RuntimeError("Facebook đang giới hạn thao tác đăng bài của tài khoản")
         return {"status": "SUCCESS", "message": "Đăng bài thành công", "group_url": url}
 
 
 class CampaignManager:
-    def __init__(self, poster_factory=FacebookGroupPoster, persistence=None):
-        if persistence is None:
-            from .cloud_history import cloud_history
-
-            persistence = cloud_history
+    def __init__(self, poster_factory=FacebookGroupPoster):
         self.poster_factory = poster_factory
-        self.persistence = persistence
         self.jobs: dict[str, CampaignJob] = {}
         self.active_by_owner: dict[str | None, str] = {}
         self.lock = threading.RLock()
@@ -518,7 +467,6 @@ class CampaignManager:
             job.cancel.set()
             with job.lock:
                 job.status = "STOPPING"
-            self._sync_run(job)
             job.log("WARNING", "Đang dừng chiến dịch sau thao tác hiện tại")
         return job.public()
 
@@ -542,42 +490,10 @@ class CampaignManager:
     def _wait(cancel: threading.Event, seconds: float) -> bool:
         return cancel.wait(max(0, seconds))
 
-    def _initialize_persistence(self, job: CampaignJob) -> None:
-        action_type = str(job.payload.get("action_type") or "POST").upper()
-        campaign_name = str(
-            job.payload.get("name")
-            or job.payload.get("campaign_name")
-            or f"{action_type} {job.id}"
-        )[:200]
-        campaign_id, run_number = self.persistence.initialize_run(
-            run_id=job.id,
-            requested_campaign_id=job.payload.get("campaign_id"),
-            owner=job.owner,
-            campaign_name=campaign_name,
-            description=job.payload.get("description"),
-            action_type=action_type,
-            config=_safe_config(job.payload),
-        )
-        job.campaign_id = campaign_id
-        job.run_number = run_number
-
-    def _sync_run(self, job: CampaignJob) -> None:
-        self.persistence.update_run(
-            job.id,
-            status=job.status,
-            total_planned=job.total,
-            total_success=job.success,
-            total_failed=job.failed,
-            total_skipped=job.skipped,
-            started_at=job.started_at,
-            finished_at=job.finished_at,
-        )
-
     def _run(self, job: CampaignJob) -> None:
         payload = job.payload
         settings = payload.get("settings") or {}
         try:
-            self._initialize_persistence(job)
             job.log("INFO", "Đang kiểm tra tài khoản và chuẩn bị các phiên Chrome...")
             uids = list(dict.fromkeys(str(uid) for uid in payload.get("account_uids") or [] if uid))
             accounts = self._load_accounts(uids, job.owner)
@@ -599,7 +515,6 @@ class CampaignManager:
             per_account = {uid: items for uid, items in per_account.items() if items}
             job.total = len(tasks)
             job.total_steps = len(tasks) * 2
-            self._sync_run(job)
 
             schedule_at = settings.get("schedule_at")
             if schedule_at:
@@ -607,7 +522,6 @@ class CampaignManager:
                 seconds = (target - datetime.now(target.tzinfo)).total_seconds()
                 if seconds > 0:
                     job.status = "SCHEDULED"
-                    self._sync_run(job)
                     job.log("INFO", f"Đã lên lịch chạy lúc {target.strftime('%d/%m/%Y %H:%M')}")
                     while seconds > 0:
                         wait_chunk = min(seconds, 60)
@@ -617,7 +531,6 @@ class CampaignManager:
 
             job.status = "RUNNING"
             job.started_at = datetime.now().isoformat(timespec="seconds")
-            self._sync_run(job)
             job.log("INFO", f"Bắt đầu {job.total} nhóm với hai luồng độc lập: tham gia nhóm và đăng bài")
             workers = min(max(1, int(settings.get("threads") or 1)), len(per_account))
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="group-post") as pool:
@@ -633,23 +546,18 @@ class CampaignManager:
             if job.cancel.is_set():
                 job.status = "STOPPED"
                 job.message = "Chiến dịch đã dừng theo yêu cầu"
-                job.log("WARNING", "Chiến dịch đã dừng theo yêu cầu")
             elif (job.failed or job.skipped) and job.success:
                 job.status = "PARTIAL"
                 job.message = f"Hoàn tất một phần: {job.success} đã đăng, {job.failed} thất bại"
-                job.log("SUCCESS", f"Chiến dịch đã hoàn thành! Đã đăng thành công {job.success}/{job.total} lượt (Thất bại: {job.failed})")
             elif job.failed:
                 job.status = "FAILED"
                 job.message = f"Chiến dịch thất bại ({job.failed}/{job.total} lượt)"
-                job.log("ERROR", f"Chiến dịch kết thúc: {job.message}")
             elif job.skipped:
                 job.status = "PARTIAL"
                 job.message = f"Đã xử lý: {job.success} đã đăng, {job.skipped} nhóm bỏ qua"
-                job.log("SUCCESS", f"Chiến dịch đã hoàn thành! Đã đăng thành công {job.success}/{job.total} lượt ({job.skipped} nhóm bỏ qua)")
             else:
                 job.status = "COMPLETED"
                 job.message = f"Đã đăng thành công {job.success}/{job.total} lượt"
-                job.log("SUCCESS", f"Chiến dịch đã hoàn thành thành công! Tổng cộng {job.success}/{job.total} lượt đăng bài.")
         except InterruptedError:
             job.status = "STOPPED"
             job.message = "Chiến dịch đã dừng theo yêu cầu"
@@ -686,32 +594,30 @@ class CampaignManager:
                     media_count = min(len(media_pool), random.randint(min_media, max_media)) if media_pool else 0
                     media = random.sample(media_pool, media_count) if media_count else []
                     group_name = group.get("name") or _group_key(group)
-                    group_url = _group_url(group)
-                    url_display = f" ({group_url})" if group_url else ""
                     join_result = None
                     try:
-                        job.log("INFO", f"[{uid}] Luồng tham gia: kiểm tra {group_name}{url_display}")
+                        job.log("INFO", f"[{uid}] Luồng tham gia: kiểm tra {group_name}")
                         try:
                             join_result = poster.join_group(group)
-                            self._record_join_step(job, uid, group_name, join_result, group_url)
+                            self._record_join_step(job, uid, group_name, join_result)
                         except InterruptedError:
                             raise
                         except Exception as join_error:
                             join_result = {"status": "FAILED", "message": str(join_error)}
-                            self._record_join_step(job, uid, group_name, join_result, group_url)
+                            self._record_join_step(job, uid, group_name, join_result)
                             job.log("WARNING", f"[{uid}] Luồng tham gia lỗi nhưng luồng đăng vẫn tiếp tục")
 
                         # Hai luồng độc lập: không chờ Facebook duyệt yêu cầu tham gia mới thử đăng.
                         action_type = str(job.payload.get("action_type") or "POST").upper()
                         if action_type == "COMMENT":
-                            job.log("INFO", f"[{uid}] Luồng bình luận: đang bình luận vào {group_name}{url_display}")
+                            job.log("INFO", f"[{uid}] Luồng bình luận: đang bình luận vào {group_name}")
                             if hasattr(poster, "comment"):
                                 result = poster.comment(group, posts[post_index])
                             else:
                                 result = poster.post(group, posts[post_index], media)
                                 result["message"] = "Đã bình luận thành công"
                         else:
-                            job.log("INFO", f"[{uid}] Luồng đăng: đang đăng bài vào {group_name}{url_display}")
+                            job.log("INFO", f"[{uid}] Luồng đăng: đang đăng bài vào {group_name}")
                             result = poster.post(group, posts[post_index], media)
                         result["join_status"] = join_result["status"]
                         result["content"] = posts[post_index]
@@ -755,9 +661,7 @@ class CampaignManager:
             job.completed_steps = min(job.total_steps, job.completed_steps + count)
 
     @staticmethod
-    def _record_join_step(
-        job: CampaignJob, uid: str, group_name: str, result: dict[str, Any], group_url: str = ""
-    ) -> None:
+    def _record_join_step(job: CampaignJob, uid: str, group_name: str, result: dict[str, Any]) -> None:
         status = result.get("status")
         with job.lock:
             job.completed_steps = min(job.total_steps, job.completed_steps + 1)
@@ -768,32 +672,27 @@ class CampaignManager:
             elif status == "PENDING_APPROVAL":
                 job.pending_approval += 1
         level = "WARNING" if status in {"PENDING_APPROVAL", "REQUIRES_ANSWERS", "FAILED"} else "SUCCESS"
-        url_part = f" ({group_url})" if group_url else ""
-        job.log(level, f"[{uid}] {group_name}{url_part}: {result.get('message', '')}")
+        job.log(level, f"[{uid}] {group_name}: {result.get('message', '')}")
 
+    @staticmethod
     def _record_result(
-        self, job: CampaignJob, account: dict[str, Any], group: dict[str, Any], result: dict[str, Any]
+        job: CampaignJob, account: dict[str, Any], group: dict[str, Any], result: dict[str, Any]
     ) -> None:
         uid = account["uid"]
-        status = str(result.get("status") or "FAILED").upper()
-        if status not in {"SUCCESS", "PENDING_APPROVAL", "FAILED", "SKIPPED", "CANCELLED"}:
-            status = "FAILED"
         item = {
-            "id": str(uuid.uuid4()),
             "account_uid": uid,
             "account_id": account.get("id"),
             "account_name": account.get("profile_name"),
             "group_key": _group_key(group),
             "group_name": group.get("name"),
             "group_url": _group_url(group),
-            "status": status,
+            "status": result.get("status", "FAILED"),
             "message": result.get("message", ""),
             "join_status": result.get("join_status"),
             "content": result.get("content"),
             "error_code": result.get("error_code"),
             "error_detail": result.get("error_detail"),
-            "result_url": result.get("result_url") or result.get("group_url") or _group_url(group),
-            "finished_at": datetime.now().isoformat(timespec="seconds"),
+            "result_url": result.get("result_url") or result.get("group_url"),
         }
         with job.lock:
             job.results.append(item)
@@ -804,19 +703,135 @@ class CampaignManager:
                 job.skipped += 1
             else:
                 job.failed += 1
-        self.persistence.record_task(job.id, item)
-        self._sync_run(job)
         level = "SUCCESS" if item["status"] == "SUCCESS" else "WARNING" if item["status"] in {"SKIPPED", "PENDING_APPROVAL"} else "ERROR"
-        target_url = item.get("result_url") or item.get("group_url") or _group_url(group)
-        group_display = item["group_name"] or item["group_key"]
-        url_part = f" ({target_url})" if target_url else ""
-        job.log(level, f"[{uid}] {group_display}{url_part}: {item['message']}")
+        job.log(level, f"[{uid}] {item['group_name'] or item['group_key']}: {item['message']}")
 
-    def _persist_final_results(self, job: CampaignJob) -> None:
-        """Finalize the PostgreSQL run summary."""
-        if job.status not in {"COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"}:
-            job.status = "FAILED"
-        self._sync_run(job)
+    @staticmethod
+    def _persist_final_results(job: CampaignJob) -> None:
+        """Persist the v2 run, final tasks and transactional sync outbox."""
+        try:
+            from ..local_database import local_db
+
+            final_status = (
+                job.status
+                if job.status in {"COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"}
+                else "FAILED"
+            )
+            action_type = str(job.payload.get("action_type") or "POST").upper()
+            campaign_id = str(uuid.uuid4())
+            campaign_name = str(
+                job.payload.get("name")
+                or job.payload.get("campaign_name")
+                or f"{action_type} {job.started_at or job.finished_at or job.id}"
+            )[:200]
+            description = job.payload.get("description")
+            config_json = json.dumps(_safe_config(job.payload), ensure_ascii=False, default=str)
+            run_payload = {
+                "run_id": job.id,
+                "campaign_id": campaign_id,
+                "owner_key": job.owner or "",
+                "campaign_name": campaign_name,
+                "action_type": action_type,
+                "status": final_status,
+                "total_planned": job.total,
+                "total_success": job.success,
+                "total_failed": job.failed,
+                "total_skipped": job.skipped,
+                "started_at": job.started_at,
+                "finished_at": job.finished_at,
+            }
+            with local_db.session() as cursor:
+                cursor.execute(
+                    """
+                        INSERT INTO group_campaigns
+                            (id, owner_key, name, description, action_type)
+                        VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (campaign_id, job.owner or "", campaign_name, description, action_type),
+                )
+                cursor.execute(
+                    """
+                        INSERT INTO group_runs
+                            (id, campaign_id, run_number, status, config_json,
+                             total_planned, total_success, total_failed, total_skipped,
+                             started_at, finished_at)
+                        VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job.id, campaign_id, final_status, config_json, job.total,
+                        job.success, job.failed, job.skipped, job.started_at,
+                        job.finished_at,
+                    ),
+                )
+                cursor.execute(
+                    """
+                        INSERT INTO group_sync_outbox
+                            (event_id, data_type, data_id, payload_json, status)
+                        VALUES (?, 'RUN', ?, ?, 'PENDING')
+                    """,
+                    (
+                        str(uuid.uuid4()), job.id,
+                        json.dumps(run_payload, ensure_ascii=False, default=str),
+                    ),
+                )
+                for result in job.results:
+                    status = (
+                        result["status"]
+                        if result["status"] in {
+                            "SUCCESS", "PENDING_APPROVAL", "FAILED", "SKIPPED", "CANCELLED"
+                        }
+                        else "FAILED"
+                    )
+                    task_id = str(uuid.uuid4())
+                    task_payload = {
+                        "log_id": task_id,
+                        "run_id": job.id,
+                        "owner_key": job.owner or "",
+                        "action_type": action_type,
+                        "account_uid": result["account_uid"],
+                        "account_name": result.get("account_name"),
+                        "group_key": result["group_key"],
+                        "group_name": result.get("group_name"),
+                        "group_url": result["group_url"],
+                        "content": result.get("content"),
+                        "status": status,
+                        "result_message": result.get("message"),
+                        "error_code": result.get("error_code"),
+                        "error_detail": result.get("error_detail"),
+                        "result_url": result.get("result_url"),
+                        "finished_at": job.finished_at,
+                    }
+                    cursor.execute(
+                        """
+                            INSERT INTO group_run_tasks
+                                (id, run_id, account_id, account_uid, account_name,
+                                 group_key, group_name, group_url, content, status,
+                                 result_message, error_code, error_detail, result_url,
+                                 attempt_count, started_at, finished_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                        """,
+                        (
+                            task_id, job.id, result.get("account_id"), result["account_uid"],
+                            result.get("account_name"), result["group_key"],
+                            result.get("group_name"), result["group_url"],
+                            result.get("content"), status, result.get("message"),
+                            result.get("error_code"), result.get("error_detail"),
+                            result.get("result_url"), job.started_at, job.finished_at,
+                        ),
+                    )
+                    cursor.execute(
+                        """
+                            INSERT INTO group_sync_outbox
+                                (event_id, data_type, data_id, payload_json, status)
+                            VALUES (?, 'LOG', ?, ?, 'PENDING')
+                        """,
+                        (
+                            str(uuid.uuid4()), task_id,
+                            json.dumps(task_payload, ensure_ascii=False, default=str),
+                        ),
+                    )
+        except Exception as exc:
+            job.log("WARNING", f"Cannot persist Module 7 campaign history: {exc}")
 
 
 campaign_manager = CampaignManager()

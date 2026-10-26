@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from modules.module_02_account_manager.api.router import scoped_owner
 
@@ -24,25 +24,19 @@ router = APIRouter(prefix="/source", tags=["Module 07: Group source"])
 @router.post("/parse", response_model=ParsedGroupsResponse, response_model_exclude_none=True)
 async def parse_group_source(item: ParseFileInput, owner: str | None = Depends(scoped_owner)):
     try:
-        return await asyncio.to_thread(
-            parse_group_file_content, item.content, item.filter_posted, owner, item.account_uid
-        )
+        return await asyncio.to_thread(parse_group_file_content, item.content, item.filter_posted, owner)
     except Exception as exc:
         raise HTTPException(400, f"Lỗi đọc dữ liệu nhóm: {exc}") from exc
 
 
 @router.post("/upload", response_model=ParsedGroupsResponse, response_model_exclude_none=True)
 async def upload_group_source_file(
-    file: UploadFile = File(...),
-    filter_posted: bool = Form(False),
-    account_uid: str | None = Form(None),
+    file: UploadFile = File(...), filter_posted: bool = False,
     owner: str | None = Depends(scoped_owner),
 ):
     try:
         content = (await file.read()).decode("utf-8", errors="replace")
-        return await asyncio.to_thread(
-            parse_group_file_content, content, filter_posted, owner, account_uid
-        )
+        return await asyncio.to_thread(parse_group_file_content, content, filter_posted, owner)
     except Exception as exc:
         raise HTTPException(400, f"Lỗi upload file nhóm: {exc}") from exc
 
@@ -67,7 +61,6 @@ async def search_groups(item: SearchGroupInput, owner: str | None = Depends(scop
             item.frequency_filter,
             item.account_uid,
             owner,
-            item.membership_filter,
         )
         return {"groups": results, "count": len(results)}
     except Exception as exc:
