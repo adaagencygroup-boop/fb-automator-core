@@ -73,6 +73,7 @@ class CredentialInput(ConnectionTestInput):
 class ParseFileInput(BaseModel):
     content: str
     filter_posted: bool = False
+    account_uid: str | None = None
 
 
 class SearchGroupInput(BaseModel):
@@ -81,6 +82,7 @@ class SearchGroupInput(BaseModel):
     member_filter: str = Field(default="all")
     group_type: str = Field(default="all")
     frequency_filter: str = Field(default="all")
+    membership_filter: str = Field(default="all")
     account_uid: str | None = None
 
 

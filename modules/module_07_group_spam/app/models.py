@@ -1,10 +1,8 @@
-"""Local-runtime and cloud-history schema bootstrap for Module 7 v2."""
+"""PostgreSQL-only schema bootstrap for Module 7."""
 
 from pathlib import Path
 
 from core.database.connection import db
-
-from .local_database import local_db
 
 
 SCHEMA_PATH = (
@@ -12,12 +10,32 @@ SCHEMA_PATH = (
     / "migrations"
     / "003_v2_campaign_runtime.sql"
 )
+CLOUD_FIRST_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "migrations"
+    / "005_cloud_first_logs.sql"
+)
+POSTGRES_ONLY_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "migrations"
+    / "006_postgres_only.sql"
+)
+REMOVE_CLOUD_EVENTS_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "migrations"
+    / "007_remove_cloud_events.sql"
+)
 
 
 def init_models() -> None:
-    """Create local runtime tables and cloud-only history tables."""
+    """Create cloud campaign, runtime and history tables and import legacy metadata once."""
     try:
-        local_db.initialize()
         db.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
+        db.execute(CLOUD_FIRST_SCHEMA_PATH.read_text(encoding="utf-8"))
+        db.execute(POSTGRES_ONLY_SCHEMA_PATH.read_text(encoding="utf-8"))
+        db.execute(REMOVE_CLOUD_EVENTS_SCHEMA_PATH.read_text(encoding="utf-8"))
+        from ..migrations.migration_006_postgres_only import import_legacy_sqlite
+
+        import_legacy_sqlite(database=db)
     except Exception as exc:
         raise RuntimeError(f"Module 7 database initialization failed: {exc}") from exc
