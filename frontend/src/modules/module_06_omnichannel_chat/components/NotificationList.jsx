@@ -1,8 +1,9 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { useIncrementalList } from "@/lib/use-incremental-list";
 import StatusFilter from "./StatusFilter";
+import { NotificationSkeleton } from "./Skeletons";
 
 // Figma: "Thông báo" (CSS all layers, 1593:2028) — sub-tab Bình luận / Tương tác bài viết + thẻ thông báo
 
@@ -49,13 +50,12 @@ const formatDateTime = (iso) => {
   });
 };
 
-function SubTabs({ type, onTypeChange, counts, unreadCounts = {} }) {
+function SubTabs({ type, onTypeChange, counts }) {
   return (
     <div role="tablist" aria-label="Loại thông báo" className="flex border-t border-gray-100 shrink-0">
       {NOTIFICATION_TYPES.map((t) => {
         const active = type === t.id;
         const count = counts[t.id] || 0;
-        const unread = unreadCounts[t.id] || 0;
         return (
           <button
             key={t.id}
@@ -71,9 +71,6 @@ function SubTabs({ type, onTypeChange, counts, unreadCounts = {} }) {
           >
             <span>{t.label}</span>
             {count > 0 && <span className="text-xs">({count})</span>}
-            {unread > 0 && (
-              <span className="size-2 rounded-full bg-red-500" title={`${unread} chưa đọc`} aria-hidden="true" />
-            )}
           </button>
         );
       })}
@@ -106,19 +103,17 @@ function NotificationCard({ notification, pageName, onOpen }) {
         </span>
 
         <span className={cn("flex-1 min-w-0 flex flex-col gap-1.5", unread ? "pr-4" : "pr-1")}>
-          <span className="text-sm leading-[19px] text-gray-800">
+          <span className="text-sm leading-[19px] text-gray-800 [overflow-wrap:anywhere]">
             {notification.replied && (
               <span className="font-bold text-emerald-500 mr-1.5" aria-label="Đã xử lý">
                 ✓
               </span>
             )}
             <strong className="font-bold text-gray-900">{notification.actor}</strong>{" "}
-            <span className="text-xs leading-4 text-red-500" aria-hidden="true">
-              📌
-            </span>{" "}
+            {" "}
             {notification.text}
           </span>
-          <span className="text-xs leading-[15px] text-gray-500">
+          <span className="text-xs leading-[15px] text-gray-500 [overflow-wrap:anywhere]">
             {formatDateTime(notification.createdAt)}
             {pageName && ` · ${pageName}`}
           </span>
@@ -135,42 +130,55 @@ function NotificationCard({ notification, pageName, onOpen }) {
   );
 }
 
+/**
+ * Danh sách thông báo.
+ *
+ * Lọc theo Page / tab / trạng thái và sắp xếp đều do Backend làm — `notifications`
+ * đến đây là những trang đã tải của đúng bộ lọc đang xem, không lọc thêm gì nữa.
+ * Badge `counts` cũng từ Backend, vì ở đây không còn cả danh sách để tự đếm.
+ */
 export default function NotificationList({
   notifications,
+  counts,
+  onLoadMore,
+  hasMore,
+  loadingMore,
   pagesById,
   type,
   onTypeChange,
   filter,
   onFilterChange,
   onOpenNotification,
+  loading,
 }) {
-  const unreadCounts = Object.fromEntries(
-    NOTIFICATION_TYPES.map((t) => [t.id, notifications.filter((n) => n.type === t.id && n.unread).length]),
-  );
+  const list = notifications;
 
-  const counts = Object.fromEntries(
-    NOTIFICATION_TYPES.map((t) => {
-      let filtered = notifications.filter((n) => n.type === t.id);
-      if (filter === "unread") filtered = filtered.filter((n) => n.unread);
-      if (filter === "unreplied") filtered = filtered.filter((n) => !n.replied);
-      return [t.id, filtered.length];
-    }),
-  );
-
-  let list = notifications.filter((n) => n.type === type);
-  if (filter === "unread") list = list.filter((n) => n.unread);
-  if (filter === "unreplied") list = list.filter((n) => !n.replied);
-  list = [...list].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-  const { slice, sentinelRef, hasMore } = useIncrementalList(list, 25);
+  // Cuộn tới gần đáy thì xin trang kế. `rootMargin` cho nạp sớm 200px để người
+  // dùng không phải đợi ở đáy. Đang tải thì không gắn observer, tránh xin chồng.
+  const moreRef = useRef(null);
+  useEffect(() => {
+    const el = moreRef.current;
+    if (!el || !hasMore || loadingMore || !onLoadMore) return undefined;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) onLoadMore();
+      },
+      { rootMargin: "200px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, loadingMore, onLoadMore, list.length]);
 
   return (
     <>
-      <SubTabs type={type} onTypeChange={onTypeChange} counts={counts} unreadCounts={unreadCounts} />
+      <SubTabs type={type} onTypeChange={onTypeChange} counts={counts || {}} />
       <StatusFilter filter={filter} onFilterChange={onFilterChange} label="Lọc thông báo" />
+      {loading ? (
+        <NotificationSkeleton />
+      ) : (
       <ul className="flex-1 min-h-0 overflow-y-auto p-3.5 flex flex-col gap-3 bg-slate-50/50">
         {list.length === 0 && <li className="py-10 text-center text-xs text-slate-400">Chưa có thông báo.</li>}
-        {slice.map((n) => (
+        {list.map((n) => (
           <NotificationCard
             key={n.id}
             notification={n}
@@ -178,8 +186,13 @@ export default function NotificationList({
             onOpen={() => onOpenNotification(n.id)}
           />
         ))}
-        {hasMore && <li ref={sentinelRef} aria-hidden="true" className="h-4" />}
+        {hasMore && (
+          <li ref={moreRef} className="py-2 text-center text-xs text-slate-400">
+            {loadingMore ? "Đang tải thêm…" : "Cuộn để xem thêm"}
+          </li>
+        )}
       </ul>
+      )}
     </>
   );
 }

@@ -30,8 +30,10 @@ HISTORY_COLUMNS = (
     "proxy_host", "proxy_mode", "egress_ip", "fingerprint_mode",
     "final_status", "error", "light_checkpoint", "cookie_saved",
     "started_at", "finished_at", "duration_seconds",
-    "newsfeed_seconds", "newsfeed_scrolls", "watch_seconds", "watch_videos",
-    "friends_sent", "friends_source", "groups_joined", "groups_keyword", "notif_checked", "notif_opened",
+    "newsfeed_seconds", "newsfeed_scrolls", "newsfeed_reactions", "watch_seconds", "watch_videos", "watch_reactions",
+    "story_frames", "story_seconds", "story_reactions",
+    "friends_sent", "friends_source", "groups_joined", "groups_source", "groups_keyword", "groups_left",
+    "notif_checked", "notif_opened",
     "actions_success", "actions_failed", "actions_blocked", "actions_skipped",
     "actions_summary", "config_snapshot", "created_at",
 )
@@ -188,8 +190,11 @@ def finish_run(run_id: int, status: str, error: Optional[str], activity: str, hi
 def summarize_actions(actions: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Tính các cột tổng hợp của farm_run_history từ danh sách kết quả hành động (theo thứ tự chạy)."""
     out = {
-        "newsfeed_seconds": 0, "newsfeed_scrolls": 0, "watch_seconds": 0, "watch_videos": 0,
-        "friends_sent": 0, "friends_source": None, "groups_joined": 0, "groups_keyword": None,
+        "newsfeed_seconds": 0, "newsfeed_scrolls": 0, "newsfeed_reactions": 0,
+        "watch_seconds": 0, "watch_videos": 0, "watch_reactions": 0,
+        "story_frames": 0, "story_seconds": 0, "story_reactions": 0,
+        "friends_sent": 0, "friends_source": None, "groups_joined": 0, "groups_source": None, "groups_keyword": None,
+        "groups_left": 0,
         "notif_checked": False, "notif_opened": False,
         "actions_success": 0, "actions_failed": 0, "actions_blocked": 0, "actions_skipped": 0,
     }
@@ -204,15 +209,24 @@ def summarize_actions(actions: List[Dict[str, Any]]) -> Dict[str, Any]:
         if action == "NEWSFEED":
             out["newsfeed_seconds"] += int(a.get("seconds") or 0)
             out["newsfeed_scrolls"] += int(a.get("scrolls") or 0)
+            out["newsfeed_reactions"] += int(a.get("reactions") or 0)
         elif action == "WATCH":
             out["watch_seconds"] += int(a.get("seconds") or 0)
             out["watch_videos"] += qty
+            out["watch_reactions"] += int(a.get("reactions") or 0)
+        elif action == "STORY":
+            out["story_frames"] += qty
+            out["story_seconds"] += int(a.get("seconds") or 0)
+            out["story_reactions"] += int(a.get("reactions") or 0)
         elif action == "ADD_FRIEND":
             out["friends_sent"] += qty
             out["friends_source"] = a.get("source") or out["friends_source"]
         elif action == "JOIN_GROUP":
             out["groups_joined"] += qty
+            out["groups_source"] = a.get("source") or out["groups_source"]
             group_keywords += [k for k in (a.get("keywords") or []) if k not in group_keywords]
+        elif action == "LEAVE_GROUP":
+            out["groups_left"] += qty
         elif action == "CHECK_NOTIF":
             out["notif_checked"] = out["notif_checked"] or status == "SUCCESS"
             out["notif_opened"] = out["notif_opened"] or (status == "SUCCESS" and qty > 0)
@@ -282,6 +296,156 @@ def sum_today(uid: str, action_type: str) -> int:
         (str(uid), action_type, _vn_day_start_utc()),
     )
     return int(row["total"] or 0) if row else 0
+
+
+def group_target_history(uid: str) -> List[Dict[str, Any]]:
+    """
+    Các log tham gia / rời nhóm có targets của 1 nick (mọi máy), cũ trước mới sau, để chế độ danh sách link bỏ qua
+    nhóm đã vào và Rời nhóm tìm nhóm tham gia gần đây. Dùng index (fb_uid, action_type, created_at).
+    """
+    return db.fetch_all(
+        """SELECT run_id, action_type, targets, created_at FROM farm_interaction_logs
+           WHERE fb_uid = ? AND action_type IN ('JOIN_GROUP', 'LEAVE_GROUP') AND targets IS NOT NULL
+           ORDER BY created_at, id""",
+        (str(uid),),
+    )
+
+
+# ─────────────────────────── CHỦ CỦA NHÓM / NGƯỜI (CHIA ĐÍCH) ────────────────────────────
+
+OWNER_KEY_CHUNK = 500
+
+
+class _TakenByOther(Exception):
+    """Có key thuộc nick khác: hủy cả lần giành (session rollback)."""
+
+
+def _placeholders(items) -> str:
+    return ", ".join("?" for _ in items)
+
+
+def target_owners(scope: str, keys: List[str]) -> Dict[str, str]:
+    """key -> uid nick chủ, chỉ gồm các key đã có chủ trong dàn."""
+    keys = list(dict.fromkeys(keys))
+    owners = {}
+    for start in range(0, len(keys), OWNER_KEY_CHUNK):
+        chunk = keys[start:start + OWNER_KEY_CHUNK]
+        rows = db.fetch_all(
+            f"SELECT target_key, fb_uid FROM farm_target_owners WHERE scope = ? AND target_key IN ({_placeholders(chunk)})",
+            (scope, *chunk),
+        )
+        owners.update({row["target_key"]: row["fb_uid"] for row in rows})
+    return owners
+
+
+def claim_target(scope: str, uid: str, kind: str, keys: List[str], status: str,
+                 name: Optional[str] = None, url: Optional[str] = None, exclusive: bool = True) -> Optional[str]:
+    """
+    Ghi nick làm chủ mọi key (các tên khác nhau của cùng 1 đích); key đã có chủ thì giữ nguyên chủ cũ.
+    exclusive: có key thuộc nick khác thì hủy cả lần ghi và trả uid nick đó; None = nick là chủ của đích.
+    2 nick giành cùng 1 key thì nick sau chờ nick trước xong (khóa duy nhất) rồi thấy đã có chủ.
+    Key ghi theo thứ tự cố định để 2 nick giành cùng lúc không khóa chéo nhau.
+    """
+    keys = sorted(set(keys))
+    if not keys:
+        return None
+    now = utc_now()
+    try:
+        with db.session() as cur:
+            for key in keys:
+                cur.execute(
+                    _q("""INSERT INTO farm_target_owners
+                              (scope, kind, target_key, fb_uid, status, name, url, created_at, updated_at)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (scope, target_key) DO NOTHING"""),
+                    (scope, kind, key, str(uid), status, name, url, now, now),
+                )
+            if exclusive:
+                cur.execute(
+                    _q(f"SELECT fb_uid FROM farm_target_owners WHERE scope = ? AND target_key IN ({_placeholders(keys)})"),
+                    (scope, *keys),
+                )
+                other = next((row["fb_uid"] for row in cur.fetchall() if row["fb_uid"] != str(uid)), None)
+                if other:
+                    raise _TakenByOther(other)
+    except _TakenByOther as taken:
+        return str(taken.args[0])
+    return None
+
+
+def settle_targets(scope: str, uid: str, keys: List[str], status: str,
+                   name: Optional[str] = None, url: Optional[str] = None):
+    """Cập nhật trạng thái các key nick đang là chủ (key của nick khác không đổi)."""
+    keys = sorted(set(keys))
+    if not keys:
+        return
+    db.execute(
+        f"""UPDATE farm_target_owners SET status = ?, name = COALESCE(?, name), url = COALESCE(?, url), updated_at = ?
+            WHERE scope = ? AND fb_uid = ? AND target_key IN ({_placeholders(keys)})""",
+        (status, name, url, utc_now(), scope, str(uid), *keys),
+    )
+
+
+def release_targets(scope: str, uid: str, keys: List[str]):
+    """Trả lại các key nick vừa giành mà không bấm được (status claimed); key đã vào / đã gửi từ trước giữ nguyên."""
+    keys = sorted(set(keys))
+    if not keys:
+        return
+    db.execute(
+        f"""DELETE FROM farm_target_owners
+            WHERE scope = ? AND fb_uid = ? AND status = 'claimed' AND target_key IN ({_placeholders(keys)})""",
+        (scope, str(uid), *keys),
+    )
+
+
+def owner_holders(scope: str) -> Dict[str, int]:
+    """Nick đang giữ chủ trong dàn: uid -> số nhóm / người đang giữ."""
+    rows = db.fetch_all(
+        "SELECT fb_uid, COUNT(*) AS total FROM farm_target_owners WHERE scope = ? GROUP BY fb_uid", (scope,))
+    return {row["fb_uid"]: int(row["total"]) for row in rows}
+
+
+def delete_owner_rows(scope: str, uids: List[str]) -> int:
+    """Xóa mọi dòng chủ của các nick trong dàn (nick đã die / đã xóa): nhóm / người đó thành chưa có chủ."""
+    uids = sorted(set(str(u) for u in uids))
+    if not uids:
+        return 0
+    with db.session() as cur:
+        cur.execute(_q(f"DELETE FROM farm_target_owners WHERE scope = ? AND fb_uid IN ({_placeholders(uids)})"),
+                    (scope, *uids))
+        return max(cur.rowcount, 0)
+
+
+def has_target_owners() -> bool:
+    return db.fetch_one("SELECT 1 AS found FROM farm_target_owners LIMIT 1") is not None
+
+
+def owner_backfill_logs() -> List[Dict[str, Any]]:
+    """Log có targets của tham gia / rời nhóm / kết bạn (mọi máy), cũ trước mới sau, để chép chủ vào bảng mới."""
+    return db.fetch_all(
+        """SELECT machine_id, owner_username, fb_uid, action_type, targets FROM farm_interaction_logs
+           WHERE action_type IN ('JOIN_GROUP', 'LEAVE_GROUP', 'ADD_FRIEND') AND targets IS NOT NULL
+           ORDER BY created_at, id"""
+    )
+
+
+def apply_owner_backfill(entries: List[Dict[str, Any]]) -> int:
+    """
+    Chép chủ từ log trong 1 giao dịch, theo thứ tự thời gian: key chưa có chủ thì nick của log là chủ;
+    key nick đó đang là chủ thì cập nhật trạng thái (vd đã rời). entries: {scope, uid, kind, keys, status, name, url}.
+    """
+    now = utc_now()
+    with db.session() as cur:
+        for e in entries:
+            for key in sorted(set(e["keys"])):
+                cur.execute(
+                    _q("""INSERT INTO farm_target_owners
+                              (scope, kind, target_key, fb_uid, status, name, url, created_at, updated_at)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          ON CONFLICT (scope, target_key) DO UPDATE SET status = EXCLUDED.status, updated_at = EXCLUDED.updated_at
+                          WHERE farm_target_owners.fb_uid = EXCLUDED.fb_uid"""),
+                    (e["scope"], e["kind"], key, str(e["uid"]), e["status"], e.get("name"), e.get("url"), now, now),
+                )
+    return len(entries)
 
 
 # ─────────────────────────── CẢNH BÁO CHECKPOINT ────────────────────────────

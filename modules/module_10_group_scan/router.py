@@ -62,6 +62,7 @@ class CheckKeywordRequest(BaseModel):
     delay_min: float = Field(5, ge=0, le=3600, description="Nghỉ tối thiểu giữa 2 từ khóa (giây)")
     delay_max: float = Field(10, ge=0, le=3600, description="Nghỉ tối đa giữa 2 từ khóa (giây)")
     public_only: bool = Field(False, description="True = chỉ giữ nhóm Public / Công khai")
+    private_only: bool = Field(False, description="True = chỉ giữ nhóm Private / Riêng tư")
     min_members: Optional[int] = Field(
         None,
         ge=0,
@@ -164,6 +165,11 @@ def check_keyword(body: CheckKeywordRequest, db: Session = Depends(get_db)):
     delay_min = float(body.delay_min)
     delay_max = max(delay_min, float(body.delay_max))
     public_only = bool(body.public_only)
+    private_only = bool(body.private_only)
+    # Tick cả hai = quét cả công khai + riêng tư
+    if public_only and private_only:
+        public_only = False
+        private_only = False
     min_members = body.min_members if body.min_members and body.min_members > 0 else None
 
     try:
@@ -174,6 +180,7 @@ def check_keyword(body: CheckKeywordRequest, db: Session = Depends(get_db)):
             delay_min=delay_min,
             delay_max=delay_max,
             public_only=public_only,
+            private_only=private_only,
             min_members=min_members,
             force=bool(body.force),
         )

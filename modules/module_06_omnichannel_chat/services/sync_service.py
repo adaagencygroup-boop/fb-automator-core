@@ -52,7 +52,7 @@ class FacebookSyncService:
             try:
                 sub_url = f"https://graph.facebook.com/{FACEBOOK_API_VERSION}/{page_id}/subscribed_apps"
                 requests.post(sub_url, params={
-                    "subscribed_fields": "messages,messaging_postbacks,feed",
+                    "subscribed_fields": "messages,messaging_postbacks,feed,message_reads,message_reactions",
                     "access_token": token
                 }, timeout=10)
             except Exception as sub_err:
@@ -448,8 +448,10 @@ class FacebookSyncService:
     async def private_reply_to_comment(self, page_id: str, comment_id: str, text: str, attachment_url: str = None):
         return await self.comment_service.private_reply_to_comment(comment_id, page_id, text, attachment_url)
 
-    async def react_to_comment(self, comment_id: str, page_id: str, reaction: str):
-        return await self.comment_service.react_to_comment(comment_id, page_id, reaction)
+    async def react_to_comment(self, comment_id: str, page_id: str, reaction: str,
+                               liked: bool = True):
+        # liked=False -> bo thich (DELETE /{comment_id}/likes)
+        return await self.comment_service.react_to_comment(comment_id, page_id, reaction, liked)
 
     async def hide_comment(self, comment_id: str, page_id: str, is_hidden: bool = True):
         return await self.comment_service.hide_comment(comment_id, page_id, is_hidden)
@@ -459,6 +461,9 @@ class FacebookSyncService:
 
     async def get_customer_profile(self, psid: str, page_id: str):
         return await self.chat_service.get_customer_profile(psid, page_id)
+
+    async def mark_seen(self, page_id: str, recipient_id: str):
+        return await self.chat_service.mark_seen(page_id, recipient_id)
 
     @staticmethod
     async def trigger_web_push(db: Session, facebook_user_id: str, title: str, body: str, target_url: str = "/"):
@@ -557,7 +562,7 @@ def sync_app_webhook(force: bool = False) -> Dict[str, Any]:
         requests.post(sub_url, data={
             "object": "page",
             "callback_url": target_callback,
-            "fields": "messages,messaging_postbacks,feed",
+            "fields": "messages,messaging_postbacks,feed,message_reads,message_reactions",
             "verify_token": verify_token,
             "access_token": app_token
         }, timeout=10)

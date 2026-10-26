@@ -4,6 +4,9 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { RefreshCw, Search, UserRound } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { attachDragSelection } from "@/modules/module_02_account_manager/utils/drag-selection.mjs";
+import { categoryLabelStyle } from "@/modules/module_02_account_manager/components/CategorySelect";
+import { useAccountCategories } from "@/modules/module_02_account_manager/hooks/useAccountCategories";
+import CategoryFilter from "./CategoryFilter";
 import { SectionCard, UidCopy, proxyHost } from "./parts";
 
 const LOGIN_LABELS = {
@@ -21,10 +24,15 @@ const ACCOUNT_STATUS = {
 export const isEligible = (acc) => acc.status === "live" && acc.login_status === "logged_in";
 
 export default function AccountPicker({
-  accounts, knownAccounts, total, search, onSearchChange,
+  accounts, knownAccounts, total, search, onSearchChange, category, onCategoryChange,
   loading, loadingMore, loadError, moreError, hasMore, onLoadMore,
   selected, onSelectedChange, onRefresh, readOnly,
 }) {
+  const categoryList = useAccountCategories(true);
+  const categoriesById = useMemo(
+    () => new Map(categoryList.categories.map((item) => [item.id, item])),
+    [categoryList.categories],
+  );
   const scrollRef = useRef(null);
   const sentinelRef = useRef(null);
   const selection = useRef(selected);
@@ -88,7 +96,10 @@ export default function AccountPicker({
   const refresh = () => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
     onRefresh();
+    categoryList.refresh();
   };
+
+  const filtered = category !== "all";
 
   return (
     <SectionCard
@@ -114,7 +125,7 @@ export default function AccountPicker({
       }
     >
       {!readOnly && (
-        <div className="mb-3">
+        <div className="mb-3 flex flex-col gap-2 sm:flex-row">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
@@ -128,6 +139,16 @@ export default function AccountPicker({
               className="h-9 w-full rounded-lg border border-border bg-slate-50 pl-9 pr-3 text-xs text-slate-800 placeholder:text-slate-400 focus:border-primary focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
+          <CategoryFilter
+            categories={categoryList.categories}
+            value={category}
+            onChange={(value) => {
+              if (scrollRef.current) scrollRef.current.scrollTop = 0;
+              onCategoryChange(value);
+            }}
+            loading={categoryList.isInitialLoading}
+            error={categoryList.hasLoaded ? null : categoryList.error}
+          />
         </div>
       )}
 
@@ -143,6 +164,7 @@ export default function AccountPicker({
               <th className="w-14 px-3 py-3 text-left">STT</th>
               <th className="px-3 py-3 text-left">UID Facebook</th>
               <th className="px-3 py-3 text-left">Họ &amp; tên tài khoản</th>
+              <th className="px-3 py-3 text-left">Danh mục</th>
               <th className="px-3 py-3 text-left">Proxy</th>
               <th className="px-3 py-3 text-left">Trạng thái ĐN</th>
               <th className="px-3 py-3 text-left">Trạng thái TK</th>
@@ -153,6 +175,7 @@ export default function AccountPicker({
               const eligible = isEligible(acc);
               const login = LOGIN_LABELS[acc.login_status] || LOGIN_LABELS.not_logged_in;
               const status = ACCOUNT_STATUS[acc.status];
+              const accCategory = acc.category_id == null ? null : categoriesById.get(acc.category_id);
               return (
                 <tr
                   key={acc.uid}
@@ -180,6 +203,19 @@ export default function AccountPicker({
                     <UidCopy uid={acc.uid} />
                   </td>
                   <td className="px-3 py-3 text-sm font-semibold text-slate-800">{acc.profile_name || "—"}</td>
+                  <td className="px-3 py-3">
+                    {acc.category_id == null ? (
+                      <span className="text-slate-400">—</span>
+                    ) : (
+                      <span
+                        style={categoryLabelStyle(accCategory)}
+                        title={accCategory?.name}
+                        className="inline-block max-w-[160px] truncate whitespace-nowrap rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold"
+                      >
+                        {accCategory?.name || `Danh mục #${acc.category_id}`}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-3 py-3 font-mono text-[11px] text-slate-500">{proxyHost(acc.proxy) || "IP máy"}</td>
                   <td className="px-3 py-3">
                     <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-semibold ${login.cls}`}>
@@ -199,7 +235,7 @@ export default function AccountPicker({
             })}
             {!readOnly && loadError && (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-xs text-red-600">
+                <td colSpan={8} className="px-3 py-6 text-center text-xs text-red-600">
                   <p role="alert">{loadError}</p>
                   <button type="button" onClick={refresh} className="mt-2 font-semibold text-primary hover:underline">Thử lại</button>
                 </td>
@@ -207,18 +243,18 @@ export default function AccountPicker({
             )}
             {(!readOnly && loading || !visible.length && !loadError) && (
               <tr>
-                <td colSpan={7} className="px-3 py-10 text-center text-xs text-slate-400">
+                <td colSpan={8} className="px-3 py-10 text-center text-xs text-slate-400">
                   {loading
                     ? "Đang tải danh sách tài khoản..."
-                    : search
-                      ? "Không có tài khoản Live hoặc Đã đăng nhập khớp từ khóa."
+                    : search || filtered
+                      ? "Không có tài khoản Live hoặc Đã đăng nhập khớp bộ lọc."
                       : "Chưa có tài khoản Live hoặc Đã đăng nhập."}
                 </td>
               </tr>
             )}
             {!readOnly && !loading && !loadError && hasMore && (
               <tr ref={!moreError && !loadingMore ? sentinelRef : undefined}>
-                <td colSpan={7} className="px-3 py-3 text-center text-xs text-slate-500">
+                <td colSpan={8} className="px-3 py-3 text-center text-xs text-slate-500">
                   {loadingMore ? "Đang tải thêm tài khoản..." : moreError ? (
                     <>
                       <span role="alert" className="text-red-600">{moreError}</span>

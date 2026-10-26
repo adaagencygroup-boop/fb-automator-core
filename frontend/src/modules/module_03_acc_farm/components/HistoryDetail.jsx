@@ -10,7 +10,9 @@ import {
   ExternalLink,
   Fingerprint,
   Globe,
+  Images,
   Loader2,
+  LogOut,
   Network,
   PlayCircle,
   Rss,
@@ -29,20 +31,31 @@ import {
   FINGERPRINT_HINTS,
   FINGERPRINT_LABELS,
   FRIEND_SOURCE_LABELS,
+  GROUP_SOURCE_LABELS,
+  LEAVE_CRITERIA_LABELS,
+  LINK_SKIP_LABELS,
   PROXY_MODE_LABELS,
 } from "../constants";
 import { getFarmHistoryDetail } from "../service";
 import { RunStatusBadge, UidCopy, formatDuration } from "./parts";
+import { parseLinkList } from "./ScenarioConfig";
 
 // Màu riêng từng kịch bản để nhìn là nhận ra
 const SCENARIO_THEME = {
   NEWSFEED: { icon: Rss, card: "border-blue-200 bg-blue-50", iconBox: "bg-blue-500", title: "text-blue-700", value: "text-blue-900" },
   WATCH: { icon: PlayCircle, card: "border-violet-200 bg-violet-50", iconBox: "bg-violet-500", title: "text-violet-700", value: "text-violet-900" },
+  STORY: { icon: Images, card: "border-pink-200 bg-pink-50", iconBox: "bg-pink-500", title: "text-pink-700", value: "text-pink-900" },
   ADD_FRIEND: { icon: UserPlus, card: "border-emerald-200 bg-emerald-50", iconBox: "bg-emerald-500", title: "text-emerald-700", value: "text-emerald-900" },
   JOIN_GROUP: { icon: Users, card: "border-amber-200 bg-amber-50", iconBox: "bg-amber-500", title: "text-amber-700", value: "text-amber-900" },
+  LEAVE_GROUP: { icon: LogOut, card: "border-stone-200 bg-stone-50", iconBox: "bg-stone-500", title: "text-stone-700", value: "text-stone-900" },
   CHECK_NOTIF: { icon: Bell, card: "border-sky-200 bg-sky-50", iconBox: "bg-sky-500", title: "text-sky-700", value: "text-sky-900" },
 };
-const SCENARIO_ORDER = ["NEWSFEED", "WATCH", "ADD_FRIEND", "JOIN_GROUP", "CHECK_NOTIF"];
+const SCENARIO_ORDER = ["NEWSFEED", "WATCH", "STORY", "ADD_FRIEND", "LEAVE_GROUP", "JOIN_GROUP", "CHECK_NOTIF"];
+// Tên tiêu chí ngắn cho thẻ kết quả (phần trong ngoặc của LEAVE_CRITERIA_LABELS bỏ đi)
+const leaveCriteria = (value) => (LEAVE_CRITERIA_LABELS[value] || value || "").replace(/\s*\(.*\)$/, "");
+
+const reactionNote = (n) => (n ? ` · ${n} cảm xúc` : "");
+const reactionChip = (enabled, types) => (enabled && types?.length ? ` · thả cảm xúc ${types.join("/")}` : "");
 
 // Viền / nền phần đầu theo kết quả cuối của lượt
 const HEADER_TONE = {
@@ -70,13 +83,18 @@ const COUNT_BADGES = [
 function scenarioValue(action, h) {
   switch (action) {
     case "NEWSFEED":
-      return [formatDuration(h.newsfeed_seconds), `${h.newsfeed_scrolls} lần cuộn`];
+      return [formatDuration(h.newsfeed_seconds), `${h.newsfeed_scrolls} lần cuộn${reactionNote(h.newsfeed_reactions)}`];
     case "WATCH":
-      return [`${h.watch_videos} video`, formatDuration(h.watch_seconds)];
+      return [`${h.watch_videos} video`, `${formatDuration(h.watch_seconds)}${reactionNote(h.watch_reactions)}`];
+    case "STORY":
+      return [`${h.story_frames || 0} khung`, `${formatDuration(h.story_seconds)}${reactionNote(h.story_reactions)}`];
     case "ADD_FRIEND":
       return [`${h.friends_sent} lời mời`, h.friends_source ? `nguồn: ${FRIEND_SOURCE_LABELS[h.friends_source] || h.friends_source}` : ""];
     case "JOIN_GROUP":
+      if (h.groups_source === "list") return [`${h.groups_joined} nhóm`, `nguồn: ${GROUP_SOURCE_LABELS.list}`];
       return [`${h.groups_joined} nhóm`, h.groups_keyword ? `từ khóa: ${h.groups_keyword}` : "nhóm đề xuất"];
+    case "LEAVE_GROUP":
+      return [`${h.groups_left || 0} nhóm`, leaveCriteria(h.config_snapshot?.leave_criteria)];
     case "CHECK_NOTIF":
       return [h.notif_checked ? "Đã xem" : "Chưa xem được", h.notif_opened ? "đã mở thông báo mới" : "không có thông báo mới"];
     default:
@@ -87,13 +105,21 @@ function scenarioValue(action, h) {
 function configChips(c) {
   if (!c) return [];
   const chips = [];
-  if (c.enabled_newsfeed) chips.push(["NEWSFEED", `Newsfeed ${c.newsfeed_time_min}-${c.newsfeed_time_max} phút · delay ${c.newsfeed_delay_min}-${c.newsfeed_delay_max}s`]);
-  if (c.enabled_watch) chips.push(["WATCH", `Watch ${c.watch_time_min}-${c.watch_time_max} phút · ${c.watch_delay_min}-${c.watch_delay_max}s/video`]);
-  if (c.enabled_add_friends) {
+  if (c.enabled_newsfeed) chips.push(["NEWSFEED", `Newsfeed ${c.newsfeed_time_min}-${c.newsfeed_time_max} phút · delay ${c.newsfeed_delay_min}-${c.newsfeed_delay_max}s${reactionChip(c.newsfeed_react_enabled, c.newsfeed_react_types)}`]);
+  if (c.enabled_watch) chips.push(["WATCH", `Watch ${c.watch_time_min}-${c.watch_time_max} phút · ${c.watch_delay_min}-${c.watch_delay_max}s/video${reactionChip(c.watch_react_enabled, c.watch_react_types)}`]);
+  if (c.enabled_story) chips.push(["STORY", `Story ${c.story_min}-${c.story_max} khung · ${c.story_delay_min}-${c.story_delay_max}s/khung${reactionChip(c.story_react_enabled, c.story_react_types)}`]);
+  if (c.enabled_add_friends && c.friend_source === "list") {
+    chips.push(["ADD_FRIEND", `Kết bạn theo danh sách ${parseLinkList(c.friend_links, "friend").count} link · tối đa ${c.friend_list_limit} lời mời/nick · nghỉ ${c.friends_delay_min}-${c.friends_delay_max}s`]);
+  } else if (c.enabled_add_friends) {
     chips.push(["ADD_FRIEND", `Kết bạn ${c.friends_min}-${c.friends_max} người · nghỉ ${c.friends_delay_min}-${c.friends_delay_max}s${c.friends_fallback_group_members ? " · hết gợi ý mời thành viên nhóm" : ""}`]);
   }
-  if (c.enabled_join_groups) {
+  if (c.enabled_join_groups && c.group_source === "list") {
+    chips.push(["JOIN_GROUP", `Nhóm theo danh sách ${parseLinkList(c.group_links, "group").count} link · tối đa ${c.group_list_limit} nhóm/nick · nghỉ ${c.groups_delay_min}-${c.groups_delay_max}s`]);
+  } else if (c.enabled_join_groups) {
     chips.push(["JOIN_GROUP", `Nhóm ${c.groups_min}-${c.groups_max} · nghỉ ${c.groups_delay_min}-${c.groups_delay_max}s · ${c.group_keyword ? `"${c.group_keyword}"` : "đề xuất"}`]);
+  }
+  if (c.enabled_leave_groups) {
+    chips.push(["LEAVE_GROUP", `Rời ${c.leave_min}-${c.leave_max} nhóm · nghỉ ${c.leave_delay_min}-${c.leave_delay_max}s · ${leaveCriteria(c.leave_criteria)}${c.leave_keep_admin ? " · giữ nhóm Admin/Mod" : ""}`]);
   }
   if (c.enabled_check_notif) chips.push(["CHECK_NOTIF", "Check thông báo"]);
   return chips;
@@ -113,6 +139,7 @@ const TARGET_PREVIEW = 5;
 const TARGET_STATUS = {
   joined: { label: "Đã vào", badge: "bg-emerald-50 text-emerald-700 border-emerald-200" },
   pending: { label: "Chờ duyệt", badge: "bg-amber-50 text-amber-700 border-amber-200" },
+  left: { label: "Đã rời", badge: "bg-stone-100 text-stone-700 border-stone-200" },
 };
 
 // Chỉ mở link https của facebook.com (dữ liệu đọc từ trang Facebook)
@@ -127,14 +154,14 @@ function facebookUrl(url) {
 
 function TargetList({ action, targets }) {
   const [expanded, setExpanded] = useState(false);
-  const Icon = action === "JOIN_GROUP" ? Users : User;
+  const Icon = action === "JOIN_GROUP" || action === "LEAVE_GROUP" ? Users : User;
   const shown = expanded ? targets : targets.slice(0, TARGET_PREVIEW);
   return (
     <ul className="mt-1.5 space-y-1">
       {shown.map((t, i) => {
         const href = facebookUrl(t?.url);
         const status = TARGET_STATUS[t?.status];
-        const name = t?.name || "(không đọc được tên)";
+        const name = t?.name || t?.source_url || "(không đọc được tên)";
         return (
           <li key={i} className="flex items-center gap-1.5 text-xs">
             <Icon className="h-3.5 w-3.5 shrink-0 text-slate-400" />
@@ -147,6 +174,7 @@ function TargetList({ action, targets }) {
               <span className={cn("truncate", t?.name ? "text-slate-700" : "italic text-slate-400")}>{name}</span>
             )}
             {status && <span className={cn("shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold", status.badge)}>{status.label}</span>}
+            {t?.reason && <span className="truncate text-slate-500">· {t.reason}</span>}
           </li>
         );
       })}
@@ -158,6 +186,54 @@ function TargetList({ action, targets }) {
         </li>
       )}
     </ul>
+  );
+}
+
+// Chế độ danh sách link: link bị bỏ qua (không tính vào số lượng), thu gọn mặc định
+function SkippedList({ targets }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-1.5">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="text-[11px] font-semibold text-amber-700 hover:underline">
+        {open ? "Ẩn" : "Xem"} bỏ qua ({targets.length})
+      </button>
+      {open && (
+        <ul className="mt-1 space-y-1 rounded-lg border border-amber-100 bg-amber-50/50 px-2.5 py-1.5">
+          {targets.map((t, i) => {
+            const href = facebookUrl(t?.url);
+            const label = t?.name || t?.source_url || t?.url || "(không rõ link)";
+            return (
+              <li key={i} className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="shrink-0 rounded-md border border-amber-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                  {LINK_SKIP_LABELS[t?.result] || "Bỏ qua"}
+                </span>
+                {href ? (
+                  <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex min-w-0 items-center gap-1 font-medium text-primary hover:underline">
+                    <span className="truncate">{label}</span>
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                  </a>
+                ) : (
+                  <span className="truncate text-slate-700">{label}</span>
+                )}
+                {t?.reason && <span className="text-slate-500">· {t.reason}</span>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function LogTargets({ action, targets }) {
+  const isSkip = (t) => String(t?.result || "").startsWith("skipped_");
+  const done = targets.filter((t) => !isSkip(t));
+  const skipped = targets.filter(isSkip);
+  return (
+    <>
+      {done.length > 0 && <TargetList action={action} targets={done} />}
+      {skipped.length > 0 && <SkippedList targets={skipped} />}
+    </>
   );
 }
 
@@ -262,7 +338,7 @@ export default function HistoryDetail({ id, onClose }) {
               {/* Kết quả từng kịch bản */}
               <section>
                 <SectionTitle icon={ShieldCheck}>Kết quả kịch bản</SectionTitle>
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                   {SCENARIO_ORDER.map((action) => {
                     const theme = SCENARIO_THEME[action];
                     const Icon = theme.icon;
@@ -378,7 +454,7 @@ export default function HistoryDetail({ id, onClose }) {
                             <span className={cn("rounded-md border px-1.5 py-0.5 text-[10px] font-semibold", meta.badge)}>{meta.label}</span>
                           </div>
                           {log.details && <div className="mt-0.5 text-xs text-slate-600">{log.details}</div>}
-                          {log.targets?.length > 0 && <TargetList action={log.action_type} targets={log.targets} />}
+                          {log.targets?.length > 0 && <LogTargets action={log.action_type} targets={log.targets} />}
                         </li>
                       );
                     })}

@@ -24,6 +24,7 @@ export async function getReadyAccountsSummary() {
  *   delay_min?: number,
  *   delay_max?: number,
  *   public_only?: boolean,
+ *   private_only?: boolean,
  *   min_members?: number|null,
  *   force?: boolean,
  * }} payload

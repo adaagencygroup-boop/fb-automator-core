@@ -78,7 +78,7 @@ class StopKeepsPartialProgressTests(unittest.TestCase):
             with self.assertRaises(farming_flow.FarmStopped) as ctx:
                 farming_flow.run_newsfeed(Mock(current_url="https://www.facebook.com/"), ctl, 600, 5, 15, Mock())
         # uniform giả = 10 nên mỗi vòng có cả nghỉ cuộn ngược 10s lẫn nghỉ đọc 10s: 3 vòng = 60s
-        self.assertEqual(ctx.exception.partial, {"seconds": 60, "scrolls": 3})
+        self.assertEqual(ctx.exception.partial, {"seconds": 60, "scrolls": 3, "reactions": 0, "reaction_types": {}})
 
     def test_worker_records_partial_seconds_when_stopped(self):
         stopped = farming_flow.FarmStopped()
@@ -126,7 +126,7 @@ class StopKeepsPartialProgressTests(unittest.TestCase):
             with self.assertRaises(TimeoutError) as ctx:
                 farming_flow.run_newsfeed(Mock(current_url="https://www.facebook.com/"), ctl, 600, 5, 15, Mock())
         # Mỗi vòng gọi human_scroll 2 lần (cuộn xuống + cuộn ngược) và nghỉ 2 x 10s: lỗi ở lần cuộn đầu của vòng 2
-        self.assertEqual(ctx.exception.partial, {"seconds": 20, "scrolls": 1})
+        self.assertEqual(ctx.exception.partial, {"seconds": 20, "scrolls": 1, "reactions": 0, "reaction_types": {}})
 
 
 class NewsfeedLeavesHomeTests(unittest.TestCase):

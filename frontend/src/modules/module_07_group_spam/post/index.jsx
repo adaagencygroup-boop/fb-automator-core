@@ -1,17 +1,40 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { CheckCircle2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
+  Sparkles,
+  RotateCcw,
+  Plus,
+  Play,
+  Square,
+  RefreshCw,
+  Clock3,
+  CalendarDays,
+  ListFilter,
+  Users,
+  Search,
+  Check,
+  Info,
+  ImageIcon,
+  Bold,
+  Italic,
+  Underline,
+  List,
+  Link2,
+  Undo2,
+  Redo2,
+  ListOrdered,
+  Minus,
+  X,
+  Film,
+  Trash2,
+} from "lucide-react";
 
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import {
@@ -31,21 +54,81 @@ import CampaignInfoSection from "./components/CampaignInfoSection";
 import GroupAccountSection from "./components/GroupAccountSection";
 import GroupSettingsSection from "./components/GroupSettingsSection";
 import GroupSourceSection from "./components/GroupSourceSection";
-import GroupMediaSection from "./components/GroupMediaSection";
-import GroupContentSection, { editorHtml } from "./components/GroupContentSection";
-import GroupPostingSettingsSection from "./components/GroupPostingSettingsSection";
-import GroupSummarySection from "./components/GroupSummarySection";
-import GroupProgressSection from "./components/GroupProgressSection";
-import GroupActionBar from "./components/GroupActionBar";
 
-function StepGuard({ enabled, children }) {
-  if (enabled) return children;
+const DEFAULT_GEMINI_MODELS = [
+  { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash" },
+  { id: "gemini-3.7-flash", name: "Gemini 3.7 Flash" },
+  { id: "gemini-3.6-flash", name: "Gemini 3.6 Flash" },
+  { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash" },
+  { id: "gemini-3.5-flash-lite", name: "Gemini 3.5 Flash-Lite" },
+  { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" },
+  { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash (quyền truy cập cũ)" },
+  { id: "gemini-2.5-flash-lite", name: "Gemini 2.5 Flash-Lite (quyền truy cập cũ)" },
+  { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro (quyền truy cập cũ)" },
+];
 
+const getProvider = (m) => {
+  if (m === "gemini" || m?.startsWith("gemini-")) return "gemini";
+  if (m?.startsWith("deepseek")) return "deepseek";
+  return "openai";
+};
+
+// Nút toolbar dùng chung, giữ vùng chọn trong editor khi bấm.
+function EditorButton({ label, onClick, children }) {
   return (
-    <div className="pointer-events-none select-none opacity-50" aria-disabled="true">
-      {children}
-    </div>
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onClick}
+      className="rounded p-1.5 hover:bg-white hover:text-primary"
+    >
+      {React.cloneElement(children, { className: "size-3.5" })}
+    </button>
   );
+}
+
+// Chuyển văn bản thường thành HTML và chỉ giữ các thẻ editor hỗ trợ.
+function editorHtml(value = "") {
+  const content = String(value);
+  if (!/<\/?(?:p|div|h[23]|blockquote|ul|ol|li|br|hr|b|strong|i|em|u|a|img)\b/i.test(content)) {
+    return content.split("\n").map((line) => line.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")).join("<br>");
+  }
+  const parsed = new DOMParser().parseFromString(content, "text/html");
+  const allowed = new Set(["P", "DIV", "H2", "H3", "BLOCKQUOTE", "UL", "OL", "LI", "BR", "HR", "B", "STRONG", "I", "EM", "U", "A", "IMG"]);
+  const clean = (node) => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === Node.ELEMENT_NODE) {
+        if (!allowed.has(child.tagName)) {
+          child.replaceWith(...Array.from(child.childNodes));
+          continue;
+        }
+        const originalHref = child.getAttribute("href");
+        const originalSrc = child.getAttribute("src");
+        for (const attr of Array.from(child.attributes)) child.removeAttribute(attr.name);
+        if (child.tagName === "A") {
+          if (originalHref && /^https?:\/\//i.test(originalHref)) {
+            child.setAttribute("href", originalHref);
+            child.setAttribute("target", "_blank");
+            child.setAttribute("rel", "noopener noreferrer");
+          }
+        }
+        if (child.tagName === "IMG") {
+          if (originalSrc && /^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(originalSrc)) {
+            child.setAttribute("src", originalSrc);
+            child.setAttribute("alt", "Ảnh đính kèm");
+          } else {
+            child.remove();
+            continue;
+          }
+        }
+        clean(child);
+      }
+    }
+  };
+  clean(parsed.body);
+  return parsed.body.innerHTML;
 }
 
 export default function GroupPostModule() {
@@ -92,37 +175,24 @@ export default function GroupPostModule() {
   const [groupSearch, setGroupSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
   const [selectedGroupKeys, setSelectedGroupKeys] = useState([]);
-  const [isGroupSourceLocked, setIsGroupSourceLocked] = useState(false);
-
-  // Bước 5: Media
   const [mediaFiles, setMediaFiles] = useState([]);
   const [minMedia, setMinMedia] = useState("1");
   const [maxMedia, setMaxMedia] = useState("4");
-  const [isMediaLocked, setIsMediaLocked] = useState(false);
-
-  // Bước 6: Nội dung AI
   const [prompt, setPrompt] = useState("");
   const [aiCount, setAiCount] = useState("5");
   const [posts, setPosts] = useState(Array.from({ length: 5 }, (_, index) => (index === 0 ? INITIAL_POST : "")));
   const [activePost, setActivePost] = useState(0);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
-  const [isContentLocked, setIsContentLocked] = useState(false);
-
-  // Bước 7: Cài đặt đăng bài
+  const [avoidDuplicate, setAvoidDuplicate] = useState(false);
+  const [shuffleContent, setShuffleContent] = useState(true);
   const [delayMin, setDelayMin] = useState("30");
   const [delayMax, setDelayMax] = useState("60");
   const [delayUnit, setDelayUnit] = useState("seconds");
   const [scheduleEnabled, setScheduleEnabled] = useState(true);
   const [scheduleDate, setScheduleDate] = useState("");
   const [scheduleTime, setScheduleTime] = useState("08:00");
-  const [isPostingSettingsLocked, setIsPostingSettingsLocked] = useState(false);
-
-  // Bước 9: Tiến trình thực thi
   const [runState, setRunState] = useState("idle");
   const [campaignProgress, setCampaignProgress] = useState(null);
-  const [isCompletionModalOpen, setIsCompletionModalOpen] = useState(false);
-  const [completionData, setCompletionData] = useState(null);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   // Đọc cấu hình chạy lại từ sessionStorage
   useEffect(() => {
@@ -393,42 +463,7 @@ export default function GroupPostModule() {
   };
 
   const handleStart = async () => {
-    const trimmedCampaignName = (campaignName || "").trim();
-    if (!trimmedCampaignName) {
-      toast.warning("Vui lòng nhập Tên chiến dịch ở Bước 1 trước khi bắt đầu!", "THIẾU TÊN CHIẾN DỊCH");
-      const el = document.getElementById("step-1-campaign");
-      if (el) el.scrollIntoView({ behavior: "smooth" });
-      return;
-    }
-
-    if (!selectedAccounts.length || !hasGroups || !hasApiKey) {
-      toast.warning("Vui lòng chọn tài khoản, nguồn nhóm và cấu hình API trước khi bắt đầu!", "THIẾU CẤU HÌNH");
-      return;
-    }
-
-    const activeGroups = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
-    if (selectedAccounts.length > activeGroups.length) {
-      toast.error(
-        `Chưa đủ số lượng nhóm. Bạn đã chọn ${selectedAccounts.length} tài khoản nhưng chỉ có ${activeGroups.length} nhóm. Vui lòng chọn thêm nhóm hoặc giảm số tài khoản để số tài khoản không lớn hơn số nhóm.`,
-        "QUY TẮC PHÂN BỔ (A ≤ G)"
-      );
-      const el = document.getElementById("step-4-group-source");
-      if (el) el.scrollIntoView({ behavior: "smooth" });
-      return;
-    }
-
-    if (mediaFiles.length > 0 && Number(maxMedia) > mediaFiles.length) {
-      toast.error(
-        `Số lượng media tối đa mỗi bài (${maxMedia}) không được lớn hơn tổng số tệp media đã chọn (${mediaFiles.length}). Vui lòng điều chỉnh lại ở Bước 5!`,
-        "LỖI CẤU HÌNH MEDIA"
-      );
-      const el = document.getElementById("step-5-media");
-      if (el) el.scrollIntoView({ behavior: "smooth" });
-      return;
-    }
-
-    setIsCompletionModalOpen(false);
-    setCompletionData(null);
+    if (!selectedAccounts.length || !hasGroups || !hasApiKey) return;
     setRunState("starting");
     setCampaignProgress({
       status: "QUEUED",
@@ -512,6 +547,8 @@ export default function GroupPostModule() {
     }
   };
 
+  const canStart = runState === "idle" && selectedAccounts.length > 0 && hasGroups && hasApiKey && !settingsLoading;
+
   const resetAfterCampaign = () => {
     setIsAccountLocked(false);
     setIsSettingsLocked(false);
@@ -580,29 +617,8 @@ export default function GroupPostModule() {
         </p>
       </div>
 
-      {/* Bước 1: Tạo chiến dịch */}
-      <CampaignInfoSection
-        campaignName={campaignName}
-        setCampaignName={setCampaignName}
-        campaignDescription={campaignDescription}
-        setCampaignDescription={setCampaignDescription}
-        campaignId={campaignId}
-        isLocked={campaignLocked}
-        setIsLocked={(locked) => {
-          setCampaignLocked(locked);
-          if (!locked) resetAfterCampaign();
-        }}
-        isRerun={isRerun}
-        stepNumber="1"
-        onContinue={() => {
-          const el = document.getElementById("step-2-accounts");
-          if (el) el.scrollIntoView({ behavior: "smooth" });
-        }}
-      />
-
-      {/* Bước 2: Chọn tài khoản / người dùng đi seeding */}
-      <div id="step-2-accounts" className="scroll-mt-6">
-        <StepGuard enabled={Boolean(campaignLocked && campaignName?.trim())} requiredStep="1">
+      {/* Bước 1: Chọn tài khoản / người dùng đi seeding */}
+      <div id="step-1-accounts" className="scroll-mt-6">
         <GroupAccountSection
           stepNumber="2"
           accounts={accounts}
@@ -611,43 +627,23 @@ export default function GroupPostModule() {
           setSelectedAccountKeys={setSelectedAccountKeys}
           onRefreshAccounts={loadAccounts}
           isLocked={isAccountLocked}
-          setIsLocked={(locked) => {
-            setIsAccountLocked(locked);
-            if (!locked) resetAfterAccounts();
-          }}
-          isStep1Completed={Boolean(campaignLocked && campaignName?.trim())}
-          onContinue={() => {
-            const el = document.getElementById("step-3-settings");
-            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-          }}
+          setIsLocked={setIsAccountLocked}
         />
         </StepGuard>
       </div>
 
-      {/* Bước 3: Cấu hình API & thông số chung */}
-      <div id="step-3-settings" className="scroll-mt-6">
-        <StepGuard enabled={isAccountLocked} requiredStep="2">
-        <GroupSettingsSection
-          stepNumber="3"
-          apiSource={apiSource}
-          threads={threads}
-          setThreads={setThreads}
-          settingsLoading={settingsLoading}
-          settingsAction={settingsAction}
-          settingsFeedback={settingsFeedback}
-          onSaveSettings={handleSaveSettings}
-          isLocked={settingsConfirmed}
-          setIsLocked={(locked) => {
-            setIsSettingsLocked(locked);
-            if (!locked) resetAfterSettings();
-          }}
+      {/* Bước 2: Cấu hình API & thông số chung */}
+      <div id="step-2-settings" className="scroll-mt-6">
+        <GroupSettingsSection apiSource={apiSource}
+          threads={threads} setThreads={setThreads} restMinutes={restMinutes} setRestMinutes={setRestMinutes}
+          settingsLoading={settingsLoading} settingsAction={settingsAction} settingsFeedback={settingsFeedback}
+          onSaveSettings={handleSaveSettings} isLocked={settingsConfirmed} setIsLocked={setIsSettingsLocked}
         />
         </StepGuard>
       </div>
 
-      {/* Bước 4: Nguồn nhóm */}
-      <div id="step-4-group-source" className="scroll-mt-6">
-        <StepGuard enabled={settingsConfirmed} requiredStep="3">
+      {/* Bước 3: Nguồn nhóm */}
+      <div id="step-3-group-source" className="scroll-mt-6">
         <GroupSourceSection
           stepNumber="4"
           groupSource={groupSource}
@@ -675,212 +671,481 @@ export default function GroupPostModule() {
             if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
           }}
         />
-        </StepGuard>
       </div>
 
-      {/* Bước 5: Chọn media */}
-      <div id="step-5-media" className="scroll-mt-6">
-        <StepGuard enabled={isGroupSourceLocked} requiredStep="4">
-        <GroupMediaSection
-          stepNumber="5"
-          mediaFiles={mediaFiles}
-          setMediaFiles={setMediaFiles}
-          minMedia={minMedia}
-          setMinMedia={setMinMedia}
-          maxMedia={maxMedia}
-          setMaxMedia={setMaxMedia}
-          isLocked={isMediaLocked}
-          setIsLocked={(locked) => {
-            setIsMediaLocked(locked);
-            if (!locked) resetAfterMedia();
-          }}
-          onContinue={() => {
-            const el = document.getElementById("step-6-content");
-            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-          }}
-        />
-        </StepGuard>
-      </div>
-
-      {/* Bước 6: Tạo nội dung bằng AI */}
-      <div id="step-6-content" className="scroll-mt-6">
-        <StepGuard enabled={isMediaLocked} requiredStep="5">
-        <GroupContentSection
-          stepNumber="6"
-          prompt={prompt}
-          setPrompt={setPrompt}
-          aiCount={aiCount}
-          setAiCount={setAiCount}
-          posts={posts}
-          setPosts={setPosts}
-          activePost={activePost}
-          setActivePost={setActivePost}
-          isGenerating={isGenerating}
-          hasGeneratedContent={hasGeneratedContent}
-          setHasGeneratedContent={setHasGeneratedContent}
-          onGeneratePosts={generatePosts}
-          isLocked={isContentLocked}
-          setIsLocked={(locked) => {
-            setIsContentLocked(locked);
-            if (!locked) resetAfterContent();
-          }}
-          onContinue={() => {
-            const el = document.getElementById("step-7-posting");
-            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-          }}
-          editorRef={editorRef}
-        />
-        </StepGuard>
-      </div>
-
-      {/* Bước 7: Cài đặt đăng bài */}
-      <div id="step-7-posting" className="scroll-mt-6">
-        <StepGuard enabled={isContentLocked} requiredStep="6">
-        <GroupPostingSettingsSection
-          stepNumber="7"
-          scheduleEnabled={scheduleEnabled}
-          setScheduleEnabled={setScheduleEnabled}
-          delayMin={delayMin}
-          setDelayMin={setDelayMin}
-          delayMax={delayMax}
-          setDelayMax={setDelayMax}
-          delayUnit={delayUnit}
-          setDelayUnit={setDelayUnit}
-          scheduleDate={scheduleDate}
-          setScheduleDate={setScheduleDate}
-          scheduleTime={scheduleTime}
-          setScheduleTime={setScheduleTime}
-          isLocked={isPostingSettingsLocked}
-          setIsLocked={setIsPostingSettingsLocked}
-          onContinue={() => {
-            const el = document.getElementById("step-8-summary");
-            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-          }}
-        />
-        </StepGuard>
-      </div>
-
-      {/* Bước 8: Thông tin cấu hình tổng hợp */}
-      <div id="step-8-summary" className="scroll-mt-6">
-        <StepGuard enabled={isPostingSettingsLocked} requiredStep="7">
-        <GroupSummarySection
-          stepNumber="8"
-          campaignName={campaignName}
-          campaignId={campaignId}
-          selectedAccountsCount={selectedAccounts.length}
-          liveAccountsCount={liveAccountsCount}
-          maxPosts={maxPosts}
-          totalPlanned={totalPlanned}
-          hasApiKey={hasApiKey}
-          modelDisplayName={modelDisplayName}
-          generatedCount={generatedCount}
-          postsCount={posts.length}
-          groupSource={groupSource}
-          groupSearch={groupSearch}
-          groupFileName={groupFile?.name}
-          activeGroupsCount={activeGroupsCount}
-          mediaFilesCount={mediaFiles.length}
-          minMedia={minMedia}
-          maxMedia={maxMedia}
-          threads={threads}
-          delayMin={delayMin}
-          delayMax={delayMax}
-          delayUnit={delayUnit}
-          scheduleEnabled={scheduleEnabled}
-          scheduleDate={scheduleDate}
-          scheduleTime={scheduleTime}
-        />
-        </StepGuard>
-      </div>
-
-      {/* Bước 9: Tiến trình */}
-      <div id="step-9-progress" className="scroll-mt-6">
-        <GroupProgressSection
-          stepNumber="9"
-          runState={runState}
-          campaignProgress={campaignProgress}
-        />
-      </div>
-
-      {/* Popup Modal thông báo hoàn thành chiến dịch */}
-      <Dialog open={isCompletionModalOpen} onOpenChange={setIsCompletionModalOpen}>
-        <DialogContent className="max-w-md p-6">
-          <div className="flex flex-col items-center text-center">
-            <div className="flex size-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 ring-8 ring-emerald-50 mb-3 shadow-xs">
-              <CheckCircle2 className="size-8 text-emerald-600 animate-in zoom-in-75 duration-300" />
-            </div>
-
-            <DialogHeader className="text-center sm:text-center mb-2">
-              <DialogTitle className="text-lg sm:text-xl font-bold text-slate-900 text-center">
-                Chiến dịch hoàn thành thành công!
-              </DialogTitle>
-              <DialogDescription className="text-xs sm:text-sm text-slate-500 text-center mt-1">
-                Tất cả các tài khoản đã hoàn tất lượt đăng bài vào nhóm mục tiêu.
-              </DialogDescription>
-            </DialogHeader>
-
-            {/* Chi tiết thống kê kết quả */}
-            <div className="w-full my-4 rounded-xl border border-emerald-100 bg-emerald-50/70 p-4 text-left space-y-2.5">
-              <div className="flex items-center justify-between text-xs sm:text-sm">
-                <span className="text-slate-600 font-medium">Tên chiến dịch:</span>
-                <span className="font-bold text-slate-800 truncate max-w-[210px]" title={campaignName}>
-                  {campaignName || "Chiến dịch đăng bài nhóm"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-xs sm:text-sm">
-                <span className="text-slate-600 font-medium">Số lượt đăng thành công:</span>
-                <span className="inline-flex items-center gap-1 font-bold text-emerald-700">
-                  <span className="text-base font-extrabold">{completionData?.success || 0}</span>
-                  <span className="text-xs font-normal text-slate-500">/ {completionData?.total || 0} nhóm</span>
-                </span>
-              </div>
-              {Number(completionData?.failed || 0) > 0 && (
-                <div className="flex items-center justify-between text-xs sm:text-sm">
-                  <span className="text-slate-600 font-medium">Thất bại / Bỏ qua:</span>
-                  <span className="font-semibold text-rose-600">
-                    {completionData.failed} nhóm
-                  </span>
-                </div>
-              )}
-              <div className="flex items-center justify-between text-xs sm:text-sm">
-                <span className="text-slate-600 font-medium">Trạng thái:</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">
-                  <CheckCircle2 className="size-3" />
-                  {completionData?.status === "COMPLETED" ? "Hoàn tất 100%" : "Hoàn tất một phần"}
-                </span>
-              </div>
-            </div>
-
-            <DialogFooter className="w-full flex flex-col-reverse sm:flex-row sm:justify-end gap-2 mt-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setIsCompletionModalOpen(false);
-                  const el = document.getElementById("step-9-progress");
-                  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-                }}
-                className="w-full sm:w-auto text-xs"
-              >
-                Xem nhật ký hoạt động
-              </Button>
-              <Button
-                onClick={() => setIsCompletionModalOpen(false)}
-                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm"
-              >
-                Đã hiểu & Đóng
-              </Button>
-            </DialogFooter>
+      {/* Bước 4 */}
+      <div id="step-4-media" className="scroll-mt-6">
+        <SectionCard number="4" title="Chọn media (ảnh/video)">
+          <div className="mb-4 flex h-9 items-center justify-center rounded-md bg-primary text-xs font-semibold text-white">
+            <ImageIcon className="mr-2 size-4" /> Hình ảnh + Video
           </div>
-        </DialogContent>
-      </Dialog>
+          <input
+            ref={mediaInputRef}
+            type="file"
+            multiple
+            accept="image/*,video/*"
+            className="hidden"
+            onChange={(event) => handleFiles(event.target.files)}
+          />
+          <button
+            type="button"
+            onClick={() => mediaInputRef.current?.click()}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              handleFiles(event.dataTransfer.files);
+            }}
+            className="flex min-h-40 w-full flex-col items-center justify-center rounded-lg border border-dashed border-blue-200 bg-slate-50/60 text-center transition-colors hover:bg-blue-50/40"
+          >
+            <span className="flex size-12 items-center justify-center rounded-full bg-blue-100 text-primary">
+              <Plus className="size-5" />
+            </span>
+            <span className="mt-3 text-xs font-bold text-slate-700">
+              {mediaFiles.length ? `Đã chọn ${mediaFiles.length} tệp media` : "Nhấp để tải ảnh lên hoặc kéo thả"}
+            </span>
+            <span className="mt-1 text-[10px] text-slate-400">Hỗ trợ JPG, PNG (tối đa 10 ảnh)</span>
+          </button>
+          {mediaFiles.length > 0 && (
+            <div className="mt-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-700">
+                  Tệp đã chọn ({mediaFiles.length}/10):
+                </span>
+                <button
+                  type="button"
+                  onClick={handleClearAllMedia}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-500 transition-colors hover:text-rose-700 hover:underline"
+                >
+                  <Trash2 className="size-3" />
+                  Xoá tất cả
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
+                {mediaFiles.map((file, idx) => {
+                  const isVideo = file.type?.startsWith("video/") || /\.(mp4|mov|avi|mkv)$/i.test(file.name || "");
+                  const previewUrl = file instanceof File ? URL.createObjectURL(file) : null;
+
+                  return (
+                    <div
+                      key={`${file.name}-${idx}`}
+                      className="group relative flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white p-1.5 shadow-xs transition-all hover:border-blue-300 hover:shadow-sm"
+                    >
+                      <div className="relative aspect-square w-full overflow-hidden rounded-md bg-slate-100">
+                        {isVideo && previewUrl ? (
+                          <div className="relative h-full w-full bg-black">
+                            <video
+                              src={previewUrl}
+                              muted
+                              playsInline
+                              controls
+                              className="h-full w-full object-cover"
+                              preload="metadata"
+                            />
+                          </div>
+                        ) : previewUrl ? (
+                          <img
+                            src={previewUrl}
+                            alt={file.name}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-slate-400">
+                            <ImageIcon className="size-6" />
+                          </div>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveMedia(idx);
+                          }}
+                          className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-rose-500/90 text-white opacity-90 shadow-sm transition-transform hover:scale-110 hover:bg-rose-600 sm:opacity-0 sm:group-hover:opacity-100"
+                          title="Xoá tệp này"
+                        >
+                          <X className="size-3" />
+                        </button>
+
+                        <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 py-0.5 text-[8px] font-medium text-white backdrop-blur-xs">
+                          #{idx + 1}
+                        </span>
+                      </div>
+
+                      <div className="mt-1.5 px-0.5">
+                        <p className="truncate text-[10px] font-medium text-slate-700" title={file.name}>
+                          {file.name}
+                        </p>
+                        <p className="text-[9px] text-slate-400">
+                          {formatFileSize(file.size)}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <Field label="Tối thiểu media mỗi bài">
+              <Input type="number" min="0" value={minMedia} onChange={(event) => setMinMedia(event.target.value)} />
+            </Field>
+            <Field label="Tối đa media mỗi bài">
+              <Input type="number" min="0" value={maxMedia} onChange={(event) => setMaxMedia(event.target.value)} />
+            </Field>
+          </div>
+        </SectionCard>
+      </div>
+
+      {/* Bước 5 */}
+      <div id="step-5-content" className="scroll-mt-6">
+        <SectionCard number="5" title="Tạo nội dung bằng AI">
+          <div className="grid gap-4 md:grid-cols-[1fr_320px]">
+            <Field label="Nội dung gốc chủ đề/mô tả">
+              <div className="relative">
+                <Textarea
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  maxLength={2000}
+                  placeholder="Nhập nội dung gốc để AI tạo ra các bài đăng..."
+                  className="min-h-24 resize-none pb-6"
+                />
+                <span className="absolute bottom-2 right-3 text-[9px] text-slate-400">{prompt.length}/2000</span>
+              </div>
+            </Field>
+            <div className="flex flex-col justify-between gap-3">
+              <Field label="Số lượng bài AI tạo ra">
+                <SelectField value={aiCount} onChange={(event) => setAiCount(event.target.value)}>
+                  <option value="3">3</option>
+                  <option value="5">5</option>
+                  <option value="10">10</option>
+                </SelectField>
+              </Field>
+              <Button type="button" onClick={generatePosts} disabled={isGenerating} className="w-full">
+                <Sparkles className="mr-2 size-3.5" /> {isGenerating ? "Đang tạo nội dung..." : "Tạo nội dung AI"}
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-slate-800">Kết quả nội dung AI ({generatedCount} bài)</p>
+                <p className="text-[10px] text-slate-400">Bạn có thể chỉnh sửa nội dung trước khi đăng</p>
+              </div>
+              <Button type="button" size="sm" variant="outline" className="text-primary" disabled={isGenerating} onClick={generatePosts}>
+                <RotateCcw className="mr-1.5 size-3.5" /> Tạo lại
+              </Button>
+            </div>
+            <div className="flex overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              {posts.map((_, index) => (
+                <button
+                  type="button"
+                  key={index}
+                  onClick={() => setActivePost(index)}
+                  className={`h-9 min-w-20 flex-1 text-[10px] font-semibold ${activePost === index ? "bg-primary text-white" : "text-slate-500 hover:bg-white"
+                    }`}
+                >
+                  Bài {index + 1}
+                </button>
+              ))}
+            </div>
+            <p className="mb-2 mt-4 text-[11px] font-semibold text-slate-600">Nội dung bài {activePost + 1}</p>
+            <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+              <input
+                ref={inlineImageRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(event) => {
+                  insertInlineImage(event.target.files?.[0]);
+                  event.target.value = "";
+                }}
+              />
+              {/* Toolbar định dạng nội dung và chèn các thành phần vào vị trí con trỏ. */}
+              <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50 px-3 py-2 text-slate-500">
+                <EditorButton label="Hoàn tác" onClick={() => runEditorCommand("undo")}><Undo2 /></EditorButton>
+                <EditorButton label="Làm lại" onClick={() => runEditorCommand("redo")}><Redo2 /></EditorButton>
+                <span className="mx-1 h-5 border-l border-slate-200" />
+                <select
+                  aria-label="Kiểu đoạn văn"
+                  defaultValue="p"
+                  onChange={(event) => runEditorCommand("formatBlock", event.target.value)}
+                  className="h-7 rounded border-0 bg-transparent px-1 text-[11px] text-slate-600 outline-none hover:bg-white"
+                >
+                  <option value="p">Đoạn văn</option>
+                  <option value="h2">Tiêu đề 2</option>
+                  <option value="h3">Tiêu đề 3</option>
+                  <option value="blockquote">Trích dẫn</option>
+                </select>
+                <span className="mx-1 h-5 border-l border-slate-200" />
+                <EditorButton label="Đậm" onClick={() => runEditorCommand("bold")}><Bold /></EditorButton>
+                <EditorButton label="Nghiêng" onClick={() => runEditorCommand("italic")}><Italic /></EditorButton>
+                <EditorButton label="Gạch chân" onClick={() => runEditorCommand("underline")}><Underline /></EditorButton>
+                <span className="mx-1 h-5 border-l border-slate-200" />
+                <EditorButton label="Danh sách dấu đầu dòng" onClick={() => runEditorCommand("insertUnorderedList")}><List /></EditorButton>
+                <EditorButton label="Danh sách đánh số" onClick={() => runEditorCommand("insertOrderedList")}><ListOrdered /></EditorButton>
+                <EditorButton label="Đường phân cách" onClick={() => runEditorCommand("insertHorizontalRule")}><Minus /></EditorButton>
+                <span className="mx-1 h-5 border-l border-slate-200" />
+                <EditorButton label="Chèn liên kết" onClick={openLinkDialog}><Link2 /></EditorButton>
+                <EditorButton label="Chèn ảnh" onClick={() => inlineImageRef.current?.click()}><ImageIcon /></EditorButton>
+              </div>
+              {/* Vùng soạn thảo rich text; lưu HTML để giữ định dạng riêng từng bài. */}
+              <div
+                ref={editorRef}
+                contentEditable
+                suppressContentEditableWarning
+                role="textbox"
+                aria-label={`Nội dung bài ${activePost + 1}`}
+                aria-multiline="true"
+                onInput={(event) => updateActivePost(event.currentTarget.innerHTML)}
+                onClick={(event) => {
+                  const anchor = event.target.closest("a[href]");
+                  if (!anchor || !event.currentTarget.contains(anchor)) return;
+                  event.preventDefault();
+                  window.open(anchor.href, "_blank", "noopener,noreferrer");
+                }}
+                onPaste={(event) => {
+                  event.preventDefault();
+                  const text = event.clipboardData.getData("text/plain");
+                  document.execCommand("insertText", false, text);
+                }}
+                className="min-h-24 max-h-80 overflow-y-auto px-3 py-3 text-xs leading-5 text-slate-800 outline-none [&_a]:cursor-pointer [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_h2]:text-lg [&_h2]:font-bold [&_h3]:text-base [&_h3]:font-semibold [&_img]:my-2 [&_img]:max-h-40 [&_img]:max-w-full [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:list-disc [&_ul]:pl-6"
+              />
+              <div className="px-3 pb-2 text-right text-[9px] text-slate-400">
+                {activePostLength}/2000
+              </div>
+            </div>
+          </div>
+        </SectionCard>
+      </div>
+
+      {/* Bước 6 */}
+      <div id="step-6-posting" className="scroll-mt-6">
+        <SectionCard number="6" title="Cài đặt đăng bài">
+          <div className="flex flex-wrap gap-x-8 gap-y-3">
+            <CheckLabel checked={scheduleEnabled} onCheckedChange={setScheduleEnabled}>
+              Bật hẹn giờ đăng bài
+            </CheckLabel>
+            <CheckLabel checked={avoidDuplicate} onCheckedChange={setAvoidDuplicate}>
+              Không đăng trùng nội dung
+            </CheckLabel>
+            <CheckLabel checked={shuffleContent} onCheckedChange={setShuffleContent}>
+              Đăng ngẫu nhiên nội dung (nếu có nhiều nội dung)
+            </CheckLabel>
+          </div>
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <Field label="Thời gian nghỉ giữa các lần đăng (giây)">
+              <div className="flex items-center gap-3">
+                <Input
+                  type="number"
+                  min="0"
+                  value={delayMin}
+                  onChange={(event) => setDelayMin(event.target.value)}
+                  className="text-center"
+                />
+                <span className="text-slate-400">–</span>
+                <Input
+                  type="number"
+                  min="0"
+                  value={delayMax}
+                  onChange={(event) => setDelayMax(event.target.value)}
+                  className="text-center"
+                />
+                <span className="text-[10px] text-slate-400">giây</span>
+              </div>
+            </Field>
+            <Field label="Thời gian bắt đầu (tùy chọn)">
+              <div className={`grid grid-cols-2 gap-3 transition-opacity ${scheduleEnabled ? "opacity-100" : "pointer-events-none opacity-40"}`}>
+                <div className="relative">
+                  <CalendarDays className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    type="date"
+                    disabled={!scheduleEnabled}
+                    value={scheduleDate}
+                    onChange={(event) => setScheduleDate(event.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="relative">
+                  <Clock3 className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    type="time"
+                    disabled={!scheduleEnabled}
+                    value={scheduleTime}
+                    onChange={(event) => setScheduleTime(event.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+              </div>
+            </Field>
+          </div>
+        </SectionCard>
+      </div>
+
+      {/* Thông tin tác vụ cấu hình */}
+      <SectionCard title="Thông tin tác vụ cấu hình" aside={<Info className="size-4 text-primary" />}>
+        <div className="grid gap-x-10 gap-y-3 text-[11px] md:grid-cols-2">
+          {[
+            [
+              <Users key="a" className="size-3.5" />,
+              "Tài khoản",
+              selectedAccounts.length
+                ? `${selectedAccounts.length} tài khoản đã chọn${liveAccountsCount > 0 ? ` (${liveAccountsCount} Live)` : ""}`
+                : "Chưa chọn tài khoản",
+            ],
+            [
+              <ListFilter key="b" className="size-3.5" />,
+              "Hạn bài",
+              `${maxPosts} bài (kế hoạch ${totalPlanned} bài)`,
+            ],
+            [
+              <Sparkles key="c" className="size-3.5" />,
+              "API Key",
+              hasApiKey ? `Đã cấu hình (${modelDisplayName})` : "Chưa cấu hình",
+            ],
+            [
+              <Sparkles key="d" className="size-3.5" />,
+              "Số bài AI",
+              `${generatedCount} / ${posts.length} bài`,
+            ],
+            [
+              <Search key="e" className="size-3.5" />,
+              "Nguồn nhóm",
+              groupSource === "search"
+                ? (groupSearch ? `Từ khóa "${groupSearch}" (${activeGroupsCount} nhóm)` : `Tìm theo từ khóa (${activeGroupsCount} nhóm)`)
+                : (groupFile?.name ? `${groupFile.name} (${activeGroupsCount} nhóm)` : `Từ file link nhóm (${activeGroupsCount} nhóm)`),
+            ],
+            [
+              <ImageIcon key="f" className="size-3.5" />,
+              "Min / Max media",
+              mediaFiles.length
+                ? `${mediaFiles.length} tệp đã chọn (${minMedia} – ${maxMedia} ảnh/bài)`
+                : `${minMedia} – ${maxMedia} ảnh`,
+            ],
+            [<RefreshCw key="g" className="size-3.5" />, "Luồng chạy", `${threads} luồng`],
+            [<Clock3 key="h" className="size-3.5" />, "Giãn cách đăng", `${delayMin} – ${delayMax} giây`],
+            [<Clock3 key="i" className="size-3.5" />, "Nghỉ", `${restMinutes} phút`],
+            [
+              <CalendarDays key="j" className="size-3.5" />,
+              "Hẹn giờ",
+              scheduleEnabled ? (scheduleDate ? `${scheduleDate} ${scheduleTime}` : "Đã kích hoạt") : "Đã tắt",
+            ],
+          ].map(([icon, label, value]) => (
+            <div key={label} className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+              <span className="flex items-center gap-2 text-slate-500">
+                {icon}
+                {label}
+              </span>
+              <strong
+                className={
+                  value?.startsWith?.("Đã cấu hình") || (label === "Hẹn giờ" && scheduleEnabled)
+                    ? "text-emerald-600"
+                    : value === "Chưa cấu hình" || value === "Chưa chọn tài khoản"
+                    ? "text-amber-600"
+                    : "text-slate-700"
+                }
+              >
+                {value}
+              </strong>
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+
+      {/* Tiến trình */}
+      <Card className="min-h-64 border-slate-200 p-5 shadow-sm">
+        <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+          <span className="flex size-5 items-center justify-center rounded bg-emerald-50 text-emerald-600">▥</span>
+          Theo dõi tiến trình
+        </div>
+        {runState !== "idle" || campaignProgress ? (
+          <div className="mt-4 max-h-72 min-h-48 space-y-1 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/50 p-2">
+            {campaignProgress?.logs?.length ? campaignProgress.logs.slice().reverse().map((log, index) => (
+              <div key={`${log.time}-${index}`} className="flex gap-2 rounded px-2 py-1.5 text-[10px] hover:bg-white">
+                <span className="shrink-0 text-slate-400">{log.time?.split("T")[1] || "--:--:--"}</span>
+                <span className={log.level === "ERROR" ? "text-rose-600" : log.level === "SUCCESS" ? "text-emerald-600" : log.level === "WARNING" ? "text-amber-600" : "text-slate-600"}>
+                  {log.message}
+                </span>
+              </div>
+            )) : (
+              <div className="flex min-h-44 items-center justify-center text-[10px] text-slate-300">
+                {runState === "starting" ? "Đang khởi tạo tác vụ..." : "Chưa có nhật ký thực thi"}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex min-h-48 items-center justify-center text-xs text-slate-300">
+            Tiến trình sẽ hiển thị sau khi bắt đầu đăng bài.
+          </div>
+        )}
+      </Card>
 
       {/* Sticky Bottom Action Bar */}
-      <GroupActionBar
-        runState={runState}
-        canStart={canStart}
-        onStart={handleStart}
-        onStop={handleStop}
-      />
+      <Card className="sticky bottom-0 z-20 flex flex-col items-center justify-between gap-4 border-slate-200 bg-white/95 px-6 py-4 shadow-[0_-8px_24px_rgba(15,23,42,0.08)] backdrop-blur sm:flex-row">
+        <div className="flex items-center gap-3">
+          <span className="flex size-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+            <Check className="size-4" />
+          </span>
+          <div>
+            <p className="text-xs font-bold text-slate-700">Sẵn sàng thực thi tiến trình đăng bài</p>
+            <p className="text-[10px] text-slate-400">Hệ thống sẽ chạy tự động theo các thông số đã cấu hình ở trên</p>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <Button type="button" variant="destructive" disabled={runState === "idle"} onClick={handleStop}>
+            <Square className="mr-2 size-3 fill-current" /> DỪNG ĐĂNG
+          </Button>
+          <Button
+            type="button"
+            variant="success"
+            disabled={runState !== "idle" || !selectedAccounts.length || !hasGroups || !hasApiKey || settingsLoading}
+            onClick={handleStart}
+          >
+            <Play className="mr-2 size-3.5 fill-current" /> BẮT ĐẦU ĐĂNG BÀI
+          </Button>
+        </div>
+      </Card>
+      {linkDialogOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setLinkDialogOpen(false);
+          }}
+        >
+          <form onSubmit={applyLink} className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
+            <h2 className="text-sm font-bold text-slate-800">Chèn liên kết</h2>
+            <p className="mt-1 text-xs text-slate-500">Liên kết sẽ gắn vào phần văn bản đang chọn.</p>
+            <label className="mt-4 block text-xs font-medium text-slate-600">
+              Địa chỉ liên kết
+              <Input
+                autoFocus
+                type="text"
+                inputMode="url"
+                value={linkUrl}
+                onChange={(event) => { setLinkUrl(event.target.value); setLinkError(""); }}
+                placeholder="https://example.com"
+                className="mt-1.5"
+              />
+            </label>
+            <label className="mt-3 block text-xs font-medium text-slate-600">
+              Nội dung hiển thị
+              <Input
+                value={linkText}
+                onChange={(event) => setLinkText(event.target.value)}
+                placeholder="Nhập nội dung liên kết"
+                className="mt-1.5"
+              />
+            </label>
+            {linkError && <p role="alert" className="mt-2 text-xs text-red-600">{linkError}</p>}
+            <div className="mt-5 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setLinkDialogOpen(false)}>Hủy</Button>
+              <Button type="submit">Chèn liên kết</Button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }

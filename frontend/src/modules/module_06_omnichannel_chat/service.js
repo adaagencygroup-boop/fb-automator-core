@@ -210,30 +210,72 @@ export async function getConversations(params = {}) {
   }
 }
 
+/** Một trang thông báo bằng bao nhiêu bản ghi */
+export const NOTIFICATIONS_PAGE_SIZE = 25;
+
+/** Graph trả nhiều loại, FE chỉ có 2 tab — cái gì không phải comment là tương tác */
+const notificationType = (raw) => (raw === "comment" ? "comment" : "interaction");
+
+/** Chuẩn hoá một bản ghi thông báo từ Backend */
+export function mapNotification(n) {
+  return {
+    id: String(n.id || n.facebook_notification_id),
+    rawId: String(n.facebook_notification_id || n.id || ""),
+    actor: n.from_user_name || "Khách hàng",
+    text: n.title || "",
+    createdAt: n.created_time || new Date().toISOString(),
+    // WebSocket co the khong gui `unread`; thong bao moi thi mac dinh la chua doc
+    unread: n.unread !== undefined ? Boolean(n.unread) : true,
+    replied: Boolean(n.is_replied),
+    pageId: String(n.page_id),
+    type: notificationType(n.notification_type),
+    link: n.link || "",
+  };
+}
+
 /**
- * Lấy danh sách thông báo tương tác & bình luận (/api/facebook/notifications)
+ * Một trang thông báo (/api/facebook/notifications).
+ *
+ * Lọc và phân trang đều làm ở Backend: trước đây FE tải toàn bộ 1.200+ bản ghi
+ * rồi tự lọc, giờ chỉ xin đúng thứ đang hiển thị.
+ *
+ * `unread_counts` đi kèm để badge trên hai tab con vẫn đúng, vì FE không còn
+ * cả danh sách để tự đếm nữa.
  */
-export async function getNotifications(facebookUserId = null) {
+export async function getNotifications({
+  pageId = null,
+  type = null,
+  filter = null,
+  page = 1,
+  pageSize = NOTIFICATIONS_PAGE_SIZE,
+  facebookUserId = null,
+} = {}) {
   try {
-    const params = facebookUserId ? { facebook_user_id: facebookUserId } : {};
+    const params = { page, page_size: pageSize };
+    if (pageId) params.page_id = pageId;
+    if (type) params.notification_type = type;
+    if (filter && filter !== "all") params.filter = filter;
+    if (facebookUserId) params.facebook_user_id = facebookUserId;
+
     const res = await api.get("/api/facebook/notifications", { params });
-    const raw = Array.isArray(res) ? res : res?.notifications || [];
-    const notifications = raw.map((n) => ({
-      id: String(n.id || n.facebook_notification_id),
-      rawId: String(n.facebook_notification_id || n.id || ""),
-      actor: n.from_user_name || "Khách hàng",
-      text: n.title || "",
-      createdAt: n.created_time || new Date().toISOString(),
-      unread: Boolean(n.unread),
-      replied: Boolean(n.is_replied),
-      pageId: String(n.page_id),
-      type: n.notification_type === "comment" ? "comment" : "interaction",
-      link: n.link || "",
-    }));
-    return { notifications, isMock: false };
+    const raw = Array.isArray(res) ? res : res?.items || res?.notifications || [];
+
+    return {
+      notifications: raw.map(mapNotification),
+      unreadCounts: res?.unread_counts || {},
+      pageUnread: res?.page_unread || {},
+      total: Number(res?.total ?? raw.length) || 0,
+      page: Number(res?.page ?? page) || 1,
+      totalPages: Number(res?.total_pages ?? 1) || 1,
+      isMock: false,
+    };
   } catch (error) {
     console.warn("[getNotifications] Lỗi tải thông báo từ Backend:", error.message);
-    return { notifications: [], isMock: false, error: error.message || "Không tải được thông báo" };
+    return {
+      notifications: [], unreadCounts: {}, pageUnread: {},
+      total: 0, page: 1, totalPages: 1,
+      isMock: false, error: error.message || "Không tải được thông báo",
+    };
   }
 }
 
@@ -264,7 +306,8 @@ export async function getMessages(conversationId) {
           toUtcIso(m.created_at) ||
           (m.timestamp ? new Date(m.timestamp).toISOString() : new Date().toISOString()),
         reaction: m.reactions || null,
-        status: "sent",
+        status: m.direction === "outbound" ? (m.is_read ? "seen" : "sent") : undefined,
+        isRead: Boolean(m.is_read),
       };
     });
     return { messages, isMock: false };
@@ -443,11 +486,62 @@ export function postIdFromNotification(notification) {
 /**
  * Lấy chi tiết bài viết (nội dung, media, reaction/comment/share, danh sách bình luận).
  * Trả về payload Graph API; cờ `is_external = true` cho bài trong Nhóm / Trang khác.
+ *
+ * `order` là thứ tự bình luận, chuyển thẳng cho Graph.
  */
-export async function getPostDetails(postId, pageId) {
-  const res = await api.get(`/api/facebook/posts/${encodeURIComponent(postId)}`, {
-    params: { page_id: pageId },
-  });
+export async function getPostDetails(postId, pageId, order) {
+  const params = { page_id: pageId };
+  if (order) params.order = order;
+
+  const res = await api.get(`/api/facebook/posts/${encodeURIComponent(postId)}`, { params });
+  return res || {};
+}
+
+/** Hai giá trị của tham số `order` trên cạnh page-post/comments */
+export const COMMENT_SORTS = [
+  { value: "reverse_chronological", label: "Mới nhất" },
+  { value: "chronological", label: "Cũ nhất" },
+];
+
+export const DEFAULT_COMMENT_SORT = COMMENT_SORTS[0].value;
+
+/**
+ * Một trang bình luận GỐC của bài viết, kèm vài câu trả lời đầu mỗi bình luận.
+ * `after` là con trỏ lấy từ `paging.cursors.after` của trang trước.
+ */
+export async function getPostComments(postId, pageId, { order, after, limit } = {}) {
+  const params = { page_id: pageId };
+  if (order) params.order = order;
+  if (after) params.after = after;
+  if (limit) params.limit = limit;
+
+  const res = await api.get(`/api/facebook/posts/${encodeURIComponent(postId)}/comments`, { params });
+  return res || {};
+}
+
+/**
+ * Những người đã thả cảm xúc lên bài viết, lọc được theo `type`.
+ *
+ * Facebook CHሆ trả về những người mà app được phép nhìn thấy, nên `data` có thể
+ * rỗng trong khi `summary.total_count` vẫn có số thật — nơi gọi phải chịu được.
+ */
+export async function getPostReactions(postId, pageId, { type, after, limit } = {}) {
+  const params = { page_id: pageId };
+  if (type && type !== "all") params.type = String(type).toUpperCase();
+  if (after) params.after = after;
+  if (limit) params.limit = limit;
+
+  const res = await api.get(`/api/facebook/posts/${encodeURIComponent(postId)}/reactions`, { params });
+  return res || {};
+}
+
+/** Câu trả lời dưới một bình luận (mọi cấp con, gộp phẳng) */
+export async function getCommentReplies(commentId, pageId, { after, limit } = {}) {
+  const params = { page_id: pageId };
+  if (after) params.after = after;
+  if (limit) params.limit = limit;
+
+  const res = await api.get(`/api/facebook/posts/${encodeURIComponent(commentId)}/replies`, { params });
   return res || {};
 }
 
@@ -468,10 +562,39 @@ export async function privateReplyToComment(commentId, pageId, text) {
   });
 }
 
+/**
+ * Ẩn hoặc bỏ ẩn một bình luận trên Facebook.
+ *
+ * Ẩn rồi thì chỉ người viết và bạn bè họ còn thấy, người ngoài không thấy nữa.
+ * Đây là thao tác đảo ngược được — khác hẳn xoá.
+ */
+export async function hideComment(commentId, pageId, isHidden = true) {
+  return api.post(`/api/facebook/comments/${encodeURIComponent(commentId)}/hide`, {
+    page_id: pageId,
+    is_hidden: isHidden,
+  });
+}
+
+/** Xoá hẳn một bình luận — KHÔNG đảo ngược được */
+export async function deleteComment(commentId, pageId) {
+  return api.delete(`/api/facebook/comments/${encodeURIComponent(commentId)}`, {
+    params: { page_id: pageId },
+  });
+}
+
+/** Thích (liked=true) hoặc bỏ thích bài viết dưới tên Page */
+export async function setPostLike(postId, pageId, liked = true) {
+  return api.post(`/api/facebook/posts/${encodeURIComponent(postId)}/like`, {
+    page_id: pageId,
+    liked,
+  });
+}
+
 /** Bày tỏ cảm xúc cho một bình luận dưới tên Page */
-export async function reactToComment(commentId, pageId, reaction = "LIKE") {
+export async function reactToComment(commentId, pageId, reaction = "LIKE", liked = true) {
   return api.post(`/api/facebook/comments/${encodeURIComponent(commentId)}/react`, {
     page_id: pageId,
     reaction,
+    liked,
   });
 }

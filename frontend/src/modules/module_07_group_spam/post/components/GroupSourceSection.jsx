@@ -183,6 +183,11 @@ export default function GroupSourceSection({
     selectedKeysRef.current = selectedGroupKeys;
   }, [filteredGroups, selectedGroupKeys]);
 
+  useEffect(() => {
+    rowsRef.current = filteredGroups;
+    selectedKeysRef.current = selectedGroupKeys;
+  }, [filteredGroups, selectedGroupKeys]);
+
   // Gắn cơ chế drag-to-select (giữ chuột kéo để lướt chọn nhiều nhóm liên tục)
   useEffect(() => {
     if (!tableContainerRef.current) return;
@@ -498,6 +503,7 @@ export default function GroupSourceSection({
 
   return (
     <SectionCard
+      number={stepNumber}
       number={stepNumber}
       title="Nguồn nhóm"
       description="Tìm nhóm trên Facebook hoặc nhập danh sách có sẵn."

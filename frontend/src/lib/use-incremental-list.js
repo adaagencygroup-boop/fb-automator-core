@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 /**
  * Render danh sách dài theo kiểu tăng dần (chống render hết cả nghìn phần tử một lúc).
@@ -9,20 +9,25 @@ import { useEffect, useMemo, useRef, useState } from "react";
  *
  * Dùng: const { slice, sentinelRef, hasMore } = useIncrementalList(items, 30);
  * Gắn <li ref={sentinelRef} /> ở cuối danh sách khi hasMore.
+ *
+ * `sentinelRef` là ref dạng HÀM chứ không phải useRef, và đó là có chủ ý: nơi gọi
+ * có thể dựng danh sách muộn hơn component (ví dụ popover `{open && ...}`). Với
+ * useRef thì effect chạy lúc phần tử chưa tồn tại, thấy ref rỗng nên thoát sớm, và
+ * sau đó không có gì kích nó chạy lại — observer không bao giờ được gắn, cuộn
+ * tới đáy cũng không tải thêm. Ref dạng hàm thì phần tử xuất hiện là báo ngay.
  */
 export function useIncrementalList(items, step = 30) {
   const list = useMemo(() => (Array.isArray(items) ? items : []), [items]);
   const [limit, setLimit] = useState(step);
-  const sentinelRef = useRef(null);
+  const [sentinel, setSentinel] = useState(null);
+  const sentinelRef = useCallback((el) => setSentinel(el), []);
 
   // Giới hạn chỉ tăng khi cuộn; khi danh sách bị lọc ngắn lại thì slice tự hiển thị đúng số còn.
   const slice = useMemo(() => list.slice(0, limit), [list, limit]);
   const hasMore = limit < list.length;
 
   useEffect(() => {
-    if (!hasMore) return undefined;
-    const el = sentinelRef.current;
-    if (!el) return undefined;
+    if (!hasMore || !sentinel) return undefined;
     const io = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) {
@@ -31,9 +36,9 @@ export function useIncrementalList(items, step = 30) {
       },
       { rootMargin: "200px" },
     );
-    io.observe(el);
+    io.observe(sentinel);
     return () => io.disconnect();
-  }, [hasMore, step, list.length]);
+  }, [hasMore, step, list.length, sentinel]);
 
   return { slice, sentinelRef, hasMore };
 }

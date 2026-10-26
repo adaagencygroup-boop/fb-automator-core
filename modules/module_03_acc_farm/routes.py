@@ -26,8 +26,9 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Literal, Optional
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -46,9 +47,13 @@ from modules.module_03_acc_farm.farming.flow import (
     try_dismiss_checkpoint,
     run_add_friends,
     run_add_friends_from_groups,
+    run_add_friends_from_links,
     run_check_notifications,
     run_join_groups,
+    run_join_groups_from_links,
+    run_leave_groups,
     run_newsfeed,
+    run_story,
     run_watch,
 )
 
@@ -58,18 +63,32 @@ router = APIRouter(prefix="/api/farm", tags=["Module 03 - Tương tác tài kho�
 HARD_MAX_THREADS = 10
 MAX_TIME_VALUE = 3600
 # Delay tối thiểu ép phía server: nhập 0-1 giây sẽ gửi lời mời liên tục như bot, rất dễ bị chặn tính năng
-DELAY_FLOORS = {"friends_delay": 3, "groups_delay": 5}
+DELAY_FLOORS = {"friends_delay": 3, "groups_delay": 5, "leave_delay": 5}
 # VR-M03-CFG-03: ô từ khóa tham gia nhóm (nhiều từ khóa cách nhau dấu phẩy) không quá số ký tự này,
 # tính sau khi bỏ khoảng trắng 2 đầu
 GROUP_KEYWORD_MAX_LEN = 50
+# Chế độ danh sách link: giới hạn số nhóm / lời mời mỗi nick mỗi phiên
+LIST_LIMIT_RANGE = (1, 100)
+# Rời nhóm bằng tính năng Rời nhóm thì sau chừng này ngày mới được tham gia lại theo danh sách
+REJOIN_AFTER_DAYS = 7
+# Số dòng lỗi tối đa đưa vào thông báo 400 (FE đã hiện đủ từng dòng)
+LINK_ERRORS_IN_MESSAGE = 5
+# Loại cảm xúc cho phép (giống nhau ở Newsfeed, Watch, Story; không có Angry)
+REACTION_TYPES = ("Like", "Love", "Care", "Haha", "Wow", "Sad")
+REACT_SCENARIOS = ("newsfeed", "watch", "story")
+# Rời nhóm: ngưỡng ngày random lại cho mỗi nick mỗi phiên (không có ô trên UI)
+LEAVE_STALE_DAYS = (5, 7)    # "không tương tác lâu ngày" / "lâu chưa hoạt động"
+LEAVE_RECENT_DAYS = (2, 3)   # "tham gia gần đây"
 _farm_executor = ThreadPoolExecutor(max_workers=HARD_MAX_THREADS, thread_name_prefix="farm")
 
 ACTION_LABELS = {
     "CHECK_NOTIF": "Check thông báo",
     "NEWSFEED": "Lướt Newsfeed",
     "WATCH": "Xem Video Watch",
+    "STORY": "Xem Story",
     "ADD_FRIEND": "Kết bạn theo gợi ý",
     "JOIN_GROUP": "Tham gia nhóm",
+    "LEAVE_GROUP": "Rời nhóm",
 }
 FINAL_STATUSES = set(repository.FINAL_STATUSES)
 # Cảnh báo mức 1: nick khác trên cùng máy dính checkpoint nặng trong khoảng này thì báo khi bắt đầu phiên
@@ -94,12 +113,24 @@ class FarmScenarioConfig(BaseModel):
     newsfeed_time_max: int = 7
     newsfeed_delay_min: int = 5      # giây dừng đọc giữa các nhịp cuộn
     newsfeed_delay_max: int = 15
+    newsfeed_react_enabled: bool = False
+    newsfeed_react_types: List[str] = []   # loại cảm xúc được chọn ngẫu nhiên (REACTION_TYPES)
 
     enabled_watch: bool = False
     watch_time_min: int = 3          # phút
     watch_time_max: int = 7
     watch_delay_min: int = 5         # giây xem mỗi video
     watch_delay_max: int = 15
+    watch_react_enabled: bool = False
+    watch_react_types: List[str] = []
+
+    enabled_story: bool = False
+    story_min: int = 5               # số khung story xem mỗi nick
+    story_max: int = 10
+    story_delay_min: int = 3         # giây xem mỗi khung
+    story_delay_max: int = 8
+    story_react_enabled: bool = False
+    story_react_types: List[str] = []
 
     enabled_add_friends: bool = False
     friends_min: int = 3
@@ -107,6 +138,10 @@ class FarmScenarioConfig(BaseModel):
     friends_delay_min: int = 5       # giây nghỉ giữa 2 lời mời
     friends_delay_max: int = 15
     friends_fallback_group_members: bool = False   # Không có gợi ý thì kết bạn với thành viên nhóm đã tham gia
+    friend_source: Literal["suggestions", "list"] = "suggestions"
+    friend_links: str = ""           # Chế độ list: mỗi dòng 1 link trang cá nhân
+    friend_list_limit: int = 10      # Chế độ list: số lời mời tối đa mỗi nick mỗi phiên
+    friends_split_enabled: bool = True   # Chế độ list: chia link cho các nick, mỗi người chỉ 1 nick trong dàn mời
 
     enabled_join_groups: bool = False
     groups_min: int = 1
@@ -114,10 +149,24 @@ class FarmScenarioConfig(BaseModel):
     groups_delay_min: int = 10       # giây nghỉ giữa 2 lần tham gia nhóm
     groups_delay_max: int = 20
     group_keyword: str = ""
+    group_source: Literal["keyword", "list"] = "keyword"
+    group_links: str = ""            # Chế độ list: mỗi dòng 1 link nhóm
+    group_list_limit: int = 10       # Chế độ list: số nhóm tối đa mỗi nick mỗi phiên
+    groups_split_enabled: bool = True    # Mỗi nhóm chỉ 1 nick trong dàn vào (chia link / từ khóa, bỏ nhóm đã có chủ)
+
+    enabled_leave_groups: bool = False
+    leave_min: int = 3
+    leave_max: int = 5
+    leave_delay_min: int = 10        # giây nghỉ giữa 2 lần rời nhóm
+    leave_delay_max: int = 30
+    # not_visited: lâu không vào nhóm ("You last visited"); inactive: nhóm lâu chưa hoạt động ("Last active");
+    # recent: nhóm tool vào gần đây ở các phiên trước
+    leave_criteria: Literal["not_visited", "inactive", "recent"] = "not_visited"
+    leave_keep_admin: bool = True    # Giữ lại nhóm nick là Admin/Mod
 
     enabled_check_notif: bool = False
 
-    daily_limit_enabled: bool = True
+    daily_limit_enabled: bool = False
     daily_friend_limit: int = 20
     daily_group_limit: int = 5
 
@@ -154,12 +203,17 @@ _state: Dict = {
 }
 # Dữ liệu gom cho dòng lịch sử của từng nick trong phiên hiện tại (không trả ra API status)
 _history_data: Dict[str, Dict] = {}
+# Phần link / từ khóa chia cho từng nick khi bấm Kích hoạt (uid -> {"group_links", "friend_links", "group_keywords"})
+_assignments: Dict[str, Dict] = {}
+# UID mọi nick trong dàn (cùng owner, đọc 1 lần lúc Kích hoạt) để kết bạn không mời trúng nick nhà.
+# None = đọc lỗi: kết bạn báo lỗi chứ không chạy mà không kiểm.
+_own_uids: Optional[frozenset] = frozenset()
 
 
 def _snapshot() -> Dict:
     with _state_lock:
         return {
-            **{k: v for k, v in _state.items() if k not in ("accounts", "checkpoint_alerts")},
+            **{k: v for k, v in _state.items() if k not in ("accounts", "checkpoint_alerts", "owner_scope")},
             "paused": bool(_control and _control.paused),
             "stopping": bool(_control and _control.stopped and _state["running"]),
             "accounts": [dict(a) for a in _state["accounts"].values()],
@@ -244,19 +298,35 @@ def _normalize_pair(low: int, high: int, cap: Optional[int] = None):
 def _normalize_config(cfg: FarmScenarioConfig) -> FarmScenarioConfig:
     """Validate lại phía server: số nguyên >= 0, Min > Max thì hoán đổi, Thời gian/Delay tối đa 3600."""
     data = cfg.model_dump()
-    for prefix in ("newsfeed_time", "newsfeed_delay", "watch_time", "watch_delay"):
+    for prefix in ("newsfeed_time", "newsfeed_delay", "watch_time", "watch_delay", "story_delay"):
         data[f"{prefix}_min"], data[f"{prefix}_max"] = _normalize_pair(
             data[f"{prefix}_min"], data[f"{prefix}_max"], MAX_TIME_VALUE
         )
-    for prefix in ("friends", "groups"):
+    low, high = _normalize_pair(data["story_min"], data["story_max"])
+    data["story_min"], data["story_max"] = max(1, low), max(1, high)
+    for scenario in REACT_SCENARIOS:
+        # Chỉ giữ loại hợp lệ, không trùng; bật mà không chọn loại nào thì coi như tắt
+        types = [t for t in REACTION_TYPES if t in set(data[f"{scenario}_react_types"] or [])]
+        enabled = bool(data[f"{scenario}_react_enabled"] and types)
+        data[f"{scenario}_react_enabled"], data[f"{scenario}_react_types"] = enabled, types if enabled else []
+    for prefix in ("friends", "groups", "leave"):
         data[f"{prefix}_min"], data[f"{prefix}_max"] = _normalize_pair(data[f"{prefix}_min"], data[f"{prefix}_max"])
     for prefix, floor in DELAY_FLOORS.items():
         low, high = _normalize_pair(data[f"{prefix}_min"], data[f"{prefix}_max"], MAX_TIME_VALUE)
         data[f"{prefix}_min"], data[f"{prefix}_max"] = max(low, floor), max(high, floor)
     data["daily_friend_limit"] = min(100, max(1, int(data["daily_friend_limit"] or 1)))
     data["daily_group_limit"] = min(100, max(1, int(data["daily_group_limit"] or 1)))
-    # Không tham gia nhóm thì từ khóa không có ý nghĩa: bỏ đi để không lưu chuỗi tùy ý vào config_snapshot
-    data["group_keyword"] = (data.get("group_keyword") or "").strip() if data["enabled_join_groups"] else ""
+    for key in ("friend_list_limit", "group_list_limit"):
+        data[key] = min(LIST_LIMIT_RANGE[1], max(LIST_LIMIT_RANGE[0], int(data[key] or LIST_LIMIT_RANGE[0])))
+    # Ô không dùng tới (kịch bản tắt / chế độ khác) thì bỏ đi để không lưu chuỗi tùy ý vào config_snapshot
+    group_list = data["enabled_join_groups"] and data["group_source"] == "list"
+    friend_list = data["enabled_add_friends"] and data["friend_source"] == "list"
+    data["group_keyword"] = (data.get("group_keyword") or "").strip() \
+        if data["enabled_join_groups"] and not group_list else ""
+    data["group_links"] = (data.get("group_links") or "").strip() if group_list else ""
+    data["friend_links"] = (data.get("friend_links") or "").strip() if friend_list else ""
+    if friend_list:
+        data["friends_fallback_group_members"] = False
     return FarmScenarioConfig(**data)
 
 
@@ -271,35 +341,484 @@ def split_group_keywords(raw: str) -> List[str]:
     return keywords
 
 
-def _build_plan(cfg: FarmScenarioConfig) -> List[tuple]:
+# ─────────────────────── DANH SÁCH LINK ────────────────────────────
+
+FB_LINK_HOSTS = {"facebook.com", "www.facebook.com", "web.facebook.com", "m.facebook.com",
+                 "mbasic.facebook.com", "fb.com", "www.fb.com"}
+LINK_MAX_LEN = 500
+_RESERVED_GROUP_PATHS = {"joins", "discover", "feed", "create", "search", "notifications"}
+# Đường dẫn 1 đoạn không phải trang cá nhân (khớp NOT_PROFILE trong farming/flow.py)
+_NOT_PROFILE_PATHS = {"friends", "groups", "watch", "marketplace", "gaming", "reel", "reels", "photo", "photos",
+                      "events", "pages", "search", "notifications", "messages", "bookmarks", "stories", "hashtag",
+                      "profile.php", "home.php", "login", "share", "people", "permalink.php", "story.php"}
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9.]{5,}$")
+_NUMERIC_RE = re.compile(r"^\d+$")
+
+
+def parse_fb_link(raw: str) -> Optional[Dict]:
+    """
+    Nhận diện 1 link Facebook: {"kind": "group" | "friend", "key": id chuẩn để so trùng, "url": link mở}.
+    key nhóm "group:<id|tên>"; người "id:<số>" hoặc "user:<username>"; link chia sẻ /share/... "share:<đường dẫn>"
+    (chưa biết đích, mở ra mới biết). Không phải link Facebook / không nhận ra thì trả None.
+    """
+    text = (raw or "").strip()
+    if not text or len(text) > LINK_MAX_LEN or any(c.isspace() for c in text):
+        return None
+    if not re.match(r"^[a-z][a-z0-9+.-]*://", text, re.I):
+        text = "https://" + text
+    try:
+        parsed = urlparse(text)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in ("http", "https") or (parsed.hostname or "").lower() not in FB_LINK_HOSTS:
+        return None
+    parts = [p for p in parsed.path.split("/") if p]
+    query = parse_qs(parsed.query)
+    first = parts[0].lower() if parts else ""
+
+    if first == "share" and len(parts) >= 2:
+        # /share/g/<mã> = nhóm; /share/p|r|v/<mã> = bài / reel / video (không nhận); /share/<mã> = trang cá nhân
+        if len(parts) >= 3 and parts[1] == "g":
+            kind = "group"
+        elif len(parts) == 2:
+            kind = "friend"
+        else:
+            return None
+        path = "/" + "/".join(parts) + "/"
+        return {"kind": kind, "key": f"share:{path}", "url": f"https://www.facebook.com{path}"}
+
+    if first == "groups" and len(parts) >= 2:
+        if len(parts) >= 4 and parts[2] == "user" and _NUMERIC_RE.match(parts[3]):
+            return _person(parts[3])
+        gid = parts[1]
+        if gid.lower() in _RESERVED_GROUP_PATHS:
+            return None
+        return {"kind": "group", "key": f"group:{gid.lower()}", "url": f"https://www.facebook.com/groups/{gid}/"}
+
+    profile_id = (query.get("profile_id") or [""])[0]
+    if _NUMERIC_RE.match(profile_id):
+        return _person(profile_id)
+    if first == "profile.php":
+        pid = (query.get("id") or [""])[0]
+        return _person(pid) if _NUMERIC_RE.match(pid) else None
+    if first == "people" and len(parts) >= 3 and _NUMERIC_RE.match(parts[2]):
+        return _person(parts[2])
+    if len(parts) == 1 and _USERNAME_RE.match(parts[0]) and first not in _NOT_PROFILE_PATHS:
+        if _NUMERIC_RE.match(parts[0]):
+            return _person(parts[0])
+        return {"kind": "friend", "key": f"user:{first}", "url": f"https://www.facebook.com/{parts[0]}"}
+    return None
+
+
+def _person(pid: str) -> Dict:
+    return {"kind": "friend", "key": f"id:{pid}", "url": f"https://www.facebook.com/profile.php?id={pid}"}
+
+
+def parse_link_list(raw: str, kind: str) -> Dict:
+    """
+    Tách ô dán link (mỗi dòng 1 link) cho kind "group" / "friend".
+    Trả {"items": [{"key", "url", "source": dòng gốc}], "errors": [(số dòng, lý do)], "duplicates": số dòng trùng}.
+    Dòng trống bỏ qua; link trùng (cùng key) chỉ giữ dòng đầu.
+    """
+    items, errors, seen, duplicates = [], [], set(), 0
+    label = "nhóm" if kind == "group" else "trang cá nhân"
+    for number, line in enumerate((raw or "").splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        link = parse_fb_link(line)
+        if link is None:
+            errors.append((number, f"không phải link {label} Facebook hợp lệ"))
+        elif link["kind"] != kind:
+            other = "trang cá nhân" if link["kind"] == "friend" else "nhóm"
+            errors.append((number, f"là link {other}, ô này chỉ nhận link {label}"))
+        elif link["key"] in seen:
+            duplicates += 1
+        else:
+            seen.add(link["key"])
+            items.append({"key": link["key"], "url": link["url"], "source": line[:LINK_MAX_LEN]})
+    return {"items": items, "errors": errors, "duplicates": duplicates}
+
+
+def _link_list_error(raw: str, kind: str) -> Optional[str]:
+    """Lỗi của ô danh sách link (dòng sai / không có link hợp lệ) để trả 400; None = hợp lệ."""
+    title = "Danh sách nhóm" if kind == "group" else "Danh sách kết bạn"
+    parsed = parse_link_list(raw, kind)
+    if parsed["errors"]:
+        shown = "; ".join(f"dòng {n}: {reason}" for n, reason in parsed["errors"][:LINK_ERRORS_IN_MESSAGE])
+        more = len(parsed["errors"]) - LINK_ERRORS_IN_MESSAGE
+        return f"{title} có link sai ({shown}{f'; và {more} dòng khác' if more > 0 else ''})."
+    if not parsed["items"]:
+        return f"{title} đang trống. Vui lòng dán ít nhất 1 link."
+    return None
+
+
+def _link_keys(target: Dict) -> set:
+    """Các key của 1 mục targets đã lưu (link gốc đã dán + link đọc được trên trang)."""
+    keys = set()
+    for field in ("source_url", "url"):
+        link = parse_fb_link(target.get(field) or "") if isinstance(target, dict) else None
+        if link:
+            keys.add(link["key"])
+    return keys
+
+
+def _group_history_skips(uid: str) -> Dict[str, str]:
+    """
+    Nhóm nick không cần tham gia lại theo lịch sử tool (mọi máy): key -> lý do.
+    Xét trạng thái CUỐI của từng nhóm: đã vào / chờ duyệt -> bỏ qua; đã rời bằng tính năng Rời nhóm -> bỏ qua
+    tới đủ REJOIN_AFTER_DAYS ngày. Nhóm rời bằng tay tool không biết, vẫn bỏ qua.
+    """
+    try:
+        rows = repository.group_target_history(uid)
+    except Exception as e:
+        raise RuntimeError(f"Không đọc được lịch sử nhóm của nick (lỗi CSDL), bỏ qua để không vào lại nhóm cũ: {e}") from e
+    latest: Dict[str, tuple] = {}
+    for row in rows:
+        try:
+            targets = json.loads(row.get("targets") or "[]")
+        except (TypeError, ValueError):
+            continue
+        for target in targets if isinstance(targets, list) else []:
+            if not isinstance(target, dict):
+                continue
+            if row["action_type"] == "LEAVE_GROUP":
+                state = "left" if target.get("result") == "left" else None
+            else:
+                # Chế độ từ khóa không có "result": bấm Tham gia xong là đã vào / chờ duyệt (status có thể trống)
+                result = target.get("result")
+                state = "in" if result in (None, "joined", "pending", "skipped_done") else None
+            if state:
+                for key in _link_keys(target):
+                    latest[key] = (state, repository.as_datetime(row["created_at"]))
+    rejoin_before = repository.utc_now() - timedelta(days=REJOIN_AFTER_DAYS)
+    skips = {}
+    for key, (state, at) in latest.items():
+        if state == "in":
+            skips[key] = "đã vào / đang chờ duyệt (theo lịch sử tool)"
+        elif at and at > rejoin_before:
+            skips[key] = f"vừa rời nhóm chưa đủ {REJOIN_AFTER_DAYS} ngày (theo lịch sử tool)"
+    return skips
+
+
+# ─────────────────────── CHIA ĐÍCH CHO CÁC NICK ────────────────────────────
+# Mỗi nhóm / người chỉ thuộc 1 nick trong dàn (bảng farm_target_owners): nick giành được trước là chủ, giữ mãi
+# (rời nhóm vẫn là chủ, chủ được vào lại theo REJOIN_AFTER_DAYS). Dàn = nick cùng owner trên mọi máy; nick local
+# (không owner) tính theo máy. Bỏ tick chia: vẫn ghi chủ cho đích chưa có chủ nhưng không chặn nick nào.
+
+TARGET_KEY_MAX_LEN = 255
+
+
+def _owner_scope(owner: Optional[str], machine_id: Optional[str]) -> str:
+    return f"owner:{owner}" if owner else f"machine:{machine_id}"
+
+
+def split_links(items: List[Dict], uids: List[str], owners: Dict[str, str]) -> tuple:
+    """
+    Chia danh sách link cho các nick, mỗi link đúng 1 nick. Link đã có chủ là nick đang chạy thì về nick đó,
+    chủ là nick khác (không chạy lượt này) thì bỏ; link chưa có chủ chia vòng theo thứ tự xáo để các nick đều nhau.
+    Trả ({uid: [link] đã xáo}, số link bỏ vì thuộc nick khác).
+    """
+    assigned = {uid: [] for uid in uids}
+    free, dropped = [], 0
+    for item in items:
+        owner = owners.get(item["key"])
+        if owner is None:
+            free.append(item)
+        elif owner in assigned:
+            assigned[owner].append(item)
+        else:
+            dropped += 1
+    random.shuffle(free)
+    order = random.sample(uids, len(uids))
+    for index, item in enumerate(free):
+        assigned[order[index % len(order)]].append(item)
+    for links in assigned.values():
+        random.shuffle(links)
+    return assigned, dropped
+
+
+def split_keywords(keywords: List[str], uids: List[str]) -> Dict[str, List[str]]:
+    """Chia từ khóa nhóm cho các nick, không trùng; ít từ khóa hơn số nick thì mỗi nick 1 từ khóa (có nick dùng chung)."""
+    if not keywords:
+        return {uid: [] for uid in uids}
+    words = random.sample(keywords, len(keywords))
+    order = random.sample(uids, len(uids))
+    if len(words) >= len(order):
+        return {uid: words[index::len(order)] for index, uid in enumerate(order)}
+    return {uid: [words[index % len(words)]] for index, uid in enumerate(order)}
+
+
+class TargetOwners:
+    """
+    Chủ của nhóm / người cho 1 nick trong 1 kịch bản. Flow gọi claim trước khi bấm Tham gia / Thêm bạn bè,
+    settle khi đã bấm xong, release khi không bấm được, record khi nick đã có sẵn (đã là thành viên / bạn bè).
+    enforce=False (bỏ tick chia): vẫn ghi chủ cho đích chưa có chủ nhưng không bao giờ chặn.
+    """
+
+    def __init__(self, scope: str, uid: str, kind: str, enforce: bool):
+        self.scope, self.uid, self.kind, self.enforce = scope, str(uid), kind, enforce
+
+    @staticmethod
+    def keys(*urls) -> List[str]:
+        """Key chuẩn của các link (link dán, link trang đang mở, ID số / tên rút gọn của nhóm), không trùng."""
+        out = []
+        for url in urls:
+            link = parse_fb_link(url or "")
+            if link and len(link["key"]) <= TARGET_KEY_MAX_LEN and link["key"] not in out:
+                out.append(link["key"])
+        return out
+
+    def claim(self, keys: List[str], name: Optional[str] = None, url: Optional[str] = None) -> Optional[str]:
+        """None = được bấm; chuỗi = uid nick khác đang là chủ. Lỗi CSDL khi đang chia thì ném lỗi (không đoán)."""
+        try:
+            other = repository.claim_target(self.scope, self.uid, self.kind, keys, "claimed", name, url,
+                                            exclusive=self.enforce)
+        except Exception as e:
+            if self.enforce:
+                raise RuntimeError(f"Không ghi được nick nhận {'nhóm' if self.kind == 'group' else 'người'} này "
+                                   f"(lỗi CSDL), dừng để không trùng nick khác: {e}") from e
+            logger.warning(f"[{self.uid}] Không ghi được chủ {keys}: {e}")
+            return None
+        return other if self.enforce else None
+
+    def settle(self, keys: List[str], status: str, name: Optional[str] = None, url: Optional[str] = None):
+        try:
+            repository.settle_targets(self.scope, self.uid, keys, status, name, url)
+        except Exception as e:
+            logger.warning(f"[{self.uid}] Không cập nhật được trạng thái chủ {keys}: {e}")
+
+    def release(self, keys: List[str]):
+        try:
+            repository.release_targets(self.scope, self.uid, keys)
+        except Exception as e:
+            logger.warning(f"[{self.uid}] Không trả lại được {keys}: {e}")
+
+    def record(self, keys: List[str], status: str, name: Optional[str] = None, url: Optional[str] = None):
+        """Đích nick đã có sẵn: chưa có chủ thì nick là chủ; nick đang là chủ thì cập nhật trạng thái. Không chặn."""
+        try:
+            repository.claim_target(self.scope, self.uid, self.kind, keys, status, name, url, exclusive=False)
+            repository.settle_targets(self.scope, self.uid, keys, status, name, url)
+        except Exception as e:
+            logger.warning(f"[{self.uid}] Không ghi được chủ {keys}: {e}")
+
+
+def _assign_targets(cfg: "FarmScenarioConfig", uids: List[str], scope: str) -> tuple:
+    """
+    Chia link / từ khóa cho các nick lúc Kích hoạt (chỉ phần đang bật chia). Trả ({uid: phần của nick}, dòng log).
+    Không đọc được chủ (lỗi CSDL) thì ném lỗi: chia sai còn tệ hơn không chạy.
+    """
+    assigned: Dict[str, Dict] = {uid: {} for uid in uids}
+    notes = []
+    for enabled, split, source, raw, kind, field, unit in (
+        (cfg.enabled_join_groups, cfg.groups_split_enabled, cfg.group_source, cfg.group_links, "group", "group_links", "nhóm"),
+        (cfg.enabled_add_friends, cfg.friends_split_enabled, cfg.friend_source, cfg.friend_links, "friend", "friend_links",
+         "kết bạn"),
+    ):
+        if not (enabled and split and source == "list"):
+            continue
+        items = parse_link_list(raw, kind)["items"]
+        parts, dropped = split_links(items, uids, repository.target_owners(scope, [i["key"] for i in items]))
+        for uid, links in parts.items():
+            assigned[uid][field] = links
+        dropped_text = f", bỏ {dropped} link đã thuộc nick khác trong dàn" if dropped else ""
+        notes.append(f"Chia danh sách {unit}: {len(items)} link cho {len(uids)} nick, mỗi link 1 nick{dropped_text}")
+    if cfg.enabled_join_groups and cfg.groups_split_enabled and cfg.group_source == "keyword":
+        keywords = split_group_keywords(cfg.group_keyword)
+        if keywords:
+            for uid, words in split_keywords(keywords, uids).items():
+                assigned[uid]["group_keywords"] = words
+            shared = "" if len(keywords) >= len(uids) else f" ({len(keywords)} từ khóa cho {len(uids)} nick, có nick dùng chung)"
+            notes.append(f"Chia từ khóa nhóm cho các nick{shared}; nhóm đã có nick khác trong dàn vào thì bỏ qua")
+        else:
+            notes.append("Nhóm đề xuất: nhóm đã có nick khác trong dàn vào thì bỏ qua")
+    return assigned, notes
+
+
+def _owner_backfill_entries(rows: List[Dict]) -> List[Dict]:
+    """Chủ suy ra từ log cũ (bảng farm_target_owners mới tạo), theo đúng quy tắc khi chạy."""
+    entries = []
+    for row in rows:
+        try:
+            targets = json.loads(row.get("targets") or "[]")
+        except (TypeError, ValueError):
+            continue
+        scope = _owner_scope(row.get("owner_username"), row.get("machine_id"))
+        for target in targets if isinstance(targets, list) else []:
+            if not isinstance(target, dict):
+                continue
+            result = target.get("result")
+            if row["action_type"] == "LEAVE_GROUP":
+                if result != "left":
+                    continue
+                kind, status = "group", "left"
+            elif row["action_type"] == "JOIN_GROUP":
+                # skipped_done "vừa rời nhóm" là nhóm nick đã rời, không phải đang ở trong
+                if result not in (None, "joined", "pending", "skipped_done") or "vừa rời" in (target.get("reason") or ""):
+                    continue
+                kind = "group"
+                status = "member" if result == "skipped_done" else (result or target.get("status") or "joined")
+            else:
+                # Kết bạn theo gợi ý / thành viên nhóm không chia, chỉ chế độ danh sách (có source_url)
+                if not target.get("source_url") or result not in ("sent", "skipped_done"):
+                    continue
+                kind, status = "friend", "sent" if result == "sent" else "friends"
+            keys = [k for k in _link_keys(target) if len(k) <= TARGET_KEY_MAX_LEN]
+            if keys:
+                entries.append({"scope": scope, "uid": row["fb_uid"], "kind": kind, "keys": keys, "status": status,
+                                "name": (target.get("name") or None), "url": target.get("url") or None})
+    return entries
+
+
+def _nick_gone(accounts: Dict[str, str], uid: str) -> bool:
+    """Nick đã xóa khỏi Module 02 hoặc DIE: không còn giữ nhóm / người. CHECKPOINT vẫn giữ (có thể gỡ được)."""
+    return accounts.get(str(uid)) in (None, "DIE")
+
+
+def _scope_owner(scope: str) -> Optional[str]:
+    """Owner của dàn: "owner:<tên>" -> tên; "machine:<id>" (nick local) -> None."""
+    kind, _, value = scope.partition(":")
+    return value if kind == "owner" else None
+
+
+def _release_gone_owners(scope: str, accounts: Optional[Dict[str, str]]) -> List[tuple]:
+    """
+    Lúc Kích hoạt: xóa chủ của nick đã die / đã xóa trong dàn để nhóm / người đó chia lại được cho nick khác.
+    accounts: nick của owner trong Module 02 (None = đọc lỗi). Đọc lỗi hoặc owner không có nick nào (thường do
+    nối nhầm CSDL) thì không xóa gì. Trả các dòng log (level, nội dung).
+    """
+    if accounts is None:
+        return [("warning", "Không đọc được danh sách nick trong dàn: chưa trả nhóm / người của nick đã die hoặc đã xóa")]
+    if not accounts:
+        return []
+    try:
+        holders = repository.owner_holders(scope)
+        gone = sorted(uid for uid in holders if _nick_gone(accounts, uid))
+        removed = repository.delete_owner_rows(scope, gone) if gone else 0
+    except Exception as e:
+        logger.warning(f"Không trả được nhóm / người của nick đã die hoặc đã xóa: {e}")
+        return [("warning", "Lỗi CSDL khi trả nhóm / người của nick đã die hoặc đã xóa, bỏ qua bước này")]
+    if not removed:
+        return []
+    return [("info", f"Trả {removed} nhóm / người của nick đã die hoặc đã xóa: {', '.join(gone)}")]
+
+
+def _backfill_target_owners() -> int:
+    """
+    Bảng chủ còn trống (vừa tạo) thì chép chủ từ log cũ để nhóm / người đã vào trước đây vẫn có chủ.
+    Bỏ nick đã die / đã xóa (cùng quy tắc lúc Kích hoạt). Không đọc được Module 02 thì ném lỗi: bảng vẫn trống,
+    lần khởi động sau chép lại.
+    """
+    if repository.has_target_owners():
+        return 0
+    entries = _owner_backfill_entries(repository.owner_backfill_logs())
+    accounts_by_scope = {scope: adapters.list_owner_accounts(_scope_owner(scope))
+                         for scope in {e["scope"] for e in entries}}
+    entries = [e for e in entries if not _nick_gone(accounts_by_scope[e["scope"]], e["uid"])]
+    return repository.apply_owner_backfill(entries) if entries else 0
+
+
+def _build_plan(cfg: FarmScenarioConfig, assigned: Optional[Dict] = None) -> List[tuple]:
     """
     Sinh kế hoạch riêng cho từng nick (random độc lập trong khoảng Min–Max).
     Check thông báo luôn chạy đầu tiên; các kịch bản còn lại xáo thứ tự ngẫu nhiên.
+    Chế độ danh sách link: mỗi nick đi danh sách theo thứ tự xáo riêng, số lượng = giới hạn mỗi phiên.
+    assigned: phần đã chia cho nick lúc Kích hoạt (bật chia); không có thì nick dùng cả danh sách / mọi từ khóa.
     """
+    assigned = assigned or {}
     steps = []
     if cfg.enabled_newsfeed:
         steps.append(("NEWSFEED", {
             "total_seconds": random.uniform(cfg.newsfeed_time_min, cfg.newsfeed_time_max) * 60,
             "delay": (cfg.newsfeed_delay_min, cfg.newsfeed_delay_max),
+            "react": list(cfg.newsfeed_react_types) if cfg.newsfeed_react_enabled else None,
         }))
     if cfg.enabled_watch:
         steps.append(("WATCH", {
             "total_seconds": random.uniform(cfg.watch_time_min, cfg.watch_time_max) * 60,
             "delay": (cfg.watch_delay_min, cfg.watch_delay_max),
+            "react": list(cfg.watch_react_types) if cfg.watch_react_enabled else None,
         }))
-    if cfg.enabled_add_friends:
+    if cfg.enabled_story:
+        steps.append(("STORY", {
+            "target": random.randint(cfg.story_min, cfg.story_max),
+            "delay": (cfg.story_delay_min, cfg.story_delay_max),
+            "react": list(cfg.story_react_types) if cfg.story_react_enabled else None,
+        }))
+    if cfg.enabled_add_friends and cfg.friend_source == "list":
+        links = assigned.get("friend_links")
+        if links is None:
+            links = parse_link_list(cfg.friend_links, "friend")["items"]
+            links = random.sample(links, len(links))
+        steps.append(("ADD_FRIEND", {"target": cfg.friend_list_limit, "links": list(links)}))
+    elif cfg.enabled_add_friends:
         steps.append(("ADD_FRIEND", {"target": random.randint(cfg.friends_min, cfg.friends_max)}))
-    if cfg.enabled_join_groups:
-        keywords = split_group_keywords(cfg.group_keyword)
+    if cfg.enabled_join_groups and cfg.group_source == "list":
+        links = assigned.get("group_links")
+        if links is None:
+            links = parse_link_list(cfg.group_links, "group")["items"]
+            links = random.sample(links, len(links))
+        steps.append(("JOIN_GROUP", {"target": cfg.group_list_limit, "links": list(links)}))
+    elif cfg.enabled_join_groups:
+        keywords = assigned.get("group_keywords")
+        if keywords is None:
+            # Mỗi nick dùng từ khóa theo thứ tự riêng để các nick không cùng vào một danh sách nhóm
+            keywords = split_group_keywords(cfg.group_keyword)
+            keywords = random.sample(keywords, len(keywords))
         steps.append(("JOIN_GROUP", {
             "target": random.randint(cfg.groups_min, cfg.groups_max),
-            # Mỗi nick dùng từ khóa theo thứ tự riêng để các nick không cùng vào một danh sách nhóm
-            "keywords": random.sample(keywords, len(keywords)),
+            "keywords": list(keywords),
+        }))
+    if cfg.enabled_leave_groups:
+        low, high = LEAVE_RECENT_DAYS if cfg.leave_criteria == "recent" else LEAVE_STALE_DAYS
+        steps.append(("LEAVE_GROUP", {
+            "target": random.randint(cfg.leave_min, cfg.leave_max),
+            "criteria": cfg.leave_criteria,
+            "days": random.randint(low, high),
+            "keep_admin": cfg.leave_keep_admin,
+            "delay": (cfg.leave_delay_min, cfg.leave_delay_max),
         }))
     random.shuffle(steps)
+    # Rời nhóm luôn chạy trước Tham gia nhóm (không rời nhóm vừa vào trong cùng phiên)
+    names = [a for a, _ in steps]
+    if "LEAVE_GROUP" in names and "JOIN_GROUP" in names and names.index("LEAVE_GROUP") > names.index("JOIN_GROUP"):
+        steps.insert(names.index("JOIN_GROUP"), steps.pop(names.index("LEAVE_GROUP")))
     if cfg.enabled_check_notif:
         steps.insert(0, ("CHECK_NOTIF", {}))
     return steps
+
+
+def _recent_joined_groups(uid: str, days: int, current_run_id: Optional[int]) -> Dict[str, float]:
+    """
+    Nhóm tool đã vào HẲN (không tính chờ duyệt) trong `days` ngày qua ở các phiên trước, chưa rời sau đó:
+    key -> số ngày kể từ lúc vào. Không đọc được lịch sử thì ném lỗi (kịch bản Rời nhóm báo lỗi, không đoán).
+    """
+    try:
+        rows = repository.group_target_history(uid)
+    except Exception as e:
+        raise RuntimeError(f"Không đọc được lịch sử nhóm của nick (lỗi CSDL): {e}") from e
+    now = repository.utc_now()
+    joined: Dict[str, float] = {}
+    for row in rows:
+        if current_run_id and row.get("run_id") == current_run_id:
+            continue
+        try:
+            targets = json.loads(row.get("targets") or "[]")
+        except (TypeError, ValueError):
+            continue
+        at = repository.as_datetime(row["created_at"])
+        for target in targets if isinstance(targets, list) else []:
+            if not isinstance(target, dict):
+                continue
+            keys = _link_keys(target)
+            if row["action_type"] == "LEAVE_GROUP":
+                if target.get("result") == "left":
+                    for key in keys:
+                        joined.pop(key, None)
+            elif (target.get("result") or target.get("status")) == "joined" and at:
+                for key in keys:
+                    joined[key] = (now - at).total_seconds() / 86400
+    return {key: age for key, age in joined.items() if age <= days}
 
 
 def _uid_has_other_browser(uid: str, owner: Optional[str]) -> bool:
@@ -329,32 +848,100 @@ def _apply_daily_limit(uid: str, action: str, target: int, cfg: FarmScenarioConf
     return max(0, min(target, limit - done_today)), done_today, limit
 
 
+def _action_label(action: str, params: dict) -> str:
+    if "links" in params:
+        return {"ADD_FRIEND": "Kết bạn theo danh sách", "JOIN_GROUP": "Tham gia nhóm theo danh sách"}[action]
+    return ACTION_LABELS[action]
+
+
+def _action_source(action: str, params: dict) -> Optional[str]:
+    """Nguồn của kết bạn / tham gia nhóm để ghi friends_source / groups_source."""
+    if action == "ADD_FRIEND":
+        return "list" if "links" in params else "suggestions"
+    if action == "JOIN_GROUP":
+        return "list" if "links" in params else ("keyword" if params.get("keywords") else "suggested")
+    return None
+
+
+def _target_owners(uid: str, kind: str, enforce: bool) -> Optional[TargetOwners]:
+    """Đối tượng ghi chủ cho nick trong phiên hiện tại (None khi chưa có scope, vd gọi ngoài /start)."""
+    with _state_lock:
+        scope = _state.get("owner_scope")
+    return TargetOwners(scope, uid, kind, enforce) if scope else None
+
+
+def _settle_left(owners: Optional[TargetOwners], targets) -> None:
+    """Nhóm vừa rời: nick vẫn là chủ, chỉ đổi trạng thái (không trả nhóm cho nick khác)."""
+    for target in (targets or []) if owners else []:
+        if isinstance(target, dict) and target.get("result") == "left":
+            owners.settle(sorted(_link_keys(target)), "left")
+
+
 def _run_action(driver, ctl: FarmControl, uid: str, action: str, params: dict,
-                cfg: FarmScenarioConfig, report, progress=None) -> dict:
+                cfg: FarmScenarioConfig, report, progress=None, log=None) -> dict:
     if action == "CHECK_NOTIF":
         return run_check_notifications(driver, ctl, report)
     if action == "NEWSFEED":
-        return run_newsfeed(driver, ctl, params["total_seconds"], *params["delay"], report)
+        return run_newsfeed(driver, ctl, params["total_seconds"], *params["delay"], report, react=params.get("react"))
     if action == "WATCH":
-        return run_watch(driver, ctl, params["total_seconds"], *params["delay"], report)
+        return run_watch(driver, ctl, params["total_seconds"], *params["delay"], report, react=params.get("react"))
+    if action == "STORY":
+        return run_story(driver, ctl, params["target"], *params["delay"], report, react=params.get("react"))
+    if action == "LEAVE_GROUP":
+        recent = None
+        if params["criteria"] == "recent":
+            with _state_lock:
+                run_id = _state["accounts"].get(uid, {}).get("run_id")
+            recent = _recent_joined_groups(uid, params["days"], run_id)
+        owners = _target_owners(uid, "group", False)
+        try:
+            result = run_leave_groups(driver, ctl, params["target"], params["criteria"], params["days"],
+                                      params["keep_admin"], report, progress, delay=params["delay"], recent=recent,
+                                      log=log)
+        except Exception as e:
+            _settle_left(owners, (getattr(e, "partial", None) or {}).get("targets"))
+            raise
+        _settle_left(owners, result.get("targets"))
+        return result
 
     target, done_today, limit = _apply_daily_limit(uid, action, params["target"], cfg)
     if target <= 0:
         return {"status": "SKIPPED", "quantity": 0,
                 "details": f"Đã đạt giới hạn ngày ({done_today}/{limit})"}
+    with _state_lock:
+        own_uids = _own_uids
+    if action == "ADD_FRIEND" and own_uids is None:
+        return {"status": "FAILED", "quantity": 0,
+                "details": "Không đọc được danh sách nick trong dàn (lỗi CSDL), không kết bạn để tránh mời trúng nick nhà"}
+    if "links" in params:
+        if not params["links"]:
+            return {"status": "SKIPPED", "quantity": 0,
+                    "details": "Không có link nào được chia cho nick này (danh sách ít link hơn số nick "
+                               "hoặc link đã thuộc nick khác trong dàn)"}
+        if action == "ADD_FRIEND":
+            return run_add_friends_from_links(driver, ctl, params["links"], target, report, progress,
+                                              delay=(cfg.friends_delay_min, cfg.friends_delay_max), log=log,
+                                              owners=_target_owners(uid, "friend", cfg.friends_split_enabled),
+                                              own_uids=own_uids)
+        return run_join_groups_from_links(driver, ctl, params["links"], target, report, progress,
+                                          delay=(cfg.groups_delay_min, cfg.groups_delay_max),
+                                          skips=_group_history_skips(uid), log=log,
+                                          owners=_target_owners(uid, "group", cfg.groups_split_enabled))
     if action == "ADD_FRIEND":
         delay = (cfg.friends_delay_min, cfg.friends_delay_max)
-        result = run_add_friends(driver, ctl, target, report, progress, delay=delay)
+        result = run_add_friends(driver, ctl, target, report, progress, delay=delay, own_uids=own_uids)
         result["source"] = "suggestions"
         if result.get("no_suggestions") and cfg.friends_fallback_group_members:
             report("Không có gợi ý kết bạn, chuyển sang thành viên nhóm đã tham gia")
-            fallback = run_add_friends_from_groups(driver, ctl, target, report, progress, delay=delay)
+            fallback = run_add_friends_from_groups(driver, ctl, target, report, progress, delay=delay,
+                                                   own_uids=own_uids)
             fallback["details"] = f"Không có gợi ý → {fallback['details']}"
             fallback["source"] = "group_members"
             return fallback
         return result
     return run_join_groups(driver, ctl, target, params.get("keywords"), report, progress,
-                           delay=(cfg.groups_delay_min, cfg.groups_delay_max))
+                           delay=(cfg.groups_delay_min, cfg.groups_delay_max),
+                           owners=_target_owners(uid, "group", cfg.groups_split_enabled))
 
 
 def _record_action(uid: str, action: str, result: dict, owner: Optional[str]):
@@ -534,13 +1121,22 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
         if not login.get("success"):
             raise FarmAccountDead(login.get("error") or "Phiên đăng nhập không hợp lệ", checkpoint=login.get("checkpoint"))
 
-        plan = _build_plan(cfg)
-        _emit("info", "Kế hoạch: " + " → ".join(ACTION_LABELS[a] for a, _ in plan), uid, slot)
+        with _state_lock:
+            share = dict(_assignments.get(uid) or {})
+        plan = _build_plan(cfg, share)
+        _emit("info", "Kế hoạch: " + " → ".join(_action_label(a, p) for a, p in plan), uid, slot)
+        shared_parts = [f"{len(share[field])} link {unit}" for field, unit in
+                        (("group_links", "nhóm"), ("friend_links", "kết bạn")) if field in share]
+        if share.get("group_keywords"):
+            shared_parts.append("từ khóa " + ", ".join(f"'{k}'" for k in share["group_keywords"]))
+        if shared_parts:
+            _emit("info", "Được chia: " + "; ".join(shared_parts), uid, slot)
         _set_account(uid, actions={a: "PENDING" for a, _ in plan})
 
         for action, params in plan:
             ctl.checkpoint()
-            label = ACTION_LABELS[action]
+            label = _action_label(action, params)
+            source = _action_source(action, params)
             _set_account(uid, activity=f"Đang chạy: {label}")
             _emit("info", f"Bắt đầu: {label}", uid, slot)
             with _state_lock:
@@ -560,14 +1156,22 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
                 if _field:
                     _set_account(_uid, **{_field: quantity})
 
-            def partial_of(e, _done=done):
+            def log_line(level, text, _uid=uid, _slot=slot, _label=label):
+                # Chế độ danh sách: mỗi link 1 dòng log ngay khi xử lý xong
+                _emit(level, f"{_label}: {text}", _uid, _slot)
+
+            def partial_of(e, _done=done, _source=source):
                 # Newsfeed / Watch gắn phần đã chạy (giây, lần cuộn, video), nhóm gắn từ khóa đã dùng vào lỗi
                 # (mọi loại lỗi); số lượng kết bạn / nhóm báo qua progress
                 partial = dict(getattr(e, "partial", None) or {})
+                if _source:
+                    partial.setdefault("source", _source)
                 return partial.pop("quantity", _done["quantity"]), partial
 
             try:
-                result = _run_action(driver, ctl, uid, action, params, cfg, report, progress)
+                result = _run_action(driver, ctl, uid, action, params, cfg, report, progress, log_line)
+                if source:
+                    result.setdefault("source", source)
             except FarmStopped as e:
                 quantity, partial = partial_of(e)
                 _record_action(uid, action, {
@@ -677,6 +1281,12 @@ async def on_startup(ws_manager):
             logger.info(f"Đã chuyển {stale} lượt treo của lần chạy trước sang FAILED và ghi lịch sử")
     except Exception as e:
         logger.warning(f"Không dọn được lượt treo lúc khởi động: {e}")
+    try:
+        filled = await asyncio.to_thread(_backfill_target_owners)
+        if filled:
+            logger.info(f"Đã chép chủ của {filled} nhóm / người từ lịch sử cũ vào bảng chia đích")
+    except Exception as e:
+        logger.warning(f"Không chép được chủ nhóm / người từ lịch sử cũ: {e}")
 
 
 async def on_shutdown():
@@ -689,7 +1299,7 @@ async def on_shutdown():
 
 @router.post("/start")
 async def start_farm_interactions(req: FarmStartRequest, request: Request):
-    global _control, _active_task
+    global _control, _active_task, _own_uids
     # Nick thuộc người đang đăng nhập (giống Module 02); không đăng nhập thì chỉ nick local
     owner = await asyncio.to_thread(adapters.owner_from_request, request)
     if owner and not adapters.is_license_valid(owner):
@@ -703,12 +1313,17 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
     if not uids:
         raise HTTPException(status_code=400, detail="Vui lòng chọn ít nhất 1 tài khoản để thực thi.")
     cfg = _normalize_config(req.config)
-    if not any([cfg.enabled_newsfeed, cfg.enabled_watch, cfg.enabled_add_friends,
-                cfg.enabled_join_groups, cfg.enabled_check_notif]):
+    if not any([cfg.enabled_newsfeed, cfg.enabled_watch, cfg.enabled_story, cfg.enabled_add_friends,
+                cfg.enabled_join_groups, cfg.enabled_leave_groups, cfg.enabled_check_notif]):
         raise HTTPException(status_code=400, detail="Kịch bản tương tác đang trống. Vui lòng chọn ít nhất 1 hành động.")
     if len(cfg.group_keyword) > GROUP_KEYWORD_MAX_LEN:
         raise HTTPException(status_code=400,
                             detail=f"Từ khóa tham gia nhóm không được quá {GROUP_KEYWORD_MAX_LEN} ký tự.")
+    for enabled, source, raw, kind in ((cfg.enabled_join_groups, cfg.group_source, cfg.group_links, "group"),
+                                       (cfg.enabled_add_friends, cfg.friend_source, cfg.friend_links, "friend")):
+        error = _link_list_error(raw, kind) if enabled and source == "list" else None
+        if error:
+            raise HTTPException(status_code=400, detail=error)
 
     # Chỉ nick Live + Đã đăng nhập mới được chạy (VR-M03-ACC-01)
     eligible, rejected = [], []
@@ -724,6 +1339,23 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
     # Mỗi lần kích hoạt tạo lượt mới, giữ nguyên lịch sử lượt cũ (BR-STS-01)
     session_id = uuid.uuid4().hex
     machine_id = await asyncio.to_thread(adapters.get_machine_id)
+    scope = _owner_scope(owner, machine_id)
+    # Nick trong dàn (Module 02): trả nhóm / người của nick đã die / đã xóa trước khi chia, kết bạn bỏ qua nick nhà
+    try:
+        dan_accounts = await asyncio.to_thread(adapters.list_owner_accounts, owner)
+    except Exception as e:
+        logger.exception(f"Không đọc được danh sách nick trong dàn: {e}")
+        dan_accounts = None
+    release_notes = await asyncio.to_thread(_release_gone_owners, scope, dan_accounts)
+    try:
+        assignments, split_notes = await asyncio.to_thread(_assign_targets, cfg, [a["uid"] for a in eligible], scope)
+    except Exception as e:
+        logger.exception(f"Không chia được link / từ khóa cho các nick: {e}")
+        raise HTTPException(status_code=503, detail="Không đọc được nhóm / người đã có nick nhận trong dàn (lỗi CSDL). "
+                                                    "Kiểm tra kết nối CSDL rồi thử lại, hoặc bỏ tick chia cho các nick.")
+    own_uids: Optional[frozenset] = frozenset()
+    if cfg.enabled_add_friends:
+        own_uids = frozenset(dan_accounts) if dan_accounts is not None else None
     try:
         run_ids = {}
         for acc in eligible:
@@ -739,10 +1371,14 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
     _control = FarmControl()
     with _state_lock:
         _history_data.clear()
+        _assignments.clear()
+        _assignments.update(assignments)
+        _own_uids = own_uids
         _state.update({
             "checkpoint_alerts": history_alerts,
             "running": True,
             "owner_username": owner or "",
+            "owner_scope": scope,
             "session_id": session_id,
             "threads": threads,
             "started_at": time.time(),
@@ -767,6 +1403,12 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
         })
 
     _emit("info", f"Bắt đầu Tương tác tài khoản: {len(eligible)} nick, {threads} luồng")
+    for level, note in release_notes:
+        _emit(level, note)
+    for note in split_notes:
+        _emit("info", note)
+    if own_uids is None:
+        _emit("warning", "Không đọc được danh sách nick trong dàn (lỗi CSDL): lượt này không kết bạn để tránh mời trúng nick nhà")
     if rejected:
         _emit("warning", f"Bỏ qua {len(rejected)} nick không đủ điều kiện (cần Live + Đã đăng nhập): {', '.join(rejected)}")
     if history_alerts:
@@ -997,9 +1639,12 @@ _CSV_COLUMNS = [
     ("proxy_host", "Proxy"), ("proxy_mode", "Chế độ proxy"), ("egress_ip", "IP ra ngoài"),
     ("fingerprint_mode", "Fingerprint"),
     ("newsfeed_seconds", "Newsfeed (giây)"), ("newsfeed_scrolls", "Số lần cuộn"),
-    ("watch_seconds", "Watch (giây)"), ("watch_videos", "Video đã xem"),
+    ("newsfeed_reactions", "Cảm xúc Newsfeed"),
+    ("watch_seconds", "Watch (giây)"), ("watch_videos", "Video đã xem"), ("watch_reactions", "Cảm xúc Watch"),
+    ("story_frames", "Khung story đã xem"), ("story_seconds", "Story (giây)"), ("story_reactions", "Cảm xúc Story"),
     ("friends_sent", "Lời mời kết bạn"), ("friends_source", "Nguồn kết bạn"),
-    ("groups_joined", "Nhóm đã tham gia"), ("groups_keyword", "Từ khóa nhóm"),
+    ("groups_joined", "Nhóm đã tham gia"), ("groups_source", "Nguồn nhóm"), ("groups_keyword", "Từ khóa nhóm"),
+    ("groups_left", "Nhóm đã rời"),
     ("notif_checked", "Đã xem thông báo"),
     ("notif_opened", "Mở thông báo chưa đọc"),
     ("actions_success", "HĐ thành công"), ("actions_failed", "HĐ lỗi"),
