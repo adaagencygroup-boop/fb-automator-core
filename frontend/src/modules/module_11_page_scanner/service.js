@@ -18,11 +18,16 @@ export async function parsePageLinks(payload) {
   return api.post("/api/page-scanner/source/parse", payload);
 }
 
+// ── SOURCE: SCAN BY LINKS (quét thông tin Fanpage theo danh sách link) ──
+export async function scanPageLinks(payload) {
+  return api.post("/api/page-scanner/source/scan-links", payload);
+}
+
 // ── SOURCE: UPLOAD FILE .txt/.csv ──
-export async function uploadPageFile(formData) {
+export async function uploadPageFile(formData, params = { save_to_db: true, filter_existing: true }) {
   return api.post("/api/page-scanner/source/upload", formData, {
     headers: { "Content-Type": "multipart/form-data" },
-    params: { save_to_db: true },
+    params,
   });
 }
 

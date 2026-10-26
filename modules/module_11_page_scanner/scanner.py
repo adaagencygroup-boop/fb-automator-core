@@ -404,13 +404,17 @@ def save_batch_pages(
             owner_key, page_key, page_name, page_url, avatar_url,
             category, follower_count, follower_text, is_verified,
             is_sponsored, identifier_quality, relevance_score, relevance_status,
-            matched_hashtags, hashtag_post_count, first_found_by_account_uid,
+            matched_hashtags, hashtag_post_count,
+            phone, email, website, address,
+            first_found_by_account_uid,
             first_source_type, first_session_id, raw_data, created_at, updated_at
         ) VALUES (
             %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
             %s, %s, %s, %s,
-            %s, %s, %s,
+            %s, %s,
+            %s, %s, %s, %s,
+            %s,
             %s, %s, %s, NOW(), NOW()
         )
         ON CONFLICT (owner_key, page_key) DO UPDATE
@@ -425,6 +429,10 @@ def save_batch_pages(
             relevance_status = EXCLUDED.relevance_status,
             matched_hashtags = COALESCE(EXCLUDED.matched_hashtags, scanned_pages.matched_hashtags),
             hashtag_post_count = GREATEST(scanned_pages.hashtag_post_count, EXCLUDED.hashtag_post_count),
+            phone = COALESCE(EXCLUDED.phone, scanned_pages.phone),
+            email = COALESCE(EXCLUDED.email, scanned_pages.email),
+            website = COALESCE(EXCLUDED.website, scanned_pages.website),
+            address = COALESCE(EXCLUDED.address, scanned_pages.address),
             updated_at = NOW()
         RETURNING (xmax = 0) AS is_new;
         """
@@ -447,6 +455,10 @@ def save_batch_pages(
                     rel_status,
                     matched_tags,
                     hashtag_post_count,
+                    page.get("phone"),
+                    page.get("email"),
+                    page.get("website"),
+                    page.get("address"),
                     account_uid,
                     source_type,
                     session_id,
@@ -1158,6 +1170,32 @@ if (img) {
   avatarUrl = img.getAttribute('xlink:href') || img.getAttribute('href') || img.getAttribute('src') || null;
 }
 
+let phone = null;
+const phoneMatch = body.match(/(?:\+84|84|0)(?:3|5|7|8|9|2\d)\d(?:[\s.\-]?\d){7}\b/);
+if (phoneMatch) phone = phoneMatch[0].trim();
+
+let email = null;
+const emailMatch = body.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+if (emailMatch) email = emailMatch[0].trim();
+
+let website = null;
+const extLinks = Array.from(document.querySelectorAll('a[href*="l.facebook.com/l.php?u="], a[target="_blank"][href^="http"]'));
+for (const a of extLinks) {
+  const href = a.getAttribute('href') || '';
+  if (href.includes('l.facebook.com/l.php?u=')) {
+    try {
+      const u = new URL(href).searchParams.get('u');
+      if (u && !/facebook\.com|fb\.com|instagram\.com/i.test(u)) {
+        website = u;
+        break;
+      }
+    } catch (e) {}
+  } else if (!/facebook\.com|fb\.com|instagram\.com/i.test(href)) {
+    website = href;
+    break;
+  }
+}
+
 return {
   is_page: isPage,
   is_profile: isProfile,
@@ -1166,7 +1204,10 @@ return {
   follower_text: followerText,
   category: category,
   is_verified: isVerified,
-  avatar_url: avatarUrl
+  avatar_url: avatarUrl,
+  phone: phone,
+  email: email,
+  website: website
 };
 """
 
@@ -1264,6 +1305,9 @@ def verify_and_extract_page_in_new_tab(driver, author_url: str) -> Optional[Dict
             "is_verified": info.get("is_verified"),
             "is_sponsored": False,
             "identifier_quality": quality,
+            "phone": info.get("phone"),
+            "email": info.get("email"),
+            "website": info.get("website"),
         }
     except Exception as exc:
         logger.warning(f"[Scanner] Lỗi xác minh Page tab mới ({author_url}): {exc}")
@@ -2071,3 +2115,411 @@ def start_hashtag_search_background(
     worker_thread.start()
 
     return session_id
+
+
+def run_link_scan_flow(
+    pages: List[Dict[str, Any]],
+    account_uid: Optional[str] = None,
+    account_uids: Optional[List[str]] = None,
+    max_results: int = 30,
+    min_followers: int = 0,
+    switch_account_every: int = 50,
+    delay_min: int = 5,
+    delay_max: int = 10,
+    source_type: str = "PARSE",
+    owner_key: str = "system",
+    headless: bool = False,
+    allow_direct_fallback: bool = True,
+    session_id: Optional[int] = None,
+    campaign_id: Optional[str] = None,
+    keep_browser: bool = False,
+) -> Dict[str, Any]:
+    """
+    Thực thi phiên quét chi tiết thông tin Fanpage theo danh sách Link (Nhập Link / Tải tệp):
+    - Duyệt từng link hợp lệ (tối đa max_results)
+    - Mở Chrome qua tài khoản Facebook được chọn, bóc tách Tên Page, Followers, Danh mục,
+      Tích xanh, SĐT, Email, Website
+    - Hỗ trợ lọc min_followers, đổi tài khoản sau switch_account_every Page,
+      nghỉ ngẫu nhiên delay_min..delay_max giây, Tạm dừng / Tiếp tục / Dừng khẩn cấp.
+    """
+    import random
+
+    target_list = list(pages or [])[: max(1, min(int(max_results or 30), 500))]
+    uid_pool = [str(u).strip() for u in (account_uids or []) if str(u).strip()]
+    if account_uid and str(account_uid).strip() and str(account_uid).strip() not in uid_pool:
+        uid_pool.insert(0, str(account_uid).strip())
+
+    primary_uid = uid_pool[0] if uid_pool else account_uid
+    account = get_scraping_account(primary_uid, owner_key=owner_key)
+
+    if session_id is None:
+        session_id = create_scan_session(
+            owner_key=owner_key,
+            keyword="Quét theo danh sách Link" if source_type == "PARSE" else "Quét từ tệp tải lên",
+            account_uid=str(account.get("uid") or "") if account else None,
+            source_type=source_type,
+            max_results=len(target_list),
+            settings={
+                "min_followers": min_followers,
+                "switch_account_every": switch_account_every,
+                "delay_min": delay_min,
+                "delay_max": delay_max,
+                "headless": headless,
+            },
+            campaign_id=campaign_id,
+        )
+
+    with _ACTIVE_SESSIONS_LOCK:
+        if session_id not in _ACTIVE_STOP_EVENTS:
+            _ACTIVE_STOP_EVENTS[session_id] = threading.Event()
+        if session_id not in _ACTIVE_PAUSE_EVENTS:
+            _ACTIVE_PAUSE_EVENTS[session_id] = threading.Event()
+        stop_event = _ACTIVE_STOP_EVENTS[session_id]
+
+    start_time = time.time()
+    kho: Dict[str, Dict[str, Any]] = {}
+    total_seen = 0
+    stop_reason = "TARGET_REACHED"
+    error_message: Optional[str] = None
+
+    # Fallback: Nếu chưa có tài khoản Facebook LIVE trong Module 02, vẫn lưu danh sách link vào kho
+    if not account:
+        append_session_log(
+            session_id,
+            "Chưa có tài khoản Facebook LIVE — lưu trực tiếp danh sách Link hợp lệ vào kho dữ liệu.",
+            "warn",
+        )
+        for idx, p in enumerate(target_list, start=1):
+            slug_name = (p.get("page_key") or "").replace("user:", "").replace("id:", "") or p.get("page_url")
+            item = {
+                **p,
+                "page_name": p.get("page_name") or slug_name,
+            }
+            kho[item["page_key"]] = item
+        save_batch_pages(session_id, owner_key, 1, list(kho.values()), None, source_type)
+        finalize_scan_session(
+            session_id=session_id,
+            status="COMPLETED",
+            stop_reason="TARGET_REACHED",
+            total_seen=len(target_list),
+            total_unique=len(kho),
+            total_duplicates=0,
+            total_sponsored=0,
+            batches_count=1,
+            duration_seconds=int(time.time() - start_time),
+        )
+        with _ACTIVE_SESSIONS_LOCK:
+            _ACTIVE_STOP_EVENTS.pop(session_id, None)
+            _ACTIVE_PAUSE_EVENTS.pop(session_id, None)
+        return {
+            "session_id": session_id,
+            "count": len(kho),
+            "pages": list(kho.values()),
+            "stop_reason": "TARGET_REACHED",
+            "status": "COMPLETED",
+        }
+
+    driver = None
+    acquired_lock = False
+    lock = None
+    curr_acc_idx = 0
+
+    def _open_for_account(acc_obj: Dict[str, Any]):
+        nonlocal driver, acquired_lock, lock
+        if acquired_lock and lock:
+            try:
+                lock.release()
+            except Exception:
+                pass
+            acquired_lock = False
+            lock = None
+        t_uid = str(acc_obj.get("uid") or "").strip()
+        t_owner = acc_obj.get("user_id") or owner_key
+        t_cookie = acc_obj.get("cookie") or ""
+        t_proxy = acc_obj.get("proxy")
+        driver, created_new, lock, acquired_lock = _acquire_page_scanner_browser(
+            target_uid=t_uid,
+            owner=t_owner,
+            proxy=t_proxy,
+            cookie_str=t_cookie,
+            headless=headless,
+            allow_direct_fallback=allow_direct_fallback,
+        )
+        append_session_log(
+            session_id,
+            f"Sử dụng tài khoản {t_uid} ({'mở mới' if created_new else 'tái sử dụng'} Chrome)",
+            "info",
+        )
+        return t_uid
+
+    try:
+        current_uid = _open_for_account(account)
+        append_session_log(
+            session_id,
+            f"Bắt đầu quét thông tin {len(target_list)} liên kết Fanpage...",
+            "info",
+        )
+
+        for idx, item in enumerate(target_list, start=1):
+            if _wait_if_paused(session_id, stop_event):
+                stop_reason = "USER_STOPPED"
+                break
+            if stop_event.is_set():
+                stop_reason = "USER_STOPPED"
+                break
+
+            # Đổi tài khoản định kỳ nếu có nhiều tài khoản
+            if (
+                len(uid_pool) > 1
+                and switch_account_every > 0
+                and idx > 1
+                and (idx - 1) % switch_account_every == 0
+            ):
+                curr_acc_idx = (curr_acc_idx + 1) % len(uid_pool)
+                next_acc = get_scraping_account(uid_pool[curr_acc_idx], owner_key=owner_key)
+                if next_acc:
+                    append_session_log(
+                        session_id,
+                        f"Đổi sang tài khoản tiếp theo sau {idx - 1} Page...",
+                        "warn",
+                    )
+                    current_uid = _open_for_account(next_acc)
+
+            target_url = item.get("page_url") or ""
+            if not target_url:
+                continue
+
+            total_seen += 1
+            append_session_log(
+                session_id,
+                f"[{idx}/{len(target_list)}] Đang truy cập: {target_url}",
+                "info",
+            )
+
+            try:
+                driver.get(target_url)
+            except Exception as nav_err:
+                append_session_log(
+                    session_id,
+                    f"Lỗi mở link {target_url}: {nav_err}",
+                    "warn",
+                )
+                continue
+
+            curr_url = (driver.current_url or "").lower()
+            if "checkpoint" in curr_url or "/login" in curr_url:
+                stop_reason = "CHECKPOINT"
+                error_message = f"Tài khoản {current_uid} bị dính checkpoint hoặc mất đăng nhập"
+                append_session_log(session_id, error_message, "warn")
+                break
+
+            info = _wait_page_meta_ready(driver, timeout_sec=10.0)
+            cleaned_final = clean_page_url(info.get("page_url") or target_url) or target_url
+            page_key, quality = extract_page_identifier(cleaned_final)
+            if not page_key:
+                page_key = item.get("page_key") or f"url:{target_url}"
+
+            follower_raw = (info.get("follower_text") or "").strip()
+            follower_count, follower_text = parse_follower_count(follower_raw)
+
+            if min_followers > 0 and follower_count is not None and follower_count <= min_followers:
+                append_session_log(
+                    session_id,
+                    f"Bỏ qua [{info.get('page_name') or page_key}]: {follower_count} ≤ {min_followers} followers",
+                    "info",
+                )
+                continue
+
+            slug_fallback = page_key.replace("user:", "").replace("id:", "")
+            page_record = {
+                "page_key": page_key,
+                "page_name": (info.get("page_name") or "").strip() or slug_fallback,
+                "page_url": cleaned_final,
+                "avatar_url": info.get("avatar_url"),
+                "category": info.get("category") or "",
+                "follower_count": follower_count,
+                "follower_text": follower_text or follower_raw,
+                "is_verified": info.get("is_verified"),
+                "is_sponsored": False,
+                "identifier_quality": quality,
+                "phone": info.get("phone"),
+                "email": info.get("email"),
+                "website": info.get("website"),
+            }
+
+            kho[page_key] = page_record
+            save_batch_pages(session_id, owner_key, idx, [page_record], current_uid, source_type)
+
+            try:
+                db.execute(
+                    """
+                    UPDATE page_scan_sessions
+                    SET total_seen = %s, total_unique = %s, batches_count = %s, duration_seconds = %s
+                    WHERE id = %s
+                    """,
+                    (total_seen, len(kho), idx, int(time.time() - start_time), session_id),
+                )
+            except Exception:
+                pass
+
+            append_session_log(
+                session_id,
+                (
+                    f"Quét thành công [{page_record['page_name']}]"
+                    f" · FL={follower_count if follower_count is not None else (follower_raw or '—')}"
+                    f"{' · SĐT=' + page_record['phone'] if page_record.get('phone') else ''}"
+                ),
+                "success",
+            )
+
+            if idx < len(target_list):
+                d_lo = max(1, int(delay_min or 3))
+                d_hi = max(d_lo, int(delay_max or 6))
+                sleep_s = random.uniform(d_lo, d_hi)
+                end_sleep = time.time() + sleep_s
+                while time.time() < end_sleep:
+                    if stop_event.is_set() or _wait_if_paused(session_id, stop_event):
+                        break
+                    time.sleep(0.3)
+
+    except Exception as exc:
+        logger.error(f"[Scanner] Lỗi phiên quét link #{session_id}: {exc}", exc_info=True)
+        stop_reason = "ERROR"
+        error_message = str(exc)
+    finally:
+        with _ACTIVE_SESSIONS_LOCK:
+            _ACTIVE_STOP_EVENTS.pop(session_id, None)
+            _ACTIVE_PAUSE_EVENTS.pop(session_id, None)
+
+        duration = int(time.time() - start_time)
+        final_status = "COMPLETED" if stop_reason == "TARGET_REACHED" else "PARTIAL"
+        if stop_reason == "ERROR":
+            final_status = "FAILED"
+        elif stop_reason == "USER_STOPPED":
+            final_status = "STOPPED"
+
+        finalize_scan_session(
+            session_id=session_id,
+            status=final_status,
+            stop_reason=stop_reason,
+            total_seen=total_seen,
+            total_unique=len(kho),
+            total_duplicates=0,
+            total_sponsored=0,
+            batches_count=total_seen,
+            duration_seconds=duration,
+            error_message=error_message,
+        )
+
+        _release_page_scanner_browser(
+            stop_reason=stop_reason,
+            keep_browser=keep_browser,
+            acquired_lock=acquired_lock,
+            lock=lock,
+        )
+
+    return {
+        "session_id": session_id,
+        "count": len(kho),
+        "pages": list(kho.values()),
+        "stop_reason": stop_reason,
+        "status": final_status,
+        "error_message": error_message,
+    }
+
+
+def start_link_scan_background(
+    content: str,
+    account_uid: Optional[str] = None,
+    account_uids: Optional[List[str]] = None,
+    max_results: int = 30,
+    min_followers: int = 0,
+    switch_account_every: int = 50,
+    delay_min: int = 5,
+    delay_max: int = 10,
+    source_type: str = "PARSE",
+    owner_key: str = "system",
+    headless: bool = False,
+    allow_direct_fallback: bool = True,
+    campaign_id: Optional[str] = None,
+    keep_browser: bool = False,
+) -> Dict[str, Any]:
+    """
+    Khởi động phiên quét thông tin Fanpage theo danh sách Link trong background thread.
+    Trả về ngay session_id và thống kê parse ban đầu.
+    """
+    from .page_source import parse_page_file_content
+
+    parsed = parse_page_file_content(content, filter_existing=True, owner_key=owner_key)
+    valid_pages = parsed.get("pages") or []
+    if not valid_pages:
+        raise ValueError("Không tìm thấy đường dẫn Fanpage hợp lệ nào trong danh sách")
+
+    max_results = max(1, min(int(max_results or 30), 500))
+    target_pages = valid_pages[:max_results]
+
+    uid_pool = [str(u).strip() for u in (account_uids or []) if str(u).strip()]
+    if account_uid and str(account_uid).strip() and str(account_uid).strip() not in uid_pool:
+        uid_pool.insert(0, str(account_uid).strip())
+    primary_uid = uid_pool[0] if uid_pool else account_uid
+
+    account = get_scraping_account(primary_uid, owner_key=owner_key)
+    target_uid = str(account.get("uid") or "").strip() if account else None
+
+    src_type = "UPLOAD" if str(source_type).upper() == "UPLOAD" else "PARSE"
+    session_id = create_scan_session(
+        owner_key=owner_key,
+        keyword="Quét từ tệp tải lên" if src_type == "UPLOAD" else "Quét theo danh sách Link",
+        account_uid=target_uid,
+        source_type=src_type,
+        max_results=len(target_pages),
+        settings={
+            "min_followers": min_followers,
+            "switch_account_every": switch_account_every,
+            "delay_min": delay_min,
+            "delay_max": delay_max,
+            "headless": headless,
+            "total_lines": parsed.get("total_lines", 0),
+            "valid_count": parsed.get("valid_count", 0),
+            "dedup_count": parsed.get("dedup_count", 0),
+        },
+        campaign_id=campaign_id,
+    )
+
+    with _ACTIVE_SESSIONS_LOCK:
+        _ACTIVE_STOP_EVENTS[session_id] = threading.Event()
+        _ACTIVE_PAUSE_EVENTS[session_id] = threading.Event()
+
+    worker_thread = threading.Thread(
+        target=run_link_scan_flow,
+        kwargs={
+            "pages": target_pages,
+            "account_uid": target_uid,
+            "account_uids": uid_pool,
+            "max_results": len(target_pages),
+            "min_followers": min_followers,
+            "switch_account_every": switch_account_every,
+            "delay_min": delay_min,
+            "delay_max": delay_max,
+            "source_type": src_type,
+            "owner_key": owner_key,
+            "headless": headless,
+            "allow_direct_fallback": allow_direct_fallback,
+            "session_id": session_id,
+            "campaign_id": campaign_id,
+            "keep_browser": keep_browser,
+        },
+        daemon=True,
+        name=f"page_link_scan_worker_{session_id}",
+    )
+    worker_thread.start()
+
+    return {
+        "session_id": session_id,
+        "campaign_id": campaign_id,
+        "status": "RUNNING",
+        "target_count": len(target_pages),
+        "parsed": parsed,
+        "message": f"Phiên quét theo link #{session_id} ({len(target_pages)} Page) đã được khởi động",
+    }
+

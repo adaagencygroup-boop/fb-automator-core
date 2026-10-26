@@ -264,6 +264,7 @@ def parse_page_file_content(
     if not content:
         return {
             "pages": [],
+            "line_items": [],
             "total_lines": 0,
             "valid_count": 0,
             "dedup_count": 0,
@@ -305,12 +306,21 @@ def parse_page_file_content(
 
     seen_keys: Set[str] = set()
     pages: List[Dict[str, Any]] = []
+    line_items: List[Dict[str, Any]] = []
     dedup_count = 0
     invalid_count = 0
 
-    for raw in raw_candidates:
+    for idx, raw in enumerate(raw_candidates, start=1):
         if not is_valid_page_entry(raw):
             invalid_count += 1
+            line_items.append({
+                "line_no": idx,
+                "raw_input": raw,
+                "page_url": raw,
+                "page_key": "",
+                "status": "INVALID",
+                "is_existing": False,
+            })
             continue
 
         cleaned_url = clean_page_url(raw)
@@ -318,18 +328,44 @@ def parse_page_file_content(
 
         if not page_key:
             invalid_count += 1
+            line_items.append({
+                "line_no": idx,
+                "raw_input": raw,
+                "page_url": cleaned_url or raw,
+                "page_key": "",
+                "status": "INVALID",
+                "is_existing": False,
+            })
             continue
 
         if page_key in seen_keys:
             dedup_count += 1
+            line_items.append({
+                "line_no": idx,
+                "raw_input": raw,
+                "page_url": cleaned_url,
+                "page_key": page_key,
+                "status": "DUPLICATE",
+                "is_existing": False,
+            })
             continue
 
         seen_keys.add(page_key)
-        pages.append({
+        page_obj = {
             "page_key": page_key,
             "page_url": cleaned_url,
             "raw_input": raw,
             "identifier_quality": quality,
+            "is_existing": False,
+        }
+        pages.append(page_obj)
+        line_items.append({
+            "line_no": idx,
+            "raw_input": raw,
+            "page_url": cleaned_url,
+            "page_key": page_key,
+            "status": "VALID",
+            "is_existing": False,
         })
 
     valid_count = len(pages)
@@ -347,11 +383,15 @@ def parse_page_file_content(
             already_existing_count = len(existing_set)
             for p in pages:
                 p["is_existing"] = p["page_key"] in existing_set
+            for item in line_items:
+                if item.get("page_key") and item["page_key"] in existing_set:
+                    item["is_existing"] = True
         except Exception as exc:
             logger.warning(f"[PageSource] Lỗi kiểm tra trùng DB: {exc}")
 
     return {
         "pages": pages,
+        "line_items": line_items,
         "total_lines": total_lines,
         "valid_count": valid_count,
         "dedup_count": dedup_count,

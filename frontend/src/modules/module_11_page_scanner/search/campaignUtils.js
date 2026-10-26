@@ -147,10 +147,12 @@ export function buildCampaignJobs({ searchMode: _searchMode, keywords, manualHas
     });
   };
 
-  const tags = collectHashtagsForCampaign(keywords, manualHashtags);
-  for (const tag of tags) addHashtagJob(tag, "hashtag", tag);
-  if (!tags.length && manualHashtags?.length) {
-    for (const tag of manualHashtags) addHashtagJob(tag, "hashtag", tag);
+  for (const kw of keywords || []) {
+    const body = keywordToHashtagBody(kw);
+    if (body) addHashtagJob(`#${body}`, "hashtag", kw);
+  }
+  for (const tag of manualHashtags || []) {
+    addHashtagJob(tag, "hashtag", tag);
   }
 
   return jobs;

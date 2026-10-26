@@ -32,6 +32,7 @@ from ..scanner import (
     save_batch_pages,
     start_page_search_background,
     start_hashtag_search_background,
+    start_link_scan_background,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,8 @@ class SearchHashtagInput(BaseModel):
     context_keywords: Optional[List[str]] = Field(default=[], description="Từ khóa ngữ cảnh bổ trợ chấm điểm liên quan")
     min_posts: int = Field(2, ge=1, le=10, description="Điều kiện cứng: tối thiểu số bài viết / Page")
     max_posts_per_hashtag: int = Field(100, ge=10, le=300, description="Số bài viết tối đa mỗi hashtag")
+    min_followers: int = Field(1000, ge=0, description="Ngưỡng tối thiểu người theo dõi")
+    target_pages: Optional[int] = Field(None, ge=1, le=500, description="Số lượng Fanpage mục tiêu cho hashtag")
     account_uid: Optional[str] = Field(None, description="UID tài khoản Facebook cào (tuỳ chọn)")
     headless: bool = Field(False, description="Chạy Chrome ẩn hay hiện")
     allow_direct_fallback: bool = Field(True, description="Tự động chuyển sang IP trực tiếp nếu proxy lỗi")
@@ -86,6 +89,22 @@ class ParseInput(BaseModel):
     content: str = Field(..., min_length=1, description="Chuỗi danh sách link/UID mỗi dòng 1 Page")
     filter_existing: bool = Field(False, description="Kiểm tra đối chiếu trùng với kho đã lưu")
     save_to_db: bool = Field(False, description="Lưu ngay các Page hợp lệ vào kho database")
+
+
+class LinkScanInput(BaseModel):
+    content: str = Field(..., min_length=1, description="Danh sách link hoặc UID Fanpage mỗi dòng 1 Page")
+    account_uid: Optional[str] = Field(None, description="UID tài khoản Facebook chính")
+    account_uids: Optional[List[str]] = Field(default=None, description="Danh sách UID tài khoản để xoay vòng")
+    max_results: int = Field(30, ge=1, le=500, description="Số lượng Page mục tiêu muốn quét")
+    min_followers: int = Field(0, ge=0, description="Chỉ lấy Page có followers lớn hơn ngưỡng này")
+    switch_account_every: int = Field(50, ge=1, le=500, description="Đổi tài khoản sau mỗi X Page")
+    delay_min: int = Field(5, ge=1, le=120, description="Thời gian nghỉ tối thiểu giữa 2 lần quét (giây)")
+    delay_max: int = Field(10, ge=1, le=120, description="Thời gian nghỉ tối đa giữa 2 lần quét (giây)")
+    source_type: str = Field("PARSE", description="PARSE hoặc UPLOAD")
+    headless: bool = Field(False, description="Chạy Chrome ẩn hay hiện")
+    allow_direct_fallback: bool = Field(True, description="Tự động chuyển sang IP trực tiếp nếu proxy lỗi")
+    campaign_id: Optional[str] = Field(None, description="Mã đợt chạy")
+    keep_browser: bool = Field(False, description="Giữ Chrome sau khi phiên kết thúc")
 
 
 # ==================== ENDPOINTS ====================
@@ -107,6 +126,8 @@ async def search_pages_by_hashtag(item: SearchHashtagInput):
             context_keywords=item.context_keywords,
             min_posts=item.min_posts,
             max_posts_per_hashtag=item.max_posts_per_hashtag,
+            min_followers=item.min_followers,
+            target_pages=item.target_pages,
             account_uid=item.account_uid,
             owner_key=owner,
             headless=item.headless,
@@ -125,6 +146,39 @@ async def search_pages_by_hashtag(item: SearchHashtagInput):
     except Exception as exc:
         logger.error(f"[Module 11 API] Lỗi hashtag search: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Không thể khởi động phiên quét hashtag: {exc}")
+
+
+@router.post("/source/scan-links")
+async def scan_pages_by_links(item: LinkScanInput):
+    """
+    POST /api/page-scanner/source/scan-links
+    Khởi động phiên quét thông tin Fanpage theo danh sách Link (Nhập Link / Tải tệp) trong background.
+    """
+    owner = _get_owner()
+    try:
+        res = await asyncio.to_thread(
+            start_link_scan_background,
+            content=item.content,
+            account_uid=item.account_uid,
+            account_uids=item.account_uids,
+            max_results=item.max_results,
+            min_followers=item.min_followers,
+            switch_account_every=item.switch_account_every,
+            delay_min=item.delay_min,
+            delay_max=item.delay_max,
+            source_type=item.source_type,
+            owner_key=owner,
+            headless=item.headless,
+            allow_direct_fallback=item.allow_direct_fallback,
+            campaign_id=item.campaign_id,
+            keep_browser=item.keep_browser,
+        )
+        return res
+    except ValueError as val_err:
+        raise HTTPException(status_code=422, detail=str(val_err))
+    except Exception as exc:
+        logger.error(f"[Module 11 API] Lỗi scan-links: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Không thể khởi động phiên quét theo link: {exc}")
 
 
 @router.post("/source/search")
