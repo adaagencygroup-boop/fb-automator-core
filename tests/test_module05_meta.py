@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from core.facebook.fb_graph_client import FacebookGraphClient
 from modules.module_05_page_manager import meta_sync as sync
-from modules.module_05_page_manager.meta_config import REQUIRED_SCOPES
+from modules.module_05_page_manager.meta_config import ALL_SCOPES, REQUIRED_SCOPES
 from modules.module_05_page_manager.routes_pages import router
 from modules.module_05_page_manager.routes_reels import router as reels_router
 from modules.module_05_page_manager.reels_runner import ReelsTaskRunner
@@ -311,7 +311,7 @@ class SyncTests(unittest.TestCase):
         self.assertNotEqual(first["state"], second["state"])
         from urllib.parse import urlsplit, parse_qs
         query = parse_qs(urlsplit(first["authorization_url"]).query)
-        self.assertEqual(set(query["scope"][0].split(",")), REQUIRED_SCOPES)
+        self.assertEqual(set(query["scope"][0].split(",")), ALL_SCOPES)
         for state, owner, flow, uid in (("invalid", "a", "web", None), (first["state"], "b", "web", None),
                                        (first["state"], "a", "profile", None), (first["state"], "a", "web", "222")):
             with self.subTest(state=state, owner=owner, flow=flow, uid=uid), self.assertRaises(ValueError):

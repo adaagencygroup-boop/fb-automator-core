@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Depends, Request
 from . import meta_sync
 from . import meta_web
-from .meta_config import GRAPH_API_VERSION, REQUIRED_SCOPES, credentials, callback_url
+from .meta_config import GRAPH_API_VERSION, ALL_SCOPES, credentials, callback_url
 
 from core.database.connection import db
 from core.facebook.fb_graph_client import fb_client
@@ -273,7 +273,7 @@ def get_oauth_config():
         app_id, _ = credentials()
         redirect = callback_url()
         return {"configured": True, "app_id": app_id, "api_version": GRAPH_API_VERSION,
-                "callback_url": redirect, "scopes": sorted(REQUIRED_SCOPES)}
+                "callback_url": redirect, "scopes": sorted(ALL_SCOPES)}
     except ValueError as exc:
         return {"configured": False, "message": str(exc)}
 
