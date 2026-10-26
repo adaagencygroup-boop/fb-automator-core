@@ -205,6 +205,8 @@ export default function FarmEngage() {
         total={accountPages.total}
         search={accountPages.search}
         onSearchChange={accountPages.changeSearch}
+        category={accountPages.category}
+        onCategoryChange={accountPages.changeCategory}
         loading={accountPages.loading}
         loadingMore={accountPages.loadingMore}
         loadError={accountPages.loadError}
