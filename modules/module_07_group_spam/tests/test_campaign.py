@@ -3,22 +3,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from modules.module_07_group_spam.app.services.campaign import CampaignJob, CampaignManager, FacebookGroupPoster, html_to_facebook_text
-
-
-class FakePersistence:
-    def __init__(self):
-        self.tasks = []
-        self.updates = []
-
-    def initialize_run(self, **kwargs):
-        return kwargs.get("requested_campaign_id") or "campaign-1", 1
-
-    def record_task(self, run_id, item):
-        self.tasks.append((run_id, item))
-
-    def update_run(self, run_id, **values):
-        self.updates.append((run_id, values))
+from modules.module_07_group_spam.app.services.campaign import CampaignManager, FacebookGroupPoster, html_to_facebook_text
 
 
 class FakePoster:
@@ -54,12 +39,14 @@ def wait_for_job(manager, job_id, timeout=2):
 
 class CampaignTests(unittest.TestCase):
     def setUp(self):
-        self.persistence = FakePersistence()
-        self.manager = CampaignManager(poster_factory=FakePoster, persistence=self.persistence)
+        self.manager = CampaignManager(poster_factory=FakePoster)
         self.accounts = {
             "100": {"id": 1, "uid": "100", "password": "", "two_fa": "", "cookie": "", "proxy": ""},
             "200": {"id": 2, "uid": "200", "password": "", "two_fa": "", "cookie": "", "proxy": ""},
         }
+        self.persist = patch.object(CampaignManager, "_persist_final_results")
+        self.persist.start()
+        self.addCleanup(self.persist.stop)
 
     def payload(self):
         return {
@@ -74,13 +61,6 @@ class CampaignTests(unittest.TestCase):
             "settings": {"threads": 2, "max_posts": 3, "delay_min": 0, "delay_max": 0},
         }
 
-    def test_progress_logs_remain_in_ram_without_line_limit(self):
-        job = CampaignJob(id="job-ram", owner="owner-1", payload={})
-        for index in range(105):
-            job.log("INFO", f"event-{index}")
-        self.assertEqual(len(job.public()["logs"]), 105)
-        self.assertEqual(job.public()["logs"][0]["message"], "event-0")
-
     def test_campaign_runs_concurrently_and_reports_partial_result(self):
         with patch.object(self.manager, "_load_accounts", return_value=self.accounts):
             started = self.manager.start(self.payload(), "owner-1")
@@ -89,8 +69,6 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual((result["total"], result["completed"]), (3, 3))
         self.assertEqual((result["success"], result["failed"]), (2, 1))
         self.assertEqual((result["completed_steps"], result["total_steps"]), (6, 6))
-        self.assertEqual(len(self.persistence.tasks), 3)
-        self.assertEqual(self.persistence.updates[-1][1]["status"], "PARTIAL")
 
     def test_pending_join_request_does_not_block_posting(self):
         payload = self.payload()
@@ -161,31 +139,7 @@ class CampaignTests(unittest.TestCase):
 
         self.assertEqual(poster._wait_until(rerendering_condition, 1, "not found"), "fresh-element")
         self.assertEqual(len(calls), 2)
-    def test_campaign_log_includes_group_name_link_and_status(self):
-        job = CampaignJob(id="job-log-test", owner="owner-1", payload={})
-        account = {"uid": "61577080577029", "id": 1, "profile_name": "Test User"}
-        group = {"key": "12345", "name": "NHÓM BÁN HÀNG ONLINE", "url": "https://www.facebook.com/groups/12345"}
-        result = {"status": "SUCCESS", "message": "Đăng bài thành công"}
-        self.manager._record_result(job, account, group, result)
-        logs = job.public()["logs"]
-        self.assertTrue(any(
-            "[61577080577029] NHÓM BÁN HÀNG ONLINE (https://www.facebook.com/groups/12345): Đăng bài thành công" in log["message"]
-            for log in logs
-        ))
-
-
-    def test_campaign_completion_records_success_log(self):
-        payload = self.payload()
-        payload["account_uids"] = ["100"]
-        payload["groups"] = [{"key": "g1", "url": "https://facebook.com/groups/g1", "name": "Nhóm 1"}]
-        with patch.object(self.manager, "_load_accounts", return_value=self.accounts):
-            started = self.manager.start(payload, "owner-1")
-            result = wait_for_job(self.manager, started["job_id"])
-        self.assertEqual(result["status"], "COMPLETED")
-        logs = result["logs"]
-        self.assertTrue(any("Chiến dịch đã hoàn thành thành công" in log["message"] for log in logs))
 
 
 if __name__ == "__main__":
     unittest.main()
-

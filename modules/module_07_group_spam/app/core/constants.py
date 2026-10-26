@@ -132,16 +132,9 @@ BLOCK_TAGS: Set[str] = {"p", "div", "h1", "h2", "h3", "blockquote", "li", "br", 
 # =============================================================================
 # 6. DATABASE TABLES V2 (POSTGRESQL)
 # =============================================================================
-TABLE_CLOUD_GROUP_CAMPAIGNS = "cloud_group_campaigns"
+TABLE_GROUP_CAMPAIGNS = "group_campaigns"
+TABLE_GROUP_RUNS = "group_runs"
+TABLE_GROUP_RUN_TASKS = "group_run_tasks"
+TABLE_GROUP_SYNC_OUTBOX = "group_sync_outbox"
 TABLE_CLOUD_GROUP_RUNS = "cloud_group_runs"
 TABLE_CLOUD_GROUP_LOGS = "cloud_group_logs"
-
-# =============================================================================
-# 7. DEFINE LOG 
-# =============================================================================
-
-class LogLevel(str, Enum):
-    INFO = "INFO"
-    WARNING = "WARNING"
-    SUCCESS = "SUCCESS"
-    ERROR = "ERROR"

@@ -53,7 +53,6 @@ class GroupResponse(BaseModel):
     privacy: str
     already_posted: bool
     mem_num: float | None = None
-    membership_status: str | None = None
 
 
 class ParsedGroupsResponse(BaseModel):
