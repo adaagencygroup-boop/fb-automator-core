@@ -3,6 +3,7 @@ Project module_07_group_spam {
   Note: '''
     Module 7 uses PostgreSQL/Supabase only.
     Legacy SQLite is imported once by migration 006 and is not used at runtime.
+    Progress messages remain in CampaignJob RAM for the job lifetime; only durable data is modeled here.
   '''
 }
 
@@ -29,13 +30,6 @@ Enum group_log_status {
   FAILED
   SKIPPED
   CANCELLED
-}
-
-Enum group_event_level {
-  INFO
-  SUCCESS
-  WARNING
-  ERROR
 }
 
 Table cloud_group_campaigns {
@@ -84,25 +78,6 @@ Table cloud_group_runs {
   Note: "Live and final run summary. Aggregate totals are non-negative and cannot exceed total_planned."
 }
 
-Table cloud_group_events {
-  event_id varchar(36) [pk, not null]
-  run_id varchar(36) [not null]
-  owner_key varchar(100) [not null]
-  sequence_number integer [not null, note: "Monotonic within a run; must be >= 1"]
-  level group_event_level [not null]
-  message text [not null]
-  created_at timestamp [not null]
-  synced_at timestamp [not null, default: `CURRENT_TIMESTAMP AT TIME ZONE 'UTC'`]
-
-  indexes {
-    (run_id, sequence_number) [unique, name: "uq_cloud_group_events_sequence"]
-    (run_id, sequence_number) [name: "idx_cloud_group_events_run_sequence"]
-    (owner_key, created_at) [name: "idx_cloud_group_events_owner_created"]
-  }
-
-  Note: "Progress messages written directly while a campaign is running."
-}
-
 Table cloud_group_logs {
   log_id varchar(36) [pk, not null]
   run_id varchar(36) [not null]
@@ -134,10 +109,6 @@ Table cloud_group_logs {
 
 Ref fk_cloud_group_runs_campaign {
   cloud_group_campaigns.campaign_id < cloud_group_runs.campaign_id [delete: cascade]
-}
-
-Ref fk_cloud_group_events_run {
-  cloud_group_runs.run_id < cloud_group_events.run_id [delete: cascade]
 }
 
 Ref fk_cloud_group_logs_run {

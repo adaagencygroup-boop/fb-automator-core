@@ -107,8 +107,6 @@ class CampaignJob:
     results: list[dict[str, Any]] = field(default_factory=list)
     campaign_id: str | None = None
     run_number: int = 1
-    log_sequence: int = 0
-    log_sink: Callable[[dict[str, Any]], None] | None = field(default=None, repr=False)
     cancel: threading.Event = field(default_factory=threading.Event, repr=False)
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
@@ -118,19 +116,13 @@ class CampaignJob:
         except (ValueError, AttributeError):
             return  # Chỉ ghi nhận các log level đã định nghĩa trong LogLevel
         with self.lock:
-            self.log_sequence += 1
             entry = {
                 "time": datetime.now().isoformat(timespec="seconds"),
                 "level": lvl,
                 "message": message,
             }
             self.logs.append(entry)
-            del self.logs[:-100]
             self.message = message
-            sink = self.log_sink
-            cloud_entry = {**entry, "sequence_number": self.log_sequence}
-        if sink:
-            sink(cloud_entry)
 
     def public(self) -> dict[str, Any]:
         with self.lock:
@@ -531,16 +523,6 @@ class CampaignManager:
         job.campaign_id = campaign_id
         job.run_number = run_number
 
-        with job.lock:
-            buffered_logs = list(job.logs)
-            first_sequence = job.log_sequence - len(buffered_logs) + 1
-            job.log_sink = lambda entry: self.persistence.record_event(job.id, entry)
-        for offset, entry in enumerate(buffered_logs):
-            self.persistence.record_event(
-                job.id,
-                {**entry, "sequence_number": first_sequence + offset},
-            )
-
     def _sync_run(self, job: CampaignJob) -> None:
         self.persistence.update_run(
             job.id,
@@ -780,7 +762,7 @@ class CampaignManager:
         job.log(level, f"[{uid}] {item['group_name'] or item['group_key']}: {item['message']}")
 
     def _persist_final_results(self, job: CampaignJob) -> None:
-        """Finalize the local run summary and cloud run status."""
+        """Finalize the PostgreSQL run summary."""
         if job.status not in {"COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"}:
             job.status = "FAILED"
         self._sync_run(job)

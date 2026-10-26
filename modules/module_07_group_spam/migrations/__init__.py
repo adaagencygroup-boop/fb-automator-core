@@ -7,11 +7,13 @@ def up() -> None:
     from .migration_004_remove_local_tables_from_cloud import up as run_004_up
     from .migration_005_cloud_first_logs import up as run_005_up
     from .migration_006_postgres_only import up as run_006_up
+    from .migration_007_remove_cloud_events import up as run_007_up
 
     run_003_up()
     run_004_up()
     run_005_up()
     run_006_up()
+    run_007_up()
 
 
 def down() -> None:

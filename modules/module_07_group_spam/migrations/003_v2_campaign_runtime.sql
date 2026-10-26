@@ -1,5 +1,5 @@
 -- Module 7 v2 cloud schema.
--- PostgreSQL / Supabase stores live run summaries, progress events and task outcomes.
+-- PostgreSQL / Supabase stores campaigns, run summaries and final task outcomes.
 
 BEGIN;
 
@@ -87,24 +87,6 @@ CREATE TABLE IF NOT EXISTS public.cloud_group_logs (
         CHECK (status IN ('SUCCESS', 'PENDING_APPROVAL', 'FAILED', 'SKIPPED', 'CANCELLED'))
 );
 
-CREATE TABLE IF NOT EXISTS public.cloud_group_events (
-    event_id VARCHAR(36) PRIMARY KEY,
-    run_id VARCHAR(36) NOT NULL
-        REFERENCES public.cloud_group_runs(run_id) ON DELETE CASCADE,
-    owner_key VARCHAR(100) NOT NULL,
-    sequence_number INTEGER NOT NULL,
-    level VARCHAR(20) NOT NULL,
-    message TEXT NOT NULL,
-    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
-    synced_at TIMESTAMP WITHOUT TIME ZONE NOT NULL
-        DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
-
-    CONSTRAINT uq_cloud_group_events_sequence UNIQUE (run_id, sequence_number),
-    CONSTRAINT ck_cloud_group_events_sequence CHECK (sequence_number >= 1),
-    CONSTRAINT ck_cloud_group_events_level
-        CHECK (level IN ('INFO', 'SUCCESS', 'WARNING', 'ERROR'))
-);
-
 CREATE INDEX IF NOT EXISTS idx_cloud_group_runs_history
     ON public.cloud_group_runs (owner_key, finished_at);
 CREATE INDEX IF NOT EXISTS idx_cloud_group_runs_status
@@ -120,10 +102,6 @@ CREATE INDEX IF NOT EXISTS idx_cloud_group_logs_account
     ON public.cloud_group_logs (owner_key, account_uid, finished_at);
 CREATE INDEX IF NOT EXISTS idx_cloud_group_logs_group
     ON public.cloud_group_logs (owner_key, group_key, finished_at);
-CREATE INDEX IF NOT EXISTS idx_cloud_group_events_run_sequence
-    ON public.cloud_group_events (run_id, sequence_number);
-CREATE INDEX IF NOT EXISTS idx_cloud_group_events_owner_created
-    ON public.cloud_group_events (owner_key, created_at);
 CREATE INDEX IF NOT EXISTS idx_cloud_group_campaigns_owner_created
     ON public.cloud_group_campaigns (owner_key, created_at);
 CREATE INDEX IF NOT EXISTS idx_cloud_group_campaigns_owner_type
@@ -137,12 +115,9 @@ COMMENT ON TABLE public.cloud_group_runs IS
     'Module 7 cloud run summaries; upsert by run_id.';
 COMMENT ON TABLE public.cloud_group_logs IS
     'Module 7 cloud final task outcomes; upsert by log_id.';
-COMMENT ON TABLE public.cloud_group_events IS
-    'Module 7 cloud progress events written directly while a run is active.';
 
 ALTER TABLE public.cloud_group_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cloud_group_logs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.cloud_group_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.cloud_group_campaigns ENABLE ROW LEVEL SECURITY;
 
 COMMIT;

@@ -11,6 +11,7 @@ MODULE_ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = MODULE_ROOT / "migrations"
 CLOUD_SCHEMA = MIGRATIONS / "003_v2_campaign_runtime.sql"
 POSTGRES_ONLY_SCHEMA = MIGRATIONS / "006_postgres_only.sql"
+REMOVE_EVENTS_SCHEMA = MIGRATIONS / "007_remove_cloud_events.sql"
 CLOUD_CLEANUP = MIGRATIONS / "004_remove_local_tables_from_cloud.sql"
 
 
@@ -19,6 +20,7 @@ class Module7V2SchemaTests(unittest.TestCase):
     def setUpClass(cls):
         cls.cloud_sql = CLOUD_SCHEMA.read_text(encoding="utf-8").lower()
         cls.postgres_only_sql = POSTGRES_ONLY_SCHEMA.read_text(encoding="utf-8").lower()
+        cls.remove_events_sql = REMOVE_EVENTS_SCHEMA.read_text(encoding="utf-8").lower()
         cls.cleanup_sql = CLOUD_CLEANUP.read_text(encoding="utf-8").lower()
 
     def test_runtime_has_no_sqlite_database_module_or_schema(self):
@@ -31,13 +33,14 @@ class Module7V2SchemaTests(unittest.TestCase):
             "cloud_group_campaigns",
             "cloud_group_runs",
             "cloud_group_logs",
-            "cloud_group_events",
         ):
             self.assertIn(f"create table if not exists public.{table}", self.cloud_sql)
             self.assertIn(
                 f"alter table public.{table} enable row level security",
                 self.cloud_sql,
             )
+        self.assertNotIn("create table if not exists public.cloud_group_events", self.cloud_sql)
+        self.assertIn("drop table if exists public.cloud_group_events", self.remove_events_sql)
 
     def test_cloud_runs_store_rerun_configuration(self):
         self.assertIn("run_number integer not null default 1", self.cloud_sql)

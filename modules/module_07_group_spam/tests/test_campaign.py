@@ -3,20 +3,16 @@ import time
 import unittest
 from unittest.mock import patch
 
-from modules.module_07_group_spam.app.services.campaign import CampaignManager, FacebookGroupPoster, html_to_facebook_text
+from modules.module_07_group_spam.app.services.campaign import CampaignJob, CampaignManager, FacebookGroupPoster, html_to_facebook_text
 
 
 class FakePersistence:
     def __init__(self):
-        self.events = []
         self.tasks = []
         self.updates = []
 
     def initialize_run(self, **kwargs):
         return kwargs.get("requested_campaign_id") or "campaign-1", 1
-
-    def record_event(self, run_id, entry):
-        self.events.append((run_id, entry))
 
     def record_task(self, run_id, item):
         self.tasks.append((run_id, item))
@@ -78,6 +74,13 @@ class CampaignTests(unittest.TestCase):
             "settings": {"threads": 2, "max_posts": 3, "delay_min": 0, "delay_max": 0},
         }
 
+    def test_progress_logs_remain_in_ram_without_line_limit(self):
+        job = CampaignJob(id="job-ram", owner="owner-1", payload={})
+        for index in range(105):
+            job.log("INFO", f"event-{index}")
+        self.assertEqual(len(job.public()["logs"]), 105)
+        self.assertEqual(job.public()["logs"][0]["message"], "event-0")
+
     def test_campaign_runs_concurrently_and_reports_partial_result(self):
         with patch.object(self.manager, "_load_accounts", return_value=self.accounts):
             started = self.manager.start(self.payload(), "owner-1")
@@ -87,7 +90,6 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual((result["success"], result["failed"]), (2, 1))
         self.assertEqual((result["completed_steps"], result["total_steps"]), (6, 6))
         self.assertEqual(len(self.persistence.tasks), 3)
-        self.assertTrue(self.persistence.events)
         self.assertEqual(self.persistence.updates[-1][1]["status"], "PARTIAL")
 
     def test_pending_join_request_does_not_block_posting(self):

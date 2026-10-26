@@ -20,6 +20,11 @@ POSTGRES_ONLY_SCHEMA_PATH = (
     / "migrations"
     / "006_postgres_only.sql"
 )
+REMOVE_CLOUD_EVENTS_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "migrations"
+    / "007_remove_cloud_events.sql"
+)
 
 
 def init_models() -> None:
@@ -28,6 +33,7 @@ def init_models() -> None:
         db.execute(SCHEMA_PATH.read_text(encoding="utf-8"))
         db.execute(CLOUD_FIRST_SCHEMA_PATH.read_text(encoding="utf-8"))
         db.execute(POSTGRES_ONLY_SCHEMA_PATH.read_text(encoding="utf-8"))
+        db.execute(REMOVE_CLOUD_EVENTS_SCHEMA_PATH.read_text(encoding="utf-8"))
         from ..migrations.migration_006_postgres_only import import_legacy_sqlite
 
         import_legacy_sqlite(database=db)

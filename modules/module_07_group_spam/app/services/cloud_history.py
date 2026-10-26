@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class CloudHistoryStore:
-    """Write campaign metadata, live events and task outcomes to PostgreSQL."""
+    """Write campaign metadata, run summaries and task outcomes to PostgreSQL."""
 
     def __init__(self) -> None:
         self._runs: dict[str, dict[str, Any]] = {}
@@ -223,36 +223,6 @@ class CloudHistoryStore:
                 self._upsert_cloud_run(metadata)
             else:
                 self._ensure_cloud_run(metadata)
-
-    def record_event(self, run_id: str, entry: dict[str, Any]) -> None:
-        with self._lock:
-            metadata = self._runs.get(run_id)
-            cloud_ready = run_id in self._cloud_ready
-        if not metadata:
-            return
-        if not cloud_ready and not self._ensure_cloud_run(metadata):
-            return
-        try:
-            self._db().execute(
-                """
-                INSERT INTO cloud_group_events
-                    (event_id, run_id, owner_key, sequence_number, level,
-                     message, created_at, synced_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
-                ON CONFLICT (run_id, sequence_number) DO UPDATE SET
-                    level = EXCLUDED.level,
-                    message = EXCLUDED.message,
-                    created_at = EXCLUDED.created_at,
-                    synced_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
-                """,
-                (
-                    str(uuid.uuid4()), run_id, metadata["owner_key"],
-                    int(entry["sequence_number"]), str(entry["level"]),
-                    str(entry["message"]), entry["time"],
-                ),
-            )
-        except Exception:
-            logger.warning("Cannot write Module 7 progress event to cloud", exc_info=True)
 
     def record_task(self, run_id: str, item: dict[str, Any]) -> None:
         with self._lock:

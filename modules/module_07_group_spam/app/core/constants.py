@@ -135,7 +135,6 @@ BLOCK_TAGS: Set[str] = {"p", "div", "h1", "h2", "h3", "blockquote", "li", "br", 
 TABLE_CLOUD_GROUP_CAMPAIGNS = "cloud_group_campaigns"
 TABLE_CLOUD_GROUP_RUNS = "cloud_group_runs"
 TABLE_CLOUD_GROUP_LOGS = "cloud_group_logs"
-TABLE_CLOUD_GROUP_EVENTS = "cloud_group_events"
 
 # =============================================================================
 # 7. DEFINE LOG 
