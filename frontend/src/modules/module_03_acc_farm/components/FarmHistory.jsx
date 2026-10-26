@@ -6,7 +6,7 @@ import CustomSelect from "@/components/ui/custom-select";
 import Pagination from "@/components/ui/pagination";
 import { toast } from "@/lib/toast";
 import { formatVietnamDateTime } from "@/lib/date-utils";
-import { ACTION_FULL_LABELS, FINAL_STATUSES, FRIEND_SOURCE_LABELS, PROXY_MODE_LABELS, RUN_STATUS } from "../constants";
+import { ACTION_FULL_LABELS, FINAL_STATUSES, FRIEND_SOURCE_LABELS, GROUP_SOURCE_LABELS, PROXY_MODE_LABELS, RUN_STATUS } from "../constants";
 import { cleanupFarmHistory, downloadFarmHistoryCsv, downloadFarmHistoryXlsx, getFarmHistory } from "../service";
 import HistoryDetail from "./HistoryDetail";
 import { HistoryView } from "./HistoryView";
@@ -29,12 +29,18 @@ function scenarioLines(h) {
   const has = (a) => actions.some((x) => x.action === a);
   const lines = [];
   if (has("CHECK_NOTIF")) lines.push(h.notif_checked ? (h.notif_opened ? "Đã xem & mở thông báo mới" : "Đã xem thông báo") : "Chưa xem được thông báo");
-  if (has("NEWSFEED")) lines.push(`Lướt Newsfeed ${formatDuration(h.newsfeed_seconds)}, ${h.newsfeed_scrolls} lần cuộn`);
-  if (has("WATCH")) lines.push(`Xem ${h.watch_videos} video trong ${formatDuration(h.watch_seconds)}`);
+  const reacted = (n) => (n ? `, thả ${n} cảm xúc` : "");
+  if (has("NEWSFEED")) lines.push(`Lướt Newsfeed ${formatDuration(h.newsfeed_seconds)}, ${h.newsfeed_scrolls} lần cuộn${reacted(h.newsfeed_reactions)}`);
+  if (has("WATCH")) lines.push(`Xem ${h.watch_videos} video trong ${formatDuration(h.watch_seconds)}${reacted(h.watch_reactions)}`);
+  if (has("STORY")) lines.push(`Xem ${h.story_frames || 0} khung story trong ${formatDuration(h.story_seconds)}${reacted(h.story_reactions)}`);
   if (has("ADD_FRIEND")) {
     lines.push(`Gửi ${h.friends_sent} lời mời kết bạn${h.friends_source ? ` (${FRIEND_SOURCE_LABELS[h.friends_source] || h.friends_source})` : ""}`);
   }
-  if (has("JOIN_GROUP")) lines.push(`Tham gia ${h.groups_joined} nhóm${h.groups_keyword ? `: "${h.groups_keyword}"` : " (đề xuất)"}`);
+  if (has("LEAVE_GROUP")) lines.push(`Rời ${h.groups_left || 0} nhóm`);
+  if (has("JOIN_GROUP")) {
+    const source = h.groups_source === "list" ? ` (${GROUP_SOURCE_LABELS.list})` : h.groups_keyword ? `: "${h.groups_keyword}"` : " (đề xuất)";
+    lines.push(`Tham gia ${h.groups_joined} nhóm${source}`);
+  }
   return lines;
 }
 

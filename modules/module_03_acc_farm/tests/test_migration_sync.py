@@ -7,7 +7,11 @@ from modules.module_03_acc_farm.models import ADDED_COLUMNS, DDL_STATEMENTS, SHA
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 MIGRATION = MIGRATIONS_DIR / "001_tab1_farm_schema.sql"
 # Các file chỉ thêm cột cho bảng Tab 1 sau khi 001 đã chạy trên Supabase
-TAB1_ADD_COLUMN_MIGRATIONS = [MIGRATIONS_DIR / "006_farm_log_targets.sql"]
+TAB1_ADD_COLUMN_MIGRATIONS = [MIGRATIONS_DIR / "006_farm_log_targets.sql",
+                              MIGRATIONS_DIR / "007_farm_history_groups_source.sql",
+                              MIGRATIONS_DIR / "008_farm_history_reactions_story.sql",
+                              MIGRATIONS_DIR / "009_farm_history_groups_left.sql",
+                              MIGRATIONS_DIR / "010_farm_target_owners.sql"]
 SHARED_MIGRATION = MIGRATIONS_DIR / "005_browser_fingerprints.sql"
 
 

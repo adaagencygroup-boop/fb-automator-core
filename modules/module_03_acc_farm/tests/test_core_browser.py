@@ -193,6 +193,17 @@ class TestProxyFailure(unittest.TestCase):
         self.assertIn(f"--window-size={cfg.window_size[0]},{cfg.window_size[1]}", args)
         self.assertFalse(any(a.startswith("--user-agent") for a in args))
 
+    def test_window_not_maximized_and_webrtc_proxied_only(self):
+        _, chrome = self._open(True)
+        options = chrome.call_args.kwargs["options"]
+        # --start-maximized đè --window-size: mọi nick cùng 1 khung bằng màn hình máy
+        self.assertNotIn("--start-maximized", options.arguments)
+        # STUN không đi thẳng ra mạng, không lộ IP thật của máy
+        self.assertIn("--force-webrtc-ip-handling-policy=disable_non_proxied_udp", options.arguments)
+        prefs = options.experimental_options["prefs"]
+        self.assertEqual(prefs["webrtc.ip_handling_policy"], "disable_non_proxied_udp")
+        self.assertFalse(prefs["webrtc.nonproxied_udp_enabled"])
+
 
 class TestProfileRelease(unittest.TestCase):
     def test_matches_only_the_automation_profile(self):
