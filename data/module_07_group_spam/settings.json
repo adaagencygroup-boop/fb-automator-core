@@ -1,6 +1,6 @@
 {
   "model": "deepseek-v4-flash",
-  "threads": 1,
+  "threads": 2,
   "rest_minutes": 10,
   "max_posts": 10,
   "api_keys": {},

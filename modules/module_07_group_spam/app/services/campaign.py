@@ -128,6 +128,9 @@ class CampaignJob:
         with self.lock:
             percent = round(self.completed_steps * 100 / self.total_steps) if self.total_steps else 0
             return {
+                "campaign_id": self.campaign_id,
+                "run_number": self.run_number,
+                "action_type": str(self.payload.get("action_type") or "POST").upper(),
                 "job_id": self.id,
                 "status": self.status,
                 "message": self.message,
@@ -466,6 +469,194 @@ class FacebookGroupPoster:
         return {"status": "SUCCESS", "message": "Đăng bài thành công", "group_url": url}
 
 
+    def comment(
+        self,
+        group: dict[str, Any],
+        content: str,
+        media: list[str],
+        *,
+        auto_like: bool = False,
+    ) -> dict[str, Any]:
+        """Comment on the first visible post of a Facebook group."""
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.common.keys import Keys
+
+        self._raise_if_cancelled()
+        url = _group_url(group)
+        if not url:
+            raise ValueError("Link nhóm không hợp lệ")
+        driver = self.driver
+        driver.get(url)
+        self._wait_until(
+            lambda: driver.execute_script("return document.readyState") == "complete",
+            25,
+            "Facebook tải trang nhóm quá lâu",
+        )
+        if any(part in (driver.current_url or "").lower() for part in ("checkpoint", "/login", "two_step")):
+            raise RuntimeError("Tài khoản bị đăng xuất hoặc checkpoint")
+
+        article_xpath = "//div[@role='feed']//div[@role='article'] | //div[@role='article']"
+
+        def find_first_article():
+            return next(
+                (item for item in driver.find_elements(By.XPATH, article_xpath) if item.is_displayed()),
+                None,
+            )
+
+        article = self._wait_until(
+            find_first_article,
+            30,
+            "Không tìm thấy bài viết đầu tiên trong nhóm",
+        )
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", article)
+        self._raise_if_cancelled()
+
+        permalink = driver.current_url or url
+        try:
+            post_links = article.find_elements(
+                By.XPATH,
+                ".//a[contains(@href,'/posts/') or contains(@href,'/permalink/') or "
+                "contains(@href,'story_fbid=')]",
+            )
+            permalink = next(
+                (link.get_attribute("href") for link in post_links if link.get_attribute("href")),
+                permalink,
+            )
+        except Exception:
+            pass
+
+        if auto_like:
+            try:
+                article = find_first_article() or article
+                like_xpath = (
+                    ".//*[@role='button' and @aria-pressed='false' and "
+                    "(@aria-label='Thích' or @aria-label='Like' or "
+                    "starts-with(@aria-label,'Thích ') or starts-with(@aria-label,'Like '))]"
+                )
+                like_button = next(
+                    (item for item in article.find_elements(By.XPATH, like_xpath) if item.is_displayed()),
+                    None,
+                )
+                if like_button:
+                    driver.execute_script("arguments[0].click()", like_button)
+                    if self.cancel.wait(0.5):
+                        self._raise_if_cancelled()
+            except InterruptedError:
+                raise
+            except Exception:
+                self.log("WARNING", f"[{self.account['uid']}] Không thể tự động thích bài đầu tiên")
+
+        textbox_xpath = (
+            ".//*[@contenteditable='true' and @role='textbox' and "
+            "(contains(@aria-label,'Viết bình luận') or "
+            "contains(@aria-label,'Bình luận dưới tên') or "
+            "contains(@aria-label,'Write a comment') or "
+            "contains(@aria-label,'Comment as'))]"
+        )
+
+        def find_textbox():
+            current_article = find_first_article()
+            if current_article is None:
+                return None
+            return next(
+                (item for item in current_article.find_elements(By.XPATH, textbox_xpath)
+                 if item.is_displayed() and item.is_enabled()),
+                None,
+            )
+
+        textbox = find_textbox()
+        if textbox is None:
+            article = find_first_article() or article
+            comment_button_xpath = (
+                ".//*[@role='button' and "
+                "(@aria-label='Bình luận' or @aria-label='Comment' or "
+                "normalize-space(.)='Bình luận' or normalize-space(.)='Comment')]"
+            )
+            button = next(
+                (item for item in article.find_elements(By.XPATH, comment_button_xpath)
+                 if item.is_displayed() and item.is_enabled()),
+                None,
+            )
+            if button:
+                driver.execute_script("arguments[0].click()", button)
+            textbox = self._wait_until(
+                find_textbox,
+                15,
+                "Không tìm thấy ô bình luận của bài viết đầu tiên",
+            )
+
+        textbox.click()
+        self._raise_if_cancelled()
+        driver.execute_script(
+            """
+            arguments[0].focus();
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(arguments[0]);
+            range.collapse(false);
+            selection.removeAllRanges();
+            selection.addRange(range);
+            document.execCommand('insertText', false, arguments[1]);
+            arguments[0].dispatchEvent(new InputEvent('input', {
+                bubbles: true, inputType: 'insertText', data: arguments[1]
+            }));
+            """,
+            textbox,
+            content,
+        )
+
+        if media:
+            def upload_comment_media():
+                current_article = find_first_article()
+                if current_article is None:
+                    return False
+                inputs = current_article.find_elements(By.XPATH, ".//input[@type='file']")
+                if not inputs:
+                    return False
+                inputs[-1].send_keys("\n".join(media))
+                return True
+
+            self._wait_until(
+                upload_comment_media,
+                15,
+                "Không tìm thấy vùng tải media của bình luận",
+            )
+            if self.cancel.wait(2 + min(len(media) * 2, 8)):
+                self._raise_if_cancelled()
+
+        self._raise_if_cancelled()
+        textbox = self._wait_until(
+            find_textbox,
+            10,
+            "Ô bình luận không còn khả dụng trước khi gửi",
+        )
+        textbox.send_keys(Keys.ENTER)
+
+        def comment_submitted():
+            try:
+                value = (textbox.text or textbox.get_attribute("textContent") or "").strip()
+                if not value:
+                    return True
+            except Exception:
+                return True
+            try:
+                current_article = find_first_article()
+                return bool(current_article and content.strip() in (current_article.text or ""))
+            except Exception:
+                return False
+
+        self._wait_until(comment_submitted, 25, "Facebook chưa xác nhận bình luận")
+        page_text = (driver.find_element(By.TAG_NAME, "body").text or "").lower()
+        blocked = ("tạm thời bị chặn", "temporarily blocked", "giới hạn tần suất", "try again later")
+        if any(message in page_text for message in blocked):
+            raise RuntimeError("Facebook đang giới hạn thao tác bình luận của tài khoản")
+        return {
+            "status": "SUCCESS",
+            "message": "Bình luận bài viết đầu tiên thành công",
+            "result_url": str(permalink).split("?", 1)[0],
+        }
+
+
 class CampaignManager:
     def __init__(self, poster_factory=FacebookGroupPoster, persistence=None):
         if persistence is None:
@@ -486,7 +677,7 @@ class CampaignManager:
             active_id = self.active_by_owner.get(owner)
             active = self.jobs.get(active_id) if active_id else None
             if active and active.status not in TERMINAL_STATES:
-                raise RuntimeError("Đang có một chiến dịch đăng bài chạy cho tài khoản này")
+                raise RuntimeError("Đang có một chiến dịch nhóm chạy cho tài khoản này")
             job = CampaignJob(id=str(uuid.uuid4()), owner=owner, payload=payload)
             self.jobs[job.id] = job
             self.active_by_owner[owner] = job.id
@@ -495,6 +686,14 @@ class CampaignManager:
             f"Đã tiếp nhận chiến dịch: {len(payload.get('account_uids') or [])} tài khoản, "
             f"{len(payload.get('groups') or [])} nhóm.",
         )
+        try:
+            self._initialize_persistence(job)
+        except Exception:
+            with self.lock:
+                self.jobs.pop(job.id, None)
+                if self.active_by_owner.get(owner) == job.id:
+                    self.active_by_owner.pop(owner, None)
+            raise
         accepted = job.public()
         threading.Thread(target=self._run, args=(job,), name=f"group-campaign-{job.id[:8]}", daemon=True).start()
         return accepted
@@ -577,7 +776,6 @@ class CampaignManager:
         payload = job.payload
         settings = payload.get("settings") or {}
         try:
-            self._initialize_persistence(job)
             job.log("INFO", "Đang kiểm tra tài khoản và chuẩn bị các phiên Chrome...")
             uids = list(dict.fromkeys(str(uid) for uid in payload.get("account_uids") or [] if uid))
             accounts = self._load_accounts(uids, job.owner)
@@ -618,9 +816,11 @@ class CampaignManager:
             job.status = "RUNNING"
             job.started_at = datetime.now().isoformat(timespec="seconds")
             self._sync_run(job)
-            job.log("INFO", f"Bắt đầu {job.total} nhóm với hai luồng độc lập: tham gia nhóm và đăng bài")
+            action_type = str(payload.get("action_type") or "POST").upper()
+            action_label = "bình luận" if action_type == "COMMENT" else "đăng bài"
+            job.log("INFO", f"Bắt đầu {job.total} nhóm theo hai giai đoạn độc lập: tham gia nhóm trước, sau đó {action_label}")
             workers = min(max(1, int(settings.get("threads") or 1)), len(per_account))
-            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="group-post") as pool:
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="group-campaign") as pool:
                 futures = [pool.submit(self._run_account, job, accounts[uid], items) for uid, items in per_account.items()]
                 for future in as_completed(futures):
                     try:
@@ -636,20 +836,20 @@ class CampaignManager:
                 job.log("WARNING", "Chiến dịch đã dừng theo yêu cầu")
             elif (job.failed or job.skipped) and job.success:
                 job.status = "PARTIAL"
-                job.message = f"Hoàn tất một phần: {job.success} đã đăng, {job.failed} thất bại"
-                job.log("SUCCESS", f"Chiến dịch đã hoàn thành! Đã đăng thành công {job.success}/{job.total} lượt (Thất bại: {job.failed})")
+                job.message = f"Hoàn tất một phần: {job.success} lượt {action_label} thành công, {job.failed} thất bại"
+                job.log("SUCCESS", f"Chiến dịch đã hoàn thành! {job.success}/{job.total} lượt {action_label} thành công (Thất bại: {job.failed})")
             elif job.failed:
                 job.status = "FAILED"
                 job.message = f"Chiến dịch thất bại ({job.failed}/{job.total} lượt)"
                 job.log("ERROR", f"Chiến dịch kết thúc: {job.message}")
             elif job.skipped:
                 job.status = "PARTIAL"
-                job.message = f"Đã xử lý: {job.success} đã đăng, {job.skipped} nhóm bỏ qua"
-                job.log("SUCCESS", f"Chiến dịch đã hoàn thành! Đã đăng thành công {job.success}/{job.total} lượt ({job.skipped} nhóm bỏ qua)")
+                job.message = f"Đã xử lý: {job.success} lượt {action_label} thành công, {job.skipped} nhóm bỏ qua"
+                job.log("SUCCESS", f"Chiến dịch đã hoàn thành! {job.success}/{job.total} lượt {action_label} thành công ({job.skipped} nhóm bỏ qua)")
             else:
                 job.status = "COMPLETED"
-                job.message = f"Đã đăng thành công {job.success}/{job.total} lượt"
-                job.log("SUCCESS", f"Chiến dịch đã hoàn thành thành công! Tổng cộng {job.success}/{job.total} lượt đăng bài.")
+                job.message = f"Đã {action_label} thành công {job.success}/{job.total} lượt"
+                job.log("SUCCESS", f"Chiến dịch đã hoàn thành thành công! Tổng cộng {job.success}/{job.total} lượt {action_label}.")
         except InterruptedError:
             job.status = "STOPPED"
             job.message = "Chiến dịch đã dừng theo yêu cầu"
@@ -670,9 +870,36 @@ class CampaignManager:
         max_media = max(min_media, int(settings.get("max_media") or min_media))
         used: list[int] = []
         uid = account["uid"]
+        join_results: list[dict[str, Any] | None] = [None] * len(groups)
+        completed_actions: set[int] = set()
 
         try:
             with owner_scope(job.owner), self.poster_factory(account, job.cancel, job.log) as poster:
+                # Complete the join pass first. Reusing the same browser for posting
+                # between join requests navigated away from Facebook before the join
+                # state had settled, which made this flow appear interrupted.
+                job.log("INFO", f"[{uid}] Luồng tham gia: bắt đầu xử lý {len(groups)} nhóm liên tục")
+                for index, group in enumerate(groups):
+                    if job.cancel.is_set():
+                        raise InterruptedError()
+                    group_name = group.get("name") or _group_key(group)
+                    group_url = _group_url(group)
+                    url_display = f" ({group_url})" if group_url else ""
+                    job.log("INFO", f"[{uid}] Luồng tham gia: kiểm tra {group_name}{url_display}")
+                    try:
+                        join_result = poster.join_group(group)
+                    except InterruptedError:
+                        raise
+                    except Exception as join_error:
+                        join_result = {"status": "FAILED", "message": str(join_error)}
+                        job.log("WARNING", f"[{uid}] Luồng tham gia lỗi nhưng luồng đăng vẫn tiếp tục")
+                    join_results[index] = join_result
+                    self._record_join_step(job, uid, group_name, join_result, group_url)
+
+                job.log("SUCCESS", f"[{uid}] Luồng tham gia: đã kiểm tra xong {len(groups)} nhóm")
+
+                # Posting/commenting is a separate pass. A failed or pending join
+                # remains informational and does not stop this action pass.
                 for index, group in enumerate(groups):
                     if job.cancel.is_set():
                         raise InterruptedError()
@@ -688,28 +915,17 @@ class CampaignManager:
                     group_name = group.get("name") or _group_key(group)
                     group_url = _group_url(group)
                     url_display = f" ({group_url})" if group_url else ""
-                    join_result = None
+                    join_result = join_results[index] or {"status": "FAILED", "message": "Chưa kiểm tra trạng thái tham gia"}
                     try:
-                        job.log("INFO", f"[{uid}] Luồng tham gia: kiểm tra {group_name}{url_display}")
-                        try:
-                            join_result = poster.join_group(group)
-                            self._record_join_step(job, uid, group_name, join_result, group_url)
-                        except InterruptedError:
-                            raise
-                        except Exception as join_error:
-                            join_result = {"status": "FAILED", "message": str(join_error)}
-                            self._record_join_step(job, uid, group_name, join_result, group_url)
-                            job.log("WARNING", f"[{uid}] Luồng tham gia lỗi nhưng luồng đăng vẫn tiếp tục")
-
-                        # Hai luồng độc lập: không chờ Facebook duyệt yêu cầu tham gia mới thử đăng.
                         action_type = str(job.payload.get("action_type") or "POST").upper()
                         if action_type == "COMMENT":
                             job.log("INFO", f"[{uid}] Luồng bình luận: đang bình luận vào {group_name}{url_display}")
-                            if hasattr(poster, "comment"):
-                                result = poster.comment(group, posts[post_index])
-                            else:
-                                result = poster.post(group, posts[post_index], media)
-                                result["message"] = "Đã bình luận thành công"
+                            result = poster.comment(
+                                group,
+                                posts[post_index],
+                                media,
+                                auto_like=bool(settings.get("auto_like")),
+                            )
                         else:
                             job.log("INFO", f"[{uid}] Luồng đăng: đang đăng bài vào {group_name}{url_display}")
                             result = poster.post(group, posts[post_index], media)
@@ -717,18 +933,17 @@ class CampaignManager:
                         result["content"] = posts[post_index]
                         self._advance_step(job)
                         self._record_result(job, account, group, result)
+                        completed_actions.add(index)
                     except InterruptedError:
                         raise
                     except Exception as exc:
-                        if join_result is None:
-                            self._advance_step(job, 2)
-                        else:
-                            self._advance_step(job)
+                        self._advance_step(job)
                         self._record_result(job, account, group, {
                             "status": "FAILED", "message": str(exc),
-                            "join_status": join_result.get("status") if join_result else "FAILED",
+                            "join_status": join_result.get("status", "FAILED"),
                             "content": posts[post_index],
                         })
+                        completed_actions.add(index)
                     if index < len(groups) - 1 and not job.cancel.is_set():
                         delay = random.randint(delay_min, delay_max)
                         job.log("INFO", f"[{uid}] Nghỉ {delay} giây trước nhóm tiếp theo")
@@ -737,17 +952,18 @@ class CampaignManager:
         except InterruptedError:
             raise
         except Exception as exc:
-            completed_keys = {
-                result["group_key"] for result in job.results
-                if result["account_uid"] == uid
-            }
-            remaining = [
-                group for group in groups if _group_key(group) not in completed_keys
-            ] if not job.cancel.is_set() else []
             job.log("ERROR", f"[{uid}] {exc}")
-            for group in remaining:
-                self._advance_step(job, 2)
-                self._record_result(job, account, group, {"status": "FAILED", "message": str(exc)})
+            if not job.cancel.is_set():
+                for index, group in enumerate(groups):
+                    if index in completed_actions:
+                        continue
+                    join_result = join_results[index]
+                    self._advance_step(job, 1 if join_result is not None else 2)
+                    self._record_result(job, account, group, {
+                        "status": "FAILED",
+                        "message": str(exc),
+                        "join_status": join_result.get("status") if join_result else "FAILED",
+                    })
 
     @staticmethod
     def _advance_step(job: CampaignJob, count: int = 1) -> None:

@@ -5,7 +5,6 @@ import {
   Download,
   FileText,
   Check,
-  Edit3,
   RotateCw,
   Trash2,
   ListFilter,
@@ -18,7 +17,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { attachDragSelection } from "../../shared/drag-selection";
 import { toast } from "@/lib/toast";
 import { SectionCard, SelectField } from "../../shared/components";
@@ -67,15 +65,12 @@ export default function GroupSourceSection({
   customGroups = [],
   setCustomGroups,
   selectedAccountKeys = [],
-  setSelectedAccountKeys,
   accounts = [],
   isLocked = false,
-  setIsLocked,
-  onContinue,
   stepNumber = "4",
 }) {
   const groupFileInputRef = useRef(null);
-  const [maxResults, setMaxResults] = useState("50");
+  const [maxResults, setMaxResults] = useState("10");
   const [memberFilter, setMemberFilter] = useState("all");
   const [groupTypeFilter, setGroupTypeFilter] = useState("all");
   const [frequencyFilter, setFrequencyFilter] = useState("all");
@@ -83,7 +78,6 @@ export default function GroupSourceSection({
   const [isFileProcessing, setIsFileProcessing] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
-  const [isQuantityDialogOpen, setIsQuantityDialogOpen] = useState(false);
   const [showSearchFilters, setShowSearchFilters] = useState(false);
   const [showResultFilters, setShowResultFilters] = useState(false);
 
@@ -103,11 +97,6 @@ export default function GroupSourceSection({
     }
     return customGroups || [];
   }, [groupSource, groupFile, customGroups]);
-
-  const selectedSourceGroupsCount = useMemo(() => {
-    const sourceKeys = new Set(baseGroups.map((group) => group.key));
-    return selectedGroupKeys.filter((key) => sourceKeys.has(key)).length;
-  }, [baseGroups, selectedGroupKeys]);
 
   // Bộ lọc tìm kiếm, số lượng thành viên, loại nhóm và tần suất bài viết
   const filteredGroups = useMemo(() => {
@@ -152,12 +141,13 @@ export default function GroupSourceSection({
     });
   }, [baseGroups, groupFilter, memberFilter, groupTypeFilter, membershipFilter, frequencyFilter]);
 
-  // Ẩn bảng danh sách nhóm và các thanh thao tác khi ở chế độ tìm kiếm nhưng chưa thực hiện tìm kiếm từ khóa nào
-  const isSearchIdle =
-    groupSource === "search" &&
-    !hasSearched &&
-    !isSearching &&
-    (!customGroups || customGroups.length === 0);
+  // Chỉ hiện bảng khi đã có nhóm, đang xử lý, hoặc vừa hoàn tất một lượt tìm kiếm.
+  // Ở chế độ file, chưa tải/gắn link nhóm thì ẩn toàn bộ khung bảng trống.
+  const shouldShowGroupTable =
+    baseGroups.length > 0 ||
+    isFileProcessing ||
+    isSearching ||
+    (groupSource === "search" && hasSearched);
 
   const activeResultFilterCount = [
     memberFilter,
@@ -165,7 +155,7 @@ export default function GroupSourceSection({
     frequencyFilter,
     membershipFilter,
   ].filter((value) => value !== "all").length;
-  const activeSearchFilterCount = activeResultFilterCount + (maxResults !== "50" ? 1 : 0);
+  const activeSearchFilterCount = activeResultFilterCount + (maxResults !== "10" ? 1 : 0);
 
   // Toggle chọn 1 nhóm
   const toggleGroup = (key, checked) => {
@@ -225,32 +215,6 @@ export default function GroupSourceSection({
     }
   };
 
-  const handleSaveSource = () => {
-    if (
-      selectedSourceGroupsCount === 0 ||
-      selectedAccountKeys.length > selectedSourceGroupsCount
-    ) {
-      setIsQuantityDialogOpen(true);
-      return;
-    }
-    toast.success("Đã lưu cấu hình nguồn nhóm.", "LƯU THÀNH CÔNG");
-    setIsLocked?.(true);
-    onContinue?.();
-  };
-
-  const handleReduceAccounts = () => {
-    if (selectedSourceGroupsCount === 0 || !setSelectedAccountKeys) return;
-    const trimmed = selectedAccountKeys.slice(0, selectedSourceGroupsCount);
-    setSelectedAccountKeys(trimmed);
-    setIsQuantityDialogOpen(false);
-    setIsLocked?.(true);
-    toast.info(
-      `Đã giảm số tài khoản xuống ${trimmed.length} để phù hợp với số nhóm.`,
-      "ĐIỀU CHỈNH SỐ LƯỢNG"
-    );
-    onContinue?.();
-  };
-
   // Quét tìm nhóm theo từ khóa qua Backend (dữ liệu nhóm Facebook thật)
   const handleSearchGroups = async () => {
     if (!activeScrapingAccount) {
@@ -268,7 +232,7 @@ export default function GroupSourceSection({
     try {
       const res = await searchGroupSource({
         keyword,
-        max_results: Number(maxResults) || 50,
+        max_results: Number(maxResults) || 10,
         member_filter: memberFilter,
         group_type: groupTypeFilter,
         frequency_filter: frequencyFilter,
@@ -478,7 +442,7 @@ export default function GroupSourceSection({
           <option value="not_joined">Chưa tham gia</option>
         </SelectField>
       </div>
-      {(activeResultFilterCount > 0 || (includeMaxResults && maxResults !== "50")) && (
+      {(activeResultFilterCount > 0 || (includeMaxResults && maxResults !== "10")) && (
         <button
           type="button"
           onClick={() => {
@@ -692,7 +656,7 @@ export default function GroupSourceSection({
         </div>
       )}
 
-      {!isSearchIdle && (
+      {shouldShowGroupTable && (
         <div className="mt-3 overflow-hidden rounded-lg border border-slate-200">
           <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50/60 p-2.5 sm:flex-row sm:items-center">
             <div className="relative min-w-[180px] flex-1">
@@ -872,36 +836,6 @@ export default function GroupSourceSection({
 
       </fieldset>
 
-      <div className="mt-4 flex justify-end border-t border-slate-100 pt-3">
-        {isLocked ? (
-          <Button type="button" variant="outline" size="sm" onClick={() => setIsLocked?.(false)} className="h-9 px-4 text-xs">
-            <Edit3 className="mr-1.5 size-3.5" />
-            Chỉnh sửa
-          </Button>
-        ) : (
-          <Button type="button" size="sm" onClick={handleSaveSource} className="h-9 px-4 text-xs">
-            <Check className="mr-1.5 size-3.5" />
-            Lưu cấu hình
-          </Button>
-        )}
-      </div>
-
-      <ConfirmDialog
-        isOpen={isQuantityDialogOpen}
-        onClose={() => setIsQuantityDialogOpen(false)}
-        onConfirm={() => setIsQuantityDialogOpen(false)}
-        onSecondaryConfirm={handleReduceAccounts}
-        title={selectedSourceGroupsCount === 0 ? "Chưa chọn nhóm" : "Chưa đủ số lượng nhóm"}
-        description={
-          selectedSourceGroupsCount === 0
-            ? `Bạn đã chọn ${selectedAccountKeys.length} tài khoản nhưng chưa chọn nhóm nào. Hãy chọn ít nhất một nhóm trước khi lưu cấu hình.`
-            : `Bạn đã chọn ${selectedAccountKeys.length} tài khoản nhưng chỉ có ${selectedSourceGroupsCount} nhóm. Số tài khoản không được lớn hơn số nhóm (A ≤ G).`
-        }
-        confirmText="Chọn thêm nhóm"
-        cancelText="Đóng"
-        secondaryText={selectedSourceGroupsCount > 0 ? "Giảm số tài khoản" : undefined}
-        variant="warning"
-      />
     </SectionCard>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Terminal, Activity, CheckCircle2, XCircle, ExternalLink } from "lucide-react";
 
@@ -44,6 +44,12 @@ export default function GroupProgressSection({
 }) {
   const status = campaignProgress?.status || (runState === "starting" ? "STARTING" : runState === "running" ? "RUNNING" : "IDLE");
   const logs = campaignProgress?.logs || [];
+  const logContainerRef = useRef(null);
+
+  useEffect(() => {
+    if (!logs.length || !logContainerRef.current) return;
+    logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+  }, [logs.length]);
 
   return (
     <Card className="min-h-72 border-slate-200 p-5 shadow-sm">
@@ -94,9 +100,9 @@ export default function GroupProgressSection({
       </div>
 
       {runState !== "idle" || campaignProgress ? (
-        <div className="mt-4 min-h-64 max-h-[460px] space-y-0.5 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
+        <div ref={logContainerRef} className="mt-4 min-h-64 max-h-[460px] space-y-0.5 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
           {logs.length ? (
-            logs.slice().reverse().map((log, index) => {
+            logs.map((log, index) => {
               const isError = log.level === "ERROR";
               const isSuccess = log.level === "SUCCESS";
               const isWarning = log.level === "WARNING";

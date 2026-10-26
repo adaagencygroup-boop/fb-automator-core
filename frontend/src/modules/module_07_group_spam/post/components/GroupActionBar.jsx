@@ -18,8 +18,8 @@ export default function GroupActionBar({
           <Check className="size-4" />
         </span>
         <div>
-          <p className="text-xs font-bold text-slate-700">Sẵn sàng thực thi tiến trình đăng bài</p>
-          <p className="text-[10px] text-slate-400">Hệ thống sẽ chạy tự động theo các thông số đã cấu hình ở trên</p>
+          <p className="text-xs font-bold text-slate-700">Bắt đầu khi bạn đã nhập đủ thông tin</p>
+          <p className="text-[10px] text-slate-400">Hệ thống sẽ thông báo các bước còn thiếu khi bạn nhấn Bắt đầu đăng bài</p>
         </div>
       </div>
       <div className="flex gap-3">

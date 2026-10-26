@@ -639,7 +639,7 @@ def get_scraping_account(
 def search_facebook_via_browser(
     keyword: str,
     account_uid: Optional[str] = None,
-    max_results: int = 50,
+    max_results: int = 10,
     owner: str | None = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -925,7 +925,7 @@ REAL_FACEBOOK_GROUPS: tuple[dict[str, Any], ...] = ()
 
 def search_facebook_groups(
     keyword: str,
-    max_results: int = 50,
+    max_results: int = 10,
     member_filter: str = "all",
     group_type: str = "all",
     frequency_filter: str = "all",

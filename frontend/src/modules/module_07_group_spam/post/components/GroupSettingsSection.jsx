@@ -1,8 +1,7 @@
 "use client";
 
 import React from "react";
-import { Sparkles, Layers, Check, Edit3, Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Sparkles, Layers } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { SectionCard, Field } from "../../shared/components";
 import SavedApiSelector from "../../shared/SavedApiSelector";
@@ -12,33 +11,16 @@ export default function GroupSettingsSection({
   threads,
   setThreads,
   settingsLoading,
-  settingsAction,
   settingsFeedback,
-  onSaveSettings,
-  isLocked,
-  setIsLocked,
   stepNumber = "3",
 }) {
-  const busy = settingsLoading || Boolean(settingsAction);
+  const busy = settingsLoading;
 
   return (
     <SectionCard
       number={stepNumber}
       title="Cấu hình API & thông số chung"
       description="Chọn API đã cấu hình trong Hồ sơ cá nhân để tạo nội dung và số luồng xử lý song song."
-      aside={
-        isLocked ? (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200/60 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
-            <Check className="size-3 text-emerald-600" />
-            Đã lưu cấu hình
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/60 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700">
-            <Edit3 className="size-3 text-amber-600" />
-            Đang chỉnh sửa
-          </span>
-        )
-      }
     >
       <div className="grid gap-3 lg:grid-cols-2">
         {/* Cột 1: Cấu hình Mô hình & API AI */}
@@ -53,7 +35,7 @@ export default function GroupSettingsSection({
                 <p className="text-[10px] text-slate-400">Chọn API để tự động sinh nội dung bài viết và bình luận</p>
               </div>
             </div>
-            <SavedApiSelector source={apiSource} disabled={busy || isLocked} onChange={() => setIsLocked(false)} />
+            <SavedApiSelector source={apiSource} disabled={busy} showActions={false} />
           </div>
         </div>
 
@@ -78,17 +60,12 @@ export default function GroupSettingsSection({
                   max="10"
                   value={threads}
                   onChange={(event) => setThreads(event.target.value)}
-                  disabled={busy || isLocked}
+                  disabled={busy}
                   placeholder="1 - 10"
                   className="h-9 bg-white text-xs font-medium"
                 />
               </Field>
 
-              <div className="rounded-md border border-slate-100 bg-white p-2.5 text-[11px] text-slate-500">
-                <p className="leading-relaxed">
-                  <span className="font-semibold text-slate-700">💡 Gợi ý:</span> Nên chạy từ <strong>1 – 3 luồng</strong> để tiết kiệm CPU/RAM máy tính và giảm thiểu nguy cơ bị Facebook quét checkpoint.
-                </p>
-              </div>
             </div>
           </div>
         </div>
@@ -103,31 +80,6 @@ export default function GroupSettingsSection({
         </p>
       )}
 
-      <div className="mt-4 flex items-center justify-end border-t border-slate-100 pt-3">
-        {isLocked ? (
-          <Button type="button" variant="outline" size="sm" onClick={() => setIsLocked(false)}>
-            <Edit3 className="mr-1.5 size-3.5" /> Chỉnh sửa
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            size="sm"
-            disabled={busy || apiSource.loading || !apiSource.selected}
-            onClick={() => onSaveSettings()}
-            className="bg-primary text-white hover:bg-primary/90"
-          >
-            {settingsAction === "saving" ? (
-              <>
-                <Loader2 className="mr-1.5 size-3.5 animate-spin" /> Đang lưu...
-              </>
-            ) : (
-              <>
-                <Check className="mr-1.5 size-3.5" /> Lưu cấu hình
-              </>
-            )}
-          </Button>
-        )}
-      </div>
     </SectionCard>
   );
 }

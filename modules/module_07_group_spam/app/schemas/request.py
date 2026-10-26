@@ -78,7 +78,7 @@ class ParseFileInput(BaseModel):
 
 class SearchGroupInput(BaseModel):
     keyword: str = Field(min_length=1, max_length=200)
-    max_results: int = Field(default=50, ge=1, le=200)
+    max_results: int = Field(default=10, ge=1, le=200)
     member_filter: str = Field(default="all")
     group_type: str = Field(default="all")
     frequency_filter: str = Field(default="all")
