@@ -214,6 +214,8 @@ export default function GroupCommentModule() {
           if (s.max_posts) setMaxComments(String(s.max_posts));
           if (s.delay_min !== undefined) setDelayMin(String(s.delay_min));
           if (s.delay_max !== undefined) setDelayMax(String(s.delay_max));
+          if (s.min_media !== undefined) setMinMedia(String(s.min_media));
+          if (s.max_media !== undefined) setMaxMedia(String(s.max_media));
           if (s.avoid_duplicate !== undefined) setAvoidDuplicate(Boolean(s.avoid_duplicate));
           if (s.shuffle_content !== undefined) setShuffleContent(Boolean(s.shuffle_content));
           if (s.auto_like !== undefined) setAutoLikeBeforeComment(Boolean(s.auto_like));
@@ -391,6 +393,28 @@ export default function GroupCommentModule() {
       return;
     }
 
+    const mediaCount = savedMedia.length + mediaFiles.length;
+    const normalizedMinMedia = Math.max(0, Number(minMedia) || 0);
+    const normalizedMaxMedia = Math.max(0, Number(maxMedia) || 0);
+    if (normalizedMinMedia > normalizedMaxMedia) {
+      toast.error("Số media tối thiểu không được lớn hơn số media tối đa.", "LỖI CẤU HÌNH MEDIA");
+      document.getElementById("step-5-media")?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+    if (mediaCount > 0 && normalizedMaxMedia > mediaCount) {
+      toast.error(
+        `Số lượng media tối đa mỗi bình luận (${normalizedMaxMedia}) không được lớn hơn tổng số tệp media đã chọn (${mediaCount}).`,
+        "LỖI CẤU HÌNH MEDIA"
+      );
+      document.getElementById("step-5-media")?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+    if (mediaCount === 0 && normalizedMinMedia > 0) {
+      toast.error("Vui lòng chọn media hoặc đặt số media tối thiểu về 0.", "LỖI CẤU HÌNH MEDIA");
+      document.getElementById("step-5-media")?.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+
     setRunState("starting");
     setProgress(4);
     try {
@@ -419,6 +443,8 @@ export default function GroupCommentModule() {
           max_posts: Number(maxComments),
           delay_min: Number(delayMin),
           delay_max: Number(delayMax),
+          min_media: normalizedMinMedia,
+          max_media: normalizedMaxMedia,
           avoid_duplicate: avoidDuplicate,
           shuffle_content: shuffleContent,
           auto_like: autoLikeBeforeComment,

@@ -37,19 +37,16 @@ import GroupPostingSettingsSection from "./components/GroupPostingSettingsSectio
 import GroupSummarySection from "./components/GroupSummarySection";
 import GroupProgressSection from "./components/GroupProgressSection";
 import GroupActionBar from "./components/GroupActionBar";
-
-function StepGuard({ enabled, children }) {
-  if (enabled) return children;
-
-  return (
-    <div className="pointer-events-none select-none opacity-50" aria-disabled="true">
-      {children}
-    </div>
-  );
-}
+import {
+  readGroupPostDraft,
+  readGroupPostDraftMedia,
+  writeGroupPostDraft,
+  writeGroupPostDraftMedia,
+} from "./draftStorage";
 
 export default function GroupPostModule() {
   const editorRef = useRef(null);
+  const completionToastJobRef = useRef(null);
 
   // Bước 1: Chiến dịch
   const [campaignId, setCampaignId] = useState(null);
@@ -65,15 +62,9 @@ export default function GroupPostModule() {
   const [selectedAccountKeys, setSelectedAccountKeys] = useState([]);
   const [isAccountLocked, setIsAccountLocked] = useState(false);
 
-  // Khi Bước 1 chưa xác nhận hoặc bị mở khóa, tự động mở khóa Bước 2 để đảm bảo tính tuần tự
-  useEffect(() => {
-    if ((!campaignLocked || !campaignName?.trim()) && isAccountLocked) {
-      queueMicrotask(() => setIsAccountLocked(false));
-    }
-  }, [campaignLocked, campaignName, isAccountLocked]);
-
   // Bước 3: Cấu hình API & thông số chung
   const apiSource = useSavedApis();
+  const selectApi = apiSource.select;
   const model = apiSource.selected?.model || "gpt-4o";
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsAction, setSettingsAction] = useState("");
@@ -115,7 +106,7 @@ export default function GroupPostModule() {
   const [delayMin, setDelayMin] = useState("30");
   const [delayMax, setDelayMax] = useState("60");
   const [delayUnit, setDelayUnit] = useState("seconds");
-  const [scheduleEnabled, setScheduleEnabled] = useState(true);
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleDate, setScheduleDate] = useState("");
   const [scheduleTime, setScheduleTime] = useState("08:00");
   const [isPostingSettingsLocked, setIsPostingSettingsLocked] = useState(false);
@@ -125,15 +116,17 @@ export default function GroupPostModule() {
   const [campaignProgress, setCampaignProgress] = useState(null);
   const [isCompletionModalOpen, setIsCompletionModalOpen] = useState(false);
   const [completionData, setCompletionData] = useState(null);
+  const [draftReady, setDraftReady] = useState(false);
 
-  // Đọc cấu hình chạy lại từ sessionStorage
+  // Cấu hình chạy lại được ưu tiên; nếu không có thì khôi phục bản nháp khi quay lại tab.
   useEffect(() => {
-    try {
-      const stored = sessionStorage.getItem("fb_rerun_campaign");
-      if (stored) {
-        const data = JSON.parse(stored);
-        queueMicrotask(() => {
-          if (data.action_type !== "POST") return;
+    let cancelled = false;
+
+    const restoreDraft = async () => {
+      try {
+        const stored = sessionStorage.getItem("fb_rerun_campaign");
+        const data = stored ? JSON.parse(stored) : null;
+        if (data?.action_type === "POST") {
           if (data.campaign_id) setCampaignId(data.campaign_id);
           if (data.name) setCampaignName(data.name);
           if (data.description) setCampaignDescription(data.description);
@@ -154,9 +147,8 @@ export default function GroupPostModule() {
           }
           setSavedMedia(cfg.media || []);
           if (cfg.settings) {
+            if (cfg.settings.credential_id !== undefined) selectApi(cfg.settings.credential_id);
             if (cfg.settings.max_posts !== undefined) setMaxPosts(String(cfg.settings.max_posts));
-            if (cfg.settings.avoid_duplicate !== undefined) setAvoidDuplicate(Boolean(cfg.settings.avoid_duplicate));
-            if (cfg.settings.shuffle_content !== undefined) setShuffleContent(Boolean(cfg.settings.shuffle_content));
             if (cfg.settings.threads) setThreads(String(cfg.settings.threads));
             if (cfg.settings.rest_minutes !== undefined) setRestMinutes(String(cfg.settings.rest_minutes));
             if (cfg.settings.delay_min !== undefined) setDelayMin(String(cfg.settings.delay_min));
@@ -170,12 +162,115 @@ export default function GroupPostModule() {
             `Đã nạp lại cấu hình từ chiến dịch "${data.name}". Vui lòng rà soát lại các bước trước khi bắt đầu.`,
             "CHẾ ĐỘ CHẠY LẠI"
           );
-        });
+          return;
+        }
+
+        const draft = readGroupPostDraft();
+        if (!draft) return;
+
+        setCampaignId(draft.campaignId ?? null);
+        setCampaignName(draft.campaignName ?? "");
+        setCampaignDescription(draft.campaignDescription ?? "");
+        setCampaignLocked(Boolean(draft.campaignLocked));
+        setSelectedAccountKeys(draft.selectedAccountKeys || []);
+        setIsAccountLocked(Boolean(draft.isAccountLocked));
+        selectApi(draft.credentialId ?? "");
+        setThreads(draft.threads ?? "2");
+        setRestMinutes(draft.restMinutes ?? "10");
+        setMaxPosts(draft.maxPosts ?? "10");
+        setIsSettingsLocked(Boolean(draft.isSettingsLocked));
+        setConfirmedApi(draft.confirmedApi ?? "");
+        setGroupSource(draft.groupSource ?? "search");
+        setGroupFile(draft.groupFile || null);
+        setCustomGroups(draft.customGroups || []);
+        setGroupSearch(draft.groupSearch ?? "");
+        setGroupFilter(draft.groupFilter ?? "");
+        setSelectedGroupKeys(draft.selectedGroupKeys || []);
+        setIsGroupSourceLocked(Boolean(draft.isGroupSourceLocked));
+        setSavedMedia(draft.savedMedia || []);
+        setMinMedia(draft.minMedia ?? "1");
+        setMaxMedia(draft.maxMedia ?? "4");
+        setIsMediaLocked(Boolean(draft.isMediaLocked));
+        setPrompt(draft.prompt ?? "");
+        setAiCount(draft.aiCount ?? "1");
+        setPosts(draft.posts?.length ? draft.posts : [INITIAL_POST]);
+        setActivePost(Number.isInteger(draft.activePost) ? draft.activePost : 0);
+        setHasGeneratedContent(Boolean(draft.hasGeneratedContent));
+        setIsContentLocked(Boolean(draft.isContentLocked));
+        setDelayMin(draft.delayMin ?? "30");
+        setDelayMax(draft.delayMax ?? "60");
+        setDelayUnit(draft.delayUnit ?? "seconds");
+        setScheduleEnabled(Boolean(draft.scheduleEnabled));
+        setScheduleDate(draft.scheduleDate ?? "");
+        setScheduleTime(draft.scheduleTime ?? "08:00");
+        setIsPostingSettingsLocked(Boolean(draft.isPostingSettingsLocked));
+
+        const restoredMedia = await readGroupPostDraftMedia();
+        if (!cancelled) setMediaFiles(restoredMedia);
+      } catch (e) {
+        console.warn("Lỗi khôi phục cấu hình đăng bài nhóm:", e);
+      } finally {
+        if (!cancelled) setDraftReady(true);
       }
-    } catch (e) {
-      console.warn("Lỗi đọc cấu hình chạy lại:", e);
-    }
-  }, []);
+    };
+
+    restoreDraft();
+    return () => { cancelled = true; };
+  }, [selectApi]);
+
+  useEffect(() => {
+    if (!draftReady || isRerun) return;
+    writeGroupPostDraft({
+      campaignId,
+      campaignName,
+      campaignDescription,
+      campaignLocked,
+      selectedAccountKeys,
+      isAccountLocked,
+      credentialId: apiSource.selectedId,
+      threads,
+      restMinutes,
+      maxPosts,
+      isSettingsLocked,
+      confirmedApi,
+      groupSource,
+      groupFile,
+      customGroups,
+      groupSearch,
+      groupFilter,
+      selectedGroupKeys,
+      isGroupSourceLocked,
+      savedMedia,
+      minMedia,
+      maxMedia,
+      isMediaLocked,
+      prompt,
+      aiCount,
+      posts,
+      activePost,
+      hasGeneratedContent,
+      isContentLocked,
+      delayMin,
+      delayMax,
+      delayUnit,
+      scheduleEnabled,
+      scheduleDate,
+      scheduleTime,
+      isPostingSettingsLocked,
+    });
+  }, [
+    draftReady, isRerun, campaignId, campaignName, campaignDescription, campaignLocked,
+    selectedAccountKeys, isAccountLocked, apiSource.selectedId, threads, restMinutes, maxPosts, isSettingsLocked,
+    confirmedApi, groupSource, groupFile, customGroups, groupSearch, groupFilter,
+    selectedGroupKeys, isGroupSourceLocked, savedMedia, minMedia, maxMedia, isMediaLocked,
+    prompt, aiCount, posts, activePost, hasGeneratedContent, isContentLocked, delayMin,
+    delayMax, delayUnit, scheduleEnabled, scheduleDate, scheduleTime, isPostingSettingsLocked,
+  ]);
+
+  useEffect(() => {
+    if (!draftReady || isRerun) return;
+    writeGroupPostDraftMedia(mediaFiles);
+  }, [draftReady, isRerun, mediaFiles]);
 
   const loadAccounts = async () => {
     setAccountsLoading(true);
@@ -213,7 +308,7 @@ export default function GroupPostModule() {
       .then((data) => {
         if (cancelled) return;
         const rerun = JSON.parse(sessionStorage.getItem("fb_rerun_campaign") || "null");
-        if (rerun?.action_type === "POST") return;
+        if (rerun?.action_type === "POST" || readGroupPostDraft()) return;
         setThreads(String(data.threads));
         setRestMinutes(String(data.rest_minutes));
         setMaxPosts(String(data.max_posts));
@@ -259,15 +354,13 @@ export default function GroupPostModule() {
         const terminal = ["COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"].includes(job.status);
         if (terminal) {
           setRunState("idle");
-<<<<<<< HEAD
-          setCampaignId(null);
-=======
           setJobId(null);
->>>>>>> f54b1289b8ca16cdf658e016b786d10af8cb6b72
           if (job.status === "COMPLETED" || (job.status === "PARTIAL" && job.success > 0)) {
             setCompletionData(job);
             setIsCompletionModalOpen(true);
-            toast.success(job.message || "Chiến dịch đã hoàn thành thành công!", "HOÀN TẤT CHIẾN DỊCH");
+            if (job.status === "PARTIAL") {
+              toast.success(job.message || "Chiến dịch đã hoàn thành một phần!", "HOÀN TẤT CHIẾN DỊCH");
+            }
           } else if (job.status === "STOPPED") {
             toast.info(job.message, "ĐÃ DỪNG CHIẾN DỊCH");
           } else {
@@ -291,6 +384,26 @@ export default function GroupPostModule() {
     };
   }, [jobId]);
 
+  // Hiển thị toast sau khi React đã nhận và render dòng log hoàn tất.
+  // Theo dõi job_id để không thông báo lặp lại qua các lần polling.
+  useEffect(() => {
+    if (campaignProgress?.status !== "COMPLETED") return;
+    const completionLog = [...(campaignProgress.logs || [])]
+      .reverse()
+      .find((log) => log.level === "SUCCESS" && log.message?.includes("Chiến dịch đã hoàn thành thành công"));
+    if (!completionLog) return;
+
+    const completionKey = campaignProgress.job_id || campaignProgress.campaign_id || completionLog.time;
+    if (completionToastJobRef.current === completionKey) return;
+    completionToastJobRef.current = completionKey;
+    toast.success({
+      key: `group-post-completed-${completionKey}`,
+      title: "HOÀN TẤT CHIẾN DỊCH",
+      message: completionLog.message,
+      duration: 8000,
+    });
+  }, [campaignProgress]);
+
   const currentGroupPool = useMemo(() => {
     if (groupSource === "file" && groupFile?.groups?.length) {
       return groupFile.groups;
@@ -300,7 +413,6 @@ export default function GroupPostModule() {
 
   const selectedAccounts = accounts.filter((account) => selectedAccountKeys.includes(account.key));
   const selectedGroups = currentGroupPool.filter((group) => selectedGroupKeys.includes(group.key));
-  const hasGroups = selectedGroups.length > 0 || (groupSource === "file" ? Boolean(groupFile) : false);
   const activeGroupsCount = groupSource === "file" ? (groupFile?.validGroupsCount || selectedGroups.length) : selectedGroups.length;
   const generatedCount = posts.filter((post) => post.trim()).length;
   const totalPlanned = Math.min(Number(maxPosts) || 0, activeGroupsCount * Math.max(selectedAccounts.length, 1));
@@ -341,13 +453,13 @@ export default function GroupPostModule() {
     return values;
   };
 
-  const handleSaveSettings = async (shouldScroll = true) => {
+  const handleSaveSettings = async (shouldScroll = true, notify = true) => {
     setSettingsAction("saving");
     setSettingsFeedback(null);
     try {
       await saveGroupSettings(normalizedSettings());
       setSettingsFeedback({ type: "success", message: "Đã lưu cấu hình trên máy này" });
-      toast.success("Đã lưu cấu hình trên máy này thành công.", "LƯU THÀNH CÔNG");
+      if (notify) toast.success("Đã lưu cấu hình trên máy này thành công.", "LƯU THÀNH CÔNG");
       setIsSettingsLocked(true);
       setConfirmedApi(apiSignature);
 
@@ -370,12 +482,8 @@ export default function GroupPostModule() {
   };
 
   const generatePosts = async () => {
-<<<<<<< HEAD
     const isDup = aiCount === "duplicate" || aiCount === "1" || Number(aiCount) === 1;
     const amount = isDup
-=======
-    const amount = aiCount === "duplicate"
->>>>>>> f54b1289b8ca16cdf658e016b786d10af8cb6b72
       ? 1
       : Math.max(1, Math.min(10, Number(aiCount) || 1));
     if (!prompt.trim()) {
@@ -404,7 +512,6 @@ export default function GroupPostModule() {
       setPosts(generatedPosts);
       setActivePost(0);
       setHasGeneratedContent(true);
-<<<<<<< HEAD
       toast.success(
         isDup
           ? "Đã tạo thành công 1 bài viết bằng AI (Trùng lặp nội dung)!"
@@ -412,10 +519,6 @@ export default function GroupPostModule() {
         "TẠO NỘI DUNG THÀNH CÔNG"
       );
       setSettingsFeedback({ type: "success", message: `Đã tạo ${generatedPosts.length} bài bằng ${model}` });
-=======
-      toast.success(`Đã tạo thành công ${result.count} bài viết bằng AI!`, "TẠO NỘI DUNG THÀNH CÔNG");
-      setSettingsFeedback({ type: "success", message: `Đã tạo ${result.count} bài bằng ${model}` });
->>>>>>> f54b1289b8ca16cdf658e016b786d10af8cb6b72
     } catch (error) {
       toast.error(error.message || "Không thể tạo nội dung AI", "LỖI TẠO NỘI DUNG");
       setSettingsFeedback({ type: "error", message: error.message || "Không thể tạo nội dung AI" });
@@ -436,19 +539,43 @@ export default function GroupPostModule() {
 
   const handleStart = async () => {
     const trimmedCampaignName = (campaignName || "").trim();
-    if (!trimmedCampaignName) {
-      toast.warning("Vui lòng nhập Tên chiến dịch ở Bước 1 trước khi bắt đầu!", "THIẾU TÊN CHIẾN DỊCH");
-      const el = document.getElementById("step-1-campaign");
-      if (el) el.scrollIntoView({ behavior: "smooth" });
-      return;
-    }
-
-    if (!selectedAccounts.length || !hasGroups || !hasApiKey) {
-      toast.warning("Vui lòng chọn tài khoản, nguồn nhóm và cấu hình API trước khi bắt đầu!", "THIẾU CẤU HÌNH");
-      return;
-    }
-
     const activeGroups = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
+    const hasPostContent = hasGeneratedContent
+      ? posts.some((post) => String(post || "").replace(/<[^>]*>/g, "").trim())
+      : Boolean(prompt.trim());
+    const missingSteps = [];
+
+    if (!trimmedCampaignName) missingSteps.push({ step: 1, message: "nhập tên chiến dịch", target: "step-1-campaign" });
+    if (!selectedAccounts.length) missingSteps.push({ step: 2, message: "chọn ít nhất một tài khoản", target: "step-2-accounts" });
+    if (!hasApiKey) missingSteps.push({ step: 3, message: "chọn API đã cấu hình", target: "step-3-settings" });
+    if (!activeGroups.length) missingSteps.push({ step: 4, message: "chọn ít nhất một nhóm", target: "step-4-group-source" });
+    if (!hasPostContent) missingSteps.push({ step: 6, message: "nhập nội dung bài viết", target: "step-6-content" });
+    if (scheduleEnabled && !scheduleDate) missingSteps.push({ step: 7, message: "chọn ngày bắt đầu", target: "step-7-posting" });
+    if (scheduleEnabled && !scheduleTime) missingSteps.push({ step: 7, message: "chọn giờ bắt đầu", target: "step-7-posting" });
+
+    if (missingSteps.length > 0) {
+      const details = missingSteps.map((item) => `Bước ${item.step}: ${item.message}`).join("; ");
+      toast.warning(details, "VUI LÒNG BỔ SUNG CÁC BƯỚC CÒN THIẾU");
+      document.getElementById(missingSteps[0].target)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+
+    try {
+      normalizedSettings();
+    } catch (error) {
+      toast.warning(error.message, "CẤU HÌNH CHƯA HỢP LỆ");
+      document.getElementById("step-3-settings")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+
+    const delayMinValue = Number(delayMin);
+    const delayMaxValue = Number(delayMax);
+    if (!Number.isFinite(delayMinValue) || !Number.isFinite(delayMaxValue) || delayMinValue < 0 || delayMaxValue < delayMinValue) {
+      toast.warning("Bước 7: khoảng nghỉ phải là số không âm và giá trị 'Đến' không được nhỏ hơn giá trị 'Từ'.", "CẤU HÌNH CHƯA HỢP LỆ");
+      document.getElementById("step-7-posting")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+
     if (selectedAccounts.length > activeGroups.length) {
       toast.error(
         `Chưa đủ số lượng nhóm. Bạn đã chọn ${selectedAccounts.length} tài khoản nhưng chỉ có ${activeGroups.length} nhóm. Vui lòng chọn thêm nhóm hoặc giảm số tài khoản để số tài khoản không lớn hơn số nhóm.`,
@@ -481,11 +608,9 @@ export default function GroupPostModule() {
       }],
     });
     try {
-      if (!settingsConfirmed) {
-        appendCampaignLog("INFO", "Đang kiểm tra và lưu cấu hình Module 7...");
-        const saved = await handleSaveSettings(false);
-        if (!saved) throw new Error("Cấu hình chưa hợp lệ");
-      }
+      appendCampaignLog("INFO", "Đang kiểm tra và lưu cấu hình Module 7...");
+      const saved = await handleSaveSettings(false, false);
+      if (!saved) throw new Error("Cấu hình chưa hợp lệ");
       appendCampaignLog("SUCCESS", `Đã chuẩn bị ${selectedAccounts.length} tài khoản và nguồn nhóm.`);
       let savedMediaPaths = [];
       if (mediaFiles.length > 0) {
@@ -504,10 +629,11 @@ export default function GroupPostModule() {
 
       const isDup = aiCount === "duplicate" || aiCount === "1" || Number(aiCount) === 1;
       const targetCount = isDup ? 1 : Math.max(1, Math.min(10, Number(aiCount) || 1));
+      const contentPool = !hasGeneratedContent && prompt.trim() ? [prompt.trim()] : posts;
       const validPosts = isDup
-        ? [posts[0] || prompt.trim()]
-        : posts.slice(0, targetCount).map((p) => p?.trim()).filter(Boolean);
-      const finalPosts = validPosts.length > 0 ? validPosts : [posts[0] || prompt.trim()];
+        ? [contentPool[0] || prompt.trim()]
+        : contentPool.slice(0, targetCount).map((p) => p?.trim()).filter(Boolean);
+      const finalPosts = validPosts.length > 0 ? validPosts : [contentPool[0] || prompt.trim()];
 
       appendCampaignLog("INFO", `Đang gửi chiến dịch ${selectedAccounts.length} tài khoản × ${activeGroups.length} nhóm tới worker...`);
       const campaign = await runGroupCampaign({
@@ -518,13 +644,8 @@ export default function GroupPostModule() {
         account_ids: selectedAccounts.map((account) => account.id),
         account_uids: selectedAccounts.map((account) => account.uid),
         groups: activeGroups,
-<<<<<<< HEAD
         posts: finalPosts,
-        media: savedMediaPaths.length ? savedMediaPaths : mediaFiles.map((file) => file.name),
-=======
-        posts,
         media: [...savedMedia, ...savedMediaPaths],
->>>>>>> f54b1289b8ca16cdf658e016b786d10af8cb6b72
         settings: {
           model,
           credential_id: apiSource.selectedId,
@@ -567,61 +688,7 @@ export default function GroupPostModule() {
     }
   };
 
-  const resetAfterCampaign = () => {
-    setIsAccountLocked(false);
-    setIsSettingsLocked(false);
-    setIsGroupSourceLocked(false);
-    setIsMediaLocked(false);
-    setIsContentLocked(false);
-    setIsPostingSettingsLocked(false);
-  };
-
-  const resetAfterAccounts = () => {
-    setIsSettingsLocked(false);
-    setIsGroupSourceLocked(false);
-    setIsMediaLocked(false);
-    setIsContentLocked(false);
-    setIsPostingSettingsLocked(false);
-  };
-
-  const resetAfterSettings = () => {
-    setIsGroupSourceLocked(false);
-    setIsMediaLocked(false);
-    setIsContentLocked(false);
-    setIsPostingSettingsLocked(false);
-  };
-
-  const resetAfterGroupSource = () => {
-    setIsMediaLocked(false);
-    setIsContentLocked(false);
-    setIsPostingSettingsLocked(false);
-  };
-
-  const resetAfterMedia = () => {
-    setIsContentLocked(false);
-    setIsPostingSettingsLocked(false);
-  };
-
-  const resetAfterContent = () => {
-    setIsPostingSettingsLocked(false);
-  };
-
-  const allStepsCompleted = Boolean(
-    campaignLocked
-    && isAccountLocked
-    && settingsConfirmed
-    && isGroupSourceLocked
-    && isMediaLocked
-    && isContentLocked
-    && isPostingSettingsLocked
-  );
-
-  const canStart = runState === "idle"
-    && allStepsCompleted
-    && selectedAccounts.length > 0
-    && hasGroups
-    && hasApiKey
-    && !settingsLoading;
+  const canStart = runState === "idle";
 
   return (
     <div className="space-y-6">
@@ -642,22 +709,12 @@ export default function GroupPostModule() {
         campaignDescription={campaignDescription}
         setCampaignDescription={setCampaignDescription}
         campaignId={campaignId}
-        isLocked={campaignLocked}
-        setIsLocked={(locked) => {
-          setCampaignLocked(locked);
-          if (!locked) resetAfterCampaign();
-        }}
         isRerun={isRerun}
         stepNumber="1"
-        onContinue={() => {
-          const el = document.getElementById("step-2-accounts");
-          if (el) el.scrollIntoView({ behavior: "smooth" });
-        }}
       />
 
       {/* Bước 2: Chọn tài khoản / người dùng đi seeding */}
       <div id="step-2-accounts" className="scroll-mt-6">
-        <StepGuard enabled={Boolean(campaignLocked && campaignName?.trim())} requiredStep="1">
         <GroupAccountSection
           stepNumber="2"
           accounts={accounts}
@@ -665,44 +722,23 @@ export default function GroupPostModule() {
           selectedAccountKeys={selectedAccountKeys}
           setSelectedAccountKeys={setSelectedAccountKeys}
           onRefreshAccounts={loadAccounts}
-          isLocked={isAccountLocked}
-          setIsLocked={(locked) => {
-            setIsAccountLocked(locked);
-            if (!locked) resetAfterAccounts();
-          }}
-          isStep1Completed={Boolean(campaignLocked && campaignName?.trim())}
-          onContinue={() => {
-            const el = document.getElementById("step-3-settings");
-            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-          }}
         />
-        </StepGuard>
       </div>
 
       {/* Bước 3: Cấu hình API & thông số chung */}
       <div id="step-3-settings" className="scroll-mt-6">
-        <StepGuard enabled={isAccountLocked} requiredStep="2">
         <GroupSettingsSection
           stepNumber="3"
           apiSource={apiSource}
           threads={threads}
           setThreads={setThreads}
           settingsLoading={settingsLoading}
-          settingsAction={settingsAction}
           settingsFeedback={settingsFeedback}
-          onSaveSettings={handleSaveSettings}
-          isLocked={settingsConfirmed}
-          setIsLocked={(locked) => {
-            setIsSettingsLocked(locked);
-            if (!locked) resetAfterSettings();
-          }}
         />
-        </StepGuard>
       </div>
 
       {/* Bước 4: Nguồn nhóm */}
       <div id="step-4-group-source" className="scroll-mt-6">
-        <StepGuard enabled={settingsConfirmed} requiredStep="3">
         <GroupSourceSection
           stepNumber="4"
           groupSource={groupSource}
@@ -718,24 +754,13 @@ export default function GroupPostModule() {
           customGroups={customGroups}
           setCustomGroups={setCustomGroups}
           selectedAccountKeys={selectedAccountKeys}
-          setSelectedAccountKeys={setSelectedAccountKeys}
           accounts={accounts}
-          isLocked={isGroupSourceLocked}
-          setIsLocked={(locked) => {
-            setIsGroupSourceLocked(locked);
-            if (!locked) resetAfterGroupSource();
-          }}
-          onContinue={() => {
-            const el = document.getElementById("step-5-media");
-            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-          }}
+          isLocked={false}
         />
-        </StepGuard>
       </div>
 
       {/* Bước 5: Chọn media */}
       <div id="step-5-media" className="scroll-mt-6">
-        <StepGuard enabled={isGroupSourceLocked} requiredStep="4">
         <GroupMediaSection
           stepNumber="5"
           mediaFiles={mediaFiles}
@@ -744,22 +769,12 @@ export default function GroupPostModule() {
           setMinMedia={setMinMedia}
           maxMedia={maxMedia}
           setMaxMedia={setMaxMedia}
-          isLocked={isMediaLocked}
-          setIsLocked={(locked) => {
-            setIsMediaLocked(locked);
-            if (!locked) resetAfterMedia();
-          }}
-          onContinue={() => {
-            const el = document.getElementById("step-6-content");
-            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-          }}
+          isLocked={false}
         />
-        </StepGuard>
       </div>
 
       {/* Bước 6: Tạo nội dung bằng AI */}
       <div id="step-6-content" className="scroll-mt-6">
-        <StepGuard enabled={isMediaLocked} requiredStep="5">
         <GroupContentSection
           stepNumber="6"
           prompt={prompt}
@@ -774,23 +789,13 @@ export default function GroupPostModule() {
           hasGeneratedContent={hasGeneratedContent}
           setHasGeneratedContent={setHasGeneratedContent}
           onGeneratePosts={generatePosts}
-          isLocked={isContentLocked}
-          setIsLocked={(locked) => {
-            setIsContentLocked(locked);
-            if (!locked) resetAfterContent();
-          }}
-          onContinue={() => {
-            const el = document.getElementById("step-7-posting");
-            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-          }}
+          isLocked={false}
           editorRef={editorRef}
         />
-        </StepGuard>
       </div>
 
       {/* Bước 7: Cài đặt đăng bài */}
       <div id="step-7-posting" className="scroll-mt-6">
-        <StepGuard enabled={isContentLocked} requiredStep="6">
         <GroupPostingSettingsSection
           stepNumber="7"
           scheduleEnabled={scheduleEnabled}
@@ -805,23 +810,15 @@ export default function GroupPostModule() {
           setScheduleDate={setScheduleDate}
           scheduleTime={scheduleTime}
           setScheduleTime={setScheduleTime}
-          isLocked={isPostingSettingsLocked}
-          setIsLocked={setIsPostingSettingsLocked}
-          onContinue={() => {
-            const el = document.getElementById("step-8-summary");
-            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-          }}
+          isLocked={false}
         />
-        </StepGuard>
       </div>
 
       {/* Bước 8: Thông tin cấu hình tổng hợp */}
       <div id="step-8-summary" className="scroll-mt-6">
-        <StepGuard enabled={isPostingSettingsLocked} requiredStep="7">
         <GroupSummarySection
           stepNumber="8"
           campaignName={campaignName}
-          campaignId={campaignId}
           selectedAccountsCount={selectedAccounts.length}
           liveAccountsCount={liveAccountsCount}
           maxPosts={maxPosts}
@@ -845,7 +842,6 @@ export default function GroupPostModule() {
           scheduleDate={scheduleDate}
           scheduleTime={scheduleTime}
         />
-        </StepGuard>
       </div>
 
       {/* Bước 9: Tiến trình */}

@@ -2,10 +2,6 @@
 
 import React, { useRef, useState, useEffect } from "react";
 import {
-  Check,
-  Edit3,
-  Check,
-  Edit3,
   Sparkles,
   RotateCcw,
   ImageIcon,
@@ -19,7 +15,6 @@ import {
   ListOrdered,
   Minus,
 } from "lucide-react";
-import { toast } from "@/lib/toast";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -99,12 +94,7 @@ export default function GroupContentSection({
   isGenerating,
   hasGeneratedContent,
   setHasGeneratedContent,
-  hasGeneratedContent,
-  setHasGeneratedContent,
   onGeneratePosts,
-  isLocked = false,
-  setIsLocked,
-  onContinue,
   isLocked = false,
   setIsLocked,
   onContinue,
@@ -115,7 +105,6 @@ export default function GroupContentSection({
   const editorRef = externalEditorRef || localEditorRef;
   const inlineImageRef = useRef(null);
   const postsRef = useRef(posts);
-  const isTypingRef = useRef(false);
   const isTypingRef = useRef(false);
   const linkRangeRef = useRef(null);
 
@@ -129,12 +118,7 @@ export default function GroupContentSection({
   }, [posts]);
 
   // Đồng bộ nội dung vào editor khi chuyển tab bài viết, khi AI tạo bài mới, hoặc khi editor mount.
-  // Đồng bộ nội dung vào editor khi chuyển tab bài viết, khi AI tạo bài mới, hoặc khi editor mount.
   useEffect(() => {
-    if (isTypingRef.current) {
-      isTypingRef.current = false;
-      return;
-    }
     if (isTypingRef.current) {
       isTypingRef.current = false;
       return;
@@ -144,12 +128,7 @@ export default function GroupContentSection({
       if (editorRef.current.innerHTML !== targetHtml) {
         editorRef.current.innerHTML = targetHtml;
       }
-      const targetHtml = editorHtml(posts[activePost] || "");
-      if (editorRef.current.innerHTML !== targetHtml) {
-        editorRef.current.innerHTML = targetHtml;
-      }
     }
-  }, [activePost, posts, hasGeneratedContent, editorRef]);
   }, [activePost, posts, hasGeneratedContent, editorRef]);
 
   const isDuplicateContent = aiCount === "duplicate" || aiCount === "1" || Number(aiCount) === 1;
@@ -236,28 +215,7 @@ export default function GroupContentSection({
       toast.success(`Đã áp dụng nội dung gốc cho ${count} bài viết!`, "XÁC NHẬN NỘI DUNG");
     }
     setPosts(nextPosts);
-    setHasGeneratedContent(true);
-  };
-
-  const handleSave = () => {
-    const currentPostContent = posts[activePost] || posts[0] || prompt.trim();
-    if (!currentPostContent?.trim()) {
-      toast.warning("Vui lòng tạo hoặc nhập nội dung bài viết trước khi lưu!", "CHƯA CÓ NỘI DUNG");
-      return;
-    }
-    if (!hasGeneratedContent) {
-      const count = isDuplicateContent ? 1 : numCount;
-      const nextPosts = count === 1 ? [currentPostContent] : Array.from({ length: count }, (_, i) => posts[i]?.trim() || currentPostContent);
-      setPosts(nextPosts);
-      setHasGeneratedContent(true);
-    }
-    toast.success("Đã lưu cấu hình nội dung bài viết thành công.", "LƯU THÀNH CÔNG");
-    setIsLocked?.(true);
-    onContinue?.();
-  };
-
-  const handleEdit = () => {
-    setIsLocked?.(false);
+    setHasGeneratedContent(false);
   };
 
   const updateActivePost = (value) => {
@@ -273,10 +231,6 @@ export default function GroupContentSection({
   const runEditorCommand = (command, value = null) => {
     editorRef.current?.focus();
     document.execCommand(command, false, value);
-    if (editorRef.current) {
-      isTypingRef.current = true;
-      updateActivePost(editorRef.current.innerHTML);
-    }
     if (editorRef.current) {
       isTypingRef.current = true;
       updateActivePost(editorRef.current.innerHTML);
@@ -358,17 +312,6 @@ export default function GroupContentSection({
       <SectionCard
         number={stepNumber}
         title="Tạo nội dung bài viết"
-        aside={isLocked ? (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200/60 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
-            <Check className="size-3 text-emerald-600" />
-            Đã lưu cấu hình
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/60 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700">
-            <Edit3 className="size-3 text-amber-600" />
-            Đang thiết lập
-          </span>
-        )}
       >
         <div className="grid gap-4 md:grid-cols-[1fr_320px]">
           <Field
@@ -378,7 +321,10 @@ export default function GroupContentSection({
             <div className="relative">
               <Textarea
                 value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
+                onChange={(event) => {
+                  setPrompt(event.target.value);
+                  setHasGeneratedContent(false);
+                }}
                 disabled={isLocked}
                 maxLength={2000}
                 placeholder="Nhập nội dung gốc của bài viết tại đây..."
@@ -427,25 +373,10 @@ export default function GroupContentSection({
                     ))}
                   </div>
                 </div>
-                {isDuplicateContent && (
-                  <div className="flex items-center gap-1.5 rounded-md bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700 border border-amber-200/60">
-                    <span>⚡ Chế độ trùng lặp nội dung (1 bài cho tất cả nhóm)</span>
-                  </div>
-                )}
               </div>
             </Field>
 
             <div className="space-y-2 pt-1">
-              {/* Nút xác nhận nội dung gốc chính */}
-              <Button
-                type="button"
-                onClick={handleConfirmOriginalContent}
-                disabled={isLocked || !prompt.trim()}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-sm transition-colors"
-              >
-                <Check className="mr-2 size-4" /> Xác nhận nội dung gốc
-              </Button>
-
               {/* Nút tạo nội dung AI hỗ trợ */}
               <Button
                 type="button"
@@ -462,7 +393,7 @@ export default function GroupContentSection({
           </div>
         </div>
 
-        {(hasGeneratedContent || posts.some((p) => p && p.trim())) && (
+        {hasGeneratedContent && posts.some((p) => p && p.trim()) && (
           <div className="mt-5 rounded-lg border border-slate-100 bg-slate-50/50 p-4">
           <div className="mb-3 flex items-center justify-between">
             <div>
@@ -558,49 +489,14 @@ export default function GroupContentSection({
                 <EditorButton label="Chèn ảnh" onClick={() => inlineImageRef.current?.click()}><ImageIcon /></EditorButton>
               </div>
             )}
-            {!isLocked && (
-              <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50 px-3 py-2 text-slate-500">
-                <EditorButton label="Hoàn tác" onClick={() => runEditorCommand("undo")}><Undo2 /></EditorButton>
-                <EditorButton label="Làm lại" onClick={() => runEditorCommand("redo")}><Redo2 /></EditorButton>
-                <span className="mx-1 h-5 border-l border-slate-200" />
-                <select
-                  aria-label="Kiểu đoạn văn"
-                  defaultValue="p"
-                  onChange={(event) => runEditorCommand("formatBlock", event.target.value)}
-                  className="h-7 rounded border-0 bg-transparent px-1 text-[11px] text-slate-600 outline-none hover:bg-white"
-                >
-                  <option value="p">Đoạn văn</option>
-                  <option value="h2">Tiêu đề 2</option>
-                  <option value="h3">Tiêu đề 3</option>
-                  <option value="blockquote">Trích dẫn</option>
-                </select>
-                <span className="mx-1 h-5 border-l border-slate-200" />
-                <EditorButton label="Đậm" onClick={() => runEditorCommand("bold")}><Bold /></EditorButton>
-                <EditorButton label="Nghiêng" onClick={() => runEditorCommand("italic")}><Italic /></EditorButton>
-                <EditorButton label="Gạch chân" onClick={() => runEditorCommand("underline")}><Underline /></EditorButton>
-                <span className="mx-1 h-5 border-l border-slate-200" />
-                <EditorButton label="Danh sách dấu đầu dòng" onClick={() => runEditorCommand("insertUnorderedList")}><List /></EditorButton>
-                <EditorButton label="Danh sách đánh số" onClick={() => runEditorCommand("insertOrderedList")}><ListOrdered /></EditorButton>
-                <EditorButton label="Đường phân cách" onClick={() => runEditorCommand("insertHorizontalRule")}><Minus /></EditorButton>
-                <span className="mx-1 h-5 border-l border-slate-200" />
-                <EditorButton label="Chèn liên kết" onClick={openLinkDialog}><Link2 /></EditorButton>
-                <EditorButton label="Chèn ảnh" onClick={() => inlineImageRef.current?.click()}><ImageIcon /></EditorButton>
-              </div>
-            )}
             {/* Vùng soạn thảo rich text; lưu HTML để giữ định dạng riêng từng bài. */}
             <div
               ref={editorRef}
-              contentEditable={!isLocked}
               contentEditable={!isLocked}
               suppressContentEditableWarning
               role="textbox"
               aria-label={`Nội dung bài ${activePost + 1}`}
               aria-multiline="true"
-              aria-readonly={isLocked}
-              onInput={(event) => {
-                isTypingRef.current = true;
-                updateActivePost(event.currentTarget.innerHTML);
-              }}
               aria-readonly={isLocked}
               onInput={(event) => {
                 isTypingRef.current = true;
@@ -626,24 +522,6 @@ export default function GroupContentSection({
           </div>
         )}
 
-        <div className="mt-4 flex justify-end border-t border-slate-100 pt-3">
-          {isLocked ? (
-            <Button type="button" variant="outline" size="sm" onClick={handleEdit}>
-              <Edit3 className="mr-1.5 size-3.5" />
-              Chỉnh sửa
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleSave}
-              disabled={(!hasGeneratedContent && !posts.some((p) => p && p.trim()) && !prompt.trim()) || isGenerating}
-            >
-              <Check className="mr-1.5 size-3.5" />
-              Lưu cấu hình
-            </Button>
-          )}
-        </div>
       </SectionCard>
 
       {linkDialogOpen && (

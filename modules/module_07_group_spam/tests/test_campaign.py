@@ -41,6 +41,15 @@ class FakePoster:
             raise RuntimeError("Facebook từ chối bài đăng")
         return {"status": "SUCCESS", "message": "Đăng bài thành công"}
 
+    def comment(self, group, content, media, *, auto_like=False):
+        if group.get("fail"):
+            raise RuntimeError("Facebook từ chối bình luận")
+        return {
+            "status": "SUCCESS",
+            "message": "Bình luận bài viết đầu tiên thành công",
+            "result_url": f"{group['url']}/posts/first",
+        }
+
 
 def wait_for_job(manager, job_id, timeout=2):
     deadline = time.time() + timeout
@@ -103,6 +112,52 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual(result["pending_approval"], 1)
         self.assertEqual(result["success"], 1)
         self.assertEqual(result["progress"], 100)
+
+    def test_join_flow_finishes_before_posting_flow_starts(self):
+        events = []
+
+        class RecordingPoster(FakePoster):
+            def join_group(self, group):
+                events.append(("join", group["key"]))
+                return super().join_group(group)
+
+            def post(self, group, content, media):
+                events.append(("post", group["key"]))
+                return super().post(group, content, media)
+
+        manager = CampaignManager(poster_factory=RecordingPoster, persistence=FakePersistence())
+        payload = self.payload()
+        payload["account_uids"] = ["100"]
+        payload["groups"] = [
+            {"key": "g1", "url": "https://facebook.com/groups/g1"},
+            {"key": "g2", "url": "https://facebook.com/groups/g2"},
+        ]
+        payload["settings"]["max_posts"] = 2
+        with patch.object(manager, "_load_accounts", return_value=self.accounts):
+            started = manager.start(payload, "owner-1")
+            result = wait_for_job(manager, started["job_id"])
+
+        self.assertEqual(result["status"], "COMPLETED")
+        self.assertEqual(events, [("join", "g1"), ("join", "g2"), ("post", "g1"), ("post", "g2")])
+
+    def test_comment_campaign_uses_first_post_comment_flow(self):
+        payload = self.payload()
+        payload["action_type"] = "COMMENT"
+        payload["account_uids"] = ["100"]
+        payload["groups"] = [{"key": "g1", "url": "https://facebook.com/groups/g1", "name": "Nhóm 1"}]
+        payload["settings"]["max_posts"] = 1
+        payload["settings"]["auto_like"] = True
+        with patch.object(self.manager, "_load_accounts", return_value=self.accounts):
+            started = self.manager.start(payload, "owner-1")
+            result = wait_for_job(self.manager, started["job_id"])
+        self.assertEqual(started["campaign_id"], "campaign-1")
+        self.assertEqual(started["action_type"], "COMMENT")
+        self.assertEqual(result["status"], "COMPLETED")
+        self.assertIn("bình luận", result["message"])
+        self.assertEqual(result["success"], 1)
+        saved = self.persistence.tasks[0][1]
+        self.assertEqual(saved["message"], "Bình luận bài viết đầu tiên thành công")
+        self.assertTrue(saved["result_url"].endswith("/posts/first"))
 
     def test_scheduled_campaign_can_be_stopped_before_browser_starts(self):
         payload = self.payload()
@@ -188,4 +243,3 @@ class CampaignTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

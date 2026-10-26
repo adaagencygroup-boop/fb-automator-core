@@ -7,19 +7,14 @@ import {
   Users,
   Plus,
   MousePointerClick,
-  CheckCircle2,
-  AlertCircle,
-  Edit3,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { toast } from "@/lib/toast";
 import { SectionCard, initialsOf } from "../../shared/components";
 import { AVATAR_COLORS } from "../../shared/constants";
 import { attachDragSelection } from "../../shared/drag-selection";
-import ConfirmDialog from "@/components/ui/confirm-dialog";
 
 /**
  * ============================================================================
@@ -38,25 +33,11 @@ export default function GroupAccountSection({
   selectedAccountKeys = [],
   setSelectedAccountKeys,
   onRefreshAccounts,
-  onConfirm,
-  onContinue,
-  isLocked,
-  setIsLocked,
-  isStep1Completed = true,
   stepNumber = "2",
 }) {
   const effectiveAccounts = useMemo(() => accounts || [], [accounts]);
 
-  const [internalLocked, setInternalLocked] = useState(false);
-  const locked = isLocked !== undefined ? isLocked : internalLocked;
-  const setLocked = (val) => {
-    if (setIsLocked) setIsLocked(val);
-    setInternalLocked(val);
-  };
-
   const [accountSearch, setAccountSearch] = useState("");
-  const [showNoAccountWarning, setShowNoAccountWarning] = useState(false);
-  const [showStep1Warning, setShowStep1Warning] = useState(false);
 
   // Lọc tài khoản theo từ khóa tìm kiếm
   const filteredAccounts = useMemo(() => {
@@ -86,13 +67,12 @@ export default function GroupAccountSection({
         selectedKeysRef.current = keys;
         setSelectedAccountKeys(keys);
       },
-      disabled: accountsLoading || locked,
+      disabled: accountsLoading,
     });
-  }, [accountsLoading, locked, setSelectedAccountKeys]);
+  }, [accountsLoading, setSelectedAccountKeys]);
 
   // Toggle chọn 1 tài khoản
   const toggleAccount = (key, checked) => {
-    if (locked) return;
     setSelectedAccountKeys((current) =>
       checked ? [...new Set([...current, key])] : current.filter((item) => item !== key)
     );
@@ -100,7 +80,6 @@ export default function GroupAccountSection({
 
   // Click vào dòng tài khoản để toggle nhanh
   const handleRowClick = (accountKey, event) => {
-    if (locked) return;
     if (event.target.closest("button, input, select, textarea, a, [role='button']")) return;
     const isCurrentlySelected = selectedAccountKeys.includes(accountKey);
     toggleAccount(accountKey, !isCurrentlySelected);
@@ -108,7 +87,6 @@ export default function GroupAccountSection({
 
   // Chọn tất cả tài khoản trong kết quả lọc
   const handleSelectAll = () => {
-    if (locked) return;
     setSelectedAccountKeys(filteredAccounts.map((account) => account.key));
   };
 
@@ -118,59 +96,11 @@ export default function GroupAccountSection({
     if (onRefreshAccounts) onRefreshAccounts();
   };
 
-  // Xác nhận tài khoản và chuyển sang Bước 3 (ràng buộc: phải hoàn thành Bước 1 và chọn ít nhất 1 tài khoản)
-  const handleConfirmAccounts = () => {
-    if (!isStep1Completed) {
-      setShowStep1Warning(true);
-      return;
-    }
-
-    if (!selectedAccountKeys || selectedAccountKeys.length === 0) {
-      setShowNoAccountWarning(true);
-      return;
-    }
-
-    toast.success(
-      `Đã xác nhận ${selectedAccountKeys.length} tài khoản Facebook. Đang chuyển sang Bước 3...`,
-      "XÁC NHẬN THÀNH CÔNG"
-    );
-
-    setLocked(true);
-
-    if (onConfirm) {
-      onConfirm(selectedAccountKeys);
-    }
-
-    if (onContinue) {
-      onContinue();
-    } else {
-      setTimeout(() => {
-        const step3El = document.getElementById("step-3-settings");
-        if (step3El) {
-          step3El.scrollIntoView({ behavior: "smooth", block: "start" });
-        }
-      }, 120);
-    }
-  };
-
   return (
     <SectionCard
       number={stepNumber}
       title="Chọn tài khoản"
       description="Chọn danh sách tài khoản Facebook sẽ thực hiện đăng bài và tương tác"
-      aside={
-        locked ? (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 border border-emerald-200/60">
-            <Check className="size-3 text-emerald-600" />
-            Đã xác nhận
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700 border border-amber-200/60">
-            <Edit3 className="size-3 text-amber-600" />
-            Đang thiết lập
-          </span>
-        )
-      }
     >
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative min-w-[240px] flex-1">
@@ -178,7 +108,6 @@ export default function GroupAccountSection({
           <Input
             value={accountSearch}
             onChange={(event) => setAccountSearch(event.target.value)}
-            disabled={locked}
             placeholder="Tìm kiếm UID, tên tài khoản Facebook..."
             className="pl-9 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
           />
@@ -187,7 +116,6 @@ export default function GroupAccountSection({
           type="button"
           variant="outline"
           size="sm"
-          disabled={locked}
           onClick={handleSelectAll}
           className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -197,7 +125,7 @@ export default function GroupAccountSection({
           type="button"
           variant="outline"
           size="icon"
-          disabled={locked || accountsLoading}
+          disabled={accountsLoading}
           className="size-8 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
           title="Đồng bộ danh sách từ Module 2"
           onClick={handleRefresh}
@@ -217,7 +145,6 @@ export default function GroupAccountSection({
                       filteredAccounts.length > 0 &&
                       filteredAccounts.every((account) => selectedAccountKeys.includes(account.key))
                     }
-                    disabled={locked}
                     onCheckedChange={(checked) =>
                       setSelectedAccountKeys(checked ? filteredAccounts.map((account) => account.key) : [])
                     }
@@ -236,16 +163,13 @@ export default function GroupAccountSection({
                     key={account.key}
                     data-account-key={account.key}
                     onClick={(e) => handleRowClick(account.key, e)}
-                    className={`transition-colors select-none ${
-                      locked ? "cursor-default" : "cursor-pointer"
-                    } ${
+                    className={`cursor-pointer transition-colors select-none ${
                       selected ? "bg-blue-50/70 hover:bg-blue-100/60" : "bg-white hover:bg-slate-50"
                     }`}
                   >
                     <td className="px-4 py-2.5">
                       <Checkbox
                         checked={selected}
-                        disabled={locked}
                         onCheckedChange={(checked) => toggleAccount(account.key, checked)}
                       />
                     </td>
@@ -339,68 +263,11 @@ export default function GroupAccountSection({
         </span>
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
-        <div
-          className={`text-[11px] ${
-            locked
-              ? "text-emerald-600 font-medium"
-              : "text-slate-500"
-          }`}
-        >
-          {locked
-            ? `Đã xác nhận ${selectedAccountKeys.length} tài khoản Facebook. Bấm Chỉnh sửa nếu muốn thay đổi.`
-            : selectedAccountKeys.length > 0
-              ? `Đã chọn ${selectedAccountKeys.length}/${effectiveAccounts.length} tài khoản`
-              : "Chưa chọn tài khoản nào"}
-        </div>
-        <div className="flex gap-2">
-          {locked ? (
-            <Button type="button" variant="outline" size="sm" onClick={() => setLocked(false)}>
-              <Edit3 className="mr-1.5 size-3.5" /> Chỉnh sửa
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              size="sm"
-              disabled={accountsLoading}
-              onClick={handleConfirmAccounts}
-              className="bg-primary text-white hover:bg-primary/90"
-            >
-              <Check className="mr-1.5 size-3.5" /> Xác nhận
-            </Button>
-          )}
-        </div>
+      <div className="mt-4 border-t border-slate-100 pt-4 text-[11px] text-slate-500">
+        {selectedAccountKeys.length > 0
+          ? `Đã chọn ${selectedAccountKeys.length}/${effectiveAccounts.length} tài khoản`
+          : "Chưa chọn tài khoản nào"}
       </div>
-
-      {/* Popup cảnh báo khi chưa thực hiện Bước 1 mà ấn xác nhận Bước 2 */}
-      <ConfirmDialog
-        isOpen={showStep1Warning}
-        onClose={() => setShowStep1Warning(false)}
-        onConfirm={() => {
-          setShowStep1Warning(false);
-          const step1El = document.getElementById("step-1-campaign");
-          if (step1El) {
-            step1El.scrollIntoView({ behavior: "smooth", block: "start" });
-          }
-        }}
-        title="Chưa hoàn thành Bước 1"
-        description="Bạn chưa thực hiện Bước 1 (Tạo chiến dịch). Vui lòng nhập tên chiến dịch và bấm Xác nhận ở Bước 1 trước khi xác nhận danh sách tài khoản ở Bước 2."
-        confirmText="Đến Bước 1"
-        cancelText="Đóng"
-        variant="warning"
-      />
-
-      {/* Popup cảnh báo khi chưa chọn tài khoản mà ấn xác nhận */}
-      <ConfirmDialog
-        isOpen={showNoAccountWarning}
-        onClose={() => setShowNoAccountWarning(false)}
-        onConfirm={() => setShowNoAccountWarning(false)}
-        title="Chưa chọn tài khoản Facebook"
-        description="Bạn chưa chọn tài khoản Facebook nào. Vui lòng chọn ít nhất 1 tài khoản ở danh sách trên trước khi xác nhận để tiếp tục sang Bước 3."
-        confirmText="Đã hiểu"
-        variant="warning"
-        hideCancel
-      />
     </SectionCard>
   );
 }

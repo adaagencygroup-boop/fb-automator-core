@@ -4,7 +4,6 @@ import React from "react";
 import {
   Info,
   FolderPlus,
-  Hash,
   Users,
   ListFilter,
   Sparkles,
@@ -14,11 +13,11 @@ import {
   Clock3,
   CalendarDays,
 } from "lucide-react";
+import { Tooltip } from "@/components/ui/tooltip";
 import { SectionCard } from "../../shared/components";
 
 export default function GroupSummarySection({
   campaignName,
-  campaignId,
   selectedAccountsCount = 0,
   liveAccountsCount = 0,
   maxPosts = 0,
@@ -49,11 +48,6 @@ export default function GroupSummarySection({
       <FolderPlus key="camp" className="size-3.5" />,
       "Chiến dịch",
       campaignName ? campaignName : "Chưa đặt tên",
-    ],
-    [
-      <Hash key="cid" className="size-3.5" />,
-      "Mã chiến dịch",
-      campaignId || "Tự động tạo mới",
     ],
     [
       <Users key="a" className="size-3.5" />,
@@ -104,8 +98,42 @@ export default function GroupSummarySection({
     ],
   ];
 
+  const safetyTooltip = (
+    <div className="space-y-2.5 text-left">
+      <p className="flex items-center gap-1.5 border-b border-slate-200 pb-2 text-xs font-semibold text-slate-800">
+        <Info className="size-3.5 text-primary" />
+        Lưu ý vận hành an toàn
+      </p>
+      <p>Cần nhập API Key hợp lệ để tạo tự động nội dung bài đăng bằng AI.</p>
+      <p>Thiết lập luồng (1–3) và thời gian nghỉ tối thiểu 10 phút để tránh checkpoint.</p>
+      <p>Bật chế độ xáo trộn ngẫu nhiên để nội dung mỗi nhóm là duy nhất.</p>
+      <p>Kiểm tra trạng thái tài khoản Live trước khi nhấn bắt đầu tác vụ.</p>
+    </div>
+  );
+
   return (
-    <SectionCard number={stepNumber} title="Thông tin cấu hình tổng hợp" aside={<Info className="size-4 text-primary" />}>
+    <SectionCard
+      number={stepNumber}
+      title="Thông tin cấu hình tổng hợp"
+      aside={(
+        <Tooltip
+          content={safetyTooltip}
+          position="bottom"
+          align="right"
+          variant="light"
+          containerClassName="inline-flex items-center"
+          className="max-w-[270px] bg-slate-50 p-4 text-[11px] text-slate-600 shadow-xl"
+        >
+          <button
+            type="button"
+            aria-label="Xem lưu ý vận hành an toàn"
+            className="inline-flex rounded-full text-primary transition-colors hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          >
+            <Info className="size-4" />
+          </button>
+        </Tooltip>
+      )}
+    >
       <div className="grid gap-x-10 gap-y-3 text-[11px] md:grid-cols-2">
         {summaryItems.map(([icon, label, value]) => (
           <div key={label} className="flex items-center justify-between border-b border-slate-100 pb-2.5">

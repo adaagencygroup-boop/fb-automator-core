@@ -1,8 +1,7 @@
 "use client";
 
 import React from "react";
-import { CalendarDays, Check, Clock3, Edit3 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { CalendarDays, Clock3 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { SectionCard, CheckLabel } from "../../shared/components";
 
@@ -20,19 +19,8 @@ export default function GroupPostingSettingsSection({
   scheduleTime,
   setScheduleTime,
   isLocked = false,
-  setIsLocked,
-  onContinue,
   stepNumber = "7",
 }) {
-  const handleSave = () => {
-    setIsLocked?.(true);
-    onContinue?.();
-  };
-
-  const handleEdit = () => {
-    setIsLocked?.(false);
-  };
-
   return (
     <SectionCard
       number={stepNumber}
@@ -153,19 +141,6 @@ export default function GroupPostingSettingsSection({
         </div>
       </div>
 
-      <div className="mt-4 flex justify-end border-t border-slate-100 pt-3">
-        {isLocked ? (
-          <Button type="button" variant="outline" size="sm" onClick={handleEdit}>
-            <Edit3 className="mr-1.5 size-3.5" />
-            Chỉnh sửa
-          </Button>
-        ) : (
-          <Button type="button" size="sm" onClick={handleSave}>
-            <Check className="mr-1.5 size-3.5" />
-            Lưu cấu hình
-          </Button>
-        )}
-      </div>
     </SectionCard>
   );
 }

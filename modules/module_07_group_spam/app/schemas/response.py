@@ -118,6 +118,7 @@ class CampaignResultResponse(BaseModel):
 
 class CampaignStatusResponse(BaseModel):
     campaign_id: str | None = None
+    run_number: int | None = None
     action_type: str | None = None
     job_id: str | None = None
     status: str
@@ -141,6 +142,7 @@ class CampaignStatusResponse(BaseModel):
 
 class CampaignStartedResponse(BaseModel):
     campaign_id: str = ""
+    run_number: int = 1
     action_type: str = "POST"
     job_id: str
     status: str
