@@ -305,7 +305,8 @@ export async function getMessages(conversationId) {
           toUtcIso(m.created_at) ||
           (m.timestamp ? new Date(m.timestamp).toISOString() : new Date().toISOString()),
         reaction: m.reactions || null,
-        status: "sent",
+        status: m.direction === "outbound" ? (m.is_read ? "seen" : "sent") : undefined,
+        isRead: Boolean(m.is_read),
       };
     });
     return { messages, isMock: false };

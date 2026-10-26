@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict, Any
 import json
+from sqlalchemy import or_
 from modules.module_06_omnichannel_chat.database import SessionLocal
 from modules.module_06_omnichannel_chat.repositories import (
     MessageRepository,
@@ -88,6 +89,57 @@ async def process_webhook_event(event: Dict[str, Any]):
                             }
                             await manager.send_personal_message(ws_payload, fb_user_id)
 
+                # 1.2 Handle read receipts (seen status) from customer
+                read_event = messaging.get("read")
+                if read_event:
+                    watermark = read_event.get("watermark")
+                    mid = read_event.get("mid")
+                    if sender_id and str(sender_id) == str(page_id):
+                        customer_psid = str(recipient_id) if recipient_id else None
+                        target_page_id = str(page_id)
+                    else:
+                        customer_psid = str(sender_id) if sender_id else None
+                        target_page_id = str(page_id) if page_id else (str(recipient_id) if recipient_id else None)
+
+                    if customer_psid and target_page_id:
+                        query = db.query(Message).filter(
+                            Message.page_id == target_page_id,
+                            Message.sender_id == customer_psid,
+                            Message.direction == "outbound"
+                        )
+                        if watermark:
+                            # Cho phép dung sai 60 giây đề phòng lệch đồng hồ giữa server và Facebook
+                            query = query.filter(
+                                or_(
+                                    Message.timestamp <= (watermark + 60000),
+                                    Message.timestamp == None
+                                )
+                            )
+                        elif mid:
+                            query = query.filter(Message.facebook_message_id == mid)
+
+                        read_msgs = query.all()
+                        for rm in read_msgs:
+                            rm.is_read = True
+                        db.commit()
+
+                        page_record = db.query(Page).filter(Page.page_id == target_page_id).first()
+                        fb_user_id = page_record.facebook_user_id if page_record else "all"
+                        ws_payload = {
+                            "type": "read",
+                            "page_id": target_page_id,
+                            "data": {
+                                "page_id": target_page_id,
+                                "sender_id": customer_psid,
+                                "watermark": watermark,
+                                "mid": mid,
+                                "message_ids": [m.id for m in read_msgs]
+                            }
+                        }
+                        await manager.send_personal_message(ws_payload, fb_user_id)
+                        await manager.broadcast(ws_payload)
+                        print(f"[Facebook Webhook Read] Khách {customer_psid} đã xem tin nhắn của Page {target_page_id} (watermark: {watermark})")
+
                 message_obj = messaging.get("message", {})
                 message_id = message_obj.get("mid")
                 text = message_obj.get("text")
@@ -170,6 +222,18 @@ async def process_webhook_event(event: Dict[str, Any]):
                         timestamp=timestamp,
                         direction=direction,
                     )
+
+                    if direction == "inbound":
+                        try:
+                            db.query(Message).filter(
+                                Message.page_id == str(page_id),
+                                Message.sender_id == str(active_customer_id),
+                                Message.direction == "outbound",
+                                Message.is_read == False
+                            ).update({"is_read": True}, synchronize_session=False)
+                            db.commit()
+                        except Exception as e:
+                            print(f"[Mark Inbound Seen Prior Outbound Error] {e}")
 
                     # Resolve Page mapping
                     page_record = db.query(Page).filter(Page.page_id == str(page_id)).first()

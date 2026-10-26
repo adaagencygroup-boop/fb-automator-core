@@ -573,19 +573,33 @@ function MessageRow({ message, outgoing, radius, showAvatar, avatar, customerNam
         )}
         {/* Trạng thái kiểu Messenger: chỉ hiện dưới tin outbound cuối cùng */}
         {outgoing && isLastOutgoing && message.status !== "failed" && (
-          <span className="mt-0.5 pr-0.5 inline-flex items-center gap-1 text-[11px] leading-4 text-slate-400">
+          <div className="mt-1 flex justify-end">
             {message.status === "sending" ? (
-              "Đang gửi…"
+              <span className="text-[11px] leading-4 text-slate-400 pr-0.5">Đang gửi…</span>
+            ) : message.status === "seen" || message.isRead ? (
+              <div title="Đã xem" className="pr-0.5 pt-0.5 flex justify-end">
+                {avatar ? (
+                  <img
+                    src={avatar}
+                    alt="Đã xem"
+                    className="size-3.5 rounded-full object-cover ring-1 ring-white shrink-0"
+                  />
+                ) : (
+                  <span className="size-3.5 rounded-full bg-slate-200 text-[9px] text-slate-600 font-bold flex items-center justify-center ring-1 ring-white shrink-0">
+                    {String(customerName || "KH").slice(0, 1).toUpperCase()}
+                  </span>
+                )}
+              </div>
             ) : (
-              <>
+              <span className="inline-flex items-center gap-1 text-[11px] leading-4 text-slate-400 pr-0.5">
                 <svg viewBox="0 0 16 16" width="11" height="11" className="shrink-0" aria-hidden="true">
                   <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.5" />
                   <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
                 Đã gửi
-              </>
+              </span>
             )}
-          </span>
+          </div>
         )}
       </div>
 

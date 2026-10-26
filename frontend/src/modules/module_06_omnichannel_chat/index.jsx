@@ -300,8 +300,18 @@ export default function OmnichannelChatModule() {
                     return { ...all, [convId]: next };
                   }
                 }
+                if (incomingMsg.direction === "in") {
+                  const updatedList = currentList.map((m) =>
+                    m.direction === "out" ? { ...m, status: "seen", isRead: true } : m
+                  );
+                  return { ...all, [convId]: [...updatedList, incomingMsg] };
+                }
                 return { ...all, [convId]: [...currentList, incomingMsg] };
               });
+
+              if (activeConvRef.current === convId && msgData.direction === "inbound") {
+                if (!isMock) markConversationRead(convId).catch(() => {});
+              }
 
               // Cập nhật thẻ hội thoại ở sidebar
               setConversations((list) => {
@@ -339,6 +349,31 @@ export default function OmnichannelChatModule() {
                   };
                   return [newConv, ...list];
                 }
+              });
+            } else if (payload.type === "read" && payload.data) {
+              const { page_id, sender_id, watermark, mid } = payload.data;
+              const targetPageId = String(page_id || "");
+              const targetSenderId = String(sender_id || "");
+              const convId = `${targetPageId}_${targetSenderId}`;
+
+              setMessagesByConversation((all) => {
+                const matchedKey = Object.keys(all).find(
+                  (k) => k === convId || (k.includes(targetPageId) && k.includes(targetSenderId))
+                ) || convId;
+
+                const list = all[matchedKey];
+                if (!list || list.length === 0) return all;
+
+                const next = list.map((m) => {
+                  if (m.direction === "out") {
+                    const isTarget = mid ? String(m.id) === String(mid) : true;
+                    if (isTarget) {
+                      return { ...m, status: "seen", isRead: true };
+                    }
+                  }
+                  return m;
+                });
+                return { ...all, [matchedKey]: next };
               });
             } else if (payload.type === "notification" && payload.data) {
               const incomingNotif = mapNotification(payload.data);
