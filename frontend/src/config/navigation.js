@@ -190,6 +190,72 @@ export const NAV_ITEMS = [
         moduleId: "groups",
         icon: HISTORY_ICON,
       },
+      {
+        id: "groups.campaigns",
+        label: "Quản lý chiến dịch",
+        title: "Quản lý chiến dịch Spam Group",
+        description: "Theo dõi, tra cứu, xem chi tiết và chạy lại các chiến dịch.",
+        moduleId: "groups",
+        icon: icon("icon_nav_fanpage_list", 24, 10.5),
+      },
+    ],
+  },
+  {
+    id: "scan",
+    label: "Quét nhóm",
+    icon: icon("icon_nav_group_spam", 30, 13),
+    headerIcon: icon("icon_header_flag", 21, 24),
+    children: [
+      {
+        id: "scan.info",
+        label: "Quét thông tin nhóm",
+        description: "Tìm kiếm và thu thập thông tin nhóm theo từ khóa, link hoặc tệp.",
+        moduleId: "scan",
+        icon: icon("icon_nav_group_post", 16, 16),
+      },
+      {
+        id: "scan.members",
+        label: "Quét thành viên nhóm",
+        description: "Thu thập danh sách thành viên trong các nhóm đã chọn.",
+        moduleId: "scan",
+        icon: icon("icon_nav_fb_accounts", 16.5417, 14.1667),
+      },
+      {
+        id: "scan.posts",
+        label: "Quét bài viết nhóm",
+        description: "Thu thập bài viết trong các nhóm đã chọn.",
+        moduleId: "scan",
+        icon: icon("icon_nav_post_facebook", 14, 14),
+      },
+      {
+        id: "scan.list",
+        label: "Danh sách nhóm quét",
+        description: "Kho nhóm đã quét được, dùng lại cho các luồng khác.",
+        moduleId: "scan",
+        icon: icon("icon_nav_fanpage_list", 24, 10.5),
+      },
+      {
+        id: "scan.post_list",
+        label: "Danh sách bài viết quét",
+        description: "Kho bài viết đã quét từ nhóm.",
+        moduleId: "scan",
+        icon: icon("icon_nav_seeding_post", 16, 16),
+      },
+      {
+        id: "scan.member_list",
+        label: "Danh sách thành viên quét",
+        description: "Kho thành viên đã quét từ nhóm.",
+        moduleId: "scan",
+        icon: icon("icon_nav_seeding_profile", 16, 13),
+      },
+      {
+        id: "scan.history",
+        label: "Lịch sử",
+        title: "Lịch sử quét nhóm",
+        description: "Nhật ký các phiên quét nhóm.",
+        moduleId: "scan",
+        icon: HISTORY_ICON,
+      },
     ],
   },
   {
@@ -334,7 +400,20 @@ const normalizePath = (p = "/") => {
 /** Tìm mục menu theo đường dẫn (bỏ qua dấu "/" cuối). Không khớp -> null */
 export function findNavItemByPath(pathname) {
   const target = normalizePath(pathname);
-  return NAV_ROUTES.find((item) => pathOf(item) === target) || null;
+  const exact = NAV_ROUTES.find((item) => pathOf(item) === target);
+  if (exact) return exact;
+
+  // Nếu là trang con (ví dụ /groups/campaigns/camp-001 -> khớp với /groups/campaigns)
+  const matches = NAV_ROUTES.filter((item) => {
+    const p = pathOf(item);
+    return p !== "/" && target.startsWith(p);
+  });
+  if (matches.length > 0) {
+    // Sắp xếp lấy route dài nhất
+    matches.sort((a, b) => pathOf(b).length - pathOf(a).length);
+    return matches[0];
+  }
+  return null;
 }
 
 /** metadata (tiêu đề tab trình duyệt) cho trang của một mục menu — dùng trong các file src/app/.../page.js */

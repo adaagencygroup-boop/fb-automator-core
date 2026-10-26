@@ -17,7 +17,7 @@ import {
 import AccountPicker, { isEligible } from "./AccountPicker";
 import LogConsole from "./LogConsole";
 import ProgressMonitor from "./ProgressMonitor";
-import ScenarioConfig, { DEFAULT_CONFIG, GROUP_KEYWORD_MAX_LEN, toPayload } from "./ScenarioConfig";
+import ScenarioConfig, { DEFAULT_CONFIG, GROUP_KEYWORD_MAX_LEN, linkListError, toPayload } from "./ScenarioConfig";
 import { NumberInput, PageTitle } from "./parts";
 import { useFarmAccounts } from "../hooks/useFarmAccounts";
 
@@ -123,11 +123,15 @@ export default function FarmEngage() {
   const validate = () => {
     const uids = Object.values(knownAccounts).filter((a) => selected.has(a.uid) && isEligible(a)).map((a) => a.uid);
     if (!uids.length) return "Vui lòng chọn ít nhất 1 tài khoản Live + Đã đăng nhập.";
-    const enabled = ["enabled_newsfeed", "enabled_watch", "enabled_add_friends", "enabled_join_groups", "enabled_check_notif"];
+    const enabled = ["enabled_newsfeed", "enabled_watch", "enabled_story", "enabled_add_friends", "enabled_join_groups", "enabled_leave_groups", "enabled_check_notif"];
     if (!enabled.some((k) => config[k])) return "Kịch bản tương tác đang trống. Vui lòng chọn ít nhất 1 hành động.";
-    if (config.enabled_join_groups && config.group_keyword.trim().length > GROUP_KEYWORD_MAX_LEN) {
+    const groupList = config.group_source === "list";
+    if (config.enabled_join_groups && !groupList && config.group_keyword.trim().length > GROUP_KEYWORD_MAX_LEN) {
       return `Từ khóa tham gia nhóm không được quá ${GROUP_KEYWORD_MAX_LEN} ký tự.`;
     }
+    const listError = (config.enabled_join_groups && groupList && linkListError(config.group_links, "group"))
+      || (config.enabled_add_friends && config.friend_source === "list" && linkListError(config.friend_links, "friend"));
+    if (listError) return listError;
     return { uids };
   };
 
@@ -201,6 +205,8 @@ export default function FarmEngage() {
         total={accountPages.total}
         search={accountPages.search}
         onSearchChange={accountPages.changeSearch}
+        category={accountPages.category}
+        onCategoryChange={accountPages.changeCategory}
         loading={accountPages.loading}
         loadingMore={accountPages.loadingMore}
         loadError={accountPages.loadError}

@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 LogCallback = Callable[[str, str], None]  # (level, message)
 
+# WebRTC không được dùng UDP đi thẳng (không qua proxy): STUN không đọc được IP thật của máy
+WEBRTC_IP_POLICY = "disable_non_proxied_udp"
+
 
 def _notify(on_log: Optional[LogCallback], level: str, message: str):
     if on_log:
@@ -324,10 +327,11 @@ def bring_chrome_to_front(driver=None):
     Kích hoạt cửa sổ Chrome lên tiền cảnh (foreground) trên Windows.
     Sử dụng kỹ thuật SetWindowPos HWND_TOPMOST -> HWND_NOTOPMOST để ép hiển thị
     trên tất cả các cửa sổ ứng dụng khác (kể cả IDE / terminal đang active).
+    Không phóng to / đổi kích thước: cửa sổ giữ kích thước theo dấu vân tay của nick; cửa sổ đang thu nhỏ thì
+    khôi phục về kích thước thường, cửa sổ Chrome khác của người dùng không bị đổi kích thước.
     """
     if driver:
         try:
-            driver.maximize_window()
             driver.switch_to.window(driver.current_window_handle)
         except Exception:
             pass
@@ -339,7 +343,6 @@ def bring_chrome_to_front(driver=None):
 
             user32 = ctypes.windll.user32
             SW_RESTORE = 9
-            SW_MAXIMIZE = 3
             HWND_TOPMOST = -1
             HWND_NOTOPMOST = -2
             SWP_SHOWWINDOW = 0x0040
@@ -351,8 +354,8 @@ def bring_chrome_to_front(driver=None):
                     class_buf = ctypes.create_unicode_buffer(256)
                     user32.GetClassNameW(hwnd, class_buf, 256)
                     if class_buf.value == "Chrome_WidgetWin_1":
-                        user32.ShowWindow(hwnd, SW_RESTORE)
-                        user32.ShowWindow(hwnd, SW_MAXIMIZE)
+                        if user32.IsIconic(hwnd):
+                            user32.ShowWindow(hwnd, SW_RESTORE)
                         user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
                         user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
                         user32.BringWindowToTop(hwnd)
@@ -434,16 +437,23 @@ def open_browser(
     options.add_argument("--disable-sync")
     options.add_argument("--disable-extensions")
     options.add_argument(f"--lang={config.lang_flag}")
+    # Cửa sổ đúng kích thước theo dấu vân tay của nick; không --start-maximized (cờ đó đè --window-size,
+    # mọi nick cùng 1 khung bằng màn hình máy, đã kiểm 2026-10-23)
     options.add_argument(f"--window-size={w},{h}")
     if not headless:
-        options.add_argument("--start-maximized")
         options.add_argument("--window-position=50,50")
+    # WebRTC chỉ đi qua proxy: STUN gửi UDP thẳng ra mạng, để lộ IP thật của máy (chung cho mọi nick trên máy)
+    # dù nick có proxy riêng (đã kiểm 2026-10-23: lộ IPv4 + IPv6 của máy)
+    options.add_argument(f"--force-webrtc-ip-handling-policy={WEBRTC_IP_POLICY}")
     options.add_experimental_option("prefs", {
         "profile.default_content_setting_values.notifications": 2,
         "credentials_enable_service": False,
         "profile.password_manager_enabled": False,
         "profile.exit_type": "Normal",
         "profile.exited_cleanly": True,
+        "webrtc.ip_handling_policy": WEBRTC_IP_POLICY,
+        "webrtc.multiple_routes_enabled": False,
+        "webrtc.nonproxied_udp_enabled": False,
     })
     if headless:
         options.add_argument("--headless=new")

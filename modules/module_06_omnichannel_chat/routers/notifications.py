@@ -122,7 +122,15 @@ def get_notifications(
         .filter(Notification.created_time >= two_weeks_ago)\
         .filter(Notification.page_id.in_(allowed_page_ids))
 
-    if s_type:
+    # FE chi co 2 tab: "comment" va "interaction". Trong DB thi `interaction`
+    # la mot gia tri that, BEN CANH reaction/video/status — tat ca deu thuoc tab
+    # "Tuong tac" cua FE. Khop tuyet doi se nuot mat reaction/video/status
+    # (469/1211 ban ghi), nen phai hieu "interaction" = KHAC comment.
+    if s_type == "comment":
+        query = query.filter(Notification.notification_type == "comment")
+    elif s_type == "interaction":
+        query = query.filter(Notification.notification_type != "comment")
+    elif s_type:
         query = query.filter(Notification.notification_type == s_type)
     if s_filter == "unread":
         query = query.filter(Notification.unread == True)
@@ -142,6 +150,30 @@ def get_notifications(
 
     total = query.count()
     query = query.order_by(Notification.created_time.desc())
+
+    # Phan trang roi thi FE khong con ca danh sach de tu dem badge chua doc nua.
+    # Dem o day tren cung pham vi (2 tuan + page duoc phep + page_id neu co),
+    # nhung KHONG an theo tab/filter/search dang chon — badge phai dung yen khi
+    # nguoi dung doi tab.
+    counted = db.query(Notification)        .filter(Notification.created_time >= two_weeks_ago)        .filter(Notification.page_id.in_(allowed_page_ids))        .filter(Notification.unread == True)
+    unread_counts = {
+        "comment": counted.filter(Notification.notification_type == "comment").count(),
+        "interaction": counted.filter(Notification.notification_type != "comment").count(),
+    }
+
+    # Tong moi tab (so trong ngoac tren sub-tab), AN theo `filter` dang chon
+    # nhung KHONG an theo tab — doi tab thi so hai ben phai dung yen.
+    typed = db.query(Notification)        .filter(Notification.created_time >= two_weeks_ago)        .filter(Notification.page_id.in_(allowed_page_ids))
+    if s_filter == "unread":
+        typed = typed.filter(Notification.unread == True)
+    elif s_filter == "unreplied":
+        typed = typed.filter(Notification.is_replied == False)
+    elif s_filter == "replied":
+        typed = typed.filter(Notification.is_replied == True)
+    type_counts = {
+        "comment": typed.filter(Notification.notification_type == "comment").count(),
+        "interaction": typed.filter(Notification.notification_type != "comment").count(),
+    }
 
     if is_paginated:
         results = query.offset(effective_offset).limit(effective_page_size).all()
@@ -179,6 +211,8 @@ def get_notifications(
         return PaginatedNotificationsOut(
             items=notif_list,
             notifications=notif_list,
+            unread_counts=unread_counts,
+            type_counts=type_counts,
             total=total,
             page=effective_page,
             page_size=effective_page_size,

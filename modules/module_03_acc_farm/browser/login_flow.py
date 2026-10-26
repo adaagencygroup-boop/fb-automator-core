@@ -14,9 +14,9 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
-from core.browser import extract_cookies_as_string, human_sleep, human_type, load_cookies, wait_and_find
+from core.browser import extract_cookies_as_string, human_click, human_sleep, human_type, load_cookies, wait_and_find
 from modules.module_03_acc_farm.browser.locators import LOGIN
 from modules.module_03_acc_farm.browser.otp import generate_totp
 
@@ -30,6 +30,20 @@ CHECKPOINT_HEAVY = "heavy"
 _CHECKPOINT_LABELS = {CHECKPOINT_LIGHT: "nhẹ", CHECKPOINT_HEAVY: "nặng"}
 # Đầu chuỗi lỗi của checkpoint nặng, dùng để tra lịch sử cảnh báo cụm nick trên cùng máy
 HEAVY_CHECKPOINT_PREFIX = "Checkpoint nặng"
+
+
+def _click(driver, element) -> bool:
+    """
+    Bấm bằng chuột giống người (core.browser.human_click); không được thì bấm thật của WebDriver (vẫn là sự kiện
+    chuột thật). Không bấm bằng JS: sự kiện giả (isTrusted = false), không có chuột, đúng lúc đăng nhập bị soi kỹ.
+    """
+    if human_click(driver, element):
+        return True
+    try:
+        element.click()
+        return True
+    except WebDriverException:
+        return False
 
 
 def is_checkpoint_url(url: str) -> bool:
@@ -148,10 +162,7 @@ def ensure_personal_profile(driver: webdriver.Chrome, uid: str = "") -> bool:
                 for b in btns:
                     if b.is_displayed():
                         logger.info(f"[{uid}] Tìm thấy nút chuyển về profile cá nhân ({loc}). Đang click...")
-                        try:
-                            b.click()
-                        except Exception:
-                            driver.execute_script("arguments[0].click();", b)
+                        _click(driver, b)
                         human_sleep(2.5, 4.0)
                         break
             except Exception:
@@ -245,25 +256,13 @@ def _advance_saved_account_chooser(driver: webdriver.Chrome, uid: str, expected_
     if not button:
         raise RuntimeError("Không tìm thấy nút Tiếp tục của tài khoản đã lưu")
     logger.info("[%s] Đã nhận diện tài khoản lưu trên Facebook; chọn Tiếp tục", uid)
-    try:
-        button.click()
-    except WebDriverException:
-        driver.execute_script("arguments[0].click();", button)
+    _click(driver, button)
     try:
         _wait_after_saved_account_continue(driver, timeout=5)
     except TimeoutException:
-        logger.info("[%s] Nút Tiếp tục chưa chuyển trang; thử click trực tiếp vào vị trí nút", uid)
-        point = driver.execute_script(
-            "const r = arguments[0].getBoundingClientRect();"
-            "return {x: r.left + r.width / 2, y: r.top + r.height / 2};", button
-        )
-        if not point:
+        logger.info("[%s] Nút Tiếp tục chưa chuyển trang; bấm lại 1 lần", uid)
+        if not _click(driver, button):
             raise
-        for event in ("mouseMoved", "mousePressed", "mouseReleased"):
-            driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
-                "type": event, "x": point["x"], "y": point["y"],
-                "button": "left", "clickCount": 1,
-            })
         _wait_after_saved_account_continue(driver)
     return True
 
@@ -313,10 +312,9 @@ def _submit_login_form(driver: webdriver.Chrome, uid: str, password: str,
 
     try:
         login_btn = wait_and_find(driver, LOGIN["login_button"], timeout=5)
-        try:
-            login_btn.click()
-        except WebDriverException:
-            driver.execute_script("arguments[0].click();", login_btn)
+        if not _click(driver, login_btn):
+            from selenium.webdriver.common.keys import Keys
+            pass_el.send_keys(Keys.ENTER)
     except TimeoutException:
         from selenium.webdriver.common.keys import Keys
         pass_el.send_keys(Keys.ENTER)
@@ -363,10 +361,7 @@ def _handle_2fa(driver: webdriver.Chrome, two_fa_secret: str) -> bool:
 
             if try_other_el:
                 logger.info("Found 'Try another way' option. Clicking...")
-                try:
-                    try_other_el.click()
-                except Exception:
-                    driver.execute_script("arguments[0].click();", try_other_el)
+                _click(driver, try_other_el)
                 human_sleep(1.5, 2.5)
 
                 # ── 2. Chọn "Authentication app" ──
@@ -382,10 +377,7 @@ def _handle_2fa(driver: webdriver.Chrome, two_fa_secret: str) -> bool:
 
                 if auth_app_el:
                     logger.info("Found 'Authentication app' option. Selecting...")
-                    try:
-                        auth_app_el.click()
-                    except Exception:
-                        driver.execute_script("arguments[0].click();", auth_app_el)
+                    _click(driver, auth_app_el)
                     human_sleep(1.0, 2.0)
 
                 # ── 3. Bấm "Continue" trong popup chọn phương thức ──
@@ -401,10 +393,7 @@ def _handle_2fa(driver: webdriver.Chrome, two_fa_secret: str) -> bool:
 
                 if cont_el:
                     logger.info("Clicking 'Continue' button after selecting Authentication app...")
-                    try:
-                        cont_el.click()
-                    except Exception:
-                        driver.execute_script("arguments[0].click();", cont_el)
+                    _click(driver, cont_el)
                     human_sleep(2.0, 3.5)
 
         except Exception as try_err:
@@ -446,19 +435,7 @@ def _handle_2fa(driver: webdriver.Chrome, two_fa_secret: str) -> bool:
             submit_btn = wait_and_find(driver, LOGIN["two_fa_submit"], timeout=4)
 
         logger.info("Clicking 2FA 'Continue' submit button...")
-        clicked = False
-        try:
-            submit_btn.click()
-            clicked = True
-        except Exception as click_err:
-            logger.debug(f"Direct click on 2FA Continue button failed: {click_err}")
-
-        if not clicked:
-            try:
-                driver.execute_script("arguments[0].click();", submit_btn)
-                clicked = True
-            except Exception as js_err:
-                logger.debug(f"JS click on 2FA Continue button failed: {js_err}")
+        clicked = _click(driver, submit_btn)
 
         if not clicked:
             from selenium.webdriver.common.keys import Keys
@@ -536,10 +513,7 @@ def _handle_trust_device_screen(driver: webdriver.Chrome, max_wait_sec: float = 
                 for el in elements:
                     if el.is_displayed():
                         logger.info("Phát hiện màn hình 'Trust this device' (Lưu trình duyệt). Đang click...")
-                        try:
-                            el.click()
-                        except Exception:
-                            driver.execute_script("arguments[0].click();", el)
+                        _click(driver, el)
                         human_sleep(2.0, 3.5)
                         clicked = True
                         break
@@ -589,10 +563,7 @@ def _handle_post_login_popups(driver: webdriver.Chrome, max_wait_sec: float = 3.
                 for el in elements:
                     if el.is_displayed():
                         logger.info("Found post-login 'Dismiss' popup. Clicking...")
-                        try:
-                            el.click()
-                        except Exception:
-                            driver.execute_script("arguments[0].click();", el)
+                        _click(driver, el)
                         human_sleep(1.0, 2.0)
                         clicked = True
                         break

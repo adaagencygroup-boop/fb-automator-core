@@ -30,10 +30,12 @@ class DatabaseManager:
         if not DATABASE_URL or DATABASE_URL.startswith("sqlite"):
             raise RuntimeError("DATABASE_URL phải là PostgreSQL production. Không dùng SQLite local.")
         try:
+            # maxconn thấp dễ khiến getconn() chờ vô hạn khi nhiều API/chạy song song → FE treo /me.
             self._pg_pool = pool.ThreadedConnectionPool(
-                minconn=1,
-                maxconn=5,
-                dsn=DATABASE_URL
+                minconn=2,
+                maxconn=20,
+                dsn=DATABASE_URL,
+                connect_timeout=10,
             )
             self._is_postgres = True
             print("[Database] Connected successfully to Supabase PostgreSQL!")

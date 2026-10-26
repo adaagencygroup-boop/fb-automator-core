@@ -4,8 +4,9 @@ import { cn } from "@/lib/utils";
 import { useIncrementalList } from "@/lib/use-incremental-list";
 import NotificationList from "./NotificationList";
 import StatusFilter from "./StatusFilter";
-import { CONVERSATION_TAGS } from "../constants";
 import { Star } from "lucide-react";
+import { CONVERSATION_TAGS } from "../constants";
+import { ConversationSkeleton } from "./Skeletons";
 
 // Figma: Section - COLUMN 3: CONVERSATION LIST (HỘI THOẠI & THÔNG BÁO) (1072:12294)
 
@@ -101,6 +102,7 @@ function FilterBar({
 }
 
 function ConversationItem({ conversation, pageName, active, first, onSelect }) {
+  const isUnread = Boolean(conversation.unread);
   return (
     <li>
       <button
@@ -108,9 +110,9 @@ function ConversationItem({ conversation, pageName, active, first, onSelect }) {
         onClick={onSelect}
         aria-current={active ? "true" : undefined}
         className={cn(
-          "w-full flex flex-col gap-1 px-3 text-left transition-colors",
+          "w-full flex flex-col gap-1 px-3 text-left transition-colors relative",
           first ? "py-3" : "pt-[13px] pb-3 border-t border-slate-100",
-          active ? "bg-blue-50/30" : "hover:bg-slate-50",
+          active ? "bg-blue-50/40" : isUnread ? "bg-blue-50/20 hover:bg-blue-50/30" : "hover:bg-slate-50",
           FOCUS,
         )}
       >
@@ -118,20 +120,26 @@ function ConversationItem({ conversation, pageName, active, first, onSelect }) {
           <span className="flex items-center gap-1.5 min-w-0">
             <img src="/icons/icon_facebook_source.svg" alt="Facebook" width={11.625} height={11.5547} className="block shrink-0" />
             <span
-              className="truncate text-xs leading-4 font-bold text-slate-900"
+              className={cn(
+                "truncate text-xs leading-4",
+                isUnread ? "font-bold text-slate-900" : "font-medium text-slate-800"
+              )}
               title={conversation.customerName || `KH: ${conversation.customer}`}
             >
               {conversation.customerName || `KH: ${shortCustomer(conversation.customer)}`}
             </span>
+            {isUnread && (
+              <span className="size-2 rounded-full bg-blue-600 shrink-0" title="Chưa xem" />
+            )}
             {conversation.starred && (
               <Star size={12} className="text-amber-400 fill-amber-400 shrink-0" />
             )}
           </span>
-          <time dateTime={conversation.updatedAt} className="shrink-0 text-[10px] leading-5 text-slate-400">
+          <time dateTime={conversation.updatedAt} className={cn("shrink-0 text-[10px] leading-5", isUnread ? "text-blue-600 font-semibold" : "text-slate-400")}>
             {formatTime(conversation.updatedAt)}
           </time>
         </span>
-        <span className="w-full truncate text-xs leading-4 text-slate-600">
+        <span className={cn("w-full truncate text-xs leading-4", isUnread ? "text-slate-900 font-semibold" : "text-slate-600")}>
           {conversation.lastMessage}
         </span>
         <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
@@ -175,6 +183,12 @@ export default function ConversationList({
   onSortChange,
   conversations,
   notifications,
+  notificationCounts,
+  notificationTypeCounts,
+  notificationsLoading,
+  onLoadMoreNotifications,
+  hasMoreNotifications,
+  loadingMoreNotifications,
   pagesById,
   activeConversationId,
   onSelectConversation,
@@ -188,6 +202,10 @@ export default function ConversationList({
   className,
 }) {
   const { slice: convSlice, sentinelRef: convSentinel, hasMore: convHasMore } = useIncrementalList(conversations, 30);
+  // Đếm từ Backend chứ không từ danh sách: danh sách giờ chỉ là một trang
+  const unreadNotifications = Object.values(notificationCounts || {}).reduce((a, b) => a + b, 0);
+  const totalNotifications = Object.values(notificationTypeCounts || {}).reduce((a, b) => a + b, 0);
+
   return (
     <section
       aria-label="Hội thoại và thông báo"
@@ -199,8 +217,8 @@ export default function ConversationList({
       <Tabs
         tab={tab}
         onTabChange={onTabChange}
-        notificationCount={notifications.length}
-        hasUnread={notifications.some((n) => n.unread)}
+        notificationCount={totalNotifications}
+        hasUnread={unreadNotifications > 0}
         onBack={onBack}
       />
 
@@ -216,6 +234,9 @@ export default function ConversationList({
             sort={sort}
             onSortChange={onSortChange}
           />
+          {loading ? (
+            <ConversationSkeleton />
+          ) : (
           <ul className="flex-1 min-h-0 overflow-y-auto">
             {loading ? (
               <li className="px-3 py-16 text-center flex flex-col items-center justify-center gap-2">
@@ -242,10 +263,17 @@ export default function ConversationList({
               ))}
             {!loading && convHasMore && <li ref={convSentinel} aria-hidden="true" className="h-4" />}
           </ul>
+          )}
         </>
       ) : (
         <NotificationList
+          loading={notificationsLoading ?? loading}
           notifications={notifications}
+          counts={notificationTypeCounts}
+          unreadCounts={notificationCounts}
+          onLoadMore={onLoadMoreNotifications}
+          hasMore={hasMoreNotifications}
+          loadingMore={loadingMoreNotifications}
           pagesById={pagesById}
           type={notificationType}
           onTypeChange={onNotificationTypeChange}

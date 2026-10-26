@@ -1,7 +1,7 @@
 """
 farming_flow.py
 Kịch bản tương tác nuôi tài khoản Facebook (Module 03 – Tab 1 Tương tác tài khoản):
-lướt Newsfeed, xem Watch, kết bạn gợi ý, tham gia nhóm, check thông báo.
+lướt Newsfeed, xem Watch, xem Story (kèm thả cảm xúc), kết bạn, tham gia nhóm, check thông báo.
 
 Mỗi kịch bản nhận driver đang đăng nhập + FarmControl (tạm dừng / dừng) và trả về
 dict {"status": SUCCESS|BLOCKED|SKIPPED|FAILED, "quantity": int, "details": str}.
@@ -9,19 +9,23 @@ Lỗi mức tài khoản (checkpoint / mất phiên) ném FarmAccountDead để 
 """
 import logging
 import random
+import re
 import threading
 import time
 from typing import Callable, Optional
 from urllib.parse import quote_plus, urlparse
 
-from selenium.common.exceptions import StaleElementReferenceException, WebDriverException
+from selenium.common.exceptions import StaleElementReferenceException, TimeoutException, WebDriverException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.actions.wheel_input import ScrollOrigin
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 
+from core.browser.human import click_point, element_box, hover_element, human_click, mouse_position, mouse_to, press_mouse
 from modules.module_03_acc_farm.browser.locators import LOGIN
-from modules.module_03_acc_farm.farming.locators import FARM_COMMON, FARM_WATCH, FARM_FRIEND, FARM_GROUP, FARM_NOTIF
+from modules.module_03_acc_farm.farming.locators import (
+    FARM_COMMON, FARM_FRIEND, FARM_GROUP, FARM_LEAVE, FARM_NOTIF, FARM_STORY, FARM_WATCH, REACTION_BUTTON,
+)
 from modules.module_03_acc_farm.browser.login_flow import (
     CHECKPOINT_HEAVY, checkpoint_kind, checkpoint_message, is_checkpoint_url, _check_logged_in,
 )
@@ -39,6 +43,7 @@ FB_GROUP_MEMBERS = "https://www.facebook.com/groups/{gid}/members"
 # Delay mặc định giữa các thao tác rủi ro cao (UI cho chỉnh, server ép tối thiểu FRIEND/GROUP_DELAY_FLOOR)
 FRIEND_DELAY_RANGE = (5.0, 15.0)
 GROUP_DELAY_RANGE = (10.0, 20.0)
+LEAVE_DELAY_RANGE = (10.0, 30.0)
 # Thỉnh thoảng nghỉ dài + cuộn đọc như người xem profile, để nhịp không đều đặn như máy
 LONG_PAUSE_RATE = 0.25
 LONG_PAUSE_RANGE = (30.0, 60.0)
@@ -49,6 +54,11 @@ BROWSE_BEFORE_PICK_RATE = 0.3
 PAGE_LOAD_WAIT = 15.0
 NOTIF_OPEN_RANGE = (3.0, 7.0)
 NOTIF_CLICK_RATE = 0.20
+# Thả cảm xúc: tỉ lệ mỗi bài / video / khung story; thanh cảm xúc chờ tối đa REACTION_BAR_WAIT giây mỗi lần rê chuột,
+# không hiện thì rê ra rồi rê lại, tối đa REACTION_HOVER_TRIES lần rồi bỏ qua bài đó
+REACT_RATE = 0.50
+REACTION_BAR_WAIT = 3.0
+REACTION_HOVER_TRIES = 2
 
 
 class FarmStopped(Exception):
@@ -379,20 +389,8 @@ def human_scroll(driver, distance: int, allow_keys: bool = True, element=None):
 
 
 def _human_click(driver, element) -> bool:
-    try:
-        ActionChains(driver).scroll_to_element(element).perform()
-    except WebDriverException:
-        pass
-    time.sleep(random.uniform(0.3, 0.8))
-    try:
-        ActionChains(driver).move_to_element(element).pause(random.uniform(0.2, 0.6)).click().perform()
-        return True
-    except WebDriverException:
-        try:
-            driver.execute_script("arguments[0].click();", element)
-            return True
-        except WebDriverException:
-            return False
+    """Bấm bằng chuột giống người (core.browser.human); không bấm bằng JS. False = không bấm được, bỏ qua phần tử."""
+    return human_click(driver, element)
 
 
 def _same_page(current: str, target: str) -> bool:
@@ -423,13 +421,213 @@ def _on_home_feed(driver, landing_path: str = "") -> bool:
     return path in ("", "/home.php") or (bool(landing_path) and path == landing_path.rstrip("/"))
 
 
+# ─────────────────────────── THẢ CẢM XÚC ────────────────────────────
+
+# Cảm xúc hiện tại của 1 bài / video: nút Like đổi nhãn thành "Remove <Loại>" sau khi thả (đã kiểm 2026-10-22).
+# So nguyên nhãn: "Like: 17 people" là nút đếm, không phải nút thả.
+_REACTION_STATE_JS = r"""
+const box = arguments[0];
+if (!box || !box.isConnected) return null;
+for (const b of box.querySelectorAll('[role="button"][aria-label]')) {
+  const m = b.getAttribute('aria-label').trim().match(/^Remove (Like|Love|Care|Haha|Wow|Sad|Angry)$/);
+  if (m) return m[1];
+}
+return null;
+"""
+
+# Bài trên Newsfeed vừa vào màn hình (khối [aria-posinset] có nút Like của bài nằm trọn trong màn hình), mỗi bài
+# chỉ xét 1 lần. Nút Like đầu tiên trong bài là của bài (nút Like của bình luận nằm sau). Khối không có Like
+# (People you may know, Reels, gợi ý nhóm) tự bị loại. Bài đã thả cảm xúc ("Remove <Loại>") bỏ qua.
+# Nút bị che (ảnh / video / lớp phủ / khối khác) hoặc lệch ngoài màn hình thì chưa xét, không đánh dấu: lần sau xét lại.
+_FEED_REACT_CANDIDATES_JS = r"""
+const vh = innerHeight, out = [];
+const seen = (el) => {
+  const r = el.getBoundingClientRect();
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  if (x < 0 || x > innerWidth) return false;
+  const hit = document.elementFromPoint(x, y);
+  return !!hit && (hit === el || el.contains(hit));
+};
+for (const post of document.querySelectorAll('[aria-posinset]')) {
+  if (post.dataset.m03Seen) continue;
+  const like = Array.from(post.querySelectorAll('[role="button"][aria-label]'))
+    .find((b) => /^(Like|Remove [A-Za-z]+)$/.test(b.getAttribute('aria-label').trim()) && b.getClientRects().length);
+  if (!like) continue;
+  const r = like.getBoundingClientRect();
+  if (r.top < 80 || r.bottom > vh - 10 || !seen(like)) continue;
+  post.dataset.m03Seen = '1';
+  if (like.getAttribute('aria-label').trim() === 'Like') out.push([post, like]);
+}
+return out;
+"""
+
+# Nút Like của video đang xem: tầng tổ tiên gần nhất của video có nút Like / Remove <Loại>. Trình xem reel có 2 video
+# (đang phát + kế tiếp), mỗi video 1 nút Like trong khối riêng (đã kiểm 2026-10-22).
+_VIDEO_LIKE_JS = r"""
+let node = arguments[0];
+for (let depth = 0; node && depth < 25; depth++, node = node.parentElement) {
+  const like = Array.from(node.querySelectorAll('[role="button"][aria-label]'))
+    .find((b) => /^(Like|Remove [A-Za-z]+)$/.test(b.getAttribute('aria-label').trim()));
+  if (like) return [node, like];
+}
+return null;
+"""
+
+
+# Phần tử nhìn thấy thật: điểm giữa nằm trong màn hình (cả dọc lẫn ngang, dưới thanh tiêu đề) và phần tử trên cùng tại
+# điểm đó là chính nó / con của nó. Tránh rê chuột vào "tọa độ" của nút đang bị che: chuột sẽ rơi vào thứ đang hiện ở
+# đó (vd tên người đăng, user gặp 2026-10-22 khi màn hình đang ở giữa ảnh / video to, không thấy nút Like nào).
+_REALLY_VISIBLE_JS = r"""
+const el = arguments[0];
+if (!el || !el.isConnected) return false;
+const r = el.getBoundingClientRect();
+if (r.width < 4 || r.height < 4) return false;
+const x = r.left + r.width / 2, y = r.top + r.height / 2;
+if (x < 0 || x > innerWidth || y < 60 || y > innerHeight - 5) return false;
+const hit = document.elementFromPoint(x, y);
+return !!hit && (hit === el || el.contains(hit));
+"""
+
+# Điểm trống để đặt chuột (như người để chuột ở lề khi lướt): không nằm trên link, nút, ảnh, video, bài viết, menu,
+# cột trái / phải. Dò lề 2 bên cột chính trước rồi quét ngang màn hình. Không có điểm nào thì trả null.
+_SAFE_POINT_JS = r"""
+const BAD = 'a, button, input, textarea, video, img, svg, [role="button"], [role="link"], [role="img"], [role="article"],'
+  + ' [aria-posinset], [role="dialog"], [role="menu"], [role="banner"], [role="navigation"], [role="complementary"]';
+const xs = [];
+const main = document.querySelector('[role="main"]');
+if (main) { const r = main.getBoundingClientRect(); xs.push(r.left - 14, r.right + 14); }
+for (let f = 0.02; f < 1; f += 0.04) xs.push(innerWidth * f);
+const ys = [0.5, 0.35, 0.65, 0.8].map((f) => innerHeight * f);
+for (const x of xs) {
+  if (x < 2 || x > innerWidth - 2) continue;
+  for (const y of ys) {
+    const hit = document.elementFromPoint(x, y);
+    if (hit && !hit.closest(BAD)) return [Math.round(x), Math.round(y)];
+  }
+}
+return null;
+"""
+
+
+def _really_visible(driver, element) -> bool:
+    try:
+        return bool(driver.execute_script(_REALLY_VISIBLE_JS, element))
+    except WebDriverException:
+        return False
+
+
+def _park_mouse(driver) -> bool:
+    """Đưa chuột ra điểm trống trên màn hình để lúc cuộn trang chuột không lướt qua tên / link (bật thẻ hover)."""
+    try:
+        point = driver.execute_script(_SAFE_POINT_JS)
+    except WebDriverException:
+        return False
+    if not point:
+        return False
+    try:
+        mouse_to(driver, point[0], point[1])
+        return True
+    except WebDriverException:
+        return False
+
+
+def _reaction_text(counts: dict) -> str:
+    return ", ".join(f"{kind} {n}" for kind, n in counts.items() if n)
+
+
+def _reaction_result(counts: dict) -> dict:
+    return {"reactions": sum(counts.values()), "reaction_types": {k: v for k, v in counts.items() if v}}
+
+
+def _reaction_bar_button(driver, ctl: FarmControl, like_button, kind: str):
+    """
+    Rê chuột lên nút Like, chờ thanh cảm xúc hiện (tối đa REACTION_BAR_WAIT giây); không hiện thì rê ra rồi rê lại,
+    tối đa REACTION_HOVER_TRIES lần. Trả nút của loại cảm xúc cần thả, hoặc None.
+    Rê ra: sang điểm trống ở lề, không có thì sang ngang dọc thanh nút (Comment / Share); không rê lên trên vì dễ
+    trúng tên người đăng của bài ngắn.
+    """
+    locator = [REACTION_BUTTON.format(kind=kind)]
+    for attempt in range(REACTION_HOVER_TRIES):
+        if attempt:
+            if not _park_mouse(driver):
+                here = mouse_position(driver)
+                if here:
+                    try:
+                        mouse_to(driver, here[0] + random.randint(180, 260), here[1], curve=0.2, overshoot=False)
+                    except WebDriverException:
+                        pass
+            ctl.sleep(random.uniform(0.6, 1.2))
+            if not _really_visible(driver, like_button):
+                return None
+        if not hover_element(driver, like_button):
+            return None
+        timer = ActiveTimer(ctl, REACTION_BAR_WAIT)
+        while timer.remaining() > 0:
+            buttons = _find_visible(driver, locator)
+            if buttons:
+                return buttons[0]
+            ctl.sleep(0.3)
+    return None
+
+
+def _react(driver, ctl: FarmControl, box, like_button, types: list) -> Optional[str]:
+    """
+    Thả 1 cảm xúc ngẫu nhiên trong types lên bài / video chứa nút like_button (box = khối của bài / video).
+    Like thì bấm thẳng nút; loại khác thì rê chuột mở thanh cảm xúc. Trả loại đã thả nếu đọc lại được nhãn
+    "Remove <Loại>", không thì None (không đếm). Nút Like / nút trên thanh không thấy thật thì không rê chuột, không bấm.
+    Xong (thả được hay không) thì đưa chuột ra điểm trống trước khi kịch bản cuộn tiếp.
+    """
+    if not _really_visible(driver, like_button):
+        logger.debug("Thả cảm xúc: nút Like không thấy thật trên màn hình (bị che / lệch), bỏ qua bài")
+        return None
+    kind = random.choice(types)
+    try:
+        if kind == "Like":
+            if not _human_click(driver, like_button):
+                return None
+        else:
+            button = _reaction_bar_button(driver, ctl, like_button, kind)
+            if button is None:
+                logger.info("Thả cảm xúc: thanh cảm xúc không hiện sau %s lần rê chuột, bỏ qua", REACTION_HOVER_TRIES)
+                return None
+            # Thanh vừa hiện còn chạy hiệu ứng: bấm ngay hoặc rê chéo ra khỏi thanh thì Facebook không nhận. Chờ ~1s rồi
+            # rê lên thẳng phía trên nút Like (vẫn trong thanh) trước, sau đó mới sang ngang tới loại cần thả
+            # (đã kiểm 2026-10-22). Trang trôi / thanh tắt trong lúc chờ thì không bấm.
+            ctl.sleep(random.uniform(0.8, 1.2))
+            if not _really_visible(driver, button):
+                logger.info("Thả cảm xúc: nút %s trên thanh cảm xúc không còn hiện, không bấm", kind)
+                return None
+            try:
+                like_box, target = element_box(driver, like_button), click_point(driver, button)
+                if like_box is None or target is None:
+                    return None
+                above_like = (like_box[0] + like_box[2]) / 2 + random.uniform(-3, 3)
+                # Gần như thẳng (curve nhỏ, không đi quá đà) để chuột không rời khỏi thanh cảm xúc
+                mouse_to(driver, above_like, target[1], curve=0.1, overshoot=False)
+                time.sleep(random.uniform(0.2, 0.4))
+                mouse_to(driver, *target, curve=0.1, overshoot=False)
+                time.sleep(random.uniform(0.3, 0.6))
+                press_mouse(driver)
+            except WebDriverException:
+                return None
+        ctl.sleep(random.uniform(1.0, 2.0))
+        _release_focus(driver)
+        try:
+            return driver.execute_script(_REACTION_STATE_JS, box)
+        except WebDriverException:
+            return None
+    finally:
+        _park_mouse(driver)
+
+
 # ─────────────────────────── KỊCH BẢN ────────────────────────────
 
 def run_newsfeed(driver, ctl: FarmControl, total_seconds: float, delay_min: float, delay_max: float,
-                 report: Callable[[str], None]) -> dict:
+                 report: Callable[[str], None], react: Optional[list] = None) -> dict:
     """
     Lướt Newsfeed tự nhiên: cuộn mượt 500-800px, 10-15% cuộn ngược, dừng đọc theo delay.
     Trang bị chuyển khỏi Trang chủ (người dùng bấm sang chỗ khác) thì mở lại Trang chủ, tối đa NEWSFEED_MAX_REOPENS lần.
+    react: loại cảm xúc được chọn; mỗi bài vào màn hình có REACT_RATE khả năng được thả 1 cảm xúc.
     """
     if total_seconds <= 0:
         return _result("SKIPPED", "Thời gian lướt = 0")
@@ -438,6 +636,7 @@ def run_newsfeed(driver, ctl: FarmControl, total_seconds: float, delay_min: floa
     timer = ActiveTimer(ctl, total_seconds)
     scrolls = 0
     reopens = 0
+    reactions = {}
     scroll_up_rate = random.uniform(0.10, 0.15)
     try:
         while timer.remaining() > 0:
@@ -463,13 +662,29 @@ def run_newsfeed(driver, ctl: FarmControl, total_seconds: float, delay_min: floa
             if scrolls % 5 == 0:
                 report(f"Lướt Newsfeed: {timer.elapsed() / 60:.1f}/{total_seconds / 60:.1f} phút, {scrolls} lần cuộn")
             ctl.sleep(min(random.uniform(delay_min, delay_max), max(timer.remaining(), 0)))
+            if react and timer.remaining() > 0:
+                for post, like in _feed_react_candidates(driver):
+                    if random.random() >= REACT_RATE:
+                        continue
+                    kind = _react(driver, ctl, post, like, react)
+                    if kind:
+                        reactions[kind] = reactions.get(kind, 0) + 1
+                        report(f"Lướt Newsfeed: đã thả {kind}, tổng {sum(reactions.values())} cảm xúc")
     except Exception as e:
         # Dừng / tài khoản chết / trình duyệt treo giữa chừng: giữ lại phần đã lướt để lịch sử không ghi 0 giây
-        e.partial = {"seconds": int(timer.elapsed()), "scrolls": scrolls}
+        e.partial = {"seconds": int(timer.elapsed()), "scrolls": scrolls, **_reaction_result(reactions)}
         raise
     check_account_state(driver)
-    return {**_result("SUCCESS", f"Đã lướt {timer.elapsed() / 60:.1f} phút, cuộn {scrolls} lần"),
-            "seconds": int(timer.elapsed()), "scrolls": scrolls}
+    react_note = f", thả {sum(reactions.values())} cảm xúc ({_reaction_text(reactions)})" if reactions else ""
+    return {**_result("SUCCESS", f"Đã lướt {timer.elapsed() / 60:.1f} phút, cuộn {scrolls} lần{react_note}"),
+            "seconds": int(timer.elapsed()), "scrolls": scrolls, **_reaction_result(reactions)}
+
+
+def _feed_react_candidates(driver) -> list:
+    try:
+        return driver.execute_script(_FEED_REACT_CANDIDATES_JS) or []
+    except WebDriverException:
+        return []
 
 
 _VISIBLE_VIDEO_JS = """
@@ -585,13 +800,17 @@ def _advance_video(driver, video, stuck: int):
 
 
 def run_watch(driver, ctl: FarmControl, total_seconds: float, view_min: float, view_max: float,
-              report: Callable[[str], None]) -> dict:
-    """Đếm mỗi video Watch một lần, sau khi xác nhận video mới đã phát."""
+              report: Callable[[str], None], react: Optional[list] = None) -> dict:
+    """
+    Đếm mỗi video Watch một lần, sau khi xác nhận video mới đã phát.
+    react: loại cảm xúc được chọn; mỗi video đã tính "đã xem" có REACT_RATE khả năng được thả 1 cảm xúc.
+    """
     if total_seconds <= 0:
         return _result("SKIPPED", "Thời gian xem = 0")
     _open(driver, ctl, FB_WATCH)
     landing_path = urlparse(driver.current_url or "").path
     timer = ActiveTimer(ctl, total_seconds)
+    reactions = {}
     watched = 0
     misses = 0
     stuck = 0
@@ -654,7 +873,9 @@ def run_watch(driver, ctl: FarmControl, total_seconds: float, view_min: float, v
                 continue
             stuck = 0
             try:
-                ActionChains(driver).move_to_element(video).pause(random.uniform(0.5, 1.2)).perform()
+                # Video luôn có lớp phủ (nút, chữ) đè lên: rê qua phần đang thấy, không kiểm bị che, không cuộn trang
+                hover_element(driver, video, need_hit=False)
+                time.sleep(random.uniform(0.5, 1.2))
                 if driver.execute_script("return arguments[0].muted === true;", video):
                     unmute = _find_visible(driver, FARM_WATCH["unmute_button"])
                     if unmute:
@@ -697,19 +918,208 @@ def run_watch(driver, ctl: FarmControl, total_seconds: float, view_min: float, v
                 seen_videos.update(current.get("keys") or [])
                 watched += 1
                 report(progress_text("vừa xem xong 1 video"))
+                if react and random.random() < REACT_RATE:
+                    kind = _react_video(driver, ctl, video, react)
+                    if kind:
+                        reactions[kind] = reactions.get(kind, 0) + 1
+                        report(progress_text(f"đã thả {kind}"))
             check_account_state(driver)
             _advance_video(driver, video, 0)
             ctl.sleep(min(random.uniform(1.0, 2.5), max(timer.remaining(), 0)))
     except Exception as e:
         # Dừng / tài khoản chết / trình duyệt treo giữa chừng: giữ lại phần đã xem để lịch sử không ghi 0 giây / 0 video
-        e.partial = {"seconds": int(timer.elapsed()), "quantity": watched}
+        e.partial = {"seconds": int(timer.elapsed()), "quantity": watched, **_reaction_result(reactions)}
         raise
 
     if watched == 0:
         return {**_result("SKIPPED", "Không xác nhận được video mới nào đã phát trên Watch"),
                 "seconds": int(timer.elapsed())}
-    return {**_result("SUCCESS", f"Đã xem {watched} video khác nhau trong {timer.elapsed() / 60:.1f} phút", watched),
-            "seconds": int(timer.elapsed())}
+    react_note = f", thả {sum(reactions.values())} cảm xúc ({_reaction_text(reactions)})" if reactions else ""
+    return {**_result("SUCCESS", f"Đã xem {watched} video khác nhau trong {timer.elapsed() / 60:.1f} phút{react_note}",
+                      watched),
+            "seconds": int(timer.elapsed()), **_reaction_result(reactions)}
+
+
+def _react_video(driver, ctl: FarmControl, video, types: list) -> Optional[str]:
+    """Thả cảm xúc lên video đang xem (nút Like trong khối của chính video đó); video đã thả trước thì bỏ qua."""
+    try:
+        found = driver.execute_script(_VIDEO_LIKE_JS, video)
+    except WebDriverException:
+        return None
+    if not found:
+        return None
+    box, like = found
+    try:
+        if (like.get_attribute("aria-label") or "").strip() != "Like":
+            return None
+    except WebDriverException:
+        return None
+    return _react(driver, ctl, box, like, types)
+
+
+STORY_MAX_STUCK = 3  # Bấm sang khung kế liên tiếp chừng này lần mà khung không đổi thì coi như hết story
+
+# Trạng thái trình xem story. URL KHÔNG đổi khi chuyển khung / chuyển người (đã kiểm 2026-10-22) nên nhận khung mới
+# qua ảnh / video lớn nhất giữa màn hình: ảnh theo đường dẫn, video theo đường dẫn + thời lượng, không có thì theo
+# chính phần tử. Hết story: rời /stories/ hoặc hiện nút "Create story" (khung của người khác không có nút này,
+# màn cuối thì có, đã kiểm 2026-10-22). Khung thật có nút cảm xúc, màn cuối thì không.
+_STORY_STATE_JS = r"""
+const vis = (el) => el.getClientRects().length > 0;
+const path = location.pathname;
+const inViewer = path.startsWith('/stories/') && !path.startsWith('/stories/create');
+const labels = Array.from(document.querySelectorAll('[role="button"][aria-label], [role="link"][aria-label]'))
+  .filter(vis).map((b) => b.getAttribute('aria-label').trim());
+const reacts = labels.filter((l) => /^(Like|Love|Care|Haha|Wow|Sad|Angry)$/.test(l)).length;
+const end = !inViewer || labels.includes('Create story');
+const vw = innerWidth;
+let media = null, area = 0;
+for (const m of document.querySelectorAll('img, video')) {
+  if (!vis(m)) continue;
+  const r = m.getBoundingClientRect();
+  if (r.left > vw * 0.75 || r.right < vw * 0.25) continue;
+  if (r.width * r.height > area) { media = m; area = r.width * r.height; }
+}
+let sig = null;
+if (media) {
+  if (!media.dataset.m03Frame) media.dataset.m03Frame = Math.random().toString(36).slice(2, 10);
+  const src = (media.currentSrc || media.src || '').split('?')[0];
+  const extra = media.tagName === 'VIDEO' ? `:${Math.round(media.duration || 0)}` : '';
+  sig = `${media.tagName}:${src || media.dataset.m03Frame}${extra}`;
+}
+return {end, reacts, sig};
+"""
+
+
+def _story_state(driver) -> Optional[dict]:
+    try:
+        return driver.execute_script(_STORY_STATE_JS)
+    except WebDriverException:
+        return None
+
+
+STORY_KEY_WAIT = (0.6, 1.0)  # Chờ sau phím mũi tên phải rồi mới xem khung đã đổi chưa
+
+
+def _story_next(driver):
+    """
+    Sang khung kế bằng phím mũi tên phải như người dùng máy tính; focus đang ở ô trả lời thì bỏ focus trước.
+    Phím chỉ ăn khi focus còn trong trình xem: thả cảm xúc xong focus về trang (body) thì phím không sang được
+    (đã gặp 2026-10-23, kẹt ở 1 video dài). Khung không đổi thì bấm nút Next card / Next Bucket bằng chuột.
+    """
+    if _focus_is_text_field(driver):
+        _release_focus(driver)
+    before = _story_state(driver)
+    try:
+        ActionChains(driver).send_keys(Keys.ARROW_RIGHT).perform()
+        time.sleep(random.uniform(*STORY_KEY_WAIT))
+        after = _story_state(driver)
+        if not before or not after or after.get("end") or after.get("sig") != before.get("sig"):
+            return
+    except WebDriverException:
+        pass
+    buttons = _find_visible(driver, FARM_STORY["next"])
+    if buttons:
+        _human_click(driver, buttons[0])
+
+
+def _react_story(driver, types: list) -> Optional[str]:
+    """Story hiện sẵn các nút cảm xúc: bấm 1 loại ngẫu nhiên. Facebook không đổi nhãn sau khi thả nên tính khi bấm được."""
+    kind = random.choice(types)
+    buttons = _find_visible(driver, [REACTION_BUTTON.format(kind=kind)])
+    if not buttons or not _human_click(driver, buttons[0]):
+        return None
+    _release_focus(driver)
+    _leave_reaction_bar(driver)
+    return kind
+
+
+# Chuột nằm trên thanh cảm xúc của story thì Facebook dừng khung (phím mũi tên cũng không sang khung được), rê ra
+# là chạy tiếp (user mô tả + đã kiểm 2026-10-23). Thả xong rê chuột lên trên, vào vùng khung story.
+STORY_LEAVE_UP_PX = (200, 300)
+STORY_TRAY_MAX_SCROLL = 400  # Trang chủ đã cuộn quá chừng này (px) thì mở lại để khay story hiện lại
+
+
+def _leave_reaction_bar(driver):
+    here = mouse_position(driver)
+    if not here:
+        return
+    try:
+        mouse_to(driver, here[0] + random.randint(-40, 40), here[1] - random.randint(*STORY_LEAVE_UP_PX))
+    except WebDriverException:
+        pass
+
+
+def run_story(driver, ctl: FarmControl, target: int, delay_min: float, delay_max: float,
+              report: Callable[[str], None], react: Optional[list] = None) -> dict:
+    """
+    Xem story: bấm thẻ đầu khay story trên Trang chủ, mỗi khung xem trong khoảng delay rồi sang khung kế
+    (hết khung của 1 người thì Facebook tự sang người kế). Đếm theo khung; dừng khi đủ target hoặc hết story.
+    react: mỗi khung mới có REACT_RATE khả năng được thả 1 cảm xúc.
+    """
+    if target <= 0:
+        return _result("SKIPPED", "Số khung story = 0")
+    # Đang ở Trang chủ nhưng đã lướt xa (vd vừa chạy Newsfeed): Facebook gỡ khay story ở đầu trang khỏi DOM, tìm
+    # không thấy thẻ nào (đã gặp 2026-10-23, báo nhầm "không có story"). Mở lại Trang chủ như bấm logo về đầu trang.
+    scrolled = _same_page(driver.current_url, FB_HOME) and (_script(driver, "return window.scrollY") or 0) > \
+        STORY_TRAY_MAX_SCROLL
+    _open(driver, ctl, FB_HOME, reuse=not scrolled)
+    _wait_for_any(driver, ctl, FARM_STORY["tray_cards"])
+    cards = _find_visible(driver, FARM_STORY["tray_cards"])
+    if not cards or not _human_click(driver, cards[0]):
+        return _result("SKIPPED", "Không có story nào trong khay để xem")
+    ctl.sleep(random.uniform(2.5, 4.0))
+    timer = ActiveTimer(ctl, 0)
+    frames = stuck = 0
+    last_sig = None
+    reactions = {}
+    try:
+        while frames < target:
+            ctl.checkpoint()
+            check_account_state(driver)
+            before = _story_state(driver)
+            if not before or before["end"]:
+                break
+            view = random.uniform(delay_min, delay_max)
+            if react and before["reacts"] and before["sig"] != last_sig and random.random() < REACT_RATE:
+                part = view * random.uniform(0.3, 0.6)
+                ctl.sleep(part)
+                kind = _react_story(driver, react)
+                if kind:
+                    reactions[kind] = reactions.get(kind, 0) + 1
+                ctl.sleep(view - part)
+            else:
+                ctl.sleep(view)
+            after = _story_state(driver)
+            ended = not after or after["end"]
+            logger.debug("Story: trước %s, sau %s", before, after)
+            # Hết story trong lúc xem: chỉ tính khung vừa xem nếu lúc bắt đầu xem nó là khung thật (có nút cảm xúc),
+            # không tính màn cuối chưa kịp hiện nút "Create story"
+            sig = (before["sig"] if before["reacts"] else None) if ended else after["sig"]
+            if sig and sig != last_sig:
+                frames += 1
+                stuck = 0
+                last_sig = sig
+                report(f"Xem Story: {frames}/{target} khung" + (f", {sum(reactions.values())} cảm xúc" if reactions else ""))
+            else:
+                stuck += 1
+                if stuck >= STORY_MAX_STUCK:
+                    logger.info("Story: %s lần sang khung kế mà khung không đổi, kết thúc", stuck)
+                    break
+            if ended or frames >= target:
+                break
+            _story_next(driver)
+            ctl.sleep(random.uniform(1.0, 2.0))
+    except Exception as e:
+        e.partial = {"seconds": int(timer.elapsed()), "quantity": frames, **_reaction_result(reactions)}
+        raise
+
+    extra = {"seconds": int(timer.elapsed()), **_reaction_result(reactions)}
+    if frames == 0:
+        return {**_result("SKIPPED", "Không xem được khung story nào"), **extra}
+    react_note = f", thả {sum(reactions.values())} cảm xúc ({_reaction_text(reactions)})" if reactions else ""
+    tail = "" if frames >= target else " (hết story)"
+    return {**_result("SUCCESS", f"Đã xem {frames}/{target} khung story trong {timer.elapsed() / 60:.1f} phút"
+                                 f"{react_note}{tail}", frames), **extra}
 
 
 def _wait_for_any(driver, ctl: FarmControl, locators, timeout: float = PAGE_LOAD_WAIT) -> bool:
@@ -892,16 +1302,34 @@ def _keep_targets(e: Exception, targets: list):
     e.partial = {**(getattr(e, "partial", None) or {}), "targets": list(targets)}
 
 
+# UID số trong link trang cá nhân đã chuẩn hóa (profile.php?id=<số>); link dạng username không có
+_PROFILE_ID_RE = re.compile(r"[?&]id=(\d+)")
+
+
+def _profile_uid(*urls) -> Optional[str]:
+    for url in urls:
+        match = _PROFILE_ID_RE.search(url or "")
+        if match:
+            return match.group(1)
+    return None
+
+
+def _own_nick_note(skipped: int) -> str:
+    return f", bỏ qua {skipped} người là nick trong dàn" if skipped else ""
+
+
 def run_add_friends(driver, ctl: FarmControl, target: int, report: Callable[[str], None],
                     progress: Optional[Callable[[int], None]] = None,
-                    delay: tuple = FRIEND_DELAY_RANGE) -> dict:
+                    delay: tuple = FRIEND_DELAY_RANGE, own_uids: Optional[set] = None) -> dict:
     """
     Kết bạn theo gợi ý: chọn ngẫu nhiên, nghỉ theo delay, bắt popup 'Bạn có biết…' và dialog chặn tính năng.
+    own_uids: UID các nick trong dàn; gợi ý trúng nick trong dàn thì bỏ qua, không tính vào số lời mời.
     Kết quả có thêm "targets": tên + link những người đã gửi lời mời.
     """
     if target <= 0:
         return _result("SKIPPED", "Số lượng kết bạn = 0")
     targets = []
+    skipped_own = 0
     try:
         _open(driver, ctl, FB_FRIEND_SUGGESTIONS)
         _wait_for_any(driver, ctl, FARM_FRIEND["add_friend_buttons"])
@@ -921,6 +1349,10 @@ def run_add_friends(driver, ctl: FarmControl, target: int, report: Callable[[str
             empty_rounds = 0
             clicked_ids.add(button.id)
             person = _read_target(driver, button, "friend")
+            if own_uids and _profile_uid(person["url"]) in own_uids:
+                skipped_own += 1
+                report("Kết bạn: bỏ qua 1 gợi ý là nick trong dàn")
+                continue
             if not _human_click(driver, button):
                 continue
             ctl.sleep(random.uniform(1.5, 2.5))
@@ -931,8 +1363,8 @@ def run_add_friends(driver, ctl: FarmControl, target: int, report: Callable[[str
             if _find_visible(driver, FARM_FRIEND["know_person_dialog"]):
                 _close_dialogs(driver)
                 status = "SUCCESS" if sent else "SKIPPED"
-                return {**_result(status, f"Đã gửi {sent} lời mời, dừng do Facebook hỏi 'Bạn có biết người này'", sent),
-                        "targets": targets}
+                return {**_result(status, f"Đã gửi {sent} lời mời, dừng do Facebook hỏi 'Bạn có biết người này'"
+                                          f"{_own_nick_note(skipped_own)}", sent), "targets": targets}
 
             sent += 1
             targets.append(person)
@@ -945,10 +1377,11 @@ def run_add_friends(driver, ctl: FarmControl, target: int, report: Callable[[str
         raise
 
     if sent == 0:
-        result = _result("SKIPPED", "Không có gợi ý kết bạn, tự động bỏ qua")
+        result = _result("SKIPPED", f"Không có gợi ý kết bạn, tự động bỏ qua{_own_nick_note(skipped_own)}")
         result["no_suggestions"] = True
         return result
-    return {**_result("SUCCESS", f"Đã gửi {sent}/{target} lời mời kết bạn", sent), "targets": targets}
+    return {**_result("SUCCESS", f"Đã gửi {sent}/{target} lời mời kết bạn{_own_nick_note(skipped_own)}", sent),
+            "targets": targets}
 
 
 _JOINED_GROUP_IDS_JS = r"""
@@ -963,15 +1396,17 @@ return Array.from(ids);
 
 def run_add_friends_from_groups(driver, ctl: FarmControl, target: int, report: Callable[[str], None],
                                 progress: Optional[Callable[[int], None]] = None,
-                                delay: tuple = FRIEND_DELAY_RANGE) -> dict:
+                                delay: tuple = FRIEND_DELAY_RANGE, own_uids: Optional[set] = None) -> dict:
     """
     Kết bạn dự phòng khi trang gợi ý trống: gửi lời mời cho thành viên các nhóm nick đã tham gia.
     Chọn ngẫu nhiên trong các người đang hiển thị, nghỉ theo delay, bắt popup / dialog chặn như kết bạn gợi ý.
+    own_uids: UID các nick trong dàn (thường cùng ở các nhóm này); trúng nick trong dàn thì bỏ qua.
     Kết quả có thêm "targets": tên + link những người đã gửi lời mời.
     """
     if target <= 0:
         return _result("SKIPPED", "Số lượng kết bạn = 0")
     targets = []
+    skipped_own = 0
     try:
         _open(driver, ctl, FB_GROUPS_JOINS)
         group_ids = driver.execute_script(_JOINED_GROUP_IDS_JS) or []
@@ -1001,6 +1436,10 @@ def run_add_friends_from_groups(driver, ctl: FarmControl, target: int, report: C
                 empty_rounds = 0
                 clicked_ids.add(button.id)
                 person = _read_target(driver, button, "friend")
+                if own_uids and _profile_uid(person["url"]) in own_uids:
+                    skipped_own += 1
+                    report("Kết bạn thành viên nhóm: bỏ qua 1 người là nick trong dàn")
+                    continue
                 if not _human_click(driver, button):
                     continue
                 ctl.sleep(random.uniform(1.5, 2.5))
@@ -1013,7 +1452,8 @@ def run_add_friends_from_groups(driver, ctl: FarmControl, target: int, report: C
                     _close_dialogs(driver)
                     status = "SUCCESS" if sent else "SKIPPED"
                     return {**_result(status, f"Đã gửi {sent} lời mời cho thành viên nhóm, dừng do Facebook hỏi "
-                                              f"'Bạn có biết người này'", sent), "targets": targets}
+                                              f"'Bạn có biết người này'{_own_nick_note(skipped_own)}", sent),
+                            "targets": targets}
 
                 sent += 1
                 group_sent += 1
@@ -1029,9 +1469,10 @@ def run_add_friends_from_groups(driver, ctl: FarmControl, target: int, report: C
         raise
 
     if sent == 0:
-        return _result("SKIPPED", "Không gửi được lời mời nào cho thành viên các nhóm đã tham gia")
-    return {**_result("SUCCESS", f"Đã gửi {sent}/{target} lời mời cho thành viên nhóm ({', '.join(used_groups)})", sent),
-            "targets": targets}
+        return _result("SKIPPED", f"Không gửi được lời mời nào cho thành viên các nhóm đã tham gia"
+                                  f"{_own_nick_note(skipped_own)}")
+    return {**_result("SUCCESS", f"Đã gửi {sent}/{target} lời mời cho thành viên nhóm ({', '.join(used_groups)})"
+                                 f"{_own_nick_note(skipped_own)}", sent), "targets": targets}
 
 
 def _handle_group_dialog(driver) -> str:
@@ -1063,13 +1504,20 @@ def _handle_group_dialog(driver) -> str:
     return "skipped"
 
 
+# Bỏ qua liên tiếp chừng này nhóm (đã thuộc nick khác / form phức tạp / không bấm được) mà chưa vào được nhóm nào
+# thì thôi trang kết quả này, sang từ khóa kế: tránh cuộn mãi khi phần lớn nhóm đã có nick khác trong dàn vào
+KEYWORD_MAX_MISSES = 15
+
+
 def run_join_groups(driver, ctl: FarmControl, target: int, keywords: Optional[list], report: Callable[[str], None],
                     progress: Optional[Callable[[int], None]] = None,
-                    delay: tuple = GROUP_DELAY_RANGE) -> dict:
+                    delay: tuple = GROUP_DELAY_RANGE, owners=None) -> dict:
     """
     Tham gia nhóm theo danh sách từ khóa (đã xáo riêng cho từng nick): từ khóa nào hết nhóm vào được thì chuyển
     sang từ khóa kế tiếp, đến khi đủ số lượng hoặc hết danh sách. Danh sách rỗng thì vào nhóm đề xuất.
     Chọn ngẫu nhiên, nghỉ theo delay, bỏ qua form phức tạp.
+    owners (routes.TargetOwners): giành chủ nhóm trước khi bấm; nhóm đã thuộc nick khác trong dàn thì bỏ qua,
+    đang chia mà không đọc được link nhóm thì cũng bỏ qua (không biết có trùng nick khác không).
     Kết quả có thêm "keywords": các từ khóa đã mở trang tìm kiếm, theo thứ tự đã dùng;
     "targets": tên + link các nhóm đã bấm tham gia, kèm trạng thái joined / pending (None: không đọc được).
     """
@@ -1079,6 +1527,7 @@ def run_join_groups(driver, ctl: FarmControl, target: int, keywords: Optional[li
     sources = [(k, FB_GROUPS_SEARCH.format(q=quote_plus(k))) for k in keywords] or [(None, FB_GROUPS_DISCOVER)]
     joined = 0
     skipped_forms = 0
+    skipped_owned = skipped_unknown = 0
     used = []
     targets = []
     try:
@@ -1092,9 +1541,12 @@ def run_join_groups(driver, ctl: FarmControl, target: int, keywords: Optional[li
             _open(driver, ctl, list_url)
             _wait_for_any(driver, ctl, FARM_GROUP["join_buttons"])
             clicked_ids = set()
-            empty_rounds = 0
+            empty_rounds = misses = 0
             while joined < target:
                 ctl.checkpoint()
+                if misses >= KEYWORD_MAX_MISSES:
+                    report(f"Tham gia nhóm: bỏ qua liên tiếp {misses} nhóm, thôi danh sách này")
+                    break
                 button = _pick_button(driver, ctl, FARM_GROUP["join_buttons"], clicked_ids)
                 if button is None:
                     empty_rounds += 1
@@ -1107,7 +1559,20 @@ def run_join_groups(driver, ctl: FarmControl, target: int, keywords: Optional[li
                 clicked_ids.add(button.id)
                 token = _next_target_token()
                 group = _read_target(driver, button, "group", token)
+                keys = owners.keys(group["url"]) if owners else []
+                misses += 1  # Về 0 khi vào được nhóm
+                if owners and owners.enforce and not keys:
+                    skipped_unknown += 1
+                    report("Tham gia nhóm: bỏ qua 1 nhóm không đọc được link (không biết có trùng nick khác không)")
+                    continue
+                other = owners.claim(keys, group["name"], group["url"]) if keys else None
+                if other:
+                    skipped_owned += 1
+                    report(f"Tham gia nhóm: bỏ qua '{group['name'] or group['url']}' (đã thuộc nick khác trong dàn)")
+                    continue
                 if not _human_click(driver, button):
+                    if keys:
+                        owners.release(keys)
                     continue
                 ctl.sleep(random.uniform(2.0, 3.0))
 
@@ -1119,13 +1584,19 @@ def run_join_groups(driver, ctl: FarmControl, target: int, keywords: Optional[li
                 outcome = _handle_group_dialog(driver)
                 if outcome == "skipped":
                     skipped_forms += 1
+                    if keys:
+                        owners.release(keys)
                     report("Tham gia nhóm: bỏ qua 1 nhóm có form câu hỏi phức tạp")
                     ctl.sleep(random.uniform(2.0, 4.0))
                     continue
 
                 joined += 1
+                misses = 0
                 ctl.sleep(random.uniform(1.0, 2.0))  # Chờ nút đổi sang "Đã tham gia" / "Hủy yêu cầu"
-                targets.append({**group, "status": _group_join_status(driver, token, list_url, outcome)})
+                status = _group_join_status(driver, token, list_url, outcome)
+                if keys:
+                    owners.settle(keys, status or "joined", group["name"], group["url"])
+                targets.append({**group, "status": status})
                 _count(progress, joined)
                 report(f"Tham gia nhóm: {joined}/{target} nhóm")
                 # Một số nhóm công khai tự chuyển sang trang nhóm sau khi tham gia: quay lại danh sách
@@ -1141,11 +1612,600 @@ def run_join_groups(driver, ctl: FarmControl, target: int, keywords: Optional[li
         raise
 
     extra = f", bỏ qua {skipped_forms} nhóm có form phức tạp" if skipped_forms else ""
+    if skipped_owned:
+        extra += f", bỏ qua {skipped_owned} nhóm đã thuộc nick khác"
+    if skipped_unknown:
+        extra += f", bỏ qua {skipped_unknown} nhóm không đọc được link"
     source = "từ khóa " + ", ".join(f"'{k}'" for k in used) if used else "nhóm đề xuất"
     if joined == 0:
         return {**_result("SKIPPED", f"Không tham gia được nhóm nào ({source}){extra}"), "keywords": used}
     return {**_result("SUCCESS", f"Đã tham gia {joined}/{target} nhóm ({source}){extra}", joined),
             "keywords": used, "targets": targets}
+
+
+# ─────────────────────────── THEO DANH SÁCH LINK ────────────────────────────
+
+# Lý do bỏ qua link (ghi vào targets[].reason, hiện ở chi tiết lịch sử)
+SKIP_UNAVAILABLE = "skipped_unavailable"
+SKIP_DONE = "skipped_done"
+SKIP_FORM = "skipped_form"
+SKIP_OWNED = "skipped_owned"  # Nhóm / người đã thuộc nick khác trong dàn (chia đích)
+SKIP_OWN_NICK = "skipped_own_nick"  # Người nhận là chính 1 nick trong dàn (kể cả nick đang chạy)
+LINK_SKIP_PAUSE = (2.0, 4.0)  # Nghỉ ngắn sau khi mở 1 link phải bỏ qua, không mở link kế ngay lập tức
+
+# ID số + tên rút gọn của nhóm đang mở, đọc trong dữ liệu trang (đã kiểm 2026-10-23): mở bằng ID thì URL giữ ID,
+# mở bằng tên rút gọn thì giữ tên; trang luôn có "groupID":"<số>" và tab About "content_view_uri":"\/groups\/<tên>\/about\/"
+# (nhóm không có tên rút gọn thì <tên> là ID). Dùng để 1 nhóm dán bằng ID hay tên vẫn ra cùng 1 chủ.
+_GROUP_ALIASES_JS = r"""
+const html = document.documentElement.innerHTML;
+const id = (html.match(/"groupID":"(\d+)"/) || [])[1] || null;
+const slug = (html.match(/"content_view_uri":"\\\/groups\\\/([^"\\\/]+)\\\/about\\\/"/) || [])[1] || null;
+return {id, slug};
+"""
+
+
+def _group_alias_urls(driver, page_url: str) -> list:
+    """Link nhóm theo ID số và tên rút gọn. Dữ liệu không khớp nhóm đang mở (có thể của nhóm khác) thì bỏ."""
+    info = _script(driver, _GROUP_ALIASES_JS) or {}
+    names = {str(v) for v in (info.get("id"), info.get("slug")) if v}
+    current = page_url.rstrip("/").rsplit("/groups/", 1)[-1].lower()
+    if current not in {n.lower() for n in names}:
+        return []
+    return [f"https://www.facebook.com/groups/{n}/" for n in sorted(names)]
+
+# Trạng thái nút của trang nhóm: so nguyên nhãn / dòng chữ của nút đang hiển thị
+_GROUP_PAGE_STATE_JS = r"""
+const texts = [];
+for (const el of document.querySelectorAll('[role="button"]')) {
+  if (!el.getClientRects().length) continue;
+  texts.push((el.getAttribute('aria-label') || '').trim());
+  for (const line of (el.innerText || '').split('\n')) texts.push(line.trim());
+}
+const has = (re) => texts.some((t) => re.test(t));
+if (has(/^(Cancel [Rr]equest|Hủy yêu cầu|Đã gửi yêu cầu|Request sent|Requested|Pending)$/)) return 'pending';
+if (has(/^(Joined|Đã tham gia)$/)) return 'joined';
+return null;
+"""
+
+# Tên trang đang mở (nhóm / người): tiêu đề h1 trong vùng chính, không có thì lấy từ tiêu đề tab
+_PAGE_NAME_JS = r"""
+const h1 = document.querySelector('[role="main"] h1') || document.querySelector('h1');
+const fromH1 = h1 ? (h1.innerText || '').split('\n')[0].trim() : '';
+if (fromH1) return fromH1;
+return (document.title || '').replace(/^\(\d+\+?\)\s*/, '').replace(/\s*\|\s*Facebook\s*$/, '').trim() || null;
+"""
+
+# Trang cá nhân: chỉ bấm nút kết bạn của CHỦ TRANG. Cùng trang có khối gợi ý "Add Friend <người khác>", mỗi người
+# gợi ý luôn kèm nút "Remove recommendation for <tên>" (đã kiểm 2026-10-22); nút của chủ trang thì không.
+# Tên chủ trang: nút "Search <Tên>'s profile" (có lúc có), không có thì là tên trong nhãn "Add Friend <Tên>" /
+# "Cancel Request <Tên>" không thuộc khối gợi ý và trùng chữ của nút tên chủ trang (nút không nhãn, chữ = tên;
+# trang cá nhân hiện không có h1), cuối cùng mới thử h1. Không xác định được chủ trang thì không bấm gì.
+_PROFILE_STATE_JS = r"""
+const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+const visible = (el) => el.getClientRects().length > 0;
+const buttons = Array.from(document.querySelectorAll('[role="button"]')).filter(visible);
+const label = (el) => (el.getAttribute('aria-label') || '').trim();
+const ADD = /^(?:Add [Ff]riend|Thêm bạn bè)\s+(.+)$/;
+const CANCEL = /^(?:Cancel [Rr]equest|Hủy lời mời|Hủy yêu cầu)\s+(.+)$/;
+const nameIn = (el, re) => { const m = label(el).match(re); return m ? m[1].trim() : null; };
+const recommended = new Set(buttons.map((b) => nameIn(b, /^Remove recommendation for\s+(.+)$/)).filter(Boolean).map(norm));
+const plainTexts = new Set(buttons.filter((b) => !label(b)).map((b) => norm((b.innerText || '').split('\n')[0])));
+let owner = null;
+for (const el of document.querySelectorAll('[aria-label]')) {
+  const m = label(el).match(/^Search\s+(.+?)['’]s profile$/);
+  if (m) { owner = m[1].trim(); break; }
+}
+if (!owner) {
+  for (const b of buttons) {
+    const name = nameIn(b, ADD) || nameIn(b, CANCEL);
+    if (name && !recommended.has(norm(name)) && plainTexts.has(norm(name))) { owner = name; break; }
+  }
+}
+if (!owner) {
+  const h1 = document.querySelector('[role="main"] h1');
+  owner = h1 ? (h1.innerText || '').split('\n')[0].trim() || null : null;
+}
+const ownerButton = (re) => owner ? buttons.find((b) => { const n = nameIn(b, re); return n && norm(n) === norm(owner); }) : null;
+const add = ownerButton(ADD);
+if (add) return {owner, state: 'add', button: add};
+if (ownerButton(CANCEL)) return {owner, state: 'pending', button: null};
+if (buttons.some((b) => /^(Friends|Bạn bè)$/.test(label(b)))) return {owner, state: 'friends', button: null};
+return {owner, state: 'none', button: null};
+"""
+
+_PROFILE_SKIP_REASONS = {
+    "pending": "đã gửi lời mời trước đó, đang chờ chấp nhận",
+    "friends": "đã là bạn bè",
+    "none": "trang không có nút Thêm bạn bè",
+}
+
+
+def _clean_page_url(current: str, fallback: str) -> str:
+    """Link trang đang mở (sau khi Facebook chuyển hướng link chia sẻ), bỏ query trừ id của profile.php."""
+    parsed = urlparse(current or "")
+    if not (parsed.hostname or "").endswith("facebook.com") or not parsed.path.strip("/"):
+        return fallback
+    path = "/" + parsed.path.strip("/")
+    if path == "/profile.php":
+        pid = next((p.split("=", 1)[1] for p in parsed.query.split("&") if p.startswith("id=")), "")
+        return f"https://www.facebook.com/profile.php?id={pid}" if pid.isdigit() else fallback
+    return f"https://www.facebook.com{path}/" if path.startswith("/groups/") else f"https://www.facebook.com{path}"
+
+
+def _open_link(driver, ctl: FarmControl, url: str) -> bool:
+    """Mở 1 link từ danh sách dán. False = tải trang quá thời gian (link chết / mạng), bỏ qua link này."""
+    ctl.checkpoint()
+    try:
+        driver.get(url)
+    except TimeoutException:
+        return False
+    ctl.sleep(random.uniform(3.0, 5.0))
+    check_account_state(driver)
+    return True
+
+
+def _script(driver, js: str, *args):
+    try:
+        return driver.execute_script(js, *args)
+    except WebDriverException:
+        return None
+
+
+def _skip_entry(link: dict, result: str, reason: str, name: Optional[str] = None, url: Optional[str] = None) -> dict:
+    return {"name": name, "url": url or link["url"], "source_url": link["source"], "result": result, "reason": reason}
+
+
+def _list_summary(done: int, target: int, unit: str, skipped: int, total: int) -> str:
+    ended = ", hết danh sách" if done < target and total else ""
+    extra = f", bỏ qua {skipped} link" if skipped else ""
+    return f"{done}/{target} {unit}{ended}{extra}"
+
+
+def run_join_groups_from_links(driver, ctl: FarmControl, links: list, target: int, report: Callable[[str], None],
+                               progress: Optional[Callable[[int], None]] = None,
+                               delay: tuple = GROUP_DELAY_RANGE, skips: Optional[dict] = None,
+                               log: Optional[Callable[[str, str], None]] = None, owners=None) -> dict:
+    """
+    Tham gia nhóm theo danh sách link (đã xáo riêng cho nick): đi lần lượt tới khi đủ target nhóm hoặc hết danh sách.
+    links: [{"key", "url", "source"}]; skips: key -> lý do (nhóm đã vào / vừa rời theo lịch sử tool), không mở trang.
+    Trang không có nút "Join group" -> skipped_done; không mở được -> skipped_unavailable; form phức tạp -> skipped_form;
+    nhóm đã thuộc nick khác trong dàn (owners giành chủ theo link dán + ID số + tên rút gọn) -> skipped_owned.
+    Link bỏ qua không tính vào target. "targets" ghi mọi link đã xét kèm "source_url" và "result".
+    """
+    if target <= 0:
+        return _result("SKIPPED", "Số lượng nhóm = 0")
+    log = log or (lambda level, text: None)
+    skips = skips or {}
+    joined = skipped = 0
+    targets = []
+
+    def skip(link, result, reason, name=None, url=None):
+        nonlocal skipped
+        skipped += 1
+        targets.append(_skip_entry(link, result, reason, name, url))
+        log("warning", f"bỏ qua {link['source']}: {reason}")
+
+    try:
+        for index, link in enumerate(links, start=1):
+            if joined >= target:
+                break
+            report(f"Tham gia nhóm theo danh sách: {joined}/{target} nhóm, đang xét link {index}/{len(links)}")
+            if link["key"] in skips:
+                skip(link, SKIP_DONE, skips[link["key"]])
+                continue
+            if not _open_link(driver, ctl, link["url"]):
+                skip(link, SKIP_UNAVAILABLE, "trang tải quá lâu, không mở được")
+                continue
+            _wait_for_any(driver, ctl, FARM_GROUP["page_loaded"] + FARM_COMMON["unavailable_page"])
+            page_url = _clean_page_url(driver.current_url, link["url"])
+            if _find_visible(driver, FARM_COMMON["unavailable_page"]) or "/groups/" not in page_url:
+                skip(link, SKIP_UNAVAILABLE, "nhóm không tồn tại hoặc không xem được", url=page_url)
+                ctl.sleep(random.uniform(*LINK_SKIP_PAUSE))
+                continue
+            name = _script(driver, _PAGE_NAME_JS)
+            name = str(name).strip()[:150] if name else None
+            # Xét trạng thái trước: trang nhóm đã vào đôi khi vẫn có 1 nút "Join group" lạc (đã gặp 2026-10-22 ở
+            # nhóm govap.phongtro.club, có thể là thẻ nhóm trong bài viết), không được bấm
+            state = _script(driver, _GROUP_PAGE_STATE_JS)
+            buttons = [] if state else _find_visible(driver, FARM_GROUP["page_join_button"])
+            keys = owners.keys(link["source"], page_url, *_group_alias_urls(driver, page_url)) if owners else []
+            if not buttons:
+                reason = {"joined": "nick đã là thành viên nhóm", "pending": "đã gửi yêu cầu tham gia, đang chờ duyệt"}
+                if keys and state in reason:
+                    owners.record(keys, "member" if state == "joined" else "pending", name, page_url)
+                skip(link, SKIP_DONE, reason.get(state, "trang không có nút Tham gia nhóm"), name, page_url)
+                ctl.sleep(random.uniform(*LINK_SKIP_PAUSE))
+                continue
+            other = owners.claim(keys, name, page_url) if keys else None
+            if other:
+                skip(link, SKIP_OWNED, f"nhóm đã thuộc nick khác trong dàn ({other})", name, page_url)
+                ctl.sleep(random.uniform(*LINK_SKIP_PAUSE))
+                continue
+            if not _human_click(driver, buttons[0]):
+                if keys:
+                    owners.release(keys)
+                skip(link, SKIP_UNAVAILABLE, "không bấm được nút Tham gia nhóm", name, page_url)
+                continue
+            ctl.sleep(random.uniform(2.0, 3.0))
+
+            if check_account_state(driver) == "blocked":
+                _close_dialogs(driver)
+                log("error", f"Facebook chặn tham gia nhóm khi xét {link['source']}")
+                return {**_result("BLOCKED", f"Bị chặn tham gia nhóm sau {joined} nhóm", joined), "targets": targets}
+            outcome = _handle_group_dialog(driver)
+            if outcome == "skipped":
+                if keys:
+                    owners.release(keys)
+                skip(link, SKIP_FORM, "nhóm có form câu hỏi phức tạp", name, page_url)
+                ctl.sleep(random.uniform(*LINK_SKIP_PAUSE))
+                continue
+
+            joined += 1
+            ctl.sleep(random.uniform(1.0, 2.0))  # Chờ nút đổi sang "Joined" / "Cancel request"
+            status = _script(driver, _GROUP_PAGE_STATE_JS) or ("pending" if outcome == "submitted" else None)
+            if keys:
+                owners.settle(keys, status or "joined", name, page_url)
+            targets.append({"name": name, "url": page_url, "source_url": link["source"],
+                            "result": status, "status": status})
+            _count(progress, joined)
+            state_text = {"joined": "đã tham gia", "pending": "đã gửi yêu cầu, chờ duyệt"}.get(status, "đã bấm tham gia")
+            log("success", f"nhóm {joined}/{target} {state_text}: {name or page_url}")
+            if joined < target and index < len(links):
+                _pause_between(driver, ctl, delay, report, f"Tham gia nhóm {joined}/{target}")
+    except Exception as e:
+        _keep_targets(e, targets)
+        raise
+
+    summary = _list_summary(joined, target, "nhóm", skipped, len(links))
+    if joined == 0:
+        return {**_result("SKIPPED", f"Không tham gia được nhóm nào theo danh sách ({summary})"), "targets": targets}
+    return {**_result("SUCCESS", f"Đã tham gia {summary} theo danh sách", joined), "targets": targets}
+
+
+def run_add_friends_from_links(driver, ctl: FarmControl, links: list, target: int, report: Callable[[str], None],
+                               progress: Optional[Callable[[int], None]] = None,
+                               delay: tuple = FRIEND_DELAY_RANGE,
+                               log: Optional[Callable[[str, str], None]] = None, owners=None,
+                               own_uids: Optional[set] = None) -> dict:
+    """
+    Kết bạn theo danh sách link trang cá nhân (đã xáo riêng cho nick), tới khi đủ target lời mời hoặc hết danh sách.
+    Chỉ bấm nút "Add Friend <Tên chủ trang>"; chủ trang đang chờ chấp nhận / đã là bạn -> skipped_done;
+    người đã thuộc nick khác trong dàn (owners giành chủ theo link dán + link trang đang mở) -> skipped_owned;
+    người là nick trong dàn (own_uids, so UID số; link username không so được) -> skipped_own_nick.
+    Không lọc theo lịch sử tool: người từng từ chối mà trang còn nút Thêm bạn bè thì vẫn gửi lại.
+    """
+    if target <= 0:
+        return _result("SKIPPED", "Số lượng kết bạn = 0")
+    log = log or (lambda level, text: None)
+    sent = skipped = 0
+    targets = []
+
+    def skip(link, result, reason, name=None, url=None):
+        nonlocal skipped
+        skipped += 1
+        targets.append(_skip_entry(link, result, reason, name, url))
+        log("warning", f"bỏ qua {link['source']}: {reason}")
+
+    try:
+        for index, link in enumerate(links, start=1):
+            if sent >= target:
+                break
+            report(f"Kết bạn theo danh sách: {sent}/{target} lời mời, đang xét link {index}/{len(links)}")
+            if own_uids and _profile_uid(link["url"]) in own_uids:
+                skip(link, SKIP_OWN_NICK, "là nick trong dàn, không tự kết bạn với nhau")
+                continue
+            if not _open_link(driver, ctl, link["url"]):
+                skip(link, SKIP_UNAVAILABLE, "trang tải quá lâu, không mở được")
+                continue
+            _wait_for_any(driver, ctl, FARM_FRIEND["profile_loaded"] + FARM_COMMON["unavailable_page"])
+            page_url = _clean_page_url(driver.current_url, link["url"])
+            if _find_visible(driver, FARM_COMMON["unavailable_page"]):
+                skip(link, SKIP_UNAVAILABLE, "trang cá nhân không tồn tại hoặc không xem được", url=page_url)
+                ctl.sleep(random.uniform(*LINK_SKIP_PAUSE))
+                continue
+            if own_uids and _profile_uid(page_url) in own_uids:
+                skip(link, SKIP_OWN_NICK, "là nick trong dàn, không tự kết bạn với nhau", url=page_url)
+                ctl.sleep(random.uniform(*LINK_SKIP_PAUSE))
+                continue
+            info = _script(driver, _PROFILE_STATE_JS) or {}
+            if info.get("state") in (None, "none", "unknown"):
+                # Nút "Search <Tên>'s profile" có thể hiện trước các nút kết bạn: chờ thêm rồi đọc lại 1 lần
+                ctl.sleep(random.uniform(2.0, 3.0))
+                info = _script(driver, _PROFILE_STATE_JS) or {}
+            name = str(info.get("owner") or "").strip()[:150] or None
+            keys = owners.keys(link["source"], page_url) if owners else []
+            if info.get("state") != "add" or info.get("button") is None:
+                if keys and info.get("state") in ("pending", "friends"):
+                    owners.record(keys, "sent" if info["state"] == "pending" else "friends", name, page_url)
+                reason = _PROFILE_SKIP_REASONS.get(info.get("state"), "không đọc được trang cá nhân")
+                skip(link, SKIP_DONE if info.get("state") in _PROFILE_SKIP_REASONS else SKIP_UNAVAILABLE,
+                     reason, name, page_url)
+                ctl.sleep(random.uniform(*LINK_SKIP_PAUSE))
+                continue
+            other = owners.claim(keys, name, page_url) if keys else None
+            if other:
+                skip(link, SKIP_OWNED, f"người này đã thuộc nick khác trong dàn ({other})", name, page_url)
+                ctl.sleep(random.uniform(*LINK_SKIP_PAUSE))
+                continue
+            if not _human_click(driver, info["button"]):
+                if keys:
+                    owners.release(keys)
+                skip(link, SKIP_UNAVAILABLE, "không bấm được nút Thêm bạn bè", name, page_url)
+                continue
+            ctl.sleep(random.uniform(1.5, 2.5))
+
+            if check_account_state(driver) == "blocked":
+                _close_dialogs(driver)
+                log("error", f"Facebook chặn kết bạn khi gửi cho {name or link['source']}")
+                return {**_result("BLOCKED", f"Bị chặn tính năng kết bạn sau {sent} lời mời", sent), "targets": targets}
+            if _find_visible(driver, FARM_FRIEND["know_person_dialog"]):
+                if keys:
+                    owners.release(keys)
+                _close_dialogs(driver)
+                log("warning", f"Facebook hỏi 'Bạn có biết người này' khi gửi cho {name or link['source']}, dừng kết bạn")
+                status = "SUCCESS" if sent else "SKIPPED"
+                return {**_result(status, f"Đã gửi {sent} lời mời theo danh sách, dừng do Facebook hỏi "
+                                          f"'Bạn có biết người này'", sent), "targets": targets}
+
+            sent += 1
+            if keys:
+                owners.settle(keys, "sent", name, page_url)
+            targets.append({"name": name, "url": page_url, "source_url": link["source"], "result": "sent"})
+            _count(progress, sent)
+            log("success", f"đã gửi lời mời {sent}/{target}: {name or page_url}")
+            if sent < target and index < len(links):
+                _pause_between(driver, ctl, delay, report, f"Kết bạn {sent}/{target}")
+    except Exception as e:
+        _keep_targets(e, targets)
+        raise
+
+    summary = _list_summary(sent, target, "lời mời", skipped, len(links))
+    if sent == 0:
+        return {**_result("SKIPPED", f"Không gửi được lời mời nào theo danh sách ({summary})"), "targets": targets}
+    return {**_result("SUCCESS", f"Đã gửi {summary} theo danh sách", sent), "targets": targets}
+
+
+# ─────────────────────────── RỜI NHÓM ────────────────────────────
+
+LEAVE_SCROLL_ROUNDS = 6  # Cuộn danh sách nhóm giữa trang để tải đủ thẻ (thẻ tải dần khi cuộn)
+
+# Nhóm đã tham gia trên groups/joins (đã kiểm 2026-10-22): thẻ giữa trang "<Tên> | You last visited | <thời gian>"
+# + nút More (1 nhóm vẽ nhiều bản, gom theo link); cột trái "Groups you manage" (admin) rồi "Groups you've joined",
+# mỗi dòng "Last active <thời gian>". Tên nhóm có thể trùng nhau nên gom theo link /groups/<id|tên>.
+_JOINED_GROUPS_JS = r"""
+const RESERVED = ['joins', 'discover', 'feed', 'create', 'search', 'notifications'];
+const idOf = (a) => {
+  const m = (a.getAttribute('href') || '').match(/\/groups\/([^/?#]+)/);
+  return m && !RESERVED.includes(m[1]) ? m[1] : null;
+};
+const groupIds = (node) => new Set(Array.from(node.querySelectorAll('a[href*="/groups/"]'), idOf).filter(Boolean));
+const out = {};
+const get = (id, name) => out[id] || (out[id] = {id, name: name || null, visited: null, active: null, admin: false, card: false});
+const main = document.querySelector('[role="main"]');
+for (const a of (main ? main.querySelectorAll('a[href*="/groups/"]') : [])) {
+  const id = idOf(a);
+  if (!id || (out[id] && out[id].card)) continue;
+  let node = a, card = null;
+  for (let i = 0; i < 12 && node; i++, node = node.parentElement) {
+    if (groupIds(node).size > 1) break;
+    if (node.querySelector('[role="button"][aria-label="More"]')) { card = node; break; }
+  }
+  if (!card) continue;
+  const lines = (card.innerText || '').split('\n').map((s) => s.trim()).filter(Boolean);
+  const at = lines.findIndex((l) => /^You last visited$/i.test(l));
+  const g = get(id, lines[0]);
+  g.card = true;
+  g.visited = at >= 0 ? (lines[at + 1] || null) : null;
+}
+for (const nav of document.querySelectorAll('[role="navigation"]')) {
+  let section = null;
+  for (const el of nav.querySelectorAll('*')) {
+    if (!el.children.length) {
+      const t = (el.textContent || '').trim();
+      if (t === 'Groups you manage') section = 'manage';
+      else if (t === "Groups you've joined") section = 'joined';
+    }
+    if (el.tagName !== 'A' || !section) continue;
+    const id = idOf(el);
+    if (!id) continue;
+    let node = el, text = '';
+    for (let i = 0; i < 4 && node; i++, node = node.parentElement) {
+      if (groupIds(node).size > 1) break;
+      text = node.innerText || '';
+      if (/Last active/.test(text)) break;
+    }
+    const g = get(id, (el.innerText || '').split('\n')[0].trim());
+    const m = text.match(/Last active\s+([^\n]+)/);
+    if (m) g.active = m[1].trim();
+    if (section === 'manage') g.admin = true;
+  }
+}
+return Object.values(out);
+"""
+
+# Nút More trên thẻ của 1 nhóm (cùng cách tìm thẻ như trên)
+_GROUP_MORE_JS = r"""
+const id = arguments[0];
+const RESERVED = ['joins', 'discover', 'feed', 'create', 'search', 'notifications'];
+const idOf = (a) => { const m = (a.getAttribute('href') || '').match(/\/groups\/([^/?#]+)/); return m && !RESERVED.includes(m[1]) ? m[1] : null; };
+const main = document.querySelector('[role="main"]');
+for (const a of (main ? main.querySelectorAll('a[href*="/groups/"]') : [])) {
+  if (idOf(a) !== id) continue;
+  let node = a;
+  for (let i = 0; i < 12 && node; i++, node = node.parentElement) {
+    if (new Set(Array.from(node.querySelectorAll('a[href*="/groups/"]'), idOf).filter(Boolean)).size > 1) break;
+    const more = Array.from(node.querySelectorAll('[role="button"][aria-label="More"]')).find((b) => b.getClientRects().length);
+    if (more) return more;
+  }
+}
+return null;
+"""
+
+_AGO_UNITS = {"second": 1 / 86400, "minute": 1 / 1440, "hour": 1 / 24, "day": 1, "week": 7, "month": 30, "year": 365}
+_AGO_RE = re.compile(r"^(?:about |over |almost )?(a few|a|an|one|\d+) (second|minute|hour|day|week|month|year)s? ago$")
+
+
+def parse_ago_days(text: Optional[str]) -> Optional[float]:
+    """'5 days ago' -> 5; 'about an hour ago' -> 0.04; 'a week ago' -> 7. Không nhận ra dạng chữ thì None."""
+    value = re.sub(r"\s+", " ", (text or "").strip().lower())
+    if value == "just now":
+        return 0.0
+    if value == "yesterday":
+        return 1.0
+    m = _AGO_RE.match(value)
+    if not m:
+        return None
+    count = {"a few": 3, "a": 1, "an": 1, "one": 1}.get(m.group(1))
+    return (count if count is not None else int(m.group(1))) * _AGO_UNITS[m.group(2)]
+
+
+def _load_joined_groups(driver, ctl: FarmControl) -> list:
+    """Mở đủ danh sách: bấm See all ở cột trái, cuộn giữa trang tới khi số thẻ không tăng nữa."""
+    buttons = _find_visible(driver, FARM_LEAVE["see_all"])
+    if buttons and _human_click(driver, buttons[0]):
+        ctl.sleep(random.uniform(2.0, 3.0))
+    groups, last = [], -1
+    for _ in range(LEAVE_SCROLL_ROUNDS):
+        groups = _script(driver, _JOINED_GROUPS_JS) or []
+        cards = sum(1 for g in groups if g.get("card"))
+        if cards == last:
+            break
+        last = cards
+        human_scroll(driver, random.randint(900, 1300), allow_keys=False)
+        ctl.sleep(random.uniform(1.5, 2.5))
+    return groups
+
+
+def _leave_group(driver, ctl: FarmControl, group_id: str) -> str:
+    """
+    Rời 1 nhóm: More trên thẻ -> Leave group -> hộp xác nhận. Trả "left" / "last_admin" (hộp "Delete group by
+    leaving?", đã bấm Cancel) / "no_menu" (không thấy nút / mục rời nhóm) / "no_dialog" / "blocked".
+    """
+    more = _script(driver, _GROUP_MORE_JS, group_id)
+    if more is None or not _human_click(driver, more):
+        return "no_menu"
+    ctl.sleep(random.uniform(1.0, 2.0))
+    items = _find_visible(driver, FARM_LEAVE["menu_leave"])
+    if not items:
+        _close_dialogs(driver)
+        return "no_menu"
+    _human_click(driver, items[0])
+    ctl.sleep(random.uniform(1.5, 2.5))
+    dialogs = _find_visible(driver, FARM_LEAVE["dialog"])
+    if not dialogs:
+        _close_dialogs(driver)
+        return "no_dialog"
+    dialog = dialogs[-1]
+    try:
+        text = dialog.text or ""
+        if re.search(r"Delete group|Xóa nhóm", text):
+            # Nick là admin cuối: rời là xóa luôn nhóm, không bao giờ làm
+            cancel = dialog.find_elements(By.XPATH, FARM_LEAVE["dialog_cancel"])
+            if not (cancel and _human_click(driver, cancel[0])):
+                _close_dialogs(driver)
+            return "last_admin"
+        confirm = dialog.find_elements(By.XPATH, FARM_LEAVE["dialog_confirm"])
+    except WebDriverException:
+        _close_dialogs(driver)
+        return "no_dialog"
+    if not confirm or not _human_click(driver, confirm[-1]):
+        _close_dialogs(driver)
+        return "no_dialog"
+    ctl.sleep(random.uniform(2.0, 3.0))
+    if check_account_state(driver) == "blocked":
+        _close_dialogs(driver)
+        return "blocked"
+    return "left"
+
+
+def run_leave_groups(driver, ctl: FarmControl, target: int, criteria: str, days: float, keep_admin: bool,
+                     report: Callable[[str], None], progress: Optional[Callable[[int], None]] = None,
+                     delay: tuple = LEAVE_DELAY_RANGE, recent: Optional[dict] = None,
+                     log: Optional[Callable[[str, str], None]] = None) -> dict:
+    """
+    Rời nhóm trên trang groups/joins theo 1 tiêu chí, chọn ngẫu nhiên trong các nhóm đủ tiêu chí:
+      not_visited: "You last visited" >= days; inactive: "Last active" >= days;
+      recent: nhóm trong `recent` (key "group:<id>" -> số ngày từ lúc tool vào, đã lọc theo days ở routes).
+    Nhóm không đọc được thời gian thì không rời. keep_admin: không rời nhóm trong "Groups you manage".
+    Ít nhóm đủ tiêu chí hơn target thì chỉ rời số đủ tiêu chí. "targets": nhóm đã rời / bỏ qua kèm lý do.
+    """
+    if target <= 0:
+        return _result("SKIPPED", "Số nhóm rời = 0")
+    log = log or (lambda level, text: None)
+    _open(driver, ctl, FB_GROUPS_JOINS)
+    _wait_for_any(driver, ctl, FARM_LEAVE["more_buttons"])
+    groups = _load_joined_groups(driver, ctl)
+
+    eligible, unreadable, admins, no_card = [], 0, 0, 0
+    for g in groups:
+        if criteria == "recent":
+            age = (recent or {}).get(f"group:{str(g['id']).lower()}")
+            if age is None:
+                continue
+            reason = f"tool vào nhóm {age:.1f} ngày trước"
+        else:
+            text = g.get("visited") if criteria == "not_visited" else g.get("active")
+            value = parse_ago_days(text)
+            if value is None:
+                unreadable += 1
+                continue
+            if value < days:
+                continue
+            reason = f"{'You last visited' if criteria == 'not_visited' else 'Last active'} {text}"
+        if keep_admin and g.get("admin"):
+            admins += 1
+            continue
+        if not g.get("card"):
+            no_card += 1
+            continue
+        eligible.append((g, reason))
+    random.shuffle(eligible)
+    notes = [f"{n} nhóm {what}" for n, what in ((unreadable, "không đọc được thời gian, không rời"),
+                                                (admins, "là Admin/Mod, giữ lại"),
+                                                (no_card, "không thấy thẻ để rời")) if n]
+    if notes:
+        log("info", "; ".join(notes))
+    if not eligible:
+        return _result("SKIPPED", f"Không có nhóm nào đủ tiêu chí trong {len(groups)} nhóm đã tham gia"
+                                  + (f" ({'; '.join(notes)})" if notes else ""))
+
+    left = 0
+    targets = []
+    try:
+        for g, reason in eligible:
+            if left >= target:
+                break
+            ctl.checkpoint()
+            report(f"Rời nhóm: {left}/{target}, đang rời {g.get('name') or g['id']}")
+            outcome = _leave_group(driver, ctl, g["id"])
+            entry = {"name": g.get("name"), "url": f"https://www.facebook.com/groups/{g['id']}/", "reason": reason}
+            if outcome == "blocked":
+                log("error", f"Facebook chặn khi rời nhóm {g.get('name') or g['id']}")
+                return {**_result("BLOCKED", f"Bị chặn khi rời nhóm sau {left} nhóm", left), "targets": targets}
+            if outcome == "left":
+                left += 1
+                targets.append({**entry, "result": "left", "status": "left"})
+                _count(progress, left)
+                log("success", f"đã rời {left}/{target}: {g.get('name') or g['id']} ({reason})")
+                if left < target:
+                    _pause_between(driver, ctl, delay, report, f"Rời nhóm {left}/{target}")
+            elif outcome == "last_admin":
+                targets.append({**entry, "result": "skipped_last_admin",
+                                "reason": "nick là admin cuối, rời sẽ xóa nhóm (đã bấm Hủy)"})
+                log("warning", f"bỏ qua {g.get('name') or g['id']}: nick là admin cuối, rời sẽ xóa nhóm")
+            else:
+                targets.append({**entry, "result": "skipped_unavailable", "reason": "không mở được menu / hộp rời nhóm"})
+                log("warning", f"bỏ qua {g.get('name') or g['id']}: không mở được menu / hộp rời nhóm")
+    except Exception as e:
+        _keep_targets(e, targets)
+        raise
+
+    criteria_text = {"not_visited": f"không vào nhóm >= {days} ngày", "inactive": f"nhóm không hoạt động >= {days} ngày",
+                     "recent": f"vào trong {days} ngày qua"}.get(criteria, criteria)
+    if left == 0:
+        return {**_result("SKIPPED", f"Không rời được nhóm nào ({criteria_text})"), "targets": targets}
+    tail = "" if left >= target else f", chỉ có {len(eligible)} nhóm đủ tiêu chí"
+    return {**_result("SUCCESS", f"Đã rời {left}/{target} nhóm ({criteria_text}){tail}", left), "targets": targets}
 
 
 def run_check_notifications(driver, ctl: FarmControl, report: Callable[[str], None]) -> dict:
@@ -1177,9 +2237,11 @@ def run_check_notifications(driver, ctl: FarmControl, report: Callable[[str], No
 
 def _move_mouse_off(driver):
     """Đưa chuột vào vùng nội dung để tắt dòng nhắc 'Thông báo' còn hiện dưới nút chuông."""
+    if _park_mouse(driver):
+        return
     targets = _find_visible(driver, ['//div[@role="main"]'])
     try:
-        ActionChains(driver).move_to_element(targets[0] if targets else driver.find_element(By.TAG_NAME, "body")).perform()
+        hover_element(driver, targets[0] if targets else driver.find_element(By.TAG_NAME, "body"))
     except WebDriverException:
         pass
 
