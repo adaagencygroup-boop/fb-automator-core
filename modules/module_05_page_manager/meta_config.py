@@ -7,6 +7,10 @@ REQUIRED_SCOPES = {
     "pages_manage_engagement", "pages_messaging", "pages_manage_metadata",
 }
 
+OPTIONAL_SCOPES = {"read_insights"}
+
+ALL_SCOPES = REQUIRED_SCOPES | OPTIONAL_SCOPES
+
 
 def credentials():
     app_id = os.getenv("FACEBOOK_APP_ID", "").strip()
