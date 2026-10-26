@@ -263,7 +263,7 @@ export async function getNotifications({
     return {
       notifications: raw.map(mapNotification),
       unreadCounts: res?.unread_counts || {},
-      typeCounts: res?.type_counts || {},
+      pageUnread: res?.page_unread || {},
       total: Number(res?.total ?? raw.length) || 0,
       page: Number(res?.page ?? page) || 1,
       totalPages: Number(res?.total_pages ?? 1) || 1,
@@ -272,7 +272,8 @@ export async function getNotifications({
   } catch (error) {
     console.warn("[getNotifications] Lỗi tải thông báo từ Backend:", error.message);
     return {
-      notifications: [], unreadCounts: {}, typeCounts: {}, total: 0, page: 1, totalPages: 1,
+      notifications: [], unreadCounts: {}, pageUnread: {},
+      total: 0, page: 1, totalPages: 1,
       isMock: false, error: error.message || "Không tải được thông báo",
     };
   }

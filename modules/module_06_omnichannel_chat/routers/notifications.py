@@ -79,6 +79,9 @@ def get_notifications(
         where_clauses.append("p.facebook_user_id = :fb_uid")
         params["fb_uid"] = str(facebook_user_id)
 
+    scope_clauses = list(where_clauses)
+    scope_params = dict(params)
+
     if page_id:
         where_clauses.append("p.page_id = :page_id")
         params["page_id"] = str(page_id)
@@ -99,6 +102,12 @@ def get_notifications(
     page_rows = db.execute(sql, params).mappings().all()
     page_dict = {str(r["page_id"]): r["page_name"] for r in page_rows}
     allowed_page_ids = list(page_dict.keys())
+
+    if page_id:
+        scope_sql = text(str(sql).replace(where_sql, ("WHERE " + " AND ".join(scope_clauses)) if scope_clauses else ""))
+        scope_page_ids = [str(r["page_id"]) for r in db.execute(scope_sql, scope_params).mappings().all()]
+    else:
+        scope_page_ids = allowed_page_ids
 
     p_page = page if isinstance(page, int) else None
     p_size = page_size if isinstance(page_size, int) else None
@@ -155,25 +164,29 @@ def get_notifications(
     # Dem o day tren cung pham vi (2 tuan + page duoc phep + page_id neu co),
     # nhung KHONG an theo tab/filter/search dang chon — badge phai dung yen khi
     # nguoi dung doi tab.
-    counted = db.query(Notification)        .filter(Notification.created_time >= two_weeks_ago)        .filter(Notification.page_id.in_(allowed_page_ids))        .filter(Notification.unread == True)
+    counted = (
+        db.query(Notification)
+        .filter(Notification.created_time >= two_weeks_ago)
+        .filter(Notification.page_id.in_(allowed_page_ids))
+        .filter(Notification.unread == True)
+    )
     unread_counts = {
         "comment": counted.filter(Notification.notification_type == "comment").count(),
         "interaction": counted.filter(Notification.notification_type != "comment").count(),
     }
 
-    # Tong moi tab (so trong ngoac tren sub-tab), AN theo `filter` dang chon
-    # nhung KHONG an theo tab — doi tab thi so hai ben phai dung yen.
-    typed = db.query(Notification)        .filter(Notification.created_time >= two_weeks_ago)        .filter(Notification.page_id.in_(allowed_page_ids))
-    if s_filter == "unread":
-        typed = typed.filter(Notification.unread == True)
-    elif s_filter == "unreplied":
-        typed = typed.filter(Notification.is_replied == False)
-    elif s_filter == "replied":
-        typed = typed.filter(Notification.is_replied == True)
-    type_counts = {
-        "comment": typed.filter(Notification.notification_type == "comment").count(),
-        "interaction": typed.filter(Notification.notification_type != "comment").count(),
-    }
+    # Badge tren danh sach Page: {page_id: so chua doc}. Mot cau GROUP BY, va
+    # KHONG an theo page_id/tab/filter dang chon — badge phai dung yen khi nguoi
+    # dung bam quanh, chi doi khi that su co cai gi do duoc doc.
+    page_unread = {}
+    if scope_page_ids:
+        rows = db.query(Notification.page_id, func.count(Notification.id))\
+            .filter(Notification.created_time >= two_weeks_ago)\
+            .filter(Notification.page_id.in_(scope_page_ids))\
+            .filter(Notification.unread == True)\
+            .group_by(Notification.page_id)\
+            .all()
+        page_unread = {str(pid): int(cnt) for pid, cnt in rows}
 
     if is_paginated:
         results = query.offset(effective_offset).limit(effective_page_size).all()
@@ -212,7 +225,7 @@ def get_notifications(
             items=notif_list,
             notifications=notif_list,
             unread_counts=unread_counts,
-            type_counts=type_counts,
+            page_unread=page_unread,
             total=total,
             page=effective_page,
             page_size=effective_page_size,

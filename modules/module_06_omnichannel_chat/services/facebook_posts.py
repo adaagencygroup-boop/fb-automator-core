@@ -100,54 +100,6 @@ class FacebookPostService:
                 breakdown[key] = count
         return breakdown
 
-    async def _fetch_post_views(self, post_id: str, access_token: str):
-        """So luot xem bai viet, qua canh /insights.
-
-        CHI dung metric con song. Mo ta cu (post_impressions, post_engaged_users,
-        post_video_views_unique) da bi khai tu sau Graph v25 — gui len la Graph
-        tra "(#100) The value must be a valid insight" va hong ca lenh goi.
-
-        Do thuc te 23/10/2026: ca ba metric duoi deu duoc CHAP NHAN nhung tra ve
-        `data: []`, ke ca o cap Page. Nhieu kha nang token thieu `read_insights`
-        / tac vu ANALYZE. Vi vay ham nay phai chiu duoc rong, va tra ve None de
-        FE an han o do di thay vi hien so 0 gia.
-        """
-        metrics = "post_media_view,post_total_media_view_unique,post_video_views"
-        url = f"https://graph.facebook.com/{FACEBOOK_API_VERSION}/{post_id}/insights"
-        params = {"metric": metrics, "access_token": access_token}
-
-        try:
-            response = await asyncio.to_thread(requests.get, url, params=params, timeout=15)
-            data = response.json()
-        except Exception as e:
-            print(f"[FacebookPostService] Post views skipped (network): {e}")
-            return None
-
-        if not isinstance(data, dict) or "error" in data:
-            err = (data or {}).get("error", {}) if isinstance(data, dict) else {}
-            print(f"[FacebookPostService] Post views skipped: {err.get('message', 'unknown')}")
-            return None
-
-        found = {}
-        for item in data.get("data") or []:
-            if not isinstance(item, dict):
-                continue
-            values = item.get("values") or []
-            raw = values[0].get("value") if values and isinstance(values[0], dict) else None
-            # Mot so metric tra ve dict chia nho (vd. theo nguon) thay vi mot so
-            if isinstance(raw, dict):
-                raw = sum(v for v in raw.values() if isinstance(v, int))
-            if isinstance(raw, int) and raw > 0:
-                found[item.get("name")] = raw
-
-        if not found:
-            return None
-        # Video thi uu tien luot xem video, con lai lay luot hien thi noi dung
-        for key in ("post_video_views", "post_media_view", "post_total_media_view_unique"):
-            if key in found:
-                return {"count": found[key], "metric": key}
-        return None
-
     async def _fetch_comment_total(self, post_id: str, access_token: str):
         """Tong so binh luan KE CA cau tra loi.
 
@@ -354,11 +306,10 @@ class FacebookPostService:
             # Chay song song de khong cong them mot vong doi mang.
             # _fetch_reaction_breakdown tu bat moi loi nen gather chi co the
             # vang loi tu lenh lay chi tiet bai viet.
-            response, breakdown, comment_total, views = await asyncio.gather(
+            response, breakdown, comment_total = await asyncio.gather(
                 asyncio.to_thread(requests.get, url, params=params, timeout=15),
                 self._fetch_reaction_breakdown(post_id, page.page_access_token),
                 self._fetch_comment_total(post_id, page.page_access_token),
-                self._fetch_post_views(post_id, page.page_access_token),
             )
             response_json = response.json()
         except Exception as e:
@@ -404,10 +355,6 @@ class FacebookPostService:
         # Danh sach chinh dem theo toplevel; day moi la con so ke ca tra loi
         if comment_total is not None:
             response_json["comment_total"] = comment_total
-
-        # Khong co = thieu quyen insights hoac bai chua co so lieu -> FE an di
-        if views:
-            response_json["views"] = views
 
         return response_json
 
