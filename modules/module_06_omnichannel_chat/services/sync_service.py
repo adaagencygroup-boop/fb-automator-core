@@ -52,7 +52,7 @@ class FacebookSyncService:
             try:
                 sub_url = f"https://graph.facebook.com/{FACEBOOK_API_VERSION}/{page_id}/subscribed_apps"
                 requests.post(sub_url, params={
-                    "subscribed_fields": "messages,messaging_postbacks,feed",
+                    "subscribed_fields": "messages,messaging_postbacks,feed,message_reads,message_reactions",
                     "access_token": token
                 }, timeout=10)
             except Exception as sub_err:
@@ -460,6 +460,9 @@ class FacebookSyncService:
     async def get_customer_profile(self, psid: str, page_id: str):
         return await self.chat_service.get_customer_profile(psid, page_id)
 
+    async def mark_seen(self, page_id: str, recipient_id: str):
+        return await self.chat_service.mark_seen(page_id, recipient_id)
+
     @staticmethod
     async def trigger_web_push(db: Session, facebook_user_id: str, title: str, body: str, target_url: str = "/"):
         return await WebPushService.trigger_web_push(db, facebook_user_id, title, body, target_url=target_url)
@@ -557,7 +560,7 @@ def sync_app_webhook(force: bool = False) -> Dict[str, Any]:
         requests.post(sub_url, data={
             "object": "page",
             "callback_url": target_callback,
-            "fields": "messages,messaging_postbacks,feed",
+            "fields": "messages,messaging_postbacks,feed,message_reads,message_reactions",
             "verify_token": verify_token,
             "access_token": app_token
         }, timeout=10)
