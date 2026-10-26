@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { toast } from "@/lib/toast";
 import { SectionCard, Field } from "../../shared/components";
 
 export default function GroupMediaSection({
@@ -57,6 +58,47 @@ export default function GroupMediaSection({
   };
 
   const handleSave = () => {
+    const totalMedia = mediaFiles.length;
+    const minVal = parseInt(minMedia, 10) || 0;
+    const maxVal = parseInt(maxMedia, 10) || 0;
+
+    if (totalMedia > 0) {
+      if (maxVal > totalMedia) {
+        toast.error(
+          `Số lượng media tối đa mỗi bài (${maxVal}) không được lớn hơn tổng số media đã chọn (${totalMedia}). Vui lòng điều chỉnh lại!`,
+          "LỖI CẤU HÌNH MEDIA"
+        );
+        return;
+      }
+      if (minVal > totalMedia) {
+        toast.error(
+          `Số lượng media tối thiểu mỗi bài (${minVal}) không được lớn hơn tổng số media đã chọn (${totalMedia}). Vui lòng điều chỉnh lại!`,
+          "LỖI CẤU HÌNH MEDIA"
+        );
+        return;
+      }
+      if (minVal > maxVal) {
+        toast.error(
+          `Số lượng media tối thiểu (${minVal}) không được lớn hơn số lượng tối đa (${maxVal}). Vui lòng điều chỉnh lại!`,
+          "LỖI CẤU HÌNH MEDIA"
+        );
+        return;
+      }
+      if (maxVal < 1) {
+        toast.error(
+          "Số lượng media tối đa mỗi bài phải từ 1 trở lên khi có chọn media.",
+          "LỖI CẤU HÌNH MEDIA"
+        );
+        return;
+      }
+      toast.success(
+        `Đã lưu cấu hình: Mỗi bài viết sẽ chọn ngẫu nhiên từ ${minVal} đến ${maxVal} tệp trong tổng số ${totalMedia} tệp đã tải lên.`,
+        "LƯU MEDIA THÀNH CÔNG"
+      );
+    } else {
+      toast.info("Đã lưu cấu hình: Không sử dụng media (bài viết dạng văn bản thuần).", "CẤU HÌNH MEDIA");
+    }
+
     setIsLocked?.(true);
     onContinue?.();
   };
@@ -222,12 +264,44 @@ export default function GroupMediaSection({
 
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <Field label="Tối thiểu media mỗi bài">
-          <Input type="number" min="0" value={minMedia} onChange={(event) => setMinMedia(event.target.value)} disabled={isLocked} />
+          <Input
+            type="number"
+            min="0"
+            max={mediaFiles.length || undefined}
+            value={minMedia}
+            onChange={(event) => setMinMedia(event.target.value)}
+            disabled={isLocked}
+          />
         </Field>
         <Field label="Tối đa media mỗi bài">
-          <Input type="number" min="0" value={maxMedia} onChange={(event) => setMaxMedia(event.target.value)} disabled={isLocked} />
+          <Input
+            type="number"
+            min="0"
+            max={mediaFiles.length || undefined}
+            value={maxMedia}
+            onChange={(event) => setMaxMedia(event.target.value)}
+            disabled={isLocked}
+          />
         </Field>
       </div>
+
+      {mediaFiles.length > 0 && (
+        <div className="mt-2.5">
+          {Number(maxMedia) > mediaFiles.length ? (
+            <p className="text-[11px] font-medium text-rose-600">
+              ⚠️ Số lượng tối đa ({maxMedia}) đang lớn hơn tổng số tệp đã tải lên ({mediaFiles.length}). Vui lòng giảm số tối đa hoặc tải thêm tệp.
+            </p>
+          ) : Number(minMedia) > Number(maxMedia) ? (
+            <p className="text-[11px] font-medium text-rose-600">
+              ⚠️ Số lượng tối thiểu ({minMedia}) không được lớn hơn số lượng tối đa ({maxMedia}).
+            </p>
+          ) : (
+            <p className="text-[11px] text-slate-500">
+              💡 Hệ thống sẽ <strong>chọn ngẫu nhiên từ {minMedia || 0} đến {maxMedia || 0} tệp</strong> trong tổng số {mediaFiles.length} tệp đã chọn cho mỗi bài đăng vào nhóm.
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="mt-4 flex justify-end border-t border-slate-100 pt-3">
         {isLocked ? (

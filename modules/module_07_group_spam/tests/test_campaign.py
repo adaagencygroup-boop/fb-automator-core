@@ -161,7 +161,31 @@ class CampaignTests(unittest.TestCase):
 
         self.assertEqual(poster._wait_until(rerendering_condition, 1, "not found"), "fresh-element")
         self.assertEqual(len(calls), 2)
+    def test_campaign_log_includes_group_name_link_and_status(self):
+        job = CampaignJob(id="job-log-test", owner="owner-1", payload={})
+        account = {"uid": "61577080577029", "id": 1, "profile_name": "Test User"}
+        group = {"key": "12345", "name": "NHÓM BÁN HÀNG ONLINE", "url": "https://www.facebook.com/groups/12345"}
+        result = {"status": "SUCCESS", "message": "Đăng bài thành công"}
+        self.manager._record_result(job, account, group, result)
+        logs = job.public()["logs"]
+        self.assertTrue(any(
+            "[61577080577029] NHÓM BÁN HÀNG ONLINE (https://www.facebook.com/groups/12345): Đăng bài thành công" in log["message"]
+            for log in logs
+        ))
+
+
+    def test_campaign_completion_records_success_log(self):
+        payload = self.payload()
+        payload["account_uids"] = ["100"]
+        payload["groups"] = [{"key": "g1", "url": "https://facebook.com/groups/g1", "name": "Nhóm 1"}]
+        with patch.object(self.manager, "_load_accounts", return_value=self.accounts):
+            started = self.manager.start(payload, "owner-1")
+            result = wait_for_job(self.manager, started["job_id"])
+        self.assertEqual(result["status"], "COMPLETED")
+        logs = result["logs"]
+        self.assertTrue(any("Chiến dịch đã hoàn thành thành công" in log["message"] for log in logs))
 
 
 if __name__ == "__main__":
     unittest.main()
+

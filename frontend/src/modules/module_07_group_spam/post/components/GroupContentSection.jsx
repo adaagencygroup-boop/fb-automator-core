@@ -17,6 +17,7 @@ import {
   ListOrdered,
   Minus,
 } from "lucide-react";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -106,6 +107,7 @@ export default function GroupContentSection({
   const editorRef = externalEditorRef || localEditorRef;
   const inlineImageRef = useRef(null);
   const postsRef = useRef(posts);
+  const isTypingRef = useRef(false);
   const linkRangeRef = useRef(null);
 
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
@@ -117,12 +119,19 @@ export default function GroupContentSection({
     postsRef.current = posts;
   }, [posts]);
 
-  // Nạp lại nội dung tương ứng khi người dùng chuyển tab bài viết.
+  // Đồng bộ nội dung vào editor khi chuyển tab bài viết, khi AI tạo bài mới, hoặc khi editor mount.
   useEffect(() => {
-    if (editorRef.current) {
-      editorRef.current.innerHTML = editorHtml(postsRef.current[activePost] || "");
+    if (isTypingRef.current) {
+      isTypingRef.current = false;
+      return;
     }
-  }, [activePost, editorRef]);
+    if (editorRef.current) {
+      const targetHtml = editorHtml(posts[activePost] || "");
+      if (editorRef.current.innerHTML !== targetHtml) {
+        editorRef.current.innerHTML = targetHtml;
+      }
+    }
+  }, [activePost, posts, hasGeneratedContent, editorRef]);
 
   const isDuplicateContent = aiCount === "duplicate";
   const visiblePosts = isDuplicateContent ? posts.slice(0, 1) : posts;
@@ -137,6 +146,11 @@ export default function GroupContentSection({
   };
 
   const handleSave = () => {
+    if (!posts[activePost]?.trim()) {
+      toast.warning("Vui lòng tạo hoặc nhập nội dung bài viết trước khi lưu!", "CHƯA CÓ NỘI DUNG");
+      return;
+    }
+    toast.success("Đã lưu cấu hình nội dung bài viết thành công.", "LƯU THÀNH CÔNG");
     setIsLocked?.(true);
     onContinue?.();
   };
@@ -153,7 +167,10 @@ export default function GroupContentSection({
   const runEditorCommand = (command, value = null) => {
     editorRef.current?.focus();
     document.execCommand(command, false, value);
-    if (editorRef.current) updateActivePost(editorRef.current.innerHTML);
+    if (editorRef.current) {
+      isTypingRef.current = true;
+      updateActivePost(editorRef.current.innerHTML);
+    }
   };
 
   // Lưu vùng chọn để gắn liên kết sau khi người dùng nhập URL trong modal.
@@ -352,7 +369,10 @@ export default function GroupContentSection({
               aria-label={`Nội dung bài ${activePost + 1}`}
               aria-multiline="true"
               aria-readonly={isLocked}
-              onInput={(event) => updateActivePost(event.currentTarget.innerHTML)}
+              onInput={(event) => {
+                isTypingRef.current = true;
+                updateActivePost(event.currentTarget.innerHTML);
+              }}
               onClick={(event) => {
                 const anchor = event.target.closest("a[href]");
                 if (!anchor || !event.currentTarget.contains(anchor)) return;

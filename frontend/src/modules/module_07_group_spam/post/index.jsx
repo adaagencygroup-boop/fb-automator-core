@@ -1,6 +1,16 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { CheckCircle2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 
 import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
@@ -111,6 +121,8 @@ export default function GroupPostModule() {
   // Bước 9: Tiến trình thực thi
   const [runState, setRunState] = useState("idle");
   const [campaignProgress, setCampaignProgress] = useState(null);
+  const [isCompletionModalOpen, setIsCompletionModalOpen] = useState(false);
+  const [completionData, setCompletionData] = useState(null);
 
   // Đọc cấu hình chạy lại từ sessionStorage
   useEffect(() => {
@@ -231,9 +243,15 @@ export default function GroupPostModule() {
         if (terminal) {
           setRunState("idle");
           setCampaignId(null);
-          if (job.status === "COMPLETED") toast.success(job.message, "HOÀN TẤT CHIẾN DỊCH");
-          else if (job.status === "STOPPED") toast.info(job.message, "ĐÃ DỪNG CHIẾN DỊCH");
-          else toast.error(job.message, "CHIẾN DỊCH KẾT THÚC");
+          if (job.status === "COMPLETED" || (job.status === "PARTIAL" && job.success > 0)) {
+            setCompletionData(job);
+            setIsCompletionModalOpen(true);
+            toast.success(job.message || "Chiến dịch đã hoàn thành thành công!", "HOÀN TẤT CHIẾN DỊCH");
+          } else if (job.status === "STOPPED") {
+            toast.info(job.message, "ĐÃ DỪNG CHIẾN DỊCH");
+          } else {
+            toast.error(job.message, "CHIẾN DỊCH KẾT THÚC");
+          }
           return;
         }
         setRunState(job.status === "QUEUED" ? "starting" : "running");
@@ -354,9 +372,10 @@ export default function GroupPostModule() {
       setPosts(result.posts);
       setActivePost(0);
       setHasGeneratedContent(true);
-      if (editorRef.current) editorRef.current.innerHTML = editorHtml(result.posts[0] || "");
+      toast.success(`Đã tạo thành công ${result.count} bài viết bằng AI!`, "TẠO NỘI DUNG THÀNH CÔNG");
       setSettingsFeedback({ type: "success", message: `Đã tạo ${result.count} bài bằng ${model}` });
     } catch (error) {
+      toast.error(error.message || "Không thể tạo nội dung AI", "LỖI TẠO NỘI DUNG");
       setSettingsFeedback({ type: "error", message: error.message || "Không thể tạo nội dung AI" });
     } finally {
       setIsGenerating(false);
@@ -398,6 +417,18 @@ export default function GroupPostModule() {
       return;
     }
 
+    if (mediaFiles.length > 0 && Number(maxMedia) > mediaFiles.length) {
+      toast.error(
+        `Số lượng media tối đa mỗi bài (${maxMedia}) không được lớn hơn tổng số tệp media đã chọn (${mediaFiles.length}). Vui lòng điều chỉnh lại ở Bước 5!`,
+        "LỖI CẤU HÌNH MEDIA"
+      );
+      const el = document.getElementById("step-5-media");
+      if (el) el.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+
+    setIsCompletionModalOpen(false);
+    setCompletionData(null);
     setRunState("starting");
     setCampaignProgress({
       status: "QUEUED",
@@ -770,6 +801,78 @@ export default function GroupPostModule() {
           campaignProgress={campaignProgress}
         />
       </div>
+
+      {/* Popup Modal thông báo hoàn thành chiến dịch */}
+      <Dialog open={isCompletionModalOpen} onOpenChange={setIsCompletionModalOpen}>
+        <DialogContent className="max-w-md p-6">
+          <div className="flex flex-col items-center text-center">
+            <div className="flex size-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 ring-8 ring-emerald-50 mb-3 shadow-xs">
+              <CheckCircle2 className="size-8 text-emerald-600 animate-in zoom-in-75 duration-300" />
+            </div>
+
+            <DialogHeader className="text-center sm:text-center mb-2">
+              <DialogTitle className="text-lg sm:text-xl font-bold text-slate-900 text-center">
+                Chiến dịch hoàn thành thành công!
+              </DialogTitle>
+              <DialogDescription className="text-xs sm:text-sm text-slate-500 text-center mt-1">
+                Tất cả các tài khoản đã hoàn tất lượt đăng bài vào nhóm mục tiêu.
+              </DialogDescription>
+            </DialogHeader>
+
+            {/* Chi tiết thống kê kết quả */}
+            <div className="w-full my-4 rounded-xl border border-emerald-100 bg-emerald-50/70 p-4 text-left space-y-2.5">
+              <div className="flex items-center justify-between text-xs sm:text-sm">
+                <span className="text-slate-600 font-medium">Tên chiến dịch:</span>
+                <span className="font-bold text-slate-800 truncate max-w-[210px]" title={campaignName}>
+                  {campaignName || "Chiến dịch đăng bài nhóm"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs sm:text-sm">
+                <span className="text-slate-600 font-medium">Số lượt đăng thành công:</span>
+                <span className="inline-flex items-center gap-1 font-bold text-emerald-700">
+                  <span className="text-base font-extrabold">{completionData?.success || 0}</span>
+                  <span className="text-xs font-normal text-slate-500">/ {completionData?.total || 0} nhóm</span>
+                </span>
+              </div>
+              {Number(completionData?.failed || 0) > 0 && (
+                <div className="flex items-center justify-between text-xs sm:text-sm">
+                  <span className="text-slate-600 font-medium">Thất bại / Bỏ qua:</span>
+                  <span className="font-semibold text-rose-600">
+                    {completionData.failed} nhóm
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center justify-between text-xs sm:text-sm">
+                <span className="text-slate-600 font-medium">Trạng thái:</span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">
+                  <CheckCircle2 className="size-3" />
+                  {completionData?.status === "COMPLETED" ? "Hoàn tất 100%" : "Hoàn tất một phần"}
+                </span>
+              </div>
+            </div>
+
+            <DialogFooter className="w-full flex flex-col-reverse sm:flex-row sm:justify-end gap-2 mt-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setIsCompletionModalOpen(false);
+                  const el = document.getElementById("step-9-progress");
+                  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+                className="w-full sm:w-auto text-xs"
+              >
+                Xem nhật ký hoạt động
+              </Button>
+              <Button
+                onClick={() => setIsCompletionModalOpen(false)}
+                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm"
+              >
+                Đã hiểu & Đóng
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Sticky Bottom Action Bar */}
       <GroupActionBar
