@@ -42,7 +42,10 @@ export default function GroupSummarySection({
   scheduleDate = "",
   scheduleTime = "",
   stepNumber = "8",
+  contentType = "post",
 }) {
+  const isComment = contentType === "comment";
+  const itemLabel = isComment ? "bình luận" : "bài";
   const summaryItems = [
     [
       <FolderPlus key="camp" className="size-3.5" />,
@@ -58,8 +61,8 @@ export default function GroupSummarySection({
     ],
     [
       <ListFilter key="b" className="size-3.5" />,
-      "Hạn bài",
-      `${maxPosts} bài (kế hoạch ${totalPlanned} bài)`,
+      `Hạn ${itemLabel}`,
+      `${maxPosts} ${itemLabel} (kế hoạch ${totalPlanned} ${itemLabel})`,
     ],
     [
       <Sparkles key="c" className="size-3.5" />,
@@ -68,8 +71,8 @@ export default function GroupSummarySection({
     ],
     [
       <Sparkles key="d" className="size-3.5" />,
-      "Số bài AI",
-      `${generatedCount} / ${postsCount} bài`,
+      `Số ${itemLabel} AI`,
+      `${generatedCount} / ${postsCount} ${itemLabel}`,
     ],
     [
       <Search key="e" className="size-3.5" />,
@@ -82,13 +85,13 @@ export default function GroupSummarySection({
       <ImageIcon key="f" className="size-3.5" />,
       "Min / Max media",
       mediaFilesCount
-        ? `${mediaFilesCount} tệp đã chọn (${minMedia} – ${maxMedia} ảnh/bài)`
+        ? `${mediaFilesCount} tệp đã chọn (${minMedia} – ${maxMedia} ảnh/${itemLabel})`
         : `${minMedia} – ${maxMedia} ảnh`,
     ],
     [<RefreshCw key="g" className="size-3.5" />, "Luồng chạy", `${threads} luồng`],
     [
       <Clock3 key="h" className="size-3.5" />,
-      "Giãn cách đăng",
+      `Giãn cách ${isComment ? "bình luận" : "đăng"}`,
       `${delayMin} – ${delayMax} ${delayUnit === "minutes" ? "phút" : "giây"}`,
     ],
     [
@@ -104,7 +107,7 @@ export default function GroupSummarySection({
         <Info className="size-3.5 text-primary" />
         Lưu ý vận hành an toàn
       </p>
-      <p>Cần nhập API Key hợp lệ để tạo tự động nội dung bài đăng bằng AI.</p>
+      <p>Cần nhập API Key hợp lệ khi muốn tạo tự động nội dung {itemLabel} bằng AI.</p>
       <p>Thiết lập luồng (1–3) và thời gian nghỉ tối thiểu 10 phút để tránh checkpoint.</p>
       <p>Bật chế độ xáo trộn ngẫu nhiên để nội dung mỗi nhóm là duy nhất.</p>
       <p>Kiểm tra trạng thái tài khoản Live trước khi nhấn bắt đầu tác vụ.</p>

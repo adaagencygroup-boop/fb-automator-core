@@ -216,6 +216,120 @@ class CampaignTests(unittest.TestCase):
 
         self.assertEqual(poster._wait_until(rerendering_condition, 1, "not found"), "fresh-element")
         self.assertEqual(len(calls), 2)
+
+    def test_comment_accepts_facebook_aria_placeholder_editor(self):
+        class Textbox:
+            def __init__(self):
+                self.text = ""
+
+            def is_displayed(self):
+                return True
+
+            def is_enabled(self):
+                return True
+
+            def click(self):
+                return None
+
+            def get_attribute(self, name):
+                return self.text if name in {"textContent", "value"} else None
+
+            def send_keys(self, value):
+                if value == "\ue007":
+                    self.text = ""
+                else:
+                    self.text += str(value)
+
+        textbox = Textbox()
+
+        class Link:
+            def get_attribute(self, name):
+                return "https://facebook.com/groups/g1/posts/p1" if name == "href" else None
+
+        class Article:
+            text = ""
+
+            def is_displayed(self):
+                return True
+
+            def find_elements(self, _by, xpath):
+                if "/posts/" in xpath:
+                    return [Link()]
+                if "aria-placeholder" in xpath:
+                    return [textbox]
+                return []
+
+        article = Article()
+
+        class Body:
+            text = ""
+
+        class Driver:
+            current_url = "https://facebook.com/groups/g1"
+
+            def get(self, _url):
+                return None
+
+            def find_elements(self, _by, _xpath):
+                return [article]
+
+            def find_element(self, _by, _value):
+                return Body()
+
+            def execute_script(self, script, *args):
+                if "document.readyState" in script:
+                    return "complete"
+                if "execCommand('insertText'" in script:
+                    args[0].text = args[1]
+                return None
+
+        poster = FacebookGroupPoster({"uid": "100"}, threading.Event(), lambda *_: None)
+        poster.driver = Driver()
+        result = poster.comment(
+            {"key": "g1", "url": "https://facebook.com/groups/g1"},
+            "Anh quan tâm bài viết này",
+            [],
+        )
+
+        self.assertEqual(result["status"], "SUCCESS")
+        self.assertTrue(result["result_url"].endswith("/posts/p1"))
+
+    def test_group_welcome_overlay_is_closed_before_commenting(self):
+        class CloseButton:
+            def is_displayed(self):
+                return True
+
+            def is_enabled(self):
+                return True
+
+        close_button = CloseButton()
+
+        class Dialog:
+            text = "Hey Tuan, welcome to Chợ Laptop & PC"
+            visible = True
+
+            def is_displayed(self):
+                return self.visible
+
+            def find_elements(self, _by, _xpath):
+                return [close_button]
+
+        dialog = Dialog()
+
+        class Driver:
+            def find_elements(self, _by, _xpath):
+                return [dialog]
+
+            def execute_script(self, _script, element):
+                if element is close_button:
+                    dialog.visible = False
+
+        poster = FacebookGroupPoster({"uid": "100"}, threading.Event(), lambda *_: None)
+        poster.driver = Driver()
+
+        self.assertTrue(poster._dismiss_group_join_overlays())
+        self.assertFalse(dialog.visible)
+
     def test_campaign_log_includes_group_name_link_and_status(self):
         job = CampaignJob(id="job-log-test", owner="owner-1", payload={})
         account = {"uid": "61577080577029", "id": 1, "profile_name": "Test User"}

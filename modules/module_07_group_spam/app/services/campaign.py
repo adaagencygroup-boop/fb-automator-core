@@ -234,6 +234,63 @@ class FacebookGroupPoster:
         except Exception:
             pass
 
+    def _dismiss_group_join_overlays(self) -> bool:
+        """Close Facebook welcome/questions overlays left after joining a group."""
+        if self.driver is None:
+            return False
+        try:
+            from selenium.webdriver.common.by import By
+            from selenium.webdriver.common.keys import Keys
+
+            driver = self.driver
+            markers = (
+                "welcome to", "chào mừng", "group rules", "quy tắc nhóm",
+                "answer questions", "membership questions", "câu hỏi thành viên",
+            )
+            dialogs = [
+                item for item in driver.find_elements(By.XPATH, "//*[@role='dialog']")
+                if self._is_displayed(item)
+            ]
+            dismissed = False
+            for dialog in dialogs:
+                try:
+                    dialog_text = (dialog.text or "").lower()
+                except Exception:
+                    dialog_text = ""
+                if not any(marker in dialog_text for marker in markers):
+                    continue
+
+                close_xpath = (
+                    ".//*[@role='button' and (contains(@aria-label,'Đóng') or "
+                    "contains(@aria-label,'Close') or contains(@aria-label,'Dismiss'))] | "
+                    ".//button[contains(@aria-label,'Đóng') or contains(@aria-label,'Close')]"
+                )
+                close_button = next(
+                    (button for button in dialog.find_elements(By.XPATH, close_xpath) if self._is_visible(button)),
+                    None,
+                )
+                if close_button is not None:
+                    driver.execute_script("arguments[0].click()", close_button)
+                else:
+                    driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                dismissed = True
+
+            if dismissed:
+                self._wait_until(
+                    lambda: not any(
+                        self._is_displayed(item)
+                        and any(marker in ((item.text or "").lower()) for marker in markers)
+                        for item in driver.find_elements(By.XPATH, "//*[@role='dialog']")
+                    ),
+                    5,
+                    "Không thể đóng popup chào mừng của nhóm",
+                )
+            return dismissed
+        except InterruptedError:
+            raise
+        except Exception:
+            return False
+
     def _raise_if_cancelled(self) -> None:
         if self.cancel.is_set():
             self._dismiss_open_dialog()
@@ -320,6 +377,7 @@ class FacebookGroupPoster:
                 dialog_text = " ".join((d.text or "").lower() for d in dialogs)
                 question_markers = ("trả lời câu hỏi", "answer questions", "câu hỏi thành viên", "membership questions")
                 if any(marker in dialog_text for marker in question_markers):
+                    self._dismiss_group_join_overlays()
                     return {"status": "REQUIRES_ANSWERS", "message": "Nhóm yêu cầu trả lời câu hỏi tham gia"}
             except Exception:
                 pass
@@ -335,6 +393,7 @@ class FacebookGroupPoster:
         remaining = [b for b in driver.find_elements(By.XPATH, join_xpath) if self._is_displayed(b)]
         if remaining:
             raise RuntimeError("Facebook chưa xác nhận thao tác tham gia nhóm")
+        self._dismiss_group_join_overlays()
         return {"status": "JOINED", "message": "Tham gia nhóm thành công"}
 
     def post(self, group: dict[str, Any], content: str, media: list[str]) -> dict[str, Any]:
@@ -353,6 +412,7 @@ class FacebookGroupPoster:
         )
         if any(part in (driver.current_url or "").lower() for part in ("checkpoint", "/login", "two_step")):
             raise RuntimeError("Tài khoản bị đăng xuất hoặc checkpoint")
+        self._dismiss_group_join_overlays()
 
         opener_xpath = (
             "//div[@role='button'][contains(@aria-label,'Bạn viết gì') or "
@@ -494,14 +554,29 @@ class FacebookGroupPoster:
         )
         if any(part in (driver.current_url or "").lower() for part in ("checkpoint", "/login", "two_step")):
             raise RuntimeError("Tài khoản bị đăng xuất hoặc checkpoint")
+        self._dismiss_group_join_overlays()
 
         article_xpath = "//div[@role='feed']//div[@role='article'] | //div[@role='article']"
+        post_marker_xpath = (
+            ".//a[contains(@href,'/posts/') or contains(@href,'/permalink/') or "
+            "contains(@href,'story_fbid=')] | "
+            ".//*[@role='button' and (contains(@aria-label,'Bình luận') or "
+            "contains(@aria-label,'Comment') or normalize-space(.)='Bình luận' or "
+            "normalize-space(.)='Comment')]"
+        )
 
         def find_first_article():
-            return next(
-                (item for item in driver.find_elements(By.XPATH, article_xpath) if item.is_displayed()),
-                None,
-            )
+            visible = [item for item in driver.find_elements(By.XPATH, article_xpath) if self._is_displayed(item)]
+            # role=article còn được Facebook dùng cho thẻ giới thiệu và một số khối
+            # phụ. Ưu tiên article có permalink hoặc điều khiển bình luận để lấy
+            # đúng bài viết đầu tiên trong feed.
+            for item in visible:
+                try:
+                    if item.find_elements(By.XPATH, post_marker_xpath):
+                        return item
+                except Exception:
+                    continue
+            return visible[0] if visible else None
 
         article = self._wait_until(
             find_first_article,
@@ -546,31 +621,95 @@ class FacebookGroupPoster:
             except Exception:
                 self.log("WARNING", f"[{self.account['uid']}] Không thể tự động thích bài đầu tiên")
 
-        textbox_xpath = (
-            ".//*[@contenteditable='true' and @role='textbox' and "
-            "(contains(@aria-label,'Viết bình luận') or "
-            "contains(@aria-label,'Bình luận dưới tên') or "
-            "contains(@aria-label,'Write a comment') or "
-            "contains(@aria-label,'Comment as'))]"
+        textbox_xpaths = (
+            ".//*[@data-lexical-editor='true' and @role='textbox']",
+            ".//*[@role='textbox' and (contains(@aria-label,'Viết bình luận') or "
+            "contains(@aria-label,'Bình luận dưới tên') or contains(@aria-label,'Bình luận') or "
+            "contains(@aria-label,'Write a comment') or contains(@aria-label,'Comment as') or "
+            "contains(@aria-placeholder,'Bình luận') or contains(@aria-placeholder,'Comment'))]",
+            ".//*[@role='textbox' and @contenteditable='true']",
+            ".//*[@contenteditable='true' and @data-lexical-editor='true']",
+            ".//form[contains(@action,'comment')]//*[@contenteditable='true']",
+            ".//textarea[contains(@placeholder,'Bình luận') or contains(@placeholder,'comment') or "
+            "contains(@aria-label,'Bình luận') or contains(@aria-label,'Comment')]",
         )
 
+        def resolve_article():
+            try:
+                if self._is_displayed(article):
+                    return article
+            except Exception:
+                pass
+            return find_first_article()
+
         def find_textbox():
-            current_article = find_first_article()
+            current_article = resolve_article()
             if current_article is None:
                 return None
-            return next(
-                (item for item in current_article.find_elements(By.XPATH, textbox_xpath)
-                 if item.is_displayed() and item.is_enabled()),
-                None,
+            for textbox_xpath in textbox_xpaths:
+                try:
+                    textbox = next(
+                        (item for item in current_article.find_elements(By.XPATH, textbox_xpath)
+                         if self._is_visible(item)),
+                        None,
+                    )
+                    if textbox is not None:
+                        return textbox
+                except Exception:
+                    continue
+            # Một số phiên bản Facebook render editor bình luận qua portal nên
+            # textbox không còn là con trực tiếp của role=article.
+            global_comment_xpath = (
+                "//*[@role='textbox' and (contains(@aria-label,'Viết bình luận') or "
+                "contains(@aria-label,'Bình luận dưới tên') or contains(@aria-label,'Write a comment') or "
+                "contains(@aria-label,'Comment as') or contains(@aria-placeholder,'Bình luận') or "
+                "contains(@aria-placeholder,'Comment'))] | "
+                "//textarea[contains(@placeholder,'Bình luận') or contains(@placeholder,'comment')]"
             )
+            try:
+                global_textbox = next(
+                    (item for item in driver.find_elements(By.XPATH, global_comment_xpath) if self._is_visible(item)),
+                    None,
+                )
+                if global_textbox is not None:
+                    return global_textbox
+            except Exception:
+                pass
+            # Fallback cho các biến thể DOM mới của Lexical Editor không còn
+            # role=textbox hoặc aria-label như trước.
+            try:
+                return driver.execute_script(
+                    """
+                    const root = arguments[0];
+                    const selectors = [
+                      '[data-lexical-editor="true"][contenteditable="true"]',
+                      '[role="textbox"][contenteditable="true"]',
+                      '[role="textbox"][aria-placeholder]',
+                      'form[action*="comment"] [contenteditable="true"]',
+                      'textarea[placeholder]'
+                    ];
+                    for (const selector of selectors) {
+                      const element = root.querySelector(selector);
+                      if (element && element.getClientRects().length) return element;
+                    }
+                    return null;
+                    """,
+                    current_article,
+                )
+            except Exception:
+                return None
 
         textbox = find_textbox()
         if textbox is None:
-            article = find_first_article() or article
+            article = resolve_article() or article
             comment_button_xpath = (
                 ".//*[@role='button' and "
-                "(@aria-label='Bình luận' or @aria-label='Comment' or "
-                "normalize-space(.)='Bình luận' or normalize-space(.)='Comment')]"
+                "(contains(@aria-label,'Bình luận') or contains(@aria-label,'Comment') or "
+                "contains(@aria-label,'Viết bình luận') or contains(@aria-label,'Write a comment') or "
+                "contains(@aria-label,'Để lại bình luận') or normalize-space(.)='Bình luận' or "
+                "normalize-space(.)='Comment')] | "
+                ".//span[normalize-space(.)='Bình luận' or normalize-space(.)='Comment']"
+                "/ancestor::*[@role='button'][1]"
             )
             button = next(
                 (item for item in article.find_elements(By.XPATH, comment_button_xpath)
@@ -578,14 +717,25 @@ class FacebookGroupPoster:
                 None,
             )
             if button:
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
                 driver.execute_script("arguments[0].click()", button)
             textbox = self._wait_until(
                 find_textbox,
-                15,
+                20,
                 "Không tìm thấy ô bình luận của bài viết đầu tiên",
             )
 
-        textbox.click()
+        try:
+            textbox.click()
+        except Exception:
+            # Popup chào mừng sau khi vừa tham gia nhóm có thể phủ lên editor
+            # dù Selenium vẫn tìm thấy textbox phía sau lớp overlay.
+            self._dismiss_group_join_overlays()
+            try:
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", textbox)
+                driver.execute_script("arguments[0].click(); arguments[0].focus();", textbox)
+            except Exception as exc:
+                raise RuntimeError("Ô bình luận đang bị popup Facebook che, không thể thao tác") from exc
         self._raise_if_cancelled()
         driver.execute_script(
             """
@@ -605,9 +755,29 @@ class FacebookGroupPoster:
             content,
         )
 
+        def textbox_value(element) -> str:
+            try:
+                return str(
+                    element.text
+                    or element.get_attribute("textContent")
+                    or element.get_attribute("value")
+                    or ""
+                ).strip()
+            except Exception:
+                return ""
+
+        # Lexical Editor có thể bỏ qua execCommand mà không ném lỗi.
+        if content.strip() not in textbox_value(textbox):
+            try:
+                textbox.send_keys(content)
+            except Exception as exc:
+                raise RuntimeError("Không thể nhập nội dung vào ô bình luận") from exc
+        if content.strip() not in textbox_value(textbox):
+            raise RuntimeError("Facebook không nhận nội dung bình luận")
+
         if media:
             def upload_comment_media():
-                current_article = find_first_article()
+                current_article = resolve_article()
                 if current_article is None:
                     return False
                 inputs = current_article.find_elements(By.XPATH, ".//input[@type='file']")
@@ -630,17 +800,19 @@ class FacebookGroupPoster:
             10,
             "Ô bình luận không còn khả dụng trước khi gửi",
         )
+        if content.strip() not in textbox_value(textbox):
+            textbox.send_keys(content)
         textbox.send_keys(Keys.ENTER)
 
         def comment_submitted():
             try:
-                value = (textbox.text or textbox.get_attribute("textContent") or "").strip()
+                value = textbox_value(textbox)
                 if not value:
                     return True
             except Exception:
                 return True
             try:
-                current_article = find_first_article()
+                current_article = resolve_article()
                 return bool(current_article and content.strip() in (current_article.text or ""))
             except Exception:
                 return False
