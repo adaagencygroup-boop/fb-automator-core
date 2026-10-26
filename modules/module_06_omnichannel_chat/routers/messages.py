@@ -2,6 +2,7 @@ import os
 import shutil
 import time
 import math
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, or_
@@ -284,7 +285,7 @@ def get_conversations(
     return sorted_convs
 
 @router.put("/conversations/{page_id}/{sender_id}/read")
-def mark_conversation_read(
+async def mark_conversation_read(
     page_id: str,
     sender_id: str,
     db: Session = Depends(get_db)
@@ -292,6 +293,7 @@ def mark_conversation_read(
     unread_msgs = db.query(Message).filter(
         Message.page_id == page_id,
         Message.sender_id == sender_id,
+        Message.direction == "inbound",
         Message.is_read == False
     ).all()
     for msg in unread_msgs:
@@ -305,6 +307,14 @@ def mark_conversation_read(
         conv.is_read = True
 
     db.commit()
+
+    # Gửi hành động "mark_seen" lên Facebook Graph API để hiện avatar Page đã xem ở máy khách
+    try:
+        sync_service = FacebookSyncService(db)
+        asyncio.create_task(sync_service.mark_seen(page_id, sender_id))
+    except Exception as e:
+        print(f"[Mark Seen Trigger Error] {e}")
+
     return {"success": True, "message": "Marked as read"}
 
 

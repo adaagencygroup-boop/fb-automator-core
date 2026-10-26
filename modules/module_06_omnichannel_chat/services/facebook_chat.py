@@ -78,7 +78,7 @@ class FacebookChatService:
                 text=text,
                 timestamp=int(datetime.utcnow().timestamp() * 1000),
                 direction="outbound",
-                is_read=True,
+                is_read=False,
                 reply_to_message_id=reply_to_message_id
             )
 
@@ -174,7 +174,7 @@ class FacebookChatService:
                 text=media_text,
                 timestamp=int(datetime.utcnow().timestamp() * 1000),
                 direction="outbound",
-                is_read=True,
+                is_read=False,
                 reply_to_message_id=reply_to_message_id
             )
 
@@ -293,5 +293,25 @@ class FacebookChatService:
         except Exception as e:
             print(f"[Customer Profile Fetch Error] {e}")
 
-        return {"name": "", "avatar_url": ""}
+    async def mark_seen(self, page_id: str, recipient_id: str) -> Dict[str, Any]:
+        """Gửi hành động mark_seen lên Facebook Send API để hiện avatar Page đã xem tin nhắn ở máy khách."""
+        page = self.page_repo.get_by_page_id(page_id)
+        if not page or not page.page_access_token:
+            return {"success": False, "error": f"Page or page access token not found for Page ID {page_id}"}
+
+        url = f"{FACEBOOK_BASE_URL}/me/messages"
+        payload = {
+            "recipient": {"id": recipient_id},
+            "sender_action": "mark_seen"
+        }
+        params = {"access_token": page.page_access_token}
+
+        try:
+            response = await asyncio.to_thread(
+                requests.post, url, params=params, json=payload, timeout=10
+            )
+            return response.json()
+        except Exception as e:
+            print(f"[Mark Seen Error] Page {page_id}, Recipient {recipient_id}: {e}")
+            return {"success": False, "error": str(e)}
 
