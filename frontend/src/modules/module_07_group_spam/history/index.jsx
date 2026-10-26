@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   AlertCircle,
   CalendarDays,
@@ -35,6 +35,16 @@ import { Input } from "@/components/ui/input";
 import { toast } from "@/lib/toast";
 import { getGroupHistoryRecords } from "../service";
 
+const taskStatusLabel = (status) => ({
+  SUCCESS: "Thành công",
+  FAILED: "Thất bại",
+  CANCELLED: "Đã hủy",
+  SKIPPED: "Bỏ qua",
+  PENDING_APPROVAL: "Chờ duyệt",
+  PENDING: "Đang chờ",
+  RUNNING: "Đang chạy",
+}[status] || status || "--");
+
 export default function GroupHistoryModule() {
   // Bộ lọc
   const [searchTerm, setSearchTerm] = useState("");
@@ -65,7 +75,7 @@ export default function GroupHistoryModule() {
   const [detailItem, setDetailItem] = useState(null);
 
   // Tính ngày theo timeRange
-  const resolveDateParams = () => {
+  const resolveDateParams = useCallback(() => {
     const now = new Date();
     if (timeRange === "today") {
       const today = now.toISOString().slice(0, 10);
@@ -88,10 +98,10 @@ export default function GroupHistoryModule() {
       };
     }
     return { from_date: undefined, to_date: undefined };
-  };
+  }, [timeRange, startDate, endDate]);
 
   // Tải dữ liệu lịch sử từ Backend API
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     // Validate ngày: Từ ngày không được lớn hơn Đến ngày
     if (timeRange === "custom" && startDate && endDate && startDate > endDate) {
       setDateError("Khoảng ngày không hợp lệ: Từ ngày không được lớn hơn Đến ngày.");
@@ -124,11 +134,11 @@ export default function GroupHistoryModule() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [timeRange, startDate, endDate, resolveDateParams, searchTerm, campaignFilter, seedingType, statusFilter, currentPage, pageSize]);
 
   useEffect(() => {
-    loadHistory();
-  }, [campaignFilter, seedingType, statusFilter, timeRange, currentPage, pageSize]);
+    Promise.resolve().then(loadHistory);
+  }, [loadHistory]);
 
   // Nhấn Lọc
   const handleFilter = (e) => {
@@ -161,7 +171,7 @@ export default function GroupHistoryModule() {
     }
     const headers = ["STT,Thời gian,Loại,Chiến dịch,UID,Nhóm,Nội dung,Trạng thái,Kết quả,Link liên quan"];
     const rows = records.map((item) =>
-      `"${item.stt}","${item.time}","${item.action_type === "POST" ? "Đăng bài" : "Bình luận"}","${(item.campaign_name || "").replace(/"/g, '""')}","${item.account_uid}","${(item.group_name || "").replace(/"/g, '""')}","${(item.content || "").replace(/"/g, '""')}","${item.status === "SUCCESS" ? "Thành công" : "Thất bại"}","${(item.result || "").replace(/"/g, '""')}","${item.result_url || ""}"`
+      `"${item.stt}","${item.time}","${item.action_type === "POST" ? "Đăng bài" : "Bình luận"}","${(item.campaign_name || "").replace(/"/g, '""')}","${item.account_uid}","${(item.group_name || "").replace(/"/g, '""')}","${(item.content || "").replace(/"/g, '""')}","${taskStatusLabel(item.status)}","${(item.result || "").replace(/"/g, '""')}","${item.result_url || ""}"`
     );
     const csvContent = "\uFEFF" + [headers, ...rows].join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -515,7 +525,7 @@ export default function GroupHistoryModule() {
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-700 border border-rose-200">
-                          <XCircle className="size-3 text-rose-600" /> Thất bại
+                          <XCircle className="size-3 text-rose-600" /> {taskStatusLabel(item.status)}
                         </span>
                       )}
                     </td>

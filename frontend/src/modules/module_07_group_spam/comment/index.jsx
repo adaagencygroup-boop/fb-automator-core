@@ -47,7 +47,7 @@ import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
-import { generateGroupComments, getGroupSettings, runGroupCampaign } from "../service";
+import { generateGroupComments, getGroupSettings, uploadGroupMedia, runGroupCampaign, getGroupCampaign, getCurrentGroupCampaign, stopGroupCampaign } from "../service";
 import Link from "next/link";
 import useSavedApis from "../shared/useSavedApis";
 import SavedApiSelector from "../shared/SavedApiSelector";
@@ -110,8 +110,48 @@ export default function GroupCommentModule() {
   const [campaignName, setCampaignName] = useState("");
   const [campaignDescription, setCampaignDescription] = useState("");
   const [campaignLocked, setCampaignLocked] = useState(false);
+  const [savedMedia, setSavedMedia] = useState([]);
   const [campaignId, setCampaignId] = useState("");
+  const [jobId, setJobId] = useState(null);
   const [isRerun, setIsRerun] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getCurrentGroupCampaign().then((job) => {
+      if (cancelled || !job?.job_id || job.action_type !== "COMMENT") return;
+      if (["COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"].includes(job.status)) return;
+      setCampaignId(job.campaign_id);
+      setJobId(job.job_id);
+      setRunState("running");
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!jobId) return;
+    let cancelled = false;
+    let timer;
+    const poll = async () => {
+      try {
+        const job = await getGroupCampaign(jobId);
+        if (cancelled) return;
+        setProgress(job.progress || 0);
+        if (["COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"].includes(job.status)) {
+          setJobId(null);
+          setRunState("idle");
+          toast.info(job.message || "Chiến dịch đã kết thúc");
+          return;
+        }
+        setRunState(job.status === "STOPPING" ? "stopping" : "running");
+      } catch (error) {
+        if (cancelled) return;
+        toast.error(error.message || "Không thể tải tiến trình");
+      }
+      timer = window.setTimeout(poll, 1500);
+    };
+    poll();
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [jobId]);
 
   const loadAccounts = async () => {
     setAccountsLoading(true);
@@ -120,7 +160,12 @@ export default function GroupCommentModule() {
       const rawList = Array.isArray(data) ? data : (data?.accounts || []);
       const rows = rawList.map(normalizeAccount);
       setAccounts(rows);
-      setSelectedAccountKeys(
+      const rerun = JSON.parse(sessionStorage.getItem("fb_rerun_campaign") || "null");
+      if (rerun?.action_type === "COMMENT" && rerun.config?.account_uids) {
+        setSelectedAccountKeys(rows.filter((account) => rerun.config.account_uids.includes(account.uid)).map((account) => account.key));
+        return;
+      }
+      setSelectedAccountKeys((current) => current.length ? current :
         rows.filter((account) => account.status === "LIVE").slice(0, 4).map((account) => account.key)
       );
     } catch (err) {
@@ -136,6 +181,8 @@ export default function GroupCommentModule() {
     Promise.resolve().then(loadAccounts);
     getGroupSettings().then((data) => {
       if (!data) return;
+      const rerun = JSON.parse(sessionStorage.getItem("fb_rerun_campaign") || "null");
+      if (rerun?.action_type === "COMMENT") return;
       if (data.threads) setThreads(String(data.threads));
       if (data.rest_minutes !== undefined) setRestMinutes(String(data.rest_minutes));
     }).catch(() => {});
@@ -146,10 +193,18 @@ export default function GroupCommentModule() {
       const rerunRaw = sessionStorage.getItem("fb_rerun_campaign");
       if (!rerunRaw) return;
       const data = JSON.parse(rerunRaw);
-      if (data.action_type === "COMMENT" || (!data.action_type && data.posts)) {
+      if (data.action_type === "COMMENT") {
+        queueMicrotask(() => {
         if (data.name) setCampaignName(data.name);
         if (data.description) setCampaignDescription(data.description);
         if (data.campaign_id) setCampaignId(data.campaign_id);
+        if (data.config?.groups?.length) {
+          setGroupSource("file");
+          setGroupFile({ name: "Cấu hình chạy lại", groups: data.config.groups, validGroupsCount: data.config.groups.length });
+        }
+        if (data.config?.posts?.length) setComments(data.config.posts);
+        setSavedMedia(data.config?.media || []);
+        if (data.config?.account_uids?.length) setSelectedAccountKeys(data.config.account_uids);
         setIsRerun(true);
         setCampaignLocked(true);
         if (data.config?.settings) {
@@ -157,8 +212,8 @@ export default function GroupCommentModule() {
           if (s.threads) setThreads(String(s.threads));
           if (s.rest_minutes !== undefined) setRestMinutes(String(s.rest_minutes));
           if (s.max_posts) setMaxComments(String(s.max_posts));
-          if (s.delay_min) setDelayMin(String(s.delay_min));
-          if (s.delay_max) setDelayMax(String(s.delay_max));
+          if (s.delay_min !== undefined) setDelayMin(String(s.delay_min));
+          if (s.delay_max !== undefined) setDelayMax(String(s.delay_max));
           if (s.avoid_duplicate !== undefined) setAvoidDuplicate(Boolean(s.avoid_duplicate));
           if (s.shuffle_content !== undefined) setShuffleContent(Boolean(s.shuffle_content));
           if (s.auto_like !== undefined) setAutoLikeBeforeComment(Boolean(s.auto_like));
@@ -168,6 +223,7 @@ export default function GroupCommentModule() {
         setScheduleDate("");
         setScheduleTime("08:00");
         toast.info(`Đã nạp cấu hình từ chiến dịch "${data.name || data.campaign_id}" để chạy lại lượt mới.`);
+        });
       }
     } catch (err) {
       console.error("Lỗi đọc cấu hình rerun:", err);
@@ -338,6 +394,13 @@ export default function GroupCommentModule() {
     setRunState("starting");
     setProgress(4);
     try {
+      let uploadedMedia = [];
+      if (mediaFiles.length) {
+        const formData = new FormData();
+        mediaFiles.forEach((file) => formData.append("files", file));
+        const upload = await uploadGroupMedia(formData);
+        uploadedMedia = (upload.files || []).map((file) => file.path || file.relative_path);
+      }
       const campaign = await runGroupCampaign({
         campaign_id: campaignId || undefined,
         name: trimmedCampaignName,
@@ -347,7 +410,7 @@ export default function GroupCommentModule() {
         account_uids: selectedAccounts.map((account) => account.uid),
         groups: activeTargets,
         posts: comments,
-        media: mediaFiles.map((file) => file.name),
+        media: [...savedMedia, ...uploadedMedia],
         settings: {
           model,
           credential_id: apiSource.selectedId,
@@ -363,7 +426,8 @@ export default function GroupCommentModule() {
           schedule_at: scheduleEnabled && scheduleDate ? `${scheduleDate}T${scheduleTime}` : null,
         },
       });
-      setCampaignId(campaign?.job_id || campaignId);
+      setCampaignId(campaign.campaign_id);
+      setJobId(campaign.job_id);
       setRunState("running");
       setProgress(15);
       sessionStorage.removeItem("fb_rerun_campaign");
@@ -376,9 +440,14 @@ export default function GroupCommentModule() {
     }
   };
 
-  const handleStop = () => {
-    setRunState("idle");
-    setProgress(0);
+  const handleStop = async () => {
+    if (!jobId) return;
+    try {
+      await stopGroupCampaign(jobId);
+      setRunState("stopping");
+    } catch (error) {
+      toast.error(error.message || "Không thể dừng chiến dịch");
+    }
   };
 
   return (

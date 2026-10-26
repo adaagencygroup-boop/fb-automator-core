@@ -4,6 +4,8 @@ import React, { useRef, useState, useEffect } from "react";
 import {
   Check,
   Edit3,
+  Check,
+  Edit3,
   Sparkles,
   RotateCcw,
   ImageIcon,
@@ -17,6 +19,7 @@ import {
   ListOrdered,
   Minus,
 } from "lucide-react";
+import { toast } from "@/lib/toast";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -96,7 +99,12 @@ export default function GroupContentSection({
   isGenerating,
   hasGeneratedContent,
   setHasGeneratedContent,
+  hasGeneratedContent,
+  setHasGeneratedContent,
   onGeneratePosts,
+  isLocked = false,
+  setIsLocked,
+  onContinue,
   isLocked = false,
   setIsLocked,
   onContinue,
@@ -107,6 +115,7 @@ export default function GroupContentSection({
   const editorRef = externalEditorRef || localEditorRef;
   const inlineImageRef = useRef(null);
   const postsRef = useRef(posts);
+  const isTypingRef = useRef(false);
   const isTypingRef = useRef(false);
   const linkRangeRef = useRef(null);
 
@@ -120,7 +129,12 @@ export default function GroupContentSection({
   }, [posts]);
 
   // Đồng bộ nội dung vào editor khi chuyển tab bài viết, khi AI tạo bài mới, hoặc khi editor mount.
+  // Đồng bộ nội dung vào editor khi chuyển tab bài viết, khi AI tạo bài mới, hoặc khi editor mount.
   useEffect(() => {
+    if (isTypingRef.current) {
+      isTypingRef.current = false;
+      return;
+    }
     if (isTypingRef.current) {
       isTypingRef.current = false;
       return;
@@ -130,7 +144,12 @@ export default function GroupContentSection({
       if (editorRef.current.innerHTML !== targetHtml) {
         editorRef.current.innerHTML = targetHtml;
       }
+      const targetHtml = editorHtml(posts[activePost] || "");
+      if (editorRef.current.innerHTML !== targetHtml) {
+        editorRef.current.innerHTML = targetHtml;
+      }
     }
+  }, [activePost, posts, hasGeneratedContent, editorRef]);
   }, [activePost, posts, hasGeneratedContent, editorRef]);
 
   const isDuplicateContent = aiCount === "duplicate" || aiCount === "1" || Number(aiCount) === 1;
@@ -254,6 +273,10 @@ export default function GroupContentSection({
   const runEditorCommand = (command, value = null) => {
     editorRef.current?.focus();
     document.execCommand(command, false, value);
+    if (editorRef.current) {
+      isTypingRef.current = true;
+      updateActivePost(editorRef.current.innerHTML);
+    }
     if (editorRef.current) {
       isTypingRef.current = true;
       updateActivePost(editorRef.current.innerHTML);
@@ -535,14 +558,49 @@ export default function GroupContentSection({
                 <EditorButton label="Chèn ảnh" onClick={() => inlineImageRef.current?.click()}><ImageIcon /></EditorButton>
               </div>
             )}
+            {!isLocked && (
+              <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 bg-slate-50 px-3 py-2 text-slate-500">
+                <EditorButton label="Hoàn tác" onClick={() => runEditorCommand("undo")}><Undo2 /></EditorButton>
+                <EditorButton label="Làm lại" onClick={() => runEditorCommand("redo")}><Redo2 /></EditorButton>
+                <span className="mx-1 h-5 border-l border-slate-200" />
+                <select
+                  aria-label="Kiểu đoạn văn"
+                  defaultValue="p"
+                  onChange={(event) => runEditorCommand("formatBlock", event.target.value)}
+                  className="h-7 rounded border-0 bg-transparent px-1 text-[11px] text-slate-600 outline-none hover:bg-white"
+                >
+                  <option value="p">Đoạn văn</option>
+                  <option value="h2">Tiêu đề 2</option>
+                  <option value="h3">Tiêu đề 3</option>
+                  <option value="blockquote">Trích dẫn</option>
+                </select>
+                <span className="mx-1 h-5 border-l border-slate-200" />
+                <EditorButton label="Đậm" onClick={() => runEditorCommand("bold")}><Bold /></EditorButton>
+                <EditorButton label="Nghiêng" onClick={() => runEditorCommand("italic")}><Italic /></EditorButton>
+                <EditorButton label="Gạch chân" onClick={() => runEditorCommand("underline")}><Underline /></EditorButton>
+                <span className="mx-1 h-5 border-l border-slate-200" />
+                <EditorButton label="Danh sách dấu đầu dòng" onClick={() => runEditorCommand("insertUnorderedList")}><List /></EditorButton>
+                <EditorButton label="Danh sách đánh số" onClick={() => runEditorCommand("insertOrderedList")}><ListOrdered /></EditorButton>
+                <EditorButton label="Đường phân cách" onClick={() => runEditorCommand("insertHorizontalRule")}><Minus /></EditorButton>
+                <span className="mx-1 h-5 border-l border-slate-200" />
+                <EditorButton label="Chèn liên kết" onClick={openLinkDialog}><Link2 /></EditorButton>
+                <EditorButton label="Chèn ảnh" onClick={() => inlineImageRef.current?.click()}><ImageIcon /></EditorButton>
+              </div>
+            )}
             {/* Vùng soạn thảo rich text; lưu HTML để giữ định dạng riêng từng bài. */}
             <div
               ref={editorRef}
+              contentEditable={!isLocked}
               contentEditable={!isLocked}
               suppressContentEditableWarning
               role="textbox"
               aria-label={`Nội dung bài ${activePost + 1}`}
               aria-multiline="true"
+              aria-readonly={isLocked}
+              onInput={(event) => {
+                isTypingRef.current = true;
+                updateActivePost(event.currentTarget.innerHTML);
+              }}
               aria-readonly={isLocked}
               onInput={(event) => {
                 isTypingRef.current = true;

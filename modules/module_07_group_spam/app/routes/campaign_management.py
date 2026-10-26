@@ -63,6 +63,7 @@ async def list_campaigns(
 
     where_sql = " AND ".join(where_clauses)
     query = f"""
+<<<<<<< HEAD
         SELECT 
             c.campaign_id AS id,
             c.name,
@@ -97,6 +98,44 @@ async def list_campaigns(
         FROM cloud_group_campaigns c
         WHERE {where_sql}
         ORDER BY COALESCE(last_run_at, c.created_at) DESC
+=======
+        SELECT * FROM (
+            SELECT 
+                c.campaign_id AS id,
+                c.name,
+                c.description,
+                c.action_type,
+                c.created_at,
+                (
+                    SELECT COALESCE(r2.started_at, r2.finished_at, r2.synced_at)
+                    FROM cloud_group_runs r2
+                    WHERE r2.campaign_id = c.campaign_id
+                    ORDER BY r2.run_number DESC
+                    LIMIT 1
+                ) AS last_run_at,
+                (
+                    SELECT r3.status 
+                    FROM cloud_group_runs r3
+                    WHERE r3.campaign_id = c.campaign_id
+                    ORDER BY r3.run_number DESC
+                    LIMIT 1
+                ) AS latest_status,
+                (
+                    SELECT COUNT(r5.run_id)
+                    FROM cloud_group_runs r5
+                    WHERE r5.campaign_id = c.campaign_id
+                ) AS total_runs,
+                (
+                    SELECT COUNT(DISTINCT l.account_uid)
+                    FROM cloud_group_logs l
+                    JOIN cloud_group_runs r6 ON r6.run_id = l.run_id
+                    WHERE r6.campaign_id = c.campaign_id
+                ) AS total_accounts_run
+            FROM cloud_group_campaigns c
+            WHERE {where_sql}
+        ) t
+        ORDER BY COALESCE(t.last_run_at, t.created_at) DESC
+>>>>>>> f54b1289b8ca16cdf658e016b786d10af8cb6b72
     """
 
     rows = db.fetch_all(query, tuple(params))
