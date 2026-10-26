@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Hash,
   Link2,
@@ -8,29 +8,20 @@ import {
   Download,
   Play,
   Square,
-  RefreshCw,
+  Pause,
   Check,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
-  AlertCircle,
   Loader2,
-  Users,
-  Phone,
-  Mail,
-  Globe,
-  Filter,
   X,
   CheckCircle2,
-  Clock,
-  BarChart2,
-  Trash2,
-  Copy,
   BadgeCheck,
-  Sparkles,
-  AlertTriangle,
-  FileText,
   Search,
+  ArrowDownWideNarrow,
+  Save,
+  AlertTriangle,
+  Plus,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -40,24 +31,40 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
+import { WS_BASE } from "@/config/constants";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import { normalizeAccount, initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
-  searchPagesByHashtag,
   searchPages,
+  searchPagesByHashtag,
   parsePageLinks,
   uploadPageFile,
   downloadPageTemplate,
   stopScanSession,
+  pauseScanSession,
+  resumeScanSession,
   getScanSessionDetail,
   getScannedPages,
+  getActiveCampaign,
+  savePageList,
 } from "../service";
+import {
+  isHashtagChip,
+  splitMixedChips,
+  buildCampaignJobs,
+  collectHashtagsForCampaign,
+  mergePagesByKey,
+  sortPagesForMode,
+  channelBadge,
+  normalizeHashtag,
+  newCampaignId,
+} from "./campaignUtils";
 
-/* ─── Shared UI atoms ─── */
-function SectionCard({ number, title, description, aside, children, className = "" }) {
+/* ─── Atoms ─── */
+function SectionCard({ number, title, description, aside, children }) {
   return (
-    <Card className={`overflow-hidden border-slate-200 shadow-sm ${className}`}>
+    <Card className="overflow-hidden border-slate-200 shadow-sm">
       <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
         <div className="flex min-w-0 items-start gap-3">
           {number && (
@@ -77,143 +84,215 @@ function SectionCard({ number, title, description, aside, children, className = 
   );
 }
 
-function StepBadge({ label, active, done }) {
-  if (done) return (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 border border-emerald-200/60">
-      <Check className="size-3" /> {label}
-    </span>
-  );
-  if (active) return (
-    <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700 border border-amber-200/60">
-      <Clock className="size-3" /> {label}
-    </span>
-  );
-  return null;
-}
-
-function NumCtrl({ value, onChange, min = 1, max = 500, disabled }) {
+function NumCtrl({ value, onChange, min = 1, max = 500, step = 10, disabled, className = "" }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className={`flex items-center gap-1.5 ${className}`}>
       <button
         type="button"
         disabled={disabled || value <= min}
-        onClick={() => onChange(Math.max(min, value - 10))}
+        onClick={() => onChange(Math.max(min, value - step))}
         className="flex size-7 items-center justify-center rounded border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
-      >−</button>
+      >
+        −
+      </button>
       <input
         type="number"
-        min={min} max={max}
+        min={min}
+        max={max}
         value={value}
         disabled={disabled}
-        onChange={e => onChange(Math.min(max, Math.max(min, Number(e.target.value) || min)))}
+        onChange={(e) => onChange(Math.min(max, Math.max(min, Number(e.target.value) || min)))}
         className="h-7 w-16 rounded border border-slate-200 bg-white text-center text-xs font-semibold text-slate-700 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:bg-slate-50"
       />
       <button
         type="button"
         disabled={disabled || value >= max}
-        onClick={() => onChange(Math.min(max, value + 10))}
+        onClick={() => onChange(Math.min(max, value + step))}
         className="flex size-7 items-center justify-center rounded border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
-      >+</button>
+      >
+        +
+      </button>
     </div>
   );
 }
 
-function StopReasonBadge({ reason }) {
-  const map = {
-    TARGET_REACHED:  { label: "Đạt mục tiêu",        cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-    NO_NEW_RESULTS:  { label: "Hết kết quả",           cls: "bg-blue-50 text-blue-700 border-blue-200" },
-    CYCLE_DETECTED:  { label: "Phát hiện lặp vòng",   cls: "bg-violet-50 text-violet-700 border-violet-200" },
-    END_MARKER:      { label: "Facebook hết bài viết", cls: "bg-slate-50 text-slate-600 border-slate-200" },
-    TIMEOUT:         { label: "Hết thời gian",         cls: "bg-amber-50 text-amber-700 border-amber-200" },
-    MAX_SCROLLS:     { label: "Đạt giới hạn cuộn",    cls: "bg-amber-50 text-amber-700 border-amber-200" },
-    CHECKPOINT:      { label: "Bị checkpoint",         cls: "bg-red-50 text-red-700 border-red-200" },
-    USER_STOPPED:    { label: "Người dùng dừng",       cls: "bg-slate-50 text-slate-600 border-slate-200" },
-    ERROR:           { label: "Lỗi",                   cls: "bg-red-50 text-red-700 border-red-200" },
+function ChipInput({ chips, onChange, placeholder, disabled, onEnter, mixed = false }) {
+  const [draft, setDraft] = useState("");
+  const add = (raw) => {
+    const parts = String(raw || "")
+      .split(/[,;\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!parts.length) return;
+    const next = [...chips];
+    for (const p of parts) {
+      let value = p;
+      if (mixed && p.startsWith("#")) {
+        const n = normalizeHashtag(p);
+        if (!n) continue;
+        value = n;
+      }
+      if (!next.some((c) => c.toLowerCase() === value.toLowerCase())) next.push(value);
+    }
+    onChange(next);
+    setDraft("");
   };
-  const info = map[reason] || { label: reason || "—", cls: "bg-slate-50 text-slate-500 border-slate-200" };
   return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${info.cls}`}>
-      {info.label}
-    </span>
+    <div className={`flex min-h-10 flex-wrap items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1.5 ${disabled ? "opacity-60" : "focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20"}`}>
+      {chips.map((chip) => {
+        const tag = mixed && isHashtagChip(chip);
+        return (
+          <span
+            key={chip}
+            className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold ${
+              tag
+                ? "bg-violet-100 text-violet-700 border border-violet-200"
+                : "bg-primary/10 text-primary"
+            }`}
+          >
+            {tag && <Hash className="size-3 shrink-0" />}
+            {chip}
+            {!disabled && (
+              <button type="button" onClick={() => onChange(chips.filter((c) => c !== chip))} className="hover:text-red-600">
+                <X className="size-3" />
+              </button>
+            )}
+          </span>
+        );
+      })}
+      <input
+        value={draft}
+        disabled={disabled}
+        placeholder={chips.length ? "" : placeholder}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === ",") {
+            e.preventDefault();
+            if (draft.trim()) add(draft);
+            else if (e.key === "Enter" && onEnter) onEnter();
+          } else if (e.key === "Backspace" && !draft && chips.length) {
+            onChange(chips.slice(0, -1));
+          }
+        }}
+        onBlur={() => draft.trim() && add(draft)}
+        className="min-w-[120px] flex-1 bg-transparent text-xs outline-none placeholder:text-slate-400"
+      />
+    </div>
   );
 }
 
-function RelevanceBadge({ score = 0, status = "RELEVANT" }) {
-  if (status === "RELEVANT") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-        <Sparkles className="size-2.5 text-emerald-500" />
-        {score}đ • Liên quan
-      </span>
-    );
-  }
-  if (status === "REVIEW") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-700">
-        <AlertTriangle className="size-2.5 text-amber-500" />
-        {score}đ • Cần xem lại
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-      {score}đ • Loại
-    </span>
-  );
-}
-
-/* ─── Source mode tabs (Section 10) ─── */
 const SOURCE_MODES = [
-  { id: "hashtag",  label: "Theo Hashtag (Mục 10)",  Icon: Hash },
-  { id: "paste",    label: "Nhập Link",             Icon: Link2 },
-  { id: "upload",   label: "Tải tệp (.txt / .csv)", Icon: FileUp },
+  { id: "keyword", label: "Theo từ khóa", Icon: Search },
+  { id: "paste", label: "Nhập Link", Icon: Link2 },
+  { id: "upload", label: "Tải tệp (.txt / .csv)", Icon: FileUp },
 ];
 
+const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
+const LIVE_STATUSES = new Set(["LIVE", "live", "Live"]);
+
+function formatFollowers(n) {
+  if (n == null || n === "") return "—";
+  const num = Number(n);
+  if (!Number.isFinite(num)) return String(n);
+  return num.toLocaleString("vi-VN");
+}
+
+function nowStamp() {
+  return new Date().toLocaleTimeString("vi-VN", { hour12: false });
+}
+
 /* ════════════════════════════════════════════════════════════
-   MAIN PAGE SCANNER COMPONENT
+   MAIN — Quét thông tin page (layout theo ảnh + tab Hashtag)
    ════════════════════════════════════════════════════════════ */
-export default function PageScannerModule() {
-  /* ── Accounts ── */
+export default function PageScannerSearch() {
+  /* Accounts — multi-select */
   const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
-  const [selectedAccountUid, setSelectedAccountUid] = useState(null);
+  const [selectedUids, setSelectedUids] = useState([]);
   const [showAccountModal, setShowAccountModal] = useState(false);
+  const [modalUids, setModalUids] = useState([]);
 
-  /* ── Config Step 1: source mode ── */
-  const [sourceMode, setSourceMode] = useState("hashtag");
-  const [hashtags, setHashtags] = useState("#thoitrang, #mypham");
-  const [contextKeywords, setContextKeywords] = useState("bán sỉ, thời trang, shop, auth");
+  /* Source */
+  const [sourceMode, setSourceMode] = useState("keyword");
+  /** Chip hỗn hợp: từ khóa thường + #hashtag (mức 3) */
+  const [keywords, setKeywords] = useState([]);
+  const [searchMode] = useState("NGACH"); // chỉ tìm theo hashtag
+  const [campaignId, setCampaignId] = useState(null);
+  const [maxFollowers, setMaxFollowers] = useState("");
+  const [topN, setTopN] = useState(""); // Top N sau lọc — khác max_results
   const [pasteContent, setPasteContent] = useState("");
   const [uploadResult, setUploadResult] = useState(null);
   const fileInputRef = useRef(null);
 
-  /* ── Config Step 2: settings ── */
-  const [maxPostsPerHashtag, setMaxPostsPerHashtag] = useState(100);
+  const { keywords: plainKeywords, hashtags: manualHashtags } = useMemo(
+    () => splitMixedChips(keywords),
+    [keywords],
+  );
+  const derivedHashtags = useMemo(
+    () => collectHashtagsForCampaign(plainKeywords, manualHashtags),
+    [plainKeywords, manualHashtags],
+  );
+  const campaignPreviewJobs = useMemo(
+    () =>
+      sourceMode === "keyword"
+        ? buildCampaignJobs({ searchMode, keywords: plainKeywords, manualHashtags })
+        : [],
+    [sourceMode, searchMode, plainKeywords, manualHashtags],
+  );
+
+  /* Card 2 config */
+  const [rotateEvery, setRotateEvery] = useState(50);
+  const [delayMin, setDelayMin] = useState(5);
+  const [delayMax, setDelayMax] = useState(10);
+  const [applyAllTarget, setApplyAllTarget] = useState(30);
+  const [keywordTargets, setKeywordTargets] = useState({}); // keyword -> max_results
+  const [minFollowersEnabled, setMinFollowersEnabled] = useState(true);
+  const [minFollowers, setMinFollowers] = useState(1000);
+  const [skipSaveBelowThreshold, setSkipSaveBelowThreshold] = useState(false);
   const [minPosts, setMinPosts] = useState(2);
-  const [headless, setHeadless] = useState(false);
-  const [allowDirectFallback, setAllowDirectFallback] = useState(true);
+  const [maxPostsPerHashtag, setMaxPostsPerHashtag] = useState(100);
 
-  /* ── Session state ── */
-  const [running, setRunning] = useState(false);
+  /* Run state: idle | running | paused | done */
+  const [runPhase, setRunPhase] = useState("idle");
   const [sessionId, setSessionId] = useState(null);
-  const [stopReason, setStopReason] = useState(null);
+  const [sessionIds, setSessionIds] = useState([]);
+  const [keywordProgress, setKeywordProgress] = useState([]); // {keyword, count, status}
+  const [logs, setLogs] = useState([]);
 
-  /* ── Results & Filter ── */
+  /* Results */
   const [pages, setPages] = useState([]);
-  const [totalPages, setTotalPages] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize] = useState(50);
+  const [pageSize] = useState(5);
   const [resultSearch, setResultSearch] = useState("");
-  const [relevanceFilter, setRelevanceFilter] = useState("ALL"); // ALL | RELEVANT | REVIEW | EXCLUDED
+  const [filterKeyword, setFilterKeyword] = useState("ALL");
   const [selectedPageKeys, setSelectedPageKeys] = useState([]);
   const [loadingResults, setLoadingResults] = useState(false);
+  const [sortDir, setSortDir] = useState("desc");
 
-  /* ── Stats ── */
-  const [stats, setStats] = useState(null);
-
-  /* ── Polling & Lifecycle refs ── */
   const pollRef = useRef(null);
-  const lastLoadedCountRef = useRef(0);
+  const campaignRef = useRef({ paused: false, abort: false, queue: [], accIndex: 0 });
+  const sessionMetaRef = useRef({}); // sessionId -> { channel, label, kind }
+  const sessionIdsRef = useRef([]);
+  const wsRef = useRef(null);
+  const lastLoadedRef = useRef(0);
+  const [poolStats, setPoolStats] = useState({ pool: 0, aboveMin: 0, showing: 0 });
+
+  useEffect(() => {
+    sessionIdsRef.current = sessionIds;
+  }, [sessionIds]);
+
+  const showResults = runPhase !== "idle";
+  const isRunning = runPhase === "running";
+  const isPaused = runPhase === "paused";
+  const isBusy = isRunning || isPaused;
+
+  const pushLog = useCallback((message, type = "info") => {
+    setLogs((prev) => {
+      const next = [...prev, { id: `${Date.now()}_${prev.length}`, timestamp: nowStamp(), message, type }];
+      return next.slice(-500);
+    });
+  }, []);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -222,22 +301,30 @@ export default function PageScannerModule() {
     }
   }, []);
 
+  /* Sync mục tiêu theo từ khóa thường (không áp cho chip #) */
   useEffect(() => {
-    return () => {
-      stopPolling();
-    };
-  }, [stopPolling]);
+    setKeywordTargets((prev) => {
+      const next = { ...prev };
+      for (const kw of plainKeywords) {
+        if (next[kw] == null) next[kw] = applyAllTarget;
+      }
+      Object.keys(next).forEach((k) => {
+        if (!plainKeywords.includes(k)) delete next[k];
+      });
+      return next;
+    });
+  }, [plainKeywords, applyAllTarget]);
 
+  /* Load accounts */
   useEffect(() => {
     let ignore = false;
     getAccounts()
       .then((data) => {
-        if (!ignore) {
-          const normalized = (Array.isArray(data) ? data : data?.accounts || []).map((a, i) =>
-            normalizeAccount(a, i),
-          );
-          setAccounts(normalized);
-        }
+        if (ignore) return;
+        const normalized = (Array.isArray(data) ? data : data?.accounts || []).map((a, i) =>
+          normalizeAccount(a, i),
+        );
+        setAccounts(normalized);
       })
       .catch((err) => {
         if (!ignore) toast.error(`Lỗi tải tài khoản: ${err.message}`);
@@ -250,37 +337,637 @@ export default function PageScannerModule() {
     };
   }, []);
 
-  // Load results from a session
-  const loadResults = useCallback(async (sid, page = 1, relStatus = relevanceFilter) => {
-    if (!sid) return;
-    setLoadingResults(true);
-    try {
-      const data = await getScannedPages({
-        session_id: sid,
-        page,
-        page_size: pageSize,
-        keyword: resultSearch || undefined,
-        relevance_status: relStatus !== "ALL" ? relStatus : undefined,
-      });
-      setPages(data.items || []);
-      setTotalPages(Math.ceil((data.total || 0) / pageSize));
-    } catch (err) {
-      toast.error(`Lỗi tải kết quả: ${err.message}`);
-    } finally {
-      setLoadingResults(false);
-    }
-  }, [pageSize, resultSearch, relevanceFilter]);
+  /* Restore đợt đang chạy theo campaign_id (chỉ dẫn 1.3) */
+  useEffect(() => {
+    let ignore = false;
+    (async () => {
+      try {
+        const data = await getActiveCampaign();
+        if (ignore || !data?.active || !(data.sessions || []).length) return;
+        const sessions = data.sessions;
+        const top = sessions.find((s) => s.id === data.primary_session_id) || sessions[sessions.length - 1];
+        setCampaignId(data.campaign_id || null);
+        setSessionId(top.id);
+        setSessionIds(sessions.map((s) => s.id));
+        setRunPhase(top.status === "PAUSED" || data.status === "PAUSED" ? "paused" : "running");
 
-  // When filter changes, reload
-  const handleFilterChange = (filterVal) => {
-    setRelevanceFilter(filterVal);
-    setCurrentPage(1);
-    if (sessionId) {
-      loadResults(sessionId, 1, filterVal);
+        let settings = {};
+        try {
+          settings = typeof top.settings === "string" ? JSON.parse(top.settings || "{}") : top.settings || {};
+        } catch {
+          settings = {};
+        }
+        if (Array.isArray(settings.keywords) || Array.isArray(settings.hashtags)) {
+          const chips = [
+            ...(settings.keywords || []),
+            ...(settings.hashtags || []).map((t) => (String(t).startsWith("#") ? t : `#${t}`)),
+          ];
+          if (chips.length) setKeywords(chips);
+        }
+
+        setKeywordProgress(
+          sessions.map((s) => ({
+            keyword: s.keyword || "—",
+            count: s.total_unique || 0,
+            status:
+              s.status === "RUNNING"
+                ? "scanning"
+                : s.status === "PAUSED"
+                  ? "paused"
+                  : DONE_STATUSES.includes(s.status)
+                    ? "done"
+                    : "pending",
+            channel: s.source_type,
+          })),
+        );
+
+        // Log đã lưu kèm phiên
+        const allLogs = [];
+        for (const s of sessions) {
+          let lines = s.logs;
+          if (typeof lines === "string") {
+            try {
+              lines = JSON.parse(lines);
+            } catch {
+              lines = [];
+            }
+          }
+          for (const line of lines || []) {
+            allLogs.push({
+              id: `${s.id}_${line.ts}_${allLogs.length}`,
+              timestamp: line.ts || "—",
+              message: line.message,
+              type: line.level === "success" ? "success" : line.level === "warn" ? "warn" : line.level === "error" ? "error" : "info",
+            });
+          }
+        }
+        if (allLogs.length) setLogs(allLogs.slice(-500));
+
+        pushLog(
+          `Khôi phục đợt ${data.campaign_id || `#${top.id}`} · ${sessions.length} phiên · ${top.status}`,
+          "warn",
+        );
+        await loadResults(top.id, 1, sessions.map((s) => s.id));
+        if (top.status === "RUNNING" || top.status === "PAUSED") startPoll(top.id);
+      } catch {
+        /* không có phiên active */
+      }
+    })();
+    return () => {
+      ignore = true;
+      stopPolling();
+      if (wsRef.current) {
+        try {
+          wsRef.current.close();
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* WS logs (best-effort) */
+  useEffect(() => {
+    if (!isBusy) return undefined;
+    let ws;
+    try {
+      ws = new WebSocket(WS_BASE);
+      wsRef.current = ws;
+      ws.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          const msg = data.message || data.msg || data.text;
+          if (msg && (String(msg).toLowerCase().includes("page") || data.module === "page_scanner" || data.scope === "page_scanner")) {
+            pushLog(msg, data.level === "error" ? "error" : data.level === "warn" ? "warn" : "info");
+          }
+        } catch {
+          /* ignore non-json */
+        }
+      };
+    } catch {
+      /* ignore */
+    }
+    return () => {
+      try {
+        ws?.close();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [isBusy, pushLog]);
+
+  const loadResults = useCallback(
+    async (sid, page = 1, idsOverride = null) => {
+      const ids = (
+        idsOverride ||
+        (sessionIds.length ? sessionIds : sid ? [sid] : [])
+      ).filter(Boolean);
+      if (!ids.length) return;
+      setLoadingResults(true);
+      try {
+        const lists = await Promise.all(
+          ids.map(async (id) => {
+            const data = await getScannedPages({
+              session_id: id,
+              page: 1,
+              page_size: 200,
+              sort_by: "default",
+            });
+            return { sessionId: id, items: data.items || [] };
+          }),
+        );
+        let merged = mergePagesByKey(lists, sessionMetaRef.current);
+        const terms = [...plainKeywords, ...manualHashtags];
+        merged = sortPagesForMode(merged, searchMode, terms);
+
+        const pool = merged.length;
+        const maxFl = maxFollowers === "" || maxFollowers == null ? null : Number(maxFollowers);
+        const aboveMin = minFollowersEnabled
+          ? merged.filter((p) => {
+              const fl = p.follower_count || 0;
+              if (fl < minFollowers) return false;
+              if (maxFl != null && Number.isFinite(maxFl) && fl > maxFl) return false;
+              return true;
+            }).length
+          : pool;
+        let filtered = minFollowersEnabled
+          ? merged.filter((p) => {
+              const fl = p.follower_count || 0;
+              if (fl < minFollowers) return false;
+              if (maxFl != null && Number.isFinite(maxFl) && fl > maxFl) return false;
+              return true;
+            })
+          : merged;
+
+        if (resultSearch.trim()) {
+          const q = resultSearch.trim().toLowerCase();
+          filtered = filtered.filter((p) =>
+            `${p.page_name || ""} ${p.page_url || ""} ${p.phone || ""} ${p.email || ""} ${p.website || ""}`
+              .toLowerCase()
+              .includes(q),
+          );
+        }
+        if (filterKeyword !== "ALL") {
+          const needle = filterKeyword.toLowerCase().replace(/^#/, "");
+          filtered = filtered.filter((p) => {
+            const hay = `${p.source_keyword || ""} ${p.matched_hashtags || ""} ${(p.channels || []).join(" ")}`.toLowerCase();
+            return hay.includes(needle);
+          });
+        }
+
+        if (sortDir === "asc") {
+          filtered = [...filtered].reverse();
+        }
+
+        const limitN = topN === "" || topN == null ? null : Number(topN);
+        if (limitN != null && Number.isFinite(limitN) && limitN > 0) {
+          filtered = filtered.slice(0, limitN);
+        }
+
+        const total = filtered.length;
+        const start = (page - 1) * pageSize;
+        const slice = filtered.slice(start, start + pageSize);
+        setPages(slice);
+        setTotalCount(total);
+        setPoolStats({ pool, aboveMin, showing: slice.length });
+      } catch (err) {
+        toast.error(`Lỗi tải kết quả: ${err.message}`);
+      } finally {
+        setLoadingResults(false);
+      }
+    },
+    [
+      sessionIds,
+      pageSize,
+      resultSearch,
+      minFollowersEnabled,
+      minFollowers,
+      maxFollowers,
+      topN,
+      sortDir,
+      filterKeyword,
+      searchMode,
+      plainKeywords,
+      manualHashtags,
+    ],
+  );
+
+  const startPoll = useCallback(
+    (sid) => {
+      stopPolling();
+      lastLoadedRef.current = 0;
+      pollRef.current = setInterval(async () => {
+        try {
+          const session = await getScanSessionDetail(sid);
+          const count = session.pages_count || session.total_unique || 0;
+          if (session.status === "PAUSED") setRunPhase("paused");
+          else if (session.status === "RUNNING") setRunPhase((p) => (p === "paused" ? "running" : p));
+
+          setKeywordProgress((prev) =>
+            prev.map((row) =>
+              row.status === "scanning"
+                ? {
+                    ...row,
+                    count,
+                    status:
+                      session.status === "PAUSED"
+                        ? "paused"
+                        : DONE_STATUSES.includes(session.status)
+                          ? "done"
+                          : row.status,
+                  }
+                : row,
+            ),
+          );
+
+          // Đồng bộ log đã lưu kèm phiên
+          let lines = session.logs;
+          if (typeof lines === "string") {
+            try {
+              lines = JSON.parse(lines);
+            } catch {
+              lines = [];
+            }
+          }
+          if (Array.isArray(lines) && lines.length) {
+            setLogs((prev) => {
+              const mapped = lines.map((line, i) => ({
+                id: `s${sid}_${line.ts}_${i}`,
+                timestamp: line.ts || "—",
+                message: line.message,
+                type:
+                  line.level === "success"
+                    ? "success"
+                    : line.level === "warn"
+                      ? "warn"
+                      : line.level === "error"
+                        ? "error"
+                        : "info",
+              }));
+              return mapped.length >= prev.length ? mapped.slice(-500) : prev;
+            });
+          }
+
+          if (count > lastLoadedRef.current) {
+            lastLoadedRef.current = count;
+            const ids = sessionIdsRef.current.length ? sessionIdsRef.current : [sid];
+            loadResults(sid, 1, ids);
+          }
+          if (DONE_STATUSES.includes(session.status)) {
+            stopPolling();
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }, 1500);
+    },
+    [loadResults, stopPolling],
+  );
+
+  const waitForSession = (sid) =>
+    new Promise((resolve) => {
+      const tick = async () => {
+        if (campaignRef.current.abort) {
+          resolve({ status: "STOPPED", stop_reason: "USER_STOPPED" });
+          return;
+        }
+        try {
+          const session = await getScanSessionDetail(sid);
+          const count = session.pages_count || session.total_unique || 0;
+          if (count > lastLoadedRef.current) {
+            lastLoadedRef.current = count;
+            loadResults(sid, currentPage);
+          }
+          setKeywordProgress((prev) =>
+            prev.map((row, idx) => {
+              const isActive = prev.findIndex((r) => r.status === "scanning") === idx;
+              return isActive ? { ...row, count } : row;
+            }),
+          );
+          if (DONE_STATUSES.includes(session.status)) {
+            resolve(session);
+            return;
+          }
+        } catch {
+          /* retry */
+        }
+        setTimeout(tick, 1500);
+      };
+      tick();
+    });
+
+  /**
+   * Acc sticky theo rotate_every (Page đã quét), không xoay mỗi job/kênh.
+   * state: { cursor, pagesOnAcc }
+   */
+  const currentCampaignUid = (accState) => {
+    if (!selectedUids.length) return null;
+    return selectedUids[accState.cursor % selectedUids.length];
+  };
+
+  const advanceAccountAfterJob = (accState, pagesAdded, threshold) => {
+    const pagesOnAcc = (accState.pagesOnAcc || 0) + (Number(pagesAdded) || 0);
+    const limit = Math.max(1, Number(threshold) || 50);
+    if (selectedUids.length > 1 && pagesOnAcc >= limit) {
+      return {
+        cursor: (accState.cursor + 1) % selectedUids.length,
+        pagesOnAcc: 0,
+        rotated: true,
+        prevPages: pagesOnAcc,
+      };
+    }
+    return { cursor: accState.cursor, pagesOnAcc, rotated: false, prevPages: pagesOnAcc };
+  };
+
+  /* Q5 — Kiểm tra: chip hợp lệ + acc còn sống (không quét thử) */
+  const handlePreflight = () => {
+    const errors = [];
+    if (sourceMode === "keyword") {
+      if (!keywords.length) errors.push("Chưa nhập từ khóa hoặc hashtag (#).");
+      if (!plainKeywords.length && !manualHashtags.length) {
+        errors.push("Không tách được chip hợp lệ.");
+      }
+      if (!derivedHashtags.length) {
+        errors.push("Cần ít nhất 1 hashtag (nhập #... hoặc từ khóa để suy ra #).");
+      }
+      keywords.forEach((chip) => {
+        if (chip.length > 255) errors.push(`Chip quá dài: "${chip.slice(0, 40)}…"`);
+        if (isHashtagChip(chip) && !normalizeHashtag(chip)) {
+          errors.push(`Hashtag không hợp lệ: "${chip}" (không dấu phẩy / khoảng trắng).`);
+        }
+      });
+      const jobs = buildCampaignJobs({ searchMode, keywords: plainKeywords, manualHashtags });
+      if (!jobs.length) errors.push("Chế độ hiện tại không sinh được phiên quét nào.");
+      else pushLog(`Sẽ chạy ${jobs.length} phiên: ${jobs.map((j) => j.label).join(" · ")}`, "info");
+    } else if (sourceMode === "paste") {
+      if (!pasteContent.trim()) errors.push("Chưa dán link Page.");
+    } else if (sourceMode === "upload") {
+      if (!uploadResult) errors.push("Chưa tải file lên.");
+    }
+
+    if (selectedUids.length) {
+      const live = accounts.filter((a) => selectedUids.includes(a.uid) && LIVE_STATUSES.has(String(a.status)));
+      const dead = selectedUids.filter((uid) => !live.some((a) => a.uid === uid));
+      if (!live.length) errors.push("Không có tài khoản Live trong danh sách đã chọn.");
+      else if (dead.length) errors.push(`${dead.length} tài khoản không Live sẽ bị bỏ qua khi chạy.`);
+    } else {
+      errors.push("Chưa chọn tài khoản — hệ thống sẽ tự chọn nếu có acc Live.");
+    }
+
+    if (delayMin > delayMax) errors.push("Khoảng giãn cách không hợp lệ (từ > đến).");
+
+    if (errors.length) {
+      errors.forEach((e) => pushLog(e, "error"));
+      toast.error(errors[0]);
+      return false;
+    }
+    toast.success("Kiểm tra OK — chip & tài khoản sẵn sàng.");
+    pushLog("Preflight OK · chỉ quét theo hashtag.", "success");
+    return true;
+  };
+
+  /** Campaign hashtag-only — gom pool theo campaign_id */
+  const runMixedCampaign = async () => {
+    const jobs = buildCampaignJobs({ searchMode, keywords: plainKeywords, manualHashtags });
+    const campId = newCampaignId();
+    setCampaignId(campId);
+    campaignRef.current = { paused: false, abort: false, queue: jobs, accIndex: 0 };
+    sessionMetaRef.current = {};
+    setSessionIds([]);
+    setKeywordProgress(jobs.map((j) => ({ keyword: j.label, count: 0, status: "pending", channel: j.channel })));
+    setRunPhase("running");
+
+    const mode = "NGACH";
+    const modeLabel = "Hashtag";
+    const campaignSettings = {
+      search_mode: mode,
+      keywords: plainKeywords,
+      hashtags: manualHashtags,
+      rotate_every: rotateEvery,
+      delay_min_seconds: delayMin,
+      delay_max_seconds: delayMax,
+      min_followers: minFollowersEnabled ? minFollowers : null,
+      skip_save_below_threshold: skipSaveBelowThreshold,
+      max_followers: maxFollowers === "" ? null : Number(maxFollowers),
+      top_n: topN === "" ? null : Number(topN),
+    };
+    pushLog(
+      `Đợt ${campId} [${modeLabel}] · ${jobs.length} phiên · KW: ${plainKeywords.join(", ") || "—"} · Tag: ${derivedHashtags.join(", ") || "—"}`,
+      "warn",
+    );
+
+    let accState = { cursor: 0, pagesOnAcc: 0 };
+    const collectedIds = [];
+
+    for (let i = 0; i < jobs.length; i += 1) {
+      while (campaignRef.current.paused && !campaignRef.current.abort) {
+        setRunPhase("paused");
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      if (campaignRef.current.abort) break;
+
+      setRunPhase("running");
+      const job = jobs[i];
+      const uid = currentCampaignUid(accState);
+      // Giữ Chrome nếu còn job sau (cùng acc tái dùng; đổi acc thì BE đóng scope cũ)
+      const keepBrowser = i < jobs.length - 1 && !campaignRef.current.abort;
+
+      setKeywordProgress((prev) =>
+        prev.map((row) => (row.keyword === job.label ? { ...row, status: "scanning" } : row)),
+      );
+      pushLog(
+        `[${job.channel}] ${job.label} · acc ${uid || "auto"} · pages/acc ${accState.pagesOnAcc}/${rotateEvery}`,
+        "info",
+      );
+
+      try {
+        let sid;
+        if (job.kind === "keyword") {
+          const maxResults =
+            keywordTargets[job.rootKeyword] || keywordTargets[job.query] || applyAllTarget;
+          const res = await searchPages({
+            keyword: job.query,
+            account_uid: uid,
+            max_results: maxResults,
+            include_sponsored: false,
+            headless: false,
+            allow_direct_fallback: true,
+            campaign_id: campId,
+            settings: campaignSettings,
+            keep_browser: keepBrowser,
+          });
+          sid = res.session_id;
+        } else {
+          const res = await searchPagesByHashtag({
+            hashtags: [job.query],
+            context_keywords: plainKeywords,
+            min_posts: minPosts,
+            max_posts_per_hashtag: maxPostsPerHashtag,
+            account_uid: uid,
+            headless: false,
+            allow_direct_fallback: true,
+            campaign_id: campId,
+            keep_browser: keepBrowser,
+          });
+          sid = res.session_id;
+        }
+
+        sessionMetaRef.current[sid] = {
+          channel: job.channel,
+          label: job.label,
+          kind: job.kind,
+          account_uid: uid,
+        };
+        setSessionId(sid);
+        collectedIds.push(sid);
+        setSessionIds([...collectedIds]);
+        startPoll(sid);
+        const session = await waitForSession(sid);
+        stopPolling();
+        const count = session.pages_count || session.total_unique || 0;
+        setKeywordProgress((prev) =>
+          prev.map((row) =>
+            row.keyword === job.label ? { ...row, count, status: "done" } : row,
+          ),
+        );
+        pushLog(
+          `Xong ${job.label}: +${count} · ${session.stop_reason || session.status}`,
+          session.status === "FAILED" ? "error" : "success",
+        );
+
+        const nextAcc = advanceAccountAfterJob(accState, count, rotateEvery);
+        if (nextAcc.rotated) {
+          pushLog(
+            `Đủ ~${rotateEvery} Page/acc → đổi nick → ${selectedUids[nextAcc.cursor] || "?"} (đã ${nextAcc.prevPages})`,
+            "warn",
+          );
+        }
+        accState = { cursor: nextAcc.cursor, pagesOnAcc: nextAcc.pagesOnAcc };
+        campaignRef.current.accIndex = accState.cursor;
+
+        await loadResults(sid, 1, [...collectedIds]);
+      } catch (err) {
+        setKeywordProgress((prev) =>
+          prev.map((row) => (row.keyword === job.label ? { ...row, status: "error" } : row)),
+        );
+        pushLog(`Lỗi ${job.label}: ${err.message}`, "error");
+        toast.error(err.message);
+      }
+    }
+
+    stopPolling();
+    setRunPhase("done");
+    if (campaignRef.current.abort) {
+      pushLog("Đã dừng khẩn cấp toàn bộ đợt quét.", "error");
+    } else {
+      pushLog(`Đợt [${modeLabel}] hoàn tất — đang xếp hạng pool chung.`, "success");
+      toast.success(`Hoàn thành đợt ${modeLabel}.`);
+      if (collectedIds.length) {
+        await loadResults(collectedIds[collectedIds.length - 1], 1, collectedIds);
+      }
     }
   };
 
-  // File upload handler
+  const handleStart = async () => {
+    if (!handlePreflight()) return;
+    setLogs([]);
+    setPages([]);
+    setSelectedPageKeys([]);
+    setCurrentPage(1);
+    setTotalCount(0);
+    setPoolStats({ pool: 0, aboveMin: 0, showing: 0 });
+    lastLoadedRef.current = 0;
+    sessionMetaRef.current = {};
+
+    if (sourceMode === "keyword") {
+      await runMixedCampaign();
+      return;
+    }
+    if (sourceMode === "paste") {
+      setRunPhase("running");
+      pushLog("Đang chuẩn hoá danh sách link…", "info");
+      try {
+        const res = await parsePageLinks({
+          content: pasteContent.trim(),
+          filter_existing: true,
+          save_to_db: true,
+        });
+        setSessionId(res.session_id);
+        setSessionIds(res.session_id ? [res.session_id] : []);
+        setKeywordProgress([{ keyword: "Nhập link", count: res.valid_count || 0, status: "done" }]);
+        if (res.session_id) await loadResults(res.session_id, 1);
+        setRunPhase("done");
+        pushLog(`Parse xong: ${res.valid_count} hợp lệ / trùng ${res.dedup_count} / lỗi ${res.invalid_count}`, "success");
+        toast.success(`Đã nhập ${res.valid_count} Page hợp lệ.`);
+      } catch (err) {
+        setRunPhase("done");
+        toast.error(err.message);
+      }
+      return;
+    }
+    if (sourceMode === "upload") {
+      setRunPhase("running");
+      try {
+        setSessionId(uploadResult.session_id);
+        setSessionIds(uploadResult.session_id ? [uploadResult.session_id] : []);
+        setKeywordProgress([{ keyword: "Upload file", count: uploadResult.valid_count || 0, status: "done" }]);
+        if (uploadResult.session_id) await loadResults(uploadResult.session_id, 1);
+        setRunPhase("done");
+        pushLog(`Upload: ${uploadResult.valid_count} page đã lưu.`, "success");
+        toast.success(`Đã lưu ${uploadResult.valid_count} Page từ file.`);
+      } catch (err) {
+        setRunPhase("done");
+        toast.error(err.message);
+      }
+    }
+  };
+
+  /* TẠM DỪNG / TIẾP TỤC — pause API riêng stop (chỉ dẫn 1.1) */
+  const handlePauseResume = async () => {
+    if (isPaused) {
+      campaignRef.current.paused = false;
+      setRunPhase("running");
+      if (sessionId) {
+        try {
+          await resumeScanSession(sessionId);
+        } catch (err) {
+          pushLog(`Resume lỗi: ${err.message}`, "error");
+        }
+      }
+      pushLog("Tiếp tục phiên đang tạm dừng.", "success");
+      toast.info("Đã tiếp tục.");
+      return;
+    }
+    campaignRef.current.paused = true;
+    setRunPhase("paused");
+    if (sessionId) {
+      try {
+        await pauseScanSession(sessionId);
+      } catch (err) {
+        pushLog(`Pause lỗi: ${err.message}`, "error");
+      }
+    }
+    pushLog("Tạm dừng phiên tại điểm an toàn.", "warn");
+    toast.info("Đã tạm dừng.");
+  };
+
+  const handleEmergencyStop = async () => {
+    campaignRef.current.abort = true;
+    campaignRef.current.paused = false;
+    stopPolling();
+    if (sessionId) {
+      try {
+        await stopScanSession(sessionId);
+        pushLog(`Đã gửi dừng khẩn cấp phiên #${sessionId}.`, "error");
+      } catch (err) {
+        pushLog(`Lỗi dừng: ${err.message}`, "error");
+      }
+    }
+    setRunPhase("done");
+    toast.warning("Đã dừng khẩn cấp.");
+  };
+
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -289,264 +976,142 @@ export default function PageScannerModule() {
     try {
       const res = await uploadPageFile(formData);
       setUploadResult(res);
-      toast.success(`Đã nhập ${res.valid_count} Page hợp lệ từ "${file.name}"`);
+      toast.success(`Đã nhập ${res.valid_count} Page từ "${file.name}"`);
     } catch (err) {
       toast.error(`Lỗi đọc file: ${err.message}`);
     }
     e.target.value = "";
   };
 
-  // START execution
-  const handleStart = async () => {
-    stopPolling();
-    lastLoadedCountRef.current = 0;
-
-    setRunning(true);
-    setStopReason(null);
-    setStats(null);
-    setPages([]);
-    setSelectedPageKeys([]);
-    setCurrentPage(1);
-
-    try {
-      if (sourceMode === "hashtag") {
-        if (!hashtags.trim()) {
-          toast.warning("Vui lòng nhập ít nhất một hashtag!");
-          setRunning(false);
-          return;
-        }
-
-        const res = await searchPagesByHashtag({
-          hashtags: hashtags.trim(),
-          context_keywords: contextKeywords
-            .split(/[,;\n]/)
-            .map(k => k.trim())
-            .filter(Boolean),
-          min_posts: minPosts,
-          max_posts_per_hashtag: maxPostsPerHashtag,
-          account_uid: selectedAccountUid || null,
-          headless,
-          allow_direct_fallback: allowDirectFallback,
-        });
-
-        const activeSid = res.session_id;
-        setSessionId(activeSid);
-        toast.info(`Đã khởi động phiên quét Hashtag #${activeSid}. Đang mở Chrome...`);
-
-        // Chu kỳ polling cập nhật realtime kết quả & chỉ số
-        pollRef.current = setInterval(async () => {
-          try {
-            const session = await getScanSessionDetail(activeSid);
-            const currentCount = session.pages_count || session.total_unique || 0;
-
-            setStopReason(session.stop_reason);
-            setStats({
-              count: currentCount,
-              total_seen: session.total_seen || 0,
-              total_unique: session.total_unique || 0,
-              total_posts_scanned: session.total_posts_scanned || session.total_seen || 0,
-              total_posts_matched: session.total_posts_matched || 0,
-              total_authors_seen: session.total_authors_seen || 0,
-              total_pages_relevant: session.total_pages_relevant || 0,
-              total_pages_review: session.total_pages_review || 0,
-              total_pages_excluded: session.total_pages_excluded || 0,
-              batches_count: session.batches_count || 0,
-              duration_seconds: session.duration_seconds || 0,
-              stop_reason: session.stop_reason,
-              session_id: activeSid,
-              status: session.status,
-              error_message: session.error_message,
-            });
-
-            // Tải lũy kế các Page mới quét được vào bảng
-            if (currentCount > lastLoadedCountRef.current) {
-              lastLoadedCountRef.current = currentCount;
-              loadResults(activeSid, 1);
-            }
-
-            // Kết thúc phiên khi backend chuyển trạng thái
-            if (["COMPLETED", "PARTIAL", "STOPPED", "FAILED"].includes(session.status)) {
-              stopPolling();
-              setRunning(false);
-              loadResults(activeSid, 1);
-
-              if (session.status === "FAILED" || session.stop_reason === "ERROR") {
-                toast.error(
-                  `Phiên quét bị dừng: ${session.error_message || session.stop_reason || "Lỗi không xác định"}`
-                );
-              } else if (session.status === "STOPPED" || session.stop_reason === "USER_STOPPED") {
-                toast.info(`Đã dừng phiên quét. Thu được ${currentCount} Fanpage.`);
-              } else {
-                toast.success(
-                  `Hoàn thành! Thu hoạch ${session.total_pages_relevant || currentCount} Page liên quan (${session.total_pages_review || 0} cần duyệt).`
-                );
-              }
-            }
-          } catch (pollErr) {
-            console.error("Lỗi cập nhật tiến độ phiên:", pollErr);
-          }
-        }, 1500);
-
-        return;
-      } else if (sourceMode === "paste") {
-        if (!pasteContent.trim()) {
-          toast.warning("Vui lòng dán danh sách link vào ô trên!");
-          setRunning(false);
-          return;
-        }
-        const res = await parsePageLinks({
-          content: pasteContent.trim(),
-          filter_existing: true,
-          save_to_db: true,
-        });
-        setSessionId(res.session_id);
-        setStats({ count: res.valid_count, stop_reason: "TARGET_REACHED", session_id: res.session_id });
-        setStopReason("TARGET_REACHED");
-        if (res.session_id) await loadResults(res.session_id, 1);
-        toast.success(`Đã nhập ${res.valid_count} Page hợp lệ (trùng loại: ${res.dedup_count}, lỗi: ${res.invalid_count})`);
-        setRunning(false);
-      } else if (sourceMode === "upload") {
-        if (!uploadResult) {
-          toast.warning("Vui lòng tải file lên trước!");
-          setRunning(false);
-          return;
-        }
-        setSessionId(uploadResult.session_id);
-        setStats({ count: uploadResult.valid_count, stop_reason: "TARGET_REACHED", session_id: uploadResult.session_id });
-        setStopReason("TARGET_REACHED");
-        if (uploadResult.session_id) await loadResults(uploadResult.session_id, 1);
-        toast.success(`Đã lưu ${uploadResult.valid_count} Page từ file tải lên.`);
-        setRunning(false);
-      }
-    } catch (err) {
-      stopPolling();
-      toast.error(`Lỗi thực thi: ${err.message}`);
-      setStopReason("ERROR");
-      setRunning(false);
-    }
-  };
-
-  // STOP session
-  const handleStop = async () => {
-    if (!sessionId) {
-      stopPolling();
-      setRunning(false);
-      return;
-    }
-    try {
-      await stopScanSession(sessionId);
-      toast.info("Đã gửi tín hiệu dừng. Trình duyệt đang đóng an toàn...");
-    } catch (err) {
-      toast.error(`Không thể gửi lệnh dừng: ${err.message}`);
-      stopPolling();
-      setRunning(false);
-    }
-  };
-
-  // Pagination
-  const handlePageChange = (p) => {
-    setCurrentPage(p);
-    loadResults(sessionId, p);
-  };
-
-  // Export CSV
   const handleExportCSV = () => {
     if (!pages.length) return;
-    const headers = [
-      "STT",
-      "Tên Page",
-      "Link Page",
-      "Điểm liên quan",
-      "Xếp loại",
-      "Số bài gắn hashtag",
-      "Hashtag khớp",
-      "Bằng chứng bài viết",
-      "Followers",
-      "Tích xanh",
-      "Danh mục"
-    ];
+    const headers = ["STT", "Từ khóa", "Tên Page", "Link Page", "SĐT", "Email", "Website", "Followers", "Tích xanh"];
     const rows = pages.map((p, i) => [
-      i + 1,
+      (currentPage - 1) * pageSize + i + 1,
+      p.source_keyword || (filterKeyword !== "ALL" ? filterKeyword : ""),
       p.page_name || "",
       p.page_url || "",
-      p.relevance_score || 0,
-      p.relevance_status || "RELEVANT",
-      p.hashtag_post_count || 0,
-      p.matched_hashtags || "",
-      Array.isArray(p.evidence_posts) ? p.evidence_posts.join(" | ") : (p.evidence_posts || ""),
-      p.follower_count || "",
-      p.is_verified === true ? "Có" : p.is_verified === false ? "Không" : "",
-      p.category || "",
+      p.phone || "",
+      p.email || "",
+      p.website || "",
+      p.follower_count ?? "",
+      p.is_verified === true ? "Có" : "",
     ]);
-    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `danh_sach_fanpage_hashtag_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `quet_page_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    toast.success("Đã xuất file CSV!");
+    toast.success("Đã xuất file CSV.");
   };
 
-  // Selected account display
-  const selAcc = accounts.find(a => a.uid === selectedAccountUid);
+  /* Q6 — tick → lưu tick; chưa tick → lưu toàn bộ đang lọc (trang hiện tại + nếu có thể lấy thêm) */
+  const handleSaveList = async () => {
+    let toSave = pages.filter((p) => selectedPageKeys.includes(p.page_key));
+    if (!toSave.length) {
+      toSave = [...pages];
+      if (sessionId && totalCount > pages.length) {
+        try {
+          const all = await getScannedPages({
+            session_id: sessionId,
+            page: 1,
+            page_size: Math.min(totalCount, 200),
+            keyword: resultSearch || undefined,
+            min_followers: minFollowersEnabled ? minFollowers : undefined,
+            sort_by: "followers",
+            sort_dir: sortDir,
+          });
+          toSave = all.items || toSave;
+        } catch {
+          /* dùng trang hiện tại */
+        }
+      }
+    }
+    if (!toSave.length) {
+      toast.warning("Không có page để lưu.");
+      return;
+    }
+    const entry = savePageList({ pages: toSave });
+    toast.success(`Đã lưu ${entry.count} page vào danh sách "${entry.name}".`);
+    pushLog(`Lưu danh sách: ${entry.count} page.`, "success");
+  };
+
+  /* Reload bảng khi đổi lọc / sort (sau khi đã có phiên) */
+  useEffect(() => {
+    if (!sessionId || runPhase === "idle") return undefined;
+    const t = setTimeout(() => {
+      setCurrentPage(1);
+      loadResults(sessionId, 1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [resultSearch, filterKeyword, minFollowersEnabled, minFollowers, sortDir, sessionId, runPhase, loadResults]);
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const keywordOptions = useMemo(() => {
+    const opts = [...plainKeywords, ...manualHashtags];
+    return opts;
+  }, [plainKeywords, manualHashtags]);
+
+  const selCount = selectedUids.length;
 
   return (
     <div className="space-y-5 pb-8">
+      {/* Header copy */}
+      <div>
+        <h1 className="font-heading text-xl font-bold text-slate-900">Quét thông tin page</h1>
+        <p className="mt-1 text-xs text-slate-500">
+          Tab Từ khóa / #hashtag — chỉ quét theo hashtag (bài viết → Page) · kèm Follower, SĐT, Email, Website.
+        </p>
+      </div>
 
-      {/* ══════ STEP 1: Account + Source ══════ */}
       <div className="grid gap-5 lg:grid-cols-2">
-
-        {/* Step 1A: Account picker */}
+        {/* ═══ Card 1 ═══ */}
         <SectionCard
           number="1"
-          title="Chọn tài khoản & Thiết lập nguồn Hashtag"
-          description="Quét bài viết theo hashtag, phân loại tác giả là Fanpage và chấm điểm liên quan"
+          title="Chọn tài khoản & Thiết lập phiên quét"
+          description="Chọn dàn acc, phương thức quét và danh sách mục tiêu"
           aside={
-            selectedAccountUid
-              ? <StepBadge done label={`Đã chọn: ${selAcc?.name || selectedAccountUid}`} />
-              : <StepBadge active label="Chưa chọn (hệ thống tự chọn)" />
+            selCount > 0 ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 border border-emerald-200">
+                <CheckCircle2 className="size-3" /> Đã chọn: {selCount} tài khoản
+              </span>
+            ) : null
           }
         >
-          {/* Account select button */}
-          <div className="mb-4 flex items-center gap-2">
+          <div className="mb-4 flex flex-wrap items-center gap-2">
             <Button
               type="button"
-              variant="outline"
               size="sm"
-              onClick={() => setShowAccountModal(true)}
-              disabled={running}
+              disabled={isBusy}
+              onClick={() => {
+                setModalUids([...selectedUids]);
+                setShowAccountModal(true);
+              }}
               className="gap-1.5"
             >
-              <Users className="size-3.5" />
-              Chọn tài khoản
+              <Plus className="size-3.5" /> Chọn tài khoản
             </Button>
-            {selectedAccountUid && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-semibold text-emerald-700 border border-emerald-200">
-                <CheckCircle2 className="size-3" />
-                {selAcc?.name || selectedAccountUid}
-              </span>
-            )}
-            {!selectedAccountUid && (
-              <span className="text-[11px] text-slate-400">Không chọn → hệ thống tự chọn nick tốt nhất</span>
+            {selCount === 0 && (
+              <span className="text-[11px] text-slate-400">Chưa chọn → hệ thống tự chọn acc Live</span>
             )}
           </div>
 
-          {/* Source mode tabs */}
-          <p className="mb-2 text-[11px] font-semibold text-slate-600">PHƯƠNG THỨC QUÉT</p>
-          <div className="mb-4 flex gap-1.5">
+          <p className="mb-2 text-[11px] font-bold tracking-wide text-slate-500">PHƯƠNG THỨC QUÉT</p>
+          <div className="mb-4 flex flex-wrap gap-1.5">
             {SOURCE_MODES.map(({ id, label, Icon }) => (
               <button
                 key={id}
                 type="button"
-                disabled={running}
+                disabled={isBusy}
                 onClick={() => setSourceMode(id)}
                 className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[11px] font-semibold transition-all ${
                   sourceMode === id
-                    ? "border-primary bg-primary/5 text-primary"
-                    : "border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700"
-                } disabled:cursor-not-allowed disabled:opacity-60`}
+                    ? "border-primary bg-primary text-white"
+                    : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
+                } disabled:opacity-60`}
               >
                 <Icon className="size-3.5" />
                 {label}
@@ -554,616 +1119,646 @@ export default function PageScannerModule() {
             ))}
           </div>
 
-          {/* Source: Hashtag (Mục 10) */}
-          {sourceMode === "hashtag" && (
-            <div className="space-y-3.5">
-              <div>
-                <label className="mb-1 block text-[11px] font-semibold text-slate-700">
-                  Danh sách Hashtag mục tiêu (phân cách bằng dấu phẩy hoặc khoảng trắng)
-                </label>
-                <div className="relative">
-                  <Hash className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-primary" />
-                  <Input
-                    value={hashtags}
-                    onChange={e => setHashtags(e.target.value)}
-                    disabled={running}
-                    placeholder="#thoitrang, #mypham, #phukien..."
-                    className="pl-9 font-medium"
-                    onKeyDown={e => e.key === "Enter" && !running && handleStart()}
+          {sourceMode === "keyword" && (
+            <div className="space-y-3">
+              <p className="text-[10px] text-slate-400">
+                Chỉ tìm theo hashtag
+                {campaignId ? ` · campaign ${campaignId}` : ""}
+                {derivedHashtags.length > 0 ? ` · sẽ quét: ${derivedHashtags.join(", ")}` : ""}
+                {campaignPreviewJobs.length > 0 ? ` · ${campaignPreviewJobs.length} phiên` : ""}
+              </p>
+
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <label className="mb-1 block text-[11px] font-semibold text-slate-700">
+                    Hashtag mục tiêu
+                  </label>
+                  <ChipInput
+                    chips={keywords}
+                    onChange={setKeywords}
+                    disabled={isBusy}
+                    mixed
+                    placeholder="Vd: #mypham, thời trang (suy ra #thoitrang)…"
                   />
+                  <p className="mt-1 text-[10px] text-slate-400">
+                    {manualHashtags.length} hashtag nhập tay
+                    {plainKeywords.length > 0 ? ` · ${plainKeywords.length} từ khóa → suy ra #` : ""}
+                    {derivedHashtags.length > 0 ? ` · quét: ${derivedHashtags.join(", ")}` : ""}
+                  </p>
                 </div>
-                <p className="mt-1 text-[10px] text-slate-400">
-                  Mẹo: Nhập nhiều hashtag liên quan (VD: <code className="text-primary">#thoitrang, #outfit</code>) để Page xuất hiện ở cả 2 tag được cộng điểm tối đa (+15đ).
-                </p>
+                <Button type="button" size="sm" variant="outline" className="mt-5 shrink-0" disabled={isBusy} onClick={handlePreflight}>
+                  Kiểm tra
+                </Button>
               </div>
 
-              <div>
-                <label className="mb-1 block text-[11px] font-semibold text-slate-700">
-                  Từ khóa ngữ cảnh bổ trợ (Context keywords — tùy chọn)
-                </label>
-                <Input
-                  value={contextKeywords}
-                  onChange={e => setContextKeywords(e.target.value)}
-                  disabled={running}
-                  placeholder="bán sỉ, thời trang nữ, shop, authentic, giá tốt..."
-                  className="text-xs"
-                />
-                <p className="mt-1 text-[10px] text-slate-400">
-                  Khi hashtag quá rộng (như #sale, #review), từ khóa ngữ cảnh giúp lọc các Page đăng spam và ưu tiên Page đúng ngành.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Source: Paste */}
-          {sourceMode === "paste" && (
-            <div>
-              <label className="mb-1.5 block text-[11px] font-semibold text-slate-600">
-                Dán danh sách link Fanpage Facebook
-              </label>
-              <Textarea
-                value={pasteContent}
-                onChange={e => setPasteContent(e.target.value)}
-                disabled={running}
-                rows={6}
-                placeholder={"https://www.facebook.com/biluxuryvn\nhttps://www.facebook.com/innisfreevietnam\n100084729103941\n..."}
-                className="font-mono text-[11px]"
-              />
-              {pasteContent.trim() && (
-                <p className="mt-1.5 text-[11px] text-slate-400">
-                  Khoảng {pasteContent.trim().split("\n").filter(Boolean).length} dòng nhập vào
-                </p>
+              {keywordProgress.length > 0 && (
+                <div className="overflow-hidden rounded-lg border border-slate-200">
+                  <table className="w-full text-[11px]">
+                    <thead className="bg-slate-50 text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-semibold">Truy vấn</th>
+                        <th className="px-3 py-2 text-left font-semibold">Kênh</th>
+                        <th className="px-3 py-2 text-left font-semibold">Số page</th>
+                        <th className="px-3 py-2 text-left font-semibold">Trạng thái</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {keywordProgress.map((row) => (
+                        <tr key={row.keyword}>
+                          <td className="px-3 py-2 font-medium text-slate-700">
+                            {String(row.keyword).startsWith("#") ? (
+                              <span className="inline-flex items-center gap-1 text-violet-700">
+                                <Hash className="size-3" />
+                                {row.keyword}
+                              </span>
+                            ) : (
+                              row.keyword
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-[10px] text-slate-500">{row.channel || "—"}</td>
+                          <td className="px-3 py-2 text-slate-600">
+                            {row.count > 0 ? `${row.count.toLocaleString("vi-VN")} page` : "—"}
+                          </td>
+                          <td className="px-3 py-2">
+                            {row.status === "done" && (
+                              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">Hoàn thành</span>
+                            )}
+                            {row.status === "scanning" && (
+                              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">Đang quét</span>
+                            )}
+                            {row.status === "pending" && (
+                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">Chờ</span>
+                            )}
+                            {row.status === "paused" && (
+                              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">Tạm dừng</span>
+                            )}
+                            {row.status === "error" && (
+                              <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-bold text-red-600">Lỗi</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           )}
 
-          {/* Source: Upload */}
+          {sourceMode === "paste" && (
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold text-slate-600">Dán link Page (mỗi dòng 1 link)</label>
+              <Textarea
+                value={pasteContent}
+                onChange={(e) => setPasteContent(e.target.value)}
+                disabled={isBusy}
+                rows={7}
+                placeholder={"https://www.facebook.com/tenpage\nhttps://facebook.com/profile.php?id=..."}
+                className="font-mono text-[11px]"
+              />
+            </div>
+          )}
+
           {sourceMode === "upload" && (
             <div>
               <div
-                className="relative flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/60 p-8 text-center transition-all hover:border-primary/40 hover:bg-primary/5 cursor-pointer"
+                className="relative flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/60 p-8 text-center hover:border-primary/40"
                 onClick={() => fileInputRef.current?.click()}
               >
                 <FileUp className="size-8 text-slate-400" />
-                <div>
-                  <p className="text-sm font-semibold text-slate-700">Kéo thả file .txt hoặc .csv vào đây</p>
-                  <p className="text-[11px] text-slate-400">hoặc <span className="font-semibold text-primary underline">Bấm để tải lên</span></p>
-                </div>
+                <p className="text-sm font-semibold text-slate-700">Kéo thả .txt / .csv hoặc bấm để tải lên</p>
                 <input ref={fileInputRef} type="file" accept=".txt,.csv" hidden onChange={handleFileUpload} />
               </div>
-
               {uploadResult && (
-                <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
-                  <p className="mb-2 text-[11px] font-semibold text-slate-600">XEM TRƯỚC DANH SÁCH TẢI LÊN</p>
-                  <div className="flex gap-4 text-[11px]">
-                    <span className="text-emerald-700 font-semibold">✓ Hợp lệ: {uploadResult.valid_count}</span>
-                    <span className="text-amber-700 font-semibold">⚡ Trùng: {uploadResult.dedup_count}</span>
-                    <span className="text-red-600 font-semibold">✗ Lỗi: {uploadResult.invalid_count}</span>
-                    <span className="text-slate-500">Tổng: {uploadResult.total_lines}</span>
-                  </div>
-                  <div className="mt-2 max-h-32 overflow-auto rounded border border-slate-100 bg-slate-50">
-                    <table className="w-full text-[10px]">
-                      <thead>
-                        <tr className="border-b border-slate-200 bg-slate-100">
-                          <th className="px-3 py-1.5 text-left text-slate-500 font-semibold">STT</th>
-                          <th className="px-3 py-1.5 text-left text-slate-500 font-semibold">Link Page</th>
-                          <th className="px-3 py-1.5 text-left text-slate-500 font-semibold">Trạng thái</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(uploadResult.pages || []).slice(0, 5).map((p, i) => (
-                          <tr key={i} className="border-b border-slate-100">
-                            <td className="px-3 py-1.5 text-slate-400">{i + 1}</td>
-                            <td className="px-3 py-1.5 text-slate-600 truncate max-w-[200px]">{p.page_url}</td>
-                            <td className="px-3 py-1.5">
-                              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 font-semibold">Hợp lệ</span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+                <p className="mt-2 text-[11px] text-emerald-700 font-semibold">
+                  ✓ Hợp lệ {uploadResult.valid_count} · Trùng {uploadResult.dedup_count} · Lỗi {uploadResult.invalid_count}
+                </p>
               )}
-
-              <button
-                type="button"
-                onClick={downloadPageTemplate}
-                className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-primary hover:underline"
-              >
-                <Download className="size-3" /> Tải file mẫu (.txt)
+              <button type="button" onClick={downloadPageTemplate} className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-primary hover:underline">
+                <Download className="size-3" /> Tải file mẫu
               </button>
             </div>
           )}
         </SectionCard>
 
-        {/* Step 1B: Settings */}
-        <SectionCard
-          number="2"
-          title="Thiết lập cấu hình quét & chấm điểm"
-          description="Giới hạn bài viết, điều kiện cứng chống spam và trình duyệt"
-        >
+        {/* ═══ Card 2 ═══ */}
+        <SectionCard number="2" title="Thiết lập cấu hình quét mục tiêu" description="Luân phiên acc, giãn cách, mục tiêu page và ngưỡng follower">
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <span className="text-[11px] font-semibold text-slate-700">Số bài viết quét tối đa / hashtag</span>
-                <p className="text-[10px] text-slate-400">Khuyến nghị 50–100 bài để đảm bảo tốc độ và độ an toàn</p>
+                <p className="text-[11px] font-semibold text-slate-700">Đổi tài khoản mới khi quét được</p>
+                <p className="text-[10px] text-slate-400">Mỗi acc tối đa N page / từ khóa — đổi acc ở từ khóa kế (không cắt giữa từ khóa)</p>
               </div>
-              <NumCtrl value={maxPostsPerHashtag} onChange={setMaxPostsPerHashtag} min={10} max={300} disabled={running} />
+              <div className="flex items-center gap-2">
+                <NumCtrl value={rotateEvery} onChange={setRotateEvery} min={1} max={500} step={10} disabled={isBusy} />
+                <span className="text-[11px] text-slate-500">page/tài khoản</span>
+              </div>
             </div>
 
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="text-[11px] font-semibold text-slate-700">Điều kiện cứng: Tối thiểu số bài / Page</span>
-                <p className="text-[10px] text-slate-400">Loại các Page đăng 1 bài vu vơ câu view (mặc định 2 bài)</p>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-[11px] font-semibold text-slate-700">Khoảng cách giữa các lần quét</p>
+              <div className="flex items-center gap-2 text-[11px] text-slate-600">
+                <input
+                  type="number"
+                  min={1}
+                  max={120}
+                  disabled={isBusy}
+                  value={delayMin}
+                  onChange={(e) => setDelayMin(Math.max(1, Number(e.target.value) || 1))}
+                  className="h-7 w-14 rounded border border-slate-200 text-center text-xs font-semibold"
+                />
+                <span>đến</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={180}
+                  disabled={isBusy}
+                  value={delayMax}
+                  onChange={(e) => setDelayMax(Math.max(delayMin, Number(e.target.value) || delayMin))}
+                  className="h-7 w-14 rounded border border-slate-200 text-center text-xs font-semibold"
+                />
+                <span>giây</span>
               </div>
-              <NumCtrl value={minPosts} onChange={setMinPosts} min={1} max={10} disabled={running} />
             </div>
 
-            <hr className="border-slate-100" />
+            {sourceMode === "keyword" && (
+              <div className="space-y-3 border-t border-slate-100 pt-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-slate-700">Số bài tối đa / hashtag</span>
+                  <NumCtrl value={maxPostsPerHashtag} onChange={setMaxPostsPerHashtag} min={10} max={300} step={10} disabled={isBusy} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-slate-700">Tối thiểu bài khớp / Page (min_posts)</span>
+                  <NumCtrl value={minPosts} onChange={setMinPosts} min={1} max={10} step={1} disabled={isBusy} />
+                </div>
+              </div>
+            )}
 
-            <label className="flex cursor-pointer items-center justify-between text-[11px] font-semibold text-slate-600">
-              <div>
-                <span>Tự động dùng IP trực tiếp nếu Proxy lỗi (Fallback)</span>
-                <p className="text-[10px] font-normal text-slate-400">Tự động chuyển IP để phiên quét không bị dừng giữa chừng</p>
+            <div className="space-y-2 border-t border-slate-100 pt-4">
+              <label className="flex cursor-pointer items-start gap-2.5">
+                <Checkbox
+                  checked={minFollowersEnabled}
+                  disabled={isBusy}
+                  onCheckedChange={(c) => setMinFollowersEnabled(!!c)}
+                  className="mt-0.5"
+                />
+                <span className="text-[11px] text-slate-700">
+                  Chỉ <strong>hiển thị</strong> page có followers lớn hơn{" "}
+                  <input
+                    type="number"
+                    min={0}
+                    disabled={isBusy || !minFollowersEnabled}
+                    value={minFollowers}
+                    onChange={(e) => setMinFollowers(Math.max(0, Number(e.target.value) || 0))}
+                    className="mx-1 inline-block h-6 w-20 rounded border border-slate-200 px-1 text-center text-xs font-semibold"
+                  />{" "}
+                  Followers
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2.5 pl-6">
+                <Checkbox
+                  checked={skipSaveBelowThreshold}
+                  disabled={isBusy || !minFollowersEnabled}
+                  onCheckedChange={(c) => setSkipSaveBelowThreshold(!!c)}
+                  className="mt-0.5"
+                />
+                <span className="text-[11px] text-slate-600">
+                  Không lưu page dưới ngưỡng vào DB{" "}
+                  <span className="text-slate-400">(mặc định: lưu hết, chỉ lọc khi xem)</span>
+                </span>
+              </label>
+              <div className="flex flex-wrap items-center gap-3 pl-6 pt-1">
+                <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
+                  Max followers
+                  <input
+                    type="number"
+                    min={0}
+                    disabled={isBusy || !minFollowersEnabled}
+                    value={maxFollowers}
+                    placeholder="∞"
+                    onChange={(e) => setMaxFollowers(e.target.value === "" ? "" : Math.max(0, Number(e.target.value) || 0))}
+                    className="h-6 w-20 rounded border border-slate-200 px-1 text-center text-xs font-semibold"
+                  />
+                </label>
+                <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
+                  Top N
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    disabled={isBusy}
+                    value={topN}
+                    placeholder="all"
+                    onChange={(e) => setTopN(e.target.value === "" ? "" : Math.min(500, Math.max(1, Number(e.target.value) || 1)))}
+                    className="h-6 w-16 rounded border border-slate-200 px-1 text-center text-xs font-semibold"
+                  />
+                  <span className="text-[10px] text-slate-400">(sau lọc — khác max_results)</span>
+                </label>
               </div>
-              <div
-                onClick={() => !running && setAllowDirectFallback(v => !v)}
-                className={`relative h-5 w-9 rounded-full transition-colors cursor-pointer ${allowDirectFallback ? "bg-primary" : "bg-slate-200"} ${running ? "opacity-50 cursor-not-allowed" : ""}`}
-              >
-                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${allowDirectFallback ? "translate-x-4" : "translate-x-0.5"}`} />
-              </div>
-            </label>
-
-            <label className="flex cursor-pointer items-center justify-between text-[11px] font-semibold text-slate-600">
-              <div>
-                <span>Chạy Chrome ẩn (Headless)</span>
-                <p className="text-[10px] font-normal text-slate-400">Tắt giao diện Chrome để tiết kiệm RAM & CPU</p>
-              </div>
-              <div
-                onClick={() => !running && setHeadless(v => !v)}
-                className={`relative h-5 w-9 rounded-full transition-colors cursor-pointer ${headless ? "bg-primary" : "bg-slate-200"} ${running ? "opacity-50 cursor-not-allowed" : ""}`}
-              >
-                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${headless ? "translate-x-4" : "translate-x-0.5"}`} />
-              </div>
-            </label>
+              <p className="pl-6 text-[10px] text-slate-400 flex items-start gap-1">
+                <AlertTriangle className="size-3 shrink-0 mt-0.5 text-amber-500" />
+                SĐT/Email/Website chỉ lấy ngay với page đạt ngưỡng follower; page dưới ngưỡng để quét chi tiết sau.
+              </p>
+            </div>
           </div>
         </SectionCard>
       </div>
 
-      {/* ══════ ACTION & LIVE STREAMING STATUS ══════ */}
-      <div className="flex flex-col gap-3">
-        {running && stats && (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/90 to-indigo-50/90 p-4 shadow-sm">
-            <div className="flex items-center gap-3">
-              <span className="relative flex h-3 w-3">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
-                <span className="relative inline-flex h-3 w-3 rounded-full bg-blue-600" />
-              </span>
-              <div>
-                <p className="text-xs font-bold text-slate-800">
-                  Phiên hashtag #{stats.session_id || sessionId} đang quét trực tiếp
-                </p>
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-slate-600">
-                  <span>Bài quét: <strong className="text-slate-900">{stats.total_posts_scanned || stats.total_seen || 0}</strong></span>
-                  <span>•</span>
-                  <span>Khớp hashtag: <strong className="text-blue-700">{stats.total_posts_matched || 0}</strong></span>
-                  <span>•</span>
-                  <span>Fanpage: <strong className="text-slate-900">{stats.count || 0}</strong></span>
-                  <span>•</span>
-                  <span>Đạt chuẩn: <strong className="text-emerald-700">{stats.total_pages_relevant || 0}</strong></span>
-                  <span>•</span>
-                  <span>Cần xem lại: <strong className="text-amber-700">{stats.total_pages_review || 0}</strong></span>
-                  <span>•</span>
-                  <span>Đợt cuộn: <strong className="text-slate-700">{stats.batches_count || 0}</strong></span>
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 rounded-lg bg-white/80 px-3 py-1.5 border border-blue-100 text-xs font-medium text-slate-700">
-              <Clock className="size-3.5 text-blue-600" />
-              <span>Thời gian: <strong>{stats.duration_seconds || 0}s</strong></span>
-            </div>
-          </div>
-        )}
-
+      {/* Controls */}
+      <div className="flex flex-col gap-2">
         <Button
           type="button"
           size="lg"
           className="w-full gap-2 text-sm font-bold shadow-md shadow-primary/20"
-          disabled={running}
+          disabled={isBusy}
           onClick={handleStart}
         >
-          {running
-            ? <><Loader2 className="size-4 animate-spin" /> ĐANG QUÉT BÀI VIẾT & PHÂN LOẠI PAGE THEO HASHTAG...</>
-            : <><Play className="size-4" /> BẮT ĐẦU THỰC THI QUÉT HASHTAG</>
-          }
+          {isBusy ? (
+            <>
+              <Loader2 className="size-4 animate-spin" /> ĐANG THỰC THI…
+            </>
+          ) : (
+            <>
+              <Play className="size-4" /> BẮT ĐẦU THỰC THI
+            </>
+          )}
         </Button>
 
-        {running && (
-          <Button
-            type="button"
-            variant="outline"
-            size="lg"
-            className="w-full gap-2 border-red-300 bg-red-50/40 text-red-600 hover:bg-red-50 hover:text-red-700"
-            onClick={handleStop}
-          >
-            <Square className="size-4" /> DỪNG KHẨN CẤP
-          </Button>
-        )}
-      </div>
-
-      {/* ══════ RESULTS TABLE ══════ */}
-      <Card className="overflow-hidden border-slate-200 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 px-6 py-4">
-          <div className="flex items-center gap-3">
-            <h3 className="font-heading text-sm font-bold text-slate-800">Kết quả lọc Fanpage theo Hashtag</h3>
-            {stats && (
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-slate-400">Thu hoạch:</span>
-                <span className="text-[11px] font-bold text-primary">{stats.count} Page</span>
-                {stats.stop_reason && <StopReasonBadge reason={stats.stop_reason} />}
-              </div>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
+        {isBusy && (
+          <div className="grid grid-cols-2 gap-2">
             <Button
               type="button"
               variant="outline"
-              size="sm"
-              className="gap-1.5 text-[11px]"
-              disabled={!pages.length}
-              onClick={handleExportCSV}
+              size="lg"
+              className="gap-2 border-red-300 text-red-600 hover:bg-red-50"
+              onClick={handlePauseResume}
             >
-              <Download className="size-3.5" /> Xuất file CSV (kèm Bằng chứng)
+              {isPaused ? (
+                <>
+                  <Play className="size-4" /> TIẾP TỤC
+                </>
+              ) : (
+                <>
+                  <Pause className="size-4" /> TẠM DỪNG
+                </>
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              className="gap-2 border-red-400 bg-red-50 text-red-700 hover:bg-red-100"
+              onClick={handleEmergencyStop}
+            >
+              <Square className="size-4" /> DỪNG KHẨN CẤP
             </Button>
           </div>
-        </div>
+        )}
+      </div>
 
-        {/* Results filter & Tabs */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-3 bg-slate-50/40">
-          {/* Status Tabs */}
-          <div className="flex items-center gap-1.5">
-            {[
-              { id: "ALL", label: "Tất cả" },
-              { id: "RELEVANT", label: "✨ Liên quan (Đạt chuẩn)" },
-              { id: "REVIEW", label: "⚠️ Cần xem lại" },
-              { id: "EXCLUDED", label: "🚫 Bị loại" },
-            ].map(({ id, label }) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => handleFilterChange(id)}
-                className={`rounded-md px-3 py-1 text-xs font-semibold transition-all ${
-                  relevanceFilter === id
-                    ? "bg-white text-primary shadow-sm border border-slate-200"
-                    : "text-slate-500 hover:text-slate-800"
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {/* Search in results */}
-          <div className="relative min-w-[220px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3 text-slate-400" />
-            <Input
-              value={resultSearch}
-              onChange={e => setResultSearch(e.target.value)}
-              placeholder="Tìm theo tên hoặc link Page..."
-              className="pl-8 h-7 text-[11px] bg-white"
-            />
-          </div>
-        </div>
-
-        {/* Table */}
-        <div className="overflow-auto">
-          <table className="w-full min-w-[960px] text-left text-[11px]">
-            <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500 shadow-sm">
-              <tr className="border-b border-slate-200">
-                <th className="w-10 px-4 py-3">
-                  <Checkbox
-                    checked={pages.length > 0 && selectedPageKeys.length === pages.length}
-                    onCheckedChange={c => setSelectedPageKeys(c ? pages.map(p => p.page_key) : [])}
+      {/* Results + Log — chỉ hiện sau khi đã bắt đầu (trạng thái 2 / xong) */}
+      {showResults && (
+        <>
+          <Card className="overflow-hidden border-slate-200 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
+              <div>
+                <h3 className="font-heading text-sm font-bold text-slate-800">Kết quả quét thông tin Page</h3>
+                {poolStats.pool > 0 && (
+                  <p className="mt-0.5 text-[10px] text-slate-400">
+                    Pool {poolStats.pool.toLocaleString("vi-VN")} → đạt ngưỡng FL: {poolStats.aboveMin.toLocaleString("vi-VN")} → đang hiện trang: {poolStats.showing}
+                    {" · xếp theo điểm liên quan"}
+                    {topN ? ` · Top ${topN}` : ""}
+                  </p>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    value={resultSearch}
+                    onChange={(e) => setResultSearch(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && sessionId && loadResults(sessionId, 1)}
+                    placeholder="Tìm kiếm Tên, Link, SĐT, Email..."
+                    className="h-8 w-56 pl-8 text-[11px]"
                   />
-                </th>
-                <th className="w-12 px-3 py-3 font-semibold">STT</th>
-                <th className="px-3 py-3 font-semibold">FANPAGE</th>
-                <th className="px-3 py-3 font-semibold">ĐỘ LIÊN QUAN</th>
-                <th className="px-3 py-3 font-semibold">SỐ BÀI KHỚP HASHTAG</th>
-                <th className="px-3 py-3 font-semibold">BẰNG CHỨNG (EVIDENCE)</th>
-                <th className="px-3 py-3 font-semibold">LINK TRANG</th>
-                <th className="px-3 py-3 font-semibold">FOLLOWERS</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {loadingResults ? (
-                <tr>
-                  <td colSpan={8} className="py-16 text-center text-slate-400">
-                    <Loader2 className="mx-auto mb-2 size-6 animate-spin text-primary" />
-                    <p>Đang tải danh sách Fanpage...</p>
-                  </td>
-                </tr>
-              ) : pages.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="py-16 text-center text-slate-400">
-                    <Hash className="mx-auto mb-2 size-8 opacity-30 text-primary" />
-                    <p className="text-sm font-medium text-slate-600">Chưa có Fanpage nào</p>
-                    <p className="text-[11px]">Nhập hashtag mục tiêu và bấm &quot;Bắt đầu thực thi quét hashtag&quot; để tìm Page</p>
-                  </td>
-                </tr>
-              ) : (
-                pages.map((page, idx) => {
-                  const globalIdx = (currentPage - 1) * pageSize + idx + 1;
-                  const isSelected = selectedPageKeys.includes(page.page_key);
+                </div>
+                <select
+                  value={filterKeyword}
+                  onChange={(e) => setFilterKeyword(e.target.value)}
+                  className="h-8 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-600"
+                >
+                  <option value="ALL">Tất cả từ khóa</option>
+                  {keywordOptions.map((kw) => (
+                    <option key={kw} value={kw}>
+                      {kw}
+                    </option>
+                  ))}
+                </select>
+                <Button type="button" variant="outline" size="sm" className="gap-1.5 text-[11px]" disabled={!pages.length} onClick={handleExportCSV}>
+                  <Download className="size-3.5" /> Xuất toàn bộ file
+                </Button>
+                <Button type="button" size="sm" className="gap-1.5 text-[11px]" disabled={!pages.length && !totalCount} onClick={handleSaveList}>
+                  <Save className="size-3.5" /> Lưu danh sách
+                </Button>
+              </div>
+            </div>
 
-                  // Parse evidence posts
-                  let evidenceList = [];
-                  if (Array.isArray(page.evidence_posts)) {
-                    evidenceList = page.evidence_posts;
-                  } else if (typeof page.evidence_posts === "string" && page.evidence_posts.trim()) {
-                    try {
-                      evidenceList = JSON.parse(page.evidence_posts);
-                    } catch {
-                      evidenceList = page.evidence_posts.split("|").map(s => s.trim()).filter(Boolean);
-                    }
-                  }
-
-                  return (
-                    <tr
-                      key={page.page_key}
-                      onClick={e => {
-                        if (e.target.closest("a,button,input")) return;
-                        setSelectedPageKeys(prev =>
-                          isSelected ? prev.filter(k => k !== page.page_key) : [...prev, page.page_key]
-                        );
-                      }}
-                      className={`cursor-pointer transition-colors ${
-                        isSelected ? "bg-blue-50/60 hover:bg-blue-100/60" : "bg-white hover:bg-slate-50"
-                      }`}
-                    >
-                      <td className="px-4 py-2.5">
-                        <Checkbox
-                          checked={isSelected}
-                          onCheckedChange={c =>
-                            setSelectedPageKeys(prev =>
-                              c ? [...prev, page.page_key] : prev.filter(k => k !== page.page_key)
-                            )
-                          }
-                        />
-                      </td>
-                      <td className="px-3 py-2.5 text-slate-400 font-mono">{String(globalIdx).padStart(2, "0")}</td>
-
-                      {/* Fanpage Avatar & Name */}
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-2.5">
-                          <Avatar className="size-8 shrink-0 border border-slate-200">
-                            {page.avatar_url && <AvatarImage src={page.avatar_url} />}
-                            <AvatarFallback className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}>
-                              {initialsOf(page.page_name || "FB")}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1">
-                              <span className="truncate max-w-[180px] font-semibold text-slate-800">
-                                {page.page_name || "—"}
-                              </span>
-                              {page.is_verified === true && (
-                                <BadgeCheck className="size-3.5 shrink-0 text-blue-500" />
-                              )}
-                            </div>
-                            {page.category && (
-                              <span className="text-[10px] text-slate-400 truncate block max-w-[180px]">{page.category}</span>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* Relevance Score Badge */}
-                      <td className="px-3 py-2.5">
-                        <RelevanceBadge
-                          score={page.relevance_score || 0}
-                          status={page.relevance_status || "RELEVANT"}
-                        />
-                      </td>
-
-                      {/* Matched Count & Tags */}
-                      <td className="px-3 py-2.5">
-                        <div className="space-y-0.5">
-                          <span className="font-bold text-slate-700">
-                            {page.hashtag_post_count || 1} bài viết
-                          </span>
-                          {page.matched_hashtags && (
-                            <div className="flex flex-wrap gap-1">
-                              {String(page.matched_hashtags).split(",").map((t, ti) => (
-                                <span key={ti} className="rounded bg-blue-50 px-1.5 py-0.2 text-[9px] font-medium text-blue-600">
-                                  #{t.trim().replace(/^#/, "")}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Evidence Posts (Audit trail) */}
-                      <td className="px-3 py-2.5">
-                        {evidenceList && evidenceList.length > 0 ? (
-                          <div className="flex items-center gap-1.5">
-                            {evidenceList.slice(0, 3).map((link, li) => (
-                              <a
-                                key={li}
-                                href={link}
-                                target="_blank"
-                                rel="noreferrer"
-                                title={`Bài viết kiểm chứng #${li + 1}`}
-                                className="inline-flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:border-primary hover:text-primary transition-colors"
-                              >
-                                <FileText className="size-2.5" />
-                                Bài #{li + 1}
-                                <ExternalLink className="size-2.5" />
-                              </a>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="text-slate-300 text-[10px]">Đang ghi nhận</span>
-                        )}
-                      </td>
-
-                      {/* Page Link */}
-                      <td className="px-3 py-2.5">
-                        {page.page_url ? (
-                          <a
-                            href={page.page_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="flex items-center gap-1 text-primary hover:underline truncate max-w-[150px]"
-                          >
-                            <span className="truncate">
-                              {page.page_url.replace("https://www.facebook.com/", "fb.com/")}
-                            </span>
-                            <ExternalLink className="size-3 shrink-0" />
-                          </a>
-                        ) : "—"}
-                      </td>
-
-                      {/* Followers */}
-                      <td className="px-3 py-2.5">
-                        {page.follower_count ? (
-                          <span className="font-semibold text-emerald-700">
-                            {page.follower_count.toLocaleString("vi-VN")}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400">{page.follower_text || "—"}</span>
-                        )}
+            <div className="overflow-auto">
+              <table className="w-full min-w-[1100px] text-left text-[11px]">
+                <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500">
+                  <tr className="border-b border-slate-200">
+                    <th className="w-10 px-4 py-3">
+                      <Checkbox
+                        checked={pages.length > 0 && selectedPageKeys.length === pages.length}
+                        onCheckedChange={(c) => setSelectedPageKeys(c ? pages.map((p) => p.page_key) : [])}
+                      />
+                    </th>
+                    <th className="w-12 px-3 py-3 font-semibold">STT</th>
+                    <th className="px-3 py-3 font-semibold">NGUỒN</th>
+                    <th className="px-3 py-3 font-semibold">TÊN PAGE</th>
+                    <th className="px-3 py-3 font-semibold">ĐIỂM</th>
+                    <th className="px-3 py-3 font-semibold">LINK PAGE</th>
+                    <th className="px-3 py-3 font-semibold">SỐ ĐIỆN THOẠI</th>
+                    <th className="px-3 py-3 font-semibold">EMAIL</th>
+                    <th className="px-3 py-3 font-semibold">WEBSITE</th>
+                    <th className="px-3 py-3 font-semibold">
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 hover:text-primary"
+                        onClick={() => {
+                          const next = sortDir === "desc" ? "asc" : "desc";
+                          setSortDir(next);
+                          if (sessionId) loadResults(sessionId, currentPage);
+                        }}
+                      >
+                        FOLLOWERS <ArrowDownWideNarrow className="size-3" />
+                      </button>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {loadingResults ? (
+                    <tr>
+                      <td colSpan={10} className="py-14 text-center text-slate-400">
+                        <Loader2 className="mx-auto mb-2 size-6 animate-spin text-primary" />
+                        Đang tải kết quả…
                       </td>
                     </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                  ) : pages.length === 0 ? (
+                    <tr>
+                      <td colSpan={10} className="py-14 text-center text-slate-400">
+                        Chưa có page trong kết quả (hoặc đang lọc follower).
+                      </td>
+                    </tr>
+                  ) : (
+                    pages.map((page, idx) => {
+                      const globalIdx = (currentPage - 1) * pageSize + idx + 1;
+                      const selected = selectedPageKeys.includes(page.page_key);
+                      return (
+                        <tr
+                          key={page.page_key || page.id || idx}
+                          className={selected ? "bg-blue-50/50" : "hover:bg-slate-50"}
+                        >
+                          <td className="px-4 py-2.5">
+                            <Checkbox
+                              checked={selected}
+                              onCheckedChange={(c) =>
+                                setSelectedPageKeys((prev) =>
+                                  c ? [...prev, page.page_key] : prev.filter((k) => k !== page.page_key),
+                                )
+                              }
+                            />
+                          </td>
+                          <td className="px-3 py-2.5 font-mono text-slate-400">{String(globalIdx).padStart(2, "0")}</td>
+                          <td className="px-3 py-2.5">
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                                channelBadge(page.channels) === "Cả hai"
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : channelBadge(page.channels) === "Hashtag"
+                                    ? "bg-violet-50 text-violet-700"
+                                    : "bg-slate-100 text-slate-600"
+                              }`}
+                            >
+                              {channelBadge(page.channels)}
+                            </span>
+                            {page.source_keyword && (
+                              <div className="mt-0.5 truncate max-w-[100px] text-[9px] text-slate-400">{page.source_keyword}</div>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <Avatar className="size-8 border border-slate-200">
+                                {page.avatar_url && <AvatarImage src={page.avatar_url} />}
+                                <AvatarFallback className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}>
+                                  {initialsOf(page.page_name || "FB")}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1">
+                                  <span className="truncate max-w-[160px] font-semibold text-slate-800">{page.page_name || "—"}</span>
+                                  {page.is_verified === true && <BadgeCheck className="size-3.5 text-blue-500" />}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <span className="font-bold text-primary">
+                              {page.relevance_score ?? page.hybrid_score ?? "—"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5">
+                            {page.page_url ? (
+                              <a href={page.page_url} target="_blank" rel="noreferrer" className="inline-flex max-w-[180px] items-center gap-1 truncate text-primary hover:underline">
+                                {page.page_url.replace(/^https?:\/\/(www\.)?facebook\.com\//, "fb.com/")}
+                                <ExternalLink className="size-3 shrink-0" />
+                              </a>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5">
+                            {page.phone ? (
+                              <span className="inline-flex rounded-md bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-700 border border-emerald-200">
+                                {page.phone}
+                              </span>
+                            ) : (
+                              <span className="text-slate-300">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5 text-slate-600">{page.email || <span className="text-slate-300">—</span>}</td>
+                          <td className="px-3 py-2.5">
+                            {page.website ? (
+                              <a href={page.website.startsWith("http") ? page.website : `https://${page.website}`} target="_blank" rel="noreferrer" className="text-primary hover:underline truncate max-w-[120px] inline-block">
+                                {page.website}
+                              </a>
+                            ) : (
+                              <span className="text-slate-300">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5 font-semibold text-emerald-700">{formatFollowers(page.follower_count)}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between border-t border-slate-100 px-6 py-3">
-            <span className="text-[11px] text-slate-400">
-              Hiển thị {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, pages.length)} trong {totalPages * pageSize} Page
-            </span>
-            <div className="flex items-center gap-1">
-              <Button
-                type="button" variant="outline" size="icon"
-                className="size-7" disabled={currentPage <= 1}
-                onClick={() => handlePageChange(currentPage - 1)}
-              >
-                <ChevronLeft className="size-3.5" />
-              </Button>
-              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                const p = i + 1;
-                return (
+            <div className="flex items-center justify-between border-t border-slate-100 px-6 py-3">
+              <span className="text-[11px] text-slate-400">
+                Hiển thị {totalCount === 0 ? 0 : (currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, totalCount)} của{" "}
+                {totalCount.toLocaleString("vi-VN")} Page
+                {minFollowersEnabled ? ` (lọc ≥ ${minFollowers.toLocaleString("vi-VN")} FL)` : ""}
+              </span>
+              <div className="flex items-center gap-1">
+                <Button type="button" variant="outline" size="icon" className="size-7" disabled={currentPage <= 1} onClick={() => { setCurrentPage(currentPage - 1); loadResults(sessionId, currentPage - 1); }}>
+                  <ChevronLeft className="size-3.5" />
+                </Button>
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => i + 1).map((p) => (
                   <button
                     key={p}
-                    onClick={() => handlePageChange(p)}
-                    className={`flex size-7 items-center justify-center rounded-md text-[11px] font-semibold transition-colors ${
-                      p === currentPage
-                        ? "bg-primary text-white"
-                        : "text-slate-600 hover:bg-slate-100"
-                    }`}
+                    type="button"
+                    onClick={() => { setCurrentPage(p); loadResults(sessionId, p); }}
+                    className={`flex size-7 items-center justify-center rounded-md text-[11px] font-semibold ${p === currentPage ? "bg-primary text-white" : "text-slate-600 hover:bg-slate-100"}`}
                   >
                     {p}
                   </button>
-                );
-              })}
-              {totalPages > 5 && <span className="text-slate-400 text-[11px]">...</span>}
-              <Button
-                type="button" variant="outline" size="icon"
-                className="size-7" disabled={currentPage >= totalPages}
-                onClick={() => handlePageChange(currentPage + 1)}
+                ))}
+                {totalPages > 5 && <span className="px-1 text-[11px] text-slate-400">… {totalPages}</span>}
+                <Button type="button" variant="outline" size="icon" className="size-7" disabled={currentPage >= totalPages} onClick={() => { setCurrentPage(currentPage + 1); loadResults(sessionId, currentPage + 1); }}>
+                  <ChevronRight className="size-3.5" />
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          {/* Live log */}
+          <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#1e293b] shadow-md">
+            <div className="flex items-center justify-between border-b border-slate-800 bg-[#0f172a] px-4 py-2.5">
+              <div className="flex items-center gap-2.5">
+                <div className="flex gap-1.5">
+                  <span className="size-2.5 rounded-full bg-rose-500" />
+                  <span className="size-2.5 rounded-full bg-amber-500" />
+                  <span className="size-2.5 rounded-full bg-emerald-500" />
+                </div>
+                <span className="font-mono text-xs font-semibold text-slate-300">
+                  Live Automation Log Console [Thread-01 - Quét Page]
+                </span>
+              </div>
+              <span
+                className={`inline-flex items-center gap-1.5 rounded px-2.5 py-0.5 font-mono text-[10px] font-semibold ${
+                  isPaused
+                    ? "border border-amber-500/20 bg-amber-500/10 text-amber-400"
+                    : isRunning
+                      ? "border border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
+                      : "border border-slate-500/20 bg-slate-500/10 text-slate-400"
+                }`}
               >
-                <ChevronRight className="size-3.5" />
-              </Button>
+                <span className={`size-1.5 rounded-full ${isPaused ? "bg-amber-400" : isRunning ? "bg-emerald-400 animate-pulse" : "bg-slate-400"}`} />
+                {isPaused ? "PAUSED" : isRunning ? "RUNNING" : "IDLE"}
+              </span>
+            </div>
+            <div className="max-h-56 space-y-1.5 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed">
+              {logs.length === 0 ? (
+                <p className="text-slate-500">Chờ log phiên quét…</p>
+              ) : (
+                logs.map((log) => (
+                  <div key={log.id} className="flex items-start gap-2 text-slate-300">
+                    <span className="shrink-0 text-slate-500">[{log.timestamp}]</span>
+                    <span
+                      className={
+                        log.type === "success"
+                          ? "text-emerald-400"
+                          : log.type === "warn"
+                            ? "text-amber-400"
+                            : log.type === "error"
+                              ? "text-rose-400"
+                              : "text-slate-200"
+                      }
+                    >
+                      {log.message}
+                    </span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
-        )}
-      </Card>
+        </>
+      )}
 
-      {/* ══════ ACCOUNT SELECT MODAL ══════ */}
+      {/* Account multi-select modal */}
       {showAccountModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-2xl rounded-xl bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
               <div>
-                <h2 className="font-bold text-slate-800">Chọn tài khoản Facebook thực thi quét</h2>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Chọn tài khoản có trạng thái Live để cào dữ liệu bài viết theo hashtag
-                </p>
+                <h2 className="font-bold text-slate-800">Chọn tài khoản thực thi</h2>
+                <p className="mt-0.5 text-[11px] text-slate-400">Có thể chọn nhiều acc — luân phiên theo từng từ khóa</p>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowAccountModal(false)}
-                className="rounded-lg p-1.5 hover:bg-slate-100"
-              >
+              <button type="button" onClick={() => setShowAccountModal(false)} className="rounded-lg p-1.5 hover:bg-slate-100">
                 <X className="size-4 text-slate-500" />
               </button>
             </div>
-
             <div className="max-h-[400px] overflow-auto px-6 py-4">
               {accountsLoading ? (
                 <div className="py-10 text-center text-slate-400">
                   <Loader2 className="mx-auto mb-2 size-6 animate-spin" />
-                  <p className="text-sm">Đang tải danh sách tài khoản...</p>
+                  Đang tải tài khoản…
                 </div>
               ) : (
                 <table className="w-full text-[11px]">
                   <thead className="sticky top-0 bg-slate-50">
                     <tr className="border-b border-slate-200">
-                      <th className="w-10 px-3 py-2.5"></th>
-                      <th className="px-3 py-2.5 text-left font-semibold text-slate-500">TÀI KHOẢN & HỌ TÊN</th>
-                      <th className="px-3 py-2.5 text-left font-semibold text-slate-500">UID FACEBOOK</th>
-                      <th className="px-3 py-2.5 text-left font-semibold text-slate-500">TRẠNG THÁI TK</th>
-                      <th className="px-3 py-2.5 text-left font-semibold text-slate-500">PROXY GÁN KÈM</th>
+                      <th className="w-10 px-3 py-2.5">
+                        <Checkbox
+                          checked={accounts.length > 0 && modalUids.length === accounts.filter((a) => LIVE_STATUSES.has(String(a.status))).length}
+                          onCheckedChange={(c) => {
+                            if (c) setModalUids(accounts.filter((a) => LIVE_STATUSES.has(String(a.status))).map((a) => a.uid));
+                            else setModalUids([]);
+                          }}
+                        />
+                      </th>
+                      <th className="px-3 py-2.5 text-left font-semibold text-slate-500">TÀI KHOẢN</th>
+                      <th className="px-3 py-2.5 text-left font-semibold text-slate-500">UID</th>
+                      <th className="px-3 py-2.5 text-left font-semibold text-slate-500">TRẠNG THÁI</th>
+                      <th className="px-3 py-2.5 text-left font-semibold text-slate-500">PROXY</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {accounts.map((acc, idx) => {
-                      const selected = selectedAccountUid === acc.uid;
+                      const checked = modalUids.includes(acc.uid);
                       return (
                         <tr
                           key={acc.uid}
-                          onClick={() => setSelectedAccountUid(acc.uid)}
-                          className={`cursor-pointer transition-colors ${
-                            selected ? "bg-blue-50" : "hover:bg-slate-50"
-                          }`}
+                          onClick={() =>
+                            setModalUids((prev) => (checked ? prev.filter((u) => u !== acc.uid) : [...prev, acc.uid]))
+                          }
+                          className={`cursor-pointer ${checked ? "bg-blue-50" : "hover:bg-slate-50"}`}
                         >
-                          <td className="px-3 py-2.5">
+                          <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                             <Checkbox
-                              checked={selected}
-                              onCheckedChange={() => setSelectedAccountUid(acc.uid)}
+                              checked={checked}
+                              onCheckedChange={(c) =>
+                                setModalUids((prev) => (c ? [...prev, acc.uid] : prev.filter((u) => u !== acc.uid)))
+                              }
                             />
                           </td>
                           <td className="px-3 py-2.5">
                             <div className="flex items-center gap-2">
                               <Avatar className="size-8">
-                                <AvatarFallback className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}>
-                                  {initialsOf(acc.name)}
-                                </AvatarFallback>
+                                <AvatarFallback className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}>{initialsOf(acc.name)}</AvatarFallback>
                               </Avatar>
                               <span className="font-semibold text-slate-700">{acc.name}</span>
                             </div>
                           </td>
                           <td className="px-3 py-2.5 font-mono text-slate-500">{acc.uid}</td>
                           <td className="px-3 py-2.5">
-                            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                              acc.status === "LIVE"
-                                ? "bg-emerald-50 text-emerald-700"
-                                : "bg-red-50 text-red-600"
-                            }`}>
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${LIVE_STATUSES.has(String(acc.status)) ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-600"}`}>
                               • {acc.status}
                             </span>
                           </td>
-                          <td className="px-3 py-2.5 font-mono text-slate-400 text-[10px]">
-                            {acc.proxy || "—"}
-                          </td>
+                          <td className="px-3 py-2.5 font-mono text-[10px] text-slate-400">{acc.proxy || "—"}</td>
                         </tr>
                       );
                     })}
@@ -1171,15 +1766,19 @@ export default function PageScannerModule() {
                 </table>
               )}
             </div>
-
-            <div className="flex items-center justify-end gap-3 border-t border-slate-100 px-6 py-4">
-              <Button variant="outline" onClick={() => { setSelectedAccountUid(null); setShowAccountModal(false); }}>
-                Hủy bỏ
-              </Button>
-              <Button onClick={() => setShowAccountModal(false)} disabled={!selectedAccountUid}>
-                <Check className="mr-1.5 size-3.5" />
-                Xác nhận chọn
-              </Button>
+            <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4">
+              <span className="text-[11px] text-slate-500">Đã chọn tạm: {modalUids.length}</span>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setShowAccountModal(false)}>Hủy</Button>
+                <Button
+                  onClick={() => {
+                    setSelectedUids(modalUids);
+                    setShowAccountModal(false);
+                  }}
+                >
+                  <Check className="mr-1.5 size-3.5" /> Xác nhận ({modalUids.length})
+                </Button>
+              </div>
             </div>
           </div>
         </div>

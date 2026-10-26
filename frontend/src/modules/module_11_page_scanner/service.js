@@ -1,14 +1,16 @@
 import api from "@/services/api";
 import { API_BASE } from "@/config/constants";
 
+const SAVED_LISTS_KEY = "fb-automator.page-scanner.saved-lists";
+
+// ── SOURCE: KEYWORD SEARCH ──
+export async function searchPages(payload) {
+  return api.post("/api/page-scanner/source/search", payload);
+}
+
 // ── SOURCE: HASHTAG SEARCH (Section 10) ──
 export async function searchPagesByHashtag(payload) {
   return api.post("/api/page-scanner/source/hashtag-search", payload);
-}
-
-// ── SOURCE: SEARCH ──
-export async function searchPages(payload) {
-  return api.post("/api/page-scanner/source/search", payload);
 }
 
 // ── SOURCE: PARSE (dán link trực tiếp) ──
@@ -61,7 +63,50 @@ export async function stopScanSession(sessionId) {
   return api.post(`/api/page-scanner/sessions/${sessionId}/stop`);
 }
 
+export async function pauseScanSession(sessionId) {
+  return api.post(`/api/page-scanner/sessions/${sessionId}/pause`);
+}
+
+export async function resumeScanSession(sessionId) {
+  return api.post(`/api/page-scanner/sessions/${sessionId}/resume`);
+}
+
+/** Đợt đang chạy (RUNNING/PAUSED) + toàn bộ phiên con cùng campaign_id. */
+export async function getActiveCampaign() {
+  return api.get("/api/page-scanner/campaigns/active");
+}
+
+/** @deprecated dùng getActiveCampaign */
+export async function getActiveScanSessions() {
+  const data = await getActiveCampaign().catch(() => ({ sessions: [] }));
+  return data?.sessions || [];
+}
+
 // ── PAGES ──
 export async function getScannedPages(params = {}) {
   return api.get("/api/page-scanner/pages", { params });
+}
+
+// ── LƯU DANH SÁCH (local, chờ API danh sách page) ──
+export function loadSavedPageLists() {
+  try {
+    const raw = localStorage.getItem(SAVED_LISTS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function savePageList({ name, pages }) {
+  const lists = loadSavedPageLists();
+  const entry = {
+    id: `list_${Date.now()}`,
+    name: name || `Danh sách ${new Date().toLocaleString("vi-VN")}`,
+    created_at: new Date().toISOString(),
+    count: pages.length,
+    pages,
+  };
+  lists.unshift(entry);
+  localStorage.setItem(SAVED_LISTS_KEY, JSON.stringify(lists.slice(0, 50)));
+  return entry;
 }

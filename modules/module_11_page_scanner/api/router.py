@@ -26,6 +26,8 @@ from ..scanner import (
     create_scan_session,
     finalize_scan_session,
     request_stop_session,
+    request_pause_session,
+    request_resume_session,
     run_page_search_flow,
     save_batch_pages,
     start_page_search_background,
@@ -57,6 +59,12 @@ class SearchPageInput(BaseModel):
     include_sponsored: bool = Field(False, description="Có lấy thẻ Được tài trợ / Sponsored hay không")
     headless: bool = Field(False, description="Chạy Chrome ẩn hay hiện (POC mặc định False để quan sát)")
     allow_direct_fallback: bool = Field(True, description="Tự động chuyển sang IP trực tiếp nếu proxy lỗi")
+    campaign_id: Optional[str] = Field(None, description="Mã đợt chạy gom nhiều phiên con")
+    settings: Optional[Dict[str, Any]] = Field(None, description="Cấu hình đợt (keywords, hashtags, search_mode, …)")
+    keep_browser: bool = Field(
+        False,
+        description="Giữ Chrome page_scanner khi phiên kết thúc bình thường (job kế cùng acc)",
+    )
 
 
 class SearchHashtagInput(BaseModel):
@@ -67,6 +75,11 @@ class SearchHashtagInput(BaseModel):
     account_uid: Optional[str] = Field(None, description="UID tài khoản Facebook cào (tuỳ chọn)")
     headless: bool = Field(False, description="Chạy Chrome ẩn hay hiện")
     allow_direct_fallback: bool = Field(True, description="Tự động chuyển sang IP trực tiếp nếu proxy lỗi")
+    campaign_id: Optional[str] = Field(None, description="Mã đợt chạy gom nhiều phiên con")
+    keep_browser: bool = Field(
+        False,
+        description="Giữ Chrome page_scanner khi phiên kết thúc bình thường (job kế cùng acc)",
+    )
 
 
 class ParseInput(BaseModel):
@@ -98,9 +111,12 @@ async def search_pages_by_hashtag(item: SearchHashtagInput):
             owner_key=owner,
             headless=item.headless,
             allow_direct_fallback=item.allow_direct_fallback,
+            campaign_id=item.campaign_id,
+            keep_browser=item.keep_browser,
         )
         return {
             "session_id": session_id,
+            "campaign_id": item.campaign_id,
             "status": "RUNNING",
             "message": f"Phiên quét hashtag #{session_id} đã được khởi động thành công",
         }
@@ -132,6 +148,8 @@ async def search_pages(item: SearchPageInput):
                 owner_key=owner,
                 headless=item.headless,
                 allow_direct_fallback=item.allow_direct_fallback,
+                campaign_id=item.campaign_id,
+                keep_browser=item.keep_browser,
             )
         else:
             session_id = await asyncio.to_thread(
@@ -143,9 +161,13 @@ async def search_pages(item: SearchPageInput):
                 owner_key=owner,
                 headless=item.headless,
                 allow_direct_fallback=item.allow_direct_fallback,
+                campaign_id=item.campaign_id,
+                settings=item.settings,
+                keep_browser=item.keep_browser,
             )
         return {
             "session_id": session_id,
+            "campaign_id": item.campaign_id,
             "status": "RUNNING",
             "message": f"Phiên quét #{session_id} đã được khởi động thành công",
         }
@@ -368,31 +390,48 @@ async def list_scanned_pages(
     session_id: Optional[int] = Query(None, description="Lọc theo mã phiên quét"),
     keyword: Optional[str] = Query(None, description="Tìm theo tên hoặc url"),
     relevance_status: Optional[str] = Query(None, description="Lọc theo độ liên quan (RELEVANT, REVIEW, EXCLUDED)"),
+    min_followers: Optional[int] = Query(None, ge=0, description="Lọc hiển thị: follower tối thiểu"),
+    sort_by: str = Query("followers", description="followers | created | default"),
+    sort_dir: str = Query("desc", description="asc | desc"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ):
     """
     GET /api/page-scanner/pages
-    Truy vấn danh sách Fanpage đã cào (hỗ trợ phân trang, lọc theo phiên, từ khóa, hoặc độ liên quan).
+    Truy vấn danh sách Fanpage đã cào (phân trang, lọc phiên/từ khóa/follower, sắp xếp).
     """
     owner = _get_owner()
     offset = (page - 1) * page_size
+    sort_dir_sql = "DESC" if str(sort_dir).lower() != "asc" else "ASC"
+    sort_key = str(sort_by or "followers").lower()
 
     if session_id:
-        # Lấy các Page thuộc 1 session cụ thể
         query_params: List[Any] = [owner, session_id]
         where_conds = []
 
         if keyword:
-            where_conds.append("(sp.page_name ILIKE %s OR sp.page_url ILIKE %s)")
+            where_conds.append(
+                "(sp.page_name ILIKE %s OR sp.page_url ILIKE %s OR COALESCE(sp.phone,'') ILIKE %s OR COALESCE(sp.email,'') ILIKE %s)"
+            )
             kw_param = f"%{keyword.strip()}%"
-            query_params.extend([kw_param, kw_param])
+            query_params.extend([kw_param, kw_param, kw_param, kw_param])
 
         if relevance_status and relevance_status.upper() in ["RELEVANT", "REVIEW", "EXCLUDED"]:
             where_conds.append("ssp.relevance_status = %s")
             query_params.append(relevance_status.upper())
 
+        if min_followers is not None:
+            where_conds.append("COALESCE(sp.follower_count, 0) >= %s")
+            query_params.append(int(min_followers))
+
         cond_str = f" AND {' AND '.join(where_conds)}" if where_conds else ""
+
+        if sort_key == "created":
+            order_sql = f"sp.created_at {sort_dir_sql}, ssp.id ASC"
+        elif sort_key == "default":
+            order_sql = "ssp.id ASC"
+        else:
+            order_sql = f"COALESCE(sp.follower_count, 0) {sort_dir_sql}, ssp.id ASC"
 
         count_query = f"""
         SELECT COUNT(*) AS total
@@ -406,7 +445,8 @@ async def list_scanned_pages(
         data_query = f"""
         SELECT sp.id, sp.page_key, sp.page_name, sp.page_url, sp.avatar_url,
                sp.category, sp.follower_count, sp.follower_text, sp.is_verified,
-               sp.is_sponsored, ssp.batch_index, ssp.is_new_globally,
+               sp.is_sponsored, sp.phone, sp.email, sp.website,
+               ssp.batch_index, ssp.is_new_globally,
                COALESCE(ssp.relevance_score, sp.relevance_score, 0) AS relevance_score,
                COALESCE(ssp.relevance_status, sp.relevance_status, 'RELEVANT') AS relevance_status,
                COALESCE(ssp.hashtag_post_count, sp.hashtag_post_count, 0) AS hashtag_post_count,
@@ -415,25 +455,37 @@ async def list_scanned_pages(
         FROM page_scan_session_pages ssp
         JOIN scanned_pages sp ON ssp.page_key = sp.page_key AND sp.owner_key = %s
         WHERE ssp.session_id = %s{cond_str}
-        ORDER BY ssp.id ASC
+        ORDER BY {order_sql}
         LIMIT %s OFFSET %s
         """
         rows = db.fetch_all(data_query, tuple(query_params + [page_size, offset]))
     else:
-        # Lấy từ kho tổng của owner
         params = [owner]
         where_conds = ["owner_key = %s"]
 
         if keyword:
-            where_conds.append("(page_name ILIKE %s OR page_url ILIKE %s)")
+            where_conds.append(
+                "(page_name ILIKE %s OR page_url ILIKE %s OR COALESCE(phone,'') ILIKE %s OR COALESCE(email,'') ILIKE %s)"
+            )
             kw_param = f"%{keyword.strip()}%"
-            params.extend([kw_param, kw_param])
+            params.extend([kw_param, kw_param, kw_param, kw_param])
 
         if relevance_status and relevance_status.upper() in ["RELEVANT", "REVIEW", "EXCLUDED"]:
             where_conds.append("relevance_status = %s")
             params.append(relevance_status.upper())
 
+        if min_followers is not None:
+            where_conds.append("COALESCE(follower_count, 0) >= %s")
+            params.append(int(min_followers))
+
         cond_str = " AND ".join(where_conds)
+
+        if sort_key == "created":
+            order_sql = f"created_at {sort_dir_sql}, id DESC"
+        elif sort_key == "default":
+            order_sql = "id DESC"
+        else:
+            order_sql = f"COALESCE(follower_count, 0) {sort_dir_sql}, id DESC"
 
         count_row = db.fetch_one(
             f"SELECT COUNT(*) AS total FROM scanned_pages WHERE {cond_str}",
@@ -446,11 +498,12 @@ async def list_scanned_pages(
             f"""
             SELECT id, page_key, page_name, page_url, avatar_url, category,
                    follower_count, follower_text, is_verified, is_sponsored,
+                   phone, email, website,
                    relevance_score, relevance_status, hashtag_post_count, matched_hashtags,
                    first_found_by_account_uid, created_at, updated_at
             FROM scanned_pages
             WHERE {cond_str}
-            ORDER BY id DESC
+            ORDER BY {order_sql}
             LIMIT %s OFFSET %s
             """,
             tuple(params),
@@ -464,6 +517,93 @@ async def list_scanned_pages(
     }
 
 
+@router.get("/campaigns/active")
+async def get_active_campaign():
+    """
+    GET /api/page-scanner/campaigns/active
+    Phiên RUNNING/PAUSED mới nhất của owner + toàn bộ phiên cùng campaign_id.
+    Dùng để khôi phục state sau reload (chỉ dẫn 1.3).
+    """
+    owner = _get_owner()
+    top = db.fetch_one(
+        """
+        SELECT * FROM page_scan_sessions
+        WHERE owner_key = %s AND status IN ('RUNNING', 'PAUSED')
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (owner,),
+    )
+    if not top:
+        return {"active": False, "campaign_id": None, "sessions": []}
+
+    campaign_id = top.get("campaign_id")
+    if campaign_id:
+        sessions = db.fetch_all(
+            """
+            SELECT * FROM page_scan_sessions
+            WHERE owner_key = %s AND campaign_id = %s
+            ORDER BY id ASC
+            """,
+            (owner, campaign_id),
+        )
+    else:
+        sessions = [top]
+
+    return {
+        "active": True,
+        "campaign_id": campaign_id,
+        "primary_session_id": top.get("id"),
+        "status": top.get("status"),
+        "sessions": sessions,
+        "settings": top.get("settings"),
+    }
+
+
+@router.post("/sessions/{session_id}/pause")
+async def pause_scan_session(session_id: int):
+    """TẠM DỪNG — treo tại điểm an toàn; không dùng stop event."""
+    owner = _get_owner()
+    session = db.fetch_one(
+        "SELECT id, status FROM page_scan_sessions WHERE id = %s AND owner_key = %s",
+        (session_id, owner),
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét")
+    if session.get("status") not in ("RUNNING", "PAUSED"):
+        raise HTTPException(status_code=400, detail=f"Phiên không thể tạm dừng (status={session.get('status')})")
+
+    ok = request_pause_session(session_id)
+    return {
+        "session_id": session_id,
+        "paused": True,
+        "worker_signaled": ok,
+        "message": f"Đã gửi tín hiệu tạm dừng phiên #{session_id}",
+    }
+
+
+@router.post("/sessions/{session_id}/resume")
+async def resume_scan_session(session_id: int):
+    """TIẾP TỤC — chạy tiếp đúng phiên đang PAUSED."""
+    owner = _get_owner()
+    session = db.fetch_one(
+        "SELECT id, status FROM page_scan_sessions WHERE id = %s AND owner_key = %s",
+        (session_id, owner),
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét")
+    if session.get("status") not in ("PAUSED", "RUNNING"):
+        raise HTTPException(status_code=400, detail=f"Phiên không thể tiếp tục (status={session.get('status')})")
+
+    ok = request_resume_session(session_id)
+    return {
+        "session_id": session_id,
+        "resumed": True,
+        "worker_signaled": ok,
+        "message": f"Đã gửi tín hiệu tiếp tục phiên #{session_id}",
+    }
+
+
 @router.post("/sessions/{session_id}/stop")
 async def stop_scan_session(session_id: int):
     """
@@ -472,19 +612,46 @@ async def stop_scan_session(session_id: int):
     """
     owner = _get_owner()
     session = db.fetch_one(
-        "SELECT id, status FROM page_scan_sessions WHERE id = %s AND owner_key = %s",
+        "SELECT id, status, campaign_id FROM page_scan_sessions WHERE id = %s AND owner_key = %s",
         (session_id, owner),
     )
     if not session:
         raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét")
 
     stopped = request_stop_session(session_id)
-    # Cập nhật DB nếu trạng thái vẫn là RUNNING
-    if session.get("status") == "RUNNING":
+    # Dừng cả các phiên cùng campaign còn RUNNING/PAUSED
+    campaign_id = session.get("campaign_id")
+    if campaign_id:
+        siblings = db.fetch_all(
+            """
+            SELECT id FROM page_scan_sessions
+            WHERE owner_key = %s AND campaign_id = %s AND status IN ('RUNNING', 'PAUSED')
+            """,
+            (owner, campaign_id),
+        )
+        for row in siblings or []:
+            sid = int(row["id"])
+            request_stop_session(sid)
+            db.execute(
+                """
+                UPDATE page_scan_sessions
+                SET status = 'STOPPED', stop_reason = 'USER_STOPPED', finished_at = NOW()
+                WHERE id = %s AND status IN ('RUNNING', 'PAUSED')
+                """,
+                (sid,),
+            )
+    elif session.get("status") in ("RUNNING", "PAUSED"):
         db.execute(
             "UPDATE page_scan_sessions SET status = 'STOPPED', stop_reason = 'USER_STOPPED', finished_at = NOW() WHERE id = %s",
             (session_id,),
         )
+
+    # Dừng khẩn cấp → đóng Chrome page_scanner (kể cả đang keep_browser giữa các job)
+    try:
+        from core.browser import close_scoped_active_drivers
+        close_scoped_active_drivers(scope="page_scanner", force=True)
+    except Exception:
+        pass
 
     return {
         "session_id": session_id,

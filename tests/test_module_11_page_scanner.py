@@ -57,11 +57,17 @@ class TestModule11PageSource(unittest.TestCase):
         self.assertEqual(k2, "id:100084729103941")
 
     def test_parse_follower_count(self):
+        self.assertEqual(parse_follower_count("12 N người theo dõi")[0], 12000)
+        self.assertEqual(parse_follower_count("1.200 người theo dõi")[0], 1200)
         self.assertEqual(parse_follower_count("1,2 nghìn người theo dõi")[0], 1200)
+        self.assertEqual(parse_follower_count("1,2 triệu người theo dõi")[0], 1200000)
         self.assertEqual(parse_follower_count("15K followers")[0], 15000)
-        self.assertEqual(parse_follower_count("3,4 triệu người theo dõi")[0], 3400000)
         self.assertEqual(parse_follower_count("520 người theo dõi")[0], 520)
+        self.assertEqual(parse_follower_count("3,4 triệu người theo dõi")[0], 3400000)
         self.assertIsNone(parse_follower_count("")[0])
+        # Không lấy lượt thích làm follower
+        self.assertIsNone(parse_follower_count("1,2 nghìn lượt thích")[0])
+        self.assertIsNone(parse_follower_count("15K likes")[0])
 
     def test_parse_page_file_content_dedup_and_stats(self):
         # File gồm 5 dòng: 3 dòng trỏ về cùng 1 page, 1 page khác, 1 link rác
@@ -124,18 +130,50 @@ class TestModule11HashtagScanner(unittest.TestCase):
         parsed = parse_hashtags_input("#thoitrang, #mypham thoitrang #phukien")
         self.assertEqual(parsed, ["thoitrang", "mypham", "phukien"])
 
-    def test_classify_post_author_layers(self):
+        # Test đầu vào dạng list chứa chuỗi có dấu phẩy (lỗi từng xảy ra gây ghép cả cụm vào 1 URL)
+        parsed_list = parse_hashtags_input(["#thoitrang, #mypham", "#phukien; #giaydep"])
+        self.assertEqual(parsed_list, ["thoitrang", "mypham", "phukien", "giaydep"])
+
+    def test_classify_header_action_gate(self):
+        """Chỉ dẫn 2.5 bước 2 — cổng quyết định bằng Follow/Join, không đoán heuristic."""
+        from modules.module_11_page_scanner.page_source import (
+            classify_header_action,
+            normalize_page_candidate_key,
+        )
+
+        t1, _ = classify_header_action("Follow")
+        self.assertEqual(t1, "PAGE_CANDIDATE")
+        t1b, _ = classify_header_action("Theo dõi")
+        self.assertEqual(t1b, "PAGE_CANDIDATE")
+        t1c, _ = classify_header_action("Đang theo dõi")
+        self.assertEqual(t1c, "PAGE_CANDIDATE")
+
+        t2, _ = classify_header_action("Join")
+        self.assertEqual(t2, "GROUP")
+        t2b, _ = classify_header_action("Tham gia")
+        self.assertEqual(t2b, "GROUP")
+
+        # Trống / không nhận diện → vẫn cho qua tab xác minh
+        t3, _ = classify_header_action("")
+        self.assertEqual(t3, "PAGE_CANDIDATE")
+        t3b, _ = classify_header_action("Share")
+        self.assertEqual(t3b, "PAGE_CANDIDATE")
+
+        k1 = normalize_page_candidate_key("Kimchi Vintage", "https://www.facebook.com/kimchi")
+        k2 = normalize_page_candidate_key("  Kimchi   Vintage ", "https://www.facebook.com/kimchi/")
+        self.assertEqual(k1, k2)
+        k3 = normalize_page_candidate_key("Kimchi Vintage", "https://www.facebook.com/other")
+        self.assertNotEqual(k1, k3)
+
+    def test_classify_post_author_layers_legacy(self):
         from modules.module_11_page_scanner.page_source import classify_post_author
 
-        # 1. Bài trong Group -> loại
         t1, _ = classify_post_author("User A", "https://www.facebook.com/groups/chotot/permalink/123", post_context="Đăng trong nhóm Chợ Tốt")
         self.assertEqual(t1, "GROUP")
 
-        # 2. Tác giả có dấu hiệu Profile cá nhân (bạn bè) -> loại
         t2, _ = classify_post_author("Nguyen Van A", "https://www.facebook.com/nguyenvana", author_subtitle="5 bạn chung • Thêm bạn bè")
         self.assertEqual(t2, "PROFILE")
 
-        # 3. Tác giả có dấu hiệu Fanpage (Người theo dõi / Trang) -> PAGE
         t3, _ = classify_post_author("Biluxury", "https://www.facebook.com/biluxuryvn", author_subtitle="Trang • 1,2 triệu người theo dõi")
         self.assertEqual(t3, "PAGE")
 

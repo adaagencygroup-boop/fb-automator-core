@@ -186,11 +186,16 @@ def is_valid_page_entry(line: str) -> bool:
 
 def parse_follower_count(text: Optional[str]) -> Tuple[Optional[int], str]:
     """
-    Phân tích chuỗi số lượng người theo dõi thành số nguyên:
-    - '1,2 nghìn người theo dõi' -> (1200, text)
-    - '15K followers' -> (15000, text)
-    - '3,4 triệu người theo dõi' -> (3400000, text)
-    - '520 người theo dõi' -> (520, text)
+    Phân tích chuỗi số lượng người theo dõi thành số nguyên.
+    Dùng regex alternation cho đơn vị (không dùng character class).
+    Chỉ nhận nhãn followers / người theo dõi — không lấy lượt thích / likes.
+    Ví dụ:
+    - '12 N người theo dõi' -> 12000
+    - '1.200 người theo dõi' -> 1200
+    - '1,2 nghìn người theo dõi' -> 1200
+    - '1,2 triệu người theo dõi' -> 1200000
+    - '15K followers' -> 15000
+    - '520 người theo dõi' -> 520
     """
     if not text:
         return (None, "")
@@ -199,25 +204,46 @@ def parse_follower_count(text: Optional[str]) -> Tuple[Optional[int], str]:
         return (None, "")
 
     lower = clean_text.lower()
-    # Tìm đoạn số có thể kèm dấu chấm hoặc dấu phẩy
-    # VD: 1,2 nghìn, 1.2K, 3,4 triệu, 3.4M, 500
-    match = re.search(r"([\d\.,]+)\s*([kKmMnghìn|triệu|tr|followers|người theo dõi]*)", lower)
+
+    # Không lấy số lượt thích làm follower
+    if re.search(r"(?:lượt\s*thích|\blikes?\b)", lower) and not re.search(
+        r"(?:người\s*theo\s*dõi|\bfollowers?\b)", lower
+    ):
+        return (None, clean_text)
+
+    # Đơn vị: nghìn|ngàn|N|k|triệu|tr|m — alternation, không phải [... ]
+    match = re.search(
+        r"([\d]+(?:[.,][\d]+)*)\s*"
+        r"(nghìn|ngàn|triệu|n|k|tr|m)?\s*"
+        r"(?:người\s*theo\s*dõi|followers?)\b",
+        lower,
+        flags=re.IGNORECASE,
+    )
     if not match:
         return (None, clean_text)
 
-    num_str = match.group(1).replace(",", ".")
-    unit_str = match.group(2).strip()
+    num_str = match.group(1).strip()
+    unit_str = (match.group(2) or "").strip().lower()
 
     try:
-        # Nếu có nhiều hơn 1 dấu chấm, có thể là phân cách hàng nghìn kiểu '1.200.000'
-        if num_str.count(".") > 1:
+        # 1.200 / 1.200.000 — dấu chấm phân cách hàng nghìn (VN/EU)
+        if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", num_str):
             val = float(num_str.replace(".", ""))
-        else:
+        # 1,200,000 — dấu phẩy phân cách hàng nghìn (EN)
+        elif re.fullmatch(r"\d{1,3}(?:,\d{3})+", num_str):
+            val = float(num_str.replace(",", ""))
+        # 1,2 — phẩy thập phân
+        elif "," in num_str and "." not in num_str:
+            val = float(num_str.replace(",", "."))
+        # 1.2 kèm đơn vị — chấm thập phân
+        elif re.fullmatch(r"\d+\.\d{1,2}", num_str) and unit_str:
             val = float(num_str)
+        else:
+            val = float(num_str.replace(",", "."))
 
-        if "triệu" in unit_str or "tr" in unit_str or "m" in unit_str:
+        if unit_str in ("triệu", "m", "tr"):
             val *= 1_000_000
-        elif "nghìn" in unit_str or "k" in unit_str:
+        elif unit_str in ("nghìn", "ngàn", "n", "k"):
             val *= 1_000
 
         return (int(val), clean_text)
@@ -356,35 +382,47 @@ def get_sample_template() -> str:
 def normalize_hashtag(raw_tag: str) -> str:
     """
     Chuẩn hoá hashtag đầu vào (Section 10.2):
-    - Bỏ dấu #, bỏ khoảng trắng ở 2 đầu
+    - Bỏ tiền tố #, dấu phẩy, dấu chấm phẩy, khoảng trắng
     - Chuyển thành chữ thường để làm khóa gộp
     - Không tự ý gộp biến thể có dấu/không dấu (người dùng nhập gì quét nấy)
     """
     if not raw_tag:
         return ""
-    tag = raw_tag.strip()
-    tag = re.sub(r"^[#\s]+", "", tag)
+    tag = str(raw_tag).strip()
+    tag = tag.strip(" \t\r\n,#;:.!?'\"()[]{}<>")
     tag = re.sub(r"\s+", "", tag)
+    tag = re.sub(r"^[#]+", "", tag)
     return tag.lower()
 
 
 def parse_hashtags_input(raw_input: Any) -> List[str]:
     """
     Nhận chuỗi hoặc danh sách hashtag, chuẩn hoá và loại bỏ trùng lặp.
-    Hỗ trợ phân cách bằng dấu phẩy, khoảng trắng, hoặc xuống dòng.
+    Hỗ trợ phân cách bằng dấu phẩy, khoảng trắng, chấm phẩy hoặc xuống dòng.
+    Đặc biệt xử lý triệt để trường hợp truyền danh sách các chuỗi có chứa dấu phẩy (vd: ["#thoitrang, #mypham"]).
     """
     if not raw_input:
         return []
 
+    # Thu thập tất cả các mẩu chuỗi, hỗ trợ lồng list/tuple/set hoặc chuỗi đơn
+    raw_pieces: List[str] = []
     if isinstance(raw_input, (list, tuple, set)):
-        items = [str(x) for x in raw_input]
+        for x in raw_input:
+            if x is not None:
+                raw_pieces.append(str(x))
     else:
-        items = re.split(r"[,\s\n]+", str(raw_input))
+        raw_pieces.append(str(raw_input))
+
+    tokens: List[str] = []
+    for piece in raw_pieces:
+        # Luôn tách nhỏ từng mẩu theo dấu phẩy, chấm phẩy, khoảng trắng hoặc xuống dòng
+        parts = re.split(r"[,;\s\n\r]+", piece)
+        tokens.extend(parts)
 
     result: List[str] = []
     seen: Set[str] = set()
-    for item in items:
-        norm = normalize_hashtag(item)
+    for tok in tokens:
+        norm = normalize_hashtag(tok)
         if norm and norm not in seen:
             seen.add(norm)
             result.append(norm)
@@ -398,11 +436,8 @@ def classify_post_author(
     post_context: str = "",
 ) -> Tuple[str, str]:
     """
-    Phân loại tác giả bài viết: PAGE / PROFILE / GROUP (Section 10.4).
-    - Tầng nhanh trên thẻ:
-      * Dấu hiệu loại trừ: link/ngữ cảnh thuộc Group -> GROUP
-      * Dấu hiệu Page: subtitle có 'Trang', 'Page', 'người theo dõi', 'Followers', 'Thích'... -> PAGE
-      * Dấu hiệu Profile: 'Bạn bè', 'Bạn chung', 'Add friend' -> PROFILE
+    Phân loại tác giả bài viết: PAGE / PROFILE / GROUP (Section 10.4 — legacy).
+    CHỈ DẪN 2.5: không dùng làm cổng quyết định hashtag nữa; giữ để tương thích test/cũ.
     """
     auth_url_lower = (author_url or "").lower()
     post_ctx_lower = (post_context or "").lower()
@@ -426,6 +461,47 @@ def classify_post_author(
         return ("PROFILE", "Không trích xuất được page_key hợp lệ")
 
     return ("PAGE", "Đạt chuẩn liên kết trang Fanpage ứng viên")
+
+
+def classify_header_action(header_action: str) -> Tuple[str, str]:
+    """
+    Cổng header_action (nới):
+    - Join / Tham gia → GROUP (loại ngay)
+    - Follow / Theo dõi / Following / Đang theo dõi → PAGE_CANDIDATE
+    - Trống hoặc không nhận diện → PAGE_CANDIDATE (để tab xác minh quyết định)
+    """
+    raw = (header_action or "").strip().lower()
+    raw = re.sub(r"\s+", " ", raw)
+
+    if not raw:
+        return ("PAGE_CANDIDATE", "Không có header action — chuyển tab xác minh")
+
+    join_markers = ("join", "tham gia")
+    if any(m == raw or m in raw.split() or raw.startswith(m) for m in join_markers):
+        return ("GROUP", f"Header action là Join/Tham gia: {header_action!r}")
+
+    follow_markers = (
+        "follow",
+        "following",
+        "theo dõi",
+        "đang theo dõi",
+        "dang theo doi",
+    )
+    for m in follow_markers:
+        if raw == m or raw.startswith(m) or m in raw:
+            return ("PAGE_CANDIDATE", f"Header action Follow/Theo dõi: {header_action!r}")
+
+    return ("PAGE_CANDIDATE", f"Header action không rõ ({header_action!r}) — chuyển tab xác minh")
+
+
+def normalize_page_candidate_key(page_name: str, author_url: str) -> str:
+    """
+    Khóa khử trùng tầng ứng viên (chỉ dẫn 2.5 bước 3):
+    tên Page viết thường, gọn khoảng trắng + link tác giả đã chuẩn hoá.
+    """
+    name = re.sub(r"\s+", " ", (page_name or "").strip().lower())
+    cleaned = clean_page_url(author_url) or (author_url or "").strip().lower()
+    return f"{name}|{cleaned}"
 
 
 def strip_accents_and_spaces(text: str) -> str:
