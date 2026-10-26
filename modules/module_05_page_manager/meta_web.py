@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 
 from core.database.connection import db
 from . import meta_sync as sync
-from .meta_config import GRAPH_API_VERSION, REQUIRED_SCOPES, callback_url, credentials
+from .meta_config import GRAPH_API_VERSION, ALL_SCOPES, callback_url, credentials
 
 ACTIVE = {"AWAITING_OAUTH", "QUEUED", "RUNNING", "AWAITING_CONFIRMATION", "COMMITTING"}
 
@@ -84,7 +84,7 @@ def start(owner, reason="connect"):
         raise
     url = f"https://www.facebook.com/{GRAPH_API_VERSION}/dialog/oauth?" + urlencode({
         "client_id": app_id, "redirect_uri": redirect, "state": state, "response_type": "token",
-        "scope": ",".join(sorted(REQUIRED_SCOPES)),
+        "scope": ",".join(sorted(ALL_SCOPES)),
     })
     return {"job_id": job["job_id"], "status": "AWAITING_OAUTH", "state": state,
             "authorization_url": url, "expires_at": job["expires"],

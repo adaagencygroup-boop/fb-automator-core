@@ -8,6 +8,7 @@ import GroupSpamModule from "./module_07_group_spam";
 import InteractionSeedingModule from "./module_08_interaction_seeding";
 import UserProfileModule from "./module_09_user_profile";
 import GroupScanModule from "./module_10_group_scan";
+import PageScannerModule from "./module_11_page_scanner";
 
 export const MODULE_REGISTRY = [
   {
@@ -79,5 +80,12 @@ export const MODULE_REGISTRY = [
     label: "Cài Đặt Hệ Thống",
     author: "Trường, Kiệt",
     component: UserProfileModule,
+  },
+  {
+    id: "scanner",
+    icon: "🔍",
+    label: "Quét Dữ Liệu Page",
+    author: "Antigravity",
+    component: PageScannerModule,
   },
 ];

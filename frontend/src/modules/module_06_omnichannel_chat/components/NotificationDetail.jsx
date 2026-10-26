@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   MessageCircle,
   Share2,
+  Eye,
   ThumbsUp,
   AlertTriangle,
   ExternalLink,
@@ -18,6 +19,7 @@ import { REACTION_META, ReactionIcon } from "./ReactionIcons";
 import ReactionDialog from "./ReactionDialog";
 import CommentSortMenu from "./CommentSortMenu";
 import CommentThread from "./CommentThread";
+import PostInsightsDialog from "./PostInsightsDialog";
 import { Initial } from "./atoms";
 import {
   getPostDetails,
@@ -421,6 +423,7 @@ function InternalPostView({ post, page, pageName, postId, onReload, sort, onSort
   const imgSrc = post?.full_picture || null;
 
   const [reactionsOpen, setReactionsOpen] = useState(false);
+  const [insightsOpen, setInsightsOpen] = useState(false);
   const postPageId = page?.id || post?.page_id;
 
   /**
@@ -518,6 +521,17 @@ function InternalPostView({ post, page, pageName, postId, onReload, sort, onSort
               label="lượt chia sẻ"
               title="Lượt chia sẻ"
             />
+            {/* Chỉ hiện khi Graph thực sự trả về — thiếu quyền read_insights thì
+                `insights` không có, hiện "0 lượt xem" là nói dối */}
+            {post?.insights?.views > 0 && (
+              <StatItem
+                icon={Eye}
+                value={post.insights.views}
+                label="lượt xem"
+                title="Xem chi tiết hiệu suất bài viết"
+                onClick={() => setInsightsOpen(true)}
+              />
+            )}
           </span>
 
           <ReactionStack
@@ -545,6 +559,18 @@ function InternalPostView({ post, page, pageName, postId, onReload, sort, onSort
       </div>
 
       <Composer pageName={pageName} page={page} onSubmit={submitComment} />
+
+      {insightsOpen && (
+        <PostInsightsDialog
+          insights={post?.insights}
+          interactions={
+            countOf(post?.reactions)
+            + (post?.comment_total ?? countOf(post?.comments))
+            + countOf(post?.shares)
+          }
+          onClose={() => setInsightsOpen(false)}
+        />
+      )}
 
       {reactionsOpen && (
         <ReactionDialog

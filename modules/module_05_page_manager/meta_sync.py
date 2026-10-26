@@ -10,7 +10,7 @@ from urllib.parse import urlencode, urlsplit, parse_qs
 from core.database.connection import db
 from core.facebook.fb_graph_client import fb_client, MetaAPIError
 from modules.module_02_account_manager.context import owner_scope
-from .meta_config import GRAPH_API_VERSION, REQUIRED_SCOPES, credentials, callback_url
+from .meta_config import GRAPH_API_VERSION, ALL_SCOPES, credentials, callback_url
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="meta-oauth")
 _lock = threading.RLock()
@@ -37,7 +37,7 @@ def create_state(owner, uid, flow):
         (hashlib.sha256(state.encode()).hexdigest(), owner, uid, app_id, flow))
     url = f"https://www.facebook.com/{GRAPH_API_VERSION}/dialog/oauth?" + urlencode({
         "client_id": app_id, "redirect_uri": redirect, "state": state,
-        "scope": ",".join(sorted(REQUIRED_SCOPES)), "response_type": "token",
+        "scope": ",".join(sorted(ALL_SCOPES)), "response_type": "token",
     })
     return {"state": state, "authorization_url": url}
 

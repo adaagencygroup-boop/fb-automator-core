@@ -138,6 +138,12 @@ async def lifespan(app: FastAPI):
         from modules.module_10_group_scan.models import init_models as init_group_scan_models
 
         init_group_scan_models()
+    with startup_step("Module 11 page scanner"):
+        from modules.module_11_page_scanner.models import (
+            init_models as init_page_scanner_models,
+        )
+
+        init_page_scanner_models()
     with startup_step("Backend module imports"):
         loaded = load_backend_modules()
     print(
@@ -195,6 +201,7 @@ _PUBLIC_API = {
     "/api/post/dialog/file",
     "/api/post/dialog/folder",
     "/api/groups/source/template",
+    "/api/page-scanner/source/template",
     "/oauth/meta/callback",
     "/api/pages/web-oauth/callback-submit",
 }
@@ -424,6 +431,11 @@ def fetch_pages_tokens(req: AddPageTokenRequest, request: Request):
     return start_sync(require_owner(request), req.account_uid.strip(), req.user_token.strip())
 
 
+# ==================== MODULE 11: PAGE SCANNER ====================
+from modules.module_11_page_scanner.api.router import router as page_scanner_router
+app.include_router(page_scanner_router)
+
+
 
 # ==================== MODULE 9: SETTINGS & PROXIES ====================
 @app.get("/api/settings")
@@ -433,16 +445,22 @@ def get_settings():
 
 @app.get("/api/proxies")
 def get_proxies():
-    return {"proxies": db.fetch_all("SELECT * FROM proxies ORDER BY id DESC")}
+    try:
+        return {"proxies": db.fetch_all("SELECT * FROM proxies ORDER BY id DESC")}
+    except Exception:
+        return {"proxies": []}
 
 
 @app.get("/api/keys")
 def get_keys():
-    return {
-        "keys": db.fetch_all(
-            "SELECT id, service, status, usage_count, last_used FROM api_keys"
-        )
-    }
+    try:
+        return {
+            "keys": db.fetch_all(
+                "SELECT id, service, status, usage_count, last_used FROM api_keys"
+            )
+        }
+    except Exception:
+        return {"keys": []}
 
 
 # ==================== ENTRY POINT ====================

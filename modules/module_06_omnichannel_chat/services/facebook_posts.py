@@ -100,6 +100,85 @@ class FacebookPostService:
                 breakdown[key] = count
         return breakdown
 
+    async def _fetch_post_insights(self, post_id: str, access_token: str):
+        """So lieu hieu suat bai viet, qua canh /insights.
+
+        Anh xa sang dung nhan tren giao dien Facebook (Post insights), DO BANG
+        cach doi chieu tung con so voi mot reel that ngay 26/10/2026:
+
+            post_media_view               -> Views        (64)
+            post_total_media_view_unique  -> Viewers      (28)
+            post_video_view_time          -> Watch time   (1h41m = 6.104.321ms)
+            post_video_avg_time_watched   -> Avg watch    (2m7s  =   127.173ms)
+            post_clicks                   -> Clicks       (8)
+            post_video_views              -> xem qua 3 giay (41) — METRIC CU,
+                                             khong ung voi nhan nao, chi giu lam
+                                             luoi an toan khi thieu media_view
+
+        "Interactions" tren giao dien = reactions + comments + shares, co san
+        tren chinh bai viet nen khong hoi o day.
+        "Follows" thi KHONG lay duoc: post_new_followers va post_follows deu tra
+        (#100) khong phai metric hop le.
+
+        CHI dung metric con song: post_impressions, post_engaged_users,
+        post_video_views_unique da bi khai tu tu 15/06/2026 tren moi phien ban —
+        gui len la hong CA lenh goi chu khong phai chi mat mot so.
+
+        Metric video gui kem bai anh thi Graph lang le bo qua, van tra 200 (da
+        do), nen goi chung mot lan duoc.
+
+        Tra ve None khi khong co gi — FE tu an o do di thay vi hien so 0 gia.
+        """
+        metrics = (
+            "post_media_view,post_total_media_view_unique,"
+            "post_video_view_time,post_video_avg_time_watched,"
+            "post_clicks,post_video_views"
+        )
+        url = f"https://graph.facebook.com/{FACEBOOK_API_VERSION}/{post_id}/insights"
+        params = {"metric": metrics, "period": "lifetime", "access_token": access_token}
+
+        try:
+            response = await asyncio.to_thread(requests.get, url, params=params, timeout=15)
+            data = response.json()
+        except Exception as e:
+            print(f"[FacebookPostService] Post insights skipped (network): {e}")
+            return None
+
+        if not isinstance(data, dict) or "error" in data:
+            err = (data or {}).get("error", {}) if isinstance(data, dict) else {}
+            print(f"[FacebookPostService] Post insights skipped: {err.get('message', 'unknown')}")
+            return None
+
+        raw = {}
+        for item in data.get("data") or []:
+            if not isinstance(item, dict):
+                continue
+            values = item.get("values") or []
+            value = values[0].get("value") if values and isinstance(values[0], dict) else None
+            # Mot so metric tra ve dict chia nho (vd. theo loai cam xuc) thay vi mot so
+            if isinstance(value, dict):
+                value = sum(v for v in value.values() if isinstance(v, int))
+            if isinstance(value, int):
+                raw[item.get("name")] = value
+
+        out = {}
+        for key, metric in (
+            ("views", "post_media_view"),
+            ("viewers", "post_total_media_view_unique"),
+            ("watch_time_ms", "post_video_view_time"),
+            ("avg_watch_ms", "post_video_avg_time_watched"),
+            ("clicks", "post_clicks"),
+            ("video_views", "post_video_views"),
+        ):
+            if raw.get(metric):
+                out[key] = raw[metric]
+
+        # Thieu media_view thi lui ve metric cu, con hon khong co gi
+        if "views" not in out and out.get("video_views"):
+            out["views"] = out["video_views"]
+
+        return out or None
+
     async def _fetch_comment_total(self, post_id: str, access_token: str):
         """Tong so binh luan KE CA cau tra loi.
 
@@ -306,10 +385,11 @@ class FacebookPostService:
             # Chay song song de khong cong them mot vong doi mang.
             # _fetch_reaction_breakdown tu bat moi loi nen gather chi co the
             # vang loi tu lenh lay chi tiet bai viet.
-            response, breakdown, comment_total = await asyncio.gather(
+            response, breakdown, comment_total, insights = await asyncio.gather(
                 asyncio.to_thread(requests.get, url, params=params, timeout=15),
                 self._fetch_reaction_breakdown(post_id, page.page_access_token),
                 self._fetch_comment_total(post_id, page.page_access_token),
+                self._fetch_post_insights(post_id, page.page_access_token),
             )
             response_json = response.json()
         except Exception as e:
@@ -355,6 +435,10 @@ class FacebookPostService:
         # Danh sach chinh dem theo toplevel; day moi la con so ke ca tra loi
         if comment_total is not None:
             response_json["comment_total"] = comment_total
+
+        # Khong co = thieu quyen insights hoac bai chua co so lieu -> FE an di
+        if insights:
+            response_json["insights"] = insights
 
         return response_json
 
