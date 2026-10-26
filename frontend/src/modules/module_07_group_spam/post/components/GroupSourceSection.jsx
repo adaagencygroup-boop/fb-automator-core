@@ -5,6 +5,7 @@ import {
   Download,
   FileText,
   Check,
+  Edit3,
   RotateCw,
   Trash2,
   ListFilter,
@@ -68,6 +69,8 @@ export default function GroupSourceSection({
   selectedAccountKeys = [],
   setSelectedAccountKeys,
   accounts = [],
+  isLocked = false,
+  setIsLocked,
   onContinue,
   stepNumber = "4",
 }) {
@@ -231,6 +234,7 @@ export default function GroupSourceSection({
       return;
     }
     toast.success("Đã lưu cấu hình nguồn nhóm.", "LƯU THÀNH CÔNG");
+    setIsLocked?.(true);
     onContinue?.();
   };
 
@@ -239,6 +243,7 @@ export default function GroupSourceSection({
     const trimmed = selectedAccountKeys.slice(0, selectedSourceGroupsCount);
     setSelectedAccountKeys(trimmed);
     setIsQuantityDialogOpen(false);
+    setIsLocked?.(true);
     toast.info(
       `Đã giảm số tài khoản xuống ${trimmed.length} để phù hợp với số nhóm.`,
       "ĐIỀU CHỈNH SỐ LƯỢNG"
@@ -494,6 +499,10 @@ export default function GroupSourceSection({
         </span>
       }
     >
+      <fieldset
+        disabled={isLocked}
+        className={`min-w-0 ${isLocked ? "pointer-events-none opacity-70" : ""}`}
+      >
       <div className="inline-flex w-full rounded-lg bg-slate-100 p-1 sm:w-auto">
         <button
           type="button"
@@ -853,10 +862,20 @@ export default function GroupSourceSection({
         </div>
       )}
 
+      </fieldset>
+
       <div className="mt-4 flex justify-end border-t border-slate-100 pt-3">
-        <Button type="button" size="sm" onClick={handleSaveSource} className="h-9 px-4 text-xs">
-          Lưu cấu hình
-        </Button>
+        {isLocked ? (
+          <Button type="button" variant="outline" size="sm" onClick={() => setIsLocked?.(false)} className="h-9 px-4 text-xs">
+            <Edit3 className="mr-1.5 size-3.5" />
+            Chỉnh sửa
+          </Button>
+        ) : (
+          <Button type="button" size="sm" onClick={handleSaveSource} className="h-9 px-4 text-xs">
+            <Check className="mr-1.5 size-3.5" />
+            Lưu cấu hình
+          </Button>
+        )}
       </div>
 
       <ConfirmDialog

@@ -37,6 +37,7 @@ export default function GroupSummarySection({
   threads = "1",
   delayMin = "30",
   delayMax = "60",
+  delayUnit = "seconds",
   restMinutes = "10",
   scheduleEnabled = false,
   scheduleDate = "",
@@ -91,7 +92,11 @@ export default function GroupSummarySection({
         : `${minMedia} – ${maxMedia} ảnh`,
     ],
     [<RefreshCw key="g" className="size-3.5" />, "Luồng chạy", `${threads} luồng`],
-    [<Clock3 key="h" className="size-3.5" />, "Giãn cách đăng", `${delayMin} – ${delayMax} giây`],
+    [
+      <Clock3 key="h" className="size-3.5" />,
+      "Giãn cách đăng",
+      `${delayMin} – ${delayMax} ${delayUnit === "minutes" ? "phút" : "giây"}`,
+    ],
     [<Clock3 key="i" className="size-3.5" />, "Nghỉ", `${restMinutes} phút`],
     [
       <CalendarDays key="j" className="size-3.5" />,

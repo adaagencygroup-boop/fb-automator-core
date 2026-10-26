@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { LockKeyhole } from "lucide-react";
 
 import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
@@ -27,6 +28,22 @@ import GroupPostingSettingsSection from "./components/GroupPostingSettingsSectio
 import GroupSummarySection from "./components/GroupSummarySection";
 import GroupProgressSection from "./components/GroupProgressSection";
 import GroupActionBar from "./components/GroupActionBar";
+
+function StepGuard({ enabled, requiredStep, children }) {
+  if (enabled) return children;
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-700">
+        <LockKeyhole className="size-3.5 shrink-0" />
+        Hoàn tất và lưu Bước {requiredStep} để mở bước này.
+      </div>
+      <div className="pointer-events-none select-none opacity-50" aria-disabled="true">
+        {children}
+      </div>
+    </div>
+  );
+}
 
 export default function GroupPostModule() {
   const editorRef = useRef(null);
@@ -72,11 +89,13 @@ export default function GroupPostModule() {
   const [groupSearch, setGroupSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
   const [selectedGroupKeys, setSelectedGroupKeys] = useState([]);
+  const [isGroupSourceLocked, setIsGroupSourceLocked] = useState(false);
 
   // Bước 5: Media
   const [mediaFiles, setMediaFiles] = useState([]);
   const [minMedia, setMinMedia] = useState("1");
   const [maxMedia, setMaxMedia] = useState("4");
+  const [isMediaLocked, setIsMediaLocked] = useState(false);
 
   // Bước 6: Nội dung AI
   const [prompt, setPrompt] = useState("");
@@ -84,15 +103,17 @@ export default function GroupPostModule() {
   const [posts, setPosts] = useState(Array.from({ length: 5 }, (_, index) => (index === 0 ? INITIAL_POST : "")));
   const [activePost, setActivePost] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
+  const [isContentLocked, setIsContentLocked] = useState(false);
 
   // Bước 7: Cài đặt đăng bài
-  const [avoidDuplicate, setAvoidDuplicate] = useState(false);
-  const [shuffleContent, setShuffleContent] = useState(true);
   const [delayMin, setDelayMin] = useState("30");
   const [delayMax, setDelayMax] = useState("60");
+  const [delayUnit, setDelayUnit] = useState("seconds");
   const [scheduleEnabled, setScheduleEnabled] = useState(true);
   const [scheduleDate, setScheduleDate] = useState("");
   const [scheduleTime, setScheduleTime] = useState("08:00");
+  const [isPostingSettingsLocked, setIsPostingSettingsLocked] = useState(false);
 
   // Bước 9: Tiến trình thực thi
   const [runState, setRunState] = useState("idle");
@@ -317,7 +338,9 @@ export default function GroupPostModule() {
   };
 
   const generatePosts = async () => {
-    const amount = Math.max(1, Math.min(10, Number(aiCount) || 1));
+    const amount = aiCount === "duplicate"
+      ? 1
+      : Math.max(1, Math.min(10, Number(aiCount) || 1));
     if (!prompt.trim()) {
       setSettingsFeedback({ type: "error", message: "Hãy nhập chủ đề/mô tả trước khi tạo nội dung" });
       return;
@@ -337,6 +360,7 @@ export default function GroupPostModule() {
       });
       setPosts(result.posts);
       setActivePost(0);
+      setHasGeneratedContent(true);
       if (editorRef.current) editorRef.current.innerHTML = editorHtml(result.posts[0] || "");
       setSettingsFeedback({ type: "success", message: `Đã tạo ${result.count} bài bằng ${model}` });
     } catch (error) {
@@ -429,12 +453,12 @@ export default function GroupPostModule() {
           threads: Number(threads),
           rest_minutes: Number(restMinutes),
           max_posts: Number(maxPosts),
-          delay_min: Number(delayMin),
-          delay_max: Number(delayMax),
+          delay_min: Math.round(Number(delayMin) * (delayUnit === "minutes" ? 60 : 1)),
+          delay_max: Math.round(Number(delayMax) * (delayUnit === "minutes" ? 60 : 1)),
           min_media: Number(minMedia) || 0,
           max_media: Number(maxMedia) || 0,
-          avoid_duplicate: avoidDuplicate,
-          shuffle_content: shuffleContent,
+          avoid_duplicate: false,
+          shuffle_content: true,
           schedule_at: scheduleEnabled && scheduleDate ? `${scheduleDate}T${scheduleTime}` : null,
         },
       });
@@ -464,7 +488,61 @@ export default function GroupPostModule() {
     }
   };
 
-  const canStart = runState === "idle" && selectedAccounts.length > 0 && hasGroups && hasApiKey && !settingsLoading;
+  const resetAfterCampaign = () => {
+    setIsAccountLocked(false);
+    setIsSettingsLocked(false);
+    setIsGroupSourceLocked(false);
+    setIsMediaLocked(false);
+    setIsContentLocked(false);
+    setIsPostingSettingsLocked(false);
+  };
+
+  const resetAfterAccounts = () => {
+    setIsSettingsLocked(false);
+    setIsGroupSourceLocked(false);
+    setIsMediaLocked(false);
+    setIsContentLocked(false);
+    setIsPostingSettingsLocked(false);
+  };
+
+  const resetAfterSettings = () => {
+    setIsGroupSourceLocked(false);
+    setIsMediaLocked(false);
+    setIsContentLocked(false);
+    setIsPostingSettingsLocked(false);
+  };
+
+  const resetAfterGroupSource = () => {
+    setIsMediaLocked(false);
+    setIsContentLocked(false);
+    setIsPostingSettingsLocked(false);
+  };
+
+  const resetAfterMedia = () => {
+    setIsContentLocked(false);
+    setIsPostingSettingsLocked(false);
+  };
+
+  const resetAfterContent = () => {
+    setIsPostingSettingsLocked(false);
+  };
+
+  const allStepsCompleted = Boolean(
+    campaignLocked
+    && isAccountLocked
+    && settingsConfirmed
+    && isGroupSourceLocked
+    && isMediaLocked
+    && isContentLocked
+    && isPostingSettingsLocked
+  );
+
+  const canStart = runState === "idle"
+    && allStepsCompleted
+    && selectedAccounts.length > 0
+    && hasGroups
+    && hasApiKey
+    && !settingsLoading;
 
   return (
     <div className="space-y-6">
@@ -486,7 +564,10 @@ export default function GroupPostModule() {
         setCampaignDescription={setCampaignDescription}
         campaignId={campaignId}
         isLocked={campaignLocked}
-        setIsLocked={setCampaignLocked}
+        setIsLocked={(locked) => {
+          setCampaignLocked(locked);
+          if (!locked) resetAfterCampaign();
+        }}
         isRerun={isRerun}
         stepNumber="1"
         onContinue={() => {
@@ -497,6 +578,7 @@ export default function GroupPostModule() {
 
       {/* Bước 2: Chọn tài khoản / người dùng đi seeding */}
       <div id="step-2-accounts" className="scroll-mt-6">
+        <StepGuard enabled={Boolean(campaignLocked && campaignName?.trim())} requiredStep="1">
         <GroupAccountSection
           stepNumber="2"
           accounts={accounts}
@@ -505,17 +587,22 @@ export default function GroupPostModule() {
           setSelectedAccountKeys={setSelectedAccountKeys}
           onRefreshAccounts={loadAccounts}
           isLocked={isAccountLocked}
-          setIsLocked={setIsAccountLocked}
+          setIsLocked={(locked) => {
+            setIsAccountLocked(locked);
+            if (!locked) resetAfterAccounts();
+          }}
           isStep1Completed={Boolean(campaignLocked && campaignName?.trim())}
           onContinue={() => {
             const el = document.getElementById("step-3-settings");
             if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
           }}
         />
+        </StepGuard>
       </div>
 
       {/* Bước 3: Cấu hình API & thông số chung */}
       <div id="step-3-settings" className="scroll-mt-6">
+        <StepGuard enabled={isAccountLocked} requiredStep="2">
         <GroupSettingsSection
           stepNumber="3"
           apiSource={apiSource}
@@ -528,12 +615,17 @@ export default function GroupPostModule() {
           settingsFeedback={settingsFeedback}
           onSaveSettings={handleSaveSettings}
           isLocked={settingsConfirmed}
-          setIsLocked={setIsSettingsLocked}
+          setIsLocked={(locked) => {
+            setIsSettingsLocked(locked);
+            if (!locked) resetAfterSettings();
+          }}
         />
+        </StepGuard>
       </div>
 
       {/* Bước 4: Nguồn nhóm */}
       <div id="step-4-group-source" className="scroll-mt-6">
+        <StepGuard enabled={settingsConfirmed} requiredStep="3">
         <GroupSourceSection
           stepNumber="4"
           groupSource={groupSource}
@@ -551,15 +643,22 @@ export default function GroupPostModule() {
           selectedAccountKeys={selectedAccountKeys}
           setSelectedAccountKeys={setSelectedAccountKeys}
           accounts={accounts}
+          isLocked={isGroupSourceLocked}
+          setIsLocked={(locked) => {
+            setIsGroupSourceLocked(locked);
+            if (!locked) resetAfterGroupSource();
+          }}
           onContinue={() => {
             const el = document.getElementById("step-5-media");
             if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
           }}
         />
+        </StepGuard>
       </div>
 
       {/* Bước 5: Chọn media */}
       <div id="step-5-media" className="scroll-mt-6">
+        <StepGuard enabled={isGroupSourceLocked} requiredStep="4">
         <GroupMediaSection
           stepNumber="5"
           mediaFiles={mediaFiles}
@@ -568,11 +667,22 @@ export default function GroupPostModule() {
           setMinMedia={setMinMedia}
           maxMedia={maxMedia}
           setMaxMedia={setMaxMedia}
+          isLocked={isMediaLocked}
+          setIsLocked={(locked) => {
+            setIsMediaLocked(locked);
+            if (!locked) resetAfterMedia();
+          }}
+          onContinue={() => {
+            const el = document.getElementById("step-6-content");
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
         />
+        </StepGuard>
       </div>
 
       {/* Bước 6: Tạo nội dung bằng AI */}
       <div id="step-6-content" className="scroll-mt-6">
+        <StepGuard enabled={isMediaLocked} requiredStep="5">
         <GroupContentSection
           stepNumber="6"
           prompt={prompt}
@@ -584,34 +694,53 @@ export default function GroupPostModule() {
           activePost={activePost}
           setActivePost={setActivePost}
           isGenerating={isGenerating}
+          hasGeneratedContent={hasGeneratedContent}
+          setHasGeneratedContent={setHasGeneratedContent}
           onGeneratePosts={generatePosts}
+          isLocked={isContentLocked}
+          setIsLocked={(locked) => {
+            setIsContentLocked(locked);
+            if (!locked) resetAfterContent();
+          }}
+          onContinue={() => {
+            const el = document.getElementById("step-7-posting");
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
           editorRef={editorRef}
         />
+        </StepGuard>
       </div>
 
       {/* Bước 7: Cài đặt đăng bài */}
       <div id="step-7-posting" className="scroll-mt-6">
+        <StepGuard enabled={isContentLocked} requiredStep="6">
         <GroupPostingSettingsSection
           stepNumber="7"
           scheduleEnabled={scheduleEnabled}
           setScheduleEnabled={setScheduleEnabled}
-          avoidDuplicate={avoidDuplicate}
-          setAvoidDuplicate={setAvoidDuplicate}
-          shuffleContent={shuffleContent}
-          setShuffleContent={setShuffleContent}
           delayMin={delayMin}
           setDelayMin={setDelayMin}
           delayMax={delayMax}
           setDelayMax={setDelayMax}
+          delayUnit={delayUnit}
+          setDelayUnit={setDelayUnit}
           scheduleDate={scheduleDate}
           setScheduleDate={setScheduleDate}
           scheduleTime={scheduleTime}
           setScheduleTime={setScheduleTime}
+          isLocked={isPostingSettingsLocked}
+          setIsLocked={setIsPostingSettingsLocked}
+          onContinue={() => {
+            const el = document.getElementById("step-8-summary");
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
         />
+        </StepGuard>
       </div>
 
       {/* Bước 8: Thông tin cấu hình tổng hợp */}
       <div id="step-8-summary" className="scroll-mt-6">
+        <StepGuard enabled={isPostingSettingsLocked} requiredStep="7">
         <GroupSummarySection
           stepNumber="8"
           campaignName={campaignName}
@@ -634,11 +763,13 @@ export default function GroupPostModule() {
           threads={threads}
           delayMin={delayMin}
           delayMax={delayMax}
+          delayUnit={delayUnit}
           restMinutes={restMinutes}
           scheduleEnabled={scheduleEnabled}
           scheduleDate={scheduleDate}
           scheduleTime={scheduleTime}
         />
+        </StepGuard>
       </div>
 
       {/* Bước 9: Tiến trình */}

@@ -2,11 +2,14 @@
 
 import React, { useRef } from "react";
 import {
+  Check,
+  Edit3,
   ImageIcon,
   Plus,
   Trash2,
   X,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SectionCard, Field } from "../../shared/components";
 
@@ -17,11 +20,15 @@ export default function GroupMediaSection({
   setMinMedia,
   maxMedia,
   setMaxMedia,
+  isLocked = false,
+  setIsLocked,
+  onContinue,
   stepNumber = "5",
 }) {
   const mediaInputRef = useRef(null);
 
   const handleFiles = (fileList) => {
+    if (isLocked) return;
     const incoming = Array.from(fileList || []);
     setMediaFiles((prev) => {
       const merged = [...prev, ...incoming].slice(0, 10);
@@ -30,10 +37,12 @@ export default function GroupMediaSection({
   };
 
   const handleRemoveMedia = (indexToRemove) => {
+    if (isLocked) return;
     setMediaFiles((prev) => prev.filter((_, idx) => idx !== indexToRemove));
   };
 
   const handleClearAllMedia = () => {
+    if (isLocked) return;
     setMediaFiles([]);
     if (mediaInputRef.current) {
       mediaInputRef.current.value = "";
@@ -47,8 +56,31 @@ export default function GroupMediaSection({
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const handleSave = () => {
+    setIsLocked?.(true);
+    onContinue?.();
+  };
+
+  const handleEdit = () => {
+    setIsLocked?.(false);
+  };
+
   return (
-    <SectionCard number={stepNumber} title="Chọn media (ảnh/video)">
+    <SectionCard
+      number={stepNumber}
+      title="Chọn media (ảnh/video)"
+      aside={isLocked ? (
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200/60 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
+          <Check className="size-3 text-emerald-600" />
+          Đã lưu cấu hình
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/60 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700">
+          <Edit3 className="size-3 text-amber-600" />
+          Đang thiết lập
+        </span>
+      )}
+    >
       <div className="mb-4 flex h-9 items-center justify-center rounded-md bg-primary text-xs font-semibold text-white">
         <ImageIcon className="mr-2 size-4" /> Hình ảnh + Video
       </div>
@@ -60,24 +92,32 @@ export default function GroupMediaSection({
         className="hidden"
         onChange={(event) => handleFiles(event.target.files)}
       />
-      <button
-        type="button"
-        onClick={() => mediaInputRef.current?.click()}
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          event.preventDefault();
-          handleFiles(event.dataTransfer.files);
-        }}
-        className="flex min-h-40 w-full flex-col items-center justify-center rounded-lg border border-dashed border-blue-200 bg-slate-50/60 text-center transition-colors hover:bg-blue-50/40"
-      >
-        <span className="flex size-12 items-center justify-center rounded-full bg-blue-100 text-primary">
-          <Plus className="size-5" />
-        </span>
-        <span className="mt-3 text-xs font-bold text-slate-700">
-          {mediaFiles.length ? `Đã chọn ${mediaFiles.length} tệp media` : "Nhấp để tải ảnh lên hoặc kéo thả"}
-        </span>
-        <span className="mt-1 text-[10px] text-slate-400">Hỗ trợ JPG, PNG (tối đa 10 ảnh)</span>
-      </button>
+      {mediaFiles.length === 0 && !isLocked && (
+        <button
+          type="button"
+          onClick={() => mediaInputRef.current?.click()}
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => {
+            event.preventDefault();
+            handleFiles(event.dataTransfer.files);
+          }}
+          className="flex min-h-40 w-full flex-col items-center justify-center rounded-lg border border-dashed border-blue-200 bg-slate-50/60 text-center transition-colors hover:bg-blue-50/40"
+        >
+          <span className="flex size-12 items-center justify-center rounded-full bg-blue-100 text-primary">
+            <Plus className="size-5" />
+          </span>
+          <span className="mt-3 text-xs font-bold text-slate-700">
+            Nhấp để tải ảnh lên hoặc kéo thả
+          </span>
+          <span className="mt-1 text-[10px] text-slate-400">Hỗ trợ JPG, PNG (tối đa 10 ảnh)</span>
+        </button>
+      )}
+
+      {mediaFiles.length === 0 && isLocked && (
+        <div className="flex min-h-20 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-500">
+          Không sử dụng media
+        </div>
+      )}
 
       {mediaFiles.length > 0 && (
         <div className="mt-4 space-y-3">
@@ -85,17 +125,34 @@ export default function GroupMediaSection({
             <span className="text-xs font-semibold text-slate-700">
               Tệp đã chọn ({mediaFiles.length}/10):
             </span>
-            <button
-              type="button"
-              onClick={handleClearAllMedia}
-              className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-500 transition-colors hover:text-rose-700 hover:underline"
-            >
-              <Trash2 className="size-3" />
-              Xoá tất cả
-            </button>
+            {!isLocked && (
+              <button
+                type="button"
+                onClick={handleClearAllMedia}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-500 transition-colors hover:text-rose-700 hover:underline"
+              >
+                <Trash2 className="size-3" />
+                Xoá tất cả
+              </button>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
+            {!isLocked && mediaFiles.length < 10 && (
+              <button
+                type="button"
+                onClick={() => mediaInputRef.current?.click()}
+                className="group flex aspect-square min-h-28 flex-col items-center justify-center rounded-lg border border-dashed border-blue-200 bg-slate-50/60 text-primary transition-colors hover:border-primary hover:bg-blue-50/50"
+                title="Thêm media"
+                aria-label="Thêm media"
+              >
+                <span className="flex size-10 items-center justify-center rounded-full bg-blue-100 transition-transform group-hover:scale-105">
+                  <Plus className="size-5" />
+                </span>
+                <span className="mt-2 text-[10px] font-semibold">Thêm media</span>
+              </button>
+            )}
+
             {mediaFiles.map((file, idx) => {
               const isVideo = file.type?.startsWith("video/") || /\.(mp4|mov|avi|mkv)$/i.test(file.name || "");
               const previewUrl = file instanceof File ? URL.createObjectURL(file) : null;
@@ -129,17 +186,19 @@ export default function GroupMediaSection({
                       </div>
                     )}
 
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRemoveMedia(idx);
-                      }}
-                      className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-rose-500/90 text-white opacity-90 shadow-sm transition-transform hover:scale-110 hover:bg-rose-600 sm:opacity-0 sm:group-hover:opacity-100"
-                      title="Xoá tệp này"
-                    >
-                      <X className="size-3" />
-                    </button>
+                    {!isLocked && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveMedia(idx);
+                        }}
+                        className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-rose-500/90 text-white opacity-90 shadow-sm transition-transform hover:scale-110 hover:bg-rose-600 sm:opacity-0 sm:group-hover:opacity-100"
+                        title="Xoá tệp này"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    )}
 
                     <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 py-0.5 text-[8px] font-medium text-white backdrop-blur-xs">
                       #{idx + 1}
@@ -163,11 +222,25 @@ export default function GroupMediaSection({
 
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <Field label="Tối thiểu media mỗi bài">
-          <Input type="number" min="0" value={minMedia} onChange={(event) => setMinMedia(event.target.value)} />
+          <Input type="number" min="0" value={minMedia} onChange={(event) => setMinMedia(event.target.value)} disabled={isLocked} />
         </Field>
         <Field label="Tối đa media mỗi bài">
-          <Input type="number" min="0" value={maxMedia} onChange={(event) => setMaxMedia(event.target.value)} />
+          <Input type="number" min="0" value={maxMedia} onChange={(event) => setMaxMedia(event.target.value)} disabled={isLocked} />
         </Field>
+      </div>
+
+      <div className="mt-4 flex justify-end border-t border-slate-100 pt-3">
+        {isLocked ? (
+          <Button type="button" variant="outline" size="sm" onClick={handleEdit}>
+            <Edit3 className="mr-1.5 size-3.5" />
+            Chỉnh sửa
+          </Button>
+        ) : (
+          <Button type="button" size="sm" onClick={handleSave}>
+            <Check className="mr-1.5 size-3.5" />
+            Lưu cấu hình
+          </Button>
+        )}
       </div>
     </SectionCard>
   );
