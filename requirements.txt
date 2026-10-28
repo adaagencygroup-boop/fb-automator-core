@@ -1,5 +1,5 @@
 # Facebook Automator Core - Requirements
-# Python >= 3.10
+# Python >= 3.11
 
 # Worker threads (QThread signals) — không còn desktop GUI
 PyQt5>=5.15.10

@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS posts (
                      'PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE')),
   facebook_post_url TEXT,
   error_message     TEXT,
+  logs              JSONB,     -- log runtime từng bài (finish_post); DB cũ: 011_posts_logs.sql
   published_at      TIMESTAMPTZ,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),

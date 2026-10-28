@@ -13,6 +13,7 @@ import os
 import re
 import logging
 import mimetypes
+from config.constants import UPLOADS_DIR
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Body, UploadFile, File
 from fastapi.responses import FileResponse
@@ -349,8 +350,7 @@ def get_media_file(path: str = Query(...)):
 @router.post("/media/upload")
 async def upload_post_image(file: UploadFile = File(...)):
     """Upload ảnh từ máy tính lưu vào uploads/posts và trả về đường dẫn file."""
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    save_dir = os.path.join(project_root, "uploads", "posts")
+    save_dir = str(UPLOADS_DIR / "posts")
     os.makedirs(save_dir, exist_ok=True)
 
     content = await file.read()

@@ -158,6 +158,8 @@ ADDED_COLUMNS = [
     ("farm_run_history", "story_reactions", "INT DEFAULT 0"),
     # Rời nhóm, xem migrations/009_farm_history_groups_left.sql
     ("farm_run_history", "groups_left", "INT DEFAULT 0"),
+    # Log runtime từng bài (Story/Reels/Status) khi finish_post — migrations/011_posts_logs.sql
+    ("posts", "logs", "JSONB"),
 ]
 
 
@@ -289,6 +291,7 @@ TAB2_DDL_STATEMENTS_PG = [
         ('DRAFT', 'READY', 'PENDING', 'RUNNING', 'PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE')),
       facebook_post_url TEXT,
       error_message TEXT,
+      logs JSONB,
       published_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -432,6 +435,7 @@ TAB2_DDL_STATEMENTS_SQLITE = [
         ('DRAFT', 'READY', 'PENDING', 'RUNNING', 'PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE')),
       facebook_post_url TEXT,
       error_message TEXT,
+      logs TEXT,
       published_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,

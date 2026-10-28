@@ -5,10 +5,11 @@ import os
 from enum import Enum
 from pathlib import Path
 from dotenv import dotenv_values, load_dotenv
+from config.paths import runtime_root
 
 import sys
 if getattr(sys, "frozen", False):
-  BASE_DIR = Path(sys.executable).resolve().parent
+  BASE_DIR = runtime_root()
   # PyInstaller onefile: datas nằm trong _MEIPASS
   BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))
 else:
@@ -17,13 +18,14 @@ else:
 DATA_DIR = BASE_DIR / "data"
 LOGS_DIR = BASE_DIR / "logs"
 DOWNLOADS_DIR = BASE_DIR / "downloads"
+UPLOADS_DIR = BASE_DIR / "uploads"
 TIKTOK_CONFIG_PATH = DATA_DIR / "tiktok_config.json"
 TIKTOK_CONFIG_INI_PATH = DATA_DIR / "tiktok_config.ini"
 TIKTOK_SESSION_PATH = DATA_DIR / "tiktok_session.json"
 YOUTUBE_CONFIG_PATH = DATA_DIR / "youtube_config.json"
 YOUTUBE_CONFIG_INI_PATH = DATA_DIR / "youtube_config.ini"
 
-# .env: cạnh .exe (cài đặt) → trong bundle PyInstaller → cwd
+# .env: thư mục dữ liệu người dùng (Linux) / cạnh .exe → bundle → cwd
 _ENV_CANDIDATES = [
     BASE_DIR / ".env",
     BUNDLE_DIR / ".env",

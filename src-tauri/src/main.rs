@@ -25,12 +25,43 @@ fn log_line(msg: &str) {
     eprintln!("{}", msg);
 }
 
-fn log_path() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(|p| PathBuf::from(p).join("FB_Page_Automator").join("tauri_sidecar.log"))
-        .unwrap_or_else(|| PathBuf::from("tauri_sidecar.log"))
+#[cfg(target_os = "linux")]
+fn linux_data_dir() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir)
+                .join(".local/share")
+        })
+        .join("FBAutomator")
 }
 
+fn log_directory() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        linux_data_dir().join("logs")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(|p| PathBuf::from(p).join("FB_Page_Automator"))
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
+fn log_path() -> PathBuf {
+    log_directory().join("tauri_sidecar.log")
+}
+
+#[cfg(target_os = "linux")]
+fn sidecar_temp_dir() -> PathBuf {
+    linux_data_dir().join("engine-temp")
+}
+
+#[cfg(not(target_os = "linux"))]
 fn sidecar_temp_dir() -> PathBuf {
     let candidates = [
         PathBuf::from(r"F:\FB_Page_Automator\engine-temp"),
@@ -94,9 +125,7 @@ fn spawn_local_engine() -> Option<Child> {
     let _ = std::fs::create_dir_all(&temp_dir);
     let temp_str = temp_dir.to_string_lossy().to_string();
 
-    let log_dir = std::env::var_os("LOCALAPPDATA")
-        .map(|p| PathBuf::from(p).join("FB_Page_Automator"))
-        .unwrap_or_else(|| PathBuf::from("."));
+    let log_dir = log_directory();
     let _ = std::fs::create_dir_all(&log_dir);
     let stdout_path = log_dir.join("local_engine.out.log");
     let stderr_path = log_dir.join("local_engine.err.log");
@@ -117,11 +146,20 @@ fn spawn_local_engine() -> Option<Child> {
 
     log_line(&format!("🚀 Spawning {:?} TEMP={}", exe, temp_str));
 
+    #[cfg(target_os = "linux")]
+    let work_dir = linux_data_dir();
+    #[cfg(not(target_os = "linux"))]
+    let work_dir = exe
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .to_path_buf();
+
     match Command::new(&exe)
         .args(["--port", "28129"])
         .env("TEMP", &temp_str)
         .env("TMP", &temp_str)
-        .current_dir(exe.parent().unwrap_or(std::path::Path::new(".")))
+        .env("TMPDIR", &temp_str)
+        .current_dir(work_dir)
         .stdin(Stdio::null())
         .stdout(stdout_file)
         .stderr(stderr_file)

@@ -3,6 +3,7 @@ import shutil
 import time
 import math
 import asyncio
+from config.constants import UPLOADS_DIR
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, or_
@@ -32,7 +33,7 @@ router = APIRouter(prefix="/api/facebook", tags=["Messages"])
 
 from urllib.parse import quote
 
-UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../uploads"))
+UPLOAD_DIR = str(UPLOADS_DIR)
 
 # Facebook phai TAI DUOC file dinh kem tu Internet, nen URL gui cho Graph API phai la dia chi cong khai.
 # Chay local thi dat PUBLIC_MEDIA_BASE_URL tro toi tunnel (ngrok/cloudflared) cua engine nay.
