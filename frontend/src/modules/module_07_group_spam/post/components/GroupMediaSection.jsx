@@ -6,13 +6,16 @@ import {
   Plus,
   Trash2,
   X,
+  Cloud,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { SectionCard, Field } from "../../shared/components";
 
 export default function GroupMediaSection({
-  mediaFiles,
+  mediaFiles = [],
   setMediaFiles,
+  savedMedia = [],
+  setSavedMedia,
   minMedia,
   setMinMedia,
   maxMedia,
@@ -22,23 +25,32 @@ export default function GroupMediaSection({
 }) {
   const mediaInputRef = useRef(null);
 
+  const totalCount = (savedMedia?.length || 0) + (mediaFiles?.length || 0);
+
   const handleFiles = (fileList) => {
     if (isLocked) return;
     const incoming = Array.from(fileList || []);
+    const remainingSlots = Math.max(0, 10 - totalCount);
     setMediaFiles((prev) => {
-      const merged = [...prev, ...incoming].slice(0, 10);
+      const merged = [...prev, ...incoming.slice(0, remainingSlots)];
       return merged;
     });
   };
 
-  const handleRemoveMedia = (indexToRemove) => {
+  const handleRemoveNewMedia = (indexToRemove) => {
     if (isLocked) return;
     setMediaFiles((prev) => prev.filter((_, idx) => idx !== indexToRemove));
+  };
+
+  const handleRemoveSavedMedia = (indexToRemove) => {
+    if (isLocked || !setSavedMedia) return;
+    setSavedMedia((prev) => prev.filter((_, idx) => idx !== indexToRemove));
   };
 
   const handleClearAllMedia = () => {
     if (isLocked) return;
     setMediaFiles([]);
+    if (setSavedMedia) setSavedMedia([]);
     if (mediaInputRef.current) {
       mediaInputRef.current.value = "";
     }
@@ -57,7 +69,7 @@ export default function GroupMediaSection({
       title="Chọn media (ảnh/video)"
     >
       <div className="mb-4 flex h-9 items-center justify-center rounded-md bg-primary text-xs font-semibold text-white">
-        <ImageIcon className="mr-2 size-4" /> Hình ảnh + Video
+        <ImageIcon className="mr-2 size-4" /> Hình ảnh + Video (Lưu trữ Supabase Storage)
       </div>
       <input
         ref={mediaInputRef}
@@ -67,7 +79,8 @@ export default function GroupMediaSection({
         className="hidden"
         onChange={(event) => handleFiles(event.target.files)}
       />
-      {mediaFiles.length === 0 && !isLocked && (
+
+      {totalCount === 0 && !isLocked && (
         <button
           type="button"
           onClick={() => mediaInputRef.current?.click()}
@@ -84,21 +97,26 @@ export default function GroupMediaSection({
           <span className="mt-3 text-xs font-bold text-slate-700">
             Nhấp để tải ảnh lên hoặc kéo thả
           </span>
-          <span className="mt-1 text-[10px] text-slate-400">Hỗ trợ JPG, PNG (tối đa 10 ảnh)</span>
+          <span className="mt-1 text-[10px] text-slate-400">Hỗ trợ JPG, PNG, MP4 (tối đa 10 tệp) — Tự động lưu lên Supabase</span>
         </button>
       )}
 
-      {mediaFiles.length === 0 && isLocked && (
+      {totalCount === 0 && isLocked && (
         <div className="flex min-h-20 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-500">
           Không sử dụng media
         </div>
       )}
 
-      {mediaFiles.length > 0 && (
+      {totalCount > 0 && (
         <div className="mt-4 space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-700">
-              Tệp đã chọn ({mediaFiles.length}/10):
+              Tệp đã chọn ({totalCount}/10):
+              {savedMedia?.length > 0 && (
+                <span className="ml-2 text-[11px] font-normal text-emerald-600">
+                  ({savedMedia.length} từ Supabase Storage Cloud)
+                </span>
+              )}
             </span>
             {!isLocked && (
               <button
@@ -113,7 +131,7 @@ export default function GroupMediaSection({
           </div>
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
-            {!isLocked && mediaFiles.length < 10 && (
+            {!isLocked && totalCount < 10 && (
               <button
                 type="button"
                 onClick={() => mediaInputRef.current?.click()}
@@ -128,13 +146,78 @@ export default function GroupMediaSection({
               </button>
             )}
 
-            {mediaFiles.map((file, idx) => {
-              const isVideo = file.type?.startsWith("video/") || /\.(mp4|mov|avi|mkv)$/i.test(file.name || "");
-              const previewUrl = file instanceof File ? URL.createObjectURL(file) : null;
+            {/* Render ảnh đã lưu từ Cloud (Rerun / Đăng lại) */}
+            {savedMedia.map((item, idx) => {
+              const itemUrl = typeof item === "string" ? item : (item.url || item.path || "");
+              const itemName = (typeof item === "string" ? item.split("/").pop().split("?")[0] : item.name) || `Ảnh ${idx + 1}`;
+              const isVideo = /\.(mp4|mov|avi|mkv)$/i.test(itemName);
 
               return (
                 <div
-                  key={`${file.name}-${idx}`}
+                  key={`saved-${idx}-${itemName}`}
+                  className="group relative flex flex-col overflow-hidden rounded-lg border border-emerald-200 bg-emerald-50/30 p-1.5 shadow-xs transition-all hover:border-emerald-400 hover:shadow-sm"
+                >
+                  <div className="relative aspect-square w-full overflow-hidden rounded-md bg-slate-100">
+                    {isVideo ? (
+                      <video
+                        src={itemUrl}
+                        muted
+                        playsInline
+                        controls
+                        className="h-full w-full object-cover"
+                        preload="metadata"
+                      />
+                    ) : itemUrl ? (
+                      <img
+                        src={itemUrl}
+                        alt={itemName}
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-slate-400">
+                        <ImageIcon className="size-6" />
+                      </div>
+                    )}
+
+                    {!isLocked && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveSavedMedia(idx);
+                        }}
+                        className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-rose-500/90 text-white opacity-90 shadow-sm transition-transform hover:scale-110 hover:bg-rose-600 sm:opacity-0 sm:group-hover:opacity-100"
+                        title="Xoá ảnh này"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    )}
+
+                    <span className="absolute bottom-1 left-1 flex items-center gap-0.5 rounded bg-emerald-700/80 px-1 py-0.5 text-[8px] font-medium text-white backdrop-blur-xs">
+                      <Cloud className="size-2.5" /> Supabase #{idx + 1}
+                    </span>
+                  </div>
+
+                  <div className="mt-1.5 px-0.5">
+                    <p className="truncate text-[10px] font-medium text-slate-700" title={itemName}>
+                      {itemName}
+                    </p>
+                    <p className="text-[9px] text-emerald-600">Đã lưu trữ Cloud</p>
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Render các file mới chọn từ máy tính */}
+            {mediaFiles.map((file, idx) => {
+              const isVideo = file.type?.startsWith("video/") || /\.(mp4|mov|avi|mkv)$/i.test(file.name || "");
+              const previewUrl = file instanceof File ? URL.createObjectURL(file) : null;
+              const globalIndex = savedMedia.length + idx + 1;
+
+              return (
+                <div
+                  key={`new-${file.name}-${idx}`}
                   className="group relative flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white p-1.5 shadow-xs transition-all hover:border-blue-300 hover:shadow-sm"
                 >
                   <div className="relative aspect-square w-full overflow-hidden rounded-md bg-slate-100">
@@ -166,7 +249,7 @@ export default function GroupMediaSection({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleRemoveMedia(idx);
+                          handleRemoveNewMedia(idx);
                         }}
                         className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-rose-500/90 text-white opacity-90 shadow-sm transition-transform hover:scale-110 hover:bg-rose-600 sm:opacity-0 sm:group-hover:opacity-100"
                         title="Xoá tệp này"
@@ -176,7 +259,7 @@ export default function GroupMediaSection({
                     )}
 
                     <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1 py-0.5 text-[8px] font-medium text-white backdrop-blur-xs">
-                      #{idx + 1}
+                      #{globalIndex} (Mới)
                     </span>
                   </div>
 
@@ -200,7 +283,7 @@ export default function GroupMediaSection({
           <Input
             type="number"
             min="0"
-            max={mediaFiles.length || undefined}
+            max={totalCount || undefined}
             value={minMedia}
             onChange={(event) => setMinMedia(event.target.value)}
             disabled={isLocked}
@@ -210,7 +293,7 @@ export default function GroupMediaSection({
           <Input
             type="number"
             min="0"
-            max={mediaFiles.length || undefined}
+            max={totalCount || undefined}
             value={maxMedia}
             onChange={(event) => setMaxMedia(event.target.value)}
             disabled={isLocked}
@@ -218,11 +301,11 @@ export default function GroupMediaSection({
         </Field>
       </div>
 
-      {mediaFiles.length > 0 && (
+      {totalCount > 0 && (
         <div className="mt-2.5">
-          {Number(maxMedia) > mediaFiles.length ? (
+          {Number(maxMedia) > totalCount ? (
             <p className="text-[11px] font-medium text-rose-600">
-              ⚠️ Số lượng tối đa ({maxMedia}) đang lớn hơn tổng số tệp đã tải lên ({mediaFiles.length}). Vui lòng giảm số tối đa hoặc tải thêm tệp.
+              ⚠️ Số lượng tối đa ({maxMedia}) đang lớn hơn tổng số tệp đã có ({totalCount}). Vui lòng giảm số tối đa hoặc thêm tệp.
             </p>
           ) : Number(minMedia) > Number(maxMedia) ? (
             <p className="text-[11px] font-medium text-rose-600">
@@ -230,7 +313,7 @@ export default function GroupMediaSection({
             </p>
           ) : (
             <p className="text-[11px] text-slate-500">
-              💡 Hệ thống sẽ <strong>chọn ngẫu nhiên từ {minMedia || 0} đến {maxMedia || 0} tệp</strong> trong tổng số {mediaFiles.length} tệp đã chọn cho mỗi bài đăng vào nhóm.
+              💡 Hệ thống sẽ <strong>chọn ngẫu nhiên từ {minMedia || 0} đến {maxMedia || 0} tệp</strong> trong tổng số {totalCount} tệp cho mỗi lượt đăng/bình luận vào nhóm.
             </p>
           )}
         </div>

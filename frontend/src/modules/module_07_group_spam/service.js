@@ -83,14 +83,20 @@ export async function downloadGroupTemplate() {
   }
 }
 
-export function uploadGroupMedia(formData) {
-  return api.post("/api/groups/media/upload", formData, {
+export function uploadGroupMedia(formData, campaignId = null) {
+  const url = campaignId
+    ? `/api/groups/media/upload?campaign_id=${encodeURIComponent(campaignId)}`
+    : "/api/groups/media/upload";
+  return api.post(url, formData, {
     headers: { "Content-Type": "multipart/form-data" },
   });
 }
 
-export function getGroupMediaList() {
-  return api.get("/api/groups/media/list");
+export function getGroupMediaList(campaignId = null) {
+  const url = campaignId
+    ? `/api/groups/media/list?campaign_id=${encodeURIComponent(campaignId)}`
+    : "/api/groups/media/list";
+  return api.get(url);
 }
 
 export function getGroupCampaigns(params) {

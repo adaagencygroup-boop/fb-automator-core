@@ -19,11 +19,12 @@ class MediaServiceTests(unittest.TestCase):
                 file=BytesIO(b"fake-image"), filename="photo.jpg",
                 headers=Headers({"content-type": "image/jpeg"}),
             )
-            saved = media_service.save_uploaded_media([upload])[0]
-            self.assertEqual(saved["path"], saved["saved_name"])
+            saved = media_service.save_uploaded_media([upload], campaign_id="camp-test")[0]
+            self.assertTrue(saved["path"].endswith(saved["saved_name"]))
+            self.assertIn("camp-test", saved["path"])
             self.assertFalse(Path(str(saved["path"])).is_absolute())
             resolved = media_service.resolve_media_paths([str(saved["path"])])
-            self.assertEqual(Path(resolved[0]).parent, Path(directory).resolve())
+            self.assertTrue(Path(resolved[0]).is_file())
 
     def test_rejects_unsupported_upload_and_path_traversal(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(

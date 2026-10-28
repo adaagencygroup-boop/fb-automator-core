@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from modules.module_02_account_manager.context import owner_scope
 from ..core.constants import BLOCK_TAGS, TERMINAL_STATES, LogLevel
+from .supabase_storage import download_or_cache_media
 
 
 class _TextExtractor(HTMLParser):
@@ -520,18 +521,25 @@ class FacebookGroupPoster:
         self._wait_until(insert_content, 20, "Không tìm thấy hoặc không thể nhập nội dung trong popup")
 
         if media:
+            resolved_media = []
+            for item in media:
+                try:
+                    resolved_media.append(str(download_or_cache_media(item)))
+                except Exception:
+                    resolved_media.append(str(item))
+
             def upload_media():
                 try:
                     inputs = driver.find_elements(By.XPATH, "//div[@role='dialog']//input[@type='file']")
                     if not inputs:
                         return False
-                    inputs[-1].send_keys("\n".join(media))
+                    inputs[-1].send_keys("\n".join(resolved_media))
                     return True
                 except Exception:
                     return False
 
             self._wait_until(upload_media, 15, "Không tìm thấy vùng tải media của Facebook")
-            if self.cancel.wait(2 + min(len(media) * 2, 8)):
+            if self.cancel.wait(2 + min(len(resolved_media) * 2, 8)):
                 self._raise_if_cancelled()
 
         submit_xpath = (
@@ -854,7 +862,10 @@ class FacebookGroupPoster:
         if media:
             media_paths: list[str] = []
             for item in media:
-                media_path = Path(str(item)).expanduser().resolve()
+                try:
+                    media_path = download_or_cache_media(item)
+                except Exception:
+                    media_path = Path(str(item)).expanduser().resolve()
                 if not media_path.is_file():
                     raise RuntimeError(f"Tệp media không còn tồn tại: {media_path.name}")
                 media_paths.append(str(media_path))
@@ -1230,6 +1241,13 @@ class CampaignManager:
                         used.append(post_index)
                     media_count = min(len(media_pool), random.randint(min_media, max_media)) if media_pool else 0
                     media = random.sample(media_pool, media_count) if media_count else []
+                    local_media: list[str] = []
+                    for item in media:
+                        try:
+                            loc = download_or_cache_media(item, job.campaign_id)
+                            local_media.append(str(loc))
+                        except Exception as m_exc:
+                            job.log("WARNING", f"Không thể tải media {item}: {m_exc}")
                     try:
                         action_type = str(job.payload.get("action_type") or "POST").upper()
                         if action_type == "COMMENT":
@@ -1237,12 +1255,12 @@ class CampaignManager:
                             result = poster.comment(
                                 group,
                                 posts[post_index],
-                                media,
+                                local_media,
                                 auto_like=bool(settings.get("auto_like")),
                             )
                         else:
                             job.log("INFO", f"[{uid}] Luồng đăng: đang đăng bài vào {group_name}{url_display}")
-                            result = poster.post(group, posts[post_index], media)
+                            result = poster.post(group, posts[post_index], local_media)
                         result["join_status"] = join_result["status"]
                         result["content"] = posts[post_index]
                         self._advance_step(job)
