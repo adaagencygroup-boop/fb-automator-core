@@ -18,7 +18,7 @@ import {
   CheckCircle2,
   BadgeCheck,
   Search,
-  ArrowDownWideNarrow,
+  Phone,
   Save,
   AlertTriangle,
   Plus,
@@ -56,7 +56,7 @@ import {
   collectHashtagsForCampaign,
   mergePagesByKey,
   sortPagesForMode,
-  channelBadge,
+  pageKeywordLabel,
   normalizeHashtag,
   newCampaignId,
 } from "./campaignUtils";
@@ -190,13 +190,6 @@ const SOURCE_MODES = [
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
 const LIVE_STATUSES = new Set(["LIVE", "live", "Live"]);
 
-function formatFollowers(n) {
-  if (n == null || n === "") return "—";
-  const num = Number(n);
-  if (!Number.isFinite(num)) return String(n);
-  return num.toLocaleString("vi-VN");
-}
-
 function nowStamp() {
   return new Date().toLocaleTimeString("vi-VN", { hour12: false });
 }
@@ -301,19 +294,19 @@ export default function PageScannerSearch() {
     }
   }, []);
 
-  /* Sync mục tiêu theo từ khóa thường (không áp cho chip #) */
+  /* Sync hạn mức page mục tiêu theo từng hashtag sẽ quét */
   useEffect(() => {
     setKeywordTargets((prev) => {
       const next = { ...prev };
-      for (const kw of plainKeywords) {
-        if (next[kw] == null) next[kw] = applyAllTarget;
+      for (const tag of derivedHashtags) {
+        if (next[tag] == null) next[tag] = applyAllTarget;
       }
       Object.keys(next).forEach((k) => {
-        if (!plainKeywords.includes(k)) delete next[k];
+        if (!derivedHashtags.includes(k)) delete next[k];
       });
       return next;
     });
-  }, [plainKeywords, applyAllTarget]);
+  }, [derivedHashtags, applyAllTarget]);
 
   /* Load accounts */
   useEffect(() => {
@@ -503,7 +496,7 @@ export default function PageScannerSearch() {
         if (resultSearch.trim()) {
           const q = resultSearch.trim().toLowerCase();
           filtered = filtered.filter((p) =>
-            `${p.page_name || ""} ${p.page_url || ""} ${p.phone || ""} ${p.email || ""} ${p.website || ""}`
+            `${p.page_name || ""} ${p.page_url || ""} ${p.phone || ""} ${p.email || ""} ${p.website || ""} ${p.address || ""}`
               .toLowerCase()
               .includes(q),
           );
@@ -799,6 +792,12 @@ export default function PageScannerSearch() {
           });
           sid = res.session_id;
         } else {
+          const tagKey = job.label?.startsWith("#") ? job.label : `#${job.query}`;
+          const targetPages =
+            keywordTargets[tagKey] ||
+            keywordTargets[job.rootKeyword] ||
+            keywordTargets[job.query] ||
+            applyAllTarget;
           const res = await searchPagesByHashtag({
             hashtags: [job.query],
             context_keywords: plainKeywords,
@@ -809,6 +808,9 @@ export default function PageScannerSearch() {
             allow_direct_fallback: true,
             campaign_id: campId,
             keep_browser: keepBrowser,
+            target_pages: targetPages,
+            min_followers: minFollowersEnabled ? minFollowers : 0,
+            idle_timeout_s: 90,
           });
           sid = res.session_id;
         }
@@ -985,16 +987,16 @@ export default function PageScannerSearch() {
 
   const handleExportCSV = () => {
     if (!pages.length) return;
-    const headers = ["STT", "Từ khóa", "Tên Page", "Link Page", "SĐT", "Email", "Website", "Followers", "Tích xanh"];
+    const headers = ["STT", "Từ khóa", "Tên Page", "Link Page", "SĐT", "Email", "Website", "Vị trí / Địa chỉ", "Tích xanh"];
     const rows = pages.map((p, i) => [
       (currentPage - 1) * pageSize + i + 1,
-      p.source_keyword || (filterKeyword !== "ALL" ? filterKeyword : ""),
+      pageKeywordLabel(p) === "—" ? (filterKeyword !== "ALL" ? filterKeyword : "") : pageKeywordLabel(p),
       p.page_name || "",
       p.page_url || "",
       p.phone || "",
       p.email || "",
       p.website || "",
-      p.follower_count ?? "",
+      p.address || "",
       p.is_verified === true ? "Có" : "",
     ]);
     const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -1242,78 +1244,134 @@ export default function PageScannerSearch() {
         </SectionCard>
 
         {/* ═══ Card 2 ═══ */}
-        <SectionCard number="2" title="Thiết lập cấu hình quét mục tiêu" description="Luân phiên acc, giãn cách, mục tiêu page và ngưỡng follower">
+        <SectionCard number="2" title="Thiết lập cấu hình quét mục tiêu">
           <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-[11px] font-semibold text-slate-700">Đổi tài khoản mới khi quét được</p>
-                <p className="text-[10px] text-slate-400">Mỗi acc tối đa N page / từ khóa — đổi acc ở từ khóa kế (không cắt giữa từ khóa)</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <NumCtrl value={rotateEvery} onChange={setRotateEvery} min={1} max={500} step={10} disabled={isBusy} />
-                <span className="text-[11px] text-slate-500">page/tài khoản</span>
-              </div>
-            </div>
+            <label className="flex flex-wrap items-center gap-2 text-[12px] text-slate-800">
+              <span>Đổi tài khoản mới khi quét được</span>
+              <NumCtrl value={rotateEvery} onChange={setRotateEvery} min={1} max={500} step={10} disabled={isBusy} />
+              <span className="text-slate-500">page / tài khoản</span>
+            </label>
 
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-[11px] font-semibold text-slate-700">Khoảng cách giữa các lần quét</p>
-              <div className="flex items-center gap-2 text-[11px] text-slate-600">
-                <input
-                  type="number"
-                  min={1}
-                  max={120}
-                  disabled={isBusy}
-                  value={delayMin}
-                  onChange={(e) => setDelayMin(Math.max(1, Number(e.target.value) || 1))}
-                  className="h-7 w-14 rounded border border-slate-200 text-center text-xs font-semibold"
-                />
-                <span>đến</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={180}
-                  disabled={isBusy}
-                  value={delayMax}
-                  onChange={(e) => setDelayMax(Math.max(delayMin, Number(e.target.value) || delayMin))}
-                  className="h-7 w-14 rounded border border-slate-200 text-center text-xs font-semibold"
-                />
-                <span>giây</span>
-              </div>
-            </div>
+            <label className="flex flex-wrap items-center gap-2 text-[12px] text-slate-800">
+              <span>Khoảng cách giữa các lần quét</span>
+              <input
+                type="number"
+                min={1}
+                max={120}
+                disabled={isBusy}
+                value={delayMin}
+                onChange={(e) => setDelayMin(Math.max(1, Number(e.target.value) || 1))}
+                className="h-7 w-14 rounded border border-slate-200 text-center text-xs font-semibold"
+              />
+              <span className="text-slate-500">đến</span>
+              <input
+                type="number"
+                min={1}
+                max={180}
+                disabled={isBusy}
+                value={delayMax}
+                onChange={(e) => setDelayMax(Math.max(delayMin, Number(e.target.value) || delayMin))}
+                className="h-7 w-14 rounded border border-slate-200 text-center text-xs font-semibold"
+              />
+              <span className="text-slate-500">giây</span>
+            </label>
 
             {sourceMode === "keyword" && (
               <div className="space-y-3 border-t border-slate-100 pt-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold text-slate-700">Số bài tối đa / hashtag</span>
-                  <NumCtrl value={maxPostsPerHashtag} onChange={setMaxPostsPerHashtag} min={10} max={300} step={10} disabled={isBusy} />
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold text-slate-700">
+                    Cấu hình số page mục tiêu theo từng từ khóa
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-slate-500">Áp dụng tất cả:</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      disabled={isBusy}
+                      value={applyAllTarget}
+                      onChange={(e) => setApplyAllTarget(Math.min(500, Math.max(1, Number(e.target.value) || 1)))}
+                      className="h-7 w-14 rounded border border-slate-200 text-center text-xs font-semibold"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={isBusy || !derivedHashtags.length}
+                      onClick={() => {
+                        const next = {};
+                        derivedHashtags.forEach((tag) => {
+                          next[tag] = applyAllTarget;
+                        });
+                        setKeywordTargets(next);
+                      }}
+                    >
+                      Áp dụng
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold text-slate-700">Tối thiểu bài khớp / Page (min_posts)</span>
-                  <NumCtrl value={minPosts} onChange={setMinPosts} min={1} max={10} step={1} disabled={isBusy} />
+
+                <div className="space-y-2 rounded-lg border border-slate-100 bg-slate-50/60 p-2">
+                  {derivedHashtags.length === 0 ? (
+                    <p className="px-1 py-2 text-[11px] text-slate-400">
+                      Thêm hashtag / từ khóa ở Card 1 để đặt hạn mức page.
+                    </p>
+                  ) : (
+                    derivedHashtags.map((tag, idx) => (
+                      <div
+                        key={tag}
+                        className="flex items-center justify-between gap-3 rounded-lg border border-slate-100 bg-white px-3 py-2"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span
+                            className={`size-2 shrink-0 rounded-full ${
+                              idx % 2 === 0 ? "bg-blue-500" : "bg-orange-400"
+                            }`}
+                          />
+                          <span className="truncate text-[12px] font-medium text-slate-800">{tag}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <NumCtrl
+                            value={keywordTargets[tag] || applyAllTarget}
+                            onChange={(v) => setKeywordTargets((prev) => ({ ...prev, [tag]: v }))}
+                            min={1}
+                            max={500}
+                            step={10}
+                            disabled={isBusy}
+                          />
+                          <span className="text-[11px] text-slate-400">page</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+                  <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
+                  <p className="text-[11px] leading-5 text-amber-900">
+                    Lưu ý: Các page hiển thị ở vị trí đầu tiên của mỗi từ khóa thường có tương tác cao và chất
+                    lượng tốt nhất. Bạn nên tối ưu số lượng mục tiêu vừa đủ để quét được tệp page tiềm năng nhất.
+                  </p>
                 </div>
               </div>
             )}
 
             <div className="space-y-2 border-t border-slate-100 pt-4">
-              <label className="flex cursor-pointer items-start gap-2.5">
+              <label className="flex cursor-pointer flex-wrap items-center gap-2 text-[12px] text-slate-800">
                 <Checkbox
                   checked={minFollowersEnabled}
                   disabled={isBusy}
                   onCheckedChange={(c) => setMinFollowersEnabled(!!c)}
-                  className="mt-0.5"
                 />
-                <span className="text-[11px] text-slate-700">
-                  Chỉ <strong>hiển thị</strong> page có followers lớn hơn{" "}
-                  <input
-                    type="number"
-                    min={0}
-                    disabled={isBusy || !minFollowersEnabled}
-                    value={minFollowers}
-                    onChange={(e) => setMinFollowers(Math.max(0, Number(e.target.value) || 0))}
-                    className="mx-1 inline-block h-6 w-20 rounded border border-slate-200 px-1 text-center text-xs font-semibold"
-                  />{" "}
-                  Followers
-                </span>
+                <span>Chỉ quét page có số lượng followers lớn hơn</span>
+                <input
+                  type="number"
+                  min={0}
+                  disabled={isBusy || !minFollowersEnabled}
+                  value={minFollowers}
+                  onChange={(e) => setMinFollowers(Math.max(0, Number(e.target.value) || 0))}
+                  className="h-7 w-20 rounded border border-slate-200 px-1 text-center text-xs font-semibold"
+                />
+                <span className="text-slate-500">Followers</span>
               </label>
               <label className="flex cursor-pointer items-start gap-2.5 pl-6">
                 <Checkbox
@@ -1327,38 +1385,6 @@ export default function PageScannerSearch() {
                   <span className="text-slate-400">(mặc định: lưu hết, chỉ lọc khi xem)</span>
                 </span>
               </label>
-              <div className="flex flex-wrap items-center gap-3 pl-6 pt-1">
-                <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
-                  Max followers
-                  <input
-                    type="number"
-                    min={0}
-                    disabled={isBusy || !minFollowersEnabled}
-                    value={maxFollowers}
-                    placeholder="∞"
-                    onChange={(e) => setMaxFollowers(e.target.value === "" ? "" : Math.max(0, Number(e.target.value) || 0))}
-                    className="h-6 w-20 rounded border border-slate-200 px-1 text-center text-xs font-semibold"
-                  />
-                </label>
-                <label className="flex items-center gap-1.5 text-[11px] text-slate-600">
-                  Top N
-                  <input
-                    type="number"
-                    min={1}
-                    max={500}
-                    disabled={isBusy}
-                    value={topN}
-                    placeholder="all"
-                    onChange={(e) => setTopN(e.target.value === "" ? "" : Math.min(500, Math.max(1, Number(e.target.value) || 1)))}
-                    className="h-6 w-16 rounded border border-slate-200 px-1 text-center text-xs font-semibold"
-                  />
-                  <span className="text-[10px] text-slate-400">(sau lọc — khác max_results)</span>
-                </label>
-              </div>
-              <p className="pl-6 text-[10px] text-slate-400 flex items-start gap-1">
-                <AlertTriangle className="size-3 shrink-0 mt-0.5 text-amber-500" />
-                SĐT/Email/Website chỉ lấy ngay với page đạt ngưỡng follower; page dưới ngưỡng để quét chi tiết sau.
-              </p>
             </div>
           </div>
         </SectionCard>
@@ -1420,47 +1446,56 @@ export default function PageScannerSearch() {
       {showResults && (
         <>
           <Card className="overflow-hidden border-slate-200 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-6 pt-5 pb-3">
               <div>
                 <h3 className="font-heading text-sm font-bold text-slate-800">Kết quả quét thông tin Page</h3>
                 {poolStats.pool > 0 && (
                   <p className="mt-0.5 text-[10px] text-slate-400">
                     Pool {poolStats.pool.toLocaleString("vi-VN")} → đạt ngưỡng FL: {poolStats.aboveMin.toLocaleString("vi-VN")} → đang hiện trang: {poolStats.showing}
-                    {" · xếp theo điểm liên quan"}
                     {topN ? ` · Top ${topN}` : ""}
                   </p>
                 )}
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-                  <Input
-                    value={resultSearch}
-                    onChange={(e) => setResultSearch(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && sessionId && loadResults(sessionId, 1)}
-                    placeholder="Tìm kiếm Tên, Link, SĐT, Email..."
-                    className="h-8 w-56 pl-8 text-[11px]"
-                  />
-                </div>
-                <select
-                  value={filterKeyword}
-                  onChange={(e) => setFilterKeyword(e.target.value)}
-                  className="h-8 rounded-md border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-600"
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 border-emerald-200 bg-emerald-50 text-[11px] text-emerald-700 hover:bg-emerald-100"
+                  disabled={!pages.length}
+                  onClick={handleExportCSV}
                 >
-                  <option value="ALL">Tất cả từ khóa</option>
-                  {keywordOptions.map((kw) => (
-                    <option key={kw} value={kw}>
-                      {kw}
-                    </option>
-                  ))}
-                </select>
-                <Button type="button" variant="outline" size="sm" className="gap-1.5 text-[11px]" disabled={!pages.length} onClick={handleExportCSV}>
                   <Download className="size-3.5" /> Xuất toàn bộ file
                 </Button>
                 <Button type="button" size="sm" className="gap-1.5 text-[11px]" disabled={!pages.length && !totalCount} onClick={handleSaveList}>
                   <Save className="size-3.5" /> Lưu danh sách
                 </Button>
               </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-6 pb-4">
+              <div className="relative min-w-[220px] flex-1">
+                <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+                <Input
+                  value={resultSearch}
+                  onChange={(e) => setResultSearch(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && sessionId && loadResults(sessionId, 1)}
+                  placeholder="Tìm Tên, Link, SĐT, Email, Tỉnh thành..."
+                  className="h-9 w-full pl-8 text-[11px]"
+                />
+              </div>
+              <select
+                value={filterKeyword}
+                onChange={(e) => setFilterKeyword(e.target.value)}
+                className="h-9 rounded-md border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-600"
+              >
+                <option value="ALL">Tất cả từ khóa</option>
+                {keywordOptions.map((kw) => (
+                  <option key={kw} value={kw}>
+                    {kw}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="overflow-auto">
@@ -1474,39 +1509,26 @@ export default function PageScannerSearch() {
                       />
                     </th>
                     <th className="w-12 px-3 py-3 font-semibold">STT</th>
-                    <th className="px-3 py-3 font-semibold">NGUỒN</th>
+                    <th className="px-3 py-3 font-semibold">TỪ KHÓA</th>
                     <th className="px-3 py-3 font-semibold">TÊN PAGE</th>
-                    <th className="px-3 py-3 font-semibold">ĐIỂM</th>
                     <th className="px-3 py-3 font-semibold">LINK PAGE</th>
                     <th className="px-3 py-3 font-semibold">SỐ ĐIỆN THOẠI</th>
                     <th className="px-3 py-3 font-semibold">EMAIL</th>
                     <th className="px-3 py-3 font-semibold">WEBSITE</th>
-                    <th className="px-3 py-3 font-semibold">
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1 hover:text-primary"
-                        onClick={() => {
-                          const next = sortDir === "desc" ? "asc" : "desc";
-                          setSortDir(next);
-                          if (sessionId) loadResults(sessionId, currentPage);
-                        }}
-                      >
-                        FOLLOWERS <ArrowDownWideNarrow className="size-3" />
-                      </button>
-                    </th>
+                    <th className="px-3 py-3 font-semibold">VỊ TRÍ / ĐỊA CHỈ</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {loadingResults ? (
                     <tr>
-                      <td colSpan={10} className="py-14 text-center text-slate-400">
+                      <td colSpan={9} className="py-14 text-center text-slate-400">
                         <Loader2 className="mx-auto mb-2 size-6 animate-spin text-primary" />
                         Đang tải kết quả…
                       </td>
                     </tr>
                   ) : pages.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="py-14 text-center text-slate-400">
+                      <td colSpan={9} className="py-14 text-center text-slate-400">
                         Chưa có page trong kết quả (hoặc đang lọc follower).
                       </td>
                     </tr>
@@ -1514,6 +1536,7 @@ export default function PageScannerSearch() {
                     pages.map((page, idx) => {
                       const globalIdx = (currentPage - 1) * pageSize + idx + 1;
                       const selected = selectedPageKeys.includes(page.page_key);
+                      const kwLabel = pageKeywordLabel(page);
                       return (
                         <tr
                           key={page.page_key || page.id || idx}
@@ -1530,22 +1553,7 @@ export default function PageScannerSearch() {
                             />
                           </td>
                           <td className="px-3 py-2.5 font-mono text-slate-400">{String(globalIdx).padStart(2, "0")}</td>
-                          <td className="px-3 py-2.5">
-                            <span
-                              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                                channelBadge(page.channels) === "Cả hai"
-                                  ? "bg-emerald-50 text-emerald-700"
-                                  : channelBadge(page.channels) === "Hashtag"
-                                    ? "bg-violet-50 text-violet-700"
-                                    : "bg-slate-100 text-slate-600"
-                              }`}
-                            >
-                              {channelBadge(page.channels)}
-                            </span>
-                            {page.source_keyword && (
-                              <div className="mt-0.5 truncate max-w-[100px] text-[9px] text-slate-400">{page.source_keyword}</div>
-                            )}
-                          </td>
+                          <td className="px-3 py-2.5 font-medium text-slate-700">{kwLabel}</td>
                           <td className="px-3 py-2.5">
                             <div className="flex items-center gap-2">
                               <Avatar className="size-8 border border-slate-200">
@@ -1554,49 +1562,52 @@ export default function PageScannerSearch() {
                                   {initialsOf(page.page_name || "FB")}
                                 </AvatarFallback>
                               </Avatar>
-                              <div className="min-w-0">
-                                <div className="flex items-center gap-1">
-                                  <span className="truncate max-w-[160px] font-semibold text-slate-800">{page.page_name || "—"}</span>
-                                  {page.is_verified === true && <BadgeCheck className="size-3.5 text-blue-500" />}
-                                </div>
+                              <div className="flex min-w-0 items-center gap-1">
+                                <span className="truncate max-w-[180px] font-semibold text-slate-800">{page.page_name || "—"}</span>
+                                {page.is_verified === true && <BadgeCheck className="size-3.5 shrink-0 text-blue-500" />}
                               </div>
                             </div>
                           </td>
                           <td className="px-3 py-2.5">
-                            <span className="font-bold text-primary">
-                              {page.relevance_score ?? page.hybrid_score ?? "—"}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2.5">
                             {page.page_url ? (
                               <a href={page.page_url} target="_blank" rel="noreferrer" className="inline-flex max-w-[180px] items-center gap-1 truncate text-primary hover:underline">
-                                {page.page_url.replace(/^https?:\/\/(www\.)?facebook\.com\//, "fb.com/")}
+                                {page.page_url.replace(/^https?:\/\/(m\.|www\.)?facebook\.com\//, "fb.com/")}
                                 <ExternalLink className="size-3 shrink-0" />
                               </a>
                             ) : (
-                              "—"
+                              <span className="text-slate-300">—</span>
                             )}
                           </td>
                           <td className="px-3 py-2.5">
                             {page.phone ? (
-                              <span className="inline-flex rounded-md bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-700 border border-emerald-200">
+                              <span className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-700">
+                                <Phone className="size-3 shrink-0" />
                                 {page.phone}
                               </span>
                             ) : (
-                              <span className="text-slate-300">—</span>
+                              <span className="italic text-slate-300">Chưa cập nhật</span>
                             )}
                           </td>
-                          <td className="px-3 py-2.5 text-slate-600">{page.email || <span className="text-slate-300">—</span>}</td>
+                          <td className="px-3 py-2.5 text-slate-600">
+                            {page.email || <span className="italic text-slate-300">Chưa cập nhật</span>}
+                          </td>
                           <td className="px-3 py-2.5">
                             {page.website ? (
-                              <a href={page.website.startsWith("http") ? page.website : `https://${page.website}`} target="_blank" rel="noreferrer" className="text-primary hover:underline truncate max-w-[120px] inline-block">
-                                {page.website}
+                              <a
+                                href={page.website.startsWith("http") ? page.website : `https://${page.website}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-block max-w-[140px] truncate text-primary hover:underline"
+                              >
+                                {page.website.replace(/^https?:\/\//, "")}
                               </a>
                             ) : (
-                              <span className="text-slate-300">—</span>
+                              <span className="italic text-slate-300">Chưa cập nhật</span>
                             )}
                           </td>
-                          <td className="px-3 py-2.5 font-semibold text-emerald-700">{formatFollowers(page.follower_count)}</td>
+                          <td className="px-3 py-2.5 text-slate-600">
+                            {page.address || <span className="italic text-slate-300">Chưa cập nhật</span>}
+                          </td>
                         </tr>
                       );
                     })
@@ -1607,7 +1618,7 @@ export default function PageScannerSearch() {
 
             <div className="flex items-center justify-between border-t border-slate-100 px-6 py-3">
               <span className="text-[11px] text-slate-400">
-                Hiển thị {totalCount === 0 ? 0 : (currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, totalCount)} của{" "}
+                Hiển thị {totalCount === 0 ? 0 : (currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, totalCount)} của{" "}
                 {totalCount.toLocaleString("vi-VN")} Page
                 {minFollowersEnabled ? ` (lọc ≥ ${minFollowers.toLocaleString("vi-VN")} FL)` : ""}
               </span>

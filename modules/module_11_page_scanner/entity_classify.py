@@ -15,9 +15,38 @@ FRIEND_BUTTON_LABELS = (
     "Friends",
 )
 
+# "Add Friend <tên>", "Add friend", "Thêm bạn bè …" — không chỉ exact
+FRIEND_ADD_RE = re.compile(
+    r"(?i)(?:thêm\s*bạn(?:\s*bè)?|add\s*friend)\b",
+)
+
 FOLLOW_BUTTON_RE = re.compile(
     r"^(Theo dõi|Follow|Following|Đang theo dõi)$",
     re.IGNORECASE,
+)
+
+# Nút hành động header hồ sơ (không phải Like/Comment bài đăng)
+HEADER_PROFILE_ACTION_RE = re.compile(
+    r"(?i)\b(?:"
+    r"theo dõi|follow|following|đang theo dõi|"
+    r"nhắn tin|message|inbox|"
+    r"thêm bạn|add\s*friend|bạn bè|friends|"
+    r"subscribe|đăng ký|"
+    r"learn more|tìm hiểu|"
+    r"call now|gọi ngay|"
+    r"shop now|mua ngay|liên hệ|contact"
+    r")\b",
+)
+
+POST_INTERACTION_RE = re.compile(
+    r"(?i)^(?:"
+    r"like|react|leave a comment|comment|share|thích|bình luận|chia sẻ|"
+    r"love|care|haha|wow|sad|angry"
+    r")$",
+)
+
+ACTIONS_FOR_POST_RE = re.compile(
+    r"(?i)actions for this post|tùy chọn bài viết|tuỳ chọn bài viết",
 )
 
 FRIEND_COUNT_RE = re.compile(
@@ -54,12 +83,56 @@ def _norm_btn(label: str) -> str:
 
 
 def _has_exact_friend_button(header_buttons: List[str]) -> Optional[str]:
+    """Exact label (giữ tương thích) hoặc Add Friend / Thêm bạn kèm tên."""
     for raw in header_buttons or []:
         t = _norm_btn(raw)
+        if not t:
+            continue
         for lab in FRIEND_BUTTON_LABELS:
             if t == lab or t.lower() == lab.lower():
                 return lab
+        # "Add Friend Lê Thị Ánh Tuyết" / "Follow Add friend Search"
+        if FRIEND_ADD_RE.search(t):
+            return t[:80]
     return None
+
+
+def _friend_signal_in_header_text(header_text: str) -> Optional[str]:
+    """Cổng cứng: header text chứa Add Friend / Thêm bạn bè."""
+    h = header_text or ""
+    m = FRIEND_ADD_RE.search(h)
+    if m:
+        # Lấy cụm ngắn quanh match
+        start = max(0, m.start() - 0)
+        end = min(len(h), m.end() + 40)
+        return _norm_btn(h[start:end])[:80]
+    return None
+
+
+def find_friend_signal(
+    header_buttons: Optional[List[str]] = None,
+    header_text: str = "",
+) -> Tuple[Optional[str], str]:
+    """
+    Trả (label_or_None, source).
+    source: button_exact | button_contains | header_text | none
+    """
+    buttons = list(header_buttons or [])
+    for raw in buttons:
+        t = _norm_btn(raw)
+        if not t:
+            continue
+        for lab in FRIEND_BUTTON_LABELS:
+            if t == lab or t.lower() == lab.lower():
+                return lab, "button_exact"
+    for raw in buttons:
+        t = _norm_btn(raw)
+        if FRIEND_ADD_RE.search(t):
+            return t[:80], "button_contains"
+    ht = _friend_signal_in_header_text(header_text)
+    if ht:
+        return ht, "header_text"
+    return None, "none"
 
 
 def _has_follow_button(header_buttons: List[str]) -> bool:
@@ -67,6 +140,55 @@ def _has_follow_button(header_buttons: List[str]) -> bool:
         if FOLLOW_BUTTON_RE.match(_norm_btn(raw)):
             return True
     return False
+
+
+def is_valid_profile_header(
+    *,
+    header_text: str = "",
+    header_buttons: Optional[List[str]] = None,
+    follower_text: str = "",
+    category: str = "",
+    page_name: str = "",
+) -> Tuple[bool, str]:
+    """
+    Header hồ sơ hợp lệ khi có ít nhất: dòng follower, hoặc nút header hồ sơ,
+    hoặc tên + category trong cùng container.
+    Container chỉ Facebook lặp + text bài + Like/Comment → không hợp lệ.
+    """
+    header = header_text or ""
+    buttons = [_norm_btn(b) for b in (header_buttons or []) if _norm_btn(b)]
+    fl = (follower_text or "").strip()
+
+    if fl or FOLLOWER_IN_HEADER_RE.search(header):
+        return True, "follower_line"
+    if category or PAGE_CATEGORY_RE.search(header):
+        return True, "name_category"
+
+    for b in buttons:
+        if POST_INTERACTION_RE.match(b):
+            continue
+        if HEADER_PROFILE_ACTION_RE.search(b):
+            return True, "header_action_button"
+
+    if ACTIONS_FOR_POST_RE.search(header):
+        return False, "post_actions_menu"
+
+    # Chỉ nút tương tác bài đăng
+    non_empty = [b for b in buttons if b]
+    if non_empty and all(
+        POST_INTERACTION_RE.match(b) or re.search(r"(?i)\blike\b|\bcomment\b|\bshare\b|\bthích\b|\bbình luận\b", b)
+        for b in non_empty
+    ):
+        return False, "post_interaction_only"
+
+    fb_hits = len(re.findall(r"(?i)\bfacebook\b", header))
+    if fb_hits >= 3 and not FOLLOWER_IN_HEADER_RE.search(header):
+        return False, "facebook_chrome_noise"
+
+    if page_name and not non_empty and not fl:
+        return False, "name_only_no_signals"
+
+    return False, "no_profile_header_signals"
 
 
 def _tab_norm_list(header_tabs: List[str]) -> List[str]:
@@ -138,6 +260,7 @@ def classify_page_entity(
     except Exception:
         path = href
 
+    friend_lab, friend_src = find_friend_signal(buttons, header)
     debug: Dict[str, Any] = {
         "header_text": header[:400],
         "header_buttons": buttons[:20],
@@ -145,10 +268,17 @@ def classify_page_entity(
         "url": href,
         "has_follower_in_header": bool(FOLLOWER_IN_HEADER_RE.search(header)),
         "has_follow_button": _has_follow_button(buttons),
-        "friend_button": _has_exact_friend_button(buttons),
+        "friend_button": friend_lab,
+        "friend_signal_source": friend_src,
+        "friend_zone": "header" if friend_lab else "none",
         "has_friends_tab": _has_friends_tab(tabs),
         "has_friend_count": bool(FRIEND_COUNT_RE.search(header)),
     }
+
+    # —— Cổng cứng PROFILE: Add Friend trước mọi PAGE / fallback ——
+    if friend_lab:
+        debug["friend_button_zone"] = "header"
+        return ("PROFILE", f"friend_button:{friend_lab}", debug)
 
     # —— PAGE cứng ——
     if re.search(r"/pages/(?:[^/?#]+/)?\d{6,}", href, re.I) or re.search(
@@ -173,27 +303,34 @@ def classify_page_entity(
     if _has_page_nav_tab(tabs):
         return ("PAGE", "nav_tab_page", debug)
 
-    # —— PROFILE ——
-    friend_lab = _has_exact_friend_button(buttons)
-    if friend_lab:
-        debug["friend_button_zone"] = "header"
-        return ("PROFILE", f"friend_button:{friend_lab}", debug)
-
+    # —— PROFILE (tab Bạn bè / about) ——
     if _has_friends_tab(tabs):
+        debug["friend_zone"] = "nav_tab"
+        debug["friend_signal_source"] = "nav_tab_friends"
         return ("PROFILE", "nav_tab_friends", debug)
 
     if about and ABOUT_PROFILE_RE.search(about) and not PAGE_TRANSPARENCY_RE.search(about):
         return ("PROFILE", "about_work_study_live", debug)
 
     # —— Fallback PAGE: follower + Follow, không Friend / tab Bạn bè / số bạn bè ——
+    # Cổng cứng lần nữa: không fallback nếu vẫn còn Add Friend trong input đã log
+    friend_lab2, friend_src2 = find_friend_signal(buttons, header)
     has_fl = bool(FOLLOWER_IN_HEADER_RE.search(header))
     has_follow = _has_follow_button(buttons)
-    has_friend_btn = bool(friend_lab)
     has_fr_tab = _has_friends_tab(tabs)
     has_fr_count = bool(FRIEND_COUNT_RE.search(header))
 
-    if has_fl and has_follow and not has_friend_btn and not has_fr_tab and not has_fr_count:
+    debug["friend_button"] = friend_lab2
+    debug["friend_signal_source"] = friend_src2
+    debug["friend_zone"] = "header" if friend_lab2 else ("nav_tab" if has_fr_tab else "none")
+
+    if friend_lab2:
+        return ("PROFILE", f"friend_button:{friend_lab2}", debug)
+
+    if has_fl and has_follow and not has_fr_tab and not has_fr_count:
         debug["fallback"] = True
+        debug["friend_zone"] = "none"
+        debug["friend_signal_source"] = "none"
         return (
             "PAGE",
             "fallback_page_no_friend_signal",
@@ -223,7 +360,8 @@ def should_open_about(
     tabs = list(header_tabs or [])
     header = header_text or ""
     has_fl = bool(FOLLOWER_IN_HEADER_RE.search(header))
-    has_friend = bool(_has_exact_friend_button(buttons)) or _has_friends_tab(tabs)
+    friend_lab, _ = find_friend_signal(buttons, header)
+    has_friend = bool(friend_lab) or _has_friends_tab(tabs)
     # Đủ follower hoặc đã có friend signal → không cần about (fallback/profile đã xử lý)
     # Chỉ mở about khi thiếu cả hai
     return not has_fl and not has_friend

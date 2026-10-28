@@ -108,6 +108,18 @@
       "expect_reason": "fallback_page_no_friend_signal",
       "known_limitation": true,
       "note": "Giới hạn đã biết: profile chỉ bật Follow, không Friend/tab Bạn bè → lọt fallback PAGE. Không tính PASS độ chính xác."
+    },
+    {
+      "id": "le_thi_anh_tuyet",
+      "name": "Lê Thị Ánh Tuyết",
+      "url": "https://www.facebook.com/tuyets.anhs.3139",
+      "header_text": "Lê Thị Ánh Tuyết\nDigital creator\nÁ HẬU 2 - HOA HẬU DU LỊCH VIỆT NAM 2024\n134K followers\nFollow Add friend Search\nAdd Friend Lê Thị Ánh Tuyết",
+      "header_buttons": ["Follow Add friend Search", "Add Friend Lê Thị Ánh Tuyết", "Follow", "Search"],
+      "header_tabs": ["Posts", "About", "Photos", "More"],
+      "follower_text": "134K followers",
+      "about_text": "Studied at Trường Đại học",
+      "expect": "PROFILE",
+      "note": "Có Add Friend <tên> → PROFILE, không FALLBACK PAGE dù có Follow + follower"
     }
   ],
   "pages_extra": [
@@ -122,6 +134,82 @@
       "about_text": "",
       "expect": "PAGE",
       "expect_reason": "url_pages_id"
+    },
+    {
+      "id": "lem_beauty",
+      "name": "Lem Beauty",
+      "url": "https://www.facebook.com/lembeauty.example",
+      "header_text": "Lem Beauty\nTrang · Beauty\nTheo dõi\n12N người theo dõi",
+      "header_buttons": ["Theo dõi", "Nhắn tin"],
+      "header_tabs": ["Bài viết", "Giới thiệu", "Ảnh"],
+      "follower_text": "12N người theo dõi",
+      "about_text": "",
+      "expect": "PAGE"
+    },
+    {
+      "id": "mam_cosmetics",
+      "name": "Mắm Cosmetics",
+      "url": "https://www.facebook.com/mamcosmetics.example",
+      "header_text": "Mắm Cosmetics\nPage · Cosmetics\nFollow\n8K followers",
+      "header_buttons": ["Follow", "Message"],
+      "header_tabs": ["Posts", "About", "Photos"],
+      "follower_text": "8K followers",
+      "about_text": "",
+      "expect": "PAGE"
+    },
+    {
+      "id": "bong_beauty",
+      "name": "BÔNG Beauty",
+      "url": "https://www.facebook.com/bongbeauty.example",
+      "header_text": "BÔNG Beauty\nTheo dõi\n5.200 người theo dõi",
+      "header_buttons": ["Theo dõi"],
+      "header_tabs": ["Bài viết", "Giới thiệu"],
+      "follower_text": "5.200 người theo dõi",
+      "about_text": "",
+      "expect": "PAGE"
+    },
+    {
+      "id": "the_whoo",
+      "name": "The Whoo",
+      "url": "https://www.facebook.com/thewhoo.example",
+      "header_text": "The Whoo\nTrang · Health/beauty\nTheo dõi\n200N người theo dõi",
+      "header_buttons": ["Theo dõi", "Nhắn tin"],
+      "header_tabs": ["Bài viết", "Giới thiệu", "Shop"],
+      "follower_text": "200N người theo dõi",
+      "about_text": "",
+      "expect": "PAGE"
+    },
+    {
+      "id": "hannaholala",
+      "name": "HannahOlala",
+      "url": "https://www.facebook.com/hannaholala.example",
+      "header_text": "HannahOlala\nPage · Public figure\nFollow\n1.2M followers",
+      "header_buttons": ["Follow", "Message"],
+      "header_tabs": ["Posts", "About", "Photos", "Reviews"],
+      "follower_text": "1.2M followers",
+      "about_text": "",
+      "expect": "PAGE"
+    }
+  ],
+  "invalid_headers": [
+    {
+      "id": "post_container_combo",
+      "name": "Combo quà tặng",
+      "header_text": "Facebook Facebook Facebook Actions for this post by Combo quà tặng Like React Leave a comment Some shuffled post text about gifts",
+      "header_buttons": ["Like", "React", "Leave a comment"],
+      "follower_text": "",
+      "category": "",
+      "expect_valid": false,
+      "expect_reason_contains": "post"
+    },
+    {
+      "id": "post_container_moc",
+      "name": "Mỹ Phẩm Mộc Beautiful",
+      "header_text": "Facebook Facebook Facebook Actions for this post by Mỹ Phẩm Mộc Beautiful shuffled caption text",
+      "header_buttons": ["Like", "Comment", "Share"],
+      "follower_text": "",
+      "category": "",
+      "expect_valid": false
     }
   ]
 }

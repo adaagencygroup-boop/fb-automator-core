@@ -144,6 +144,14 @@ class TestEntityClassifyFixture(unittest.TestCase):
         hit2 = _cache_lookup(cache, "https://www.facebook.com/tutustore")
         self.assertEqual(hit2["page_name"], "TuTu Store")
 
+    def test_add_friend_with_name_is_profile(self):
+        case = next(c for c in self.data["profiles"] if c["id"] == "le_thi_anh_tuyet")
+        entity, reason, debug = _run_case(case)
+        self.assertEqual(entity, "PROFILE")
+        self.assertNotEqual(reason, "fallback_page_no_friend_signal")
+        self.assertIn("friend", (reason or "").lower())
+        self.assertNotEqual(debug.get("friend_signal_source"), "none")
+
 
 if __name__ == "__main__":
     unittest.main()

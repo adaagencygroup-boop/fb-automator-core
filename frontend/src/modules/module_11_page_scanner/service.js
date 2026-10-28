@@ -84,7 +84,93 @@ export async function getActiveScanSessions() {
 
 // ── PAGES ──
 export async function getScannedPages(params = {}) {
-  return api.get("/api/page-scanner/pages", { params });
+  // URLSearchParams encode "#" → %23 (tránh source_keyword=#tag bị cắt fragment)
+  return api.get("/api/page-scanner/pages", {
+    params,
+    paramsSerializer: (p) => {
+      const usp = new URLSearchParams();
+      Object.entries(p || {}).forEach(([key, value]) => {
+        if (value === undefined || value === null || value === "") return;
+        usp.append(key, String(value));
+      });
+      return usp.toString();
+    },
+  });
+}
+
+/** Danh mục từ khóa / hashtag đã tìm (sidebar DS page). */
+export async function getSearchKeywords() {
+  try {
+    return await api.get("/api/page-scanner/keywords");
+  } catch {
+    // Fallback khi backend chưa reload route /keywords
+    const data = await getScanSessions({ page: 1, page_size: 100 });
+    const map = new Map();
+    for (const s of data.items || []) {
+      const kw = String(s.keyword || "").trim();
+      if (!kw) continue;
+      if (s.source_type !== "SEARCH" && s.source_type !== "HASHTAG") continue;
+      if ((s.job_type || "DISCOVERY") !== "DISCOVERY") continue;
+      const prev = map.get(kw) || {
+        keyword: kw,
+        source_type: s.source_type || "SEARCH",
+        page_count: 0,
+        session_count: 0,
+        last_at: s.created_at,
+      };
+      prev.session_count += 1;
+      prev.page_count = Math.max(prev.page_count, Number(s.total_unique) || 0);
+      if (!prev.last_at || (s.created_at && s.created_at > prev.last_at)) prev.last_at = s.created_at;
+      map.set(kw, prev);
+    }
+    const items = [...map.values()];
+    return { items, total: items.length };
+  }
+}
+
+export async function resolvePageLinks(payload) {
+  return api.post("/api/page-scanner/source/resolve-pages", payload);
+}
+
+// ── FOLLOWERS (mục 2) ──
+export async function createFollowerSession(payload) {
+  return api.post("/api/page-scanner/followers/sessions", payload);
+}
+
+export async function importFollowers(payload) {
+  return api.post("/api/page-scanner/followers/import", payload);
+}
+
+export async function getPageFollowers(params = {}) {
+  return api.get("/api/page-scanner/followers", { params });
+}
+
+// ── POSTS (mục 3) ──
+export async function createPostScanSession(payload) {
+  return api.post("/api/page-scanner/posts/sessions", payload);
+}
+
+export async function importPosts(payload) {
+  return api.post("/api/page-scanner/posts/import", payload);
+}
+
+export async function getScannedPosts(params = {}) {
+  return api.get("/api/page-scanner/posts", {
+    params,
+    paramsSerializer: (p) => {
+      const usp = new URLSearchParams();
+      Object.entries(p || {}).forEach(([key, value]) => {
+        if (value === undefined || value === null || value === "") return;
+        usp.append(key, String(value));
+      });
+      return usp.toString();
+    },
+  });
+}
+
+/** Sidebar DS bài viết: page có bài + post_count. */
+export async function getPagesWithPosts() {
+  return api.get("/api/page-scanner/posts/pages");
 }
 
 // ── LƯU DANH SÁCH (local, chờ API danh sách page) ──

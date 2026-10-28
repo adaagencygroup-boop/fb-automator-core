@@ -1,8 +1,6 @@
-import PageScannerModule from "@/modules/module_11_page_scanner";
-import { pageMetadata } from "@/config/navigation";
+import { redirect } from "next/navigation";
 
-export const metadata = pageMetadata("scanner.groups");
-
+/** Alias cũ "Danh sách nhóm page" → Danh sách page */
 export default function Page() {
-  return <PageScannerModule subPage="scanner.groups" />;
+  redirect("/scanner/list");
 }
