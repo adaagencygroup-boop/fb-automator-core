@@ -71,7 +71,7 @@ def upsert_post_settings(post_type: str, data: Dict[str, Any]) -> Dict[str, Any]
     params = (
         post_type,
         data.get('api_key_file_path'),
-        data.get('gemini_model', 'Gemini 1.5 Flash'),
+        data.get('gemini_model', 'gemini-3.8-flash'),
         data.get('prompt_template'),
         data.get('master_folder_path'),
         data.get('check_duplicate', True),
