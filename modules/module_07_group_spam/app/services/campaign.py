@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from modules.module_02_account_manager.context import owner_scope
 from ..core.constants import BLOCK_TAGS, TERMINAL_STATES, LogLevel
-from .supabase_storage import download_or_cache_media
+from .supabase_storage import download_or_cache_media, upload_local_file_to_supabase
 
 
 class _TextExtractor(HTMLParser):
@@ -1091,7 +1091,7 @@ class CampaignManager:
         job.campaign_id = campaign_id
         job.run_number = run_number
 
-    def _sync_run(self, job: CampaignJob) -> None:
+    def _sync_run(self, job: CampaignJob, config: dict[str, Any] | None = None) -> None:
         self.persistence.update_run(
             job.id,
             status=job.status,
@@ -1101,6 +1101,7 @@ class CampaignManager:
             total_skipped=job.skipped,
             started_at=job.started_at,
             finished_at=job.finished_at,
+            config=config,
         )
 
     def _run(self, job: CampaignJob) -> None:
@@ -1266,6 +1267,14 @@ class CampaignManager:
                         self._advance_step(job)
                         self._record_result(job, account, group, result)
                         completed_actions.add(index)
+
+                        # Chạy xong luồng của 1 task vụ thì đồng bộ media của task đó lên Supabase Storage
+                        if result.get("status") == "SUCCESS" and local_media:
+                            for m_path in local_media:
+                                try:
+                                    upload_local_file_to_supabase(m_path, job.campaign_id or job.id)
+                                except Exception as up_err:
+                                    job.log("WARNING", f"Không thể lưu media sau task: {up_err}")
                     except InterruptedError:
                         raise
                     except Exception as exc:
@@ -1368,10 +1377,26 @@ class CampaignManager:
         job.log(level, f"[{uid}] {group_display}{url_part}: {item['message']}")
 
     def _persist_final_results(self, job: CampaignJob) -> None:
-        """Finalize the PostgreSQL run summary."""
+        """Finalize the PostgreSQL run summary and ensure campaign media is stored in Supabase Storage."""
         if job.status not in {"COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"}:
             job.status = "FAILED"
-        self._sync_run(job)
+
+        try:
+            raw_media = list(job.payload.get("media") or [])
+            if raw_media:
+                cloud_media: list[str] = []
+                for item in raw_media:
+                    try:
+                        res = upload_local_file_to_supabase(item, job.campaign_id or job.id)
+                        cloud_url = res.get("url") or res.get("path") or str(item)
+                        cloud_media.append(cloud_url)
+                    except Exception as exc:
+                        cloud_media.append(str(item))
+                job.payload["media"] = cloud_media
+        except Exception:
+            pass
+
+        self._sync_run(job, config=_safe_config(job.payload))
 
 
 campaign_manager = CampaignManager()

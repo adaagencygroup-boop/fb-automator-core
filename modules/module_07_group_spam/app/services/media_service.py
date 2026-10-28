@@ -145,39 +145,16 @@ def save_uploaded_media(
             except Exception:
                 pass
 
-            # Tải lên Supabase Storage
-            cloud_info = None
-            if is_supabase_storage_available():
-                try:
-                    cloud_info = upload_to_supabase(
-                        file_bytes=content,
-                        filename=saved_name,
-                        campaign_id=active_campaign_id,
-                        content_type=content_type,
-                    )
-                except Exception as exc:
-                    logger.warning("Không thể tải lên Supabase Storage, dùng fallback local: %s", exc)
-
-            if cloud_info:
-                uploaded.append({
-                    "original_name": file.filename,
-                    "saved_name": saved_name,
-                    "path": cloud_info["path"],
-                    "relative_path": cloud_info["path"],
-                    "url": cloud_info["url"],
-                    "size": size,
-                    "campaign_id": active_campaign_id,
-                })
-            else:
-                uploaded.append({
-                    "original_name": file.filename,
-                    "saved_name": saved_name,
-                    "path": saved_name,
-                    "relative_path": saved_name,
-                    "url": None,
-                    "size": size,
-                    "campaign_id": active_campaign_id,
-                })
+            # Lưu vào local để runner Selenium sử dụng ngay
+            uploaded.append({
+                "original_name": file.filename,
+                "saved_name": saved_name,
+                "path": saved_name,
+                "relative_path": saved_name,
+                "url": None,
+                "size": size,
+                "campaign_id": active_campaign_id,
+            })
     except MediaStorageError:
         for path in created_local_files:
             path.unlink(missing_ok=True)

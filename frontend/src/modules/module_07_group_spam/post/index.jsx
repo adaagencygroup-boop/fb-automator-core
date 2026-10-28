@@ -633,16 +633,16 @@ export default function GroupPostModule({ actionType = "POST" }) {
       if (!campaignId) setCampaignId(effectiveCampaignId);
 
       if (mediaFiles.length > 0) {
-        appendCampaignLog("INFO", `Đang tải lên ${mediaFiles.length} tệp media lên Supabase Storage (campaign/${effectiveCampaignId}/)...`);
-        setSettingsFeedback({ type: "info", message: `Đang tải lên ${mediaFiles.length} tệp media lên Supabase Storage...` });
+        appendCampaignLog("INFO", `Đang chuẩn bị ${mediaFiles.length} tệp media cho runner...`);
+        setSettingsFeedback({ type: "info", message: `Đang chuẩn bị ${mediaFiles.length} tệp media...` });
         const formData = new FormData();
         mediaFiles.forEach((file) => {
           formData.append("files", file);
         });
         const uploadRes = await uploadGroupMedia(formData, effectiveCampaignId);
         if (uploadRes?.files?.length) {
-          savedMediaPaths = uploadRes.files.map((f) => f.url || f.path || f.relative_path);
-          appendCampaignLog("SUCCESS", `Đã tải lên thành công ${savedMediaPaths.length} tệp media lên Supabase Storage.`);
+          savedMediaPaths = uploadRes.files.map((f) => f.saved_name || f.path || f.relative_path);
+          appendCampaignLog("SUCCESS", `Đã chuẩn bị thành công ${savedMediaPaths.length} tệp media.`);
         }
       }
 
@@ -794,6 +794,8 @@ export default function GroupPostModule({ actionType = "POST" }) {
           maxMedia={maxMedia}
           setMaxMedia={setMaxMedia}
           isLocked={false}
+          campaignId={campaignId}
+          onCampaignIdGenerated={setCampaignId}
         />
       </div>
 

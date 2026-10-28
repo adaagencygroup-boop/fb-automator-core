@@ -8,9 +8,16 @@ from pathlib import Path
 from typing import Any
 import urllib.parse
 
+from dotenv import load_dotenv
 import httpx
 
-from config.constants import DATA_DIR
+from config.constants import DATA_DIR, ENV_PATH
+
+# Đảm bảo nạp đầy đủ biến môi trường Supabase từ .env
+if ENV_PATH.exists():
+    load_dotenv(ENV_PATH, override=True)
+else:
+    load_dotenv(override=True)
 
 logger = logging.getLogger("module_07.supabase_storage")
 
@@ -59,7 +66,6 @@ def ensure_storage_bucket(bucket: str | None = None) -> bool:
                 if target_bucket in existing:
                     return True
 
-            # Tạo mới bucket nếu chưa có
             create_resp = client.post(
                 url,
                 headers={**_auth_headers(), "Content-Type": "application/json"},
@@ -75,7 +81,6 @@ def get_public_url(storage_path: str, bucket: str | None = None) -> str:
     """Trả về public URL cho một tệp trong Supabase Storage."""
     target_bucket = bucket or get_storage_bucket()
     clean_path = storage_path.strip().lstrip("/")
-    # Nếu path đã bắt đầu bằng tên bucket, bỏ đi để tránh trùng lặp trong URL
     if clean_path.startswith(f"{target_bucket}/"):
         clean_path = clean_path[len(target_bucket) + 1 :]
     return f"{get_supabase_url()}/storage/v1/object/public/{target_bucket}/{clean_path}"
@@ -99,7 +104,6 @@ def upload_to_supabase(
     target_bucket = bucket or get_storage_bucket()
     resolved_mime = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
-    # Đường dẫn đối tượng trong bucket: {campaign_id}/{filename}
     clean_campaign = str(campaign_id or "").strip().strip("/")
     if not clean_campaign:
         clean_campaign = "general"
@@ -123,7 +127,6 @@ def upload_to_supabase(
         logger.error("Lỗi tải lên Supabase Storage: %s", exc)
         raise RuntimeError(f"Không thể tải media lên Supabase Storage: {exc}") from exc
 
-    # Public URL truy cập trực tiếp
     public_url = get_public_url(object_path, target_bucket)
     storage_path = f"campaign/{clean_campaign}/{filename}"
 
@@ -136,6 +139,53 @@ def upload_to_supabase(
         "size": len(file_bytes),
         "campaign_id": clean_campaign,
     }
+
+
+def upload_local_file_to_supabase(
+    local_path: str | Path,
+    campaign_id: str,
+    bucket: str | None = None,
+) -> dict[str, Any]:
+    """
+    Tải file cục bộ lên Supabase Storage theo đường dẫn: campaign/{campaign_id}/{filename}.
+    Được gọi khi một luồng tác vụ chạy xong hoặc khi toàn bộ chiến dịch kết thúc.
+    Nếu file đã là URL Supabase, trả về nguyên bản.
+    """
+    raw = str(local_path or "").strip()
+    if not raw:
+        return {"url": "", "path": ""}
+
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return {"url": raw, "path": raw}
+
+    if not is_supabase_storage_available():
+        return {"url": raw, "path": raw}
+
+    file_path = Path(raw)
+    if not file_path.is_file():
+        candidate = (UPLOAD_MEDIA_DIR / file_path.name).resolve()
+        if candidate.is_file():
+            file_path = candidate
+        else:
+            cached_candidates = list(MEDIA_CACHE_DIR.glob(f"**/{file_path.name}"))
+            if cached_candidates and cached_candidates[0].is_file():
+                file_path = cached_candidates[0]
+            else:
+                return {"url": raw, "path": raw}
+
+    try:
+        content = file_path.read_bytes()
+        content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        return upload_to_supabase(
+            file_bytes=content,
+            filename=file_path.name,
+            campaign_id=campaign_id,
+            content_type=content_type,
+            bucket=bucket,
+        )
+    except Exception as exc:
+        logger.warning("Không thể tải file %s lên Supabase: %s", file_path.name, exc)
+        return {"url": raw, "path": raw}
 
 
 def download_or_cache_media(token: str, campaign_id: str | None = None) -> Path:
@@ -170,7 +220,6 @@ def download_or_cache_media(token: str, campaign_id: str | None = None) -> Path:
         parsed = urllib.parse.urlparse(raw)
         target_filename = Path(parsed.path).name or "media_file"
     elif raw.startswith("campaign/") or "/" in raw:
-        # Đường dẫn dạng campaign/{id}/{filename} hoặc {id}/{filename}
         clean_path = raw
         if clean_path.startswith("campaign/"):
             clean_path = clean_path[len("campaign/") :]
@@ -178,7 +227,6 @@ def download_or_cache_media(token: str, campaign_id: str | None = None) -> Path:
         target_filename = Path(clean_path).name or "media_file"
 
     if not download_url:
-        # Thử tìm trong thư mục cache
         for search_dir in [MEDIA_CACHE_DIR, UPLOAD_MEDIA_DIR]:
             if search_dir.exists():
                 matches = list(search_dir.glob(f"**/{target_filename}"))
@@ -200,7 +248,6 @@ def download_or_cache_media(token: str, campaign_id: str | None = None) -> Path:
         with httpx.Client(timeout=30.0, follow_redirects=True) as client:
             resp = client.get(download_url)
             if resp.status_code != 200:
-                # Nếu public URL không được, thử tải qua service key
                 resp = client.get(download_url, headers=_auth_headers())
                 if resp.status_code != 200:
                     raise RuntimeError(f"HTTP {resp.status_code}: Không thể tải file từ {download_url}")
@@ -255,4 +302,3 @@ def list_campaign_media(campaign_id: str, bucket: str | None = None) -> list[dic
     except Exception as exc:
         logger.warning("Không thể lấy danh sách media chiến dịch: %s", exc)
         return []
-
