@@ -178,9 +178,28 @@ DDL_STATEMENTS = [
         share_count INT DEFAULT 0,
         is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
         first_session_id INT REFERENCES page_scan_sessions(id) ON DELETE SET NULL,
+        last_session_id INT REFERENCES page_scan_sessions(id) ON DELETE SET NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT uq_scanned_posts_owner_post UNIQUE (owner_key, page_key, post_key)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS scanned_page_followers (
+        id SERIAL PRIMARY KEY,
+        owner_key VARCHAR(100),
+        page_key VARCHAR(255) NOT NULL,
+        follower_key VARCHAR(255) NOT NULL,
+        follower_name VARCHAR(255),
+        profile_url TEXT,
+        avatar_url TEXT,
+        gender VARCHAR(50),
+        location TEXT,
+        first_session_id INT REFERENCES page_scan_sessions(id) ON DELETE SET NULL,
+        last_session_id INT REFERENCES page_scan_sessions(id) ON DELETE SET NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_scanned_page_followers_owner UNIQUE (owner_key, page_key, follower_key)
     );
     """,
     """
@@ -221,6 +240,10 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_page_follows_acc ON page_follows (owner_key, account_uid, status);",
     "CREATE INDEX IF NOT EXISTS idx_page_follow_logs_session ON page_follow_logs (session_id);",
     "CREATE INDEX IF NOT EXISTS idx_scanned_posts_page_published ON scanned_posts (owner_key, page_key, published_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_scanned_page_followers_page ON scanned_page_followers (owner_key, page_key);",
+    "CREATE INDEX IF NOT EXISTS idx_scanned_page_followers_session ON scanned_page_followers (first_session_id);",
+    "CREATE INDEX IF NOT EXISTS idx_scanned_page_followers_last_session ON scanned_page_followers (last_session_id);",
+    "CREATE INDEX IF NOT EXISTS idx_scanned_posts_last_session ON scanned_posts (last_session_id);",
     "CREATE INDEX IF NOT EXISTS idx_account_usage_lookup ON page_scanner_account_usage (account_uid, usage_date);",
     "CREATE INDEX IF NOT EXISTS idx_page_key_aliases_canon ON page_key_aliases (owner_key, canonical_key);",
 ]
@@ -265,7 +288,41 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE page_scan_sessions ADD COLUMN IF NOT EXISTS logs TEXT;",
     "ALTER TABLE page_scan_sessions DROP CONSTRAINT IF EXISTS ck_page_scan_session_status;",
     "ALTER TABLE page_scan_sessions ADD CONSTRAINT ck_page_scan_session_status CHECK (status IN ('RUNNING', 'PAUSED', 'COMPLETED', 'PARTIAL', 'STOPPED', 'FAILED'));",
+    # 8. Bảng người theo dõi Page (khác page_follows)
+    """
+    CREATE TABLE IF NOT EXISTS scanned_page_followers (
+        id SERIAL PRIMARY KEY,
+        owner_key VARCHAR(100),
+        page_key VARCHAR(255) NOT NULL,
+        follower_key VARCHAR(255) NOT NULL,
+        follower_name VARCHAR(255),
+        profile_url TEXT,
+        avatar_url TEXT,
+        gender VARCHAR(50),
+        location TEXT,
+        first_session_id INT,
+        last_session_id INT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_scanned_page_followers_owner UNIQUE (owner_key, page_key, follower_key)
+    );
+    """,
+    # 9. last_session_id — FE lọc đúng phiên (re-scan cập nhật)
+    "ALTER TABLE scanned_page_followers ADD COLUMN IF NOT EXISTS last_session_id INT;",
+    "ALTER TABLE scanned_posts ADD COLUMN IF NOT EXISTS last_session_id INT;",
 ]
+
+
+# Gọi khi init để dọn phiên RUNNING/PAUSED orphan sau restart
+def _mark_stale_on_init():
+    try:
+        from .browser_session import mark_stale_running_sessions
+
+        n = mark_stale_running_sessions()
+        if n:
+            logger.warning(f"[Module 11 DB] Marked {n} stale RUNNING/PAUSED session(s)")
+    except Exception as exc:
+        logger.debug(f"[Module 11 DB] stale session cleanup: {exc}")
 
 
 def init_models():
@@ -305,4 +362,7 @@ def init_models():
             db.execute(idx)
         except Exception as exc:
             logger.debug(f"[Module 11 DB] Index notice: {exc}")
+
+    # 4. Phiên RUNNING orphan sau restart app
+    _mark_stale_on_init()
 

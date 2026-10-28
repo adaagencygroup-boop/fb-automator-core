@@ -1,5 +1,5 @@
 /**
- * Mục 11 — tách chip, biến thể từ khóa, hashtag suy ra, điểm kết hợp.
+ * Mục 11 — tách chip, biến thể từ khóa, hashtag suy ra.
  */
 
 /** Chỉ còn tìm theo hashtag (đã bỏ Page lớn / Kết hợp). */
@@ -7,7 +7,7 @@ export const SEARCH_MODES = [
   {
     id: "NGACH",
     label: "Hashtag",
-    hint: "Hashtag / bài viết → tác giả Page · xếp theo điểm liên quan",
+    hint: "Hashtag / bài viết → tác giả Page",
   },
 ];
 
@@ -158,37 +158,6 @@ export function buildCampaignJobs({ searchMode: _searchMode, keywords, manualHas
   return jobs;
 }
 
-export function followerBandScore(n) {
-  const v = Number(n) || 0;
-  if (v >= 1_000_000) return 30;
-  if (v >= 500_000) return 25;
-  if (v >= 100_000) return 20;
-  if (v >= 50_000) return 15;
-  if (v >= 10_000) return 10;
-  if (v >= 1_000) return 5;
-  return 0;
-}
-
-/**
- * Điểm kết hợp thang 100 (mục 11.4).
- * @param {object} page
- * @param {{ terms?: string[], channelCount?: number }} ctx
- */
-export function computeHybridScore(page, ctx = {}) {
-  const terms = (ctx.terms || []).map((t) =>
-    String(t).toLowerCase().replace(/^#/, "").trim(),
-  ).filter(Boolean);
-  let score = followerBandScore(page.follower_count);
-  const name = String(page.page_name || "").toLowerCase();
-  if (terms.some((t) => t && name.includes(t))) score += 20;
-  const rel = Number(page.relevance_score) || 0;
-  score += Math.min(30, Math.round(rel * 0.3));
-  if (page.is_verified === true) score += 10;
-  const channels = ctx.channelCount ?? page.channel_count ?? 1;
-  if (channels >= 2) score += 10;
-  return Math.min(100, Math.max(0, Math.round(score)));
-}
-
 /** Gộp page theo page_key, cộng kênh phát hiện */
 export function mergePagesByKey(pageLists, metaBySession = {}) {
   const map = new Map();
@@ -213,33 +182,45 @@ export function mergePagesByKey(pageLists, metaBySession = {}) {
           existing.channel_count = existing.channels.length;
         }
         if (!existing._sessions.includes(sessionId)) existing._sessions.push(sessionId);
-        // giữ follower / relevance cao hơn
         if ((p.follower_count || 0) > (existing.follower_count || 0)) {
           existing.follower_count = p.follower_count;
           existing.follower_text = p.follower_text;
         }
-        if ((p.relevance_score || 0) > (existing.relevance_score || 0)) {
-          existing.relevance_score = p.relevance_score;
-          existing.relevance_status = p.relevance_status;
-        }
         if (p.phone && !existing.phone) existing.phone = p.phone;
         if (p.email && !existing.email) existing.email = p.email;
         if (p.website && !existing.website) existing.website = p.website;
+        if (p.address && !existing.address) existing.address = p.address;
         if (p.avatar_url && !existing.avatar_url) existing.avatar_url = p.avatar_url;
+        if (p.page_name && !existing.page_name) existing.page_name = p.page_name;
       }
     }
   }
   return [...map.values()];
 }
 
-export function sortPagesForMode(pages, searchMode, terms) {
-  const scored = pages.map((p) => ({
-    ...p,
-    hybrid_score: computeHybridScore(p, { terms, channelCount: p.channel_count }),
-  }));
-  // Hashtag-only: xếp theo điểm liên quan
-  scored.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
-  return scored;
+/** Sắp xếp kết quả — không tính điểm; ưu tiên follower rồi tên. */
+export function sortPagesForMode(pages, _searchMode, _terms) {
+  return [...(pages || [])].sort((a, b) => {
+    const fl = (Number(b.follower_count) || 0) - (Number(a.follower_count) || 0);
+    if (fl !== 0) return fl;
+    return String(a.page_name || "").localeCompare(String(b.page_name || ""), "vi");
+  });
+}
+
+/** Nhãn từ khóa hiển thị cột TỪ KHÓA */
+export function pageKeywordLabel(page) {
+  if (page?.source_keyword) return String(page.source_keyword).replace(/^#/, "");
+  const tags = page?.matched_hashtags;
+  if (Array.isArray(tags) && tags.length) return String(tags[0]).replace(/^#/, "");
+  if (typeof tags === "string" && tags.trim()) {
+    try {
+      const parsed = JSON.parse(tags);
+      if (Array.isArray(parsed) && parsed[0]) return String(parsed[0]).replace(/^#/, "");
+    } catch {
+      return tags.replace(/^#/, "").split(",")[0].trim();
+    }
+  }
+  return "—";
 }
 
 export function newCampaignId() {
