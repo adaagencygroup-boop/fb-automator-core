@@ -20,11 +20,13 @@ export default function GroupPostingSettingsSection({
   setScheduleTime,
   isLocked = false,
   stepNumber = "7",
+  contentType = "post",
 }) {
+  const actionLabel = contentType === "comment" ? "bình luận" : "đăng bài";
   return (
     <SectionCard
       number={stepNumber}
-      title="Cài đặt đăng bài"
+      title={`Cài đặt ${actionLabel}`}
       description="Thiết lập khoảng nghỉ và thời điểm bắt đầu chiến dịch."
       aside={(
         <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${
@@ -45,8 +47,8 @@ export default function GroupPostingSettingsSection({
                 <Clock3 className="size-4" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-semibold text-slate-700">Khoảng nghỉ giữa các bài</p>
-                <p className="text-[10px] text-slate-400">Thời gian chờ ngẫu nhiên trước lần đăng tiếp theo</p>
+                <p className="text-xs font-semibold text-slate-700">Khoảng nghỉ giữa các lượt {actionLabel}</p>
+                <p className="text-[10px] text-slate-400">Thời gian chờ ngẫu nhiên trước lượt {actionLabel} tiếp theo</p>
               </div>
             </div>
             <select

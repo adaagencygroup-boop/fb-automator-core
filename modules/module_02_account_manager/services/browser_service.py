@@ -58,7 +58,7 @@ def _confirm_live_session(db, driver, uid):
     return identity
 
 
-def _watch_open_browser_login(driver, uid: str, checks: int = 150, interval: float = 2.0):
+def _watch_open_browser_login(driver, uid: str, checks: int = 150, interval: float = 2.0, target_url: str | None = None):
     """
     Theo dõi trong nền khi người dùng tự đăng nhập thủ công trên Chrome live.
     checks=150 * 2.0s = 300 giây (5 phút). Tự động lưu cookies và cập nhật login_status.
@@ -107,6 +107,8 @@ def _watch_open_browser_login(driver, uid: str, checks: int = 150, interval: flo
 
             profile_name = identity.get("profile_name", "")
             display_name = f" — {profile_name}" if profile_name else ""
+            if target_url:
+                driver.get(target_url)
             broadcast("success", f"✅ Đăng nhập thành công: Nick {uid}{display_name} đã sẵn sàng và lưu cookie!", uid=uid)
             return
 
@@ -118,7 +120,7 @@ def _watch_open_browser_login(driver, uid: str, checks: int = 150, interval: flo
     operations.update(uid, "timeout")
 
 
-def _open_live_browser_worker(uid: str):
+def _open_live_browser_worker(uid: str, target_url: str | None = None):
     """Mở Chrome với profile của nick, tự động login và giữ trình duyệt chạy trên màn hình."""
     from ..automation.browser_manager import create_driver, human_sleep, get_profile_lock
     from ..database.connection import SessionLocal
@@ -208,6 +210,8 @@ def _open_live_browser_worker(uid: str):
             identity = _confirm_live_session(db, driver, uid)
             profile_name = identity.get("profile_name", "")
             display_name = f" — {profile_name}" if profile_name else ""
+            if target_url:
+                driver.get(target_url)
             broadcast("success", f"✅ Đăng nhập thành công: Nick {uid}{display_name} đã sẵn sàng!", uid=uid)
         else:
             login_status = "failed" if attempted_login or is_checkpoint_url(driver.current_url or "") else "not_logged_in"
@@ -216,7 +220,7 @@ def _open_live_browser_worker(uid: str):
             broadcast("warning", f"⚠️ Trình duyệt nick {uid} đã mở. Bạn có thể tự đăng nhập trực tiếp trên Chrome, hệ thống sẽ tự động bắt cookie.")
             if not is_checkpoint_url(driver.current_url or ""):
                 # Chạy watcher trong daemon thread nền để không giữ profile_lock và kết nối DB
-                runtime.watch(_watch_open_browser_login, driver, uid)
+                runtime.watch(_watch_open_browser_login, driver, uid, 150, 2.0, target_url)
 
     except Exception as e:
         operations.update(uid, "failed")
@@ -230,7 +234,7 @@ def _open_live_browser_worker(uid: str):
 
 
 
-def queue_open_browser(uid):
+def queue_open_browser(uid, target_url: str | None = None):
     from ..automation.browser_manager import get_profile_lock
     from fastapi import HTTPException
     key = account_key(uid)
@@ -241,7 +245,7 @@ def queue_open_browser(uid):
     operation_id = operations.create("browser", [uid])
     try:
         with operations.scope(operation_id):
-            runtime.submit(_open_live_browser_worker, uid)
+            runtime.submit(_open_live_browser_worker, uid, target_url)
     except Exception:
         with operations.scope(operation_id):
             operations.update(uid, "failed")

@@ -100,7 +100,11 @@ export default function GroupContentSection({
   onContinue,
   editorRef: externalEditorRef,
   stepNumber = "6",
+  contentType = "post",
 }) {
+  const isComment = contentType === "comment";
+  const itemLabel = isComment ? "bình luận" : "bài viết";
+  const itemTitle = isComment ? "Bình luận" : "Bài";
   const localEditorRef = useRef(null);
   const editorRef = externalEditorRef || localEditorRef;
   const inlineImageRef = useRef(null);
@@ -311,12 +315,12 @@ export default function GroupContentSection({
     <>
       <SectionCard
         number={stepNumber}
-        title="Tạo nội dung bài viết"
+        title={isComment ? "Tạo nội dung bình luận" : "Tạo nội dung bài viết"}
       >
         <div className="grid gap-4 md:grid-cols-[1fr_320px]">
           <Field
-            label="Nội dung gốc bài viết"
-            hint="Nhập nội dung gốc để đăng bài trực tiếp hoặc làm gợi ý để AI tạo các biến thể."
+            label={`Nội dung gốc ${itemLabel}`}
+            hint={`Nhập nội dung để ${isComment ? "bình luận trực tiếp vào bài đầu tiên của nhóm" : "đăng bài trực tiếp"} hoặc làm gợi ý cho AI.`}
           >
             <div className="relative">
               <Textarea
@@ -327,7 +331,7 @@ export default function GroupContentSection({
                 }}
                 disabled={isLocked}
                 maxLength={2000}
-                placeholder="Nhập nội dung gốc của bài viết tại đây..."
+                placeholder={`Nhập nội dung ${itemLabel} tại đây...`}
                 className="min-h-32 resize-none pb-6 text-xs leading-5"
               />
               <span className="absolute bottom-2 right-3 text-[9px] text-slate-400">{prompt.length}/2000</span>
@@ -335,11 +339,11 @@ export default function GroupContentSection({
           </Field>
           <div className="flex flex-col justify-between gap-3">
             <Field
-              label="Số lượng bài AI tạo ra"
+              label={`Số lượng ${itemLabel} AI tạo ra`}
               hint={
                 isDuplicateContent
-                  ? "Nhập 1: Trùng lặp nội dung (1 bài duy nhất cho tất cả nhóm)"
-                  : `${numCount} bài: Phân bổ nội dung khác nhau cho các nhóm`
+                  ? `Nhập 1: dùng một ${itemLabel} cho tất cả nhóm`
+                  : `${numCount} ${itemLabel}: phân bổ nội dung khác nhau cho các nhóm`
               }
             >
               <div className="space-y-2">
@@ -384,7 +388,7 @@ export default function GroupContentSection({
                 onClick={onGeneratePosts}
                 disabled={isLocked || isGenerating || !prompt.trim()}
                 className="w-full border-purple-200 bg-purple-50/50 text-purple-700 hover:bg-purple-100 hover:text-purple-800 transition-colors"
-                title="Tính năng hỗ trợ: Sử dụng AI để sinh biến thể bài viết tự động"
+                title={`Tính năng hỗ trợ: Sử dụng AI để sinh biến thể ${itemLabel} tự động`}
               >
                 <Sparkles className="mr-2 size-3.5 text-purple-600" />
                 {isGenerating ? "Đang tạo nội dung AI..." : "Tạo nội dung AI (Hỗ trợ)"}
@@ -400,12 +404,12 @@ export default function GroupContentSection({
               <p className="text-xs font-bold text-slate-800">
                 {isDuplicateContent
                   ? "Kết quả nội dung (Trùng lặp nội dung)"
-                  : `Kết quả nội dung (${displayPosts.filter((p) => p && p.trim()).length} bài)`}
+                  : `Kết quả nội dung (${displayPosts.filter((p) => p && p.trim()).length} ${itemLabel})`}
               </p>
               <p className="text-[10px] text-slate-500">
                 {isDuplicateContent
-                  ? "Nội dung bài viết này sẽ được đăng trùng lặp cho tất cả các nhóm mục tiêu"
-                  : "Mỗi bài viết sẽ được luân phiên hoặc ngẫu nhiên đăng vào các nhóm"}
+                  ? `Nội dung ${itemLabel} này sẽ được dùng cho tất cả các nhóm mục tiêu`
+                  : `Mỗi ${itemLabel} sẽ được luân phiên hoặc ngẫu nhiên cho các nhóm`}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -427,7 +431,7 @@ export default function GroupContentSection({
                 className="text-purple-600 border-purple-200 hover:bg-purple-50"
                 disabled={isLocked || isGenerating || !prompt.trim()}
                 onClick={onGeneratePosts}
-                title="Yêu cầu AI sinh lại các bài viết"
+                title={`Yêu cầu AI sinh lại các ${itemLabel}`}
               >
                 <Sparkles className="mr-1.5 size-3" /> Tạo lại bằng AI
               </Button>
@@ -443,11 +447,11 @@ export default function GroupContentSection({
                   activePost === index ? "bg-primary text-white shadow-sm" : "text-slate-500 hover:bg-white"
                 }`}
               >
-                {isDuplicateContent ? "Bài 1 (Trùng lặp nội dung)" : `Bài ${index + 1}`}
+                {isDuplicateContent ? `${itemTitle} 1` : `${itemTitle} ${index + 1}`}
               </button>
             ))}
           </div>
-          <p className="mb-2 mt-4 text-[11px] font-semibold text-slate-600">Nội dung bài {activePost + 1}</p>
+          <p className="mb-2 mt-4 text-[11px] font-semibold text-slate-600">Nội dung {itemLabel} {activePost + 1}</p>
           <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
             <input
               ref={inlineImageRef}
@@ -495,7 +499,7 @@ export default function GroupContentSection({
               contentEditable={!isLocked}
               suppressContentEditableWarning
               role="textbox"
-              aria-label={`Nội dung bài ${activePost + 1}`}
+              aria-label={`Nội dung ${itemLabel} ${activePost + 1}`}
               aria-multiline="true"
               aria-readonly={isLocked}
               onInput={(event) => {

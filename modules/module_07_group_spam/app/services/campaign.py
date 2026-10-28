@@ -1,10 +1,10 @@
 """In-memory campaign runtime and Selenium group poster for Module 7."""
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from html.parser import HTMLParser
+from pathlib import Path
 import random
 import threading
 import time
@@ -55,6 +55,47 @@ def _group_url(group: dict[str, Any]) -> str:
     if value:
         return f"https://www.facebook.com/groups/{value.strip('/')}"
     return ""
+
+
+def _friendly_automation_error(error: Exception | str) -> dict[str, str]:
+    """Convert verbose Selenium errors into stable messages for logs/history."""
+    raw = str(error or "").strip()
+    lowered = raw.lower()
+    mappings = (
+        (
+            ("element click intercepted", "not clickable at point", "other element would receive the click"),
+            "ELEMENT_CLICK_INTERCEPTED",
+            "Popup hoặc lớp phủ Facebook đang che ô thao tác; hệ thống đã thử đóng popup nhưng chưa thể tiếp tục.",
+        ),
+        (
+            ("không tìm thấy ô bình luận", "không tìm thấy khung nhập bình luận"),
+            "COMMENT_BOX_NOT_FOUND",
+            "Không tìm thấy ô bình luận của bài viết đầu tiên; bài viết có thể đã tắt hoặc giới hạn bình luận.",
+        ),
+        (
+            ("stale element reference",),
+            "STALE_ELEMENT",
+            "Giao diện Facebook vừa thay đổi trong lúc thao tác; vui lòng chạy lại nhóm này.",
+        ),
+        (
+            ("invalid session id", "session deleted", "disconnected"),
+            "BROWSER_SESSION_LOST",
+            "Phiên Chrome đã mất kết nối trong lúc thực hiện tác vụ.",
+        ),
+    )
+    for needles, code, message in mappings:
+        if any(needle in lowered for needle in needles):
+            return {"message": message, "error_code": code, "error_detail": message}
+
+    # Selenium thường nối hàng trăm dòng Stacktrace vào message. Chỉ giữ phần
+    # mô tả đầu tiên để lịch sử tác vụ không bị vỡ giao diện.
+    concise = raw.split("Stacktrace:", 1)[0].strip()
+    concise = concise.removeprefix("Message:").strip()
+    concise = " ".join(concise.split())
+    if len(concise) > 500:
+        concise = f"{concise[:497]}..."
+    concise = concise or "Không thể hoàn thành thao tác Facebook"
+    return {"message": concise, "error_code": "AUTOMATION_ERROR", "error_detail": concise}
 
 
 _SENSITIVE_CONFIG_KEYS = {
@@ -234,6 +275,63 @@ class FacebookGroupPoster:
         except Exception:
             pass
 
+    def _dismiss_group_join_overlays(self) -> bool:
+        """Close Facebook welcome/questions overlays left after joining a group."""
+        if self.driver is None:
+            return False
+        try:
+            from selenium.webdriver.common.by import By
+            from selenium.webdriver.common.keys import Keys
+
+            driver = self.driver
+            markers = (
+                "welcome to", "chào mừng", "group rules", "quy tắc nhóm",
+                "answer questions", "membership questions", "câu hỏi thành viên",
+            )
+            dialogs = [
+                item for item in driver.find_elements(By.XPATH, "//*[@role='dialog']")
+                if self._is_displayed(item)
+            ]
+            dismissed = False
+            for dialog in dialogs:
+                try:
+                    dialog_text = (dialog.text or "").lower()
+                except Exception:
+                    dialog_text = ""
+                if not any(marker in dialog_text for marker in markers):
+                    continue
+
+                close_xpath = (
+                    ".//*[@role='button' and (contains(@aria-label,'Đóng') or "
+                    "contains(@aria-label,'Close') or contains(@aria-label,'Dismiss'))] | "
+                    ".//button[contains(@aria-label,'Đóng') or contains(@aria-label,'Close')]"
+                )
+                close_button = next(
+                    (button for button in dialog.find_elements(By.XPATH, close_xpath) if self._is_visible(button)),
+                    None,
+                )
+                if close_button is not None:
+                    driver.execute_script("arguments[0].click()", close_button)
+                else:
+                    driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                dismissed = True
+
+            if dismissed:
+                self._wait_until(
+                    lambda: not any(
+                        self._is_displayed(item)
+                        and any(marker in ((item.text or "").lower()) for marker in markers)
+                        for item in driver.find_elements(By.XPATH, "//*[@role='dialog']")
+                    ),
+                    5,
+                    "Không thể đóng popup chào mừng của nhóm",
+                )
+            return dismissed
+        except InterruptedError:
+            raise
+        except Exception:
+            return False
+
     def _raise_if_cancelled(self) -> None:
         if self.cancel.is_set():
             self._dismiss_open_dialog()
@@ -320,6 +418,7 @@ class FacebookGroupPoster:
                 dialog_text = " ".join((d.text or "").lower() for d in dialogs)
                 question_markers = ("trả lời câu hỏi", "answer questions", "câu hỏi thành viên", "membership questions")
                 if any(marker in dialog_text for marker in question_markers):
+                    self._dismiss_group_join_overlays()
                     return {"status": "REQUIRES_ANSWERS", "message": "Nhóm yêu cầu trả lời câu hỏi tham gia"}
             except Exception:
                 pass
@@ -335,6 +434,7 @@ class FacebookGroupPoster:
         remaining = [b for b in driver.find_elements(By.XPATH, join_xpath) if self._is_displayed(b)]
         if remaining:
             raise RuntimeError("Facebook chưa xác nhận thao tác tham gia nhóm")
+        self._dismiss_group_join_overlays()
         return {"status": "JOINED", "message": "Tham gia nhóm thành công"}
 
     def post(self, group: dict[str, Any], content: str, media: list[str]) -> dict[str, Any]:
@@ -353,6 +453,7 @@ class FacebookGroupPoster:
         )
         if any(part in (driver.current_url or "").lower() for part in ("checkpoint", "/login", "two_step")):
             raise RuntimeError("Tài khoản bị đăng xuất hoặc checkpoint")
+        self._dismiss_group_join_overlays()
 
         opener_xpath = (
             "//div[@role='button'][contains(@aria-label,'Bạn viết gì') or "
@@ -459,6 +560,35 @@ class FacebookGroupPoster:
 
         self._wait_until(dialog_is_closed, 35, "Facebook chưa đóng popup sau khi gửi bài")
 
+        result_url = url
+        content_marker = " ".join(content.split())[:80].lower()
+
+        def find_post_permalink():
+            try:
+                articles = driver.find_elements(By.XPATH, "//div[@role='feed']//div[@role='article'] | //div[@role='article']")
+                for article in articles:
+                    if not self._is_displayed(article):
+                        continue
+                    article_text = " ".join((article.text or "").split()).lower()
+                    if content_marker and content_marker not in article_text:
+                        continue
+                    links = article.find_elements(
+                        By.XPATH,
+                        ".//a[contains(@href,'/posts/') or contains(@href,'/permalink/') or contains(@href,'story_fbid=')]",
+                    )
+                    for link in links:
+                        href = link.get_attribute("href")
+                        if href:
+                            return str(href).split("?", 1)[0]
+            except Exception:
+                return None
+            return None
+
+        try:
+            result_url = self._wait_until(find_post_permalink, 5, "Chưa lấy được liên kết bài vừa đăng")
+        except RuntimeError:
+            pass
+
         try:
             page_text = (driver.find_element(By.TAG_NAME, "body").text or "").lower()
             blocked = ("tạm thời bị chặn", "temporarily blocked", "giới hạn tần suất", "try again later")
@@ -466,7 +596,12 @@ class FacebookGroupPoster:
                 raise RuntimeError("Facebook đang giới hạn thao tác đăng bài của tài khoản")
         except Exception:
             pass
-        return {"status": "SUCCESS", "message": "Đăng bài thành công", "group_url": url}
+        return {
+            "status": "SUCCESS",
+            "message": "Đăng bài thành công",
+            "group_url": url,
+            "result_url": result_url,
+        }
 
 
     def comment(
@@ -494,14 +629,29 @@ class FacebookGroupPoster:
         )
         if any(part in (driver.current_url or "").lower() for part in ("checkpoint", "/login", "two_step")):
             raise RuntimeError("Tài khoản bị đăng xuất hoặc checkpoint")
+        self._dismiss_group_join_overlays()
 
         article_xpath = "//div[@role='feed']//div[@role='article'] | //div[@role='article']"
+        post_marker_xpath = (
+            ".//a[contains(@href,'/posts/') or contains(@href,'/permalink/') or "
+            "contains(@href,'story_fbid=')] | "
+            ".//*[@role='button' and (contains(@aria-label,'Bình luận') or "
+            "contains(@aria-label,'Comment') or normalize-space(.)='Bình luận' or "
+            "normalize-space(.)='Comment')]"
+        )
 
         def find_first_article():
-            return next(
-                (item for item in driver.find_elements(By.XPATH, article_xpath) if item.is_displayed()),
-                None,
-            )
+            visible = [item for item in driver.find_elements(By.XPATH, article_xpath) if self._is_displayed(item)]
+            # role=article còn được Facebook dùng cho thẻ giới thiệu và một số khối
+            # phụ. Ưu tiên article có permalink hoặc điều khiển bình luận để lấy
+            # đúng bài viết đầu tiên trong feed.
+            for item in visible:
+                try:
+                    if item.find_elements(By.XPATH, post_marker_xpath):
+                        return item
+                except Exception:
+                    continue
+            return visible[0] if visible else None
 
         article = self._wait_until(
             find_first_article,
@@ -546,31 +696,95 @@ class FacebookGroupPoster:
             except Exception:
                 self.log("WARNING", f"[{self.account['uid']}] Không thể tự động thích bài đầu tiên")
 
-        textbox_xpath = (
-            ".//*[@contenteditable='true' and @role='textbox' and "
-            "(contains(@aria-label,'Viết bình luận') or "
-            "contains(@aria-label,'Bình luận dưới tên') or "
-            "contains(@aria-label,'Write a comment') or "
-            "contains(@aria-label,'Comment as'))]"
+        textbox_xpaths = (
+            ".//*[@data-lexical-editor='true' and @role='textbox']",
+            ".//*[@role='textbox' and (contains(@aria-label,'Viết bình luận') or "
+            "contains(@aria-label,'Bình luận dưới tên') or contains(@aria-label,'Bình luận') or "
+            "contains(@aria-label,'Write a comment') or contains(@aria-label,'Comment as') or "
+            "contains(@aria-placeholder,'Bình luận') or contains(@aria-placeholder,'Comment'))]",
+            ".//*[@role='textbox' and @contenteditable='true']",
+            ".//*[@contenteditable='true' and @data-lexical-editor='true']",
+            ".//form[contains(@action,'comment')]//*[@contenteditable='true']",
+            ".//textarea[contains(@placeholder,'Bình luận') or contains(@placeholder,'comment') or "
+            "contains(@aria-label,'Bình luận') or contains(@aria-label,'Comment')]",
         )
 
+        def resolve_article():
+            try:
+                if self._is_displayed(article):
+                    return article
+            except Exception:
+                pass
+            return find_first_article()
+
         def find_textbox():
-            current_article = find_first_article()
+            current_article = resolve_article()
             if current_article is None:
                 return None
-            return next(
-                (item for item in current_article.find_elements(By.XPATH, textbox_xpath)
-                 if item.is_displayed() and item.is_enabled()),
-                None,
+            for textbox_xpath in textbox_xpaths:
+                try:
+                    textbox = next(
+                        (item for item in current_article.find_elements(By.XPATH, textbox_xpath)
+                         if self._is_visible(item)),
+                        None,
+                    )
+                    if textbox is not None:
+                        return textbox
+                except Exception:
+                    continue
+            # Một số phiên bản Facebook render editor bình luận qua portal nên
+            # textbox không còn là con trực tiếp của role=article.
+            global_comment_xpath = (
+                "//*[@role='textbox' and (contains(@aria-label,'Viết bình luận') or "
+                "contains(@aria-label,'Bình luận dưới tên') or contains(@aria-label,'Write a comment') or "
+                "contains(@aria-label,'Comment as') or contains(@aria-placeholder,'Bình luận') or "
+                "contains(@aria-placeholder,'Comment'))] | "
+                "//textarea[contains(@placeholder,'Bình luận') or contains(@placeholder,'comment')]"
             )
+            try:
+                global_textbox = next(
+                    (item for item in driver.find_elements(By.XPATH, global_comment_xpath) if self._is_visible(item)),
+                    None,
+                )
+                if global_textbox is not None:
+                    return global_textbox
+            except Exception:
+                pass
+            # Fallback cho các biến thể DOM mới của Lexical Editor không còn
+            # role=textbox hoặc aria-label như trước.
+            try:
+                return driver.execute_script(
+                    """
+                    const root = arguments[0];
+                    const selectors = [
+                      '[data-lexical-editor="true"][contenteditable="true"]',
+                      '[role="textbox"][contenteditable="true"]',
+                      '[role="textbox"][aria-placeholder]',
+                      'form[action*="comment"] [contenteditable="true"]',
+                      'textarea[placeholder]'
+                    ];
+                    for (const selector of selectors) {
+                      const element = root.querySelector(selector);
+                      if (element && element.getClientRects().length) return element;
+                    }
+                    return null;
+                    """,
+                    current_article,
+                )
+            except Exception:
+                return None
 
         textbox = find_textbox()
         if textbox is None:
-            article = find_first_article() or article
+            article = resolve_article() or article
             comment_button_xpath = (
                 ".//*[@role='button' and "
-                "(@aria-label='Bình luận' or @aria-label='Comment' or "
-                "normalize-space(.)='Bình luận' or normalize-space(.)='Comment')]"
+                "(contains(@aria-label,'Bình luận') or contains(@aria-label,'Comment') or "
+                "contains(@aria-label,'Viết bình luận') or contains(@aria-label,'Write a comment') or "
+                "contains(@aria-label,'Để lại bình luận') or normalize-space(.)='Bình luận' or "
+                "normalize-space(.)='Comment')] | "
+                ".//span[normalize-space(.)='Bình luận' or normalize-space(.)='Comment']"
+                "/ancestor::*[@role='button'][1]"
             )
             button = next(
                 (item for item in article.find_elements(By.XPATH, comment_button_xpath)
@@ -578,42 +792,146 @@ class FacebookGroupPoster:
                 None,
             )
             if button:
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
                 driver.execute_script("arguments[0].click()", button)
             textbox = self._wait_until(
                 find_textbox,
-                15,
+                20,
                 "Không tìm thấy ô bình luận của bài viết đầu tiên",
             )
 
-        textbox.click()
+        try:
+            textbox.click()
+        except Exception:
+            # Popup chào mừng sau khi vừa tham gia nhóm có thể phủ lên editor
+            # dù Selenium vẫn tìm thấy textbox phía sau lớp overlay.
+            if not self._dismiss_group_join_overlays():
+                self._dismiss_open_dialog()
+            try:
+                textbox = self._wait_until(
+                    find_textbox,
+                    5,
+                    "Ô bình luận không còn khả dụng sau khi đóng popup",
+                )
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", textbox)
+                try:
+                    textbox.click()
+                except Exception:
+                    driver.execute_script("arguments[0].click(); arguments[0].focus();", textbox)
+            except Exception as exc:
+                raise RuntimeError(
+                    "Popup hoặc lớp phủ Facebook đang che ô bình luận, không thể thao tác"
+                ) from exc
+        def textbox_value(element) -> str:
+            try:
+                return str(
+                    element.text
+                    or element.get_attribute("textContent")
+                    or element.get_attribute("value")
+                    or ""
+                ).strip()
+            except Exception:
+                return ""
+
+        def replace_textbox_content(element) -> None:
+            """Replace editor content once using keyboard events understood by Lexical."""
+            try:
+                element.click()
+            except Exception:
+                driver.execute_script("arguments[0].focus();", element)
+            try:
+                element.send_keys(Keys.CONTROL + "a")
+                element.send_keys(Keys.BACKSPACE)
+                element.send_keys(content)
+            except Exception as exc:
+                raise RuntimeError("Không thể nhập nội dung vào ô bình luận") from exc
+
         self._raise_if_cancelled()
-        driver.execute_script(
-            """
-            arguments[0].focus();
-            const selection = window.getSelection();
-            const range = document.createRange();
-            range.selectNodeContents(arguments[0]);
-            range.collapse(false);
-            selection.removeAllRanges();
-            selection.addRange(range);
-            document.execCommand('insertText', false, arguments[1]);
-            arguments[0].dispatchEvent(new InputEvent('input', {
-                bubbles: true, inputType: 'insertText', data: arguments[1]
-            }));
-            """,
-            textbox,
-            content,
-        )
+        replace_textbox_content(textbox)
+        if textbox_value(textbox) != content.strip():
+            raise RuntimeError("Facebook không nhận nội dung bình luận")
 
         if media:
+            media_paths: list[str] = []
+            for item in media:
+                media_path = Path(str(item)).expanduser().resolve()
+                if not media_path.is_file():
+                    raise RuntimeError(f"Tệp media không còn tồn tại: {media_path.name}")
+                media_paths.append(str(media_path))
+
+            media_button_xpath = (
+                ".//*[@role='button' and ("
+                "contains(translate(@aria-label,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'photo') or "
+                "contains(translate(@aria-label,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'image') or "
+                "contains(@aria-label,'ảnh') or contains(@aria-label,'Ảnh') or "
+                "contains(translate(@aria-label,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'video'))]"
+            )
+
+            def find_comment_media_input(current_textbox, current_article):
+                # Facebook thường đặt input ẩn cạnh editor, không phải lúc nào
+                # cũng là con trực tiếp của role=article.
+                try:
+                    nearby_input = driver.execute_script(
+                        """
+                        let node = arguments[0];
+                        for (let depth = 0; node && depth < 10; depth += 1, node = node.parentElement) {
+                          const input = node.querySelector(
+                            'input[type="file"][accept*="image"], input[type="file"][accept*="video"], input[type="file"]'
+                          );
+                          if (input) return input;
+                        }
+                        return null;
+                        """,
+                        current_textbox,
+                    )
+                    if nearby_input is not None:
+                        return nearby_input
+                except Exception:
+                    pass
+                try:
+                    article_inputs = current_article.find_elements(By.XPATH, ".//input[@type='file']")
+                    if article_inputs:
+                        return article_inputs[-1]
+                except Exception:
+                    pass
+                return None
+
             def upload_comment_media():
-                current_article = find_first_article()
+                current_article = resolve_article()
                 if current_article is None:
                     return False
-                inputs = current_article.find_elements(By.XPATH, ".//input[@type='file']")
-                if not inputs:
+                current_textbox = find_textbox()
+                if current_textbox is None:
                     return False
-                inputs[-1].send_keys("\n".join(media))
+                media_input = find_comment_media_input(current_textbox, current_article)
+                if media_input is None:
+                    try:
+                        media_button = next(
+                            (
+                                item
+                                for item in current_article.find_elements(By.XPATH, media_button_xpath)
+                                if self._is_visible(item)
+                            ),
+                            None,
+                        )
+                        if media_button is not None:
+                            driver.execute_script("arguments[0].click();", media_button)
+                            media_input = find_comment_media_input(current_textbox, current_article)
+                    except Exception:
+                        media_input = None
+                if media_input is None:
+                    return False
+                try:
+                    supports_multiple = media_input.get_attribute("multiple") is not None
+                except Exception:
+                    supports_multiple = False
+                selected_paths = media_paths if supports_multiple else media_paths[:1]
+                media_input.send_keys("\n".join(selected_paths))
+                if len(selected_paths) < len(media_paths):
+                    self.log(
+                        "WARNING",
+                        f"[{self.account['uid']}] Ô ảnh bình luận chỉ nhận một tệp; đã dùng {Path(selected_paths[0]).name}",
+                    )
                 return True
 
             self._wait_until(
@@ -621,7 +939,7 @@ class FacebookGroupPoster:
                 15,
                 "Không tìm thấy vùng tải media của bình luận",
             )
-            if self.cancel.wait(2 + min(len(media) * 2, 8)):
+            if self.cancel.wait(2 + min(len(media_paths) * 2, 8)):
                 self._raise_if_cancelled()
 
         self._raise_if_cancelled()
@@ -630,17 +948,19 @@ class FacebookGroupPoster:
             10,
             "Ô bình luận không còn khả dụng trước khi gửi",
         )
+        if textbox_value(textbox) != content.strip():
+            replace_textbox_content(textbox)
         textbox.send_keys(Keys.ENTER)
 
         def comment_submitted():
             try:
-                value = (textbox.text or textbox.get_attribute("textContent") or "").strip()
+                value = textbox_value(textbox)
                 if not value:
                     return True
             except Exception:
                 return True
             try:
-                current_article = find_first_article()
+                current_article = resolve_article()
                 return bool(current_article and content.strip() in (current_article.text or ""))
             except Exception:
                 return False
@@ -788,7 +1108,9 @@ class CampaignManager:
             if not accounts or not groups or not posts:
                 raise ValueError("Chiến dịch cần ít nhất một tài khoản, một nhóm và một nội dung")
 
-            tasks = [(uid, group) for group in groups for uid in uids]
+            # Keep each account's work together so its browser completes every
+            # selected group before the next account is opened.
+            tasks = [(uid, group) for uid in uids for group in groups]
             max_posts = max(1, int(settings.get("max_posts") or len(tasks)))
             tasks = tasks[:max_posts]
             per_account: dict[str, list[dict[str, Any]]] = {uid: [] for uid in uids}
@@ -818,17 +1140,22 @@ class CampaignManager:
             self._sync_run(job)
             action_type = str(payload.get("action_type") or "POST").upper()
             action_label = "bình luận" if action_type == "COMMENT" else "đăng bài"
-            job.log("INFO", f"Bắt đầu {job.total} nhóm theo hai giai đoạn độc lập: tham gia nhóm trước, sau đó {action_label}")
-            workers = min(max(1, int(settings.get("threads") or 1)), len(per_account))
-            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="group-campaign") as pool:
-                futures = [pool.submit(self._run_account, job, accounts[uid], items) for uid, items in per_account.items()]
-                for future in as_completed(futures):
-                    try:
-                        future.result()
-                    except InterruptedError:
-                        pass
-                    except Exception as exc:
-                        job.log("ERROR", str(exc))
+            job.log(
+                "INFO",
+                f"Bắt đầu {job.total} lượt tuần tự theo tài khoản: tham gia từng nhóm rồi {action_label} ngay",
+            )
+            for uid, items in per_account.items():
+                if job.cancel.is_set():
+                    break
+                job.log("INFO", f"[{uid}] Bắt đầu xử lý {len(items)} nhóm")
+                try:
+                    self._run_account(job, accounts[uid], items)
+                except InterruptedError:
+                    break
+                except Exception as exc:
+                    job.log("ERROR", _friendly_automation_error(exc)["message"])
+                if not job.cancel.is_set():
+                    job.log("SUCCESS", f"[{uid}] Đã xử lý xong, chuẩn bị chuyển tài khoản tiếp theo")
 
             if job.cancel.is_set():
                 job.status = "STOPPED"
@@ -855,7 +1182,7 @@ class CampaignManager:
             job.message = "Chiến dịch đã dừng theo yêu cầu"
         except Exception as exc:
             job.status = "FAILED"
-            job.log("ERROR", str(exc))
+            job.log("ERROR", _friendly_automation_error(exc)["message"])
         finally:
             job.finished_at = datetime.now().isoformat(timespec="seconds")
             self._persist_final_results(job)
@@ -875,10 +1202,6 @@ class CampaignManager:
 
         try:
             with owner_scope(job.owner), self.poster_factory(account, job.cancel, job.log) as poster:
-                # Complete the join pass first. Reusing the same browser for posting
-                # between join requests navigated away from Facebook before the join
-                # state had settled, which made this flow appear interrupted.
-                job.log("INFO", f"[{uid}] Luồng tham gia: bắt đầu xử lý {len(groups)} nhóm liên tục")
                 for index, group in enumerate(groups):
                     if job.cancel.is_set():
                         raise InterruptedError()
@@ -891,18 +1214,13 @@ class CampaignManager:
                     except InterruptedError:
                         raise
                     except Exception as join_error:
-                        join_result = {"status": "FAILED", "message": str(join_error)}
+                        join_result = {"status": "FAILED", **_friendly_automation_error(join_error)}
                         job.log("WARNING", f"[{uid}] Luồng tham gia lỗi nhưng luồng đăng vẫn tiếp tục")
                     join_results[index] = join_result
                     self._record_join_step(job, uid, group_name, join_result, group_url)
 
-                job.log("SUCCESS", f"[{uid}] Luồng tham gia: đã kiểm tra xong {len(groups)} nhóm")
-
-                # Posting/commenting is a separate pass. A failed or pending join
-                # remains informational and does not stop this action pass.
-                for index, group in enumerate(groups):
-                    if job.cancel.is_set():
-                        raise InterruptedError()
+                    # A failed or pending join remains informational. The requested
+                    # action is attempted immediately before moving to the next group.
                     choices = [i for i in range(len(posts)) if i not in used]
                     if not choices:
                         used.clear()
@@ -912,10 +1230,6 @@ class CampaignManager:
                         used.append(post_index)
                     media_count = min(len(media_pool), random.randint(min_media, max_media)) if media_pool else 0
                     media = random.sample(media_pool, media_count) if media_count else []
-                    group_name = group.get("name") or _group_key(group)
-                    group_url = _group_url(group)
-                    url_display = f" ({group_url})" if group_url else ""
-                    join_result = join_results[index] or {"status": "FAILED", "message": "Chưa kiểm tra trạng thái tham gia"}
                     try:
                         action_type = str(job.payload.get("action_type") or "POST").upper()
                         if action_type == "COMMENT":
@@ -937,9 +1251,10 @@ class CampaignManager:
                     except InterruptedError:
                         raise
                     except Exception as exc:
+                        error_info = _friendly_automation_error(exc)
                         self._advance_step(job)
                         self._record_result(job, account, group, {
-                            "status": "FAILED", "message": str(exc),
+                            "status": "FAILED", **error_info,
                             "join_status": join_result.get("status", "FAILED"),
                             "content": posts[post_index],
                         })
@@ -952,7 +1267,8 @@ class CampaignManager:
         except InterruptedError:
             raise
         except Exception as exc:
-            job.log("ERROR", f"[{uid}] {exc}")
+            error_info = _friendly_automation_error(exc)
+            job.log("ERROR", f"[{uid}] {error_info['message']}")
             if not job.cancel.is_set():
                 for index, group in enumerate(groups):
                     if index in completed_actions:
@@ -961,7 +1277,7 @@ class CampaignManager:
                     self._advance_step(job, 1 if join_result is not None else 2)
                     self._record_result(job, account, group, {
                         "status": "FAILED",
-                        "message": str(exc),
+                        **error_info,
                         "join_status": join_result.get("status") if join_result else "FAILED",
                     })
 
@@ -975,6 +1291,9 @@ class CampaignManager:
         job: CampaignJob, uid: str, group_name: str, result: dict[str, Any], group_url: str = ""
     ) -> None:
         status = result.get("status")
+        if status == "FAILED" and not result.get("error_code"):
+            normalized = _friendly_automation_error(result.get("message", ""))
+            result = {**result, **normalized}
         with job.lock:
             job.completed_steps = min(job.total_steps, job.completed_steps + 1)
             if status == "JOINED":
@@ -994,6 +1313,8 @@ class CampaignManager:
         status = str(result.get("status") or "FAILED").upper()
         if status not in {"SUCCESS", "PENDING_APPROVAL", "FAILED", "SKIPPED", "CANCELLED"}:
             status = "FAILED"
+        if status == "FAILED" and not result.get("error_code"):
+            result = {**result, **_friendly_automation_error(result.get("message", ""))}
         item = {
             "id": str(uuid.uuid4()),
             "account_uid": uid,

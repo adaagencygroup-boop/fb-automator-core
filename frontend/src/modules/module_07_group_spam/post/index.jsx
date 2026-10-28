@@ -16,6 +16,7 @@ import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import {
   generateGroupPosts,
+  generateGroupComments,
   getCurrentGroupCampaign,
   getGroupCampaign,
   getGroupSettings,
@@ -44,7 +45,11 @@ import {
   writeGroupPostDraftMedia,
 } from "./draftStorage";
 
-export default function GroupPostModule() {
+export default function GroupPostModule({ actionType = "POST" }) {
+  const isComment = actionType === "COMMENT";
+  const draftScope = isComment ? "comment" : "post";
+  const actionLabel = isComment ? "bình luận" : "đăng bài";
+  const contentLabel = isComment ? "bình luận" : "bài viết";
   const editorRef = useRef(null);
   const completionToastJobRef = useRef(null);
 
@@ -96,7 +101,7 @@ export default function GroupPostModule() {
   // Bước 6: Nội dung bài viết (Hỗ trợ AI)
   const [prompt, setPrompt] = useState("");
   const [aiCount, setAiCount] = useState("1");
-  const [posts, setPosts] = useState([INITIAL_POST]);
+  const [posts, setPosts] = useState(isComment ? [""] : [INITIAL_POST]);
   const [activePost, setActivePost] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
@@ -126,7 +131,7 @@ export default function GroupPostModule() {
       try {
         const stored = sessionStorage.getItem("fb_rerun_campaign");
         const data = stored ? JSON.parse(stored) : null;
-        if (data?.action_type === "POST") {
+        if (data?.action_type === actionType) {
           if (data.campaign_id) setCampaignId(data.campaign_id);
           if (data.name) setCampaignName(data.name);
           if (data.description) setCampaignDescription(data.description);
@@ -165,7 +170,7 @@ export default function GroupPostModule() {
           return;
         }
 
-        const draft = readGroupPostDraft();
+        const draft = readGroupPostDraft(draftScope);
         if (!draft) return;
 
         setCampaignId(draft.campaignId ?? null);
@@ -193,7 +198,7 @@ export default function GroupPostModule() {
         setIsMediaLocked(Boolean(draft.isMediaLocked));
         setPrompt(draft.prompt ?? "");
         setAiCount(draft.aiCount ?? "1");
-        setPosts(draft.posts?.length ? draft.posts : [INITIAL_POST]);
+        setPosts(draft.posts?.length ? draft.posts : (isComment ? [""] : [INITIAL_POST]));
         setActivePost(Number.isInteger(draft.activePost) ? draft.activePost : 0);
         setHasGeneratedContent(Boolean(draft.hasGeneratedContent));
         setIsContentLocked(Boolean(draft.isContentLocked));
@@ -205,10 +210,10 @@ export default function GroupPostModule() {
         setScheduleTime(draft.scheduleTime ?? "08:00");
         setIsPostingSettingsLocked(Boolean(draft.isPostingSettingsLocked));
 
-        const restoredMedia = await readGroupPostDraftMedia();
+        const restoredMedia = await readGroupPostDraftMedia(draftScope);
         if (!cancelled) setMediaFiles(restoredMedia);
       } catch (e) {
-        console.warn("Lỗi khôi phục cấu hình đăng bài nhóm:", e);
+        console.warn(`Lỗi khôi phục cấu hình ${actionLabel} nhóm:`, e);
       } finally {
         if (!cancelled) setDraftReady(true);
       }
@@ -216,7 +221,7 @@ export default function GroupPostModule() {
 
     restoreDraft();
     return () => { cancelled = true; };
-  }, [selectApi]);
+  }, [actionLabel, actionType, draftScope, isComment, selectApi]);
 
   useEffect(() => {
     if (!draftReady || isRerun) return;
@@ -257,9 +262,9 @@ export default function GroupPostModule() {
       scheduleDate,
       scheduleTime,
       isPostingSettingsLocked,
-    });
+    }, draftScope);
   }, [
-    draftReady, isRerun, campaignId, campaignName, campaignDescription, campaignLocked,
+    draftReady, isRerun, campaignId, campaignName, campaignDescription, campaignLocked, draftScope,
     selectedAccountKeys, isAccountLocked, apiSource.selectedId, threads, restMinutes, maxPosts, isSettingsLocked,
     confirmedApi, groupSource, groupFile, customGroups, groupSearch, groupFilter,
     selectedGroupKeys, isGroupSourceLocked, savedMedia, minMedia, maxMedia, isMediaLocked,
@@ -269,8 +274,8 @@ export default function GroupPostModule() {
 
   useEffect(() => {
     if (!draftReady || isRerun) return;
-    writeGroupPostDraftMedia(mediaFiles);
-  }, [draftReady, isRerun, mediaFiles]);
+    writeGroupPostDraftMedia(mediaFiles, draftScope);
+  }, [draftReady, isRerun, mediaFiles, draftScope]);
 
   const loadAccounts = async () => {
     setAccountsLoading(true);
@@ -280,7 +285,7 @@ export default function GroupPostModule() {
       const rows = rawList.map(normalizeAccount);
       setAccounts(rows);
       const rerun = JSON.parse(sessionStorage.getItem("fb_rerun_campaign") || "null");
-      if (rerun?.action_type === "POST" && rerun.config?.account_uids) {
+      if (rerun?.action_type === actionType && rerun.config?.account_uids) {
         setSelectedAccountKeys(rows.filter((account) => rerun.config.account_uids.includes(account.uid)).map((account) => account.key));
         return;
       }
@@ -308,7 +313,7 @@ export default function GroupPostModule() {
       .then((data) => {
         if (cancelled) return;
         const rerun = JSON.parse(sessionStorage.getItem("fb_rerun_campaign") || "null");
-        if (rerun?.action_type === "POST" || readGroupPostDraft()) return;
+        if (rerun?.action_type === actionType || readGroupPostDraft(draftScope)) return;
         setThreads(String(data.threads));
         setRestMinutes(String(data.rest_minutes));
         setMaxPosts(String(data.max_posts));
@@ -321,14 +326,14 @@ export default function GroupPostModule() {
         if (!cancelled) setSettingsLoading(false);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [actionType, draftScope]);
 
   // Khôi phục chiến dịch đang chạy khi người dùng đổi tab hoặc tải lại giao diện.
   useEffect(() => {
     let cancelled = false;
     getCurrentGroupCampaign()
       .then((job) => {
-        if (cancelled || !job?.job_id || job.action_type !== "POST") return;
+        if (cancelled || !job?.job_id || job.action_type !== actionType) return;
         const terminal = ["COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"].includes(job.status);
         setCampaignProgress(job);
         if (!terminal) {
@@ -339,7 +344,7 @@ export default function GroupPostModule() {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, []);
+  }, [actionType]);
 
   // Polling tiến trình khi có chiến dịch đang chạy
   useEffect(() => {
@@ -397,12 +402,12 @@ export default function GroupPostModule() {
     if (completionToastJobRef.current === completionKey) return;
     completionToastJobRef.current = completionKey;
     toast.success({
-      key: `group-post-completed-${completionKey}`,
+      key: `group-${draftScope}-completed-${completionKey}`,
       title: "HOÀN TẤT CHIẾN DỊCH",
       message: completionLog.message,
       duration: 8000,
     });
-  }, [campaignProgress]);
+  }, [campaignProgress, draftScope]);
 
   const currentGroupPool = useMemo(() => {
     if (groupSource === "file" && groupFile?.groups?.length) {
@@ -449,7 +454,6 @@ export default function GroupPostModule() {
     if (!Number.isInteger(values.max_posts) || values.max_posts < 1 || values.max_posts > 1000) {
       throw new Error("Max bài phải là số nguyên từ 1 đến 1000");
     }
-    if (!hasApiKey) throw new Error("Hãy chọn API đã cấu hình trong Hồ sơ cá nhân.");
     return values;
   };
 
@@ -502,20 +506,21 @@ export default function GroupPostModule() {
     setIsGenerating(true);
     setSettingsFeedback(null);
     try {
-      const result = await generateGroupPosts({
+      const result = await (isComment ? generateGroupComments : generateGroupPosts)({
         model,
         credential_id: apiSource.selectedId,
         prompt: prompt.trim(),
         count: amount,
       });
-      const generatedPosts = isDup ? result.posts.slice(0, 1) : result.posts;
+      const generatedContent = result[isComment ? "comments" : "posts"] || [];
+      const generatedPosts = isDup ? generatedContent.slice(0, 1) : generatedContent;
       setPosts(generatedPosts);
       setActivePost(0);
       setHasGeneratedContent(true);
       toast.success(
         isDup
-          ? "Đã tạo thành công 1 bài viết bằng AI (Trùng lặp nội dung)!"
-          : `Đã tạo thành công ${generatedPosts.length} bài viết bằng AI!`,
+          ? `Đã tạo thành công 1 ${contentLabel} bằng AI!`
+          : `Đã tạo thành công ${generatedPosts.length} ${contentLabel} bằng AI!`,
         "TẠO NỘI DUNG THÀNH CÔNG"
       );
       setSettingsFeedback({ type: "success", message: `Đã tạo ${generatedPosts.length} bài bằng ${model}` });
@@ -547,9 +552,8 @@ export default function GroupPostModule() {
 
     if (!trimmedCampaignName) missingSteps.push({ step: 1, message: "nhập tên chiến dịch", target: "step-1-campaign" });
     if (!selectedAccounts.length) missingSteps.push({ step: 2, message: "chọn ít nhất một tài khoản", target: "step-2-accounts" });
-    if (!hasApiKey) missingSteps.push({ step: 3, message: "chọn API đã cấu hình", target: "step-3-settings" });
     if (!activeGroups.length) missingSteps.push({ step: 4, message: "chọn ít nhất một nhóm", target: "step-4-group-source" });
-    if (!hasPostContent) missingSteps.push({ step: 6, message: "nhập nội dung bài viết", target: "step-6-content" });
+    if (!hasPostContent) missingSteps.push({ step: 6, message: `nhập nội dung ${contentLabel}`, target: "step-6-content" });
     if (scheduleEnabled && !scheduleDate) missingSteps.push({ step: 7, message: "chọn ngày bắt đầu", target: "step-7-posting" });
     if (scheduleEnabled && !scheduleTime) missingSteps.push({ step: 7, message: "chọn giờ bắt đầu", target: "step-7-posting" });
 
@@ -609,7 +613,7 @@ export default function GroupPostModule() {
     });
     try {
       appendCampaignLog("INFO", "Đang kiểm tra và lưu cấu hình Module 7...");
-      const saved = await handleSaveSettings(false, false);
+      const saved = hasApiKey ? await handleSaveSettings(false, false) : true;
       if (!saved) throw new Error("Cấu hình chưa hợp lệ");
       appendCampaignLog("SUCCESS", `Đã chuẩn bị ${selectedAccounts.length} tài khoản và nguồn nhóm.`);
       let savedMediaPaths = [];
@@ -640,7 +644,7 @@ export default function GroupPostModule() {
         campaign_id: campaignId || undefined,
         name: trimmedCampaignName,
         description: campaignDescription || undefined,
-        action_type: "POST",
+        action_type: actionType,
         account_ids: selectedAccounts.map((account) => account.id),
         account_uids: selectedAccounts.map((account) => account.uid),
         groups: activeGroups,
@@ -658,6 +662,7 @@ export default function GroupPostModule() {
           max_media: Number(maxMedia) || 0,
           avoid_duplicate: false,
           shuffle_content: true,
+          auto_like: isComment,
           schedule_at: scheduleEnabled && scheduleDate ? `${scheduleDate}T${scheduleTime}` : null,
         },
       });
@@ -667,7 +672,7 @@ export default function GroupPostModule() {
       setRunState(campaign.status === "QUEUED" ? "starting" : "running");
       sessionStorage.removeItem("fb_rerun_campaign");
       setIsRerun(false);
-      toast.success("Đã khởi động chiến dịch đăng bài nhóm thành công!", "BẮT ĐẦU CHIẾN DỊCH");
+      toast.success(`Đã khởi động chiến dịch ${actionLabel} nhóm thành công!`, "BẮT ĐẦU CHIẾN DỊCH");
     } catch (error) {
       appendCampaignLog("ERROR", error.message || "Không thể bắt đầu chiến dịch");
       setSettingsFeedback({ type: "error", message: error.message || "Không thể bắt đầu chiến dịch" });
@@ -695,10 +700,12 @@ export default function GroupPostModule() {
       {/* Header */}
       <div>
         <h1 className="font-heading text-xl font-bold tracking-tight text-slate-800">
-          Spam Group – Đăng bài
+          {isComment ? "Spam Group – Bình luận" : "Spam Group – Đăng bài"}
         </h1>
         <p className="mt-1 text-xs text-slate-400">
-          Tự động tìm kiếm và đăng bài vào các hội nhóm Facebook theo từ khoá hoặc từ file link nhóm.
+          {isComment
+            ? "Tự động bình luận vào bài viết đầu tiên của các nhóm Facebook theo từ khoá hoặc từ file link nhóm."
+            : "Tự động tìm kiếm và đăng bài vào các hội nhóm Facebook theo từ khoá hoặc từ file link nhóm."}
         </p>
       </div>
 
@@ -776,6 +783,7 @@ export default function GroupPostModule() {
       {/* Bước 6: Tạo nội dung bằng AI */}
       <div id="step-6-content" className="scroll-mt-6">
         <GroupContentSection
+          contentType={isComment ? "comment" : "post"}
           stepNumber="6"
           prompt={prompt}
           setPrompt={setPrompt}
@@ -797,6 +805,7 @@ export default function GroupPostModule() {
       {/* Bước 7: Cài đặt đăng bài */}
       <div id="step-7-posting" className="scroll-mt-6">
         <GroupPostingSettingsSection
+          contentType={isComment ? "comment" : "post"}
           stepNumber="7"
           scheduleEnabled={scheduleEnabled}
           setScheduleEnabled={setScheduleEnabled}
@@ -817,6 +826,7 @@ export default function GroupPostModule() {
       {/* Bước 8: Thông tin cấu hình tổng hợp */}
       <div id="step-8-summary" className="scroll-mt-6">
         <GroupSummarySection
+          contentType={isComment ? "comment" : "post"}
           stepNumber="8"
           campaignName={campaignName}
           selectedAccountsCount={selectedAccounts.length}
@@ -866,7 +876,7 @@ export default function GroupPostModule() {
                 Chiến dịch hoàn thành thành công!
               </DialogTitle>
               <DialogDescription className="text-xs sm:text-sm text-slate-500 text-center mt-1">
-                Tất cả các tài khoản đã hoàn tất lượt đăng bài vào nhóm mục tiêu.
+                Tất cả các tài khoản đã hoàn tất lượt {actionLabel} vào nhóm mục tiêu.
               </DialogDescription>
             </DialogHeader>
 
@@ -875,7 +885,7 @@ export default function GroupPostModule() {
               <div className="flex items-center justify-between text-xs sm:text-sm">
                 <span className="text-slate-600 font-medium">Tên chiến dịch:</span>
                 <span className="font-bold text-slate-800 truncate max-w-[210px]" title={campaignName}>
-                  {campaignName || "Chiến dịch đăng bài nhóm"}
+                  {campaignName || `Chiến dịch ${actionLabel} nhóm`}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs sm:text-sm">
@@ -927,6 +937,7 @@ export default function GroupPostModule() {
 
       {/* Sticky Bottom Action Bar */}
       <GroupActionBar
+        contentType={isComment ? "comment" : "post"}
         runState={runState}
         canStart={canStart}
         onStart={handleStart}

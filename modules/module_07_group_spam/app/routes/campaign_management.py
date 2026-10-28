@@ -4,14 +4,36 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import json
 import math
+import re
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 # pyrefly: ignore[missing-import]
 from core.database.connection import db
 from modules.module_02_account_manager.api.router import scoped_owner
+from ..services.campaign import _friendly_automation_error
 
 router = APIRouter(tags=["Module 07: Campaigns & History"])
+
+
+def _history_result_message(status: str | None, message: str | None) -> str:
+    value = str(message or "")
+    if str(status or "").upper() == "FAILED" and value:
+        return _friendly_automation_error(value)["message"]
+    return value
+
+
+def _history_group_uid(group_key: str | None, group_url: str | None) -> str:
+    url_match = re.search(r"/groups/([^/?#]+)", str(group_url or ""), flags=re.IGNORECASE)
+    if url_match:
+        return url_match.group(1)
+    key = str(group_key or "").strip()
+    return key[6:] if key.lower().startswith("group_") else key
+
+
+def _is_post_permalink(url: str | None) -> bool:
+    value = str(url or "").lower()
+    return "/posts/" in value or "/permalink/" in value or "story_fbid=" in value
 
 
 @router.get("/campaigns")
@@ -185,10 +207,11 @@ async def get_campaign_details(
             "account_uid": task["account_uid"],
             "account_name": task.get("account_name") or "",
             "group_name": task.get("group_name") or task.get("group_key") or "",
+            "group_uid": _history_group_uid(task.get("group_key"), task.get("group_url")),
             "group_url": task.get("group_url") or "",
             "result_url": task.get("result_url") or "",
             "status": task.get("status") or "PENDING",
-            "result_message": task.get("result_message") or "",
+            "result_message": _history_result_message(task.get("status"), task.get("result_message")),
             "created_at": task.get("finished_at") or task.get("synced_at") or "",
         })
 
@@ -418,7 +441,7 @@ async def get_group_history_records(
         if st == "SUCCESS":
             result_desc = "Đã đăng bài" if is_post else "Đã bình luận"
         else:
-            result_desc = row.get("result_message") or "Lỗi"
+            result_desc = _history_result_message(row.get("status"), row.get("result_message")) or "Lỗi"
 
         time_val = row.get("finished_at") or row.get("synced_at") or ""
         records.append({
@@ -431,12 +454,13 @@ async def get_group_history_records(
             "account_uid": row["account_uid"],
             "account_name": row.get("account_name") or "",
             "group_name": row.get("group_name") or row.get("group_key") or "",
+            "group_uid": _history_group_uid(row.get("group_key"), row.get("group_url")),
             "group_url": row.get("group_url") or "",
             "content": row.get("content") or "",
             "status": st,
             "result": result_desc,
             "result_url": row.get("result_url") or row.get("group_url") or "",
-            "has_permalink": bool(row.get("result_url")),
+            "has_permalink": _is_post_permalink(row.get("result_url")),
             "time": time_val,
         })
 
@@ -450,4 +474,47 @@ async def get_group_history_records(
             "page_size": page_size,
             "total_pages": total_pages,
         },
+    }
+
+
+@router.post("/history/{log_id}/open")
+async def open_history_result(
+    log_id: str,
+    owner: str | None = Depends(scoped_owner),
+):
+    where = ["l.log_id = ?"]
+    params: list[Any] = [log_id]
+    if owner:
+        where.append("r.owner_key = ?")
+        params.append(owner)
+    record = db.fetch_one(
+        f"""
+        SELECT l.account_uid, l.result_url, l.group_url
+        FROM cloud_group_logs l
+        JOIN cloud_group_runs r ON r.run_id = l.run_id
+        WHERE {' AND '.join(where)}
+        """,
+        tuple(params),
+    )
+    if not record:
+        raise HTTPException(404, "Không tìm thấy bản ghi tác vụ")
+
+    account_uid = str(record.get("account_uid") or "").strip()
+    target_url = str(record.get("result_url") or record.get("group_url") or "").strip()
+    if not account_uid:
+        raise HTTPException(422, "Bản ghi chưa có UID người dùng")
+    if not re.match(
+        r"^https?://(?:(?:www|m|web)\.)?facebook\.com/",
+        target_url,
+        flags=re.IGNORECASE,
+    ):
+        raise HTTPException(422, "Bản ghi chưa có liên kết Facebook hợp lệ")
+
+    from modules.module_02_account_manager.services.browser_service import queue_open_browser
+
+    result = queue_open_browser(account_uid, target_url=target_url)
+    return {
+        **result,
+        "target_url": target_url,
+        "message": f"Đang mở bài bằng Chrome profile của UID {account_uid}",
     }

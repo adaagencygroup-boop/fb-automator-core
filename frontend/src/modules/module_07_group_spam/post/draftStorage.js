@@ -1,11 +1,11 @@
-const DRAFT_KEY = "module_07_group_post_draft";
+const draftKey = (scope) => `module_07_group_${scope}_draft`;
 const MEDIA_DB_NAME = "fb_automator_module_07";
 const MEDIA_STORE_NAME = "group_post_draft";
-const MEDIA_KEY = "media_files";
+const mediaKey = (scope) => `${scope}_media_files`;
 
-export function readGroupPostDraft() {
+export function readGroupPostDraft(scope = "post") {
   try {
-    const raw = sessionStorage.getItem(DRAFT_KEY);
+    const raw = sessionStorage.getItem(draftKey(scope));
     return raw ? JSON.parse(raw) : null;
   } catch (error) {
     console.warn("Không thể đọc bản nháp đăng bài nhóm:", error);
@@ -13,9 +13,9 @@ export function readGroupPostDraft() {
   }
 }
 
-export function writeGroupPostDraft(draft) {
+export function writeGroupPostDraft(draft, scope = "post") {
   try {
-    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    sessionStorage.setItem(draftKey(scope), JSON.stringify(draft));
   } catch (error) {
     console.warn("Không thể lưu bản nháp đăng bài nhóm:", error);
   }
@@ -37,14 +37,14 @@ function openMediaDatabase() {
   });
 }
 
-export async function readGroupPostDraftMedia() {
+export async function readGroupPostDraftMedia(scope = "post") {
   try {
     const db = await openMediaDatabase();
     if (!db) return [];
 
     return await new Promise((resolve, reject) => {
       const transaction = db.transaction(MEDIA_STORE_NAME, "readonly");
-      const request = transaction.objectStore(MEDIA_STORE_NAME).get(MEDIA_KEY);
+      const request = transaction.objectStore(MEDIA_STORE_NAME).get(mediaKey(scope));
       request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
       request.onerror = () => reject(request.error);
       transaction.oncomplete = () => db.close();
@@ -55,14 +55,14 @@ export async function readGroupPostDraftMedia() {
   }
 }
 
-export async function writeGroupPostDraftMedia(files) {
+export async function writeGroupPostDraftMedia(files, scope = "post") {
   try {
     const db = await openMediaDatabase();
     if (!db) return;
 
     await new Promise((resolve, reject) => {
       const transaction = db.transaction(MEDIA_STORE_NAME, "readwrite");
-      transaction.objectStore(MEDIA_STORE_NAME).put(Array.from(files || []), MEDIA_KEY);
+      transaction.objectStore(MEDIA_STORE_NAME).put(Array.from(files || []), mediaKey(scope));
       transaction.oncomplete = resolve;
       transaction.onerror = () => reject(transaction.error);
     });

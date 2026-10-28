@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/lib/toast";
-import { getGroupHistoryRecords } from "../service";
+import { getGroupHistoryRecords, openGroupHistoryRecord } from "../service";
 
 const taskStatusLabel = (status) => ({
   SUCCESS: "Thành công",
@@ -73,6 +73,7 @@ export default function GroupHistoryModule() {
   });
   const [totalPages, setTotalPages] = useState(1);
   const [detailItem, setDetailItem] = useState(null);
+  const [openingRecordId, setOpeningRecordId] = useState(null);
 
   // Tính ngày theo timeRange
   const resolveDateParams = useCallback(() => {
@@ -169,9 +170,9 @@ export default function GroupHistoryModule() {
       toast.warning("Không có dữ liệu lịch sử để xuất file!", "THÔNG BÁO");
       return;
     }
-    const headers = ["STT,Thời gian,Loại,Chiến dịch,UID,Nhóm,Nội dung,Trạng thái,Kết quả,Link liên quan"];
+    const headers = ["STT,Thời gian,Loại,Chiến dịch,UID người dùng,UID nhóm,Nhóm,Nội dung,Trạng thái,Kết quả,Link liên quan"];
     const rows = records.map((item) =>
-      `"${item.stt}","${item.time}","${item.action_type === "POST" ? "Đăng bài" : "Bình luận"}","${(item.campaign_name || "").replace(/"/g, '""')}","${item.account_uid}","${(item.group_name || "").replace(/"/g, '""')}","${(item.content || "").replace(/"/g, '""')}","${taskStatusLabel(item.status)}","${(item.result || "").replace(/"/g, '""')}","${item.result_url || ""}"`
+      `"${item.stt}","${item.time}","${item.action_type === "POST" ? "Đăng bài" : "Bình luận"}","${(item.campaign_name || "").replace(/"/g, '""')}","${item.account_uid}","${item.group_uid || ""}","${(item.group_name || "").replace(/"/g, '""')}","${(item.content || "").replace(/"/g, '""')}","${taskStatusLabel(item.status)}","${(item.result || "").replace(/"/g, '""')}","${item.result_url || ""}"`
     );
     const csvContent = "\uFEFF" + [headers, ...rows].join("\n");
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -198,6 +199,22 @@ export default function GroupHistoryModule() {
       });
     } catch {
       return timeStr;
+    }
+  };
+
+  const handleOpenResult = async (item) => {
+    if (!item?.id || openingRecordId) return;
+    setOpeningRecordId(item.id);
+    try {
+      const response = await openGroupHistoryRecord(item.id);
+      toast.success(
+        response?.message || `Đang mở bài bằng tài khoản ${item.account_uid}`,
+        "ĐANG MỞ CHROME PROFILE",
+      );
+    } catch (error) {
+      toast.error(error.message || "Không thể mở bài bằng Chrome profile của tài khoản", "LỖI MỞ BÀI");
+    } finally {
+      setOpeningRecordId(null);
     }
   };
 
@@ -446,7 +463,8 @@ export default function GroupHistoryModule() {
                 <th className="px-3 py-3">Thời gian</th>
                 <th className="px-3 py-3">Loại</th>
                 <th className="px-3 py-3">Chiến dịch</th>
-                <th className="px-3 py-3">UID</th>
+                <th className="px-3 py-3">UID người dùng</th>
+                <th className="px-3 py-3">UID nhóm</th>
                 <th className="px-3 py-3">Nhóm Facebook</th>
                 <th className="px-3 py-3">Nội dung</th>
                 <th className="px-3 py-3">Trạng thái</th>
@@ -457,14 +475,14 @@ export default function GroupHistoryModule() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-12 text-center text-slate-400">
+                  <td colSpan={11} className="px-4 py-12 text-center text-slate-400">
                     <RotateCcw className="mx-auto mb-2 size-5 animate-spin text-primary" />
                     Đang tải danh sách lịch sử...
                   </td>
                 </tr>
               ) : records.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-12 text-center">
+                  <td colSpan={11} className="px-4 py-12 text-center">
                     <div className="flex flex-col items-center justify-center space-y-2">
                       <FileText className="size-8 text-slate-300" />
                       <p className="text-xs font-semibold text-slate-600">
@@ -504,6 +522,9 @@ export default function GroupHistoryModule() {
                     <td className="px-3 py-3 font-mono text-[11px] text-slate-600">
                       {item.account_uid}
                     </td>
+                    <td className="px-3 py-3 font-mono text-[11px] text-slate-600">
+                      {item.group_uid || "--"}
+                    </td>
                     <td className="px-3 py-3">
                       <span className="font-medium text-slate-700 line-clamp-1 max-w-[150px]" title={item.group_name}>
                         {item.group_name || "Nhóm Facebook"}
@@ -534,16 +555,20 @@ export default function GroupHistoryModule() {
                     </td>
                     <td className="px-3 py-3 text-right">
                       {item.result_url ? (
-                        <a
-                          href={item.result_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        <button
+                          type="button"
+                          onClick={() => handleOpenResult(item)}
+                          disabled={Boolean(openingRecordId)}
                           className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-primary shadow-2xs hover:bg-slate-50"
-                          title={item.has_permalink ? "Mở bài viết Facebook trong tab mới" : "Mở nhóm Facebook trong tab mới"}
+                          title={`Mở bằng Chrome profile của UID ${item.account_uid}`}
                         >
-                          <span>{item.has_permalink ? "Mở bài" : "Mở nhóm"}</span>
-                          <ExternalLink className="size-3" />
-                        </a>
+                          {openingRecordId === item.id ? (
+                            <RotateCcw className="size-3 animate-spin" />
+                          ) : (
+                            <ExternalLink className="size-3" />
+                          )}
+                          <span>{openingRecordId === item.id ? "Đang mở" : (item.has_permalink ? "Mở bài" : "Mở nhóm")}</span>
+                        </button>
                       ) : (
                         <span className="text-[10px] italic text-slate-300" title="Không có liên kết được lưu">
                           Không có liên kết

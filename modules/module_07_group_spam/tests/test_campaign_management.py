@@ -55,6 +55,13 @@ class FakeCloudDatabase:
     def fetch_one(self, query, params=()):
         if "COUNT(l.log_id)" in query:
             return {"total_count": 1, "success_count": 1, "failed_count": 0}
+        if "SELECT l.account_uid, l.result_url, l.group_url" in query:
+            log = self.log()
+            return {
+                "account_uid": log["account_uid"],
+                "result_url": log["result_url"],
+                "group_url": log["group_url"],
+            }
         if "FROM cloud_group_runs WHERE campaign_id" in query:
             return {
                 "id": self.run_id,
@@ -123,6 +130,18 @@ class CampaignManagementTests(unittest.TestCase):
         history = self.client.get("/api/groups/history?status=SUCCESS")
         self.assertEqual(history.status_code, 200)
         self.assertEqual(history.json()["stats"]["success"], 1)
+        self.assertEqual(history.json()["records"][0]["group_uid"], "grp_1")
+
+        with patch(
+            "modules.module_02_account_manager.services.browser_service.queue_open_browser",
+            return_value={"started": True, "uid": "12345", "operation_id": "open-1"},
+        ) as open_browser:
+            opened = self.client.post(f"/api/groups/history/{self.cloud_db.task_id}/open")
+        self.assertEqual(opened.status_code, 200)
+        open_browser.assert_called_once_with(
+            "12345",
+            target_url="https://facebook.com/groups/grp_1/posts/999",
+        )
 
         invalid_dates = self.client.get(
             "/api/groups/history?from_date=2026-10-25&to_date=2026-10-20"
@@ -133,6 +152,21 @@ class CampaignManagementTests(unittest.TestCase):
         self.assertEqual(deleted.status_code, 200)
         after_delete = self.client.get("/api/groups/campaigns")
         self.assertEqual(after_delete.json()["campaigns"], [])
+
+    def test_open_history_accepts_web_facebook_link(self):
+        record = self.cloud_db.log()
+        record["result_url"] = "https://web.facebook.com/groups/grp_1/posts/999/"
+        with patch.object(self.cloud_db, "log", return_value=record), patch(
+            "modules.module_02_account_manager.services.browser_service.queue_open_browser",
+            return_value={"started": True, "uid": "12345", "operation_id": "open-web"},
+        ) as open_browser:
+            response = self.client.post(f"/api/groups/history/{self.cloud_db.task_id}/open")
+
+        self.assertEqual(response.status_code, 200)
+        open_browser.assert_called_once_with(
+            "12345",
+            target_url="https://web.facebook.com/groups/grp_1/posts/999/",
+        )
 
 
 if __name__ == "__main__":
