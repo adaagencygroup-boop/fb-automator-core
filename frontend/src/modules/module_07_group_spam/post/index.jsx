@@ -147,15 +147,18 @@ export default function GroupPostModule({ actionType = "POST" }) {
               setSelectedAccountKeys(cfg.account_uids);
             }
             if (cfg.groups?.length) {
+              setGroupSource("custom");
               setCustomGroups(cfg.groups);
-              setSelectedGroupKeys(cfg.groups.map((g) => g.key || g.url));
+              setSelectedGroupKeys(cfg.groups.map((g) => g.key || g.url || g.id));
             }
             if (cfg.posts?.length) {
               setPosts(cfg.posts);
               setAiCount(String(cfg.posts.length));
               setHasGeneratedContent(true);
             }
-            setSavedMedia(cfg.media || []);
+            if (Array.isArray(cfg.media) && cfg.media.length > 0) {
+              setSavedMedia(cfg.media);
+            }
             if (cfg.settings) {
               if (cfg.settings.credential_id !== undefined) selectApi(cfg.settings.credential_id);
               if (cfg.settings.max_posts !== undefined) setMaxPosts(String(cfg.settings.max_posts));
@@ -163,6 +166,8 @@ export default function GroupPostModule({ actionType = "POST" }) {
               if (cfg.settings.rest_minutes !== undefined) setRestMinutes(String(cfg.settings.rest_minutes));
               if (cfg.settings.delay_min !== undefined) setDelayMin(String(cfg.settings.delay_min));
               if (cfg.settings.delay_max !== undefined) setDelayMax(String(cfg.settings.delay_max));
+              if (cfg.settings.min_media !== undefined) setMinMedia(String(cfg.settings.min_media));
+              if (cfg.settings.max_media !== undefined) setMaxMedia(String(cfg.settings.max_media));
             }
             // Theo SRS: "Hẹn giờ cũ đã qua phải chọn lại"
             setScheduleEnabled(false);
@@ -276,6 +281,16 @@ export default function GroupPostModule({ actionType = "POST" }) {
       setAccountsLoading(false);
     }
   };
+
+  useEffect(() => {
+    const targetUids = rerunUidsRef.current;
+    if (targetUids && targetUids.length > 0 && accounts.length > 0) {
+      const matchedKeys = accounts.filter((acc) => targetUids.includes(acc.uid)).map((acc) => acc.key);
+      if (matchedKeys.length > 0) {
+        setSelectedAccountKeys(matchedKeys);
+      }
+    }
+  }, [accounts]);
 
   useEffect(() => {
     let cancelled = false;
