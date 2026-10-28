@@ -1073,6 +1073,7 @@ class CampaignManager:
         return cancel.wait(max(0, seconds))
 
     def _initialize_persistence(self, job: CampaignJob) -> None:
+
         action_type = str(job.payload.get("action_type") or "POST").upper()
         campaign_name = str(
             job.payload.get("name")
