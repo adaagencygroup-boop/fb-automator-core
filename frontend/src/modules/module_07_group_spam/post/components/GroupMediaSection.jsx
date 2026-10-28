@@ -8,6 +8,7 @@ import {
   X,
   Cloud,
   HardDrive,
+  Info,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/lib/toast";
@@ -148,18 +149,20 @@ export default function GroupMediaSection({
   setMediaFiles,
   savedMedia = [],
   setSavedMedia,
-  minMedia,
+  minMedia = "1",
   setMinMedia,
-  maxMedia,
+  maxMedia = "4",
   setMaxMedia,
   isLocked = false,
   stepNumber = "5",
   campaignId = null,
   onCampaignIdGenerated,
+  isComment = false,
 }) {
   const mediaInputRef = useRef(null);
 
   const totalCount = (savedMedia?.length || 0) + (mediaFiles?.length || 0);
+  const actionLabel = isComment ? "bình luận" : "đăng bài";
 
   const handleFiles = (fileList) => {
     if (isLocked) return;
@@ -179,6 +182,16 @@ export default function GroupMediaSection({
           ? crypto.randomUUID()
           : `camp-${Date.now()}`;
       onCampaignIdGenerated(activeCampaignId);
+    }
+
+    const newTotal = totalCount + toAdd.length;
+
+    // Tự động gán minMedia và maxMedia mặc định hợp lý khi bắt đầu chọn ảnh
+    if (setMinMedia && (!minMedia || Number(minMedia) < 1)) {
+      setMinMedia("1");
+    }
+    if (setMaxMedia && (!maxMedia || Number(maxMedia) < 1)) {
+      setMaxMedia(String(Math.min(newTotal, 4)));
     }
 
     if (setMediaFiles) {
@@ -215,7 +228,7 @@ export default function GroupMediaSection({
       title="Chọn media (ảnh/video)"
     >
       <div className="mb-4 flex h-9 items-center justify-center rounded-md bg-primary text-xs font-semibold text-white">
-        <ImageIcon className="mr-2 size-4" /> Hình ảnh + Video (Tự động lưu trữ Cloud khi chạy xong)
+        <ImageIcon className="mr-2 size-4" /> Hình ảnh + Video (Tùy chọn — Tự động lưu Cloud khi hoàn thành)
       </div>
       <input
         ref={mediaInputRef}
@@ -227,7 +240,8 @@ export default function GroupMediaSection({
         onChange={(event) => handleFiles(event.target.files)}
       />
 
-      {totalCount === 0 && !isLocked && (
+      {/* Khu vực kéo thả / chọn file */}
+      {(!isLocked || totalCount === 0) && (
         <button
           type="button"
           onClick={() => mediaInputRef.current?.click()}
@@ -236,26 +250,36 @@ export default function GroupMediaSection({
             event.preventDefault();
             handleFiles(event.dataTransfer.files);
           }}
-          className="flex min-h-40 w-full flex-col items-center justify-center rounded-lg border border-dashed border-blue-200 bg-slate-50/60 text-center transition-colors hover:bg-blue-50/40 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={isLocked || totalCount >= 10}
+          className={`flex w-full flex-col items-center justify-center rounded-lg border border-dashed transition-colors ${
+            totalCount === 0
+              ? "min-h-36 border-blue-200 bg-slate-50/60 hover:bg-blue-50/40"
+              : "min-h-20 border-slate-200 bg-slate-50/40 hover:bg-slate-100/50"
+          } text-center disabled:cursor-not-allowed disabled:opacity-60`}
         >
-          <span className="flex size-12 items-center justify-center rounded-full bg-blue-100 text-primary">
+          <span className="flex size-10 items-center justify-center rounded-full bg-blue-100 text-primary">
             <Plus className="size-5" />
           </span>
-          <span className="mt-3 text-xs font-bold text-slate-700">
-            Nhấp để tải ảnh lên hoặc kéo thả
+          <span className="mt-2 text-xs font-bold text-slate-700">
+            {totalCount === 0 ? "Nhấp để tải ảnh/video lên hoặc kéo thả (Tuỳ chọn)" : "Nhấp để chọn thêm ảnh/video"}
           </span>
           <span className="mt-1 text-[10px] text-slate-400">
-            Hỗ trợ JPG, PNG, MP4 (tối đa 10 tệp) — Tự động lưu lên Supabase Storage khi hoàn tất luồng tác vụ
+            Hỗ trợ JPG, PNG, MP4 (tối đa 10 tệp) — Nếu không chọn ảnh, hệ thống sẽ tự động {actionLabel} thuần văn bản
           </span>
         </button>
       )}
 
-      {totalCount === 0 && isLocked && (
-        <div className="flex min-h-20 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-500">
-          Không sử dụng media
+      {/* Thông báo chế độ khi không có ảnh */}
+      {totalCount === 0 && (
+        <div className="mt-3 flex items-center gap-2 rounded-md border border-blue-100 bg-blue-50/40 px-3 py-2 text-[11px] text-slate-600">
+          <Info className="size-3.5 shrink-0 text-primary" />
+          <span>
+            Chưa có media nào được chọn. Hệ thống sẽ tự động thực hiện <strong>{actionLabel} thuần văn bản</strong> (không kèm ảnh/video).
+          </span>
         </div>
       )}
 
+      {/* Danh sách ảnh đã chọn */}
       {totalCount > 0 && (
         <div className="mt-4 space-y-3">
           <div className="flex items-center justify-between">
@@ -322,47 +346,46 @@ export default function GroupMediaSection({
               />
             ))}
           </div>
-        </div>
-      )}
 
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <Field label="Tối thiểu media mỗi bài">
-          <Input
-            type="number"
-            min="0"
-            max={totalCount || undefined}
-            value={minMedia}
-            onChange={(event) => setMinMedia(event.target.value)}
-            disabled={isLocked}
-          />
-        </Field>
-        <Field label="Tối đa media mỗi bài">
-          <Input
-            type="number"
-            min="0"
-            max={totalCount || undefined}
-            value={maxMedia}
-            onChange={(event) => setMaxMedia(event.target.value)}
-            disabled={isLocked}
-          />
-        </Field>
-      </div>
+          {/* CHỈ HIỆN KHI CÓ MEDIA: Tối thiểu và Tối đa media mỗi bài / bình luận */}
+          <div className="mt-4 grid gap-4 border-t border-slate-100 pt-3 sm:grid-cols-2">
+            <Field label={`Tối thiểu media mỗi ${actionLabel}`}>
+              <Input
+                type="number"
+                min="1"
+                max={totalCount || undefined}
+                value={minMedia}
+                onChange={(event) => setMinMedia?.(event.target.value)}
+                disabled={isLocked}
+              />
+            </Field>
+            <Field label={`Tối đa media mỗi ${actionLabel}`}>
+              <Input
+                type="number"
+                min={minMedia || "1"}
+                max={totalCount || undefined}
+                value={maxMedia}
+                onChange={(event) => setMaxMedia?.(event.target.value)}
+                disabled={isLocked}
+              />
+            </Field>
+          </div>
 
-      {totalCount > 0 && (
-        <div className="mt-2.5">
-          {Number(maxMedia) > totalCount ? (
-            <p className="text-[11px] font-medium text-rose-600">
-              ⚠️ Số lượng tối đa ({maxMedia}) đang lớn hơn tổng số tệp đã có ({totalCount}). Vui lòng giảm số tối đa hoặc thêm tệp.
-            </p>
-          ) : Number(minMedia) > Number(maxMedia) ? (
-            <p className="text-[11px] font-medium text-rose-600">
-              ⚠️ Số lượng tối thiểu ({minMedia}) không được lớn hơn số lượng tối đa ({maxMedia}).
-            </p>
-          ) : (
-            <p className="text-[11px] text-slate-500">
-              💡 Hệ thống sẽ <strong>chọn ngẫu nhiên từ {minMedia || 0} đến {maxMedia || 0} tệp</strong> trong tổng số {totalCount} tệp cho mỗi lượt đăng/bình luận vào nhóm. Ảnh sẽ được tự động lưu lên Supabase Storage sau khi chạy hoàn thành.
-            </p>
-          )}
+          <div className="mt-2">
+            {Number(maxMedia) > totalCount ? (
+              <p className="text-[11px] font-medium text-rose-600">
+                ⚠️ Số lượng tối đa ({maxMedia}) đang lớn hơn tổng số tệp đã có ({totalCount}). Vui lòng giảm số tối đa hoặc thêm tệp.
+              </p>
+            ) : Number(minMedia) > Number(maxMedia) ? (
+              <p className="text-[11px] font-medium text-rose-600">
+                ⚠️ Số lượng tối thiểu ({minMedia}) không được lớn hơn số lượng tối đa ({maxMedia}).
+              </p>
+            ) : (
+              <p className="text-[11px] text-slate-500">
+                💡 Hệ thống sẽ <strong>chọn ngẫu nhiên từ {minMedia || 1} đến {maxMedia || 1} tệp</strong> trong tổng số {totalCount} tệp cho mỗi lượt {actionLabel} vào nhóm. Ảnh sẽ được tự động lưu lên Supabase Storage sau khi chạy hoàn thành.
+              </p>
+            )}
+          </div>
         </div>
       )}
 

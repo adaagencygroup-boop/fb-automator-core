@@ -41,14 +41,15 @@ PAGE_CREATION = {
     ],
     # 5. Mã quốc gia (Song ngữ VI/EN)
     "country_code_selector": [
+        # FB EN: aria-label="Country code, US +1" — phải match trước khi mặc định Mỹ làm kẹt Next
+        '//div[@role="button" and (starts-with(@aria-label, "Country code") or starts-with(@aria-label, "Mã quốc gia"))]',
         '//div[contains(@aria-label, "Mã quốc gia") or contains(@aria-label, "Country code") or contains(@aria-label, "Country Code")]',
-        '//div[@role="button" and contains(@aria-label, "+")]',
-        '//div[@role="combobox" and (contains(@aria-label, "quốc gia") or contains(@aria-label, "country") or contains(.,"VN") or contains(.,"+84"))]',
-        '//span[contains(text(), "+84") or contains(text(), "VN") or contains(text(), "Việt Nam")]/ancestor::div[@role="button" or @role="combobox"]',
+        '//div[@role="combobox" and (contains(@aria-label, "quốc gia") or contains(@aria-label, "country") or contains(@aria-label, "Country"))]',
     ],
     "country_vietnam_option": [
+        '//div[@role="option" or @role="menuitem" or @role="menuitemradio"][contains(., "Việt Nam") or contains(., "Vietnam")][contains(., "+84") or contains(., "84")]',
         '//div[@role="option" or @role="button" or @role="menuitem"][contains(., "Việt Nam") or contains(., "Vietnam") or contains(., "+84")]',
-        '//span[contains(text(), "Việt Nam") or contains(text(), "Vietnam") or contains(text(), "+84")]',
+        '//span[contains(text(), "Việt Nam") or contains(text(), "Vietnam")][contains(., "+84") or contains(../., "+84")]',
     ],
     # 6. SĐT (Song ngữ VI/EN)
     "phone_input": [

@@ -15,7 +15,7 @@ export default function LoginScreen({ onAuthenticated, onStatus, onRegister, ses
   const [hwid, setHwid] = useState("");
   const [hwidLoading, setHwidLoading] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showForgotModal, setShowForgotModal] = useState(false);

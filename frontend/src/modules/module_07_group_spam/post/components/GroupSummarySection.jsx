@@ -83,10 +83,10 @@ export default function GroupSummarySection({
     ],
     [
       <ImageIcon key="f" className="size-3.5" />,
-      "Min / Max media",
+      "Media đính kèm",
       mediaFilesCount
         ? `${mediaFilesCount} tệp đã chọn (${minMedia} – ${maxMedia} ảnh/${itemLabel})`
-        : `${minMedia} – ${maxMedia} ảnh`,
+        : "Không kèm media (Văn bản thuần)",
     ],
     [<RefreshCw key="g" className="size-3.5" />, "Luồng chạy", `${threads} luồng`],
     [

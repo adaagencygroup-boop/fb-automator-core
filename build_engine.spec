@@ -145,7 +145,8 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX dễ bị Windows Defender quét lâu (máy khác có thể 5–10 phút lần đầu).
+    upx=False,
     console=True,  # Giữ console=True để Tauri shell có thể capture stdout/stderr
     disable_windowed_traceback=False,
     argv_emulation=False,

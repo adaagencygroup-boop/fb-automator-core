@@ -577,23 +577,25 @@ export default function GroupPostModule({ actionType = "POST" }) {
     }
 
     const totalMediaCount = (savedMedia?.length || 0) + (mediaFiles?.length || 0);
-    if (totalMediaCount > 0 && Number(maxMedia) > totalMediaCount) {
-      toast.error(
-        `Số lượng media tối đa mỗi bài (${maxMedia}) không được lớn hơn tổng số tệp media đã chọn (${totalMediaCount}). Vui lòng điều chỉnh lại ở Bước 5!`,
-        "LỖI CẤU HÌNH MEDIA"
-      );
-      const el = document.getElementById("step-5-media");
-      if (el) el.scrollIntoView({ behavior: "smooth" });
-      return;
-    }
-    if (totalMediaCount === 0 && Number(minMedia) > 0) {
-      toast.error(
-        "Vui lòng chọn media hoặc đặt số media tối thiểu về 0 tại Bước 5.",
-        "LỖI CẤU HÌNH MEDIA"
-      );
-      const el = document.getElementById("step-5-media");
-      if (el) el.scrollIntoView({ behavior: "smooth" });
-      return;
+    if (totalMediaCount > 0) {
+      if (Number(maxMedia) > totalMediaCount) {
+        toast.error(
+          `Số lượng media tối đa mỗi bài (${maxMedia}) không được lớn hơn tổng số tệp media đã chọn (${totalMediaCount}). Vui lòng điều chỉnh lại ở Bước 5!`,
+          "LỖI CẤU HÌNH MEDIA"
+        );
+        const el = document.getElementById("step-5-media");
+        if (el) el.scrollIntoView({ behavior: "smooth" });
+        return;
+      }
+      if (Number(minMedia) > Number(maxMedia)) {
+        toast.error(
+          `Số lượng media tối thiểu (${minMedia}) không được lớn hơn số lượng tối đa (${maxMedia}) tại Bước 5.`,
+          "LỖI CẤU HÌNH MEDIA"
+        );
+        const el = document.getElementById("step-5-media");
+        if (el) el.scrollIntoView({ behavior: "smooth" });
+        return;
+      }
     }
 
     setIsCompletionModalOpen(false);
@@ -657,8 +659,8 @@ export default function GroupPostModule({ actionType = "POST" }) {
           max_posts: Number(maxPosts),
           delay_min: Math.round(Number(delayMin) * (delayUnit === "minutes" ? 60 : 1)),
           delay_max: Math.round(Number(delayMax) * (delayUnit === "minutes" ? 60 : 1)),
-          min_media: Number(minMedia) || 0,
-          max_media: Number(maxMedia) || 0,
+          min_media: totalMediaCount > 0 ? (Number(minMedia) || 0) : 0,
+          max_media: totalMediaCount > 0 ? (Number(maxMedia) || 0) : 0,
           avoid_duplicate: false,
           shuffle_content: true,
           auto_like: isComment,
@@ -780,6 +782,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
           isLocked={false}
           campaignId={campaignId}
           onCampaignIdGenerated={setCampaignId}
+          isComment={isComment}
         />
       </div>
 
@@ -844,7 +847,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
           groupSearch={groupSearch}
           groupFileName={groupFile?.name}
           activeGroupsCount={activeGroupsCount}
-          mediaFilesCount={mediaFiles.length}
+          mediaFilesCount={(savedMedia?.length || 0) + (mediaFiles?.length || 0)}
           minMedia={minMedia}
           maxMedia={maxMedia}
           threads={threads}

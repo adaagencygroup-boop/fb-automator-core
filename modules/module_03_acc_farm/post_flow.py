@@ -2087,12 +2087,12 @@ def publish_status_post(
             check_account_health(driver)
             raise RuntimeError(f"Lỗi tải ảnh đính kèm lên bài viết: {e}")
 
-    # 5. Tìm nút "Đăng" (chính xác trong hộp thoại dialog, chờ ảnh xử lý hoàn tất)
+    # 5. FB mới: có thể phải Next → Post settings rồi mới Post/Đăng
     _chk()
-    log("Tìm nút 'Đăng' trong hộp thoại...")
+    log("Tìm nút 'Đăng' / bước 'Next' trong hộp thoại...")
     post_btn = None
     start_wait = time.time()
-    while time.time() - start_wait < 25:
+    while time.time() - start_wait < 60:
         _chk()
         btn_selectors = [
             "//div[@role='dialog']//div[@role='button' and (@aria-label='Đăng' or @aria-label='Post')]",
@@ -2138,10 +2138,25 @@ def publish_status_post(
                     }
                 }
             }
+            // Composer còn bước Next trước Post settings
+            for (const b of buttons) {
+                const text = (b.innerText || b.textContent || '').trim().toLowerCase();
+                const aria = (b.getAttribute('aria-label') || '').trim().toLowerCase();
+                if (['next', 'tiếp', 'tiếp theo'].includes(text) || ['next', 'tiếp', 'tiếp theo'].includes(aria)) {
+                    if (b.getAttribute('aria-disabled') !== 'true' && !b.disabled) {
+                        b.click();
+                        return 'NEXT_CLICKED';
+                    }
+                }
+            }
             return null;
         """
         try:
             js_btn = driver.execute_script(js_find_btn)
+            if js_btn == "NEXT_CLICKED":
+                log("Đã bấm Next/Tiếp → chờ màn Post settings...")
+                time.sleep(random.uniform(1.2, 2.0))
+                continue
             if js_btn:
                 post_btn = js_btn
                 break

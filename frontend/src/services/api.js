@@ -161,6 +161,8 @@ api.interceptors.response.use(
     const status = error.response?.status;
     const original = error.config;
     const detail = authDetail(error);
+    const canRefreshMissingAuth =
+      detail === "Thiếu thông tin xác thực đăng nhập" && Boolean(getRefreshToken());
     if (
       status === 401
       && original
@@ -168,7 +170,7 @@ api.interceptors.response.use(
       && !shouldSkipRefresh(original.url)
       && !TERMINAL_AUTH.has(detail)
       && detail !== "SESSION_IDENTITY_CHANGED"
-      && detail !== "Thiếu thông tin xác thực đăng nhập"
+      && (detail !== "Thiếu thông tin xác thực đăng nhập" || canRefreshMissingAuth)
     ) {
       original._retry = true;
       try {
