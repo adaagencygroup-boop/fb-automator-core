@@ -201,6 +201,7 @@ class CloudHistoryStore:
         total_skipped: int,
         started_at: str | None,
         finished_at: str | None,
+        config: dict[str, Any] | None = None,
     ) -> None:
         with self._lock:
             metadata = self._runs.get(run_id)
@@ -216,6 +217,8 @@ class CloudHistoryStore:
                     "started_at": started_at,
                     "finished_at": finished_at,
                 }
+                if config is not None:
+                    metadata["config_json"] = json.dumps(config, ensure_ascii=False, default=str)
                 self._runs[run_id] = metadata
 
         if metadata:

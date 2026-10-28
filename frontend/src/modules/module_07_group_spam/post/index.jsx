@@ -561,9 +561,19 @@ export default function GroupPostModule({ actionType = "POST" }) {
       return;
     }
 
-    if (mediaFiles.length > 0 && Number(maxMedia) > mediaFiles.length) {
+    const totalMediaCount = (savedMedia?.length || 0) + (mediaFiles?.length || 0);
+    if (totalMediaCount > 0 && Number(maxMedia) > totalMediaCount) {
       toast.error(
-        `Số lượng media tối đa mỗi bài (${maxMedia}) không được lớn hơn tổng số tệp media đã chọn (${mediaFiles.length}). Vui lòng điều chỉnh lại ở Bước 5!`,
+        `Số lượng media tối đa mỗi bài (${maxMedia}) không được lớn hơn tổng số tệp media đã chọn (${totalMediaCount}). Vui lòng điều chỉnh lại ở Bước 5!`,
+        "LỖI CẤU HÌNH MEDIA"
+      );
+      const el = document.getElementById("step-5-media");
+      if (el) el.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+    if (totalMediaCount === 0 && Number(minMedia) > 0) {
+      toast.error(
+        "Vui lòng chọn media hoặc đặt số media tối thiểu về 0 tại Bước 5.",
         "LỖI CẤU HÌNH MEDIA"
       );
       const el = document.getElementById("step-5-media");
@@ -588,17 +598,20 @@ export default function GroupPostModule({ actionType = "POST" }) {
       if (!saved) throw new Error("Cấu hình chưa hợp lệ");
       appendCampaignLog("SUCCESS", `Đã chuẩn bị ${selectedAccounts.length} tài khoản và nguồn nhóm.`);
       let savedMediaPaths = [];
+      const effectiveCampaignId = campaignId || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `camp-${Date.now()}`);
+      if (!campaignId) setCampaignId(effectiveCampaignId);
+
       if (mediaFiles.length > 0) {
-        appendCampaignLog("INFO", `Đang tải lên ${mediaFiles.length} tệp media...`);
-        setSettingsFeedback({ type: "info", message: `Đang tải lên ${mediaFiles.length} tệp media lên hệ thống...` });
+        appendCampaignLog("INFO", `Đang chuẩn bị ${mediaFiles.length} tệp media cho runner...`);
+        setSettingsFeedback({ type: "info", message: `Đang chuẩn bị ${mediaFiles.length} tệp media...` });
         const formData = new FormData();
         mediaFiles.forEach((file) => {
           formData.append("files", file);
         });
-        const uploadRes = await uploadGroupMedia(formData);
+        const uploadRes = await uploadGroupMedia(formData, effectiveCampaignId);
         if (uploadRes?.files?.length) {
-          savedMediaPaths = uploadRes.files.map((f) => f.path || f.relative_path);
-          appendCampaignLog("SUCCESS", `Đã tải lên ${savedMediaPaths.length} tệp media.`);
+          savedMediaPaths = uploadRes.files.map((f) => f.saved_name || f.path || f.relative_path);
+          appendCampaignLog("SUCCESS", `Đã chuẩn bị thành công ${savedMediaPaths.length} tệp media.`);
         }
       }
 
@@ -612,7 +625,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
 
       appendCampaignLog("INFO", `Đang gửi chiến dịch ${selectedAccounts.length} tài khoản × ${activeGroups.length} nhóm tới worker...`);
       const campaign = await runGroupCampaign({
-        campaign_id: campaignId || undefined,
+        campaign_id: effectiveCampaignId,
         name: trimmedCampaignName,
         description: campaignDescription || undefined,
         action_type: actionType,
@@ -743,11 +756,15 @@ export default function GroupPostModule({ actionType = "POST" }) {
           stepNumber="5"
           mediaFiles={mediaFiles}
           setMediaFiles={setMediaFiles}
+          savedMedia={savedMedia}
+          setSavedMedia={setSavedMedia}
           minMedia={minMedia}
           setMinMedia={setMinMedia}
           maxMedia={maxMedia}
           setMaxMedia={setMaxMedia}
           isLocked={false}
+          campaignId={campaignId}
+          onCampaignIdGenerated={setCampaignId}
         />
       </div>
 

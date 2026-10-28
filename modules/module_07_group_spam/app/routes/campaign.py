@@ -6,7 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from modules.module_02_account_manager.api.router import scoped_owner
 
 from ..services.campaign import campaign_manager
-from ..services.media_service import MediaStorageError, resolve_media_paths
+from ..services.media_service import (
+    MediaStorageError,
+    resolve_media_paths,
+    resolve_media_tokens_for_config,
+)
 from ..schemas.request import CampaignInput
 from ..schemas.response import CampaignStartedResponse, CampaignStatusResponse
 from .settings import _resolved_key
@@ -23,7 +27,7 @@ async def start_group_campaign(item: CampaignInput, owner: str | None = Depends(
         _resolved_key(item.settings.get("model", ""), None, item.settings["credential_id"])
     try:
         payload = item.model_dump()
-        payload["media"] = resolve_media_paths(item.media)
+        payload["media"] = resolve_media_tokens_for_config(item.media, item.campaign_id)
         job = campaign_manager.start(payload, owner)
         return {**job, "success_count": job.get("success", 0), "success": True}
     except (MediaStorageError, RuntimeError, ValueError) as exc:

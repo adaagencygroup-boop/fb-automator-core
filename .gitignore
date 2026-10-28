@@ -48,6 +48,7 @@ data/proxies.txt
 data/accounts.txt
 data/browser_profiles/
 data/module_02_account_manager/
+data/module_07_group_spam/
 *.db
 *.sqlite
 *.sqlite3

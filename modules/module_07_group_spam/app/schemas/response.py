@@ -82,6 +82,8 @@ class UploadedMediaResponse(BaseModel):
     path: str
     relative_path: str
     size: int
+    url: str | None = None
+    campaign_id: str | None = None
 
 
 class MediaUploadResponse(MessageResponse):
@@ -93,6 +95,7 @@ class StoredMediaResponse(BaseModel):
     path: str
     relative_path: str
     size: int
+    url: str | None = None
 
 
 class MediaListResponse(BaseModel):
