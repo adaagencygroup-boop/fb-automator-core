@@ -1,5 +1,6 @@
 import os
 import asyncio
+from config.constants import UPLOADS_DIR
 from datetime import datetime
 from typing import Dict, Any
 import json
@@ -172,9 +173,7 @@ async def process_webhook_event(event: Dict[str, Any]):
                         elif att_type == "video": file_ext = ".mp4"
 
                         local_filename = f"fb_incoming_{uuid.uuid4().hex}{file_ext}"
-                        # queue_worker.py nam nong hon routers/ 1 cap -> chi di len 2 cap
-                        # moi tro ve goc repo, dung thu muc ma engine.py dang serve
-                        uploads_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../uploads"))
+                        uploads_dir = str(UPLOADS_DIR)
                         os.makedirs(uploads_dir, exist_ok=True)
                         local_filepath = os.path.join(uploads_dir, local_filename)
 

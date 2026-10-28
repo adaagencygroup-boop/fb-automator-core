@@ -18,6 +18,8 @@ _DEFAULT_BASE = (
     if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parents[2] / "data"
 )
+if getattr(sys, "frozen", False) and sys.platform.startswith("linux"):
+    _DEFAULT_BASE = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "FBAutomator" / "data"
 BASE_DIR = str(Path(os.environ.get("FB_ACCOUNT_DATA_DIR", _DEFAULT_BASE / "module_02_account_manager")).resolve())
 PROFILES_DIR = str(Path(BASE_DIR) / "browser_profiles")
 

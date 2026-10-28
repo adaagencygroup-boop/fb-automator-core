@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from config.settings import settings
+from config.constants import UPLOADS_DIR
 from core.database.connection import db
 from core.database.models import init_database
 from core.facebook.fb_graph_client import fb_client
@@ -184,7 +185,7 @@ for r in module_06_routers:
     app.include_router(r)
 
 from fastapi.staticfiles import StaticFiles
-uploads_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "uploads"))
+uploads_dir = str(UPLOADS_DIR)
 os.makedirs(uploads_dir, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 

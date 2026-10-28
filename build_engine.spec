@@ -1,12 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller Spec for building local_engine.exe (Tauri Sidecar Binary)
+PyInstaller spec for local_engine / local_engine.exe (Tauri sidecar).
 """
 import os
 import sys
+from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
-block_cipher = None
 PROJECT_DIR = os.path.abspath(SPECPATH)
 
 hidden_imports = [
@@ -55,9 +55,16 @@ hidden_imports = [
     "google.generativeai",
 ]
 
+# Enumerate project modules without importing them: some imports open the database.
+for _path in (Path(PROJECT_DIR) / "modules").rglob("*.py"):
+    _parts = _path.relative_to(PROJECT_DIR).with_suffix("").parts
+    if "tests" in _parts or _path.name.startswith("test_"):
+        continue
+    if _parts[-1] == "__init__":
+        _parts = _parts[:-1]
+    hidden_imports.append(".".join(_parts))
+
 try:
-    # Toàn bộ modules.* — load_backend_modules() import động theo registry
-    hidden_imports += collect_submodules("modules")
     hidden_imports += collect_submodules("sqlalchemy.dialects.sqlite")
     hidden_imports += collect_submodules("sqlalchemy.dialects.postgresql")
     hidden_imports += collect_submodules("yt_dlp")
@@ -91,9 +98,14 @@ datas = [
     (os.path.join(PROJECT_DIR, "data"), "data"),
 ]
 
+# Linux installs into a read-only system directory. Settings are created in the
+# user's XDG data directory; do not copy the build machine's local data into it.
+if sys.platform.startswith("linux"):
+    datas = []
+
 # .env production — Local Engine sidecar cần DATABASE_URL khi chạy ngoài repo
 _env_file = os.path.join(PROJECT_DIR, ".env")
-if os.path.isfile(_env_file):
+if sys.platform == "win32" and os.path.isfile(_env_file):
     datas.append((_env_file, "."))
 
 # SQL / migration assets đọc bằng đường dẫn file lúc runtime (không nằm trong .pyc)
@@ -117,20 +129,16 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=["tkinter", "matplotlib", "scipy", "notebook", "jupyter", "PyQt5"],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 # Build single file executable for Tauri sidecar
 exe = EXE(
     pyz,
     a.scripts,
     a.binaries,
-    a.zipfiles,
     a.datas,
     [],
     name="local_engine",
