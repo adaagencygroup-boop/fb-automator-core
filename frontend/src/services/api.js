@@ -1,6 +1,12 @@
 import axios from "axios";
 import { API_BASE } from "../config/constants";
 import { acceptSessionUser, getSessionUserId } from "./sessionIdentity.mjs";
+import {
+  clearAuthTokens,
+  getAccessToken,
+  getRefreshToken,
+  setAuthTokens,
+} from "./authTokens.mjs";
 
 export const api = axios.create({
   baseURL: API_BASE,
@@ -14,15 +20,22 @@ export const api = axios.create({
 
 api.interceptors.request.use((config) => {
   const userId = getSessionUserId();
-  const identityFree = ["/auth/login", "/auth/register", "/verify-license", "/registration-status"].some((path) => String(config.url).includes(path));
+  const identityFree = ["/auth/login", "/auth/register", "/verify-license", "/registration-status"].some((path) =>
+    String(config.url).includes(path)
+  );
   if (userId && !identityFree) config.headers["X-Auth-User-Id"] = userId;
   else delete config.headers["X-Auth-User-Id"];
+
+  // Bearer cho desktop Tauri (cookie cross-origin không可靠)
+  const token = getAccessToken();
+  if (token && !identityFree) config.headers.Authorization = `Bearer ${token}`;
+  else if (identityFree) delete config.headers.Authorization;
+
   return config;
 });
 
 export const NETWORK_ERROR_MESSAGE = "Không thể kết nối tới Local Engine. Hãy kiểm tra Engine đã được bật chưa.";
 
-// Engine tắt thì mọi request đều lỗi — chỉ ghi log 1 lần để console không bị spam
 const warned = new Set();
 function warnOnce(key, message) {
   if (warned.has(key)) return;
@@ -84,14 +97,35 @@ function apiError(error) {
   return result;
 }
 
+function captureTokensFromPayload(payload) {
+  if (!payload || typeof payload !== "object") return;
+  if (payload.access_token || payload.refresh_token) {
+    setAuthTokens({
+      access_token: payload.access_token,
+      refresh_token: payload.refresh_token,
+    });
+  }
+}
+
 function refreshAccess() {
   if (!refreshPromise) {
     refreshPromise = axios
-      .post(`${API_BASE}/api/v1/auth/refresh`, {}, {
-        withCredentials: true,
-        // Không để refresh kéo dài bằng timeout mặc định 60s khi Engine đang restart.
-        timeout: 12000,
-        headers: { "X-Auth-Client": "user", ...(getSessionUserId() ? { "X-Auth-User-Id": getSessionUserId() } : {}) },
+      .post(
+        `${API_BASE}/api/v1/auth/refresh`,
+        { refresh_token: getRefreshToken() || undefined },
+        {
+          withCredentials: true,
+          timeout: 12000,
+          headers: {
+            "X-Auth-Client": "user",
+            ...(getSessionUserId() ? { "X-Auth-User-Id": getSessionUserId() } : {}),
+            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+          },
+        }
+      )
+      .then((response) => {
+        captureTokensFromPayload(response.data);
+        return response;
       })
       .finally(() => {
         refreshPromise = null;
@@ -108,11 +142,22 @@ function shouldSkipRefresh(url) {
 
 api.interceptors.response.use(
   (response) => {
-    if (String(response.config.url).split("?")[0].endsWith("/api/v1/auth/me")) acceptSessionUser(response.data);
-    warned.delete("network"); // Engine đã chạy lại -> lần mất kết nối sau vẫn được ghi log
+    const path = String(response.config.url || "").split("?")[0];
+    if (path.endsWith("/api/v1/auth/me")) acceptSessionUser(response.data);
+    if (
+      path.endsWith("/api/v1/auth/login")
+      || path.endsWith("/api/v1/auth/verify-license")
+      || path.endsWith("/api/v1/auth/refresh")
+    ) {
+      captureTokensFromPayload(response.data);
+    }
+    warned.delete("network");
     return response.data;
   },
   async (error) => {
+    if (!error.response && error.request) {
+      warnOnce("network", NETWORK_ERROR_MESSAGE);
+    }
     const status = error.response?.status;
     const original = error.config;
     const detail = authDetail(error);
@@ -123,18 +168,23 @@ api.interceptors.response.use(
       && !shouldSkipRefresh(original.url)
       && !TERMINAL_AUTH.has(detail)
       && detail !== "SESSION_IDENTITY_CHANGED"
+      && detail !== "Thiếu thông tin xác thực đăng nhập"
     ) {
       original._retry = true;
       try {
         await refreshAccess();
+        const token = getAccessToken();
+        if (token) original.headers.Authorization = `Bearer ${token}`;
         return api.request(original);
       } catch (refreshError) {
+        clearAuthTokens();
         const refreshDetail = authDetail(refreshError);
         notifySessionLost(refreshDetail);
         return Promise.reject(apiError(refreshError));
       }
     }
-    if (TERMINAL_AUTH.has(detail)) {
+    if (TERMINAL_AUTH.has(detail) || detail === "SESSION_REVOKED") {
+      clearAuthTokens();
       notifySessionLost(detail);
       return Promise.reject(apiError(error));
     }

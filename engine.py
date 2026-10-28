@@ -274,7 +274,7 @@ app.add_middleware(LicenseMiddleware)
 # Cho phép Web UI (localhost:3000, tauri://localhost) gọi API
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|tauri://localhost)$",
+    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1|tauri\.localhost)(:\d+)?|tauri://localhost|asset://localhost)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -56,18 +56,51 @@ hidden_imports = [
 ]
 
 try:
-    hidden_imports += collect_submodules("modules.module_02_account_manager")
+    # Toàn bộ modules.* — load_backend_modules() import động theo registry
+    hidden_imports += collect_submodules("modules")
     hidden_imports += collect_submodules("sqlalchemy.dialects.sqlite")
     hidden_imports += collect_submodules("sqlalchemy.dialects.postgresql")
     hidden_imports += collect_submodules("yt_dlp")
     hidden_imports += collect_submodules("duckduckgo_search")
+    # Selenium lazy-imports chrome.webdriver — PyInstaller bỏ sót nếu không collect hết
+    hidden_imports += collect_submodules("selenium")
+    hidden_imports += collect_submodules("selenium.webdriver")
 except Exception:
     pass
+
+hidden_imports += [
+    "selenium",
+    "selenium.webdriver",
+    "selenium.webdriver.common",
+    "selenium.webdriver.common.by",
+    "selenium.webdriver.common.keys",
+    "selenium.webdriver.common.action_chains",
+    "selenium.webdriver.chrome",
+    "selenium.webdriver.chrome.webdriver",
+    "selenium.webdriver.chrome.options",
+    "selenium.webdriver.chrome.service",
+    "selenium.webdriver.remote",
+    "selenium.webdriver.remote.webdriver",
+    "selenium.webdriver.support",
+    "selenium.webdriver.support.ui",
+    "selenium.webdriver.support.expected_conditions",
+]
 
 datas = [
     (os.path.join(PROJECT_DIR, "config"), "config"),
     (os.path.join(PROJECT_DIR, "data"), "data"),
 ]
+
+# .env production — Local Engine sidecar cần DATABASE_URL khi chạy ngoài repo
+_env_file = os.path.join(PROJECT_DIR, ".env")
+if os.path.isfile(_env_file):
+    datas.append((_env_file, "."))
+
+# SQL / migration assets đọc bằng đường dẫn file lúc runtime (không nằm trong .pyc)
+import glob as _glob
+for _mig in _glob.glob(os.path.join(PROJECT_DIR, "modules", "*", "migrations")):
+    _rel = os.path.relpath(_mig, PROJECT_DIR)
+    datas.append((_mig, _rel))
 
 try:
     datas += collect_data_files("yt_dlp")

@@ -1,4 +1,5 @@
 import api from "@/services/api";
+import { API_BASE } from "@/config/constants";
 export async function getPages() {
   try {
     const res = await api.get("/api/pages");
@@ -339,7 +340,7 @@ export async function clearAllVideos(source = null, folder = "") {
   }
 }
 export function getVideoStreamUrl(path = "", videoId = null) {
-  const base = typeof window !== "undefined" ? `${window.location.protocol}//${window.location.hostname}:28129` : "http://127.0.0.1:28129";
+  const base = API_BASE || "http://127.0.0.1:28129";
   const params = new URLSearchParams();
   if (videoId) params.append("video_id", videoId);
   if (path) params.append("path", path);

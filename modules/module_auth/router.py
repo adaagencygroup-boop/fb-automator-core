@@ -200,7 +200,14 @@ def read_registration_status(request: Request):
 @auth_router.post("/verify-license")
 def verify(body: LicenseBody, request: Request, response: Response):
     data = verify_license(body.username, body.password, body.hwid or "", request)
-    set_auth_cookies(response, data.pop("access_token"), data.pop("refresh_token"), user_client=request.headers.get("x-auth-client") == "user")
+    # Giữ access_token/refresh_token trong body — Tauri WebView (tauri.localhost → 127.0.0.1)
+    # không gửi được cookie SameSite=Lax cross-origin; FE dùng Bearer.
+    set_auth_cookies(
+        response,
+        data["access_token"],
+        data["refresh_token"],
+        user_client=request.headers.get("x-auth-client") == "user",
+    )
     return data
 
 
@@ -215,16 +222,33 @@ def login(body: UserLoginBody, request: Request, response: Response):
         result = JSONResponse(status_code=error.status_code, content={"detail": error.detail})
         set_registration_cookie(result, pending_login_ticket(body.username, hwid), user_client=request.headers.get("x-auth-client") == "user")
         return result
-    set_auth_cookies(response, data.pop("access_token"), data.pop("refresh_token"), body.remember_me, user_client=request.headers.get("x-auth-client") == "user")
+    set_auth_cookies(
+        response,
+        data["access_token"],
+        data["refresh_token"],
+        body.remember_me,
+        user_client=request.headers.get("x-auth-client") == "user",
+    )
     return data
 
 
+class RefreshBody(BaseModel):
+    refresh_token: Optional[str] = None
+
+
 @auth_router.post("/refresh")
-def refresh(request: Request, response: Response):
+def refresh(request: Request, response: Response, body: Optional[RefreshBody] = None):
     admin_client = request.headers.get("x-auth-client") == "admin"
     user_client = request.headers.get("x-auth-client") == "user"
-    # Accept a legacy admin session until the next login, but prefer its isolated cookie.
-    refresh_token = request.cookies.get("fb_user_refresh", "") if user_client else (request.cookies.get("fb_admin_refresh") if admin_client else None) or request.cookies.get("fb_refresh", "")
+    payload = body or RefreshBody()
+    # Cookie (browser) hoặc body (Tauri desktop khi cookie cross-origin bị chặn)
+    refresh_token = (
+        (payload.refresh_token or "").strip()
+        or (request.cookies.get("fb_user_refresh", "") if user_client else "")
+        or (request.cookies.get("fb_admin_refresh") if admin_client else None)
+        or request.cookies.get("fb_refresh", "")
+        or ""
+    )
     access = refresh_access_token(refresh_token)
     expected_user = request.headers.get("x-auth-user-id")
     if expected_user and str(decode_token(access).get("uid")) != expected_user:
@@ -241,7 +265,7 @@ def refresh(request: Request, response: Response):
         samesite="lax",
         path="/api/v1/" if admin_client else "/",
     )
-    return {"ok": True, "access_token": access} if admin_client else {"ok": True}
+    return {"ok": True, "access_token": access, "refresh_token": refresh_token}
 
 
 @auth_router.get("/me")
