@@ -85,6 +85,9 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
       } else {
         router.push("/groups/post");
       }
+      if (onBack) {
+        onBack();
+      }
     } catch (err) {
       toast.error(err.message || "Không thể nạp cấu hình chạy lại", "LỖI CHẠY LẠI");
     } finally {
