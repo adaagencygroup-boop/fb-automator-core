@@ -3,7 +3,13 @@ import time
 import unittest
 from unittest.mock import patch
 
-from modules.module_07_group_spam.app.services.campaign import CampaignJob, CampaignManager, FacebookGroupPoster, html_to_facebook_text
+from modules.module_07_group_spam.app.services.campaign import (
+    CampaignJob,
+    CampaignManager,
+    FacebookGroupPoster,
+    _friendly_automation_error,
+    html_to_facebook_text,
+)
 
 
 class FakePersistence:
@@ -329,6 +335,26 @@ class CampaignTests(unittest.TestCase):
 
         self.assertTrue(poster._dismiss_group_join_overlays())
         self.assertFalse(dialog.visible)
+
+    def test_click_intercepted_error_is_sanitized_before_history(self):
+        raw_error = (
+            "Message: element click intercepted: Element <div role='textbox'> is not clickable at point. "
+            "Other element would receive the click\nStacktrace:\nvery long selenium stack"
+        )
+        normalized = _friendly_automation_error(raw_error)
+        self.assertEqual(normalized["error_code"], "ELEMENT_CLICK_INTERCEPTED")
+        self.assertNotIn("Stacktrace", normalized["message"])
+
+        job = CampaignJob(id="job-error", owner="owner-1", payload={})
+        account = {"uid": "100", "id": 1}
+        group = {"key": "g1", "url": "https://facebook.com/groups/g1"}
+        self.manager._record_result(job, account, group, {
+            "status": "FAILED",
+            "message": raw_error,
+        })
+        saved = self.persistence.tasks[-1][1]
+        self.assertEqual(saved["error_code"], "ELEMENT_CLICK_INTERCEPTED")
+        self.assertNotIn("Stacktrace", saved["message"])
 
     def test_campaign_log_includes_group_name_link_and_status(self):
         job = CampaignJob(id="job-log-test", owner="owner-1", payload={})

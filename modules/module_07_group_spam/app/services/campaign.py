@@ -57,6 +57,47 @@ def _group_url(group: dict[str, Any]) -> str:
     return ""
 
 
+def _friendly_automation_error(error: Exception | str) -> dict[str, str]:
+    """Convert verbose Selenium errors into stable messages for logs/history."""
+    raw = str(error or "").strip()
+    lowered = raw.lower()
+    mappings = (
+        (
+            ("element click intercepted", "not clickable at point", "other element would receive the click"),
+            "ELEMENT_CLICK_INTERCEPTED",
+            "Popup hoặc lớp phủ Facebook đang che ô thao tác; hệ thống đã thử đóng popup nhưng chưa thể tiếp tục.",
+        ),
+        (
+            ("không tìm thấy ô bình luận", "không tìm thấy khung nhập bình luận"),
+            "COMMENT_BOX_NOT_FOUND",
+            "Không tìm thấy ô bình luận của bài viết đầu tiên; bài viết có thể đã tắt hoặc giới hạn bình luận.",
+        ),
+        (
+            ("stale element reference",),
+            "STALE_ELEMENT",
+            "Giao diện Facebook vừa thay đổi trong lúc thao tác; vui lòng chạy lại nhóm này.",
+        ),
+        (
+            ("invalid session id", "session deleted", "disconnected"),
+            "BROWSER_SESSION_LOST",
+            "Phiên Chrome đã mất kết nối trong lúc thực hiện tác vụ.",
+        ),
+    )
+    for needles, code, message in mappings:
+        if any(needle in lowered for needle in needles):
+            return {"message": message, "error_code": code, "error_detail": message}
+
+    # Selenium thường nối hàng trăm dòng Stacktrace vào message. Chỉ giữ phần
+    # mô tả đầu tiên để lịch sử tác vụ không bị vỡ giao diện.
+    concise = raw.split("Stacktrace:", 1)[0].strip()
+    concise = concise.removeprefix("Message:").strip()
+    concise = " ".join(concise.split())
+    if len(concise) > 500:
+        concise = f"{concise[:497]}..."
+    concise = concise or "Không thể hoàn thành thao tác Facebook"
+    return {"message": concise, "error_code": "AUTOMATION_ERROR", "error_detail": concise}
+
+
 _SENSITIVE_CONFIG_KEYS = {
     "api_key",
     "access_token",
@@ -519,6 +560,35 @@ class FacebookGroupPoster:
 
         self._wait_until(dialog_is_closed, 35, "Facebook chưa đóng popup sau khi gửi bài")
 
+        result_url = url
+        content_marker = " ".join(content.split())[:80].lower()
+
+        def find_post_permalink():
+            try:
+                articles = driver.find_elements(By.XPATH, "//div[@role='feed']//div[@role='article'] | //div[@role='article']")
+                for article in articles:
+                    if not self._is_displayed(article):
+                        continue
+                    article_text = " ".join((article.text or "").split()).lower()
+                    if content_marker and content_marker not in article_text:
+                        continue
+                    links = article.find_elements(
+                        By.XPATH,
+                        ".//a[contains(@href,'/posts/') or contains(@href,'/permalink/') or contains(@href,'story_fbid=')]",
+                    )
+                    for link in links:
+                        href = link.get_attribute("href")
+                        if href:
+                            return str(href).split("?", 1)[0]
+            except Exception:
+                return None
+            return None
+
+        try:
+            result_url = self._wait_until(find_post_permalink, 5, "Chưa lấy được liên kết bài vừa đăng")
+        except RuntimeError:
+            pass
+
         try:
             page_text = (driver.find_element(By.TAG_NAME, "body").text or "").lower()
             blocked = ("tạm thời bị chặn", "temporarily blocked", "giới hạn tần suất", "try again later")
@@ -526,7 +596,12 @@ class FacebookGroupPoster:
                 raise RuntimeError("Facebook đang giới hạn thao tác đăng bài của tài khoản")
         except Exception:
             pass
-        return {"status": "SUCCESS", "message": "Đăng bài thành công", "group_url": url}
+        return {
+            "status": "SUCCESS",
+            "message": "Đăng bài thành công",
+            "group_url": url,
+            "result_url": result_url,
+        }
 
 
     def comment(
@@ -730,12 +805,23 @@ class FacebookGroupPoster:
         except Exception:
             # Popup chào mừng sau khi vừa tham gia nhóm có thể phủ lên editor
             # dù Selenium vẫn tìm thấy textbox phía sau lớp overlay.
-            self._dismiss_group_join_overlays()
+            if not self._dismiss_group_join_overlays():
+                self._dismiss_open_dialog()
             try:
+                textbox = self._wait_until(
+                    find_textbox,
+                    5,
+                    "Ô bình luận không còn khả dụng sau khi đóng popup",
+                )
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", textbox)
-                driver.execute_script("arguments[0].click(); arguments[0].focus();", textbox)
+                try:
+                    textbox.click()
+                except Exception:
+                    driver.execute_script("arguments[0].click(); arguments[0].focus();", textbox)
             except Exception as exc:
-                raise RuntimeError("Ô bình luận đang bị popup Facebook che, không thể thao tác") from exc
+                raise RuntimeError(
+                    "Popup hoặc lớp phủ Facebook đang che ô bình luận, không thể thao tác"
+                ) from exc
         self._raise_if_cancelled()
         driver.execute_script(
             """
@@ -1000,7 +1086,7 @@ class CampaignManager:
                     except InterruptedError:
                         pass
                     except Exception as exc:
-                        job.log("ERROR", str(exc))
+                        job.log("ERROR", _friendly_automation_error(exc)["message"])
 
             if job.cancel.is_set():
                 job.status = "STOPPED"
@@ -1027,7 +1113,7 @@ class CampaignManager:
             job.message = "Chiến dịch đã dừng theo yêu cầu"
         except Exception as exc:
             job.status = "FAILED"
-            job.log("ERROR", str(exc))
+            job.log("ERROR", _friendly_automation_error(exc)["message"])
         finally:
             job.finished_at = datetime.now().isoformat(timespec="seconds")
             self._persist_final_results(job)
@@ -1063,7 +1149,7 @@ class CampaignManager:
                     except InterruptedError:
                         raise
                     except Exception as join_error:
-                        join_result = {"status": "FAILED", "message": str(join_error)}
+                        join_result = {"status": "FAILED", **_friendly_automation_error(join_error)}
                         job.log("WARNING", f"[{uid}] Luồng tham gia lỗi nhưng luồng đăng vẫn tiếp tục")
                     join_results[index] = join_result
                     self._record_join_step(job, uid, group_name, join_result, group_url)
@@ -1109,9 +1195,10 @@ class CampaignManager:
                     except InterruptedError:
                         raise
                     except Exception as exc:
+                        error_info = _friendly_automation_error(exc)
                         self._advance_step(job)
                         self._record_result(job, account, group, {
-                            "status": "FAILED", "message": str(exc),
+                            "status": "FAILED", **error_info,
                             "join_status": join_result.get("status", "FAILED"),
                             "content": posts[post_index],
                         })
@@ -1124,7 +1211,8 @@ class CampaignManager:
         except InterruptedError:
             raise
         except Exception as exc:
-            job.log("ERROR", f"[{uid}] {exc}")
+            error_info = _friendly_automation_error(exc)
+            job.log("ERROR", f"[{uid}] {error_info['message']}")
             if not job.cancel.is_set():
                 for index, group in enumerate(groups):
                     if index in completed_actions:
@@ -1133,7 +1221,7 @@ class CampaignManager:
                     self._advance_step(job, 1 if join_result is not None else 2)
                     self._record_result(job, account, group, {
                         "status": "FAILED",
-                        "message": str(exc),
+                        **error_info,
                         "join_status": join_result.get("status") if join_result else "FAILED",
                     })
 
@@ -1147,6 +1235,9 @@ class CampaignManager:
         job: CampaignJob, uid: str, group_name: str, result: dict[str, Any], group_url: str = ""
     ) -> None:
         status = result.get("status")
+        if status == "FAILED" and not result.get("error_code"):
+            normalized = _friendly_automation_error(result.get("message", ""))
+            result = {**result, **normalized}
         with job.lock:
             job.completed_steps = min(job.total_steps, job.completed_steps + 1)
             if status == "JOINED":
@@ -1166,6 +1257,8 @@ class CampaignManager:
         status = str(result.get("status") or "FAILED").upper()
         if status not in {"SUCCESS", "PENDING_APPROVAL", "FAILED", "SKIPPED", "CANCELLED"}:
             status = "FAILED"
+        if status == "FAILED" and not result.get("error_code"):
+            result = {**result, **_friendly_automation_error(result.get("message", ""))}
         item = {
             "id": str(uuid.uuid4()),
             "account_uid": uid,

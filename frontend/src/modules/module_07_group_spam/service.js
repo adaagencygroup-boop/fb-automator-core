@@ -113,4 +113,8 @@ export function getGroupHistoryRecords(params) {
   return api.get("/api/groups/history", { params });
 }
 
+export function openGroupHistoryRecord(logId) {
+  return api.post(`/api/groups/history/${encodeURIComponent(logId)}/open`);
+}
+
 
