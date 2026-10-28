@@ -141,7 +141,7 @@ function ChipInput({ chips, onChange, placeholder, disabled, onEnter, mixed = fa
     <div className={`flex min-h-10 flex-wrap items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-1.5 ${disabled ? "opacity-60" : "focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20"}`}>
       {chips.map((chip) => {
         const tag = mixed && isHashtagChip(chip);
-        return (
+    return (
           <span
             key={chip}
             className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold ${
@@ -157,8 +157,8 @@ function ChipInput({ chips, onChange, placeholder, disabled, onEnter, mixed = fa
                 <X className="size-3" />
               </button>
             )}
-          </span>
-        );
+      </span>
+    );
       })}
       <input
         value={draft}
@@ -310,10 +310,10 @@ export default function PageScannerSearch() {
     getAccounts()
       .then((data) => {
         if (ignore) return;
-        const normalized = (Array.isArray(data) ? data : data?.accounts || []).map((a, i) =>
-          normalizeAccount(a, i),
-        );
-        setAccounts(normalized);
+          const normalized = (Array.isArray(data) ? data : data?.accounts || []).map((a, i) =>
+            normalizeAccount(a, i),
+          );
+          setAccounts(normalized);
       })
       .catch((err) => {
         if (!ignore) toast.error(`Lỗi tải tài khoản: ${err.message}`);
@@ -363,11 +363,11 @@ export default function PageScannerSearch() {
         (sessionIds.length ? sessionIds : sid ? [sid] : [])
       ).filter(Boolean);
       if (!ids.length) return;
-      setLoadingResults(true);
-      try {
+    setLoadingResults(true);
+    try {
         const lists = await Promise.all(
           ids.map(async (id) => {
-            const data = await getScannedPages({
+      const data = await getScannedPages({
               session_id: id,
               page: 1,
               page_size: 200,
@@ -430,11 +430,11 @@ export default function PageScannerSearch() {
         setPages(slice);
         setTotalCount(total);
         setPoolStats({ pool, aboveMin, showing: slice.length });
-      } catch (err) {
-        toast.error(`Lỗi tải kết quả: ${err.message}`);
-      } finally {
-        setLoadingResults(false);
-      }
+    } catch (err) {
+      toast.error(`Lỗi tải kết quả: ${err.message}`);
+    } finally {
+      setLoadingResults(false);
+    }
     },
     [
       sessionIds,
@@ -514,7 +514,7 @@ export default function PageScannerSearch() {
             loadResults(sid, 1, ids);
           }
           if (DONE_STATUSES.includes(session.status)) {
-            stopPolling();
+    stopPolling();
           }
         } catch (e) {
           console.error(e);
@@ -787,7 +787,7 @@ export default function PageScannerSearch() {
             keep_browser: keepBrowser,
           });
           sid = res.session_id;
-        } else {
+              } else {
           const tagKey = job.label?.startsWith("#") ? job.label : `#${job.query}`;
           const targetPages =
             keywordTargets[tagKey] ||
@@ -880,8 +880,8 @@ export default function PageScannerSearch() {
 
     if (sourceMode === "keyword") {
       await runMixedCampaign();
-      return;
-    }
+          return;
+        }
     if (sourceMode === "paste") {
       setRunPhase("running");
       pushLog("Đang chuẩn hoá danh sách link…", "info");
@@ -902,8 +902,8 @@ export default function PageScannerSearch() {
         setRunPhase("done");
         toast.error(err.message);
       }
-      return;
-    }
+          return;
+        }
     if (sourceMode === "upload") {
       setRunPhase("running");
       try {
@@ -914,7 +914,7 @@ export default function PageScannerSearch() {
         setRunPhase("done");
         pushLog(`Upload: ${uploadResult.valid_count} page đã lưu.`, "success");
         toast.success(`Đã lưu ${uploadResult.valid_count} Page từ file.`);
-      } catch (err) {
+    } catch (err) {
         setRunPhase("done");
         toast.error(err.message);
       }
@@ -940,9 +940,9 @@ export default function PageScannerSearch() {
     campaignRef.current.paused = true;
     setRunPhase("paused");
     if (sessionId) {
-      try {
+    try {
         await pauseScanSession(sessionId);
-      } catch (err) {
+    } catch (err) {
         pushLog(`Pause lỗi: ${err.message}`, "error");
       }
     }
@@ -953,7 +953,7 @@ export default function PageScannerSearch() {
   const handleEmergencyStop = async () => {
     campaignRef.current.abort = true;
     campaignRef.current.paused = false;
-    stopPolling();
+      stopPolling();
     if (sessionId) {
       try {
         await stopScanSession(sessionId);
@@ -1128,22 +1128,22 @@ export default function PageScannerSearch() {
 
               <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
-                  <label className="mb-1 block text-[11px] font-semibold text-slate-700">
+                <label className="mb-1 block text-[11px] font-semibold text-slate-700">
                     Hashtag mục tiêu
-                  </label>
+                </label>
                   <ChipInput
                     chips={keywords}
                     onChange={setKeywords}
                     disabled={isBusy}
                     mixed
                     placeholder="Vd: #mypham, thời trang (suy ra #thoitrang)…"
-                  />
-                  <p className="mt-1 text-[10px] text-slate-400">
+                />
+                <p className="mt-1 text-[10px] text-slate-400">
                     {manualHashtags.length} hashtag nhập tay
                     {plainKeywords.length > 0 ? ` · ${plainKeywords.length} từ khóa → suy ra #` : ""}
                     {derivedHashtags.length > 0 ? ` · quét: ${derivedHashtags.join(", ")}` : ""}
-                  </p>
-                </div>
+                </p>
+              </div>
                 <Button type="button" size="sm" variant="outline" className="mt-5 shrink-0" disabled={isBusy} onClick={handlePreflight}>
                   Kiểm tra
                 </Button>
@@ -1303,8 +1303,8 @@ export default function PageScannerSearch() {
                     >
                       Áp dụng
                     </Button>
-                  </div>
-                </div>
+              </div>
+              </div>
 
                 <div className="space-y-2 rounded-lg border border-slate-100 bg-slate-50/60 p-2">
                   {derivedHashtags.length === 0 ? (
@@ -1324,7 +1324,7 @@ export default function PageScannerSearch() {
                             }`}
                           />
                           <span className="truncate text-[12px] font-medium text-slate-800">{tag}</span>
-                        </div>
+              </div>
                         <div className="flex items-center gap-2">
                           <NumCtrl
                             value={keywordTargets[tag] || applyAllTarget}
@@ -1335,11 +1335,11 @@ export default function PageScannerSearch() {
                             disabled={isBusy}
                           />
                           <span className="text-[11px] text-slate-400">page</span>
-                        </div>
+          </div>
                       </div>
                     ))
                   )}
-                </div>
+      </div>
 
                 <div className="flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
                   <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
@@ -1382,9 +1382,9 @@ export default function PageScannerSearch() {
                 </span>
               </label>
             </div>
-          </div>
+            </div>
         </SectionCard>
-      </div>
+          </div>
 
       {/* Controls */}
       <div className="flex flex-col gap-2">
@@ -1408,10 +1408,10 @@ export default function PageScannerSearch() {
 
         {isBusy && (
           <div className="grid grid-cols-2 gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="lg"
+          <Button
+            type="button"
+            variant="outline"
+            size="lg"
               className="gap-2 border-red-300 text-red-600 hover:bg-red-50"
               onClick={handlePauseResume}
             >
@@ -1431,9 +1431,9 @@ export default function PageScannerSearch() {
               size="lg"
               className="gap-2 border-red-400 bg-red-50 text-red-700 hover:bg-red-100"
               onClick={handleEmergencyStop}
-            >
-              <Square className="size-4" /> DỪNG KHẨN CẤP
-            </Button>
+          >
+            <Square className="size-4" /> DỪNG KHẨN CẤP
+          </Button>
           </div>
         )}
       </div>
@@ -1441,7 +1441,7 @@ export default function PageScannerSearch() {
       {/* Results + Log — chỉ hiện sau khi đã bắt đầu (trạng thái 2 / xong) */}
       {showResults && (
         <>
-          <Card className="overflow-hidden border-slate-200 shadow-sm">
+      <Card className="overflow-hidden border-slate-200 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 px-6 pt-5 pb-3">
               <div>
                 <h3 className="font-heading text-sm font-bold text-slate-800">Kết quả quét thông tin Page</h3>
@@ -1450,36 +1450,36 @@ export default function PageScannerSearch() {
                     Pool {poolStats.pool.toLocaleString("vi-VN")} → đạt ngưỡng FL: {poolStats.aboveMin.toLocaleString("vi-VN")} → đang hiện trang: {poolStats.showing}
                     {topN ? ` · Top ${topN}` : ""}
                   </p>
-                )}
-              </div>
+            )}
+          </div>
               <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
                   className="gap-1.5 border-emerald-200 bg-emerald-50 text-[11px] text-emerald-700 hover:bg-emerald-100"
-                  disabled={!pages.length}
-                  onClick={handleExportCSV}
-                >
+              disabled={!pages.length}
+              onClick={handleExportCSV}
+            >
                   <Download className="size-3.5" /> Xuất toàn bộ file
                 </Button>
                 <Button type="button" size="sm" className="gap-1.5 text-[11px]" disabled={!pages.length && !totalCount} onClick={handleSaveList}>
                   <Save className="size-3.5" /> Lưu danh sách
-                </Button>
-              </div>
-            </div>
+            </Button>
+          </div>
+        </div>
 
             <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-6 pb-4">
               <div className="relative min-w-[220px] flex-1">
                 <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-                <Input
-                  value={resultSearch}
+            <Input
+              value={resultSearch}
                   onChange={(e) => setResultSearch(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && sessionId && loadResults(sessionId, 1)}
                   placeholder="Tìm Tên, Link, SĐT, Email, Tỉnh thành..."
                   className="h-9 w-full pl-8 text-[11px]"
-                />
-              </div>
+            />
+          </div>
               <select
                 value={filterKeyword}
                 onChange={(e) => setFilterKeyword(e.target.value)}
@@ -1492,19 +1492,19 @@ export default function PageScannerSearch() {
                   </option>
                 ))}
               </select>
-            </div>
+        </div>
 
-            <div className="overflow-auto">
+        <div className="overflow-auto">
               <table className="w-full min-w-[1100px] text-left text-[11px]">
                 <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500">
-                  <tr className="border-b border-slate-200">
-                    <th className="w-10 px-4 py-3">
-                      <Checkbox
-                        checked={pages.length > 0 && selectedPageKeys.length === pages.length}
+              <tr className="border-b border-slate-200">
+                <th className="w-10 px-4 py-3">
+                  <Checkbox
+                    checked={pages.length > 0 && selectedPageKeys.length === pages.length}
                         onCheckedChange={(c) => setSelectedPageKeys(c ? pages.map((p) => p.page_key) : [])}
-                      />
-                    </th>
-                    <th className="w-12 px-3 py-3 font-semibold">STT</th>
+                  />
+                </th>
+                <th className="w-12 px-3 py-3 font-semibold">STT</th>
                     <th className="px-3 py-3 font-semibold">TỪ KHÓA</th>
                     <th className="px-3 py-3 font-semibold">TÊN PAGE</th>
                     <th className="px-3 py-3 font-semibold">LINK PAGE</th>
@@ -1512,59 +1512,59 @@ export default function PageScannerSearch() {
                     <th className="px-3 py-3 font-semibold">EMAIL</th>
                     <th className="px-3 py-3 font-semibold">WEBSITE</th>
                     <th className="px-3 py-3 font-semibold">VỊ TRÍ / ĐỊA CHỈ</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {loadingResults ? (
-                    <tr>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {loadingResults ? (
+                <tr>
                       <td colSpan={9} className="py-14 text-center text-slate-400">
-                        <Loader2 className="mx-auto mb-2 size-6 animate-spin text-primary" />
+                    <Loader2 className="mx-auto mb-2 size-6 animate-spin text-primary" />
                         Đang tải kết quả…
-                      </td>
-                    </tr>
-                  ) : pages.length === 0 ? (
-                    <tr>
+                  </td>
+                </tr>
+              ) : pages.length === 0 ? (
+                <tr>
                       <td colSpan={9} className="py-14 text-center text-slate-400">
                         Chưa có page trong kết quả (hoặc đang lọc follower).
-                      </td>
-                    </tr>
-                  ) : (
-                    pages.map((page, idx) => {
-                      const globalIdx = (currentPage - 1) * pageSize + idx + 1;
+                  </td>
+                </tr>
+              ) : (
+                pages.map((page, idx) => {
+                  const globalIdx = (currentPage - 1) * pageSize + idx + 1;
                       const selected = selectedPageKeys.includes(page.page_key);
                       const kwLabel = pageKeywordLabel(page);
-                      return (
-                        <tr
+                  return (
+                    <tr
                           key={page.page_key || page.id || idx}
                           className={selected ? "bg-blue-50/50" : "hover:bg-slate-50"}
-                        >
-                          <td className="px-4 py-2.5">
-                            <Checkbox
+                    >
+                      <td className="px-4 py-2.5">
+                        <Checkbox
                               checked={selected}
                               onCheckedChange={(c) =>
                                 setSelectedPageKeys((prev) =>
                                   c ? [...prev, page.page_key] : prev.filter((k) => k !== page.page_key),
-                                )
-                              }
-                            />
-                          </td>
+                            )
+                          }
+                        />
+                      </td>
                           <td className="px-3 py-2.5 font-mono text-slate-400">{String(globalIdx).padStart(2, "0")}</td>
                           <td className="px-3 py-2.5 font-medium text-slate-700">{kwLabel}</td>
-                          <td className="px-3 py-2.5">
+                      <td className="px-3 py-2.5">
                             <div className="flex items-center gap-2">
                               <Avatar className="size-8 border border-slate-200">
-                                {page.avatar_url && <AvatarImage src={page.avatar_url} />}
-                                <AvatarFallback className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}>
-                                  {initialsOf(page.page_name || "FB")}
-                                </AvatarFallback>
-                              </Avatar>
+                            {page.avatar_url && <AvatarImage src={page.avatar_url} />}
+                            <AvatarFallback className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}>
+                              {initialsOf(page.page_name || "FB")}
+                            </AvatarFallback>
+                          </Avatar>
                               <div className="flex min-w-0 items-center gap-1">
                                 <span className="truncate max-w-[180px] font-semibold text-slate-800">{page.page_name || "—"}</span>
                                 {page.is_verified === true && <BadgeCheck className="size-3.5 shrink-0 text-blue-500" />}
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2.5">
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5">
                             {page.page_url ? (
                               <a href={page.page_url} target="_blank" rel="noreferrer" className="inline-flex max-w-[180px] items-center gap-1 truncate text-primary hover:underline">
                                 {page.page_url.replace(/^https?:\/\/(m\.|www\.)?facebook\.com\//, "fb.com/")}
@@ -1573,8 +1573,8 @@ export default function PageScannerSearch() {
                             ) : (
                               <span className="text-slate-300">—</span>
                             )}
-                          </td>
-                          <td className="px-3 py-2.5">
+                      </td>
+                      <td className="px-3 py-2.5">
                             {page.phone ? (
                               <span className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-700">
                                 <Phone className="size-3 shrink-0" />
@@ -1582,46 +1582,46 @@ export default function PageScannerSearch() {
                               </span>
                             ) : (
                               <span className="italic text-slate-300">Chưa cập nhật</span>
-                            )}
-                          </td>
+                        )}
+                      </td>
                           <td className="px-3 py-2.5 text-slate-600">
                             {page.email || <span className="italic text-slate-300">Chưa cập nhật</span>}
                           </td>
-                          <td className="px-3 py-2.5">
+                      <td className="px-3 py-2.5">
                             {page.website ? (
-                              <a
+                          <a
                                 href={page.website.startsWith("http") ? page.website : `https://${page.website}`}
-                                target="_blank"
-                                rel="noreferrer"
+                            target="_blank"
+                            rel="noreferrer"
                                 className="inline-block max-w-[140px] truncate text-primary hover:underline"
                               >
                                 {page.website.replace(/^https?:\/\//, "")}
                               </a>
                             ) : (
                               <span className="italic text-slate-300">Chưa cập nhật</span>
-                            )}
-                          </td>
+                        )}
+                      </td>
                           <td className="px-3 py-2.5 text-slate-600">
                             {page.address || <span className="italic text-slate-300">Chưa cập nhật</span>}
                           </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
 
-            <div className="flex items-center justify-between border-t border-slate-100 px-6 py-3">
-              <span className="text-[11px] text-slate-400">
+          <div className="flex items-center justify-between border-t border-slate-100 px-6 py-3">
+            <span className="text-[11px] text-slate-400">
                 Hiển thị {totalCount === 0 ? 0 : (currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, totalCount)} của{" "}
                 {totalCount.toLocaleString("vi-VN")} Page
                 {minFollowersEnabled ? ` (lọc ≥ ${minFollowers.toLocaleString("vi-VN")} FL)` : ""}
-              </span>
-              <div className="flex items-center gap-1">
+            </span>
+            <div className="flex items-center gap-1">
                 <Button type="button" variant="outline" size="icon" className="size-7" disabled={currentPage <= 1} onClick={() => { setCurrentPage(currentPage - 1); loadResults(sessionId, currentPage - 1); }}>
-                  <ChevronLeft className="size-3.5" />
-                </Button>
+                <ChevronLeft className="size-3.5" />
+              </Button>
                 {Array.from({ length: Math.min(5, totalPages) }, (_, i) => i + 1).map((p) => (
                   <button
                     key={p}
@@ -1634,11 +1634,11 @@ export default function PageScannerSearch() {
                 ))}
                 {totalPages > 5 && <span className="px-1 text-[11px] text-slate-400">… {totalPages}</span>}
                 <Button type="button" variant="outline" size="icon" className="size-7" disabled={currentPage >= totalPages} onClick={() => { setCurrentPage(currentPage + 1); loadResults(sessionId, currentPage + 1); }}>
-                  <ChevronRight className="size-3.5" />
-                </Button>
-              </div>
+                <ChevronRight className="size-3.5" />
+              </Button>
             </div>
-          </Card>
+          </div>
+      </Card>
 
           {/* Live log */}
           <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#1e293b] shadow-md">
@@ -1784,7 +1784,7 @@ export default function PageScannerSearch() {
                   }}
                 >
                   <Check className="mr-1.5 size-3.5" /> Xác nhận ({modalUids.length})
-                </Button>
+              </Button>
               </div>
             </div>
           </div>
