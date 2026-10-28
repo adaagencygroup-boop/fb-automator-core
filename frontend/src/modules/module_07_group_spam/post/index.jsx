@@ -130,88 +130,51 @@ export default function GroupPostModule({ actionType = "POST" }) {
     const restoreDraft = async () => {
       try {
         const stored = sessionStorage.getItem("fb_rerun_campaign");
-        const data = stored ? JSON.parse(stored) : null;
-        if (data?.action_type === actionType) {
-          if (data.campaign_id) setCampaignId(data.campaign_id);
-          if (data.name) setCampaignName(data.name);
-          if (data.description) setCampaignDescription(data.description);
-          setIsRerun(true);
+        if (stored) {
+          // Xóa ngay khỏi sessionStorage sau khi đọc để chỉ nạp một lần khi bấm nút Chạy lại.
+          // Khi người dùng chuyển sang module khác rồi quay lại, sẽ không còn dữ liệu cũ nữa.
+          sessionStorage.removeItem("fb_rerun_campaign");
+          const data = JSON.parse(stored);
+          if (data?.action_type === actionType) {
+            if (data.campaign_id) setCampaignId(data.campaign_id);
+            if (data.name) setCampaignName(data.name);
+            if (data.description) setCampaignDescription(data.description);
+            setIsRerun(true);
 
-          const cfg = data.config || {};
-          if (cfg.account_uids?.length) {
-            setSelectedAccountKeys(cfg.account_uids);
-          }
-          if (cfg.groups?.length) {
-            setCustomGroups(cfg.groups);
-            setSelectedGroupKeys(cfg.groups.map((g) => g.key || g.url));
-          }
-          if (cfg.posts?.length) {
-            setPosts(cfg.posts);
-            setAiCount(String(cfg.posts.length));
-            setHasGeneratedContent(true);
-          }
-          setSavedMedia(cfg.media || []);
-          if (cfg.settings) {
-            if (cfg.settings.credential_id !== undefined) selectApi(cfg.settings.credential_id);
-            if (cfg.settings.max_posts !== undefined) setMaxPosts(String(cfg.settings.max_posts));
-            if (cfg.settings.threads) setThreads(String(cfg.settings.threads));
-            if (cfg.settings.rest_minutes !== undefined) setRestMinutes(String(cfg.settings.rest_minutes));
-            if (cfg.settings.delay_min !== undefined) setDelayMin(String(cfg.settings.delay_min));
-            if (cfg.settings.delay_max !== undefined) setDelayMax(String(cfg.settings.delay_max));
-          }
-          // Theo SRS: "Hẹn giờ cũ đã qua phải chọn lại"
-          setScheduleEnabled(false);
-          setScheduleDate("");
+            const cfg = data.config || {};
+            if (cfg.account_uids?.length) {
+              rerunUidsRef.current = cfg.account_uids;
+              setSelectedAccountKeys(cfg.account_uids);
+            }
+            if (cfg.groups?.length) {
+              setCustomGroups(cfg.groups);
+              setSelectedGroupKeys(cfg.groups.map((g) => g.key || g.url));
+            }
+            if (cfg.posts?.length) {
+              setPosts(cfg.posts);
+              setAiCount(String(cfg.posts.length));
+              setHasGeneratedContent(true);
+            }
+            setSavedMedia(cfg.media || []);
+            if (cfg.settings) {
+              if (cfg.settings.credential_id !== undefined) selectApi(cfg.settings.credential_id);
+              if (cfg.settings.max_posts !== undefined) setMaxPosts(String(cfg.settings.max_posts));
+              if (cfg.settings.threads) setThreads(String(cfg.settings.threads));
+              if (cfg.settings.rest_minutes !== undefined) setRestMinutes(String(cfg.settings.rest_minutes));
+              if (cfg.settings.delay_min !== undefined) setDelayMin(String(cfg.settings.delay_min));
+              if (cfg.settings.delay_max !== undefined) setDelayMax(String(cfg.settings.delay_max));
+            }
+            // Theo SRS: "Hẹn giờ cũ đã qua phải chọn lại"
+            setScheduleEnabled(false);
+            setScheduleDate("");
 
-          toast.info(
-            `Đã nạp lại cấu hình từ chiến dịch "${data.name}". Vui lòng rà soát lại các bước trước khi bắt đầu.`,
-            "CHẾ ĐỘ CHẠY LẠI"
-          );
-          return;
+            toast.info(
+              `Đã nạp lại cấu hình từ chiến dịch "${data.name}". Vui lòng rà soát lại các bước trước khi bắt đầu.`,
+              "CHẾ ĐỘ CHẠY LẠI"
+            );
+            return;
+          }
         }
-
-        const draft = readGroupPostDraft(draftScope);
-        if (!draft) return;
-
-        setCampaignId(draft.campaignId ?? null);
-        setCampaignName(draft.campaignName ?? "");
-        setCampaignDescription(draft.campaignDescription ?? "");
-        setCampaignLocked(Boolean(draft.campaignLocked));
-        setSelectedAccountKeys(draft.selectedAccountKeys || []);
-        setIsAccountLocked(Boolean(draft.isAccountLocked));
-        selectApi(draft.credentialId ?? "");
-        setThreads(draft.threads ?? "2");
-        setRestMinutes(draft.restMinutes ?? "10");
-        setMaxPosts(draft.maxPosts ?? "10");
-        setIsSettingsLocked(Boolean(draft.isSettingsLocked));
-        setConfirmedApi(draft.confirmedApi ?? "");
-        setGroupSource(draft.groupSource ?? "search");
-        setGroupFile(draft.groupFile || null);
-        setCustomGroups(draft.customGroups || []);
-        setGroupSearch(draft.groupSearch ?? "");
-        setGroupFilter(draft.groupFilter ?? "");
-        setSelectedGroupKeys(draft.selectedGroupKeys || []);
-        setIsGroupSourceLocked(Boolean(draft.isGroupSourceLocked));
-        setSavedMedia(draft.savedMedia || []);
-        setMinMedia(draft.minMedia ?? "1");
-        setMaxMedia(draft.maxMedia ?? "4");
-        setIsMediaLocked(Boolean(draft.isMediaLocked));
-        setPrompt(draft.prompt ?? "");
-        setAiCount(draft.aiCount ?? "1");
-        setPosts(draft.posts?.length ? draft.posts : (isComment ? [""] : [INITIAL_POST]));
-        setActivePost(Number.isInteger(draft.activePost) ? draft.activePost : 0);
-        setHasGeneratedContent(Boolean(draft.hasGeneratedContent));
-        setIsContentLocked(Boolean(draft.isContentLocked));
-        setDelayMin(draft.delayMin ?? "30");
-        setDelayMax(draft.delayMax ?? "60");
-        setDelayUnit(draft.delayUnit ?? "seconds");
-        setScheduleEnabled(Boolean(draft.scheduleEnabled));
-        setScheduleDate(draft.scheduleDate ?? "");
-        setScheduleTime(draft.scheduleTime ?? "08:00");
-        setIsPostingSettingsLocked(Boolean(draft.isPostingSettingsLocked));
-
-        const restoredMedia = await readGroupPostDraftMedia(draftScope);
-        if (!cancelled) setMediaFiles(restoredMedia);
       } catch (e) {
         console.warn(`Lỗi khôi phục cấu hình ${actionLabel} nhóm:`, e);
       } finally {
@@ -277,6 +240,8 @@ export default function GroupPostModule({ actionType = "POST" }) {
     writeGroupPostDraftMedia(mediaFiles, draftScope);
   }, [draftReady, isRerun, mediaFiles, draftScope]);
 
+  const rerunUidsRef = useRef(null);
+
   const loadAccounts = async () => {
     setAccountsLoading(true);
     try {
@@ -284,11 +249,17 @@ export default function GroupPostModule({ actionType = "POST" }) {
       const rawList = Array.isArray(data) ? data : (data?.accounts || []);
       const rows = rawList.map(normalizeAccount);
       setAccounts(rows);
-      const rerun = JSON.parse(sessionStorage.getItem("fb_rerun_campaign") || "null");
-      if (rerun?.action_type === actionType && rerun.config?.account_uids) {
-        setSelectedAccountKeys(rows.filter((account) => rerun.config.account_uids.includes(account.uid)).map((account) => account.key));
-        return;
+
+      // Nếu có rerun uids (từ lượt chạy lại), chọn đúng các tài khoản có uid tương ứng
+      const targetUids = rerunUidsRef.current;
+      if (targetUids && targetUids.length > 0) {
+        const matchedKeys = rows.filter((acc) => targetUids.includes(acc.uid)).map((acc) => acc.key);
+        if (matchedKeys.length > 0) {
+          setSelectedAccountKeys(matchedKeys);
+          return;
+        }
       }
+
       setSelectedAccountKeys((current) => {
         const validKeys = new Set(rows.map((account) => account.key));
         const filteredCurrent = current.filter((key) => validKeys.has(key));
