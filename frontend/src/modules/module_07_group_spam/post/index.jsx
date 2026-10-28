@@ -45,11 +45,15 @@ import {
   writeGroupPostDraftMedia,
 } from "./draftStorage";
 
+<<<<<<< HEAD
 export default function GroupPostModule({ actionType = "POST" }) {
   const isComment = actionType === "COMMENT";
   const draftScope = isComment ? "comment" : "post";
   const actionLabel = isComment ? "bình luận" : "đăng bài";
   const contentLabel = isComment ? "bình luận" : "bài viết";
+=======
+export default function GroupPostModule() {
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
   const editorRef = useRef(null);
   const completionToastJobRef = useRef(null);
 
@@ -101,7 +105,11 @@ export default function GroupPostModule({ actionType = "POST" }) {
   // Bước 6: Nội dung bài viết (Hỗ trợ AI)
   const [prompt, setPrompt] = useState("");
   const [aiCount, setAiCount] = useState("1");
+<<<<<<< HEAD
   const [posts, setPosts] = useState(isComment ? [""] : [INITIAL_POST]);
+=======
+  const [posts, setPosts] = useState([INITIAL_POST]);
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
   const [activePost, setActivePost] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
   const [hasGeneratedContent, setHasGeneratedContent] = useState(false);
@@ -131,7 +139,11 @@ export default function GroupPostModule({ actionType = "POST" }) {
       try {
         const stored = sessionStorage.getItem("fb_rerun_campaign");
         const data = stored ? JSON.parse(stored) : null;
+<<<<<<< HEAD
         if (data?.action_type === actionType) {
+=======
+        if (data?.action_type === "POST") {
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
           if (data.campaign_id) setCampaignId(data.campaign_id);
           if (data.name) setCampaignName(data.name);
           if (data.description) setCampaignDescription(data.description);
@@ -170,7 +182,11 @@ export default function GroupPostModule({ actionType = "POST" }) {
           return;
         }
 
+<<<<<<< HEAD
         const draft = readGroupPostDraft(draftScope);
+=======
+        const draft = readGroupPostDraft();
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
         if (!draft) return;
 
         setCampaignId(draft.campaignId ?? null);
@@ -198,7 +214,11 @@ export default function GroupPostModule({ actionType = "POST" }) {
         setIsMediaLocked(Boolean(draft.isMediaLocked));
         setPrompt(draft.prompt ?? "");
         setAiCount(draft.aiCount ?? "1");
+<<<<<<< HEAD
         setPosts(draft.posts?.length ? draft.posts : (isComment ? [""] : [INITIAL_POST]));
+=======
+        setPosts(draft.posts?.length ? draft.posts : [INITIAL_POST]);
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
         setActivePost(Number.isInteger(draft.activePost) ? draft.activePost : 0);
         setHasGeneratedContent(Boolean(draft.hasGeneratedContent));
         setIsContentLocked(Boolean(draft.isContentLocked));
@@ -210,10 +230,17 @@ export default function GroupPostModule({ actionType = "POST" }) {
         setScheduleTime(draft.scheduleTime ?? "08:00");
         setIsPostingSettingsLocked(Boolean(draft.isPostingSettingsLocked));
 
+<<<<<<< HEAD
         const restoredMedia = await readGroupPostDraftMedia(draftScope);
         if (!cancelled) setMediaFiles(restoredMedia);
       } catch (e) {
         console.warn(`Lỗi khôi phục cấu hình ${actionLabel} nhóm:`, e);
+=======
+        const restoredMedia = await readGroupPostDraftMedia();
+        if (!cancelled) setMediaFiles(restoredMedia);
+      } catch (e) {
+        console.warn("Lỗi khôi phục cấu hình đăng bài nhóm:", e);
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
       } finally {
         if (!cancelled) setDraftReady(true);
       }
@@ -221,7 +248,11 @@ export default function GroupPostModule({ actionType = "POST" }) {
 
     restoreDraft();
     return () => { cancelled = true; };
+<<<<<<< HEAD
   }, [actionLabel, actionType, draftScope, isComment, selectApi]);
+=======
+  }, [selectApi]);
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
 
   useEffect(() => {
     if (!draftReady || isRerun) return;
@@ -262,9 +293,15 @@ export default function GroupPostModule({ actionType = "POST" }) {
       scheduleDate,
       scheduleTime,
       isPostingSettingsLocked,
+<<<<<<< HEAD
     }, draftScope);
   }, [
     draftReady, isRerun, campaignId, campaignName, campaignDescription, campaignLocked, draftScope,
+=======
+    });
+  }, [
+    draftReady, isRerun, campaignId, campaignName, campaignDescription, campaignLocked,
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
     selectedAccountKeys, isAccountLocked, apiSource.selectedId, threads, restMinutes, maxPosts, isSettingsLocked,
     confirmedApi, groupSource, groupFile, customGroups, groupSearch, groupFilter,
     selectedGroupKeys, isGroupSourceLocked, savedMedia, minMedia, maxMedia, isMediaLocked,
@@ -274,8 +311,13 @@ export default function GroupPostModule({ actionType = "POST" }) {
 
   useEffect(() => {
     if (!draftReady || isRerun) return;
+<<<<<<< HEAD
     writeGroupPostDraftMedia(mediaFiles, draftScope);
   }, [draftReady, isRerun, mediaFiles, draftScope]);
+=======
+    writeGroupPostDraftMedia(mediaFiles);
+  }, [draftReady, isRerun, mediaFiles]);
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
 
   const loadAccounts = async () => {
     setAccountsLoading(true);
@@ -313,7 +355,11 @@ export default function GroupPostModule({ actionType = "POST" }) {
       .then((data) => {
         if (cancelled) return;
         const rerun = JSON.parse(sessionStorage.getItem("fb_rerun_campaign") || "null");
+<<<<<<< HEAD
         if (rerun?.action_type === actionType || readGroupPostDraft(draftScope)) return;
+=======
+        if (rerun?.action_type === "POST" || readGroupPostDraft()) return;
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
         setThreads(String(data.threads));
         setRestMinutes(String(data.rest_minutes));
         setMaxPosts(String(data.max_posts));
@@ -402,12 +448,20 @@ export default function GroupPostModule({ actionType = "POST" }) {
     if (completionToastJobRef.current === completionKey) return;
     completionToastJobRef.current = completionKey;
     toast.success({
+<<<<<<< HEAD
       key: `group-${draftScope}-completed-${completionKey}`,
+=======
+      key: `group-post-completed-${completionKey}`,
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
       title: "HOÀN TẤT CHIẾN DỊCH",
       message: completionLog.message,
       duration: 8000,
     });
+<<<<<<< HEAD
   }, [campaignProgress, draftScope]);
+=======
+  }, [campaignProgress]);
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
 
   const currentGroupPool = useMemo(() => {
     if (groupSource === "file" && groupFile?.groups?.length) {
@@ -512,15 +566,24 @@ export default function GroupPostModule({ actionType = "POST" }) {
         prompt: prompt.trim(),
         count: amount,
       });
+<<<<<<< HEAD
       const generatedContent = result[isComment ? "comments" : "posts"] || [];
       const generatedPosts = isDup ? generatedContent.slice(0, 1) : generatedContent;
+=======
+      const generatedPosts = isDup ? result.posts.slice(0, 1) : result.posts;
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
       setPosts(generatedPosts);
       setActivePost(0);
       setHasGeneratedContent(true);
       toast.success(
         isDup
+<<<<<<< HEAD
           ? `Đã tạo thành công 1 ${contentLabel} bằng AI!`
           : `Đã tạo thành công ${generatedPosts.length} ${contentLabel} bằng AI!`,
+=======
+          ? "Đã tạo thành công 1 bài viết bằng AI (Trùng lặp nội dung)!"
+          : `Đã tạo thành công ${generatedPosts.length} bài viết bằng AI!`,
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
         "TẠO NỘI DUNG THÀNH CÔNG"
       );
       setSettingsFeedback({ type: "success", message: `Đã tạo ${generatedPosts.length} bài bằng ${model}` });
@@ -552,8 +615,14 @@ export default function GroupPostModule({ actionType = "POST" }) {
 
     if (!trimmedCampaignName) missingSteps.push({ step: 1, message: "nhập tên chiến dịch", target: "step-1-campaign" });
     if (!selectedAccounts.length) missingSteps.push({ step: 2, message: "chọn ít nhất một tài khoản", target: "step-2-accounts" });
+<<<<<<< HEAD
     if (!activeGroups.length) missingSteps.push({ step: 4, message: "chọn ít nhất một nhóm", target: "step-4-group-source" });
     if (!hasPostContent) missingSteps.push({ step: 6, message: `nhập nội dung ${contentLabel}`, target: "step-6-content" });
+=======
+    if (!hasApiKey) missingSteps.push({ step: 3, message: "chọn API đã cấu hình", target: "step-3-settings" });
+    if (!activeGroups.length) missingSteps.push({ step: 4, message: "chọn ít nhất một nhóm", target: "step-4-group-source" });
+    if (!hasPostContent) missingSteps.push({ step: 6, message: "nhập nội dung bài viết", target: "step-6-content" });
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
     if (scheduleEnabled && !scheduleDate) missingSteps.push({ step: 7, message: "chọn ngày bắt đầu", target: "step-7-posting" });
     if (scheduleEnabled && !scheduleTime) missingSteps.push({ step: 7, message: "chọn giờ bắt đầu", target: "step-7-posting" });
 
@@ -613,7 +682,11 @@ export default function GroupPostModule({ actionType = "POST" }) {
     });
     try {
       appendCampaignLog("INFO", "Đang kiểm tra và lưu cấu hình Module 7...");
+<<<<<<< HEAD
       const saved = hasApiKey ? await handleSaveSettings(false, false) : true;
+=======
+      const saved = await handleSaveSettings(false, false);
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
       if (!saved) throw new Error("Cấu hình chưa hợp lệ");
       appendCampaignLog("SUCCESS", `Đã chuẩn bị ${selectedAccounts.length} tài khoản và nguồn nhóm.`);
       let savedMediaPaths = [];

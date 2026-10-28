@@ -69,3 +69,22 @@ export async function getCheckStatus({ jobId, uid } = {}) {
   if (uid) params.uid = uid;
   return api.get("/api/group-scan/check-status", { params });
 }
+
+/** Lấy danh sách lịch sử phiên quét Module 10 */
+export async function getScanHistory(params = {}) {
+  try {
+    return await api.get("/api/group-scan/history", { params });
+  } catch {
+    return null;
+  }
+}
+
+/** Xóa bản ghi lịch sử phiên quét */
+export async function deleteScanHistory(id) {
+  try {
+    return await api.delete(`/api/group-scan/history/${id}`);
+  } catch {
+    return null;
+  }
+}
+

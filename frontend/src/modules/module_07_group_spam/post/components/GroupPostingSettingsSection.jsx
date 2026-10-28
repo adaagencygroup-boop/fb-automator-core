@@ -22,7 +22,10 @@ export default function GroupPostingSettingsSection({
   stepNumber = "7",
   contentType = "post",
 }) {
+<<<<<<< HEAD
   const actionLabel = contentType === "comment" ? "bình luận" : "đăng bài";
+=======
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
   return (
     <SectionCard
       number={stepNumber}

@@ -107,7 +107,11 @@ export default function GroupSummarySection({
         <Info className="size-3.5 text-primary" />
         Lưu ý vận hành an toàn
       </p>
+<<<<<<< HEAD
       <p>Cần nhập API Key hợp lệ khi muốn tạo tự động nội dung {itemLabel} bằng AI.</p>
+=======
+      <p>Cần nhập API Key hợp lệ để tạo tự động nội dung bài đăng bằng AI.</p>
+>>>>>>> 2cf443e40748b895a831e4080c9306770fbe7b94
       <p>Thiết lập luồng (1–3) và thời gian nghỉ tối thiểu 10 phút để tránh checkpoint.</p>
       <p>Bật chế độ xáo trộn ngẫu nhiên để nội dung mỗi nhóm là duy nhất.</p>
       <p>Kiểm tra trạng thái tài khoản Live trước khi nhấn bắt đầu tác vụ.</p>
