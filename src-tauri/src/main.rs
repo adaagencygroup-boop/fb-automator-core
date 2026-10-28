@@ -190,9 +190,9 @@ fn main() {
                 let mut state_lock = child_for_setup.lock().unwrap();
                 *state_lock = Some(child);
             }
-            // Engine PyInstaller + DB init thường 40–90s — đợi nền để log readiness
+            // Engine onefile unpack + AV + DB Supabase: máy chậm có thể 3–8 phút lần đầu
             thread::spawn(|| {
-                wait_for_engine_ready(120);
+                wait_for_engine_ready(480);
             });
             Ok(())
         })

@@ -152,7 +152,7 @@ def _open_session(user, request: Optional[Request], token: str):
 
 
 def issue_browser_tokens(user, request: Optional[Request], remember_me: bool = True):
-    """Access ngắn trong cookie HttpOnly. Refresh giữ phiên để cấp lại access."""
+    """Cấp access + refresh; refresh gắn session DB để gia hạn khi access hết hạn."""
     refresh = create_refresh_token({"sub": user["username"], "role": user.get("role"), "uid": user["id"], "remember_me": remember_me})
     session_id, ip_address, device, browser, os_name = _open_session(user, request, refresh)
     access = create_access_token(
@@ -356,7 +356,7 @@ def verify_license(username, password, hwid, request: Optional[Request], remembe
     }
 
 
-def login_user(username, password, hwid, request: Optional[Request], remember_me: bool = False):
+def login_user(username, password, hwid, request: Optional[Request], remember_me: bool = True):
     """Đăng nhập user/admin bằng một yêu cầu, giữ cookie HttpOnly của engine."""
     username = (username or "").strip()
     if not username:

@@ -3,9 +3,10 @@ page_flow.py
 Kịch bản tự động điền form tạo Fanpage Facebook (UC-05):
   B1 → B10: Truy cập URL → Nhập info → Tải ảnh Avatar/Cover
 """
-import time
 import logging
 import os
+import re
+import time
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -113,60 +114,201 @@ def _upload_file(driver, locators: list, file_path: str):
     return False
 
 
+# Tên tìm trong menu Country code (FB EN/VI). Ưu tiên tên nước vì "+1" khớp cả nhiều quốc gia.
+_COUNTRY_SEARCH_TERMS = {
+    "+84": ["Vietnam", "Việt Nam", "Viet Nam", "+84"],
+    "+1": ["United States", "Hoa Kỳ", "US +1", "+1"],
+    "+63": ["Philippines", "Philippine", "+63"],
+    "+62": ["Indonesia", "+62"],
+    "+66": ["Thailand", "Thái Lan", "+66"],
+    "+855": ["Cambodia", "Campuchia", "+855"],
+    "+856": ["Laos", "Lào", "+856"],
+    "+60": ["Malaysia", "+60"],
+    "+65": ["Singapore", "+65"],
+    "+81": ["Japan", "Nhật Bản", "+81"],
+    "+82": ["South Korea", "Korea", "Hàn Quốc", "+82"],
+    "+86": ["China", "Trung Quốc", "+86"],
+    "+44": ["United Kingdom", "UK", "+44"],
+    "+61": ["Australia", "Úc", "+61"],
+}
+
+
+def _country_code_label(driver) -> str:
+    """Đọc aria-label nút Country code hiện tại (vd: 'Country code, US +1')."""
+    try:
+        return driver.execute_script(
+            """
+            const nodes = Array.from(document.querySelectorAll(
+              '[role="button"][aria-label], [role="combobox"][aria-label]'
+            ));
+            for (const el of nodes) {
+              const a = (el.getAttribute('aria-label') || '').trim();
+              if (/country code|mã quốc gia/i.test(a)) return a;
+            }
+            return '';
+            """
+        ) or ""
+    except Exception:
+        return ""
+
+
+def _country_code_matches(label: str, clean_cc: str) -> bool:
+    """Khớp mã trong phần sau dấu phẩy của aria-label (tránh +1 khớp nhầm)."""
+    if not label or not clean_cc:
+        return False
+    digits = clean_cc.lstrip("+")
+    tail = label.split(",")[-1].strip() if "," in label else label
+    found = re.findall(r"\+(\d+)", tail)
+    if found:
+        return found[-1] == digits
+    return clean_cc in tail
+
+
 def _select_country_code(driver, country_code: str):
-    """Chọn mã quốc gia trên form Facebook (ví dụ: +84, +1, +63, +62...)."""
+    """Chọn mã quốc gia trên form pages/creation. FB hay mặc định US +1 theo locale nick."""
     if not country_code:
         return
     clean_cc = country_code.strip()
     if not clean_cc.startswith("+"):
         clean_cc = "+" + clean_cc
+    search_terms = list(_COUNTRY_SEARCH_TERMS.get(clean_cc, [clean_cc]))
+    if clean_cc not in search_terms:
+        search_terms.append(clean_cc)
 
-    try:
-        cc_btn = wait_and_find(driver, PAGE_CREATION["country_code_selector"], timeout=5)
+    def _already_ok() -> bool:
+        return _country_code_matches(_country_code_label(driver), clean_cc)
+
+    if _already_ok():
+        logger.info("Country code already %s (%s)", clean_cc, _country_code_label(driver))
+        return
+
+    last_err = None
+    for attempt in range(1, 4):
         try:
-            cc_btn.click()
-        except Exception:
-            driver.execute_script("arguments[0].click();", cc_btn)
-        human_sleep(1.0, 1.8)
+            cc_btn = wait_and_find(driver, PAGE_CREATION["country_code_selector"], timeout=8)
+            try:
+                cc_btn.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", cc_btn)
+            human_sleep(0.8, 1.4)
 
-        # 1. Thử tìm option chứa mã quốc gia cụ thể
-        opt_xpaths = [
-            f'//div[@role="option" or @role="button" or @role="menuitem"][contains(., "{clean_cc}")]',
-            f'//span[contains(text(), "{clean_cc}")]',
-            f'//li[contains(., "{clean_cc}")]',
-        ]
-        found_opt = False
-        for xp in opt_xpaths:
-            opts = driver.find_elements(By.XPATH, xp)
-            for opt in opts:
-                if opt.is_displayed():
+            # Menu FB: thường có ô search — gõ tên nước (Vietnam) tin cậy hơn "+84" lệch scroll.
+            search_inputs = driver.find_elements(
+                By.XPATH,
+                "//*[@role='menu' or @role='listbox' or @role='dialog']"
+                "//input[not(@type='hidden')]",
+            )
+            typed = False
+            # EN UI: "Vietnam"; VI UI: "Việt Nam" — thử lần lượt
+            for term in search_terms:
+                for inp in search_inputs:
                     try:
-                        opt.click()
+                        if not inp.is_displayed():
+                            continue
+                        inp.click()
+                        inp.send_keys(Keys.CONTROL, "a")
+                        inp.send_keys(Keys.BACKSPACE)
+                        human_type(inp, term)
+                        human_sleep(0.9, 1.4)
+                        typed = True
+                        break
                     except Exception:
-                        driver.execute_script("arguments[0].click();", opt)
-                    found_opt = True
+                        continue
+                if typed:
                     break
-            if found_opt:
-                break
 
-        # 2. Nếu không thấy trực tiếp, gõ mã vào ô tìm kiếm trong dropdown
-        if not found_opt:
-            search_inputs = driver.find_elements(By.XPATH, '//div[@role="dialog" or @role="menu" or @role="listbox"]//input')
-            if search_inputs and search_inputs[0].is_displayed():
-                search_inputs[0].clear()
-                human_type(search_inputs[0], clean_cc)
-                human_sleep(1.0, 1.8)
-                first_items = driver.find_elements(By.XPATH, '//div[@role="option" or @role="button"][1]')
-                if first_items and first_items[0].is_displayed():
-                    try:
-                        first_items[0].click()
-                    except Exception:
-                        driver.execute_script("arguments[0].click();", first_items[0])
+            clicked = driver.execute_script(
+                """
+                const wantCode = arguments[0];
+                const terms = (arguments[1] || []).map((t) => String(t).toLowerCase());
+                const digits = String(wantCode).replace('+', '');
+                const roles = new Set(['option', 'menuitem', 'menuitemradio', 'button', 'row']);
+                const nodes = Array.from(document.querySelectorAll(
+                  '[role="option"], [role="menuitem"], [role="menuitemradio"], [role="button"], [role="row"], li'
+                ));
+                const visible = (el) => {
+                  const r = el.getBoundingClientRect();
+                  return r.width > 8 && r.height > 8;
+                };
+                const scored = [];
+                for (const el of nodes) {
+                  if (!visible(el)) continue;
+                  const role = (el.getAttribute('role') || '').toLowerCase();
+                  if (role && !roles.has(role) && el.tagName !== 'LI') continue;
+                  const aria = (el.getAttribute('aria-label') || '');
+                  if (/country code|mã quốc gia/i.test(aria) && /\\+\\d+/.test(aria)) continue;
+                  const text = ((el.innerText || el.textContent || '') + ' ' + aria)
+                    .replace(/\\s+/g, ' ').trim();
+                  if (!text || text.length > 120) continue;
+                  const lower = text.toLowerCase();
+                  const hasCode = text.includes(wantCode)
+                    || new RegExp('\\\\+' + digits + '(?!\\\\d)').test(text);
+                  const hasName = terms.some((t) => t && lower.includes(t));
+                  if (!hasCode && !hasName) continue;
+                  scored.push({ el, score: (hasCode ? 10 : 0) + (hasName ? 5 : 0) });
+                }
+                scored.sort((a, b) => b.score - a.score);
+                if (!scored.length) return false;
+                scored[0].el.click();
+                return true;
+                """,
+                clean_cc,
+                search_terms,
+            )
 
-        human_sleep(0.8, 1.5)
-        logger.info(f"Country code selected: {clean_cc}")
-    except Exception as cc_err:
-        logger.info(f"Country code selection note: {cc_err}")
+            if not clicked:
+                # Fallback XPath cũ + locator Việt Nam
+                fallback_xpaths = [
+                    f'//div[@role="option" or @role="menuitem" or @role="menuitemradio"][contains(., "{clean_cc}")]',
+                    f'//span[contains(., "{clean_cc}")]/ancestor::*[@role="option" or @role="menuitem" or @role="button"][1]',
+                ]
+                if clean_cc == "+84":
+                    fallback_xpaths[1:1] = list(PAGE_CREATION.get("country_vietnam_option") or [])
+                for xp in fallback_xpaths:
+                    for opt in driver.find_elements(By.XPATH, xp):
+                        try:
+                            if opt.is_displayed():
+                                driver.execute_script("arguments[0].click();", opt)
+                                clicked = True
+                                break
+                        except Exception:
+                            continue
+                    if clicked:
+                        break
+
+            human_sleep(0.7, 1.2)
+            # Đóng menu nếu vẫn mở (Esc)
+            try:
+                driver.switch_to.active_element.send_keys(Keys.ESCAPE)
+            except Exception:
+                pass
+
+            if _already_ok():
+                logger.info(
+                    "Country code selected: %s (attempt %s) → %s",
+                    clean_cc,
+                    attempt,
+                    _country_code_label(driver),
+                )
+                return
+
+            last_err = f"sau lần {attempt} vẫn là: {_country_code_label(driver) or '(không đọc được)'}"
+            logger.warning("Chưa chọn được %s — %s", clean_cc, last_err)
+            human_sleep(0.5, 0.9)
+        except Exception as cc_err:
+            last_err = str(cc_err)
+            logger.warning("Country code attempt %s failed: %s", attempt, cc_err)
+
+    # Không nuốt lỗi im lặng — để B6 biết và log rõ (tránh kẹt Next vì US +1 + SĐT VN)
+    logger.error(
+        "Không chọn được mã quốc gia %s (FB mặc định US +1). Chi tiết: %s",
+        clean_cc,
+        last_err,
+    )
+    raise RuntimeError(
+        f"Không đổi được Country code sang {clean_cc} (đang: {_country_code_label(driver) or 'US +1'}). "
+        "Nút Next sẽ bị khóa nếu SĐT Việt Nam gắn mã Mỹ."
+    )
 
 
 def run_page_creation(
@@ -237,25 +379,40 @@ def run_page_creation(
         # ── B6: Điền thông tin liên hệ ──
         if phone:
             try:
-                # 1. Chọn Mã Quốc Gia được yêu cầu (Ví dụ: +84, +1, +63...)
-                _select_country_code(driver, country_code)
-
-                # 2. Điền số điện thoại (Chuẩn hóa)
                 phone_el = wait_and_find(driver, PAGE_CREATION["phone_input"], timeout=12)
-                phone_el.clear()
+            except TimeoutException:
+                phone_el = None
+                logger.warning("Phone input not found")
+
+            if phone_el is not None:
+                # Bắt buộc đổi Country code trước (FB mặc định US +1 theo locale nick → SĐT VN bị đỏ, Next khóa)
+                try:
+                    _select_country_code(driver, country_code or "+84")
+                except Exception as cc_fail:
+                    logger.error("Country code: %s", cc_fail)
+                    raise
+
+                try:
+                    phone_el.clear()
+                except Exception:
+                    driver.execute_script("arguments[0].value='';", phone_el)
                 clean_phone = phone.strip()
-                prefix = country_code.replace("+", "").strip()
+                prefix = (country_code or "+84").replace("+", "").strip()
                 if prefix and clean_phone.startswith(f"+{prefix}"):
-                    clean_phone = clean_phone[len(prefix)+1:]
+                    clean_phone = clean_phone[len(prefix) + 1 :]
                 elif prefix and clean_phone.startswith(prefix) and len(clean_phone) > 9:
-                    clean_phone = clean_phone[len(prefix):]
-                if country_code == "+84" and not clean_phone.startswith("0") and len(clean_phone) == 9:
+                    clean_phone = clean_phone[len(prefix) :]
+                if (country_code or "+84") == "+84" and not clean_phone.startswith("0") and len(clean_phone) == 9:
                     clean_phone = "0" + clean_phone
-                
+
                 human_type(phone_el, clean_phone)
                 human_sleep(0.8, 1.5)
-            except TimeoutException:
-                logger.warning("Phone input not found")
+                # Xác nhận lần cuối — nếu vẫn US +1 thì không tiếp tục để tránh kẹt Step 1/5
+                if not _country_code_matches(_country_code_label(driver), country_code or "+84"):
+                    raise RuntimeError(
+                        f"Sau khi điền SĐT, Country code vẫn là '{_country_code_label(driver)}' "
+                        f"(cần {country_code or '+84'})."
+                    )
 
         if email:
             try:

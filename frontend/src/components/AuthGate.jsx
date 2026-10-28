@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import api from "@/services/api";
 import { clearSessionUserId } from "@/services/sessionIdentity.mjs";
-import { clearAuthTokens } from "@/services/authTokens.mjs";
+import { clearAuthTokens, getRefreshToken } from "@/services/authTokens.mjs";
 import LoginScreen from "@/modules/module_auth/LoginScreen";
 import RegisterScreen from "@/modules/module_auth/RegisterScreen";
 import PendingScreen from "@/modules/module_auth/PendingScreen";
@@ -12,9 +12,12 @@ import AuthStatusScreen from "@/modules/module_auth/AuthStatusScreen";
 import SessionOverlay from "@/components/auth/SessionOverlay";
 
 const ADMIN_URL = process.env.NEXT_PUBLIC_ADMIN_URL || "http://127.0.0.1:3010";
-const REFRESH_EVERY_MS = 10 * 60 * 1000;
+/** Proactive refresh trước khi access hết hạn (12h) — desktop không có cookie. */
+const REFRESH_EVERY_MS = 30 * 60 * 1000;
 /** Timeout ngắn cho bước khôi phục phiên — tránh treo trắng 60s khi engine restart/chậm. */
 const AUTH_BOOT_TIMEOUT_MS = 12000;
+/** Chỉ đá phiên sau vài lần 401 liên tiếp — tránh dừng automation vì lỗi tạm. */
+const AUTH_KICK_AFTER_FAILURES = 3;
 
 export default function AuthGate({ children }) {
   const [ready, setReady] = useState(false);
@@ -132,12 +135,27 @@ export default function AuthGate({ children }) {
         if (failures >= 2) setConnectionError(true);
         return;
       }
+      const message = err.code || err.message;
+      const hardLogout = [
+        "SESSION_REVOKED",
+        "SESSION_IDENTITY_CHANGED",
+        "ACCOUNT_BANNED",
+        "ACCOUNT_LOCKED",
+        "ACCOUNT_PENDING",
+        "ACCOUNT_REJECTED",
+        "ACCOUNT_NOT_FOUND",
+      ].includes(message);
+      // Lỗi 401 tạm (engine bận / token đang refresh) — thử lại, đừng đá phiên giữa automation.
+      if (!hardLogout && failures < AUTH_KICK_AFTER_FAILURES) {
+        if (failures >= 2) setConnectionError(true);
+        return;
+      }
       stopped = true;
       clearTimeout(timer);
       setConnectionError(false);
-      const message = err.code || err.message;
       localStorage.removeItem("pending_username");
       localStorage.removeItem("locked_username");
+      clearAuthTokens();
       setUser(null);
       if (["ACCOUNT_BANNED", "ACCOUNT_LOCKED"].includes(message)) {
         if (sessionUsername) localStorage.setItem("locked_username", sessionUsername);
@@ -164,7 +182,13 @@ export default function AuthGate({ children }) {
       clearTimeout(timer);
       try {
         if (Date.now() - refreshedAt >= REFRESH_EVERY_MS) {
-          await api.post("/api/v1/auth/refresh", {}, { timeout: AUTH_BOOT_TIMEOUT_MS });
+          const refreshToken = getRefreshToken();
+          // Tauri không dùng được cookie → bắt buộc gửi refresh_token trong body.
+          await api.post(
+            "/api/v1/auth/refresh",
+            refreshToken ? { refresh_token: refreshToken } : {},
+            { timeout: AUTH_BOOT_TIMEOUT_MS },
+          );
           refreshedAt = Date.now();
         }
         const me = await api.get("/api/v1/auth/me", { timeout: AUTH_BOOT_TIMEOUT_MS });
@@ -226,9 +250,9 @@ export default function AuthGate({ children }) {
 
   if (!ready) {
     const message = connectionError
-      ? "Đang khởi động Local Engine (lần đầu có thể 1–2 phút). Đang thử kết nối lại..."
+      ? "Đang khởi động Local Engine (lần đầu / máy có Windows Defender có thể 3–8 phút). Đừng tắt app — đang thử lại..."
       : bootSlow
-        ? "Máy chủ phản hồi chậm — đang chờ Engine..."
+        ? "Máy chủ phản hồi chậm — Engine đang giải nén / kết nối DB..."
         : "Đang kiểm tra phiên đăng nhập...";
     return <SessionOverlay message={message} />;
   }

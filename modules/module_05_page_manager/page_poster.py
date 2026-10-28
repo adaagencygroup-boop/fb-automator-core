@@ -375,23 +375,28 @@ def post_on_page(driver: webdriver.Chrome, page_url: str, post_content: str, ima
         finished.set()
 
 
-def _js_click_aria(driver: webdriver.Chrome, *labels: str) -> bool:
-    """Click nút theo aria-label exact — không phụ thuộc is_displayed() của Selenium."""
+def _js_click_aria(driver: webdriver.Chrome, *labels: str, require_enabled: bool = True) -> bool:
+    """Click nút theo aria-label exact — bỏ qua nút aria-disabled (FB giữ Next mờ đến khi có nội dung/ảnh)."""
     try:
         return bool(
             driver.execute_script(
                 """
                 const want = arguments[0].map((s) => String(s).toLowerCase());
-                const nodes = Array.from(document.querySelectorAll('[aria-label][role="button"], [role="button"][aria-label]'));
+                const requireEnabled = arguments[1];
+                const nodes = Array.from(document.querySelectorAll(
+                  '[aria-label][role="button"], [role="button"][aria-label]'
+                ));
                 for (const el of nodes) {
                   const aria = (el.getAttribute('aria-label') || '').trim().toLowerCase();
                   if (!want.includes(aria)) continue;
+                  if (requireEnabled && el.getAttribute('aria-disabled') === 'true') continue;
                   el.click();
                   return true;
                 }
                 return false;
                 """,
                 list(labels),
+                require_enabled,
             )
         )
     except Exception:
@@ -399,25 +404,28 @@ def _js_click_aria(driver: webdriver.Chrome, *labels: str) -> bool:
 
 
 def _click_final_post(driver: webdriver.Chrome, should_stop=None, deadline=None) -> bool:
-    """Bấm đúng aria-label=Post/Đăng. Nếu đang ở bước Next thì bấm Next trước rồi đợi Post."""
+    """Luồng FB mới: Next (Post settings) → Post. Chờ Next bật sáng rồi mới bấm."""
     should_stop = should_stop or (lambda: False)
-    post_deadline = time.monotonic() + 25
+    # Ảnh lớn / mạng chậm: Next có thể disabled khá lâu
+    post_deadline = time.monotonic() + 60
     limit = deadline if deadline is not None else post_deadline
-    tried_next = False
+    next_clicks = 0
     while time.monotonic() < post_deadline:
         _guard(should_stop, limit)
+        # Ưu tiên Post nếu đã sang màn Post settings
         if _js_click_aria(driver, "Post", "Đăng"):
             logger.info("Đã bấm [aria-label=Post/Đăng]")
             return True
 
-        if not tried_next and _js_click_aria(driver, "Next", "Tiếp"):
-            logger.info("Đã bấm Next/Tiếp → chờ Post settings hiện aria-label=Post")
-            tried_next = True
-            _pause(1.5, 2.5, should_stop, limit)
+        # Composer còn bước Next — chỉ click khi không disabled
+        if _js_click_aria(driver, "Next", "Tiếp", "Tiếp theo"):
+            next_clicks += 1
+            logger.info("Đã bấm Next/Tiếp (#%s) → chờ Post settings", next_clicks)
+            _pause(1.2, 2.0, should_stop, limit)
             continue
 
-        time.sleep(0.5)
+        time.sleep(0.45)
 
-    logger.warning("Hết thời gian chờ [aria-label=Post]")
+    logger.warning("Hết thời gian chờ [aria-label=Post] (đã thử Next %s lần)", next_clicks)
     return False
 

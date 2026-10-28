@@ -542,25 +542,44 @@ class FacebookGroupPoster:
             if self.cancel.wait(2 + min(len(resolved_media) * 2, 8)):
                 self._raise_if_cancelled()
 
-        submit_xpath = (
+        # FB mới: composer có bước Next → Post settings → Post (không còn Đăng ngay).
+        post_xpath = (
             "//div[@role='dialog']//*[@role='button' and "
             "(@aria-label='Đăng' or @aria-label='Post' or normalize-space(.)='Đăng' or normalize-space(.)='Post') and "
+            "not(@aria-disabled='true')]"
+        )
+        next_xpath = (
+            "//div[@role='dialog']//*[@role='button' and "
+            "(@aria-label='Next' or @aria-label='Tiếp' or @aria-label='Tiếp theo' or "
+            "normalize-space(.)='Next' or normalize-space(.)='Tiếp' or normalize-space(.)='Tiếp theo') and "
             "not(@aria-disabled='true')]"
         )
 
         def click_submit():
             try:
-                submit = next((element for element in driver.find_elements(By.XPATH, submit_xpath)
-                               if self._is_visible(element)), None)
-                if submit is None:
-                    return False
                 self._raise_if_cancelled()
-                driver.execute_script("arguments[0].click()", submit)
-                return True
+                submit = next(
+                    (element for element in driver.find_elements(By.XPATH, post_xpath)
+                     if self._is_visible(element)),
+                    None,
+                )
+                if submit is not None:
+                    driver.execute_script("arguments[0].click()", submit)
+                    return True
+                nxt = next(
+                    (element for element in driver.find_elements(By.XPATH, next_xpath)
+                     if self._is_visible(element)),
+                    None,
+                )
+                if nxt is not None:
+                    driver.execute_script("arguments[0].click()", nxt)
+                    # Chưa phải Post — đợi vòng sau khi Post settings mở
+                    return False
+                return False
             except Exception:
                 return False
 
-        self._wait_until(click_submit, 25, "Nút Đăng chưa sẵn sàng")
+        self._wait_until(click_submit, 45, "Nút Đăng/Post chưa sẵn sàng (sau bước Next)")
 
         def dialog_is_closed():
             dialogs = driver.find_elements(By.XPATH, "//div[@role='dialog']")

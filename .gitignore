@@ -49,6 +49,8 @@ data/accounts.txt
 data/browser_profiles/
 data/module_02_account_manager/
 data/module_07_group_spam/
+# Ảnh avatar/cover/post do Module 4 sinh runtime — không commit
+data/creator_assets/
 *.db
 *.sqlite
 *.sqlite3

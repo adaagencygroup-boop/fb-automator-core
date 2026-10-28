@@ -70,7 +70,7 @@ class LicenseBody(BaseModel):
 
 
 class UserLoginBody(LicenseBody):
-    remember_me: bool = False
+    remember_me: bool = True
 
 
 class LoginBody(BaseModel):
