@@ -71,11 +71,17 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
       try {
         rerunData = await getGroupCampaignRerunConfig(campaign.id);
       } catch (errApi) {
-        console.warn("API rerun config error, using mock rerun state:", errApi);
+        console.warn("API rerun config error, using fallback rerun state:", errApi);
         rerunData = {
-          campaign: campaign,
+          campaign_id: campaign.id,
+          name: campaign.name,
+          description: campaign.description || "",
           action_type: campaign.action_type || "POST",
-          accounts: details.map((d) => ({ uid: d.account_uid, name: d.account_name })),
+          config: {
+            account_uids: [...new Set(details.map((d) => d.account_uid).filter(Boolean))],
+            groups: [...new Map(details.filter((d) => d.group_url || d.group_name).map((d) => [d.group_url || d.group_name, { name: d.group_name, url: d.group_url }])).values()],
+            media: [],
+          },
         };
       }
       sessionStorage.setItem("fb_rerun_campaign", JSON.stringify(rerunData));
@@ -189,7 +195,7 @@ export default function CampaignDetailModule({ campaignId, onBack }) {
                   {campaign.name}
                 </h2>
                 <p className="mt-1 text-xs text-slate-400">
-                  Ngày chạy: <span className="font-medium text-slate-600">{formatDateOnly(campaign.created_at)}</span>
+                  Ngày chạy: <span className="font-medium text-slate-600">{formatDateOnly(campaign.last_run_at || campaign.created_at || details[0]?.created_at)}</span>
                 </p>
               </div>
 

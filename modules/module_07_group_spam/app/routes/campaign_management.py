@@ -167,8 +167,23 @@ async def get_campaign_details(
         campaign_where += " AND owner_key = ?"
         campaign_params.append(owner)
     campaign = db.fetch_one(
-        f"SELECT campaign_id AS id, name, description, action_type "
-        f"FROM cloud_group_campaigns WHERE {campaign_where}",
+        f"""
+        SELECT 
+            c.campaign_id AS id, 
+            c.name, 
+            c.description, 
+            c.action_type,
+            c.created_at,
+            (
+                SELECT COALESCE(r.finished_at, r.started_at, r.synced_at)
+                FROM cloud_group_runs r
+                WHERE r.campaign_id = c.campaign_id
+                ORDER BY r.run_number DESC
+                LIMIT 1
+            ) AS last_run_at
+        FROM cloud_group_campaigns c 
+        WHERE {campaign_where}
+        """,
         tuple(campaign_params),
     )
     if not campaign:
