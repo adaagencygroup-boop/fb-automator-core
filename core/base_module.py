@@ -2,9 +2,9 @@
 Base Worker abstraction cho các module backend (QThread + signals).
 UI đã chuyển sang Next.js — không còn BaseModuleTab PyQt.
 """
-from PyQt5.QtCore import QThread, pyqtSignal, QObject
 from typing import Optional
 from config.constants import LogLevel
+from core.qt_compat import QObject, QThread, pyqtSignal
 
 
 class BaseWorker(QThread):

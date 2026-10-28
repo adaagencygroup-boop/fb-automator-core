@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import api from "@/services/api";
 import { clearSessionUserId } from "@/services/sessionIdentity.mjs";
+import { clearAuthTokens } from "@/services/authTokens.mjs";
 import LoginScreen from "@/modules/module_auth/LoginScreen";
 import RegisterScreen from "@/modules/module_auth/RegisterScreen";
 import PendingScreen from "@/modules/module_auth/PendingScreen";
@@ -57,7 +58,6 @@ export default function AuthGate({ children }) {
   }, [ready]);
 
   useEffect(() => {
-    window.localStorage.removeItem("fb_auth_token");
     let stopped = false;
     let timer;
     let failures = 0;
@@ -201,6 +201,7 @@ export default function AuthGate({ children }) {
 
   async function logout() {
     await api.post("/api/v1/auth/logout").catch(() => {});
+    clearAuthTokens();
     clearSessionUserId();
     setUser(null);
     localStorage.removeItem("pending_username");
@@ -225,7 +226,7 @@ export default function AuthGate({ children }) {
 
   if (!ready) {
     const message = connectionError
-      ? "Mất kết nối máy chủ. Đang thử kết nối lại..."
+      ? "Đang khởi động Local Engine (lần đầu có thể 1–2 phút). Đang thử kết nối lại..."
       : bootSlow
         ? "Máy chủ phản hồi chậm — đang chờ Engine..."
         : "Đang kiểm tra phiên đăng nhập...";

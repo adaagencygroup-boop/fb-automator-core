@@ -11,7 +11,7 @@ import random
 import urllib.parse
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from PyQt5.QtCore import QThread, pyqtSignal
+from core.qt_compat import QThread, pyqtSignal
 
 try:
     import curl_cffi.requests as c_requests  # type: ignore

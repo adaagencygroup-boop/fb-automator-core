@@ -240,8 +240,14 @@ export default function OmnichannelChatModule() {
     const connectWs = () => {
       if (destroyed) return;
       try {
-        const host = typeof window !== "undefined" ? window.location.hostname : "127.0.0.1";
-        const proto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
+        // Desktop/Tauri: luôn loopback — tránh wss://tauri.localhost:28129
+        const isTauri =
+          typeof window !== "undefined" &&
+          Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__ || window.location?.hostname === "tauri.localhost");
+        const host = isTauri ? "127.0.0.1" : (typeof window !== "undefined" ? window.location.hostname : "127.0.0.1");
+        const proto = isTauri
+          ? "ws:"
+          : (typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:");
         ws = new WebSocket(`${proto}//${host}:28129/api/facebook/ws/all`);
 
         ws.onopen = () => {

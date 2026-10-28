@@ -60,11 +60,17 @@ __all__ = ["MODULE_REGISTRY", "load_backend_modules"]
 
 
 def load_backend_modules():
-    """Import từng package module để engine không chạy khi thiếu backend."""
+    """Import từng package module. Module thiếu/lỗi không được làm sập cả Engine."""
     import importlib
+    import traceback
 
     loaded = []
     for item in MODULE_REGISTRY:
-        importlib.import_module(f"modules.{item['id']}")
-        loaded.append(item["id"])
+        mod_id = item["id"]
+        try:
+            importlib.import_module(f"modules.{mod_id}")
+            loaded.append(mod_id)
+        except Exception as exc:
+            print(f"[Modules] Skip {mod_id}: {exc}")
+            traceback.print_exc()
     return loaded

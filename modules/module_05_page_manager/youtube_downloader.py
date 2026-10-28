@@ -8,7 +8,7 @@ import datetime
 import threading
 import re
 from concurrent.futures import ThreadPoolExecutor
-from PyQt5.QtCore import QThread, pyqtSignal
+from core.qt_compat import QThread, pyqtSignal
 import yt_dlp
 import shutil
 import warnings

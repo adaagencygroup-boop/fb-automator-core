@@ -9,8 +9,11 @@ from dotenv import dotenv_values, load_dotenv
 import sys
 if getattr(sys, "frozen", False):
   BASE_DIR = Path(sys.executable).resolve().parent
+  # PyInstaller onefile: datas nằm trong _MEIPASS
+  BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))
 else:
   BASE_DIR = Path(__file__).resolve().parent.parent
+  BUNDLE_DIR = BASE_DIR
 DATA_DIR = BASE_DIR / "data"
 LOGS_DIR = BASE_DIR / "logs"
 DOWNLOADS_DIR = BASE_DIR / "downloads"
@@ -20,8 +23,13 @@ TIKTOK_SESSION_PATH = DATA_DIR / "tiktok_session.json"
 YOUTUBE_CONFIG_PATH = DATA_DIR / "youtube_config.json"
 YOUTUBE_CONFIG_INI_PATH = DATA_DIR / "youtube_config.ini"
 
-# Tải biến môi trường từ file .env tại thư mục gốc dự án
-ENV_PATH = BASE_DIR / ".env"
+# .env: cạnh .exe (cài đặt) → trong bundle PyInstaller → cwd
+_ENV_CANDIDATES = [
+    BASE_DIR / ".env",
+    BUNDLE_DIR / ".env",
+    Path.cwd() / ".env",
+]
+ENV_PATH = next((p for p in _ENV_CANDIDATES if p.exists()), BASE_DIR / ".env")
 if ENV_PATH.exists():
     load_dotenv(ENV_PATH)
 else:

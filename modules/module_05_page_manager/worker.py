@@ -8,7 +8,7 @@ import random
 import time
 import re
 import datetime
-from PyQt5.QtCore import QThread, pyqtSignal
+from core.qt_compat import QThread, pyqtSignal
 
 try:
     from modules.module_05_page_manager.facebook_client import post_to_facebook_page, upload_reel_to_facebook, upload_video_to_facebook

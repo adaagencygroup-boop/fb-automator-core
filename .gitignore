@@ -1,6 +1,14 @@
 # =====================================================================
 # GITIGNORE - FACEBOOK AUTOMATOR PRO
 # =====================================================================
+# Giữ lại (cần push để cả team đóng gói được):
+#   - src-tauri/tauri.conf.json, Cargo.toml, build.rs, src/, capabilities/
+#   - src-tauri/icons/          (icon app — regenerate bằng: npx tauri icon <png>)
+#   - build_engine.spec, scripts/build_sidecar.py
+#   - core/qt_compat.py và mọi fix import/sidecar trong modules/
+# Bỏ (rác build / secret / binary nặng):
+#   - src-tauri/target/, gen/, binaries/*.exe, dist/, build/, .env
+# =====================================================================
 
 # 1. Python Environment & Bytecode
 __pycache__/
@@ -22,6 +30,9 @@ venv.bak/
 frontend/.env
 frontend/.env.local
 frontend/.env.*.local
+web-admin/.env
+web-admin/.env.local
+web-admin/.env.*.local
 !.env.example
 !.env.test
 
@@ -43,13 +54,6 @@ data/module_02_account_manager/
 
 # 4. Logs & Temp Files
 logs/
-logs/*.txt
-logs/*.log
-logs/login-*.png
-logs/register-*.png
-logs/pending-*.png
-logs/locked-*.png
-logs/*.log.*
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -58,6 +62,8 @@ downloads/
 temp/
 tmp/
 scratch/
+.runtime-temp/
+engine-temp/
 
 # 5. Browser Automation & Profiles
 profiles/
@@ -69,8 +75,11 @@ sessions/
 # 6. Node & Next.js Artifacts
 node_modules/
 frontend/node_modules/
+web-admin/node_modules/
 frontend/.next/
 frontend/out/
+web-admin/.next/
+web-admin/out/
 frontend/.turbo/
 .turbo/
 .pnp
@@ -96,12 +105,30 @@ Thumbs.db
 Desktop.ini
 
 # 9. Build, Packaging & Tauri
-*.dist/
+# PyInstaller / npm / cargo output (không commit)
 build/
 dist/
 *.egg-info/
-src-tauri/ rget/
-src-tauri/binaries/*.exe
+*.dist/
+
+# Cargo build cache — rất nặng, mỗi máy tự build
+src-tauri/target/
+
+# Schema sinh tự động khi `tauri build` / `tauri dev`
+src-tauri/gen/
+
+# Sidecar binary ~1GB — build bằng: python scripts/build_sidecar.py
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+
+# Icon sinh bởi `npx tauri icon` (android/ios/store…) — chỉ giữ 2 file nguồn
+src-tauri/icons/**
+!src-tauri/icons/icon.png
+!src-tauri/icons/icon.ico
+
+# Installer / debug symbols
+*.msi
+*-setup.exe
 *.pdb
 
 # 10. Testing & Coverage
@@ -110,7 +137,7 @@ src-tauri/binaries/*.exe
 htmlcov/
 test-results/
 
-#11. Upload
+# 11. Upload
 uploads/
 
 # private
