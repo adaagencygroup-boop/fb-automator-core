@@ -35,9 +35,10 @@ def _safe_path(token: str) -> Path:
     raw = str(token or "").strip().replace("\\", "/")
     if not raw:
         raise MediaStorageError("Đường dẫn media trống")
-    candidate = (UPLOAD_MEDIA_DIR / Path(raw).name).resolve()
-    if candidate.parent != UPLOAD_MEDIA_DIR or Path(raw).name != raw:
+    file_name = Path(raw).name
+    if not file_name:
         raise MediaStorageError("Đường dẫn media không hợp lệ")
+    candidate = (UPLOAD_MEDIA_DIR / file_name).resolve()
     if candidate.suffix.lower() not in ALLOWED_EXTENSIONS:
         raise MediaStorageError("Định dạng media không được hỗ trợ")
     return candidate
@@ -89,6 +90,10 @@ def resolve_media_tokens_for_config(tokens: list[str], campaign_id: str | None =
             continue
         path = _safe_path(raw)
         if not path.is_file():
+            cached_candidate = download_or_cache_media(raw, campaign_id)
+            if cached_candidate.is_file():
+                validated.append(raw)
+                continue
             raise MediaStorageError(f"Không tìm thấy media: {path.name}")
         validated.append(raw)
     return validated
