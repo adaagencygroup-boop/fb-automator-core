@@ -503,7 +503,11 @@ async def open_history_result(
     target_url = str(record.get("result_url") or record.get("group_url") or "").strip()
     if not account_uid:
         raise HTTPException(422, "Bản ghi chưa có UID người dùng")
-    if not re.match(r"^https?://(?:www\.|m\.)?facebook\.com/", target_url, flags=re.IGNORECASE):
+    if not re.match(
+        r"^https?://(?:(?:www|m|web)\.)?facebook\.com/",
+        target_url,
+        flags=re.IGNORECASE,
+    ):
         raise HTTPException(422, "Bản ghi chưa có liên kết Facebook hợp lệ")
 
     from modules.module_02_account_manager.services.browser_service import queue_open_browser

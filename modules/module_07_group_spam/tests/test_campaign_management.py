@@ -153,6 +153,21 @@ class CampaignManagementTests(unittest.TestCase):
         after_delete = self.client.get("/api/groups/campaigns")
         self.assertEqual(after_delete.json()["campaigns"], [])
 
+    def test_open_history_accepts_web_facebook_link(self):
+        record = self.cloud_db.log()
+        record["result_url"] = "https://web.facebook.com/groups/grp_1/posts/999/"
+        with patch.object(self.cloud_db, "log", return_value=record), patch(
+            "modules.module_02_account_manager.services.browser_service.queue_open_browser",
+            return_value={"started": True, "uid": "12345", "operation_id": "open-web"},
+        ) as open_browser:
+            response = self.client.post(f"/api/groups/history/{self.cloud_db.task_id}/open")
+
+        self.assertEqual(response.status_code, 200)
+        open_browser.assert_called_once_with(
+            "12345",
+            target_url="https://web.facebook.com/groups/grp_1/posts/999/",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

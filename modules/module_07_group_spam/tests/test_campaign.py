@@ -1,6 +1,8 @@
 import threading
+import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from modules.module_07_group_spam.app.services.campaign import (
@@ -96,7 +98,7 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual(len(job.public()["logs"]), 105)
         self.assertEqual(job.public()["logs"][0]["message"], "event-0")
 
-    def test_campaign_runs_concurrently_and_reports_partial_result(self):
+    def test_campaign_reports_partial_result(self):
         with patch.object(self.manager, "_load_accounts", return_value=self.accounts):
             started = self.manager.start(self.payload(), "owner-1")
             result = wait_for_job(self.manager, started["job_id"])
@@ -119,7 +121,7 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual(result["success"], 1)
         self.assertEqual(result["progress"], 100)
 
-    def test_join_flow_finishes_before_posting_flow_starts(self):
+    def test_each_group_action_runs_immediately_after_join(self):
         events = []
 
         class RecordingPoster(FakePoster):
@@ -144,7 +146,34 @@ class CampaignTests(unittest.TestCase):
             result = wait_for_job(manager, started["job_id"])
 
         self.assertEqual(result["status"], "COMPLETED")
-        self.assertEqual(events, [("join", "g1"), ("join", "g2"), ("post", "g1"), ("post", "g2")])
+        self.assertEqual(events, [("join", "g1"), ("post", "g1"), ("join", "g2"), ("post", "g2")])
+
+    def test_one_account_finishes_before_next_account_starts(self):
+        events = []
+
+        class RecordingPoster(FakePoster):
+            def join_group(self, group):
+                events.append((self.account["uid"], "join", group["key"]))
+                return super().join_group(group)
+
+            def post(self, group, content, media):
+                events.append((self.account["uid"], "post", group["key"]))
+                return super().post(group, content, media)
+
+        manager = CampaignManager(poster_factory=RecordingPoster, persistence=FakePersistence())
+        payload = self.payload()
+        payload["settings"]["max_posts"] = 4
+        with patch.object(manager, "_load_accounts", return_value=self.accounts):
+            started = manager.start(payload, "owner-1")
+            result = wait_for_job(manager, started["job_id"])
+
+        self.assertEqual(result["status"], "PARTIAL")
+        self.assertEqual(events, [
+            ("100", "join", "g1"), ("100", "post", "g1"),
+            ("100", "join", "g2"), ("100", "post", "g2"),
+            ("200", "join", "g1"), ("200", "post", "g1"),
+            ("200", "join", "g2"), ("200", "post", "g2"),
+        ])
 
     def test_comment_campaign_uses_first_post_comment_flow(self):
         payload = self.payload()
@@ -227,6 +256,8 @@ class CampaignTests(unittest.TestCase):
         class Textbox:
             def __init__(self):
                 self.text = ""
+                self.content_entries = []
+                self.all_selected = False
 
             def is_displayed(self):
                 return True
@@ -241,12 +272,30 @@ class CampaignTests(unittest.TestCase):
                 return self.text if name in {"textContent", "value"} else None
 
             def send_keys(self, value):
-                if value == "\ue007":
+                if value == "\ue009a":
+                    self.all_selected = True
+                elif value == "\ue003" and self.all_selected:
+                    self.text = ""
+                    self.all_selected = False
+                elif value == "\ue007":
                     self.text = ""
                 else:
                     self.text += str(value)
+                    self.content_entries.append(str(value))
 
         textbox = Textbox()
+
+        class MediaInput:
+            def __init__(self):
+                self.paths = []
+
+            def get_attribute(self, name):
+                return None if name == "multiple" else "image/*"
+
+            def send_keys(self, value):
+                self.paths.append(value)
+
+        media_input = MediaInput()
 
         class Link:
             def get_attribute(self, name):
@@ -285,20 +334,32 @@ class CampaignTests(unittest.TestCase):
             def execute_script(self, script, *args):
                 if "document.readyState" in script:
                     return "complete"
-                if "execCommand('insertText'" in script:
-                    args[0].text = args[1]
+                if "node.querySelector" in script:
+                    return media_input
                 return None
 
-        poster = FacebookGroupPoster({"uid": "100"}, threading.Event(), lambda *_: None)
+        class FastCancel:
+            def is_set(self):
+                return False
+
+            def wait(self, _timeout):
+                return False
+
+        poster = FacebookGroupPoster({"uid": "100"}, FastCancel(), lambda *_: None)
         poster.driver = Driver()
-        result = poster.comment(
-            {"key": "g1", "url": "https://facebook.com/groups/g1"},
-            "Anh quan tâm bài viết này",
-            [],
-        )
+        content = "Anh quan tâm bài viết này"
+        with tempfile.NamedTemporaryFile(suffix=".jpg") as media_file, tempfile.NamedTemporaryFile(suffix=".png") as second_media:
+            media_path = str(Path(media_file.name).resolve())
+            result = poster.comment(
+                {"key": "g1", "url": "https://facebook.com/groups/g1"},
+                content,
+                [media_path, str(Path(second_media.name).resolve())],
+            )
 
         self.assertEqual(result["status"], "SUCCESS")
         self.assertTrue(result["result_url"].endswith("/posts/p1"))
+        self.assertEqual(textbox.content_entries, [content])
+        self.assertEqual(media_input.paths, [media_path])
 
     def test_group_welcome_overlay_is_closed_before_commenting(self):
         class CloseButton:
