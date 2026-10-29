@@ -9,13 +9,50 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{RunEvent, WindowEvent};
+use tauri::{AppHandle, Manager, RunEvent, Url, WindowEvent};
+use tauri_plugin_deep_link::DeepLinkExt;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
 struct SidecarState {
     child: Arc<Mutex<Option<Child>>>,
+}
+
+fn is_module5_deep_link(url: &Url) -> bool {
+    url.scheme() == "fbautomator"
+        && url.host_str() == Some("open")
+        && url.path() == "/module-5"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+fn focus_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn handle_module5_deep_link(app: &AppHandle, urls: Vec<Url>) {
+    if !urls.iter().any(is_module5_deep_link) {
+        return;
+    }
+
+    focus_main_window(app);
+    if let Some(window) = app.get_webview_window("main") {
+        if let Ok(mut destination) = window.url() {
+            destination.set_path("/pages/list");
+            destination.set_query(None);
+            destination.set_fragment(None);
+            if let Err(error) = window.navigate(destination) {
+                log_line(&format!("Could not navigate to Module 5 from deep link: {error}"));
+            }
+        }
+    }
 }
 
 fn chrono_like_now() -> String {
@@ -357,11 +394,31 @@ fn main() {
     let shutting_for_watch = Arc::clone(&shutting_down);
 
     let app = tauri::Builder::default()
+        // Register this first so a second launch is forwarded to the existing app.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            focus_main_window(app);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
         .manage(SidecarState {
             child: sidecar_child,
         })
         .setup(move |_app| {
+            // Deep links are registered by the installer in release builds.
+            // Register the configured scheme for the current executable in Windows dev builds.
+            #[cfg(all(debug_assertions, windows))]
+            if let Err(error) = _app.deep_link().register_all() {
+                log_line(&format!("Could not register the development deep link: {error}"));
+            }
+
+            let app_handle = _app.handle().clone();
+            _app.deep_link().on_open_url(move |event| {
+                handle_module5_deep_link(&app_handle, event.urls());
+            });
+            if let Ok(Some(urls)) = _app.deep_link().get_current() {
+                handle_module5_deep_link(_app.handle(), urls);
+            }
+
             log_line("==== App setup: start local_engine ====");
             if let Some(child) = spawn_local_engine() {
                 let mut state_lock = child_for_setup.lock().unwrap();
@@ -404,4 +461,26 @@ fn main() {
         }
         _ => {}
     });
+}
+
+#[cfg(test)]
+mod deep_link_tests {
+    use super::is_module5_deep_link;
+    use tauri::Url;
+
+    #[test]
+    fn accepts_only_the_fixed_module5_link_without_oauth_data() {
+        let valid = Url::parse("fbautomator://open/module-5").unwrap();
+        assert!(is_module5_deep_link(&valid));
+
+        for invalid in [
+            "fbautomator://open/other",
+            "https://open/module-5",
+            "fbautomator://open/module-5?access_token=secret",
+            "fbautomator://open/module-5#state=secret",
+            "fbautomator://other/module-5",
+        ] {
+            assert!(!is_module5_deep_link(&Url::parse(invalid).unwrap()), "{invalid}");
+        }
+    }
 }
