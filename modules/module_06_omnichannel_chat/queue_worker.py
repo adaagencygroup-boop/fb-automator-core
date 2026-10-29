@@ -182,7 +182,21 @@ async def process_webhook_event(event: Dict[str, Any]):
                             if resp.status_code == 200:
                                 with open(local_filepath, "wb") as f:
                                     f.write(resp.content)
-                                att_url = f"/uploads/{local_filename}"
+                                try:
+                                    from modules.module_06_omnichannel_chat.services.storage_service import upload_file_bytes
+                                    sb_url = await asyncio.to_thread(
+                                        upload_file_bytes,
+                                        resp.content,
+                                        local_filename,
+                                        resp.headers.get("content-type")
+                                    )
+                                    if sb_url:
+                                        att_url = sb_url
+                                    else:
+                                        att_url = f"/uploads/{local_filename}"
+                                except Exception as sb_err:
+                                    print(f"Supabase upload fallback: {sb_err}")
+                                    att_url = f"/uploads/{local_filename}"
                         except Exception as e:
                             print(f"Error downloading incoming attachment: {e}")
 

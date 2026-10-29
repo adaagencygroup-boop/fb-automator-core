@@ -1,3 +1,4 @@
+import time
 import os
 import requests
 import asyncio
@@ -125,7 +126,7 @@ class FacebookCommentService:
                     page_id=page_id,
                     sender_id=recipient_id,
                     text=text,
-                    timestamp=int(datetime.utcnow().timestamp() * 1000),
+                    timestamp=int(time.time() * 1000),
                     direction="outbound",
                     is_read=True
                 )

@@ -286,7 +286,10 @@ export default function OmnichannelChatModule() {
                     (m) =>
                       String(m.id).startsWith("local-") &&
                       m.direction === "out" &&
-                      (m.text || "") === (incomingMsg.text || ""),
+                      (
+                        (m.text || "") === (incomingMsg.text || "") ||
+                        (m.attachment && incomingMsg.attachment)
+                      ),
                   );
                   if (idx !== -1) {
                     const next = currentList.slice();
