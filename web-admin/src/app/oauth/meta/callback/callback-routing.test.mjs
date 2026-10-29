@@ -25,3 +25,9 @@ test("Facebook denial is forwarded only for the popup flow", () => {
   assert.equal(getCallbackAction("#state=unknown.xyz&access_token=TOKEN").type, "invalid");
   assert.equal(getCallbackAction("#access_token=TOKEN").type, "invalid");
 });
+
+test("profile denial remains a profile callback so the worker can read its unchanged fragment", () => {
+  const action = getCallbackAction("#state=profile.xyz&error=access_denied");
+  assert.equal(action.type, "profile");
+  assert.equal(action.result.error, "access_denied");
+});
