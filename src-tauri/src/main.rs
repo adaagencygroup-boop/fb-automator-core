@@ -70,12 +70,12 @@ fn log_path() -> PathBuf {
     log_directory().join("tauri_sidecar.log")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(not(debug_assertions), target_os = "linux"))]
 fn sidecar_temp_dir() -> PathBuf {
     linux_data_dir().join("engine-temp")
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(debug_assertions), not(target_os = "linux")))]
 fn sidecar_temp_dir() -> PathBuf {
     let candidates = [
         PathBuf::from(r"F:\FB_Page_Automator\engine-temp"),
@@ -84,7 +84,11 @@ fn sidecar_temp_dir() -> PathBuf {
             .and_then(|p| p.parent().map(|d| d.join("engine-temp")))
             .unwrap_or_else(|| PathBuf::from("engine-temp")),
         std::env::var_os("LOCALAPPDATA")
-            .map(|p| PathBuf::from(p).join("FB_Page_Automator").join("engine-temp"))
+            .map(|p| {
+                PathBuf::from(p)
+                    .join("FB_Page_Automator")
+                    .join("engine-temp")
+            })
             .unwrap_or_else(|| PathBuf::from("engine-temp")),
     ];
     for dir in candidates {
@@ -110,10 +114,12 @@ fn sidecar_temp_dir() -> PathBuf {
     PathBuf::from(r"F:\FB_Page_Automator\engine-temp")
 }
 
+#[cfg(not(debug_assertions))]
 fn resolve_sidecar_exe() -> Option<PathBuf> {
     let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     // onedir (ưu tiên): $INSTDIR/local_engine/local_engine.exe + _internal/
-    let onedir = dir.join("local_engine").join("local_engine.exe");
+    let engine_name = if cfg!(windows) { "local_engine.exe" } else { "local_engine" };
+    let onedir = dir.join("local_engine").join(engine_name);
     if onedir.is_file() {
         return Some(onedir);
     }
@@ -132,6 +138,38 @@ fn resolve_sidecar_exe() -> Option<PathBuf> {
 }
 
 fn spawn_local_engine() -> Option<Child> {
+    // Dev uses source Python so it does not depend on a stale/failing onefile build.
+    #[cfg(debug_assertions)]
+    let (exe, work_dir, engine_args) = {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()?
+            .to_path_buf();
+        let venv = if cfg!(target_os = "windows") {
+            root.join(".venv/Scripts/python.exe")
+        } else {
+            root.join(".venv/bin/python")
+        };
+        let python = std::env::var_os("FB_ENGINE_PYTHON")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                if venv.is_file() {
+                    venv
+                } else {
+                    PathBuf::from(if cfg!(target_os = "windows") {
+                        "python"
+                    } else {
+                        "python3"
+                    })
+                }
+            });
+        let args = vec![
+            "-u".to_owned(),
+            root.join("engine.py").to_string_lossy().into_owned(),
+        ];
+        (python, root, args)
+    };
+
+    #[cfg(not(debug_assertions))]
     let exe = match resolve_sidecar_exe() {
         Some(p) => p,
         None => {
@@ -139,10 +177,6 @@ fn spawn_local_engine() -> Option<Child> {
             return None;
         }
     };
-    let temp_dir = sidecar_temp_dir();
-    let _ = std::fs::create_dir_all(&temp_dir);
-    let temp_str = temp_dir.to_string_lossy().to_string();
-
     let log_dir = log_directory();
     let _ = std::fs::create_dir_all(&log_dir);
     let stdout_path = log_dir.join("local_engine.out.log");
@@ -162,21 +196,29 @@ fn spawn_local_engine() -> Option<Child> {
         .map(Stdio::from)
         .unwrap_or(Stdio::null());
 
-    log_line(&format!("🚀 Spawning {:?} TEMP={}", exe, temp_str));
+    log_line(&format!("Spawning engine: {:?}", exe));
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(not(debug_assertions), target_os = "linux"))]
     let work_dir = linux_data_dir();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(not(debug_assertions), not(target_os = "linux")))]
     let work_dir = exe
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .to_path_buf();
 
+    #[cfg(not(debug_assertions))]
+    let engine_args: Vec<String> = Vec::new();
     let mut cmd = Command::new(&exe);
-    cmd.args(["--port", "28129"])
-        .env("TEMP", &temp_str)
-        .env("TMP", &temp_str)
-        .env("TMPDIR", &temp_str)
+    #[cfg(not(debug_assertions))]
+    {
+        let temp_dir = sidecar_temp_dir();
+        let _ = std::fs::create_dir_all(&temp_dir);
+        cmd.env("TEMP", &temp_dir)
+            .env("TMP", &temp_dir)
+            .env("TMPDIR", &temp_dir);
+    }
+    cmd.args(&engine_args)
+        .args(["--port", "28129"])
         .current_dir(&work_dir)
         .stdin(Stdio::null())
         .stdout(stdout_file)
@@ -224,12 +266,8 @@ fn ureq_health() -> Result<bool, ()> {
     let mut stream =
         TcpStream::connect_timeout(&"127.0.0.1:28129".parse().unwrap(), Duration::from_secs(2))
             .map_err(|_| ())?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .ok();
-    stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .ok();
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
     let req = "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
     stream.write_all(req.as_bytes()).map_err(|_| ())?;
     let mut buf = String::new();
@@ -238,10 +276,7 @@ fn ureq_health() -> Result<bool, ()> {
 }
 
 /// Theo dõi local_engine: chết giữa chừng → spawn lại (trừ khi app đang tắt).
-fn start_engine_watchdog(
-    child_arc: Arc<Mutex<Option<Child>>>,
-    shutting_down: Arc<AtomicBool>,
-) {
+fn start_engine_watchdog(child_arc: Arc<Mutex<Option<Child>>>, shutting_down: Arc<AtomicBool>) {
     thread::spawn(move || {
         let mut backoff_secs: u64 = 2;
         loop {
@@ -295,7 +330,9 @@ fn start_engine_watchdog(
                 break;
             }
 
-            log_line(&format!("🔄 Respawn local_engine (backoff {backoff_secs}s)…"));
+            log_line(&format!(
+                "🔄 Respawn local_engine (backoff {backoff_secs}s)…"
+            ));
             if let Some(child) = spawn_local_engine() {
                 if let Ok(mut lock) = child_arc.lock() {
                     *lock = Some(child);

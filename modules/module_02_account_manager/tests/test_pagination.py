@@ -37,6 +37,22 @@ class TestPagination(unittest.TestCase):
     def page(self, **params):
         return self.client.get("/api/accounts/page", params={"owner_username": "alice", **params})
 
+    def test_full_list_returns_all_authenticated_owner_accounts_in_one_response(self):
+        self.add(37, "7")
+        self.add(12, "8")
+        with patch("modules.module_auth.service.bearer_user", return_value={"id": 7}):
+            headers = {"Authorization": "Bearer test-token", "X-Auth-Client": "user"}
+            response = self.client.get("/api/accounts", headers=headers)
+            self.assertEqual(response.status_code, 200)
+            rows = response.json()
+            self.assertEqual(len(rows), 37)
+            self.assertEqual(len({row["uid"] for row in rows}), 37)
+            self.assertTrue(all(row["user_id"] == "7" for row in rows))
+            ids = [row["id"] for row in rows]
+            self.assertEqual(ids, sorted(ids, reverse=True))
+            self.assertEqual(self.client.get("/api/accounts?user_id=8", headers=headers).status_code, 403)
+        self.assertEqual(self.client.get("/api/accounts").json(), [])
+
     def test_boundaries_and_limit(self):
         for count in (0, 10, 11, 37):
             with self.subTest(count=count):

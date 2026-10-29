@@ -17,7 +17,7 @@ import { MoveCategoryDialog } from "./components/CategoryDialogs";
 import { useAccountCategories } from "./hooks/useAccountCategories";
 import { categoryQuery, moveAccountBatches } from "./utils/categories.mjs";
 import { importOutcome } from "./utils/import-categories.mjs";
-import { useAccountPages } from "./hooks/useAccountPages";
+import { useAccounts } from "./hooks/useAccounts";
 import useAccountRealtime from "./hooks/useAccountRealtime";
 import { isAccountBusy } from "./utils/account-realtime.mjs";
 import { useLocalSSE } from "./hooks/useLocalSSE";
@@ -143,7 +143,7 @@ export default function AccountManagerModule() {
     return () => clearTimeout(timer);
   }, [searchTerm]);
   const query = useMemo(() => ({ search, status: accountFilter, login_status: loginFilter, ...categoryQuery(categoryFilter) }), [search, accountFilter, loginFilter, categoryFilter]);
-  const { accounts, setAccounts, stats, total, has_more: hasMore, isInitialLoading, isRefreshing, isLoadingMore, loadError, moreError, fetchAccounts, loadMore, retryMore, applyAccountPatches, requestRefresh } = useAccountPages(query, !isExpired, tableRef, setSelectedUids);
+  const { accounts, allAccounts, setAccounts, stats, total, isInitialLoading, isRefreshing, loadError, refreshError, fetchAccounts, applyAccountPatches, requestRefresh } = useAccounts(query, !isExpired, tableRef, setSelectedUids);
   const categoryData = useAccountCategories(!isExpired);
   const refreshCategoriesAndAccounts = async () => {
     await Promise.all([categoryData.refresh(), fetchAccounts(false)]);
@@ -525,12 +525,12 @@ export default function AccountManagerModule() {
         searchTerm={searchTerm} setSearchTerm={setSearchTerm}
         accountFilter={accountFilter} setAccountFilter={setAccountFilter}
         loginFilter={loginFilter} setLoginFilter={setLoginFilter}
-        total={total} hasMore={hasMore} isLoadingMore={isLoadingMore}
-        moreError={moreError} onLoadMore={loadMore} onRetryMore={retryMore}
+        total={total}
+        refreshError={refreshError}
         isLoading={isInitialLoading}
         isRefreshing={isRefreshing}
         loadError={loadError}
-        onRetry={() => fetchAccounts(true)}
+        onRetry={() => fetchAccounts()}
         accounts={accounts}
         selectedUids={selectedUids}
         onToggleSelect={(uid) =>
@@ -684,7 +684,7 @@ export default function AccountManagerModule() {
           categoryData.refresh();
           return category;
         }}
-        existingAccounts={accounts}
+        existingAccounts={allAccounts}
       />
 
       <SingleAccountModal
@@ -718,7 +718,7 @@ export default function AccountManagerModule() {
             });
           }
         }}
-        existingAccounts={accounts}
+        existingAccounts={allAccounts}
       />
 
       <ConfirmDialog
