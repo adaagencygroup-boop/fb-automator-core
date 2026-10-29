@@ -250,9 +250,9 @@ export default function AuthGate({ children }) {
 
   if (!ready) {
     const message = connectionError
-      ? "Đang khởi động Local Engine (lần đầu / máy có Windows Defender có thể 3–8 phút). Đừng tắt app — đang thử lại..."
+      ? "Đang khởi động Local Engine (thường dưới 2 phút). Đừng tắt app — đang thử lại..."
       : bootSlow
-        ? "Máy chủ phản hồi chậm — Engine đang giải nén / kết nối DB..."
+        ? "Máy chủ phản hồi chậm — Engine đang kết nối DB..."
         : "Đang kiểm tra phiên đăng nhập...";
     return <SessionOverlay message={message} />;
   }

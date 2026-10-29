@@ -11,7 +11,6 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
-from selenium.webdriver.common.by import By
 from sqlalchemy.orm import Session
 
 from modules.module_02_account_manager.api.router import scoped_owner
