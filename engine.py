@@ -465,6 +465,22 @@ def get_keys():
 
 
 # ==================== ENTRY POINT ====================
+def _crash_log(msg: str) -> None:
+    """Ghi crash khi không còn console (windowed PyInstaller)."""
+    try:
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        path = os.path.join(base, "FB_Page_Automator", "local_engine.crash.log")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except Exception:
+        pass
+    try:
+        print(msg, file=sys.stderr)
+    except Exception:
+        pass
+
+
 def main():
     parser = argparse.ArgumentParser(description="Facebook Automator Pro Local Engine")
     parser.add_argument(
@@ -486,4 +502,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        import traceback
+
+        _crash_log("[Local Engine] FATAL:\n" + traceback.format_exc())
+        raise
