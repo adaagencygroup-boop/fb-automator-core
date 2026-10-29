@@ -200,6 +200,9 @@ class WebPopupTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertIn("Facebook Automator Pro", res.text)
         self.assertIn("callback-submit", res.text)
+        self.assertEqual(res.headers["cache-control"], "no-store, no-cache, must-revalidate, max-age=0")
+        self.assertEqual(res.headers["referrer-policy"], "no-referrer")
+        self.assertIn("noindex", res.headers["x-robots-tag"])
 
     def test_oauth_callback_submit_completes_job_with_valid_state(self):
         attempt = self.start("a")
@@ -211,6 +214,28 @@ class WebPopupTests(unittest.TestCase):
         self.assertTrue(res.json()["success"])
         result = self.wait("a", attempt["job_id"], ("SUCCEEDED", "FAILED"))
         self.assertEqual(result["status"], "SUCCEEDED", result)
+
+    def test_oauth_callback_submit_forwards_facebook_denial_to_job(self):
+        attempt = self.start("a")
+        res = self.client.post("/api/pages/web-oauth/callback-submit", json={
+            "state": attempt["state"],
+            "error": "access_denied",
+        })
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["status"], "FAILED")
+        result = self.wait("a", attempt["job_id"], ("FAILED",))
+        self.assertEqual(result["status"], "FAILED")
+        self.assertEqual(self.db.fetch_one("SELECT COUNT(*) AS c FROM meta_web_connections")["c"], 0)
+
+    def test_oauth_callback_submit_with_valid_state_but_no_result_fails_job(self):
+        attempt = self.start("a")
+        res = self.client.post("/api/pages/web-oauth/callback-submit", json={
+            "state": attempt["state"],
+        })
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["status"], "FAILED")
+        result = self.wait("a", attempt["job_id"], ("FAILED",))
+        self.assertEqual(result["status"], "FAILED")
 
     def test_oauth_callback_submit_with_invalid_state_returns_400(self):
         res = self.client.post("/api/pages/web-oauth/callback-submit", json={

@@ -33,7 +33,21 @@ Migration bổ sung `meta_web_v2` chạy sau `meta_owner_v1`: tạo `meta_web_co
 
 ## Cấu hình
 
-Đặt `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_GRAPH_API_VERSION` và `FACEBOOK_OAUTH_CALLBACK_URL` trong `.env`. Callback phải là URL frontend thực tế kết thúc bằng `/oauth/meta/callback` hoặc `/oauth/meta/callback/`, được đăng ký chính xác trong Meta App. Không dùng trang danh sách Page làm callback. Callback nằm ngoài AuthGate; luồng web xác thực phiên phần mềm trước khi gửi token tới API.
+Đặt `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_GRAPH_API_VERSION` và callback dưới đây trong `.env` của engine:
+
+```dotenv
+FACEBOOK_OAUTH_CALLBACK_URL=https://fb-automator-core-web-admin.onrender.com/oauth/meta/callback
+```
+
+Trang public này không yêu cầu đăng nhập admin và không gọi API của web admin. Với Chrome profile, nó giữ nguyên fragment để worker đọc. Với popup, nó chuyển kết quả trong fragment về `http://127.0.0.1:28129/oauth/meta/callback`; Render không nhận token trong request, storage hay log. Nếu engine chưa chạy, hãy mở app rồi tải lại trang callback trước khi state hết hạn (10 phút).
+
+Khi triển khai:
+
+1. Deploy lại `web-admin` lên Render.
+2. Trong Meta App, thêm chính xác `https://fb-automator-core-web-admin.onrender.com/oauth/meta/callback` vào **Valid OAuth Redirect URIs**.
+3. Đặt `FACEBOOK_OAUTH_CALLBACK_URL` trên máy/build engine thành URL trên rồi khởi động lại engine hoặc build lại app.
+
+Giữ callback local mặc định cho dev. Callback public và callback local đều nằm ngoài đăng nhập; trang callback có `no-store`, `no-referrer` và `noindex`. Không cấu hình redirect URL do người dùng gửi lên.
 
 Ứng dụng xin `pages_show_list`, `pages_manage_posts`, `pages_read_engagement`, `pages_manage_engagement`, `pages_messaging`, `pages_manage_metadata`. Thiếu cấu hình, thiếu quyền, sai App ID hoặc lỗi đổi token đều khiến đồng bộ thất bại.
 
