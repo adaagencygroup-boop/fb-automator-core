@@ -20,9 +20,21 @@ from modules.module_10_group_scan.keyword_check import (
     start_keyword_check,
 )
 from modules.module_10_group_scan.models import (
+    create_scan_category,
+    delete_scan_category,
+    delete_scan_session,
+    delete_scan_sessions_bulk,
+    delete_scanned_group,
+    delete_scanned_groups_bulk,
     keyword_counts,
+    list_all_scanned_groups,
     list_groups_for_keywords,
+    list_scan_categories,
+    list_scan_sessions,
+    move_groups_to_category,
     normalize_keyword,
+    save_groups_to_category,
+    update_scan_category,
 )
 
 router = APIRouter(prefix="/api/group-scan", tags=["Module 10: Group scan"])
@@ -282,3 +294,188 @@ def check_status(job_id: Optional[str] = None, uid: Optional[str] = None):
     if not status:
         raise HTTPException(404, "Không tìm thấy job quét")
     return status
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: list[Any] = Field(..., min_length=1)
+
+
+@router.get("/groups", dependencies=[Depends(scoped_owner)])
+def get_groups(
+    keyword: Optional[str] = None,
+    privacy: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 1000,
+    offset: int = 0,
+):
+    """Lấy danh sách các nhóm đã quét từ Database."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    return list_all_scanned_groups(
+        owner,
+        keyword=keyword,
+        privacy=privacy,
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.delete("/groups/{id}", dependencies=[Depends(scoped_owner)])
+def delete_group(id: str):
+    """Xóa 1 nhóm đã quét khỏi Database."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    ok = delete_scanned_group(owner, id)
+    return {"ok": ok, "id": id}
+
+
+@router.post("/groups/delete-bulk", dependencies=[Depends(scoped_owner)])
+def delete_groups_bulk(body: BulkDeleteRequest):
+    """Xóa nhiều nhóm đã quét khỏi Database."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    deleted_count = delete_scanned_groups_bulk(owner, body.ids)
+    return {"ok": True, "deleted": deleted_count}
+
+
+@router.get("/history", dependencies=[Depends(scoped_owner)])
+def get_history(
+    search: Optional[str] = None,
+    scan_type: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    """Lấy lịch sử các phiên quét nhóm từ Database."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    sessions = list_scan_sessions(
+        owner,
+        search=search,
+        scan_type=scan_type,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
+    return {"ok": True, "sessions": sessions, "total": len(sessions)}
+
+
+@router.delete("/history/{id}", dependencies=[Depends(scoped_owner)])
+def delete_history_session(id: str):
+    """Xóa 1 phiên lịch sử quét nhóm khỏi Database."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    ok = delete_scan_session(owner, id)
+    return {"ok": ok, "id": id}
+
+
+@router.post("/history/delete-bulk", dependencies=[Depends(scoped_owner)])
+def delete_history_sessions_bulk(body: BulkDeleteRequest):
+    """Xóa nhiều phiên lịch sử quét nhóm khỏi Database."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    deleted_count = delete_scan_sessions_bulk(owner, body.ids)
+    return {"ok": True, "deleted": deleted_count}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CATEGORIES & SHARED LIST ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class CreateCategoryRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: Optional[str] = ""
+
+
+class SaveToCategoryRequest(BaseModel):
+    category_name: str = Field(..., min_length=1)
+    groups: list[dict[str, Any]] = Field(..., min_length=1)
+    deduplicate: bool = True
+
+
+@router.get("/categories", dependencies=[Depends(scoped_owner)])
+def get_categories():
+    """Lấy danh sách các danh mục nhóm có sẵn."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    categories = list_scan_categories(owner)
+    return {"ok": True, "categories": categories}
+
+
+@router.post("/categories", dependencies=[Depends(scoped_owner)])
+def post_category(body: CreateCategoryRequest):
+    """Tạo mới một danh mục nhóm."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    res = create_scan_category(owner, body.name, body.description or "")
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error") or "Không thể tạo danh mục")
+    return res
+
+
+class UpdateCategoryRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+
+
+@router.put("/categories/{id}", dependencies=[Depends(scoped_owner)])
+def put_category(id: str, body: UpdateCategoryRequest):
+    """Cập nhật tên danh mục nhóm."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    res = update_scan_category(owner, id, body.name)
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error") or "Không thể cập nhật danh mục")
+    return res
+
+
+@router.delete("/categories/{id}", dependencies=[Depends(scoped_owner)])
+def delete_category_endpoint(id: str):
+    """Xóa danh mục nhóm khỏi Database."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    ok = delete_scan_category(owner, id)
+    return {"ok": ok, "id": id}
+
+
+class MoveGroupsRequest(BaseModel):
+    category_name: str = Field(..., min_length=1)
+    group_ids: list[Any] = Field(..., min_length=1)
+
+
+@router.post("/categories/move-groups", dependencies=[Depends(scoped_owner)])
+def post_move_groups(body: MoveGroupsRequest):
+    """Chuyển các nhóm đã chọn sang danh mục khác."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    moved_count = move_groups_to_category(owner, body.category_name, body.group_ids)
+    return {"ok": True, "moved_count": moved_count}
+
+
+@router.post("/save-to-category", dependencies=[Depends(scoped_owner)])
+def post_save_to_category(body: SaveToCategoryRequest):
+    """Lưu danh sách nhóm vào danh mục chung."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    res = save_groups_to_category(
+        owner,
+        category_name=body.category_name,
+        groups=body.groups,
+        deduplicate=body.deduplicate,
+    )
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error") or "Lỗi khi lưu danh sách nhóm")
+    return res
+
