@@ -1,6 +1,15 @@
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from modules.module_06_omnichannel_chat.models import Message, Page
+
+def _dt_from_timestamp(timestamp: Optional[int]) -> datetime:
+    if timestamp:
+        try:
+            return datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc).replace(tzinfo=None)
+        except Exception:
+            pass
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 class MessageRepository:
     def __init__(self, db: Session):
@@ -21,7 +30,8 @@ class MessageRepository:
                 text=text,
                 timestamp=timestamp,
                 direction=direction,
-                reply_to_message_id=reply_to_message_id
+                reply_to_message_id=reply_to_message_id,
+                created_at=_dt_from_timestamp(timestamp)
             )
             self.db.add(message)
             self.db.commit()
@@ -41,7 +51,8 @@ class MessageRepository:
                 timestamp=timestamp,
                 direction=direction,
                 is_read=is_read,
-                reply_to_message_id=reply_to_message_id
+                reply_to_message_id=reply_to_message_id,
+                created_at=_dt_from_timestamp(timestamp)
             )
             self.db.add(message)
             self.db.commit()

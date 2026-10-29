@@ -303,8 +303,7 @@ export async function getMessages(conversationId) {
         text,
         attachment,
         createdAt:
-          toUtcIso(m.created_at) ||
-          (m.timestamp ? new Date(m.timestamp).toISOString() : new Date().toISOString()),
+          (m.timestamp ? new Date(m.timestamp).toISOString() : (toUtcIso(m.created_at) || new Date().toISOString())),
         reaction: m.reactions || null,
         status: m.direction === "outbound" ? (m.is_read ? "seen" : "sent") : undefined,
         isRead: Boolean(m.is_read),
