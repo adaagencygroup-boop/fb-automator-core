@@ -413,7 +413,9 @@ fn main() {
 
             let app_handle = _app.handle().clone();
             _app.deep_link().on_open_url(move |event| {
-                handle_module5_deep_link(&app_handle, event.urls());
+                if event.urls().iter().any(is_module5_deep_link) {
+                    focus_main_window(&app_handle);
+                }
             });
             if let Ok(Some(urls)) = _app.deep_link().get_current() {
                 handle_module5_deep_link(_app.handle(), urls);
