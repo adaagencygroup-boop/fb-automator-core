@@ -5,46 +5,87 @@ import {
   Play,
   Pause,
   Square,
-  Plus,
-  Loader2,
-  CheckCircle2,
   Search,
-  Link2,
-  FileUp,
   Download,
   ExternalLink,
   ChevronLeft,
   ChevronRight,
-  FileSpreadsheet,
   Trash2,
+  Users,
+  Layers,
+  ListChecks,
+  SlidersHorizontal,
+  FolderInput,
 } from "lucide-react";
 import Link from "next/link";
-
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import { normalizeAccount, initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   createFollowerSession,
   getScannedPages,
   getPageFollowers,
-  resolvePageLinks,
   stopScanSession,
   pauseScanSession,
   resumeScanSession,
   getScanSessionDetail,
 } from "../service";
-import { SectionCard, LiveLogConsole, nowStamp, LIVE_STATUSES } from "../_shared";
-import { useSavedPageLists } from "../shared/useSavedPageLists";
+import { LiveLogConsole, nowStamp, LIVE_STATUSES } from "../_shared";
+import {
+  DEFAULT_SCANNED_PAGES,
+  SelectAccountsModal,
+  SelectPagesModal,
+} from "../shared/SelectPagesModal";
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
 const PAGE_SIZE = 10;
+
+function StepperBox({ value, onChange, min = 1, max = 5000, step = 1, disabled }) {
+  return (
+    <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-[#E2E8F0] bg-[#F8FAFC]">
+      <button
+        type="button"
+        disabled={disabled || value <= min}
+        onClick={() => onChange(Math.max(min, Number(value || min) - step))}
+        className="flex h-full w-7 items-center justify-center text-xs font-bold text-[#64748B] hover:bg-[#E2E8F0]/60 disabled:opacity-40"
+      >
+        −
+      </button>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          if (!Number.isNaN(v)) onChange(Math.min(max, Math.max(min, v)));
+        }}
+        className="h-full w-12 border-x border-[#E2E8F0] bg-white text-center text-xs font-bold text-[#0F172A] outline-none disabled:opacity-50"
+      />
+      <button
+        type="button"
+        disabled={disabled || value >= max}
+        onClick={() => onChange(Math.min(max, Number(value || min) + step))}
+        className="flex h-full w-7 items-center justify-center text-xs font-bold text-[#64748B] hover:bg-[#E2E8F0]/60 disabled:opacity-40"
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
+function SelectedBadge({ children }) {
+  return (
+    <span className="inline-flex items-center gap-2 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-3.5 py-2 text-xs font-medium text-[#334155]">
+      <span className="size-2 shrink-0 rounded-full bg-[#10B981]" />
+      {children}
+    </span>
+  );
+}
 
 function exportFollowersCsv(rows, filename) {
   const headers = ["STT", "Họ và tên", "UID / Key", "Profile", "Địa chỉ", "Bạn bè", "Page"];
@@ -86,27 +127,51 @@ function mapFollowerRow(row, idx = 0) {
   };
 }
 
+function mapKhoToPage(p, idx = 0) {
+  const uid = String(p.page_key || "").replace(/^id:|^user:/, "") || String(idx);
+  return {
+    id: p.id || p.page_key || `pg_${idx}`,
+    page_key: p.page_key,
+    page_id: uid,
+    page_name: p.page_name || p.page_key,
+    name: p.page_name || p.page_key,
+    uid,
+    page_url: p.page_url,
+    category: p.category || "Fanpage",
+    follower_count: p.follower_count || 0,
+    followers_text: p.follower_count ? Number(p.follower_count).toLocaleString("vi-VN") : "—",
+    scanned_post_count: p.scanned_post_count || 0,
+    avatar_initials: initialsOf(p.page_name || p.page_key || "PG"),
+    avatar_color: AVATAR_COLORS[idx % AVATAR_COLORS.length],
+  };
+}
+
+function padStt(n) {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+function fmtNum(n) {
+  return Number(n || 0).toLocaleString("vi-VN");
+}
+
 export default function PageScannerFollowers() {
   const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [selectedUids, setSelectedUids] = useState([]);
   const [showAccountModal, setShowAccountModal] = useState(false);
-  const [modalUids, setModalUids] = useState([]);
 
-  const [sourceMode, setSourceMode] = useState("kho"); // kho | saved | paste
+  const [availablePages, setAvailablePages] = useState(DEFAULT_SCANNED_PAGES);
+  const [selectedPages, setSelectedPages] = useState([]);
+  const [showPageModal, setShowPageModal] = useState(false);
   const [khoPages, setKhoPages] = useState([]);
-  const [khoSearch, setKhoSearch] = useState("");
-  const [selectedKeys, setSelectedKeys] = useState([]);
-  const savedLists = useSavedPageLists();
-  const [savedListId, setSavedListId] = useState("");
-  const [pasteText, setPasteText] = useState("");
 
-  const [targetFollowers, setTargetFollowers] = useState(500);
-  const [maxPerPage, setMaxPerPage] = useState(200);
-  const [idleTimeout, setIdleTimeout] = useState(90);
-  const [pageDelay, setPageDelay] = useState(2);
-  const [keepBrowser, setKeepBrowser] = useState(true);
-  const [skipExisting, setSkipExisting] = useState(true);
+  const [delayMin, setDelayMin] = useState(5);
+  const [delayMax, setDelayMax] = useState(5);
+  const [rotateEvery, setRotateEvery] = useState(50);
+  const [maxPerPage, setMaxPerPage] = useState(50);
+  const [prioritizeRecent, setPrioritizeRecent] = useState(true);
+  const [dedupAcrossPages, setDedupAcrossPages] = useState(true);
+  const keepBrowser = false;
 
   const [runPhase, setRunPhase] = useState("idle");
   const [sessionId, setSessionId] = useState(null);
@@ -115,7 +180,6 @@ export default function PageScannerFollowers() {
   const logId = useRef(0);
   const pollRef = useRef(null);
 
-  /* Kết quả master–detail (UI Figma) */
   const [resultPages, setResultPages] = useState([]);
   const [followersByPage, setFollowersByPage] = useState({});
   const [activePageKey, setActivePageKey] = useState("");
@@ -129,7 +193,7 @@ export default function PageScannerFollowers() {
 
   const isBusy = runPhase === "running" || runPhase === "paused";
   const isPaused = runPhase === "paused";
-  const selCount = selectedUids.length;
+  const showResults = runPhase === "done";
 
   const pushLog = useCallback((message, type = "info") => {
     logId.current += 1;
@@ -145,93 +209,106 @@ export default function PageScannerFollowers() {
 
   useEffect(() => () => stopPolling(), [stopPolling]);
 
-  const syncSessionLogs = useCallback((session) => {
-    let lines = session?.logs;
-    if (typeof lines === "string") {
+  const syncSessionLogs = useCallback(
+    (session) => {
+      let lines = session?.logs;
+      if (typeof lines === "string") {
+        try {
+          lines = JSON.parse(lines);
+        } catch {
+          lines = [];
+        }
+      }
+      if (!Array.isArray(lines) || !lines.length) return;
+      setLogs(
+        lines.slice(-500).map((line, i) => ({
+          id: `s${session.id || sessionId}_${line.ts}_${i}`,
+          timestamp: line.ts || "—",
+          message: line.message,
+          type:
+            line.level === "success"
+              ? "success"
+              : line.level === "warn"
+                ? "warn"
+                : line.level === "error"
+                  ? "error"
+                  : "info",
+        })),
+      );
+    },
+    [sessionId],
+  );
+
+  const refreshResults = useCallback(
+    async (sid, pageKeys) => {
+      const keys = pageKeys?.length ? pageKeys : scanPageKeysRef.current;
+      if (!sid && !keys.length) return;
       try {
-        lines = JSON.parse(lines);
-      } catch {
-        lines = [];
-      }
-    }
-    if (!Array.isArray(lines) || !lines.length) return;
-    setLogs(
-      lines.slice(-500).map((line, i) => ({
-        id: `s${session.id || sessionId}_${line.ts}_${i}`,
-        timestamp: line.ts || "—",
-        message: line.message,
-        type:
-          line.level === "success"
-            ? "success"
-            : line.level === "warn"
-              ? "warn"
-              : line.level === "error"
-                ? "error"
-                : "info",
-      })),
-    );
-  }, [sessionId]);
-
-  const refreshResults = useCallback(async (sid, pageKeys) => {
-    const keys = pageKeys?.length ? pageKeys : scanPageKeysRef.current;
-    if (!sid && !keys.length) return;
-    try {
-      const fl = await getPageFollowers({
-        session_id: sid || undefined,
-        page: 1,
-        page_size: 200,
-      });
-      const items = (fl.items || []).map(mapFollowerRow);
-      const byPage = {};
-      for (const row of items) {
-        const pk = row.page_key || "_unknown";
-        if (!byPage[pk]) byPage[pk] = [];
-        byPage[pk].push(row);
-      }
-      /* Đảm bảo mọi page trong phiên đều xuất hiện sidebar */
-      for (const pk of keys) {
-        if (!byPage[pk]) byPage[pk] = [];
-      }
-      setFollowersByPage(byPage);
-      setResultCount(fl.total ?? items.length);
-      setUpdatedAt(nowStamp());
-
-      setResultPages((prev) => {
-        const meta = new Map(prev.map((p) => [p.page_key, p]));
-        const next = keys.map((pk, idx) => {
-          const existing = meta.get(pk);
-          const fromKho = khoPages.find((p) => p.page_key === pk);
-          const count = (byPage[pk] || []).length;
-          const isActive = runPhase === "running" || runPhase === "paused";
-          let status = "QUEUE";
-          let status_label = "Đang chờ hàng đợi";
-          if (runPhase === "done") {
-            status = count > 0 ? "DONE" : "QUEUE";
-            status_label = count > 0 ? "Hoàn tất quét" : "Chưa có dữ liệu";
-          } else if (isActive && (idx === 0 || count > 0)) {
-            status = "RUNNING";
-            status_label = "Đang thu thập...";
-          } else if (!isActive && count > 0) {
-            status = "DONE";
-            status_label = "Hoàn tất quét";
-          }
-          return {
-            page_key: pk,
-            page_name: existing?.page_name || fromKho?.page_name || pk,
-            page_url: existing?.page_url || fromKho?.page_url || "",
-            follower_count: existing?.follower_count ?? fromKho?.follower_count ?? 0,
-            scanned_uid_count: count,
-            status,
-            status_label,
-            avatar_initials: initialsOf(existing?.page_name || fromKho?.page_name || pk),
-          };
+        const fl = await getPageFollowers({
+          session_id: sid || undefined,
+          page: 1,
+          page_size: 200,
         });
-        return next;
-      });
-    } catch (err) {
-      console.error(err);
-    }
-  }, [khoPages, runPhase]);
+        const items = (fl.items || []).map(mapFollowerRow);
+        const byPage = {};
+        for (const row of items) {
+          const pk = row.page_key || "_unknown";
+          if (!byPage[pk]) byPage[pk] = [];
+          byPage[pk].push(row);
+        }
+        for (const pk of keys) {
+          if (!byPage[pk]) byPage[pk] = [];
+        }
+        setFollowersByPage(byPage);
+        setResultCount(fl.total ?? items.length);
+        setUpdatedAt(nowStamp());
+
+        setResultPages((prev) => {
+          const meta = new Map(prev.map((p) => [p.page_key, p]));
+          return keys.map((pk, idx) => {
+            const existing = meta.get(pk);
+            const fromSel = selectedPages.find((p) => p.page_key === pk);
+            const fromKho = khoPages.find((p) => p.page_key === pk);
+            const count = (byPage[pk] || []).length;
+            const isActive = runPhase === "running" || runPhase === "paused";
+            let status = "QUEUE";
+            let status_label = "Đang chờ hàng đợi";
+            if (runPhase === "done") {
+              status = count > 0 ? "DONE" : "QUEUE";
+              status_label = count > 0 ? "Hoàn tất quét" : "Chưa có dữ liệu";
+            } else if (isActive && (idx === 0 || count > 0)) {
+              status = "RUNNING";
+              status_label = "Đang thu thập...";
+            } else if (!isActive && count > 0) {
+              status = "DONE";
+              status_label = "Hoàn tất quét";
+            }
+            return {
+              page_key: pk,
+              page_name:
+                existing?.page_name || fromSel?.page_name || fromKho?.page_name || pk,
+              page_url: existing?.page_url || fromSel?.page_url || fromKho?.page_url || "",
+              follower_count:
+                existing?.follower_count ??
+                fromSel?.follower_count ??
+                fromKho?.follower_count ??
+                0,
+              category: fromSel?.category || fromKho?.category || "Fanpage",
+              scanned_uid_count: count,
+              status,
+              status_label,
+              avatar_initials: initialsOf(
+                existing?.page_name || fromSel?.page_name || fromKho?.page_name || pk,
+              ),
+            };
+          });
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    },
+    [khoPages, selectedPages, runPhase],
+  );
 
   const startPoll = useCallback(
     (sid) => {
@@ -272,6 +349,9 @@ export default function PageScannerFollowers() {
           normalizeAccount(a, i),
         );
         setAccounts(normalized);
+        setSelectedUids(
+          normalized.filter((a) => LIVE_STATUSES.has(String(a.status))).map((a) => a.uid),
+        );
       } catch (err) {
         toast.error(`Lỗi tải tài khoản: ${err.message}`);
       } finally {
@@ -288,9 +368,19 @@ export default function PageScannerFollowers() {
     (async () => {
       try {
         const data = await getScannedPages({ page: 1, page_size: 100, sort_by: "followers" });
-        if (!cancelled) setKhoPages(data.items || []);
+        if (cancelled) return;
+        const items = data.items || [];
+        setKhoPages(items);
+        if (items.length) {
+          const mapped = items.map(mapKhoToPage);
+          const combined = [...DEFAULT_SCANNED_PAGES];
+          for (const m of mapped) {
+            if (!combined.some((c) => c.page_key === m.page_key)) combined.push(m);
+          }
+          setAvailablePages(combined);
+        }
       } catch {
-        /* empty kho ok */
+        /* keep defaults */
       }
     })();
     return () => {
@@ -298,39 +388,19 @@ export default function PageScannerFollowers() {
     };
   }, []);
 
-  const filteredKho = useMemo(() => {
-    const q = khoSearch.trim().toLowerCase();
-    if (!q) return khoPages;
-    return khoPages.filter(
-      (p) =>
-        `${p.page_name || ""} ${p.page_url || ""} ${p.page_key || ""}`.toLowerCase().includes(q),
-    );
-  }, [khoPages, khoSearch]);
-
-  const resolveSelectedPageKeys = async () => {
-    if (sourceMode === "kho" || sourceMode === "saved") {
-      if (sourceMode === "saved" && savedListId) {
-        const list = savedLists.find((l) => l.id === savedListId);
-        const keys = (list?.pages || []).map((p) => p.page_key).filter(Boolean);
-        if (!keys.length) throw new Error("Danh sách đã lưu không có page_key.");
-        return keys;
-      }
-      if (!selectedKeys.length) throw new Error("Chọn ít nhất 1 Page.");
-      return [...selectedKeys];
-    }
-    if (!pasteText.trim()) throw new Error("Dán danh sách link Page.");
-    const parsed = await resolvePageLinks({ content: pasteText, filter_existing: false });
-    const keys = (parsed.pages || []).map((p) => p.page_key).filter(Boolean);
-    if (!keys.length) throw new Error("Không parse được page_key hợp lệ.");
-    return keys;
-  };
-
   const handleStart = async () => {
     try {
-      const pageKeys = await resolveSelectedPageKeys();
-      const live = accounts.filter((a) => selectedUids.includes(a.uid) && LIVE_STATUSES.has(String(a.status)));
+      if (!selectedPages.length) throw new Error("Chọn ít nhất 1 Page muốn quét.");
+      const pageKeys = selectedPages.map((p) => p.page_key).filter(Boolean);
+      if (!pageKeys.length) throw new Error("Danh sách page thiếu page_key.");
+
+      const live = accounts.filter(
+        (a) => selectedUids.includes(a.uid) && LIVE_STATUSES.has(String(a.status)),
+      );
       const accountUid = live[0]?.uid || selectedUids[0] || null;
       if (!accountUid) throw new Error("Chọn ít nhất 1 tài khoản Live.");
+
+      const targetFollowers = Math.max(pageKeys.length * maxPerPage, maxPerPage);
 
       stopPolling();
       setRunPhase("running");
@@ -341,22 +411,23 @@ export default function PageScannerFollowers() {
       setTablePage(1);
       scanPageKeysRef.current = pageKeys;
       setResultPages(
-        pageKeys.map((pk, idx) => {
-          const fromKho = khoPages.find((p) => p.page_key === pk);
-          return {
-            page_key: pk,
-            page_name: fromKho?.page_name || pk,
-            page_url: fromKho?.page_url || "",
-            follower_count: fromKho?.follower_count || 0,
-            scanned_uid_count: 0,
-            status: idx === 0 ? "RUNNING" : "QUEUE",
-            status_label: idx === 0 ? "Đang thu thập..." : "Đang chờ hàng đợi",
-            avatar_initials: initialsOf(fromKho?.page_name || pk),
-          };
-        }),
+        selectedPages.map((p, idx) => ({
+          page_key: p.page_key,
+          page_name: p.page_name || p.name || p.page_key,
+          page_url: p.page_url || "",
+          follower_count: p.follower_count || 0,
+          category: p.category || "Fanpage",
+          scanned_uid_count: 0,
+          status: idx === 0 ? "RUNNING" : "QUEUE",
+          status_label: idx === 0 ? "Đang thu thập..." : "Đang chờ hàng đợi",
+          avatar_initials: p.avatar_initials || initialsOf(p.page_name || p.name || p.page_key),
+        })),
       );
       setActivePageKey(pageKeys[0] || "");
-      pushLog(`Tạo phiên FOLLOW · ${pageKeys.length} Page · target=${targetFollowers}`, "info");
+      pushLog(
+        `Tạo phiên FOLLOW · ${pageKeys.length} Page · max/page=${maxPerPage} · delay ${delayMin}-${delayMax}s`,
+        "info",
+      );
 
       const res = await createFollowerSession({
         page_keys: pageKeys,
@@ -364,14 +435,16 @@ export default function PageScannerFollowers() {
         keep_browser: keepBrowser,
         target_followers: targetFollowers,
         max_per_page: maxPerPage,
-        idle_timeout_s: idleTimeout,
-        skip_existing: skipExisting,
-        source_list_id: sourceMode === "saved" ? savedListId || null : null,
-        page_delay_s: pageDelay,
+        idle_timeout_s: 90,
+        skip_existing: dedupAcrossPages,
+        source_list_id: null,
+        page_delay_s: delayMin,
       });
 
       setSessionId(res.session_id);
       pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
+      if (prioritizeRecent) pushLog("Ưu tiên người theo dõi gần đây (UI flag).", "info");
+      if (rotateEvery) pushLog(`Đổi acc sau ~${rotateEvery} page / tài khoản (UI flag).`, "info");
       toast.success(`Đã khởi động FOLLOW #${res.session_id}`);
       startPoll(res.session_id);
     } catch (err) {
@@ -415,6 +488,11 @@ export default function PageScannerFollowers() {
     }
   };
 
+  const handleToggleExecution = () => {
+    if (isBusy) handleStop();
+    else handleStart();
+  };
+
   const filteredLeftPages = useMemo(() => {
     const q = leftSearch.trim().toLowerCase();
     if (!q) return resultPages;
@@ -446,7 +524,10 @@ export default function PageScannerFollowers() {
   }, [followersByPage, activePage, rightSearch, sortBy]);
 
   const totalPages = Math.max(1, Math.ceil(activeFollowers.length / PAGE_SIZE) || 1);
-  if (tablePage > totalPages) setTablePage(totalPages);
+
+  useEffect(() => {
+    if (tablePage > totalPages) setTablePage(totalPages);
+  }, [tablePage, totalPages]);
 
   const pagedFollowers = useMemo(() => {
     const start = (tablePage - 1) * PAGE_SIZE;
@@ -457,9 +538,6 @@ export default function PageScannerFollowers() {
     setTablePage(1);
     setSelectedRowIds([]);
   };
-
-  const runningCount = resultPages.filter((p) => p.status === "RUNNING").length;
-  const showResults = resultPages.length > 0 || runPhase !== "idle";
 
   const handleExportAll = () => {
     const all = Object.values(followersByPage).flat();
@@ -503,480 +581,523 @@ export default function PageScannerFollowers() {
   };
 
   return (
-    <div className="space-y-5 pb-8">
+    <div className="space-y-5 pb-10">
       <div>
-        <h1 className="font-heading text-xl font-bold text-slate-900">Quét followers page</h1>
-        <p className="mt-1 text-xs text-slate-500">
-          Chọn Page từ kho mục 1 → cấu hình hạn mức FL · Selenium live.{" "}
+        <h1 className="font-heading text-[22px] font-bold tracking-tight text-[#0F172A]">
+          Quét danh sách theo dõi page
+        </h1>
+        <p className="mt-1.5 max-w-3xl text-[13px] leading-relaxed text-[#64748B]">
+          Thu thập danh sách người thích hoặc theo dõi trang, lọc thành viên mới và trích xuất
+          UID/Profile tự động
           {sessionId ? (
-            <span className="text-slate-600">
-              Phiên #{sessionId}
-              {resultCount > 0 ? ` · ${resultCount} FL` : ""} ·{" "}
+            <span className="text-[#475569]">
+              . Phiên #{sessionId}
+              {resultCount > 0 ? ` · ${fmtNum(resultCount)} FL` : ""} ·{" "}
             </span>
-          ) : null}
-          <Link href="/scanner/list-followers" className="text-primary hover:underline">
+          ) : (
+            ". "
+          )}
+          <Link href="/scanner/list-followers" className="font-medium text-[#1877F2] hover:underline">
             Xem DS followers
           </Link>
         </p>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <SectionCard
-          number="1"
-          title="Chọn tài khoản & nguồn Page"
-          description="Acc Live + Page cần quét followers"
-          aside={
-            selCount > 0 ? (
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
-                <CheckCircle2 className="size-3" /> {selCount} acc
-              </span>
-            ) : null
-          }
-        >
-          <div className="mb-4 flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              disabled={isBusy}
-              onClick={() => {
-                setModalUids([...selectedUids]);
-                setShowAccountModal(true);
-              }}
-              className="gap-1.5"
-            >
-              <Plus className="size-3.5" /> Chọn tài khoản
-            </Button>
-            {selCount === 0 && (
-              <span className="text-[11px] text-slate-400">Chưa chọn → Selenium sau sẽ tự chọn acc Live</span>
-            )}
+      {/* Figma 2890-35336 — 2 config cards */}
+      <div className="grid grid-cols-1 items-stretch gap-5 lg:grid-cols-2">
+        <div className="flex flex-col rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+          <div className="mb-5 flex items-center gap-3">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[#1877F2] text-xs font-bold text-white">
+              1
+            </span>
+            <h3 className="font-heading text-[15px] font-bold text-[#0F172A]">
+              Cấu hình chung, Chọn tài khoản &amp; Nhóm quét
+            </h3>
           </div>
 
-          <p className="mb-2 text-[11px] font-bold tracking-wide text-slate-500">NGUỒN PAGE</p>
-          <div className="mb-3 flex flex-wrap gap-1.5">
-            {[
-              { id: "kho", label: "Kho đã quét", Icon: Search },
-              { id: "saved", label: "Danh sách đã lưu", Icon: FileUp },
-              { id: "paste", label: "Dán link", Icon: Link2 },
-            ].map(({ id, label, Icon }) => (
-              <button
-                key={id}
-                type="button"
-                disabled={isBusy}
-                onClick={() => setSourceMode(id)}
-                className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[11px] font-semibold transition-all ${
-                  sourceMode === id
-                    ? "border-primary bg-primary text-white"
-                    : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"
-                } disabled:opacity-60`}
-              >
-                <Icon className="size-3.5" />
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {sourceMode === "kho" && (
-            <div className="space-y-2">
-              <Input
-                value={khoSearch}
-                onChange={(e) => setKhoSearch(e.target.value)}
-                placeholder="Lọc tên / link Page…"
-                className="h-8 text-[11px]"
-                disabled={isBusy}
-              />
-              <div className="max-h-48 overflow-auto rounded-lg border border-slate-200">
-                <table className="w-full text-[11px]">
-                  <thead className="sticky top-0 bg-slate-50 text-slate-500">
-                    <tr>
-                      <th className="w-8 px-2 py-2">
-                        <Checkbox
-                          checked={filteredKho.length > 0 && selectedKeys.length === filteredKho.length}
-                          onCheckedChange={(c) =>
-                            setSelectedKeys(c ? filteredKho.map((p) => p.page_key).filter(Boolean) : [])
-                          }
-                        />
-                      </th>
-                      <th className="px-2 py-2 text-left">Page</th>
-                      <th className="px-2 py-2 text-right">FL</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredKho.length === 0 ? (
-                      <tr>
-                        <td colSpan={3} className="px-3 py-6 text-center text-slate-400">
-                          Chưa có Page trong kho — quét mục 1 trước.
-                        </td>
-                      </tr>
-                    ) : (
-                      filteredKho.map((p) => (
-                        <tr key={p.page_key} className="hover:bg-slate-50">
-                          <td className="px-2 py-1.5">
-                            <Checkbox
-                              checked={selectedKeys.includes(p.page_key)}
-                              onCheckedChange={(c) =>
-                                setSelectedKeys((prev) =>
-                                  c ? [...prev, p.page_key] : prev.filter((k) => k !== p.page_key),
-                                )
-                              }
-                            />
-                          </td>
-                          <td className="px-2 py-1.5 font-medium text-slate-800">{p.page_name || p.page_key}</td>
-                          <td className="px-2 py-1.5 text-right text-slate-500">
-                            {p.follower_count != null ? Number(p.follower_count).toLocaleString("vi-VN") : "—"}
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+          <div className="space-y-5">
+            <div>
+              <p className="mb-2.5 text-[11px] font-bold tracking-wider text-[#64748B] uppercase">
+                TÀI KHOẢN THỰC THI QUÉT
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => setShowAccountModal(true)}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#1877F2] px-4 text-xs font-bold text-white shadow-sm transition hover:bg-[#166FE5] disabled:opacity-50"
+                >
+                  <Users className="size-4" />
+                  Chọn tài khoản
+                </button>
+                <SelectedBadge>
+                  Đã chọn:{" "}
+                  <strong className="font-bold text-[#0F172A]">
+                    {selectedUids.length} / {Math.max(accounts.length, 1)}
+                  </strong>{" "}
+                  tài khoản
+                </SelectedBadge>
               </div>
-              <p className="text-[10px] text-slate-400">Đã chọn {selectedKeys.length} Page</p>
             </div>
-          )}
 
-          {sourceMode === "saved" && (
-            <div className="space-y-2">
-              <select
-                value={savedListId}
-                disabled={isBusy}
-                onChange={(e) => {
-                  setSavedListId(e.target.value);
-                  const list = savedLists.find((l) => l.id === e.target.value);
-                  setSelectedKeys((list?.pages || []).map((p) => p.page_key).filter(Boolean));
-                }}
-                className="h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-[11px]"
-              >
-                <option value="">— Chọn danh sách —</option>
-                {savedLists.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.name} ({l.count})
-                  </option>
-                ))}
-              </select>
-              {!savedLists.length && (
-                <p className="text-[11px] text-slate-400">Chưa có list — dùng &quot;Lưu danh sách&quot; ở mục 1.</p>
-              )}
+            <div>
+              <p className="mb-2.5 text-[11px] font-bold tracking-wider text-[#64748B] uppercase">
+                CHỈ ĐỊNH NHÓM CẦN QUÉT
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => setShowPageModal(true)}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#1877F2] px-4 text-xs font-bold text-white shadow-sm transition hover:bg-[#166FE5] disabled:opacity-50"
+                >
+                  <Layers className="size-4" />
+                  Chọn page muốn quét
+                </button>
+                <SelectedBadge>
+                  Đã chọn:{" "}
+                  <strong className="font-bold text-[#0F172A]">{selectedPages.length} nhóm</strong>
+                </SelectedBadge>
+              </div>
             </div>
-          )}
 
-          {sourceMode === "paste" && (
-            <Textarea
-              value={pasteText}
-              onChange={(e) => setPasteText(e.target.value)}
-              disabled={isBusy}
-              rows={6}
-              placeholder={"Mỗi dòng 1 link Page\nhttps://www.facebook.com/…"}
-              className="text-[11px]"
-            />
-          )}
-        </SectionCard>
+            <div className="pt-0.5">
+              <p className="mb-2.5 text-xs font-semibold text-[#1E293B]">
+                Khoảng cách giữa các lần quét:
+              </p>
+              <div className="flex items-center gap-2">
+                <StepperBox
+                  value={delayMin}
+                  onChange={(v) => {
+                    setDelayMin(v);
+                    if (v > delayMax) setDelayMax(v);
+                  }}
+                  min={1}
+                  max={180}
+                  disabled={isBusy}
+                />
+                <span className="text-xs text-[#64748B]">-</span>
+                <StepperBox
+                  value={delayMax}
+                  onChange={(v) => setDelayMax(Math.max(delayMin, v))}
+                  min={1}
+                  max={180}
+                  disabled={isBusy}
+                />
+                <span className="text-xs text-[#64748B]">giây</span>
+              </div>
+            </div>
+          </div>
+        </div>
 
-        <SectionCard number="2" title="Hạn mức & an toàn" description="Contract Selenium — lưu vào settings phiên">
-          <div className="grid grid-cols-2 gap-3">
-            <label className="space-y-1 text-[11px]">
-              <span className="font-semibold text-slate-700">Target followers (tổng)</span>
-              <Input
-                type="number"
-                min={1}
-                value={targetFollowers}
-                disabled={isBusy}
-                onChange={(e) => setTargetFollowers(Math.max(1, Number(e.target.value) || 1))}
-                className="h-8"
-              />
-            </label>
-            <label className="space-y-1 text-[11px]">
-              <span className="font-semibold text-slate-700">Max / Page</span>
-              <Input
-                type="number"
-                min={1}
-                value={maxPerPage}
-                disabled={isBusy}
-                onChange={(e) => setMaxPerPage(Math.max(1, Number(e.target.value) || 1))}
-                className="h-8"
-              />
-            </label>
-            <label className="space-y-1 text-[11px]">
-              <span className="font-semibold text-slate-700">Idle timeout (s)</span>
-              <Input
-                type="number"
-                min={5}
-                value={idleTimeout}
-                disabled={isBusy}
-                onChange={(e) => setIdleTimeout(Math.max(5, Number(e.target.value) || 90))}
-                className="h-8"
-              />
-            </label>
-            <label className="space-y-1 text-[11px]">
-              <span className="font-semibold text-slate-700">Delay giữa Page (s)</span>
-              <Input
-                type="number"
-                min={0}
-                step={0.5}
-                value={pageDelay}
-                disabled={isBusy}
-                onChange={(e) => setPageDelay(Math.max(0, Number(e.target.value) || 0))}
-                className="h-8"
-              />
-            </label>
+        <div className="flex flex-col rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+          <div className="mb-5 flex items-center gap-3">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[#1877F2] text-xs font-bold text-white">
+              2
+            </span>
+            <h3 className="font-heading text-[15px] font-bold text-[#0F172A]">
+              Cấu hình quét nâng cao &amp; Bộ lọc
+            </h3>
           </div>
-          <div className="mt-4 space-y-2">
-            <label className="flex items-center gap-2 text-[12px] text-slate-800">
-              <Checkbox checked={keepBrowser} disabled={isBusy} onCheckedChange={(c) => setKeepBrowser(!!c)} />
-              Giữ browser sau phiên (keep_browser)
-            </label>
-            <label className="flex items-center gap-2 text-[12px] text-slate-800">
-              <Checkbox checked={skipExisting} disabled={isBusy} onCheckedChange={(c) => setSkipExisting(!!c)} />
-              Bỏ qua follower đã có trong kho
-            </label>
+
+          <div className="flex flex-1 flex-col space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-xs font-semibold text-[#1E293B]">
+                Đổi tài khoản mới khi quét được:
+              </span>
+              <div className="flex items-center gap-2">
+                <StepperBox
+                  value={rotateEvery}
+                  onChange={setRotateEvery}
+                  min={1}
+                  max={500}
+                  step={5}
+                  disabled={isBusy}
+                />
+                <span className="min-w-[7.5rem] text-xs text-[#64748B]">page / tài khoản</span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-xs font-semibold text-[#1E293B]">Mỗi nhóm quét tối đa:</span>
+              <div className="flex items-center gap-2">
+                <StepperBox
+                  value={maxPerPage}
+                  onChange={setMaxPerPage}
+                  min={10}
+                  max={5000}
+                  step={10}
+                  disabled={isBusy}
+                />
+                <span className="min-w-[7.5rem] text-xs text-[#64748B]">followers / page</span>
+              </div>
+            </div>
+
+            <div className="mt-auto space-y-3.5 pt-2">
+              <label className="flex cursor-pointer items-center gap-2.5 select-none">
+                <Checkbox
+                  checked={prioritizeRecent}
+                  disabled={isBusy}
+                  onCheckedChange={(c) => setPrioritizeRecent(!!c)}
+                />
+                <span className="text-xs font-medium text-[#1E293B]">
+                  Ưu tiên quét người mới theo dõi gần đây
+                </span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-2.5 select-none">
+                <Checkbox
+                  checked={dedupAcrossPages}
+                  disabled={isBusy}
+                  onCheckedChange={(c) => setDedupAcrossPages(!!c)}
+                />
+                <span className="text-xs font-medium text-[#1E293B]">
+                  Tự động kiểm tra trùng UID giữa các page
+                </span>
+              </label>
+            </div>
           </div>
-        </SectionCard>
+        </div>
       </div>
 
-      <div className="flex flex-col gap-2">
-        <Button
+      {/* Preview — Figma */}
+      <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E2E8F0] bg-[#F0F7FF] px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white text-[#1877F2] shadow-sm">
+              <ListChecks className="size-4" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h3 className="font-heading text-sm font-bold text-[#0F172A]">
+                  Xem trước danh sách page muốn quét
+                </h3>
+                <span className="rounded-full bg-[#EFF6FF] px-2.5 py-0.5 text-[11px] font-bold text-[#1877F2]">
+                  {selectedPages.length} page hợp lệ
+                </span>
+              </div>
+              <p className="mt-0.5 text-[11px] text-[#64748B]">
+                Danh sách các trang đã sẵn sàng cào danh sách followers
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] text-left text-xs">
+            <thead className="bg-[#F8FAFC] text-[11px] font-bold text-[#64748B] uppercase">
+              <tr className="border-b border-[#E2E8F0]">
+                <th className="w-16 px-6 py-3">STT</th>
+                <th className="px-4 py-3">TÊN FANPAGE &amp; ID</th>
+                <th className="px-4 py-3">NGÀNH NGHỀ / LOẠI PAGE</th>
+                <th className="px-4 py-3">QUY MÔ / FOLLOWERS</th>
+                <th className="w-24 px-6 py-3 text-center">THAO TÁC</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#F1F5F9]">
+              {selectedPages.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-6 py-8 text-center text-[#94A3B8]">
+                    Chưa chọn Fanpage. Nhấn &ldquo;Chọn page muốn quét&rdquo; để thêm.
+                  </td>
+                </tr>
+              ) : (
+                selectedPages.map((page, idx) => (
+                  <tr key={page.page_key || page.id} className="hover:bg-[#F8FAFC]">
+                    <td className="px-6 py-3.5 font-mono text-[#64748B]">{padStt(idx + 1)}</td>
+                    <td className="px-4 py-3.5">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className={`flex size-9 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                            page.avatar_color || "bg-indigo-100 text-indigo-700"
+                          }`}
+                        >
+                          {page.avatar_initials || initialsOf(page.name || page.page_name)}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-bold text-[#0F172A]">
+                            {page.name || page.page_name}
+                          </p>
+                          <p className="font-mono text-[11px] text-[#94A3B8]">
+                            UID: {page.page_id || page.uid}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3.5 text-[#475569]">{page.category || "Fanpage"}</td>
+                    <td className="px-4 py-3.5 font-bold text-[#0F172A]">
+                      {page.followers_text || fmtNum(page.follower_count)} Followers
+                    </td>
+                    <td className="px-6 py-3.5 text-center">
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() =>
+                          setSelectedPages((prev) =>
+                            prev.filter((p) => p.page_key !== page.page_key),
+                          )
+                        }
+                        className="rounded-lg p-1.5 text-[#94A3B8] hover:bg-[#FEE2E2] hover:text-[#EF4444] disabled:opacity-40"
+                        title="Xóa page"
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* CTA */}
+      <div className="space-y-2.5">
+        <button
           type="button"
-          size="lg"
-          className="w-full gap-2 text-sm font-bold shadow-md shadow-primary/20"
-          disabled={isBusy}
-          onClick={handleStart}
+          onClick={handleToggleExecution}
+          disabled={!isBusy && accountsLoading}
+          className={`flex h-12 w-full items-center justify-center gap-2 rounded-xl text-sm font-bold tracking-wide text-white shadow-sm transition ${
+            isBusy
+              ? "bg-[#DC2626] hover:bg-rose-700"
+              : "bg-[#1877F2] hover:bg-[#166FE5] disabled:opacity-60"
+          }`}
         >
           {isBusy ? (
             <>
-              <Loader2 className="size-4 animate-spin" /> ĐANG THỰC THI…
+              <Square className="size-4 fill-white" />
+              <span>DỪNG THỰC THI QUÉT FOLLOWERS</span>
             </>
           ) : (
             <>
-              <Play className="size-4" /> BẮT ĐẦU THỰC THI
+              <Play className="size-4 fill-white" />
+              <span>BẮT ĐẦU THỰC THI</span>
             </>
           )}
-        </Button>
+        </button>
         {isBusy && (
-          <div className="grid grid-cols-2 gap-2">
-            <Button type="button" variant="outline" size="lg" className="gap-2 border-red-300 text-red-600" onClick={handlePauseResume}>
-              {isPaused ? (
-                <>
-                  <Play className="size-4" /> TIẾP TỤC
-                </>
-              ) : (
-                <>
-                  <Pause className="size-4" /> TẠM DỪNG
-                </>
-              )}
-            </Button>
-            <Button type="button" variant="outline" size="lg" className="gap-2 border-red-400 bg-red-50 text-red-700" onClick={handleStop}>
-              <Square className="size-4" /> DỪNG KHẨN CẤP
-            </Button>
-          </div>
+          <button
+            type="button"
+            onClick={handlePauseResume}
+            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#F59E0B] bg-white text-xs font-bold text-[#D97706] hover:bg-amber-50"
+          >
+            {isPaused ? (
+              <>
+                <Play className="size-3.5 fill-current" />
+                TIẾP TỤC QUÉT
+              </>
+            ) : (
+              <>
+                <Pause className="size-3.5" />
+                TẠM DỪNG QUÉT
+              </>
+            )}
+          </button>
         )}
       </div>
 
-      {/* ═══ Kết quả master–detail (UI Figma) ═══ */}
-      {showResults && (
+      {/* Results — Figma master-detail, chỉ hiện khi quét xong */}
+      {showResults ? (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <h2 className="text-base font-bold text-slate-800">Kết quả quét người theo dõi</h2>
-              <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
-                Tổng {Number(resultCount || 0).toLocaleString("vi-VN")} UID
+            <div className="flex items-center gap-2.5">
+              <h3 className="font-heading text-base font-bold text-[#0F172A]">
+                Kết quả quét người theo dõi
+              </h3>
+              <span className="rounded-full bg-[#EFF6FF] px-3 py-0.5 text-xs font-bold text-[#1877F2]">
+                {fmtNum(resultCount)} UID thu thập
               </span>
             </div>
             <button
               type="button"
               onClick={handleExportAll}
-              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-700"
+              className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-xl border border-[#E2E8F0] bg-white px-3.5 text-xs font-bold text-[#1E293B] shadow-sm hover:bg-[#F8FAFC]"
             >
-              <FileSpreadsheet className="size-4" />
-              Xuất toàn bộ file Excel
+              <Download className="size-3.5 text-[#1877F2]" />
+              Xuất toàn bộ file (Excel/CSV)
             </button>
           </div>
 
-          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
-            {/* Left: DANH MỤC PAGE */}
-            <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs lg:col-span-3">
-              <div className="flex items-center justify-between border-b border-slate-100 p-3.5">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                  DANH MỤC PAGE ({resultPages.length})
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+            {/* Left — Danh mục Page mục tiêu */}
+            <div className="flex flex-col rounded-2xl border border-[#E2E8F0] bg-white p-4 shadow-sm lg:col-span-4">
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-xs font-bold text-[#0F172A]">
+                  Danh mục Page mục tiêu ({filteredLeftPages.length})
                 </span>
-                <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700">
-                  Đang chạy {runningCount}/{resultPages.length || 0}
-                </span>
+                <SlidersHorizontal className="size-3.5 text-[#64748B]" />
               </div>
 
-              <div className="border-b border-slate-100 p-3">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    value={leftSearch}
-                    onChange={(e) => setLeftSearch(e.target.value)}
-                    placeholder="Tìm tên hoặc ID Fanpage..."
-                    className="w-full rounded-lg border border-slate-200 py-1.5 pl-8 pr-3 text-xs focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
+              <div className="relative mb-3">
+                <Search className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-[#94A3B8]" />
+                <input
+                  value={leftSearch}
+                  onChange={(e) => setLeftSearch(e.target.value)}
+                  placeholder="Tìm tên Page, UID..."
+                  className="h-9 w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] pr-3 pl-9 text-xs text-[#0F172A] outline-none focus:border-[#1877F2] focus:bg-white"
+                />
               </div>
 
-              <div className="max-h-[520px] divide-y divide-slate-100 overflow-y-auto">
+              <div className="max-h-[440px] flex-1 space-y-2.5 overflow-y-auto pr-1">
                 {filteredLeftPages.length === 0 ? (
-                  <p className="p-4 text-center text-[11px] text-slate-400">Chưa có page trong phiên</p>
+                  <p className="py-8 text-center text-[11px] text-[#94A3B8]">Chưa có page trong phiên</p>
                 ) : (
-                  filteredLeftPages.map((p, idx) => {
-                    const isSelected = activePage?.page_key === p.page_key;
-                    const statusClass =
-                      p.status === "RUNNING"
-                        ? "text-blue-600"
-                        : p.status === "DONE"
-                          ? "text-emerald-600"
-                          : "text-amber-600";
+                  filteredLeftPages.map((pg, idx) => {
+                    const active = activePage?.page_key === pg.page_key;
+                    const done = pg.status === "DONE" || (pg.scanned_uid_count || 0) > 0;
                     return (
                       <button
-                        key={p.page_key}
+                        key={pg.page_key}
                         type="button"
                         onClick={() => {
-                          setActivePageKey(p.page_key);
+                          setActivePageKey(pg.page_key);
                           resetResultSelection();
                         }}
-                        className={`flex w-full cursor-pointer items-start justify-between gap-2 p-3.5 text-left transition-colors ${
-                          isSelected
-                            ? "border-l-4 border-l-blue-600 bg-blue-50/80"
-                            : "hover:bg-slate-50"
+                        className={`w-full cursor-pointer rounded-xl border p-3.5 text-left transition ${
+                          active
+                            ? "border-2 border-[#1877F2] bg-[#EFF6FF]/30 shadow-sm"
+                            : "border-[#E2E8F0] bg-white hover:bg-[#F8FAFC]"
                         }`}
                       >
-                        <div className="flex min-w-0 items-start gap-2.5">
-                          <div
-                            className={`flex size-8 shrink-0 items-center justify-center rounded-lg text-[11px] font-bold ${
-                              AVATAR_COLORS[idx % AVATAR_COLORS.length]
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate text-xs font-bold text-[#0F172A]">
+                            {pg.page_name}
+                          </span>
+                          <span
+                            className={`size-2 shrink-0 rounded-full ${
+                              done ? "bg-[#10B981]" : "bg-[#CBD5E1]"
                             }`}
-                          >
-                            {p.avatar_initials || initialsOf(p.page_name)}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="truncate text-xs font-bold text-slate-800">{p.page_name}</div>
-                            <div className={`mt-1 text-[11px] font-semibold ${statusClass}`}>
-                              ● {p.status_label}
-                            </div>
-                          </div>
+                          />
                         </div>
-                        <span
-                          className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${
-                            isSelected ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-700"
-                          }`}
-                        >
-                          {p.scanned_uid_count || 0} UID
-                        </span>
+                        <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-[#64748B]">
+                          <span>
+                            Quy mô:{" "}
+                            <strong className="text-[#0F172A]">
+                              {fmtNum(pg.follower_count)}
+                            </strong>{" "}
+                            followers
+                          </span>
+                          <span
+                            className={
+                              active
+                                ? "font-bold text-[#1877F2]"
+                                : "font-semibold text-[#334155]"
+                            }
+                          >
+                            Đã quét: {fmtNum(pg.scanned_uid_count)} UID
+                          </span>
+                        </div>
                       </button>
                     );
                   })
                 )}
               </div>
+
+              <div className="mt-4 flex items-center justify-between border-t border-[#F1F5F9] pt-3 text-xs">
+                <span className="text-[#64748B]">Tổng UID đã xử lý:</span>
+                <strong className="font-mono font-bold text-[#1877F2]">
+                  {fmtNum(resultCount)} UID
+                </strong>
+              </div>
             </div>
 
-            {/* Right: chi tiết followers */}
-            <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs lg:col-span-9">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-4">
+            {/* Right — chi tiết UID */}
+            <div className="flex flex-col rounded-2xl border border-[#E2E8F0] bg-white p-5 shadow-sm lg:col-span-8">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] pb-3.5">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900">
+                  <h4 className="font-heading text-sm font-bold text-[#0F172A]">
                     {activePage?.page_name || "Chọn page bên trái"}
-                  </h3>
-                  <p className="mt-1 text-xs text-slate-500">
+                  </h4>
+                  <p className="mt-0.5 text-xs text-[#64748B]">
                     Quy mô:{" "}
-                    <strong className="text-slate-700">
-                      {Number(activePage?.follower_count || 0).toLocaleString("vi-VN")} Followers
+                    <strong className="text-[#0F172A]">
+                      {fmtNum(activePage?.follower_count)}
                     </strong>{" "}
-                    • Đã quét:{" "}
-                    <strong className="text-blue-600">
-                      {activeFollowers.length} UID
-                    </strong>
-                    {updatedAt ? ` • Cập nhật lúc: ${updatedAt}` : null}
+                    Followers • Đã thu thập:{" "}
+                    <strong className="font-mono text-[#1877F2]">
+                      {fmtNum(activeFollowers.length)}
+                    </strong>{" "}
+                    UID
+                    {updatedAt ? ` • Cập nhật: ${updatedAt}` : null}
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={handleExportPage}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3.5 py-2 text-xs font-bold text-white transition hover:bg-blue-700"
+                  className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-xl bg-[#1877F2] px-4 text-xs font-bold text-white shadow-sm hover:bg-[#166FE5]"
                 >
                   <Download className="size-3.5" />
-                  Xuất Page này
+                  Xuất UID Page này
                 </button>
               </div>
 
-              <div className="space-y-3 border-b border-slate-100 bg-slate-50/60 p-4">
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="relative min-w-[240px] flex-1">
-                    <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-                    <input
-                      type="text"
-                      value={rightSearch}
-                      onChange={(e) => {
-                        setRightSearch(e.target.value);
-                        resetResultSelection();
-                      }}
-                      placeholder="Tìm UID, tên, vị trí, profile..."
-                      className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-3 text-xs focus:border-blue-500 focus:outline-none"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-slate-500">Sắp xếp:</span>
-                    <select
-                      value={sortBy}
-                      onChange={(e) => {
-                        setSortBy(e.target.value);
-                        resetResultSelection();
-                      }}
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 focus:outline-none"
-                    >
-                      <option value="NEWEST">Mới nhất</option>
-                      <option value="NAME">Theo tên A–Z</option>
-                    </select>
-                  </div>
-                </div>
-
-                {selectedRowIds.length > 0 && (
-                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white px-3.5 py-2">
-                    <div className="flex items-center gap-2 text-xs font-bold text-blue-600">
-                      <span className="flex size-5 items-center justify-center rounded-full bg-blue-600 text-[10px] text-white">
-                        {selectedRowIds.length}
-                      </span>
-                      Đã chọn: {selectedRowIds.length} UID
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const rows = activeFollowers.filter((u) => selectedRowIds.includes(u.id));
-                          exportFollowersCsv(rows, "followers_selected.csv");
-                          toast.success(`Đã xuất ${rows.length} UID đã chọn.`);
-                        }}
-                        className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100"
-                      >
-                        <Download className="size-3.5" />
-                        Xuất file chọn
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleDeleteSelected}
-                        className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-red-100"
-                      >
-                        <Trash2 className="size-3.5" />
-                        Xóa
-                      </button>
-                    </div>
-                  </div>
-                )}
+              <div className="relative my-3.5">
+                <Search className="absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-[#94A3B8]" />
+                <input
+                  value={rightSearch}
+                  onChange={(e) => {
+                    setRightSearch(e.target.value);
+                    resetResultSelection();
+                  }}
+                  placeholder="Tìm UID, Tên, Vị trí..."
+                  className="h-9 w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] pr-4 pl-10 text-xs text-[#0F172A] outline-none focus:border-[#1877F2] focus:bg-white"
+                />
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-left">
-                  <thead>
-                    <tr className="border-b border-slate-100 bg-slate-50 text-[11px] font-bold uppercase text-slate-500">
-                      <th className="w-10 px-3 py-3 text-center">
-                        <input
-                          type="checkbox"
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#F8FAFC] px-3.5 py-2">
+                <div className="flex items-center gap-2 text-xs font-bold text-[#1877F2]">
+                  <span className="flex size-5 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white">
+                    {selectedRowIds.length}
+                  </span>
+                  Đã chọn: {selectedRowIds.length} UID
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => toast.info("Đã mở hộp thoại chuyển danh mục")}
+                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#E2E8F0] bg-white px-3 py-1.5 text-xs font-semibold text-[#334155] hover:bg-slate-50"
+                  >
+                    <FolderInput className="size-3.5" />
+                    Chuyển danh mục
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const rows = activeFollowers.filter((u) => selectedRowIds.includes(u.id));
+                      if (!rows.length) {
+                        toast.warning("Chưa chọn UID nào.");
+                        return;
+                      }
+                      exportFollowersCsv(rows, "followers_selected.csv");
+                      toast.success(`Đã xuất ${rows.length} UID đã chọn.`);
+                    }}
+                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-3 py-1.5 text-xs font-bold text-[#1877F2] hover:bg-[#DBEAFE]"
+                  >
+                    <Download className="size-3.5" />
+                    Xuất file chọn
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDeleteSelected}
+                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-3 py-1.5 text-xs font-bold text-[#DC2626] hover:bg-[#FEE2E2]"
+                  >
+                    <Trash2 className="size-3.5" />
+                    Xóa
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-[#F8FAFC] text-[11px] font-bold text-[#64748B] uppercase">
+                    <tr className="border-b border-[#E2E8F0]">
+                      <th className="w-8 px-3 py-2.5">
+                        <Checkbox
                           checked={
                             pagedFollowers.length > 0 &&
                             pagedFollowers.every((u) => selectedRowIds.includes(u.id))
                           }
-                          onChange={(e) => {
-                            if (e.target.checked) {
+                          onCheckedChange={(c) => {
+                            if (c) {
                               setSelectedRowIds((prev) => [
                                 ...new Set([...prev, ...pagedFollowers.map((u) => u.id)]),
                               ]);
@@ -985,56 +1106,50 @@ export default function PageScannerFollowers() {
                               setSelectedRowIds((prev) => prev.filter((id) => !drop.has(id)));
                             }
                           }}
-                          className="size-3.5 rounded border-slate-300 text-blue-600"
                         />
                       </th>
-                      <th className="w-12 px-3 py-3">STT</th>
-                      <th className="min-w-[180px] px-3 py-3">HỌ VÀ TÊN</th>
-                      <th className="px-3 py-3">UID / PROFILE</th>
-                      <th className="px-3 py-3">ĐỊA CHỈ</th>
-                      <th className="px-3 py-3 text-center">BẠN BÈ</th>
-                      <th className="px-3 py-3 text-right">THỜI GIAN</th>
+                      <th className="w-12 px-2 py-2.5">STT</th>
+                      <th className="px-3 py-2.5">HỌ VÀ TÊN</th>
+                      <th className="px-3 py-2.5">UID / PROFILE LINK</th>
+                      <th className="px-3 py-2.5">ĐỊA CHỈ</th>
+                      <th className="px-3 py-2.5">SỐ BẠN BÈ</th>
+                      <th className="px-3 py-2.5 text-right">THỜI GIAN</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 text-xs">
+                  <tbody className="divide-y divide-[#F1F5F9]">
                     {pagedFollowers.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="px-3 py-10 text-center text-slate-400">
-                          {isBusy
-                            ? "Đang thu thập followers…"
-                            : "Chưa có UID — bắt đầu quét hoặc chọn page khác."}
+                        <td colSpan={7} className="px-3 py-10 text-center text-[#94A3B8]">
+                          Không có UID nào được thu thập cho page này.
                         </td>
                       </tr>
                     ) : (
                       pagedFollowers.map((u, idx) => {
                         const stt = (tablePage - 1) * PAGE_SIZE + idx + 1;
+                        const checked = selectedRowIds.includes(u.id);
                         return (
-                          <tr key={u.id} className="hover:bg-slate-50/80">
-                            <td className="px-3 py-3 text-center">
-                              <input
-                                type="checkbox"
-                                checked={selectedRowIds.includes(u.id)}
-                                onChange={(e) =>
+                          <tr key={u.id} className="hover:bg-[#F8FAFC]">
+                            <td className="px-3 py-3">
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(c) =>
                                   setSelectedRowIds((prev) =>
-                                    e.target.checked
-                                      ? [...prev, u.id]
-                                      : prev.filter((id) => id !== u.id),
+                                    c ? [...prev, u.id] : prev.filter((id) => id !== u.id),
                                   )
                                 }
-                                className="size-3.5 rounded border-slate-300 text-blue-600"
                               />
                             </td>
-                            <td className="px-3 py-3 font-semibold text-slate-500">
-                              {String(stt).padStart(2, "0")}
-                            </td>
+                            <td className="px-2 py-3 font-mono text-[#64748B]">{padStt(stt)}</td>
                             <td className="px-3 py-3">
                               <div className="flex items-center gap-2.5">
                                 <Avatar className="size-7">
-                                  <AvatarFallback className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}>
+                                  <AvatarFallback
+                                    className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}
+                                  >
                                     {initialsOf(u.name)}
                                   </AvatarFallback>
                                 </Avatar>
-                                <span className="font-bold text-slate-800">{u.name}</span>
+                                <span className="font-bold text-[#0F172A]">{u.name}</span>
                               </div>
                             </td>
                             <td className="px-3 py-3">
@@ -1042,22 +1157,16 @@ export default function PageScannerFollowers() {
                                 href={u.profile_url || `https://www.facebook.com/${u.uid}`}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="inline-flex items-center gap-1 font-mono font-medium text-blue-600 hover:underline"
+                                className="inline-flex items-center gap-1 font-mono font-medium text-[#1877F2] hover:underline"
                               >
                                 {u.uid}
                                 <ExternalLink className="size-3" />
                               </a>
                             </td>
-                            <td className="px-3 py-3 text-slate-600">{u.location}</td>
-                            <td className="px-3 py-3 text-center">
-                              <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-0.5 text-[11px] font-bold text-blue-700">
-                                {u.friends}
-                              </span>
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono text-slate-500">
-                              {u.time
-                                ? String(u.time).replace("T", " ").slice(0, 19)
-                                : "—"}
+                            <td className="px-3 py-3 text-[#475569]">{u.location}</td>
+                            <td className="px-3 py-3 font-semibold text-[#1E293B]">{u.friends}</td>
+                            <td className="px-3 py-3 text-right font-mono text-[#64748B]">
+                              {u.time ? String(u.time).replace("T", " ").slice(0, 19) : "—"}
                             </td>
                           </tr>
                         );
@@ -1067,10 +1176,10 @@ export default function PageScannerFollowers() {
                 </table>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-                <span>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-[#F1F5F9] pt-3 text-xs">
+                <span className="text-[#64748B]">
                   Hiển thị{" "}
-                  <strong>
+                  <strong className="text-[#0F172A]">
                     {activeFollowers.length === 0
                       ? "0"
                       : `${(tablePage - 1) * PAGE_SIZE + 1} - ${Math.min(
@@ -1078,59 +1187,48 @@ export default function PageScannerFollowers() {
                           activeFollowers.length,
                         )}`}
                   </strong>{" "}
-                  của <strong>{activeFollowers.length}</strong> UID
+                  của <strong className="text-[#0F172A]">{fmtNum(activeFollowers.length)}</strong> UID
                 </span>
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
                     disabled={tablePage <= 1}
                     onClick={() => setTablePage((p) => Math.max(1, p - 1))}
-                    className="flex size-7 items-center justify-center rounded border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                    className="flex size-7 items-center justify-center rounded-lg border border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC] disabled:opacity-40"
                   >
                     <ChevronLeft className="size-3.5" />
                   </button>
-                  {(() => {
-                    const windowSize = Math.min(5, totalPages);
-                    let start = Math.max(1, tablePage - 2);
-                    let end = start + windowSize - 1;
-                    if (end > totalPages) {
-                      end = totalPages;
-                      start = Math.max(1, end - windowSize + 1);
-                    }
-                    const nums = [];
-                    for (let n = start; n <= end; n += 1) nums.push(n);
-                    return nums.map((pageNum) => (
-                      <button
-                        key={pageNum}
-                        type="button"
-                        onClick={() => setTablePage(pageNum)}
-                        className={`flex size-7 items-center justify-center rounded text-xs font-bold ${
-                          tablePage === pageNum
-                            ? "bg-blue-600 text-white"
-                            : "border border-slate-200 text-slate-600 hover:bg-slate-50"
-                        }`}
-                      >
-                        {pageNum}
-                      </button>
-                    ));
-                  })()}
-                  {totalPages > 5 && tablePage < totalPages - 2 && (
+                  {Array.from({ length: Math.min(3, totalPages) }, (_, i) => i + 1).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setTablePage(p)}
+                      className={`flex size-7 items-center justify-center rounded-lg text-xs font-bold ${
+                        tablePage === p
+                          ? "bg-[#1877F2] text-white"
+                          : "border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC]"
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                  {totalPages > 3 ? (
                     <>
-                      <span className="px-1 text-slate-400">…</span>
+                      <span className="px-1 text-[#94A3B8]">...</span>
                       <button
                         type="button"
                         onClick={() => setTablePage(totalPages)}
-                        className="flex h-7 min-w-7 items-center justify-center rounded border border-slate-200 px-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                        className="flex h-7 items-center justify-center rounded-lg border border-[#E2E8F0] px-2 text-xs font-semibold text-[#475569]"
                       >
                         {totalPages}
                       </button>
                     </>
-                  )}
+                  ) : null}
                   <button
                     type="button"
                     disabled={tablePage >= totalPages}
                     onClick={() => setTablePage((p) => Math.min(totalPages, p + 1))}
-                    className="flex size-7 items-center justify-center rounded border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                    className="flex size-7 items-center justify-center rounded-lg border border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC] disabled:opacity-40"
                   >
                     <ChevronRight className="size-3.5" />
                   </button>
@@ -1139,78 +1237,34 @@ export default function PageScannerFollowers() {
             </div>
           </div>
         </div>
-      )}
+      ) : null}
 
       {(runPhase !== "idle" || logs.length > 0) && (
         <LiveLogConsole title="Live Log · Quét followers page" logs={logs} phase={runPhase} />
       )}
 
-      {showAccountModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <Card className="max-h-[80vh] w-full max-w-lg overflow-hidden border-slate-200 shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-              <h3 className="text-sm font-bold text-slate-800">Chọn tài khoản Live</h3>
-              <Button type="button" size="sm" variant="outline" onClick={() => setShowAccountModal(false)}>
-                Đóng
-              </Button>
-            </div>
-            <div className="max-h-[50vh] overflow-auto p-2">
-              {accountsLoading ? (
-                <p className="p-4 text-center text-[11px] text-slate-400">Đang tải…</p>
-              ) : (
-                <table className="w-full text-[11px]">
-                  <tbody>
-                    {accounts.map((acc, idx) => {
-                      const live = LIVE_STATUSES.has(String(acc.status));
-                      return (
-                        <tr key={acc.uid || idx} className={!live ? "opacity-40" : ""}>
-                          <td className="px-2 py-2">
-                            <Checkbox
-                              disabled={!live}
-                              checked={modalUids.includes(acc.uid)}
-                              onCheckedChange={(c) =>
-                                setModalUids((prev) =>
-                                  c ? [...prev, acc.uid] : prev.filter((u) => u !== acc.uid),
-                                )
-                              }
-                            />
-                          </td>
-                          <td className="px-2 py-2">
-                            <div className="flex items-center gap-2">
-                              <Avatar className="size-7">
-                                {acc.avatar && <AvatarImage src={acc.avatar} />}
-                                <AvatarFallback className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}>
-                                  {initialsOf(acc.name || acc.uid || "A")}
-                                </AvatarFallback>
-                              </Avatar>
-                              <div>
-                                <div className="font-semibold text-slate-800">{acc.name || acc.uid}</div>
-                                <div className="text-[10px] text-slate-400">{acc.status}</div>
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-            <div className="flex justify-end gap-2 border-t border-slate-100 px-4 py-3">
-              <Button
-                type="button"
-                size="sm"
-                onClick={() => {
-                  setSelectedUids([...modalUids]);
-                  setShowAccountModal(false);
-                }}
-              >
-                Xác nhận
-              </Button>
-            </div>
-          </Card>
-        </div>
-      )}
+      <SelectAccountsModal
+        open={showAccountModal}
+        onClose={() => setShowAccountModal(false)}
+        accounts={accounts}
+        loading={accountsLoading}
+        selectedUids={selectedUids}
+        onConfirm={(uids) => {
+          setSelectedUids(uids);
+          setShowAccountModal(false);
+        }}
+      />
+
+      <SelectPagesModal
+        open={showPageModal}
+        onClose={() => setShowPageModal(false)}
+        availablePages={availablePages}
+        selectedPages={selectedPages}
+        onConfirm={(pages) => {
+          setSelectedPages(pages.map((p, i) => mapKhoToPage(p, i)));
+          setShowPageModal(false);
+        }}
+      />
     </div>
   );
 }

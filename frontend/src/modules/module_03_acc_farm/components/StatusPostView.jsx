@@ -2308,6 +2308,28 @@ export function StatusPostView({ initialState = "config" }) {
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!logs.length) {
+                        toast.warning("Chưa có log để sao chép.");
+                        return;
+                      }
+                      const text = logs
+                        .map((l) => `[${l.timestamp}] [${l.thread}] ${l.message}`)
+                        .join("\n");
+                      navigator.clipboard
+                        ?.writeText(text)
+                        .then(() => toast.success(`Đã sao chép ${logs.length} dòng log`))
+                        .catch(() => toast.error("Không thể sao chép log"));
+                    }}
+                    disabled={!logs.length}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 bg-slate-800/80 px-2.5 py-1 font-mono text-[10px] font-semibold text-slate-300 transition hover:border-slate-500 hover:bg-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                    title="Sao chép toàn bộ log"
+                  >
+                    <Copy className="size-3.5" />
+                    Copy log
+                  </button>
                   <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-mono font-semibold ${isPaused
                     ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
                     : isStopped
