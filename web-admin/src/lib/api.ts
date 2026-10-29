@@ -132,14 +132,31 @@ export class ApiError extends Error {
   }
 }
 
+const ADMIN_REFRESH_KEY = "admin_refresh_token";
+
+export function setAdminTokens(access?: string | null, refresh?: string | null) {
+  if (typeof window === "undefined") return;
+  if (access) localStorage.setItem("admin_token", access);
+  if (refresh) localStorage.setItem(ADMIN_REFRESH_KEY, refresh);
+}
+
+export function clearAdminTokens() {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem("admin_token");
+  localStorage.removeItem(ADMIN_REFRESH_KEY);
+}
+
 let refreshPromise: Promise<void> | null = null;
 
 function refreshAdminToken(): Promise<void> {
   if (!refreshPromise) {
     const previousToken = typeof window !== "undefined" ? localStorage.getItem("admin_token") : null;
+    const refreshToken = typeof window !== "undefined" ? localStorage.getItem(ADMIN_REFRESH_KEY) : null;
     refreshPromise = fetchApi("/api/v1/auth/refresh", {
       method: "POST",
       headers: { "X-Auth-Client": "admin" },
+      // Cross-origin Render: cookie API không gửi được → bắt buộc body
+      body: JSON.stringify(refreshToken ? { refresh_token: refreshToken } : {}),
     }, false).then((data) => {
       if (typeof data.access_token !== "string" || !data.access_token) {
         throw new ApiError("Máy chủ chưa hỗ trợ làm mới phiên admin. Vui lòng thử lại sau.", 502, "ADMIN_REFRESH_UNAVAILABLE");
@@ -147,6 +164,9 @@ function refreshAdminToken(): Promise<void> {
       // Do not restore a session after logout or overwrite a newer login in another tab.
       if (typeof window !== "undefined" && localStorage.getItem("admin_token") === previousToken && previousToken) {
         localStorage.setItem("admin_token", data.access_token);
+        if (typeof data.refresh_token === "string" && data.refresh_token) {
+          localStorage.setItem(ADMIN_REFRESH_KEY, data.refresh_token);
+        }
       }
     }).finally(() => { refreshPromise = null; });
   }
@@ -195,16 +215,21 @@ async function fetchApi(path: string, options?: RequestInit, allowRefresh = true
       }
 
       if (isLocked) {
-        localStorage.removeItem("admin_token");
+        clearAdminTokens();
         sessionStorage.setItem("auth_error", "Tài khoản của bạn đã bị khóa");
         window.location.href = `/login?error=${encodeURIComponent("Tài khoản của bạn đã bị khóa")}`;
       } else if (res.status === 401 && isSessionRevoked) {
-        localStorage.removeItem("admin_token");
+        clearAdminTokens();
         const msg = "Phiên đã bị thu hồi: tài khoản đăng nhập ở phiên khác, đã đăng xuất hoặc thông tin bảo mật đã thay đổi. Vui lòng đăng nhập lại.";
         sessionStorage.setItem("auth_error", msg);
         window.location.href = `/login?error=${encodeURIComponent(msg)}`;
-      } else if ((res.status === 401 && !path.includes("/auth/logout")) || (res.status === 403 && path.includes("/auth/refresh"))) {
-        localStorage.removeItem("admin_token");
+      } else if (
+        // Chỉ đá phiên khi refresh thật sự fail auth — tránh out vì lỗi tạm / cold start
+        (res.status === 401 && path.includes("/auth/refresh"))
+        || (res.status === 403 && path.includes("/auth/refresh"))
+        || (res.status === 401 && !allowRefresh && !path.includes("/auth/logout"))
+      ) {
+        clearAdminTokens();
         sessionStorage.setItem("auth_error", translatedMsg);
         window.location.href = `/login?error=${encodeURIComponent(translatedMsg)}`;
       }
@@ -340,8 +365,13 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  logout: (): Promise<{ success: boolean; message: string }> =>
-    fetchApi("/api/v1/auth/logout", { method: "POST", headers: { "X-Auth-Client": "admin" } }),
+  logout: async (): Promise<{ success: boolean; message: string }> => {
+    try {
+      return await fetchApi("/api/v1/auth/logout", { method: "POST", headers: { "X-Auth-Client": "admin" } });
+    } finally {
+      clearAdminTokens();
+    }
+  },
 
   getActivityLogs: (limit = 200): Promise<ActivityLog[]> =>
     fetchApi(`/api/v1/admin/activity-logs?limit=${limit}`),

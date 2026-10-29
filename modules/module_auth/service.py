@@ -130,10 +130,12 @@ def revoke_active_sessions(user_id: int, at=None) -> None:
     )
 
 
-def _open_session(user, request: Optional[Request], token: str):
+def _open_session(user, request: Optional[Request], token: str, revoke_others: bool = True):
     now = utcnow()
-    revoke_active_sessions(user["id"], now)
-    logging.getLogger("uvicorn.error").info("Auth: previous sessions revoked on login user_id=%s", user["id"])
+    # Admin cloud: revoke_others=False — mở nhiều tab/máy không đá phiên đang dùng.
+    if revoke_others:
+        revoke_active_sessions(user["id"], now)
+        logging.getLogger("uvicorn.error").info("Auth: previous sessions revoked on login user_id=%s", user["id"])
     ua = request.headers.get("user-agent", "") if request else ""
     device, browser, os_name = detect_device(ua)
     ip_address = _client_ip(request)
@@ -151,10 +153,12 @@ def _open_session(user, request: Optional[Request], token: str):
     return row["id"], ip_address, device, browser, os_name
 
 
-def issue_browser_tokens(user, request: Optional[Request], remember_me: bool = True):
+def issue_browser_tokens(user, request: Optional[Request], remember_me: bool = True, revoke_others: bool = True):
     """Cấp access + refresh; refresh gắn session DB để gia hạn khi access hết hạn."""
     refresh = create_refresh_token({"sub": user["username"], "role": user.get("role"), "uid": user["id"], "remember_me": remember_me})
-    session_id, ip_address, device, browser, os_name = _open_session(user, request, refresh)
+    session_id, ip_address, device, browser, os_name = _open_session(
+        user, request, refresh, revoke_others=revoke_others
+    )
     access = create_access_token(
         {
             "sub": user["username"],
@@ -298,7 +302,7 @@ def registration_status(ticket, hwid, allow_refresh=False):
     user = _row_by_id(payload.get("uid"))
     if not user or user.get("username") != payload.get("sub"):
         raise HTTPException(401, "Phiên kiểm tra đăng ký không hợp lệ.")
-    data = {"username": user["username"], "status": user.get("status")}
+    data = {"username": user["username"], "status": user.get("status"), "user_id": user["id"]}
     if user.get("hwid") and user["hwid"] != hwid:
         data["hwid_mismatch"] = True
     return data
@@ -307,6 +311,39 @@ def registration_status(ticket, hwid, allow_refresh=False):
 def pending_login_ticket(username, hwid):
     user = _row(username.strip())
     return create_registration_ticket(user["username"], user["id"], hwid)
+
+
+def claim_approved_session(ticket: str, hwid: str, request: Optional[Request], remember_me: bool = True):
+    """Sau admin duyệt: đổi registration ticket → access/refresh, vào app không cần login lại."""
+    if not ticket:
+        raise HTTPException(401, "Phiên kiểm tra đăng ký đã hết hạn. Vui lòng đăng nhập lại.")
+    profile = registration_status(ticket, hwid, allow_refresh=False)
+    if profile.get("hwid_mismatch"):
+        raise HTTPException(403, "ERR_HWID_MISMATCH")
+    status = profile.get("status")
+    if status not in ("approved", "ACTIVE", "expired"):
+        raise HTTPException(403, f"ACCOUNT_{str(status or 'pending').upper()}")
+    user = _row_by_id(profile["user_id"])
+    if not user:
+        raise HTTPException(401, "ACCOUNT_NOT_FOUND")
+    user = _refresh_expiry(user)
+    access, refresh, _ip, _device, _browser, _os_name = issue_browser_tokens(
+        user, request, remember_me, revoke_others=True
+    )
+    expired = _as_dt(user.get("expired_at"))
+    now = utcnow()
+    return {
+        "access_token": access,
+        "refresh_token": refresh,
+        "token_type": "bearer",
+        "days_remaining": 0 if user.get("status") == "expired" else days_remaining(expired, now),
+        "expired_at": expired.isoformat() + "Z" if expired else None,
+        "username": user["username"],
+        "user_id": user["id"],
+        "role": user.get("role"),
+        "status": user.get("status"),
+        "contact_info": user.get("contact_info"),
+    }
 
 
 def _refresh_expiry(user):
@@ -403,12 +440,15 @@ def ensure_admin():
 def admin_login(username, password, request: Optional[Request], remember_me: bool = True):
     if username == admin_username() and password == admin_password():
         user = ensure_admin()
-        access, refresh, ip_address, device, browser, os_name = issue_browser_tokens(user, request, remember_me)
+        access, refresh, ip_address, device, browser, os_name = issue_browser_tokens(
+            user, request, remember_me, revoke_others=False
+        )
         token = access
         log_activity(username, "admin", "login", change_detail=f"IP: {ip_address} ({device} / {browser} / {os_name})",
                      ip_address=ip_address, user_agent=request.headers.get("user-agent", "") if request else "")
         return {
             "access_token": token,
+            "refresh_token": refresh,
             "cookie_access": access,
             "cookie_refresh": refresh,
             "token_type": "bearer",
@@ -423,13 +463,16 @@ def admin_login(username, password, request: Optional[Request], remember_me: boo
             raise HTTPException(403, "Tài khoản của bạn đã bị khóa")
         if user.get("status") not in ("approved", "ACTIVE"):
             raise HTTPException(403, "Tài khoản admin đang bị khóa hoặc chưa được duyệt")
-        access, refresh, ip_address, device, browser, os_name = issue_browser_tokens(user, request, remember_me)
+        access, refresh, ip_address, device, browser, os_name = issue_browser_tokens(
+            user, request, remember_me, revoke_others=False
+        )
         token = access
         log_activity(user["username"], user.get("role"), "login",
                      change_detail=f"IP: {ip_address} ({device} / {browser} / {os_name})",
                      ip_address=ip_address, user_agent=request.headers.get("user-agent", "") if request else "")
         return {
             "access_token": token,
+            "refresh_token": refresh,
             "cookie_access": access,
             "cookie_refresh": refresh,
             "token_type": "bearer",

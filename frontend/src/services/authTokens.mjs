@@ -2,6 +2,7 @@
 
 const ACCESS_KEY = "fb_user_access_token";
 const REFRESH_KEY = "fb_user_refresh_token";
+const REGISTRATION_KEY = "fb_registration_token";
 
 export function setAuthTokens({ access_token, refresh_token } = {}) {
   if (typeof window === "undefined") return;
@@ -21,6 +22,21 @@ export function getAccessToken() {
 export function getRefreshToken() {
   if (typeof window === "undefined") return "";
   return localStorage.getItem(REFRESH_KEY) || "";
+}
+
+export function setRegistrationToken(token) {
+  if (typeof window === "undefined" || !token) return;
+  localStorage.setItem(REGISTRATION_KEY, token);
+}
+
+export function getRegistrationToken() {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(REGISTRATION_KEY) || "";
+}
+
+export function clearRegistrationToken() {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(REGISTRATION_KEY);
 }
 
 export function clearAuthTokens() {
