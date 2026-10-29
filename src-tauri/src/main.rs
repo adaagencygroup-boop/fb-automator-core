@@ -404,6 +404,13 @@ fn main() {
             child: sidecar_child,
         })
         .setup(move |_app| {
+            // Deep links are registered by the installer in release builds.
+            // Register the configured scheme for the current executable in Windows dev builds.
+            #[cfg(all(debug_assertions, windows))]
+            if let Err(error) = _app.deep_link().register_all() {
+                log_line(&format!("Could not register the development deep link: {error}"));
+            }
+
             let app_handle = _app.handle().clone();
             _app.deep_link().on_open_url(move |event| {
                 handle_module5_deep_link(&app_handle, event.urls());
