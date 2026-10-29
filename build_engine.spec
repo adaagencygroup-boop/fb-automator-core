@@ -1,13 +1,32 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for local_engine / local_engine.exe (Tauri sidecar).
+PyInstaller onedir cho local_engine (Tauri sidecar).
+onedir: không giải nén ~1GB mỗi lần mở → boot nhanh hơn onefile rất nhiều.
+Selenium vẫn có trong bundle (automation); chromedriver tải lúc cần (Selenium Manager / webdriver-manager).
 """
+import glob as _glob
 import os
 import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 PROJECT_DIR = os.path.abspath(SPECPATH)
+
+
+def _submodules(package: str):
+    """Bỏ test/out package nặng không cần lúc freeze."""
+    skip_bits = (".tests", ".testing", "test_", ".test.")
+    out = []
+    try:
+        for name in collect_submodules(package):
+            lower = name.lower()
+            if any(bit in lower for bit in skip_bits):
+                continue
+            out.append(name)
+    except Exception:
+        pass
+    return out
+
 
 hidden_imports = [
     "uvicorn",
@@ -49,33 +68,9 @@ hidden_imports = [
     "psycopg2.pool",
     "requests",
     "urllib3",
-    "yt_dlp",
-    "duckduckgo_search",
     "google.genai",
     "google.generativeai",
-]
-
-# Enumerate project modules without importing them: some imports open the database.
-for _path in (Path(PROJECT_DIR) / "modules").rglob("*.py"):
-    _parts = _path.relative_to(PROJECT_DIR).with_suffix("").parts
-    if "tests" in _parts or _path.name.startswith("test_"):
-        continue
-    if _parts[-1] == "__init__":
-        _parts = _parts[:-1]
-    hidden_imports.append(".".join(_parts))
-
-try:
-    hidden_imports += collect_submodules("sqlalchemy.dialects.sqlite")
-    hidden_imports += collect_submodules("sqlalchemy.dialects.postgresql")
-    hidden_imports += collect_submodules("yt_dlp")
-    hidden_imports += collect_submodules("duckduckgo_search")
-    # Selenium lazy-imports chrome.webdriver — PyInstaller bỏ sót nếu không collect hết
-    hidden_imports += collect_submodules("selenium")
-    hidden_imports += collect_submodules("selenium.webdriver")
-except Exception:
-    pass
-
-hidden_imports += [
+    # Selenium — lazy import lúc mở Chrome; vẫn cần trong bundle
     "selenium",
     "selenium.webdriver",
     "selenium.webdriver.common",
@@ -91,11 +86,33 @@ hidden_imports += [
     "selenium.webdriver.support",
     "selenium.webdriver.support.ui",
     "selenium.webdriver.support.expected_conditions",
+    "selenium.common",
+    "selenium.common.exceptions",
+    # yt_dlp / duckduckgo — chỉ khi Module 5 tải video
+    "yt_dlp",
+    "duckduckgo_search",
 ]
+
+# Enumerate project modules without importing them: some imports open the database.
+for _path in (Path(PROJECT_DIR) / "modules").rglob("*.py"):
+    _parts = _path.relative_to(PROJECT_DIR).with_suffix("").parts
+    if "tests" in _parts or _path.name.startswith("test_"):
+        continue
+    if _parts[-1] == "__init__":
+        _parts = _parts[:-1]
+    hidden_imports.append(".".join(_parts))
+
+hidden_imports += _submodules("sqlalchemy.dialects.postgresql")
+hidden_imports += _submodules("selenium.webdriver.chrome")
+hidden_imports += _submodules("selenium.webdriver.common")
+hidden_imports += _submodules("selenium.webdriver.support")
+hidden_imports += _submodules("selenium.webdriver.remote")
 
 datas = [
     (os.path.join(PROJECT_DIR, "config"), "config"),
 ]
+# Không đóng data/ runtime (browser_profiles, creator_assets…) — phình GB + path NSIS quá dài.
+# Engine tự tạo thư mục data khi chạy.
 
 # Runtime data (especially Chrome profiles) is created on the user's machine.
 # Bundling it makes onefile extraction huge and can exceed Windows path limits.
@@ -110,8 +127,6 @@ _env_file = os.path.join(PROJECT_DIR, ".env")
 if sys.platform == "win32" and os.path.isfile(_env_file):
     datas.append((_env_file, "."))
 
-# SQL / migration assets đọc bằng đường dẫn file lúc runtime (không nằm trong .pyc)
-import glob as _glob
 for _mig in _glob.glob(os.path.join(PROJECT_DIR, "modules", "*", "migrations")):
     _rel = os.path.relpath(_mig, PROJECT_DIR)
     datas.append((_mig, _rel))
@@ -130,29 +145,54 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "scipy", "notebook", "jupyter", "PyQt5"],
+    excludes=[
+        "tkinter",
+        "matplotlib",
+        "scipy",
+        "notebook",
+        "jupyter",
+        "PyQt5",
+        "PyQt6",
+        "PySide2",
+        "PySide6",
+        "pytest",
+        "pytest_asyncio",
+        "IPython",
+        "pandas.tests",
+        "numpy.tests",
+    ],
     noarchive=False,
 )
 
 pyz = PYZ(a.pure)
 
-# Build single file executable for Tauri sidecar
+# onedir: EXE mỏng + thư mục _internal (không unpack mỗi lần chạy)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="local_engine",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    # UPX dễ bị Windows Defender quét lâu (máy khác có thể 5–10 phút lần đầu).
     upx=False,
-    console=True,  # Giữ console=True để Tauri shell có thể capture stdout/stderr
+    # False: không hiện cửa sổ console — đóng console cũ = giết process trên nhiều máy
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="local_engine",
 )

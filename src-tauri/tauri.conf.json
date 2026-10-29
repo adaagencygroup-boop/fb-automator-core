@@ -34,8 +34,8 @@
       "icons/icon.png",
       "icons/icon.ico"
     ],
-    "externalBin": [
-      "binaries/local_engine"
-    ]
+    "resources": {
+      "engine-runtime/": "local_engine/"
+    }
   }
 }

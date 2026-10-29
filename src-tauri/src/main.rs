@@ -5,13 +5,27 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::{RunEvent, WindowEvent};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 struct SidecarState {
     child: Arc<Mutex<Option<Child>>>,
+}
+
+fn chrono_like_now() -> String {
+    // Đủ để đọc log — không phụ thuộc crate chrono
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{secs}")
 }
 
 fn log_line(msg: &str) {
@@ -20,7 +34,7 @@ fn log_line(msg: &str) {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
-        let _ = writeln!(f, "{}", msg);
+        let _ = writeln!(f, "[{}] {}", chrono_like_now(), msg);
     }
     eprintln!("{}", msg);
 }
@@ -79,7 +93,6 @@ fn sidecar_temp_dir() -> PathBuf {
             .next()
             .map(|c| {
                 let s = c.as_os_str().to_string_lossy();
-                // "F:\" / "F:" → kiểm tra ổ tồn tại
                 if s.len() >= 2 && s.as_bytes().get(1) == Some(&b':') {
                     PathBuf::from(format!("{}\\", &s[..2])).exists()
                 } else {
@@ -100,14 +113,20 @@ fn sidecar_temp_dir() -> PathBuf {
 #[cfg(not(debug_assertions))]
 fn resolve_sidecar_exe() -> Option<PathBuf> {
     let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    let names = [
+    // onedir (ưu tiên): $INSTDIR/local_engine/local_engine.exe + _internal/
+    let engine_name = if cfg!(windows) { "local_engine.exe" } else { "local_engine" };
+    let onedir = dir.join("local_engine").join(engine_name);
+    if onedir.is_file() {
+        return Some(onedir);
+    }
+    // Legacy onefile / sidecar cạnh app
+    for name in [
         "local_engine.exe",
         "local_engine-x86_64-pc-windows-msvc.exe",
         "local_engine",
-    ];
-    for name in names {
+    ] {
         let p = dir.join(name);
-        if p.exists() {
+        if p.is_file() {
             return Some(p);
         }
     }
@@ -178,22 +197,31 @@ fn spawn_local_engine() -> Option<Child> {
 
     #[cfg(not(debug_assertions))]
     let engine_args: Vec<String> = Vec::new();
-    let mut command = Command::new(&exe);
+    let mut cmd = Command::new(&exe);
     #[cfg(not(debug_assertions))]
     {
         let temp_dir = sidecar_temp_dir();
         let _ = std::fs::create_dir_all(&temp_dir);
-        command.env("TEMP", &temp_dir).env("TMP", &temp_dir).env("TMPDIR", &temp_dir);
+        cmd.env("TEMP", &temp_dir)
+            .env("TMP", &temp_dir)
+            .env("TMPDIR", &temp_dir);
     }
-    match command
-        .args(&engine_args)
+    cmd.args(&engine_args)
         .args(["--port", "28129"])
-        .current_dir(work_dir)
+        .current_dir(&work_dir)
         .stdin(Stdio::null())
         .stdout(stdout_file)
-        .stderr(stderr_file)
-        .spawn()
+        .stderr(stderr_file);
+
+    // Không gắn console → đóng/ẩn cửa sổ không giết engine; tách process group.
+    #[cfg(windows)]
     {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+    }
+
+    match cmd.spawn() {
         Ok(child) => {
             log_line(&format!("✅ Spawned local_engine pid={}", child.id()));
             Some(child)
@@ -220,8 +248,7 @@ fn wait_for_engine_ready(timeout_secs: u64) -> bool {
     false
 }
 
-/// Minimal HTTP GET without extra crates (WinHTTP via PowerShell is heavy).
-/// Prefer tiny TCP connect to port as readiness signal, then optional HTTP.
+/// Minimal HTTP GET readiness probe.
 fn ureq_health() -> Result<bool, ()> {
     use std::io::{Read, Write as IoWrite};
     use std::net::TcpStream;
@@ -241,10 +268,87 @@ fn ureq_health() -> Result<bool, ()> {
     Ok(buf.contains("200") || buf.contains("online"))
 }
 
+/// Theo dõi local_engine: chết giữa chừng → spawn lại (trừ khi app đang tắt).
+fn start_engine_watchdog(
+    child_arc: Arc<Mutex<Option<Child>>>,
+    shutting_down: Arc<AtomicBool>,
+) {
+    thread::spawn(move || {
+        let mut backoff_secs: u64 = 2;
+        loop {
+            if shutting_down.load(Ordering::SeqCst) {
+                break;
+            }
+            thread::sleep(Duration::from_secs(3));
+            if shutting_down.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let mut need_respawn = false;
+            if let Ok(mut lock) = child_arc.lock() {
+                match lock.as_mut() {
+                    Some(child) => match child.try_wait() {
+                        Ok(Some(status)) => {
+                            log_line(&format!(
+                                "⚠️ local_engine đã thoát (status={status}) — sẽ khởi động lại"
+                            ));
+                            *lock = None;
+                            need_respawn = true;
+                        }
+                        Ok(None) => {
+                            // còn sống
+                        }
+                        Err(err) => {
+                            log_line(&format!("⚠️ try_wait lỗi: {err} — spawn lại"));
+                            *lock = None;
+                            need_respawn = true;
+                        }
+                    },
+                    None => {
+                        need_respawn = true;
+                    }
+                }
+            }
+
+            if !need_respawn {
+                backoff_secs = 2;
+                continue;
+            }
+
+            // Có thể process khác vẫn giữ port (engine sống nhưng handle mất)
+            if ureq_health().unwrap_or(false) {
+                log_line("ℹ️ Port 28129 vẫn OK — không spawn trùng");
+                backoff_secs = 2;
+                continue;
+            }
+
+            if shutting_down.load(Ordering::SeqCst) {
+                break;
+            }
+
+            log_line(&format!("🔄 Respawn local_engine (backoff {backoff_secs}s)…"));
+            if let Some(child) = spawn_local_engine() {
+                if let Ok(mut lock) = child_arc.lock() {
+                    *lock = Some(child);
+                }
+                let _ = wait_for_engine_ready(90);
+                backoff_secs = 2;
+            } else {
+                thread::sleep(Duration::from_secs(backoff_secs));
+                backoff_secs = (backoff_secs * 2).min(30);
+            }
+        }
+    });
+}
+
 fn main() {
     let sidecar_child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
     let child_for_setup = Arc::clone(&sidecar_child);
     let child_for_run = Arc::clone(&sidecar_child);
+    let child_for_watch = Arc::clone(&sidecar_child);
+    let shutting_down = Arc::new(AtomicBool::new(false));
+    let shutting_for_run = Arc::clone(&shutting_down);
+    let shutting_for_watch = Arc::clone(&shutting_down);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -257,9 +361,10 @@ fn main() {
                 let mut state_lock = child_for_setup.lock().unwrap();
                 *state_lock = Some(child);
             }
-            // Engine onefile unpack + AV + DB Supabase: máy chậm có thể 3–8 phút lần đầu
+            start_engine_watchdog(child_for_watch, shutting_for_watch);
+            // onedir: không unpack 1GB mỗi lần — thường sẵn sàng trong ~30–90s (DB/AV)
             thread::spawn(|| {
-                wait_for_engine_ready(480);
+                wait_for_engine_ready(180);
             });
             Ok(())
         })
@@ -271,9 +376,12 @@ fn main() {
             event: WindowEvent::CloseRequested { .. },
             ..
         }
-        | RunEvent::ExitRequested { .. } => {
+        | RunEvent::ExitRequested { .. }
+        | RunEvent::Exit => {
+            if shutting_for_run.swap(true, Ordering::SeqCst) {
+                return; // đã xử lý
+            }
             log_line("🛑 App closing — stop local_engine");
-            // Best-effort HTTP shutdown
             let _ = thread::spawn(|| {
                 let _ = Command::new("curl")
                     .args(["-X", "POST", "http://127.0.0.1:28129/api/shutdown"])
