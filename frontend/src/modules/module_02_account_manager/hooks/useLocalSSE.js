@@ -127,42 +127,12 @@ function getOrCreateEventSource() {
     es.onopen = () => {
       isConnectedGlobal = true;
       connectionListeners.forEach((l) => l(true));
-
-      const logs = loadFromStorage();
-      const lastMsg = logs.length > 0 ? logs[logs.length - 1].message : "";
-      if (!lastMsg.includes("Đã kết nối với Local Python Engine")) {
-        const connMsg = {
-          timestamp: formatVietnamTime(),
-          type: "info",
-          message: "Đã kết nối với Local Python Engine (SSE Stream)",
-        };
-        const next = [...logs, connMsg];
-        persistLogs(next);
-        listeners.forEach((l) => l(next));
-      }
+      markEngineConnected("SSE Stream & WebSocket Realtime");
     };
 
     es.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        if (isHeartbeat(data)) return;
-
-        window.dispatchEvent(new CustomEvent("local_engine_event", { detail: data }));
-
-        if (data.event === "account_operation_updated") return;
-
-        const currentLogs = loadFromStorage();
-        const newMsg = {
-          timestamp: data.time || formatVietnamTime(),
-          type: data.level || data.type || "info",
-          message: translateLogMessage(data.message || JSON.stringify(data)),
-          uid: data.uid,
-          extra: data,
-        };
-
-        const next = [...currentLogs, newMsg].slice(-MAX_LOGS);
-        persistLogs(next);
-        listeners.forEach((l) => l(next));
+        appendEngineLog(JSON.parse(event.data));
       } catch (e) {
         console.error("SSE parse error", e);
       }
@@ -193,6 +163,57 @@ function getOrCreateEventSource() {
   }
 }
 
+function markEngineConnected(label) {
+  const logs = loadFromStorage();
+  const lastMsg = logs.length > 0 ? logs[logs.length - 1].message : "";
+  if (lastMsg.includes("Đã kết nối với Local Python Engine")) return;
+  const connMsg = {
+    timestamp: formatVietnamTime(),
+    type: "info",
+    message: `Đã kết nối với Local Python Engine (${label})`,
+  };
+  const next = [...logs, connMsg];
+  persistLogs(next);
+  listeners.forEach((l) => l(next));
+}
+
+function appendEngineLog(data) {
+  if (isHeartbeat(data)) return;
+  window.dispatchEvent(new CustomEvent("local_engine_event", { detail: data }));
+  if (data.event === "account_operation_updated") return;
+  if (data.type === "connected" && !data.level && !data.message?.includes?.("🚀") && !data.uid) {
+    // SSE hello — không nhân đôi với markEngineConnected
+    if (String(data.message || "").toLowerCase().includes("sse stream connected")) return;
+  }
+
+  const currentLogs = loadFromStorage();
+  const stamp = data.time || data.timestamp;
+  let displayTime = formatVietnamTime();
+  if (typeof stamp === "string" && stamp) {
+    displayTime = stamp.includes("T") ? formatVietnamTime(stamp) : stamp;
+  }
+  const newMsg = {
+    timestamp: displayTime,
+    type: String(data.level || data.type || "info").toLowerCase(),
+    message: translateLogMessage(data.message || JSON.stringify(data)),
+    uid: data.uid,
+    extra: data,
+  };
+  // Tránh spam trùng 1 dòng (SSE + WS mirror cùng message)
+  const last = currentLogs[currentLogs.length - 1];
+  if (
+    last
+    && last.message === newMsg.message
+    && last.uid === newMsg.uid
+    && String(last.type) === String(newMsg.type)
+  ) {
+    return;
+  }
+  const next = [...currentLogs, newMsg].slice(-MAX_LOGS);
+  persistLogs(next);
+  listeners.forEach((l) => l(next));
+}
+
 function getOrCreateWebSocket() {
   if (typeof window === "undefined" || !WS_BASE) return;
   if (
@@ -207,30 +228,21 @@ function getOrCreateWebSocket() {
     const ws = new WebSocket(WS_BASE);
     activeWebSocket = ws;
 
-    // This socket carries other modules' logs; account connectivity comes from SSE.
-    ws.onopen = () => {};
+    // Module 02/04 broadcast mirror qua /ws/logs — quan trọng cho bản .exe
+    ws.onopen = () => {
+      if (!isConnectedGlobal) {
+        isConnectedGlobal = true;
+        connectionListeners.forEach((l) => l(true));
+        markEngineConnected("WebSocket Realtime");
+      }
+      try {
+        ws.send("ping");
+      } catch (e) {}
+    };
 
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        if (isHeartbeat(data)) return;
-
-        window.dispatchEvent(new CustomEvent("local_engine_event", { detail: data }));
-
-        if (data.event === "account_operation_updated") return;
-
-        const currentLogs = loadFromStorage();
-        const newMsg = {
-          timestamp: data.timestamp || data.time || formatVietnamTime(),
-          type: (data.level || data.type || "info").toLowerCase(),
-          message: translateLogMessage(data.message || JSON.stringify(data)),
-          uid: data.uid,
-          extra: data,
-        };
-
-        const next = [...currentLogs, newMsg].slice(-MAX_LOGS);
-        persistLogs(next);
-        listeners.forEach((l) => l(next));
+        appendEngineLog(JSON.parse(event.data));
       } catch (e) {}
     };
 

@@ -163,6 +163,12 @@ async def lifespan(app: FastAPI):
                 await farm_on_startup(ws_manager)
         except Exception as e:
             print(f"[Local Engine] Module 03 (Farm) startup error: {e}")
+    try:
+        from modules.module_02_account_manager.services.events import register_ws_log_channel
+
+        register_ws_log_channel(ws_manager, asyncio.get_running_loop())
+    except Exception as e:
+        print(f"[Local Engine] Account WS log channel note: {e}")
     print("[Startup] Backend ready", flush=True)
     try:
         yield
