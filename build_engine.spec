@@ -95,8 +95,10 @@ hidden_imports += [
 
 datas = [
     (os.path.join(PROJECT_DIR, "config"), "config"),
-    (os.path.join(PROJECT_DIR, "data"), "data"),
 ]
+
+# Runtime data (especially Chrome profiles) is created on the user's machine.
+# Bundling it makes onefile extraction huge and can exceed Windows path limits.
 
 # Linux installs into a read-only system directory. Settings are created in the
 # user's XDG data directory; do not copy the build machine's local data into it.

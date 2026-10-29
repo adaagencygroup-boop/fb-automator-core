@@ -56,12 +56,12 @@ fn log_path() -> PathBuf {
     log_directory().join("tauri_sidecar.log")
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(not(debug_assertions), target_os = "linux"))]
 fn sidecar_temp_dir() -> PathBuf {
     linux_data_dir().join("engine-temp")
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(debug_assertions), not(target_os = "linux")))]
 fn sidecar_temp_dir() -> PathBuf {
     let candidates = [
         PathBuf::from(r"F:\FB_Page_Automator\engine-temp"),
@@ -97,6 +97,7 @@ fn sidecar_temp_dir() -> PathBuf {
     PathBuf::from(r"F:\FB_Page_Automator\engine-temp")
 }
 
+#[cfg(not(debug_assertions))]
 fn resolve_sidecar_exe() -> Option<PathBuf> {
     let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     let names = [
@@ -114,6 +115,31 @@ fn resolve_sidecar_exe() -> Option<PathBuf> {
 }
 
 fn spawn_local_engine() -> Option<Child> {
+    // Dev uses source Python so it does not depend on a stale/failing onefile build.
+    #[cfg(debug_assertions)]
+    let (exe, work_dir, engine_args) = {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()?
+            .to_path_buf();
+        let venv = if cfg!(target_os = "windows") {
+            root.join(".venv/Scripts/python.exe")
+        } else {
+            root.join(".venv/bin/python")
+        };
+        let python = std::env::var_os("FB_ENGINE_PYTHON")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                if venv.is_file() {
+                    venv
+                } else {
+                    PathBuf::from(if cfg!(target_os = "windows") { "python" } else { "python3" })
+                }
+            });
+        let args = vec!["-u".to_owned(), root.join("engine.py").to_string_lossy().into_owned()];
+        (python, root, args)
+    };
+
+    #[cfg(not(debug_assertions))]
     let exe = match resolve_sidecar_exe() {
         Some(p) => p,
         None => {
@@ -121,10 +147,6 @@ fn spawn_local_engine() -> Option<Child> {
             return None;
         }
     };
-    let temp_dir = sidecar_temp_dir();
-    let _ = std::fs::create_dir_all(&temp_dir);
-    let temp_str = temp_dir.to_string_lossy().to_string();
-
     let log_dir = log_directory();
     let _ = std::fs::create_dir_all(&log_dir);
     let stdout_path = log_dir.join("local_engine.out.log");
@@ -144,21 +166,28 @@ fn spawn_local_engine() -> Option<Child> {
         .map(Stdio::from)
         .unwrap_or(Stdio::null());
 
-    log_line(&format!("🚀 Spawning {:?} TEMP={}", exe, temp_str));
+    log_line(&format!("Spawning engine: {:?}", exe));
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(not(debug_assertions), target_os = "linux"))]
     let work_dir = linux_data_dir();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(not(debug_assertions), not(target_os = "linux")))]
     let work_dir = exe
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .to_path_buf();
 
-    match Command::new(&exe)
+    #[cfg(not(debug_assertions))]
+    let engine_args: Vec<String> = Vec::new();
+    let mut command = Command::new(&exe);
+    #[cfg(not(debug_assertions))]
+    {
+        let temp_dir = sidecar_temp_dir();
+        let _ = std::fs::create_dir_all(&temp_dir);
+        command.env("TEMP", &temp_dir).env("TMP", &temp_dir).env("TMPDIR", &temp_dir);
+    }
+    match command
+        .args(&engine_args)
         .args(["--port", "28129"])
-        .env("TEMP", &temp_str)
-        .env("TMP", &temp_str)
-        .env("TMPDIR", &temp_str)
         .current_dir(work_dir)
         .stdin(Stdio::null())
         .stdout(stdout_file)

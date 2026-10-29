@@ -3,14 +3,33 @@ import os
 from pathlib import Path
 import runpy
 import subprocess
+import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from config import paths
 from scripts import build_sidecar
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class BundleDataTests(unittest.TestCase):
+    def test_windows_bundle_excludes_runtime_data_and_browser_profiles(self):
+        analysis = Mock(return_value=SimpleNamespace(pure=[], scripts=[], binaries=[], datas=[]))
+        with patch("PyInstaller.utils.hooks.collect_submodules", return_value=[]), patch(
+            "PyInstaller.utils.hooks.collect_data_files", return_value=[]
+        ), patch.object(sys, "platform", "win32"):
+            runpy.run_path(str(ROOT / "build_engine.spec"), init_globals={
+                "SPECPATH": str(ROOT), "Analysis": analysis,
+                "PYZ": Mock(), "EXE": Mock(),
+            })
+        bundled = analysis.call_args.kwargs["datas"]
+        for source, destination in bundled:
+            self.assertFalse(Path(source).is_relative_to(ROOT / "data"), source)
+            self.assertNotIn("browser_profiles", Path(destination).parts)
+        self.assertTrue(any("migrations" in Path(destination).parts for _, destination in bundled))
 
 
 class SidecarBuildTests(unittest.TestCase):
