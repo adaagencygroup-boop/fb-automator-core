@@ -84,7 +84,11 @@ fn sidecar_temp_dir() -> PathBuf {
             .and_then(|p| p.parent().map(|d| d.join("engine-temp")))
             .unwrap_or_else(|| PathBuf::from("engine-temp")),
         std::env::var_os("LOCALAPPDATA")
-            .map(|p| PathBuf::from(p).join("FB_Page_Automator").join("engine-temp"))
+            .map(|p| {
+                PathBuf::from(p)
+                    .join("FB_Page_Automator")
+                    .join("engine-temp")
+            })
             .unwrap_or_else(|| PathBuf::from("engine-temp")),
     ];
     for dir in candidates {
@@ -151,10 +155,17 @@ fn spawn_local_engine() -> Option<Child> {
                 if venv.is_file() {
                     venv
                 } else {
-                    PathBuf::from(if cfg!(target_os = "windows") { "python" } else { "python3" })
+                    PathBuf::from(if cfg!(target_os = "windows") {
+                        "python"
+                    } else {
+                        "python3"
+                    })
                 }
             });
-        let args = vec!["-u".to_owned(), root.join("engine.py").to_string_lossy().into_owned()];
+        let args = vec![
+            "-u".to_owned(),
+            root.join("engine.py").to_string_lossy().into_owned(),
+        ];
         (python, root, args)
     };
 
@@ -255,12 +266,8 @@ fn ureq_health() -> Result<bool, ()> {
     let mut stream =
         TcpStream::connect_timeout(&"127.0.0.1:28129".parse().unwrap(), Duration::from_secs(2))
             .map_err(|_| ())?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .ok();
-    stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .ok();
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
     let req = "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
     stream.write_all(req.as_bytes()).map_err(|_| ())?;
     let mut buf = String::new();
@@ -269,10 +276,7 @@ fn ureq_health() -> Result<bool, ()> {
 }
 
 /// Theo dõi local_engine: chết giữa chừng → spawn lại (trừ khi app đang tắt).
-fn start_engine_watchdog(
-    child_arc: Arc<Mutex<Option<Child>>>,
-    shutting_down: Arc<AtomicBool>,
-) {
+fn start_engine_watchdog(child_arc: Arc<Mutex<Option<Child>>>, shutting_down: Arc<AtomicBool>) {
     thread::spawn(move || {
         let mut backoff_secs: u64 = 2;
         loop {
@@ -326,7 +330,9 @@ fn start_engine_watchdog(
                 break;
             }
 
-            log_line(&format!("🔄 Respawn local_engine (backoff {backoff_secs}s)…"));
+            log_line(&format!(
+                "🔄 Respawn local_engine (backoff {backoff_secs}s)…"
+            ));
             if let Some(child) = spawn_local_engine() {
                 if let Ok(mut lock) = child_arc.lock() {
                     *lock = Some(child);
