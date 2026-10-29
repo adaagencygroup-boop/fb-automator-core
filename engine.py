@@ -272,9 +272,18 @@ class LicenseMiddleware:
 app.add_middleware(LicenseMiddleware)
 
 
-# Cho phép Web UI (localhost:3000, tauri://localhost) gọi API
+def _cors_extra_origins() -> list[str]:
+    """Render/admin: CORS_ORIGINS=https://fb-automator-core-web-admin.onrender.com[,…]"""
+    raw = os.environ.get("CORS_ORIGINS", "").strip()
+    if not raw:
+        return []
+    return [part.strip().rstrip("/") for part in raw.split(",") if part.strip()]
+
+
+# Local/Tauri + origin cloud từ env CORS_ORIGINS (web-admin trên Render)
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=_cors_extra_origins(),
     allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1|tauri\.localhost)(:\d+)?|tauri://localhost|asset://localhost)$",
     allow_credentials=True,
     allow_methods=["*"],
