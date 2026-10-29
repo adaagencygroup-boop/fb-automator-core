@@ -18,6 +18,14 @@ from .meta_config import GRAPH_API_VERSION, credentials, callback_url
 router = APIRouter(tags=["OAuth Meta Callback"])
 
 
+def _callback_response(content):
+    return HTMLResponse(content=content, headers={
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow, noarchive, nosnippet",
+    })
+
+
 class CallbackSubmitBody(BaseModel):
     state: str
     access_token: str = ""
@@ -143,7 +151,7 @@ CALLBACK_HTML_TEMPLATE = """<!DOCTYPE html>
       const msg = document.getElementById("msg");
       const action = document.getElementById("action");
 
-      if (error || (!token && !state)) {
+      if (!state) {
         icon.className = "icon-wrapper icon-error";
         icon.innerHTML = "&#10006;";
         title.innerText = "Kết nối chưa hoàn tất";
@@ -159,7 +167,15 @@ CALLBACK_HTML_TEMPLATE = """<!DOCTYPE html>
           body: JSON.stringify({ state, access_token: token, error })
         });
         const data = await response.json();
-        if (response.ok && data.success) {
+        if (response.ok && data.success && data.status === "QUEUED") {
+          icon.className = "icon-wrapper icon-loading";
+          icon.innerHTML = "";
+          title.innerText = "Đã nhận kết quả Facebook";
+          msg.innerText = "Ứng dụng đang đồng bộ Page. Hãy quay lại ứng dụng để xem kết quả.";
+          action.style.display = "block";
+        } else if (response.ok && data.status === "FAILED") {
+          throw new Error("Facebook authorization was declined or sync failed. The existing connection was kept.");
+        } else if (response.ok && data.success && data.status === "SUCCEEDED") {
           icon.className = "icon-wrapper icon-success";
           icon.innerHTML = "&#10004;";
           title.innerText = "Kết nối thành công!";
@@ -176,7 +192,7 @@ CALLBACK_HTML_TEMPLATE = """<!DOCTYPE html>
         icon.className = "icon-wrapper icon-error";
         icon.innerHTML = "&#10006;";
         title.innerText = "Lỗi kết nối";
-        msg.innerText = err.message || "Không thể gửi dữ liệu về phần mềm.";
+        msg.innerText = "Không thể hoàn tất kết nối. Hãy quay lại ứng dụng hoặc thử kết nối lại.";
         action.style.display = "block";
       }
     })();
@@ -218,7 +234,7 @@ def oauth_meta_callback_page(request: Request):
                 raise ValueError(token_data.get("error", {}).get("message") or "Không lấy được access_token từ code.")
             meta_web.complete_by_state(state, access_token, auto_confirm=True)
             # Render trang thành công trực tiếp
-            return HTMLResponse(content=CALLBACK_HTML_TEMPLATE.replace(
+            return _callback_response(CALLBACK_HTML_TEMPLATE.replace(
                 "Đang xác thực tài khoản…", "Kết nối thành công!"
             ).replace(
                 "icon-loading", "icon-success"
@@ -227,16 +243,16 @@ def oauth_meta_callback_page(request: Request):
                 "Đã xác thực và đồng bộ với phần mềm. Bạn có thể đóng tab này lại."
             ))
         except Exception as exc:
-            return HTMLResponse(content=CALLBACK_HTML_TEMPLATE.replace(
+            return _callback_response(CALLBACK_HTML_TEMPLATE.replace(
                 "Đang xác thực tài khoản…", "Lỗi kết nối"
             ).replace(
                 "icon-loading", "icon-error"
             ).replace(
                 "Vui lòng chờ trong giây lát, hệ thống đang đồng bộ kết nối với phần mềm.",
-                f"Lỗi: {exc}"
+                "Không thể hoàn tất OAuth. Hãy quay lại ứng dụng và thử kết nối lại."
             ))
 
-    return HTMLResponse(content=CALLBACK_HTML_TEMPLATE)
+    return _callback_response(CALLBACK_HTML_TEMPLATE)
 
 
 @router.post("/api/pages/web-oauth/callback-submit")
