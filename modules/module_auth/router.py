@@ -40,6 +40,7 @@ from modules.module_auth.service import (
     mark_all_notifications,
     mark_notification,
     public_user,
+    claim_approved_session,
     pending_login_ticket,
     refresh_access_token,
     register_user,
@@ -178,23 +179,92 @@ def read_hwid():
 def register(body: RegisterBody, request: Request, response: Response):
     hwid = get_hwid()
     data = register_user(body.username, body.password, body.contact_info, hwid)
-    set_registration_cookie(response, create_registration_ticket(body.username.strip(), data["user_id"], hwid), user_client=request.headers.get("x-auth-client") == "user")
+    ticket = create_registration_ticket(body.username.strip(), data["user_id"], hwid)
+    set_registration_cookie(response, ticket, user_client=request.headers.get("x-auth-client") == "user")
+    # Body token cho Tauri (cookie cross-origin không tin cậy)
+    data["registration_token"] = ticket
     return data
 
 
-@auth_router.get("/registration-status")
-def read_registration_status(request: Request):
-    hwid = get_hwid()
+def _registration_tickets(request: Request, authorization: Optional[str] = None, body_token: Optional[str] = None):
+    tickets = []
+    if body_token:
+        tickets.append(body_token.strip())
+    header_ticket = (request.headers.get("x-registration-token") or "").strip()
+    if header_ticket:
+        tickets.append(header_ticket)
+    if authorization and authorization.startswith("Bearer "):
+        tickets.append(authorization[7:].strip())
     refresh_name = "fb_user_refresh" if request.headers.get("x-auth-client") == "user" else "fb_refresh"
     for name in (refresh_name, "fb_registration"):
-        ticket = request.cookies.get(name)
-        if ticket:
-            try:
-                return registration_status(ticket, hwid, allow_refresh=name == refresh_name)
-            except HTTPException as error:
-                if error.status_code != 401:
-                    raise
+        cookie = request.cookies.get(name)
+        if cookie:
+            tickets.append(cookie)
+    # Giữ thứ tự, bỏ trùng
+    seen = set()
+    ordered = []
+    for ticket in tickets:
+        if ticket and ticket not in seen:
+            seen.add(ticket)
+            ordered.append(ticket)
+    return ordered
+
+
+@auth_router.get("/registration-status")
+def read_registration_status(request: Request, authorization: Optional[str] = Header(None)):
+    hwid = get_hwid()
+    last_error = None
+    for ticket in _registration_tickets(request, authorization):
+        try:
+            payload = decode_token(ticket)
+            allow_refresh = payload.get("typ") == "refresh"
+            return registration_status(ticket, hwid, allow_refresh=allow_refresh)
+        except HTTPException as error:
+            last_error = error
+            if error.status_code != 401:
+                raise
+        except Exception:
+            last_error = HTTPException(401, "Phiên kiểm tra đăng ký không hợp lệ.")
+    if last_error:
+        raise last_error
     raise HTTPException(401, "Phiên kiểm tra đăng ký đã hết hạn. Vui lòng đăng nhập lại.")
+
+
+class ClaimApprovalBody(BaseModel):
+    registration_token: Optional[str] = None
+    remember_me: bool = True
+
+
+@auth_router.post("/claim-approval")
+def claim_approval(
+    request: Request,
+    response: Response,
+    body: Optional[ClaimApprovalBody] = None,
+    authorization: Optional[str] = Header(None),
+):
+    """User đã được admin duyệt — cấp session workspace ngay (không bắt login lại)."""
+    payload = body or ClaimApprovalBody()
+    hwid = get_hwid()
+    tickets = _registration_tickets(request, authorization, payload.registration_token)
+    if not tickets:
+        raise HTTPException(401, "Phiên kiểm tra đăng ký đã hết hạn. Vui lòng đăng nhập lại.")
+    last_error = None
+    for ticket in tickets:
+        try:
+            data = claim_approved_session(ticket, hwid, request, payload.remember_me)
+            set_auth_cookies(
+                response,
+                data["access_token"],
+                data["refresh_token"],
+                payload.remember_me,
+                user_client=request.headers.get("x-auth-client") == "user",
+            )
+            return data
+        except HTTPException as error:
+            last_error = error
+            if error.status_code not in (401,):
+                raise
+    raise last_error or HTTPException(401, "Phiên kiểm tra đăng ký đã hết hạn. Vui lòng đăng nhập lại.")
 
 
 @auth_router.post("/verify-license")
@@ -219,8 +289,12 @@ def login(body: UserLoginBody, request: Request, response: Response):
     except HTTPException as error:
         if error.detail not in ("ACCOUNT_PENDING", "ACCOUNT_BANNED", "ACCOUNT_LOCKED", "ERR_HWID_MISMATCH"):
             raise
-        result = JSONResponse(status_code=error.status_code, content={"detail": error.detail})
-        set_registration_cookie(result, pending_login_ticket(body.username, hwid), user_client=request.headers.get("x-auth-client") == "user")
+        ticket = pending_login_ticket(body.username, hwid)
+        result = JSONResponse(
+            status_code=error.status_code,
+            content={"detail": error.detail, "registration_token": ticket},
+        )
+        set_registration_cookie(result, ticket, user_client=request.headers.get("x-auth-client") == "user")
         return result
     set_auth_cookies(
         response,
@@ -340,8 +414,11 @@ async def login_admin(request: Request, response: Response, username: str = "", 
     refresh = data.pop("cookie_refresh", None)
     if access and refresh:
         set_auth_cookies(response, access, refresh, remember_me, admin_client=True)
+        # Cross-origin web-admin (Render) không nhận cookie API → cần refresh trong body
+        data["refresh_token"] = refresh
     if request.headers.get("x-auth-client") == "browser":
         data.pop("access_token", None)
+        data.pop("refresh_token", None)
     return data
 
 

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import api from "@/services/api";
 import { clearSessionUserId } from "@/services/sessionIdentity.mjs";
-import { clearAuthTokens, getRefreshToken } from "@/services/authTokens.mjs";
+import { clearAuthTokens, clearRegistrationToken, getRefreshToken } from "@/services/authTokens.mjs";
 import LoginScreen from "@/modules/module_auth/LoginScreen";
 import RegisterScreen from "@/modules/module_auth/RegisterScreen";
 import PendingScreen from "@/modules/module_auth/PendingScreen";
@@ -226,6 +226,7 @@ export default function AuthGate({ children }) {
   async function logout() {
     await api.post("/api/v1/auth/logout").catch(() => {});
     clearAuthTokens();
+    clearRegistrationToken();
     clearSessionUserId();
     setUser(null);
     localStorage.removeItem("pending_username");
@@ -236,6 +237,7 @@ export default function AuthGate({ children }) {
   function backToLogin() {
     localStorage.removeItem("pending_username");
     localStorage.removeItem("locked_username");
+    clearRegistrationToken();
     setScreen("login");
   }
 
@@ -269,7 +271,7 @@ export default function AuthGate({ children }) {
       );
     }
     if (screen === "pending") {
-      return <PendingScreen onBack={backToLogin} onStatus={showStatus} />;
+      return <PendingScreen onBack={backToLogin} onStatus={showStatus} onApproved={loadMe} />;
     }
     if (screen === "banned" || screen === "hwid") {
       return <LockScreen onBack={backToLogin} onStatus={showStatus} />;

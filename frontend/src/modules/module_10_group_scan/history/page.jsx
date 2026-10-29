@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useCallback } from "react";
 import {
   Search,
   Filter,
@@ -30,263 +30,19 @@ import {
   ShieldCheck,
   Check,
   ChevronDown,
+  Loader2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { toast } from "@/lib/toast";
-
-// ==========================================
-// MOCK DATA: PHIÊN QUÉT LỊCH SỬ CHUẨN MẪU
-// ==========================================
-const INITIAL_HISTORY_DATA = [
-  {
-    id: "SCN-2026-8941",
-    type: "GROUP_INFO", // GROUP_INFO | MEMBERS | POSTS
-    title: "Quét thông tin nhóm theo từ khóa",
-    target: "thời trang sỉ tphcm, kinh doanh online",
-    targetType: "keywords",
-    account: {
-      uid: "100084920412845",
-      name: "Nguyễn Văn Hùng (Nick Trâu)",
-      avatarText: "NV",
-      avatarBg: "bg-blue-600",
-    },
-    progress: {
-      collected: 50,
-      target: 50,
-      percentage: 100,
-      unit: "nhóm",
-    },
-    startTime: "26/10/2026 14:15:20",
-    endTime: "26/10/2026 14:22:45",
-    duration: "7m 25s",
-    status: "SUCCESS", // SUCCESS | RUNNING | PAUSED | FAILED
-    config: {
-      delay: "5 - 10s",
-      privacy: "Tất cả (Public & Private)",
-      minMembers: "1.000 thành viên",
-      maxKeywords: 2,
-    },
-    logs: [
-      { time: "14:15:20", level: "INFO", message: "Khởi động Chrome profile với UID 100084920412845" },
-      { time: "14:15:35", level: "INFO", message: "Đã đăng nhập thành công. Điều hướng đến Facebook Search Groups" },
-      { time: "14:16:10", level: "INFO", message: "Bắt đầu quét từ khóa 1: 'thời trang sỉ tphcm'" },
-      { time: "14:18:40", level: "SUCCESS", message: "Đã thu thập đủ 25 nhóm hợp lệ cho từ khóa 1. Nghỉ chuyển tiếp 7s" },
-      { time: "14:18:47", level: "INFO", message: "Bắt đầu quét từ khóa 2: 'kinh doanh online'" },
-      { time: "14:22:30", level: "SUCCESS", message: "Đã thu thập đủ 25 nhóm hợp lệ cho từ khóa 2" },
-      { time: "14:22:45", level: "SUCCESS", message: "Lưu 50 nhóm vào cơ sở dữ liệu Supabase thành công. Hoàn tất job!" },
-    ],
-    sampleResults: [
-      { id: "1018249102", name: "Chợ Sỉ Quần Áo Sài Gòn & Miền Tây", privacy: "Công khai", members: "128,400 TV", url: "https://facebook.com/groups/chosi.saigon" },
-      { id: "1029482019", name: "Tổng Kho Sỉ Thời Trang Nữ TPHCM", privacy: "Công khai", members: "94,200 TV", url: "https://facebook.com/groups/tongkhosi.tphcm" },
-      { id: "1038592011", name: "Hội Các Mẹ Bán Hàng Online Toàn Quốc", privacy: "Riêng tư", members: "245,000 TV", url: "https://facebook.com/groups/mebanhang.online" },
-      { id: "1049583024", name: "Cộng Đồng Kinh Doanh Đột Phá 2026", privacy: "Công khai", members: "68,100 TV", url: "https://facebook.com/groups/kinhdoanh.dotpha" },
-    ],
-  },
-  {
-    id: "SCN-2026-8940",
-    type: "MEMBERS",
-    title: "Quét UID thành viên nhóm tiềm năng",
-    target: "Chợ Đầu Mối Quần Áo Ninh Hiệp (UID: 8492019482)",
-    targetType: "group",
-    account: {
-      uid: "100091847291048",
-      name: "Trần Mai Anh (Seeding 02)",
-      avatarText: "TM",
-      avatarBg: "bg-emerald-600",
-    },
-    progress: {
-      collected: 1200,
-      target: 1200,
-      percentage: 100,
-      unit: "UID",
-    },
-    startTime: "26/10/2026 13:40:10",
-    endTime: "26/10/2026 13:58:30",
-    duration: "18m 20s",
-    status: "SUCCESS",
-    config: {
-      delay: "3 - 5s",
-      filterNewMembers: "Bật (Ưu tiên TV mới vào < 30 ngày)",
-      extractField: "UID, Họ tên, Giới tính, Link Profile",
-      targetCount: "1.200 TV",
-    },
-    logs: [
-      { time: "13:40:10", level: "INFO", message: "Kết nối tài khoản 100091847291048 tới nhóm mục tiêu" },
-      { time: "13:40:25", level: "INFO", message: "Mở tab Danh sách thành viên / Thẻ thành viên mới" },
-      { time: "13:45:00", level: "INFO", message: "Cuộn trang tự động, trích xuất 300 UID thành viên mới đợt 1" },
-      { time: "13:50:15", level: "INFO", message: "Đã trích xuất 750 UID. Kiểm tra trùng lặp: loại bỏ 18 UID đã có" },
-      { time: "13:58:10", level: "SUCCESS", message: "Đạt mốc chỉ tiêu 1.200 UID hợp lệ. Kết xuất file dữ liệu" },
-      { time: "13:58:30", level: "SUCCESS", message: "Cập nhật vào Kho thành viên quét. Hoàn thành phiên." },
-    ],
-    sampleResults: [
-      { id: "100092840192841", name: "Hoàng Minh Thuận", extra: "Thành viên mới (5 ngày)", url: "https://facebook.com/profile.php?id=100092840192841" },
-      { id: "100083910294812", name: "Lê Ngọc Bích", extra: "Thành viên tích cực", url: "https://facebook.com/profile.php?id=100083910294812" },
-      { id: "100074819204910", name: "Nguyễn Hải Đăng", extra: "Thành viên mới (1 tuần)", url: "https://facebook.com/profile.php?id=100074819204910" },
-      { id: "100065910294819", name: "Phạm Thúy Hằng", extra: "Thành viên mới (2 ngày)", url: "https://facebook.com/profile.php?id=100065910294819" },
-    ],
-  },
-  {
-    id: "SCN-2026-8939",
-    type: "POSTS",
-    title: "Quét bài viết & đo lường tương tác nhóm",
-    target: "Hội Mua Bán Xe Ô Tô Cũ Hà Nội (UID: 7182940192)",
-    targetType: "group",
-    account: {
-      uid: "100072819401928",
-      name: "Phạm Quốc Bảo (Scan Post 01)",
-      avatarText: "PQ",
-      avatarBg: "bg-amber-600",
-    },
-    progress: {
-      collected: 185,
-      target: 200,
-      percentage: 92,
-      unit: "bài viết",
-    },
-    startTime: "26/10/2026 11:20:05",
-    endTime: "--:--:--",
-    duration: "42m 10s",
-    status: "RUNNING",
-    config: {
-      delay: "4 - 8s",
-      minReactions: 10,
-      minComments: 5,
-      scanDays: "7 ngày gần nhất",
-      extractFields: "Nội dung, Link bài, Tương tác (Likes, Comments, Shares)",
-    },
-    logs: [
-      { time: "11:20:05", level: "INFO", message: "Bắt đầu phiên quét bài viết nhóm Ô Tô Cũ Hà Nội" },
-      { time: "11:22:15", level: "INFO", message: "Tải bảng tin nhóm, phát hiện 32 bài viết trong 24h qua" },
-      { time: "11:35:40", level: "INFO", message: "Đã bóc tách 90 bài viết đạt tiêu chí tương tác tối thiểu" },
-      { time: "12:00:10", level: "INFO", message: "Tiến trình hiện tại: 185/200 bài viết. Đang cuộn tiếp..." },
-    ],
-    sampleResults: [
-      { id: "post-98401", title: "Cần bán Mazda 3 sedan 2021 màu đỏ chính chủ...", reactions: "142 Likes", comments: "48 Cmt", shares: "12 Share" },
-      { id: "post-98402", title: "Tìm xe gầm cao tài chính 500tr quay đầu tại Hà Nội...", reactions: "89 Likes", comments: "64 Cmt", shares: "3 Share" },
-      { id: "post-98403", title: "Bảo dưỡng định kỳ các dòng xe Nhật, ưu đãi tháng 10...", reactions: "56 Likes", comments: "21 Cmt", shares: "8 Share" },
-    ],
-  },
-  {
-    id: "SCN-2026-8938",
-    type: "GROUP_INFO",
-    title: "Quét thông tin nhóm theo từ khóa",
-    target: "bất động sản ven đô, đầu tư đất nền",
-    targetType: "keywords",
-    account: {
-      uid: "100084920412845",
-      name: "Nguyễn Văn Hùng (Nick Trâu)",
-      avatarText: "NV",
-      avatarBg: "bg-blue-600",
-    },
-    progress: {
-      collected: 45,
-      target: 60,
-      percentage: 75,
-      unit: "nhóm",
-    },
-    startTime: "25/10/2026 16:10:00",
-    endTime: "25/10/2026 16:21:10",
-    duration: "11m 10s",
-    status: "PAUSED",
-    config: {
-      delay: "6 - 12s",
-      privacy: "Chỉ nhóm Công khai (Public)",
-      minMembers: "5.000 thành viên",
-      maxKeywords: 2,
-    },
-    logs: [
-      { time: "16:10:00", level: "INFO", message: "Bắt đầu phiên quét từ khóa Bất động sản" },
-      { time: "16:15:30", level: "SUCCESS", message: "Từ khóa 1 'bất động sản ven đô' quét được 30 nhóm" },
-      { time: "16:20:00", level: "INFO", message: "Từ khóa 2 'đầu tư đất nền' quét được 15 nhóm" },
-      { time: "16:21:10", level: "WARN", message: "Người dùng bấm tạm dừng tiến trình quét qua bảng điều khiển" },
-    ],
-    sampleResults: [
-      { id: "1083920192", name: "Cộng Đồng Đầu Tư Bất Động Sản Ven Đô", privacy: "Công khai", members: "152,000 TV", url: "https://facebook.com/groups/bds.vendo" },
-      { id: "1094820194", name: "Hội Mua Bán Đất Nền Hòa Lạc & Quốc Oai", privacy: "Công khai", members: "88,400 TV", url: "https://facebook.com/groups/datnen.hoalac" },
-    ],
-  },
-  {
-    id: "SCN-2026-8937",
-    type: "MEMBERS",
-    title: "Quét UID thành viên nhóm tiềm năng",
-    target: "Cộng Đồng Designer & Freelancer VN (UID: 6182940192)",
-    targetType: "group",
-    account: {
-      uid: "100061829401924",
-      name: "Vũ Hải Đăng (Acc Backup 03)",
-      avatarText: "VH",
-      avatarBg: "bg-purple-600",
-    },
-    progress: {
-      collected: 540,
-      target: 1000,
-      percentage: 54,
-      unit: "UID",
-    },
-    startTime: "25/10/2026 09:15:30",
-    endTime: "25/10/2026 09:22:45",
-    duration: "7m 15s",
-    status: "FAILED",
-    config: {
-      delay: "3 - 6s",
-      filterNewMembers: "Tắt",
-      extractField: "UID, Họ tên, Link Profile",
-      targetCount: "1.000 TV",
-    },
-    logs: [
-      { time: "09:15:30", level: "INFO", message: "Khởi động phiên quét thành viên Designer" },
-      { time: "09:18:20", level: "INFO", message: "Trích xuất thành công 540 UID" },
-      { time: "09:22:40", level: "ERROR", message: "Facebook yêu cầu xác thực Checkpoint (956) trên tài khoản 100061829401924" },
-      { time: "09:22:45", level: "FAILED", message: "Dừng tiến trình quét khẩn cấp để bảo vệ an toàn cho nick" },
-    ],
-    sampleResults: [
-      { id: "100094820194812", name: "Nguyễn Minh Đức", extra: "Freelance UI/UX", url: "https://facebook.com/profile.php?id=100094820194812" },
-      { id: "100083910294810", name: "Đặng Thị Huyền", extra: "Graphic Designer", url: "https://facebook.com/profile.php?id=100083910294810" },
-    ],
-  },
-  {
-    id: "SCN-2026-8936",
-    type: "POSTS",
-    title: "Quét bài viết & đo lường tương tác nhóm",
-    target: "Hội Review Phim & Điện Ảnh Chiếu Rạp (UID: 5182940192)",
-    targetType: "group",
-    account: {
-      uid: "100091847291048",
-      name: "Trần Mai Anh (Seeding 02)",
-      avatarText: "TM",
-      avatarBg: "bg-emerald-600",
-    },
-    progress: {
-      collected: 150,
-      target: 150,
-      percentage: 100,
-      unit: "bài viết",
-    },
-    startTime: "24/10/2026 20:10:00",
-    endTime: "24/10/2026 20:25:30",
-    duration: "15m 30s",
-    status: "SUCCESS",
-    config: {
-      delay: "5 - 10s",
-      minReactions: 20,
-      minComments: 10,
-      scanDays: "3 ngày gần nhất",
-      extractFields: "Nội dung, Link bài viết, Lượt tương tác",
-    },
-    logs: [
-      { time: "20:10:00", level: "INFO", message: "Kết nối tài khoản tới nhóm Review Phim" },
-      { time: "20:15:20", level: "INFO", message: "Bóc tách 80 bài viết có thảo luận sôi nổi" },
-      { time: "20:25:30", level: "SUCCESS", message: "Đã hoàn tất quét 150 bài viết tương tác cao. Lưu vào CSDL." },
-    ],
-    sampleResults: [
-      { id: "post-88201", title: "Cảm nhận sau khi xem suất chiếu sớm bom tấn hành động...", reactions: "840 Likes", comments: "310 Cmt", shares: "45 Share" },
-      { id: "post-88202", title: "Top 5 chi tiết ẩn giấu mà bạn có thể bỏ lỡ trong phim...", reactions: "420 Likes", comments: "185 Cmt", shares: "29 Share" },
-    ],
-  },
-];
+import {
+  getScanHistory,
+  deleteScanHistory,
+  deleteScanHistoryBulk,
+} from "../service";
 
 export default function GroupScanHistoryPage() {
-  const [historyList, setHistoryList] = useState(INITIAL_HISTORY_DATA);
+  const [historyList, setHistoryList] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [selectedSession, setSelectedSession] = useState(null);
   const [detailModalTab, setDetailModalTab] = useState("overview"); // overview | results | logs
@@ -302,6 +58,34 @@ export default function GroupScanHistoryPage() {
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+
+  // Nạp dữ liệu lịch sử phiên quét từ Database
+  const fetchHistory = useCallback(async (isRefresh = false) => {
+    setLoading(true);
+    try {
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.removeItem("fb_scanned_sessions_cache");
+        } catch {}
+      }
+
+      const res = await getScanHistory();
+      const sessions = Array.isArray(res) ? res : res?.sessions || [];
+
+      setHistoryList(sessions);
+      if (isRefresh) {
+        toast.success("Đã làm mới danh sách lịch sử quét từ Database!");
+      }
+    } catch (err) {
+      console.warn("[Scan History]", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
 
   // Stats calculation
   const stats = useMemo(() => {
@@ -328,12 +112,12 @@ export default function GroupScanHistoryPage() {
       // 1. Search Query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const matchId = item.id.toLowerCase().includes(q);
-        const matchTitle = item.title.toLowerCase().includes(q);
-        const matchTarget = item.target.toLowerCase().includes(q);
+        const matchId = (item.id || "").toLowerCase().includes(q);
+        const matchTitle = (item.title || "").toLowerCase().includes(q);
+        const matchTarget = (item.target || "").toLowerCase().includes(q);
         const matchAcc =
-          item.account.name.toLowerCase().includes(q) ||
-          item.account.uid.includes(q);
+          (item.account?.name || "").toLowerCase().includes(q) ||
+          (item.account?.uid || "").includes(q);
         if (!matchId && !matchTitle && !matchTarget && !matchAcc) return false;
       }
 
@@ -345,10 +129,12 @@ export default function GroupScanHistoryPage() {
 
       // 4. Date Range Filter
       if (filterDateRange === "TODAY") {
-        const todayStr = "26/10/2026";
-        if (!item.startTime.includes(todayStr)) return false;
-      } else if (filterDateRange === "CUSTOM" && customStartDate && customEndDate) {
-        // Simple string comparison for demo or valid dates
+        const today = new Date();
+        const day = String(today.getDate()).padStart(2, "0");
+        const month = String(today.getMonth() + 1).padStart(2, "0");
+        const year = today.getFullYear();
+        const todayStr = `${day}/${month}/${year}`;
+        if (!item.startTime?.includes(todayStr)) return false;
       }
 
       return true;
@@ -359,8 +145,6 @@ export default function GroupScanHistoryPage() {
     filterType,
     filterStatus,
     filterDateRange,
-    customStartDate,
-    customEndDate,
   ]);
 
   // Pagination slice
@@ -390,31 +174,49 @@ export default function GroupScanHistoryPage() {
 
   // Actions
   const handleRefresh = () => {
-    toast.success("Đã làm mới danh sách lịch sử quét!");
+    fetchHistory(true);
   };
 
-
-  const handleDeleteOne = (id) => {
-    setHistoryList((prev) => prev.filter((item) => item.id !== id));
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-    toast.success(`Đã xóa bản ghi ${id} khỏi lịch sử!`);
+  const handleDeleteOne = async (id) => {
+    try {
+      await deleteScanHistory(id);
+      setHistoryList((prev) => prev.filter((item) => item.id !== id));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      if (selectedSession?.id === id) {
+        setSelectedSession(null);
+      }
+      toast.success(`Đã xóa phiên #${id} khỏi Database!`);
+    } catch (err) {
+      console.error(err);
+      toast.error(`Lỗi khi xóa phiên #${id}`);
+    }
   };
 
-  const handleBulkDelete = () => {
+  const handleBulkDelete = async () => {
     if (selectedIds.size === 0) return;
     const count = selectedIds.size;
-    setHistoryList((prev) => prev.filter((item) => !selectedIds.has(item.id)));
-    setSelectedIds(new Set());
-    toast.success(`Đã xóa ${count} bản ghi lịch sử được chọn!`);
+    const ids = Array.from(selectedIds);
+    try {
+      await deleteScanHistoryBulk(ids);
+      setHistoryList((prev) => prev.filter((item) => !selectedIds.has(item.id)));
+      setSelectedIds(new Set());
+      if (selectedSession && selectedIds.has(selectedSession.id)) {
+        setSelectedSession(null);
+      }
+      toast.success(`Đã xóa ${count} bản ghi lịch sử khỏi Database!`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Lỗi khi xóa nhiều phiên lịch sử!");
+    }
   };
 
   const handleRerun = (session) => {
     toast.info(
-      `Đang khởi chạy lại phiên quét: ${session.title} (${session.target})...`
+      `Phiên quét: ${session.title} (${session.target}). Hãy mở tab Quét thông tin nhóm để tiếp tục!`
     );
   };
 
@@ -434,14 +236,14 @@ export default function GroupScanHistoryPage() {
             ? "Quét thành viên nhóm"
             : "Quét bài viết nhóm",
         "Mục tiêu / Từ khóa": item.target,
-        "Tài khoản UID": item.account.uid,
-        "Tên tài khoản": item.account.name,
-        "Đã thu thập": `${item.progress.collected} ${item.progress.unit}`,
-        "Mục tiêu đặt ra": `${item.progress.target} ${item.progress.unit}`,
-        "Tiến độ %": `${item.progress.percentage}%`,
-        "Bắt đầu": item.startTime,
-        "Kết thúc": item.endTime,
-        "Thời lượng": item.duration,
+        "Tài khoản UID": item.account?.uid || "",
+        "Tên tài khoản": item.account?.name || "",
+        "Đã thu thập": `${item.progress?.collected || 0} ${item.progress?.unit || "nhóm"}`,
+        "Mục tiêu đặt ra": `${item.progress?.target || 0} ${item.progress?.unit || "nhóm"}`,
+        "Tiến độ %": `${item.progress?.percentage || 0}%`,
+        "Bắt đầu": item.startTime || "",
+        "Kết thúc": item.endTime || "",
+        "Thời lượng": item.duration || "",
         "Trạng thái":
           item.status === "SUCCESS"
             ? "Hoàn thành"
@@ -493,7 +295,12 @@ export default function GroupScanHistoryPage() {
           </span>
         );
       default:
-        return null;
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-50 text-slate-700 border border-slate-200">
+            <Search className="size-3" />
+            <span>{type || "Quét nhóm"}</span>
+          </span>
+        );
     }
   };
 
@@ -545,8 +352,7 @@ export default function GroupScanHistoryPage() {
             <p className="text-xs font-semibold text-[#64748B]">Tổng phiên quét</p>
             <p className="text-2xl font-bold text-[#0F172A]">{stats.total}</p>
             <p className="text-[11px] text-[#2563EB] font-medium flex items-center gap-1">
-              <span>+12 phiên</span>
-              <span className="text-[#94A3B8]">trong 7 ngày qua</span>
+              <span>Đã lưu trong CSDL</span>
             </p>
           </div>
           <div className="size-11 rounded-xl bg-blue-50 flex items-center justify-center text-[#2563EB]">
@@ -589,10 +395,10 @@ export default function GroupScanHistoryPage() {
           <div className="space-y-1">
             <p className="text-xs font-semibold text-[#64748B]">Dữ liệu đã thu thập</p>
             <p className="text-2xl font-bold text-violet-700">
-              {stats.totalItemsCollected.toLocaleString()}
+              {stats.totalItemsCollected.toLocaleString("vi-VN")}
             </p>
             <p className="text-[11px] text-[#64748B] font-medium">
-              Nhóm • UID • Bài viết
+              Nhóm Facebook đã lưu
             </p>
           </div>
           <div className="size-11 rounded-xl bg-violet-50 flex items-center justify-center text-violet-600">
@@ -674,21 +480,17 @@ export default function GroupScanHistoryPage() {
             >
               <option value="ALL">Toàn bộ thời gian</option>
               <option value="TODAY">Hôm nay</option>
-              <option value="7DAYS">7 ngày qua</option>
-              <option value="30DAYS">30 ngày qua</option>
-              <option value="CUSTOM">Tùy chỉnh ngày</option>
             </select>
 
             {/* Action Buttons */}
             <button
               type="button"
               onClick={handleRefresh}
-              title="Làm mới dữ liệu"
+              title="Làm mới dữ liệu từ Database"
               className="size-9 flex items-center justify-center rounded-lg border border-[#CBD5E1] bg-white text-[#475569] hover:bg-slate-50 transition-colors"
             >
-              <RotateCcw className="size-4" />
+              <RotateCcw className={`size-4 ${loading ? "animate-spin text-blue-600" : ""}`} />
             </button>
-
 
             {/* Nút Xuất Excel */}
             <button
@@ -713,26 +515,6 @@ export default function GroupScanHistoryPage() {
             )}
           </div>
         </div>
-
-        {/* Custom Date Picker Inputs when selected */}
-        {filterDateRange === "CUSTOM" && (
-          <div className="pt-2 border-t border-[#F1F5F9] flex items-center gap-2 text-xs">
-            <span className="text-[#64748B]">Từ ngày:</span>
-            <input
-              type="date"
-              value={customStartDate}
-              onChange={(e) => setCustomStartDate(e.target.value)}
-              className="h-8 px-2 border border-[#CBD5E1] rounded-md text-xs bg-white text-[#1E293B]"
-            />
-            <span className="text-[#64748B]">Đến ngày:</span>
-            <input
-              type="date"
-              value={customEndDate}
-              onChange={(e) => setCustomEndDate(e.target.value)}
-              className="h-8 px-2 border border-[#CBD5E1] rounded-md text-xs bg-white text-[#1E293B]"
-            />
-          </div>
-        )}
       </div>
 
       {/* ======================================================== */}
@@ -751,7 +533,9 @@ export default function GroupScanHistoryPage() {
           </div>
 
           <div className="flex items-center gap-2 text-xs text-[#64748B]">
-            <span>Đã chọn: <b className="text-[#0F172A]">{selectedIds.size}</b> phiên</span>
+            <span>
+              Đã chọn: <b className="text-[#0F172A]">{selectedIds.size}</b> phiên
+            </span>
           </div>
         </div>
 
@@ -781,13 +565,26 @@ export default function GroupScanHistoryPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#F1F5F9] text-[#1E293B]">
-              {paginatedList.length === 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan={8} className="py-12 text-center text-slate-500">
+                    <div className="flex items-center justify-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                      <span>Đang tải lịch sử phiên quét từ Database...</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : paginatedList.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-12 text-center text-[#94A3B8]">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Layers className="size-8 text-slate-300 stroke-[1.5]" />
-                      <p className="font-semibold text-slate-600">Không tìm thấy phiên quét nào phù hợp</p>
-                      <p className="text-[11px] text-slate-400">Hãy thử thay đổi từ khóa tìm kiếm hoặc đặt lại bộ lọc</p>
+                      <p className="font-semibold text-slate-600">
+                        Chưa có phiên quét nào được lưu trong Database
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        Hãy chuyển qua tab Quét thông tin nhóm để bắt đầu quét các nhóm Facebook
+                      </p>
                     </div>
                   </td>
                 </tr>
@@ -824,7 +621,10 @@ export default function GroupScanHistoryPage() {
                       {/* Mục tiêu / Từ khóa */}
                       <td className="py-3 px-4">
                         <div className="flex flex-col gap-1 max-w-[260px]">
-                          <span className="font-semibold text-[#0F172A] truncate" title={item.target}>
+                          <span
+                            className="font-semibold text-[#0F172A] truncate"
+                            title={item.target}
+                          >
                             {item.target}
                           </span>
                           <span className="text-[11px] text-[#64748B]">
@@ -837,16 +637,18 @@ export default function GroupScanHistoryPage() {
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2.5">
                           <div
-                            className={`size-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold shrink-0 ${item.account.avatarBg}`}
+                            className={`size-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold shrink-0 ${
+                              item.account?.avatarBg || "bg-blue-600"
+                            }`}
                           >
-                            {item.account.avatarText}
+                            {item.account?.avatarText || "FB"}
                           </div>
                           <div className="flex flex-col min-w-0">
                             <span className="font-semibold text-[#0F172A] truncate text-[11px]">
-                              {item.account.name}
+                              {item.account?.name || item.account?.uid || "Tài khoản quét"}
                             </span>
                             <span className="text-[10px] text-[#64748B] font-mono">
-                              {item.account.uid}
+                              {item.account?.uid}
                             </span>
                           </div>
                         </div>
@@ -857,10 +659,11 @@ export default function GroupScanHistoryPage() {
                         <div className="space-y-1.5 w-36">
                           <div className="flex items-center justify-between text-[11px]">
                             <span className="font-bold text-[#0F172A]">
-                              {item.progress.collected} / {item.progress.target}
+                              {item.progress?.collected || 0} /{" "}
+                              {item.progress?.target || 0}
                             </span>
                             <span className="font-medium text-[#64748B]">
-                              {item.progress.percentage}%
+                              {item.progress?.percentage || 0}%
                             </span>
                           </div>
                           {/* Progress bar */}
@@ -871,15 +674,20 @@ export default function GroupScanHistoryPage() {
                                   ? "bg-rose-500"
                                   : item.status === "PAUSED"
                                   ? "bg-amber-500"
-                                  : item.progress.percentage === 100
+                                  : (item.progress?.percentage || 0) >= 100
                                   ? "bg-emerald-500"
                                   : "bg-[#2563EB]"
                               }`}
-                              style={{ width: `${Math.min(100, item.progress.percentage)}%` }}
+                              style={{
+                                width: `${Math.min(
+                                  100,
+                                  item.progress?.percentage || 0
+                                )}%`,
+                              }}
                             />
                           </div>
                           <span className="text-[10px] text-[#94A3B8]">
-                            Đơn vị: {item.progress.unit}
+                            Đơn vị: {item.progress?.unit || "nhóm"}
                           </span>
                         </div>
                       </td>
@@ -892,7 +700,7 @@ export default function GroupScanHistoryPage() {
                           </span>
                           <span className="inline-flex items-center gap-1 text-[10px] text-[#64748B]">
                             <Clock className="size-3 text-slate-400" />
-                            <span>{item.duration}</span>
+                            <span>{item.duration || "—"}</span>
                           </span>
                         </div>
                       </td>
@@ -932,7 +740,7 @@ export default function GroupScanHistoryPage() {
                           <button
                             type="button"
                             onClick={() => handleDeleteOne(item.id)}
-                            title="Xóa phiên khỏi lịch sử"
+                            title="Xóa phiên khỏi Database"
                             className="size-7 rounded-lg border border-[#E2E8F0] hover:border-rose-500 hover:text-rose-500 flex items-center justify-center text-[#475569] transition-colors"
                           >
                             <Trash2 className="size-3.5" />
@@ -963,7 +771,9 @@ export default function GroupScanHistoryPage() {
               <option value={20}>20</option>
               <option value={50}>50</option>
             </select>
-            <span>trên tổng số <b>{filteredList.length}</b> phiên</span>
+            <span>
+              trên tổng số <b>{filteredList.length}</b> phiên
+            </span>
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -1024,7 +834,8 @@ export default function GroupScanHistoryPage() {
                     {renderStatusBadge(selectedSession.status)}
                   </div>
                   <p className="text-[11px] text-[#64748B]">
-                    Khởi tạo lúc: {selectedSession.startTime} • Thời lượng: {selectedSession.duration}
+                    Khởi tạo lúc: {selectedSession.startTime} • Thời lượng:{" "}
+                    {selectedSession.duration || "—"}
                   </p>
                 </div>
               </div>
@@ -1088,16 +899,18 @@ export default function GroupScanHistoryPage() {
                       </span>
                       <div className="flex items-center gap-3 pt-1">
                         <div
-                          className={`size-9 rounded-full flex items-center justify-center text-white text-xs font-bold ${selectedSession.account.avatarBg}`}
+                          className={`size-9 rounded-full flex items-center justify-center text-white text-xs font-bold ${
+                            selectedSession.account?.avatarBg || "bg-blue-600"
+                          }`}
                         >
-                          {selectedSession.account.avatarText}
+                          {selectedSession.account?.avatarText || "FB"}
                         </div>
                         <div className="flex flex-col">
                           <span className="font-bold text-[#0F172A]">
-                            {selectedSession.account.name}
+                            {selectedSession.account?.name || "Tài khoản quét"}
                           </span>
                           <span className="text-[11px] text-[#64748B] font-mono">
-                            UID: {selectedSession.account.uid}
+                            UID: {selectedSession.account?.uid || "—"}
                           </span>
                         </div>
                       </div>
@@ -1122,17 +935,20 @@ export default function GroupScanHistoryPage() {
                   <div className="rounded-xl border border-[#E2E8F0] p-4 bg-white space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-[#0F172A]">
-                        Kết quả thu thập: {selectedSession.progress.collected} /{" "}
-                        {selectedSession.progress.target} {selectedSession.progress.unit}
+                        Kết quả thu thập: {selectedSession.progress?.collected || 0} /{" "}
+                        {selectedSession.progress?.target || 0}{" "}
+                        {selectedSession.progress?.unit || "nhóm"}
                       </span>
                       <span className="font-bold text-[#2563EB]">
-                        {selectedSession.progress.percentage}%
+                        {selectedSession.progress?.percentage || 0}%
                       </span>
                     </div>
                     <div className="h-2 w-full rounded-full bg-[#E2E8F0] overflow-hidden">
                       <div
                         className="h-full bg-[#2563EB] rounded-full"
-                        style={{ width: `${selectedSession.progress.percentage}%` }}
+                        style={{
+                          width: `${selectedSession.progress?.percentage || 0}%`,
+                        }}
                       />
                     </div>
                   </div>
@@ -1143,12 +959,16 @@ export default function GroupScanHistoryPage() {
                       Cấu hình tham số phiên chạy
                     </h4>
                     <div className="grid grid-cols-2 gap-y-2 text-[11px]">
-                      {Object.entries(selectedSession.config || {}).map(([key, val]) => (
-                        <div key={key} className="flex flex-col">
-                          <span className="text-[#64748B] capitalize">{key}:</span>
-                          <span className="font-semibold text-[#1E293B]">{String(val)}</span>
-                        </div>
-                      ))}
+                      {Object.entries(selectedSession.config || {}).map(
+                        ([key, val]) => (
+                          <div key={key} className="flex flex-col">
+                            <span className="text-[#64748B] capitalize">{key}:</span>
+                            <span className="font-semibold text-[#1E293B]">
+                              {String(val)}
+                            </span>
+                          </div>
+                        )
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1159,13 +979,13 @@ export default function GroupScanHistoryPage() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between pb-2 border-b border-[#F1F5F9]">
                     <span className="text-xs font-semibold text-[#64748B]">
-                      Hiển thị mẫu các mục dữ liệu đã trích xuất được:
+                      Hiển thị mẫu các nhóm đã trích xuất được trong phiên:
                     </span>
                     <button
                       type="button"
                       onClick={() => {
                         navigator.clipboard.writeText(
-                          JSON.stringify(selectedSession.sampleResults, null, 2)
+                          JSON.stringify(selectedSession.sampleResults || [], null, 2)
                         );
                         toast.success("Đã copy dữ liệu mẫu vào Clipboard!");
                       }}
@@ -1177,31 +997,41 @@ export default function GroupScanHistoryPage() {
                   </div>
 
                   <div className="space-y-2">
-                    {selectedSession.sampleResults?.map((res, idx) => (
-                      <div
-                        key={idx}
-                        className="p-3 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC]/50 hover:bg-white transition-colors flex items-center justify-between"
-                      >
-                        <div className="flex flex-col min-w-0 pr-2">
-                          <span className="font-bold text-[#0F172A] truncate">
-                            {res.name || res.title}
-                          </span>
-                          <span className="text-[11px] text-[#64748B]">
-                            {res.members || res.extra || `${res.reactions || ""} • ${res.comments || ""}`}
-                          </span>
-                        </div>
-                        {res.url && (
-                          <a
-                            href={res.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="size-7 rounded-md border border-[#CBD5E1] flex items-center justify-center text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0"
-                          >
-                            <ExternalLink className="size-3.5" />
-                          </a>
-                        )}
+                    {!selectedSession.sampleResults ||
+                    selectedSession.sampleResults.length === 0 ? (
+                      <div className="p-4 text-center text-[#94A3B8]">
+                        Chưa có dữ liệu mẫu nào được lưu cho phiên này.
                       </div>
-                    ))}
+                    ) : (
+                      selectedSession.sampleResults.map((res, idx) => (
+                        <div
+                          key={idx}
+                          className="p-3 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC]/50 hover:bg-white transition-colors flex items-center justify-between"
+                        >
+                          <div className="flex flex-col min-w-0 pr-2">
+                            <span className="font-bold text-[#0F172A] truncate">
+                              {res.name || res.title || res.group_name}
+                            </span>
+                            <span className="text-[11px] text-[#64748B]">
+                              {res.members ||
+                                res.members_label ||
+                                res.privacy ||
+                                "—"}
+                            </span>
+                          </div>
+                          {(res.url || res.href) && (
+                            <a
+                              href={res.url || res.href}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="size-7 rounded-md border border-[#CBD5E1] flex items-center justify-center text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition-colors shrink-0"
+                            >
+                              <ExternalLink className="size-3.5" />
+                            </a>
+                          )}
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
               )}
@@ -1209,25 +1039,29 @@ export default function GroupScanHistoryPage() {
               {/* TAB 3: LOGS */}
               {detailModalTab === "logs" && (
                 <div className="rounded-xl bg-[#0F172A] p-4 text-[#F8FAFC] font-mono text-[11px] space-y-2 max-h-[350px] overflow-y-auto">
-                  {selectedSession.logs?.map((lg, i) => (
-                    <div key={i} className="flex items-start gap-2">
-                      <span className="text-[#64748B] shrink-0">[{lg.time}]</span>
-                      <span
-                        className={`font-bold shrink-0 ${
-                          lg.level === "ERROR" || lg.level === "FAILED"
-                            ? "text-rose-400"
-                            : lg.level === "SUCCESS"
-                            ? "text-emerald-400"
-                            : lg.level === "WARN"
-                            ? "text-amber-400"
-                            : "text-blue-400"
-                        }`}
-                      >
-                        [{lg.level}]
-                      </span>
-                      <span className="text-slate-200 break-all">{lg.message}</span>
-                    </div>
-                  ))}
+                  {!selectedSession.logs || selectedSession.logs.length === 0 ? (
+                    <div className="text-slate-400">Chưa có nhật ký ghi nhận cho phiên này.</div>
+                  ) : (
+                    selectedSession.logs.map((lg, i) => (
+                      <div key={i} className="flex items-start gap-2">
+                        <span className="text-[#64748B] shrink-0">[{lg.time}]</span>
+                        <span
+                          className={`font-bold shrink-0 ${
+                            lg.level === "ERROR" || lg.level === "FAILED"
+                              ? "text-rose-400"
+                              : lg.level === "SUCCESS"
+                              ? "text-emerald-400"
+                              : lg.level === "WARN"
+                              ? "text-amber-400"
+                              : "text-blue-400"
+                          }`}
+                        >
+                          [{lg.level}]
+                        </span>
+                        <span className="text-slate-200 break-all">{lg.message}</span>
+                      </div>
+                    ))
+                  )}
                 </div>
               )}
             </div>

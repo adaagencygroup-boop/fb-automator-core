@@ -153,6 +153,11 @@ def _append_log(job_id: str, text: str, tone: str = "info") -> None:
         broadcast(level, text, uid=_jobs.get(job_id, {}).get("uid"))
     except Exception:
         pass
+    try:
+        from modules.module_10_group_scan.models import add_session_log
+        add_session_log(job_id, tone, text)
+    except Exception:
+        pass
 
 
 def _set_job(job_id: str, **fields) -> None:
@@ -350,6 +355,31 @@ def start_keyword_check(
             "started_at": time.time(),
         }
 
+    try:
+        from modules.module_10_group_scan.models import create_scan_session
+        import json
+        words_str = ", ".join(item["keyword"] for item in items)
+        cfg_str = json.dumps({
+            "delay": f"{dmin:.0f} - {dmax:.0f}s",
+            "privacy": "Công khai" if public_only else "Riêng tư" if private_only else "Tất cả",
+            "minMembers": f"{min_members:,} TV" if min_members else "—",
+            "maxKeywords": len(items),
+        }, ensure_ascii=False)
+        create_scan_session(
+            owner=owner,
+            session_id=job_id,
+            scan_type="GROUP_INFO",
+            title=f"Quét thông tin nhóm theo từ khóa «{words_str[:80]}»",
+            target=words_str,
+            target_type="keywords",
+            source_uid=uid,
+            account_name=f"Nick {uid}",
+            target_count=sum(item["limit"] for item in items),
+            config=cfg_str,
+        )
+    except Exception as exc:
+        logger.debug(f"create_scan_session error: {exc}")
+
     thread = threading.Thread(
         target=_run_check,
         args=(owner, uid, items, dmin, dmax, public_only, private_only, min_members, key, job_id),
@@ -424,6 +454,12 @@ def _run_check(
             # Không ghi đè paused / aborted / error đã set trong vòng lặp
             if job and job.get("status") == "running":
                 job["status"] = "done"
+        try:
+            from modules.module_10_group_scan.models import update_scan_session
+            st = "SUCCESS" if (job and job.get("status") in {"done", "running"}) else "FAILED"
+            update_scan_session(job_id, status=st, finished=True)
+        except Exception:
+            pass
 
 
 def _normalize_group_url(href: str) -> str:
@@ -822,6 +858,11 @@ def _scrape_groups_from_results(
                 job = _jobs.get(job_id)
                 if job is not None:
                     job["groups"] = list(already or []) + list(found)
+            try:
+                from modules.module_10_group_scan.models import update_scan_session
+                update_scan_session(job_id, total_found=len(already or []) + len(found))
+            except Exception:
+                pass
             _update_keyword_stat(job_id, keyword, count=len(found), status="running")
             if len(found) >= limit:
                 break
