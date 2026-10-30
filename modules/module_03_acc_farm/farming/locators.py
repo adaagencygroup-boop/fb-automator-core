@@ -54,8 +54,11 @@ FARM_WATCH = {
 }
 
 # Thả cảm xúc: thanh cảm xúc hiện sau khi rê chuột lên nút Like ~0,7s (đã đo 2026-10-22 trên feed và reel)
-# (Story: các nút cảm xúc hiện sẵn, không cần rê chuột). {kind} chỉ nhận giá trị trong REACTION_TYPES.
-REACTION_BUTTON = '//*[@aria-label="{kind}"]'
+# (Story: các nút cảm xúc hiện sẵn, không cần rê chuột). {kind} chỉ nhận giá trị trong REACTION_TYPES, {vi} là tên nút
+# đó ở giao diện tiếng Việt (REACTION_NAMES_VI). Thứ tự trên thanh giống nhau ở 2 ngôn ngữ (đã đo 2026-10-30).
+REACTION_BUTTON = '//*[@aria-label="{kind}" or @aria-label="{vi}"]'
+REACTION_NAMES_VI = {"Like": "Thích", "Love": "Yêu thích", "Care": "Thương thương", "Haha": "Haha", "Wow": "Wow",
+                     "Sad": "Buồn", "Angry": "Phẫn nộ"}
 
 FARM_STORY = {
     # Khay story trên Trang chủ: bỏ thẻ "Create story" (/stories/create/), lấy thẻ "<Tên>'s story"

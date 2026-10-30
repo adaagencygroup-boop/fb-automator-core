@@ -25,6 +25,7 @@ from core.browser.human import click_point, element_box, hover_element, human_cl
 from modules.module_03_acc_farm.browser.locators import LOGIN
 from modules.module_03_acc_farm.farming.locators import (
     FARM_COMMON, FARM_FRIEND, FARM_GROUP, FARM_LEAVE, FARM_NOTIF, FARM_STORY, FARM_WATCH, REACTION_BUTTON,
+    REACTION_NAMES_VI,
 )
 from modules.module_03_acc_farm.browser.login_flow import (
     CHECKPOINT_HEAVY, checkpoint_kind, checkpoint_message, is_checkpoint_url, _check_logged_in,
@@ -423,23 +424,45 @@ def _on_home_feed(driver, landing_path: str = "") -> bool:
 
 # ─────────────────────────── THẢ CẢM XÚC ────────────────────────────
 
-# Cảm xúc hiện tại của 1 bài / video: nút Like đổi nhãn thành "Remove <Loại>" sau khi thả (đã kiểm 2026-10-22).
-# So nguyên nhãn: "Like: 17 people" là nút đếm, không phải nút thả.
-_REACTION_STATE_JS = r"""
+# Nhãn nút thả cảm xúc của bài (đo thật): giao diện mới (2026-10-30) "React with Like to <Tên>'s post", đã thả
+# "Remove <Loại> from <Tên>'s post"; giao diện cũ (2026-10-22, có thể còn ở 1 số nick) "Like" / "Remove <Loại>".
+# Reel vẫn là "Like" / "Remove <Loại>". Tiếng Việt (2026-10-30): bài "Bày tỏ cảm xúc Thích về bài viết của <Tên>" /
+# "Gỡ <Loại> khỏi bài viết của <Tên>", reel "Thích" / "Gỡ <Loại>"; loại đọc được quy về tên tiếng Anh (KIND).
+# So nguyên nhãn: "Like: 17 people" là nút đếm, không phải nút thả. Bình luận nổi dưới bài vẫn có nút "Like" /
+# "Remove <Loại>" riêng, nằm trong khối [role=article] "Comment by ..." / "Reply by ..." (tiếng Việt "Bình luận dưới
+# tên ..." / "Phản hồi bình luận của ...") -> luôn loại theo khối đó, không theo nhãn (Facebook đổi nhãn nút thì cùng
+# lắm không thả, không bao giờ thả nhầm vào bình luận).
+_REACT_LABELS_JS = r"""
+const UNREACTED = /^(React with Like to .+|Like|Bày tỏ cảm xúc Thích về .+|Thích)$/;
+const REACTED = /^(?:Remove (Like|Love|Care|Haha|Wow|Sad|Angry)(?: from .+)?|Gỡ (Thích|Yêu thích|Thương thương|Haha|Wow|Buồn|Phẫn nộ)(?: khỏi .+)?)$/;
+const KIND = {'Thích': 'Like', 'Yêu thích': 'Love', 'Thương thương': 'Care', 'Buồn': 'Sad', 'Phẫn nộ': 'Angry'};
+const reactedKind = (label) => {
+  const m = label.match(REACTED);
+  return m ? (m[1] || KIND[m[2]] || m[2]) : null;
+};
+const inComment = (el, root) => {
+  const art = el.closest('[role="article"]');
+  return !!art && art !== root && root.contains(art)
+    && /^(Comment|Reply|Bình luận|Phản hồi)\b/i.test((art.getAttribute('aria-label') || '').trim());
+};
+"""
+
+# Cảm xúc hiện tại của 1 bài / video (đọc lại sau khi thả), bỏ phần bình luận.
+_REACTION_STATE_JS = _REACT_LABELS_JS + r"""
 const box = arguments[0];
 if (!box || !box.isConnected) return null;
 for (const b of box.querySelectorAll('[role="button"][aria-label]')) {
-  const m = b.getAttribute('aria-label').trim().match(/^Remove (Like|Love|Care|Haha|Wow|Sad|Angry)$/);
-  if (m) return m[1];
+  if (inComment(b, box)) continue;
+  const kind = reactedKind(b.getAttribute('aria-label').trim());
+  if (kind) return kind;
 }
 return null;
 """
 
 # Bài trên Newsfeed vừa vào màn hình (khối [aria-posinset] có nút Like của bài nằm trọn trong màn hình), mỗi bài
-# chỉ xét 1 lần. Nút Like đầu tiên trong bài là của bài (nút Like của bình luận nằm sau). Khối không có Like
-# (People you may know, Reels, gợi ý nhóm) tự bị loại. Bài đã thả cảm xúc ("Remove <Loại>") bỏ qua.
+# chỉ xét 1 lần. Khối không có Like (People you may know, Reels, gợi ý nhóm) tự bị loại. Bài đã thả cảm xúc bỏ qua.
 # Nút bị che (ảnh / video / lớp phủ / khối khác) hoặc lệch ngoài màn hình thì chưa xét, không đánh dấu: lần sau xét lại.
-_FEED_REACT_CANDIDATES_JS = r"""
+_FEED_REACT_CANDIDATES_JS = _REACT_LABELS_JS + r"""
 const vh = innerHeight, out = [];
 const seen = (el) => {
   const r = el.getBoundingClientRect();
@@ -450,25 +473,31 @@ const seen = (el) => {
 };
 for (const post of document.querySelectorAll('[aria-posinset]')) {
   if (post.dataset.m03Seen) continue;
-  const like = Array.from(post.querySelectorAll('[role="button"][aria-label]'))
-    .find((b) => /^(Like|Remove [A-Za-z]+)$/.test(b.getAttribute('aria-label').trim()) && b.getClientRects().length);
+  const like = Array.from(post.querySelectorAll('[role="button"][aria-label]')).find((b) => {
+    const label = b.getAttribute('aria-label').trim();
+    return (UNREACTED.test(label) || REACTED.test(label)) && b.getClientRects().length && !inComment(b, post);
+  });
   if (!like) continue;
   const r = like.getBoundingClientRect();
   if (r.top < 80 || r.bottom > vh - 10 || !seen(like)) continue;
   post.dataset.m03Seen = '1';
-  if (like.getAttribute('aria-label').trim() === 'Like') out.push([post, like]);
+  if (UNREACTED.test(like.getAttribute('aria-label').trim())) out.push([post, like]);
 }
 return out;
 """
 
 # Nút Like của video đang xem: tầng tổ tiên gần nhất của video có nút Like / Remove <Loại>. Trình xem reel có 2 video
-# (đang phát + kế tiếp), mỗi video 1 nút Like trong khối riêng (đã kiểm 2026-10-22).
-_VIDEO_LIKE_JS = r"""
+# (đang phát + kế tiếp), mỗi video 1 nút Like trong khối riêng (đã kiểm 2026-10-22, 2026-10-30 cả tiếng Việt).
+# Trả [khối, nút, chưa thả?].
+_VIDEO_LIKE_JS = _REACT_LABELS_JS + r"""
 let node = arguments[0];
 for (let depth = 0; node && depth < 25; depth++, node = node.parentElement) {
-  const like = Array.from(node.querySelectorAll('[role="button"][aria-label]'))
-    .find((b) => /^(Like|Remove [A-Za-z]+)$/.test(b.getAttribute('aria-label').trim()));
-  if (like) return [node, like];
+  const box = node;
+  const like = Array.from(box.querySelectorAll('[role="button"][aria-label]')).find((b) => {
+    const label = b.getAttribute('aria-label').trim();
+    return (UNREACTED.test(label) || REACTED.test(label)) && !inComment(b, box);
+  });
+  if (like) return [box, like, UNREACTED.test(like.getAttribute('aria-label').trim())];
 }
 return null;
 """
@@ -539,6 +568,10 @@ def _reaction_result(counts: dict) -> dict:
     return {"reactions": sum(counts.values()), "reaction_types": {k: v for k, v in counts.items() if v}}
 
 
+def _reaction_locator(kind: str) -> str:
+    return REACTION_BUTTON.format(kind=kind, vi=REACTION_NAMES_VI.get(kind, kind))
+
+
 def _reaction_bar_button(driver, ctl: FarmControl, like_button, kind: str):
     """
     Rê chuột lên nút Like, chờ thanh cảm xúc hiện (tối đa REACTION_BAR_WAIT giây); không hiện thì rê ra rồi rê lại,
@@ -546,7 +579,7 @@ def _reaction_bar_button(driver, ctl: FarmControl, like_button, kind: str):
     Rê ra: sang điểm trống ở lề, không có thì sang ngang dọc thanh nút (Comment / Share); không rê lên trên vì dễ
     trúng tên người đăng của bài ngắn.
     """
-    locator = [REACTION_BUTTON.format(kind=kind)]
+    locator = [_reaction_locator(kind)]
     for attempt in range(REACTION_HOVER_TRIES):
         if attempt:
             if not _park_mouse(driver):
@@ -948,11 +981,8 @@ def _react_video(driver, ctl: FarmControl, video, types: list) -> Optional[str]:
         return None
     if not found:
         return None
-    box, like = found
-    try:
-        if (like.get_attribute("aria-label") or "").strip() != "Like":
-            return None
-    except WebDriverException:
+    box, like, fresh = found
+    if not fresh:
         return None
     return _react(driver, ctl, box, like, types)
 
@@ -969,7 +999,7 @@ const path = location.pathname;
 const inViewer = path.startsWith('/stories/') && !path.startsWith('/stories/create');
 const labels = Array.from(document.querySelectorAll('[role="button"][aria-label], [role="link"][aria-label]'))
   .filter(vis).map((b) => b.getAttribute('aria-label').trim());
-const reacts = labels.filter((l) => /^(Like|Love|Care|Haha|Wow|Sad|Angry)$/.test(l)).length;
+const reacts = labels.filter((l) => /^(Like|Love|Care|Haha|Wow|Sad|Angry|Thích|Yêu thích|Thương thương|Buồn|Phẫn nộ)$/.test(l)).length;
 const end = !inViewer || labels.includes('Create story');
 const vw = innerWidth;
 let media = null, area = 0;
@@ -1025,7 +1055,7 @@ def _story_next(driver):
 def _react_story(driver, types: list) -> Optional[str]:
     """Story hiện sẵn các nút cảm xúc: bấm 1 loại ngẫu nhiên. Facebook không đổi nhãn sau khi thả nên tính khi bấm được."""
     kind = random.choice(types)
-    buttons = _find_visible(driver, [REACTION_BUTTON.format(kind=kind)])
+    buttons = _find_visible(driver, [_reaction_locator(kind)])
     if not buttons or not _human_click(driver, buttons[0]):
         return None
     _release_focus(driver)
