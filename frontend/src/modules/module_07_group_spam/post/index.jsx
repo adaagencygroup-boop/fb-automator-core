@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,6 +39,7 @@ import GroupSummarySection from "./components/GroupSummarySection";
 import GroupProgressSection from "./components/GroupProgressSection";
 import GroupActionBar from "./components/GroupActionBar";
 import {
+  clearGroupPostDraft,
   readGroupPostDraft,
   readGroupPostDraftMedia,
   writeGroupPostDraft,
@@ -122,6 +123,59 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const [isCompletionModalOpen, setIsCompletionModalOpen] = useState(false);
   const [completionData, setCompletionData] = useState(null);
   const [draftReady, setDraftReady] = useState(false);
+  const [formResetVersion, setFormResetVersion] = useState(0);
+  const rerunUidsRef = useRef(null);
+
+  // The completion dialog keeps its own result snapshot. The campaign form itself
+  // must be clean as soon as a run reaches a terminal state.
+  const resetCompletedRun = useCallback(async () => {
+    sessionStorage.removeItem("fb_rerun_campaign");
+    rerunUidsRef.current = null;
+    setCampaignId(null);
+    setJobId(null);
+    setCampaignName("");
+    setCampaignDescription("");
+    setCampaignLocked(false);
+    setIsRerun(false);
+    setSelectedAccountKeys([]);
+    setIsAccountLocked(false);
+    setSettingsAction("");
+    setSettingsFeedback(null);
+    setIsSettingsLocked(false);
+    setConfirmedApi("");
+    setThreads("2");
+    setRestMinutes("10");
+    setMaxPosts("10");
+    setGroupSource("search");
+    setGroupFile(null);
+    setCustomGroups([]);
+    setGroupSearch("");
+    setGroupFilter("");
+    setSelectedGroupKeys([]);
+    setIsGroupSourceLocked(false);
+    setMediaFiles([]);
+    setSavedMedia([]);
+    setMinMedia("1");
+    setMaxMedia("4");
+    setIsMediaLocked(false);
+    setPrompt("");
+    setAiCount("1");
+    setPosts(isComment ? [""] : [INITIAL_POST]);
+    setActivePost(0);
+    setHasGeneratedContent(false);
+    setIsContentLocked(false);
+    setDelayMin("30");
+    setDelayMax("60");
+    setDelayUnit("seconds");
+    setScheduleEnabled(false);
+    setScheduleDate("");
+    setScheduleTime("08:00");
+    setIsPostingSettingsLocked(false);
+    setCampaignProgress(null);
+    setRunState("idle");
+    setFormResetVersion((version) => version + 1);
+    await clearGroupPostDraft(draftScope);
+  }, [draftScope, isComment]);
 
   // Cấu hình chạy lại được ưu tiên; nếu không có thì khôi phục bản nháp khi quay lại tab.
   useEffect(() => {
@@ -245,8 +299,6 @@ export default function GroupPostModule({ actionType = "POST" }) {
     writeGroupPostDraftMedia(mediaFiles, draftScope);
   }, [draftReady, isRerun, mediaFiles, draftScope]);
 
-  const rerunUidsRef = useRef(null);
-
   const loadAccounts = async () => {
     setAccountsLoading(true);
     try {
@@ -321,12 +373,11 @@ export default function GroupPostModule({ actionType = "POST" }) {
       .then((job) => {
         if (cancelled || !job?.job_id || job.action_type !== actionType) return;
         const terminal = ["COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"].includes(job.status);
+        if (terminal) return;
         setCampaignProgress(job);
-        if (!terminal) {
-          setJobId(job.job_id);
-          setCampaignId(job.campaign_id);
-          setRunState(job.status === "QUEUED" ? "starting" : "running");
-        }
+        setJobId(job.job_id);
+        setCampaignId(job.campaign_id);
+        setRunState(job.status === "QUEUED" ? "starting" : "running");
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -347,8 +398,9 @@ export default function GroupPostModule({ actionType = "POST" }) {
           setRunState("idle");
           setJobId(null);
           if (job.status === "COMPLETED" || (job.status === "PARTIAL" && job.success > 0)) {
-            setCompletionData(job);
+            setCompletionData({ ...job, name: job.name || job.campaign_name });
             setIsCompletionModalOpen(true);
+            void resetCompletedRun();
             if (job.status === "PARTIAL") {
               toast.success(job.message || "Chiến dịch đã hoàn thành một phần!", "HOÀN TẤT CHIẾN DỊCH");
             }
@@ -373,7 +425,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [jobId]);
+  }, [jobId, resetCompletedRun]);
 
   // Hiển thị toast sau khi React đã nhận và render dòng log hoàn tất.
   // Theo dõi job_id để không thông báo lặp lại qua các lần polling.
@@ -526,6 +578,11 @@ export default function GroupPostModule({ actionType = "POST" }) {
         { time: new Date().toISOString().slice(0, 19), level, message },
       ],
     }));
+  };
+
+  const closeCompletionModal = () => {
+    setIsCompletionModalOpen(false);
+    setCompletionData(null);
   };
 
   const handleStart = async () => {
@@ -748,6 +805,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
       {/* Bước 4: Nguồn nhóm */}
       <div id="step-4-group-source" className="scroll-mt-6">
         <GroupSourceSection
+          key={`group-source-${formResetVersion}`}
           stepNumber="4"
           groupSource={groupSource}
           setGroupSource={setGroupSource}
@@ -770,6 +828,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
       {/* Bước 5: Chọn media */}
       <div id="step-5-media" className="scroll-mt-6">
         <GroupMediaSection
+          key={`group-media-${formResetVersion}`}
           stepNumber="5"
           mediaFiles={mediaFiles}
           setMediaFiles={setMediaFiles}
@@ -789,6 +848,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
       {/* Bước 6: Tạo nội dung bằng AI */}
       <div id="step-6-content" className="scroll-mt-6">
         <GroupContentSection
+          key={`group-content-${formResetVersion}`}
           contentType={isComment ? "comment" : "post"}
           stepNumber="6"
           prompt={prompt}
@@ -870,7 +930,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
       </div>
 
       {/* Popup Modal thông báo hoàn thành chiến dịch */}
-      <Dialog open={isCompletionModalOpen} onOpenChange={setIsCompletionModalOpen}>
+      <Dialog open={isCompletionModalOpen} onOpenChange={(open) => (open ? setIsCompletionModalOpen(true) : closeCompletionModal())}>
         <DialogContent className="max-w-md p-6">
           <div className="flex flex-col items-center text-center">
             <div className="flex size-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 ring-8 ring-emerald-50 mb-3 shadow-xs">
@@ -890,8 +950,8 @@ export default function GroupPostModule({ actionType = "POST" }) {
             <div className="w-full my-4 rounded-xl border border-emerald-100 bg-emerald-50/70 p-4 text-left space-y-2.5">
               <div className="flex items-center justify-between text-xs sm:text-sm">
                 <span className="text-slate-600 font-medium">Tên chiến dịch:</span>
-                <span className="font-bold text-slate-800 truncate max-w-[210px]" title={campaignName}>
-                  {campaignName || `Chiến dịch ${actionLabel} nhóm`}
+                <span className="font-bold text-slate-800 truncate max-w-[210px]" title={completionData?.name}>
+                  {completionData?.name || `Chiến dịch ${actionLabel} nhóm`}
                 </span>
               </div>
               <div className="flex items-center justify-between text-xs sm:text-sm">
@@ -922,16 +982,16 @@ export default function GroupPostModule({ actionType = "POST" }) {
               <Button
                 variant="outline"
                 onClick={() => {
-                  setIsCompletionModalOpen(false);
-                  const el = document.getElementById("step-9-progress");
+                  closeCompletionModal();
+                  const el = document.getElementById("step-1-campaign");
                   if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
                 }}
                 className="w-full sm:w-auto text-xs"
               >
-                Xem nhật ký hoạt động
+                Tạo chiến dịch mới
               </Button>
               <Button
-                onClick={() => setIsCompletionModalOpen(false)}
+                onClick={closeCompletionModal}
                 className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm"
               >
                 Đã hiểu & Đóng

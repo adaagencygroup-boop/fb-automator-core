@@ -21,6 +21,25 @@ export function writeGroupPostDraft(draft, scope = "post") {
   }
 }
 
+export async function clearGroupPostDraft(scope = "post") {
+  try {
+    sessionStorage.removeItem(draftKey(scope));
+
+    const db = await openMediaDatabase();
+    if (!db) return;
+
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(MEDIA_STORE_NAME, "readwrite");
+      transaction.objectStore(MEDIA_STORE_NAME).delete(mediaKey(scope));
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error);
+    });
+    db.close();
+  } catch (error) {
+    console.warn("Unable to clear group post draft:", error);
+  }
+}
+
 function openMediaDatabase() {
   if (typeof indexedDB === "undefined") return Promise.resolve(null);
 
