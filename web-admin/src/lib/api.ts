@@ -317,10 +317,10 @@ export const api = {
   banUser: (id: number) =>
     fetchApi(`/api/v1/admin/users/${id}/ban`, { method: "PUT" }),
 
-  createUser: (payload: { username: string; password: string; contact_info?: string; days: number; status: string; role?: string }) =>
+  createUser: (payload: { username: string; password: string; contact_info?: string; days: number; status: string; role?: string; hwid?: string }) =>
     fetchApi("/api/v1/admin/users", { method: "POST", body: JSON.stringify(payload) }),
 
-  editUser: (id: number, payload: { username?: string; contact_info?: string; days?: number; password?: string; status?: string; role?: string }) =>
+  editUser: (id: number, payload: { username?: string; contact_info?: string; days?: number; password?: string; status?: string; role?: string; hwid?: string }) =>
     fetchApi(`/api/v1/admin/users/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
 
   unbanUser: (id: number) =>
