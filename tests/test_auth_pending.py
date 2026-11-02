@@ -39,7 +39,10 @@ class PendingTests(unittest.TestCase):
             self.db.fetch_one.return_value["status"] = status
             response = self.status(self.ticket, query="?username=someoneelse")
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {"username": "member", "status": status})
+            self.assertEqual(
+                response.json(),
+                {"username": "member", "status": status, "user_id": 42},
+            )
             self.db.fetch_one.assert_called_with("SELECT * FROM users WHERE id = ?", (42,))
 
     def test_ticket_cannot_be_used_on_another_device(self):
@@ -76,7 +79,7 @@ class PendingTests(unittest.TestCase):
         self.db.fetch_one.return_value["status"] = "banned"
         response = self.status()
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"username": "member", "status": "banned"})
+        self.assertEqual(response.json(), {"username": "member", "status": "banned", "user_id": 42})
         self.assertNotIn("set-cookie", response.headers)
         self.db.execute.assert_not_called()
         with self.assertRaises(HTTPException):
@@ -92,6 +95,46 @@ class PendingTests(unittest.TestCase):
         self.assertTrue(self.status(self.ticket).json()["hwid_mismatch"])
         self.db.fetch_one.return_value["hwid"] = None
         self.assertNotIn("hwid_mismatch", self.status(self.ticket).json())
+
+    def test_status_accepts_registration_token_header_without_cookie(self):
+        self.db.fetch_one.return_value["status"] = "pending"
+        with patch.object(self.router, "get_hwid", return_value="engine-device"):
+            response = self.client.get(
+                "/api/v1/auth/registration-status",
+                headers={"X-Registration-Token": self.ticket},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "pending")
+
+    def test_claim_approval_issues_workspace_tokens_when_approved(self):
+        self.db.fetch_one.side_effect = [
+            {"id": 42, "username": "member", "status": "approved", "role": "user", "hwid": "engine-device", "expired_at": None},
+            {"id": 42, "username": "member", "status": "approved", "role": "user", "hwid": "engine-device", "expired_at": None},
+            {"id": 91},
+        ]
+        with patch.object(self.router, "get_hwid", return_value="engine-device"):
+            response = self.client.post(
+                "/api/v1/auth/claim-approval",
+                json={"registration_token": self.ticket, "remember_me": True},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["status"], "approved")
+        self.assertIn("access_token", body)
+        self.assertIn("refresh_token", body)
+        self.db.fetch_one.side_effect = None
+
+    def test_claim_approval_rejects_while_still_pending(self):
+        self.db.fetch_one.return_value = {
+            "id": 42, "username": "member", "status": "pending", "role": "user", "hwid": "engine-device",
+        }
+        with patch.object(self.router, "get_hwid", return_value="engine-device"):
+            response = self.client.post(
+                "/api/v1/auth/claim-approval",
+                json={"registration_token": self.ticket},
+            )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["detail"], "ACCOUNT_PENDING")
 
 
 if __name__ == "__main__":

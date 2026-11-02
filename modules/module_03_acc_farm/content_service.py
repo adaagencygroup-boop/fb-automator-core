@@ -13,6 +13,7 @@ import random
 import urllib.request
 import urllib.parse
 import json
+from config.constants import UPLOADS_DIR
 from typing import List, Dict, Any, Optional, Tuple, Set
 
 logger = logging.getLogger(__name__)
@@ -446,8 +447,7 @@ def crawl_or_fetch_image(
     import requests
 
     if not save_dir:
-        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        save_dir = os.path.join(project_root, "uploads", "posts")
+        save_dir = str(UPLOADS_DIR / "posts")
     os.makedirs(save_dir, exist_ok=True)
 
     # 1. Thử Pixabay nếu có key

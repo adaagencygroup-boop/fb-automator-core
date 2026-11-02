@@ -3,27 +3,15 @@
 import { useEffect, useState } from "react";
 import { formatVietnamTime } from "@/lib/date-utils";
 import { API_BASE, WS_BASE } from "@/config/constants";
+import { api } from "@/services/api";
+import { getAccessToken } from "@/services/authTokens.mjs";
+import { getSessionUserId } from "@/services/sessionIdentity.mjs";
+import { connectSSE } from "@/services/sse.mjs";
 
 const STORAGE_KEY = "fb_account_terminal_logs";
 const MAX_LOGS = 600;
 
-const DEFAULT_INITIAL_LOGS = [
-  {
-    timestamp: "09:30:02",
-    type: "info",
-    message: "Khởi động hệ thống Facebook Automator Pro thành công (Port 28129)",
-  },
-  {
-    timestamp: "09:30:08",
-    type: "info",
-    message: "Đang kiểm tra trình duyệt Chromium headless cho các luồng automation...",
-  },
-  {
-    timestamp: "09:30:15",
-    type: "success",
-    message: "Đã kết nối với Local Python Engine (SSE Stream & WebSocket Realtime)",
-  },
-];
+const DEFAULT_INITIAL_LOGS = [];
 
 let globalLogs = [];
 let hasLoadedFromStorage = false;
@@ -76,7 +64,7 @@ function isHeartbeat(m) {
 }
 
 function loadFromStorage() {
-  if (hasLoadedFromStorage && globalLogs.length > 0) return globalLogs;
+  if (hasLoadedFromStorage) return globalLogs;
   if (typeof window !== "undefined") {
     try {
       const saved = sessionStorage.getItem(STORAGE_KEY);
@@ -93,7 +81,7 @@ function loadFromStorage() {
     }
   }
 
-  // Khởi tạo các log trạng thái ban đầu để Terminal luôn hiển thị trực quan
+  // Connection messages are added only after the stream actually connects.
   globalLogs = [...DEFAULT_INITIAL_LOGS];
   hasLoadedFromStorage = true;
   return globalLogs;
@@ -128,70 +116,102 @@ const connectionListeners = new Set();
 
 function getOrCreateEventSource() {
   if (typeof window === "undefined") return;
-  if (activeEventSource && activeEventSource.readyState !== EventSource.CLOSED) {
+  if (activeEventSource) {
     return;
   }
 
   try {
     const sseUrl = `${API_BASE}/api/accounts/stream`;
-    // Thêm withCredentials: true để gửi kèm cookie fb_access khi gọi cross-origin
-    const es = new EventSource(sseUrl, { withCredentials: true });
-    activeEventSource = es;
+    const es = {};
 
     es.onopen = () => {
       isConnectedGlobal = true;
       connectionListeners.forEach((l) => l(true));
-
-      const logs = loadFromStorage();
-      const lastMsg = logs.length > 0 ? logs[logs.length - 1].message : "";
-      if (!lastMsg.includes("Đã kết nối với Local Python Engine")) {
-        const connMsg = {
-          timestamp: formatVietnamTime(),
-          type: "info",
-          message: "Đã kết nối với Local Python Engine (SSE Stream)",
-        };
-        const next = [...logs, connMsg];
-        persistLogs(next);
-        listeners.forEach((l) => l(next));
-      }
+      markEngineConnected("SSE Stream & WebSocket Realtime");
     };
 
     es.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        if (isHeartbeat(data)) return;
-
-        window.dispatchEvent(new CustomEvent("local_engine_event", { detail: data }));
-
-        if (data.event === "account_operation_updated") return;
-
-        const currentLogs = loadFromStorage();
-        const newMsg = {
-          timestamp: data.time || formatVietnamTime(),
-          type: data.level || data.type || "info",
-          message: translateLogMessage(data.message || JSON.stringify(data)),
-          uid: data.uid,
-          extra: data,
-        };
-
-        const next = [...currentLogs, newMsg].slice(-MAX_LOGS);
-        persistLogs(next);
-        listeners.forEach((l) => l(next));
+        appendEngineLog(JSON.parse(event.data));
       } catch (e) {
         console.error("SSE parse error", e);
       }
     };
 
     es.onerror = () => {
-      // Khi SSE tạm lỗi, để WebSocket dự phòng hỗ trợ
-      if (!activeWebSocket || activeWebSocket.readyState !== WebSocket.OPEN) {
-        isConnectedGlobal = false;
-        connectionListeners.forEach((l) => l(false));
-      }
+      isConnectedGlobal = false;
+      connectionListeners.forEach((l) => l(false));
     };
+    activeEventSource = connectSSE(sseUrl, {
+      getHeaders: () => {
+        const token = getAccessToken();
+        const userId = getSessionUserId();
+        return {
+          "X-Auth-Client": "user",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...(userId ? { "X-Auth-User-Id": userId } : {}),
+        };
+      },
+      // Reuse API session validation and its token refresh interceptor.
+      onUnauthorized: () => api.get("/api/v1/auth/me"),
+      onOpen: es.onopen,
+      onMessage: es.onmessage,
+      onError: es.onerror,
+    });
   } catch (err) {
-    console.error("Failed to initialize SSE EventSource:", err);
+    console.error("Failed to initialize SSE connection:", err);
   }
+}
+
+function markEngineConnected(label) {
+  const logs = loadFromStorage();
+  const lastMsg = logs.length > 0 ? logs[logs.length - 1].message : "";
+  if (lastMsg.includes("Đã kết nối với Local Python Engine")) return;
+  const connMsg = {
+    timestamp: formatVietnamTime(),
+    type: "info",
+    message: `Đã kết nối với Local Python Engine (${label})`,
+  };
+  const next = [...logs, connMsg];
+  persistLogs(next);
+  listeners.forEach((l) => l(next));
+}
+
+function appendEngineLog(data) {
+  if (isHeartbeat(data)) return;
+  window.dispatchEvent(new CustomEvent("local_engine_event", { detail: data }));
+  if (data.event === "account_operation_updated") return;
+  if (data.type === "connected" && !data.level && !data.message?.includes?.("🚀") && !data.uid) {
+    // SSE hello — không nhân đôi với markEngineConnected
+    if (String(data.message || "").toLowerCase().includes("sse stream connected")) return;
+  }
+
+  const currentLogs = loadFromStorage();
+  const stamp = data.time || data.timestamp;
+  let displayTime = formatVietnamTime();
+  if (typeof stamp === "string" && stamp) {
+    displayTime = stamp.includes("T") ? formatVietnamTime(stamp) : stamp;
+  }
+  const newMsg = {
+    timestamp: displayTime,
+    type: String(data.level || data.type || "info").toLowerCase(),
+    message: translateLogMessage(data.message || JSON.stringify(data)),
+    uid: data.uid,
+    extra: data,
+  };
+  // Tránh spam trùng 1 dòng (SSE + WS mirror cùng message)
+  const last = currentLogs[currentLogs.length - 1];
+  if (
+    last
+    && last.message === newMsg.message
+    && last.uid === newMsg.uid
+    && String(last.type) === String(newMsg.type)
+  ) {
+    return;
+  }
+  const next = [...currentLogs, newMsg].slice(-MAX_LOGS);
+  persistLogs(next);
+  listeners.forEach((l) => l(next));
 }
 
 function getOrCreateWebSocket() {
@@ -208,32 +228,21 @@ function getOrCreateWebSocket() {
     const ws = new WebSocket(WS_BASE);
     activeWebSocket = ws;
 
+    // Module 02/04 broadcast mirror qua /ws/logs — quan trọng cho bản .exe
     ws.onopen = () => {
-      isConnectedGlobal = true;
-      connectionListeners.forEach((l) => l(true));
+      if (!isConnectedGlobal) {
+        isConnectedGlobal = true;
+        connectionListeners.forEach((l) => l(true));
+        markEngineConnected("WebSocket Realtime");
+      }
+      try {
+        ws.send("ping");
+      } catch (e) {}
     };
 
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        if (isHeartbeat(data)) return;
-
-        window.dispatchEvent(new CustomEvent("local_engine_event", { detail: data }));
-
-        if (data.event === "account_operation_updated") return;
-
-        const currentLogs = loadFromStorage();
-        const newMsg = {
-          timestamp: data.timestamp || data.time || formatVietnamTime(),
-          type: (data.level || data.type || "info").toLowerCase(),
-          message: translateLogMessage(data.message || JSON.stringify(data)),
-          uid: data.uid,
-          extra: data,
-        };
-
-        const next = [...currentLogs, newMsg].slice(-MAX_LOGS);
-        persistLogs(next);
-        listeners.forEach((l) => l(next));
+        appendEngineLog(JSON.parse(event.data));
       } catch (e) {}
     };
 
@@ -270,6 +279,16 @@ export function useLocalSSE(enabled = true) {
       listeners.delete(logListener);
       connectionListeners.delete(connListener);
       activeSubscribersCount = Math.max(0, activeSubscribersCount - 1);
+      if (activeSubscribersCount === 0) {
+        activeEventSource?.close();
+        activeEventSource = null;
+        if (activeWebSocket) {
+          activeWebSocket.onclose = null;
+          activeWebSocket.close();
+          activeWebSocket = null;
+        }
+        isConnectedGlobal = false;
+      }
     };
   }, [enabled]);
 

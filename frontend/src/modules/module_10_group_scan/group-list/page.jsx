@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import {
   Folder,
   Plus,
@@ -15,426 +15,34 @@ import {
   ChevronLeft,
   ChevronRight,
   FolderPlus,
-  ArrowUpDown,
+  RefreshCw,
+  Loader2,
 } from "lucide-react";
 import { toast } from "@/lib/toast";
-
-// ==========================================
-// DỮ LIỆU MẪU BAN ĐẦU CHUẨN FIGMA / SCREENSHOT
-// ==========================================
-const INITIAL_CATEGORIES = [
-  {
-    id: "cat-1",
-    name: "Hội Buôn",
-    description: "Các nhóm buôn bán kinh doanh sỉ & lẻ",
-    sub: "15 nhóm FB • 1.8M TV",
-  },
-  {
-    id: "cat-2",
-    name: "Marketing Sài Gòn Hub",
-    description: "Nhóm chuyên môn marketing & truyền thông tại HCM",
-    sub: "15 nhóm FB • 1.8M TV",
-  },
-  {
-    id: "cat-3",
-    name: "Marketing Sài Gòn Hub",
-    description: "Cộng đồng agency & freelancer",
-    sub: "15 nhóm FB • 1.8M TV",
-  },
-  {
-    id: "cat-4",
-    name: "Marketing Sài Gòn Hub",
-    description: "Cộng đồng kinh doanh online",
-    sub: "15 nhóm FB • 1.8M TV",
-  },
-  {
-    id: "cat-5",
-    name: "Marketing Sài Gòn Hub",
-    description: "Nhóm mua bán trao đổi phụ kiện",
-    sub: "15 nhóm FB • 1.8M TV",
-  },
-  {
-    id: "cat-6",
-    name: "Marketing Sài Gòn Hub",
-    description: "Nhóm quảng cáo đa nền tảng",
-    sub: "15 nhóm FB • 1.8M TV",
-  },
-];
-
-const INITIAL_GROUPS = [
-  {
-    id: "g-1",
-    categoryId: "cat-1",
-    stt: 1,
-    keyword: "bán hàng online",
-    name: "Hội Buôn Bán Online Toàn Quốc",
-    type: "public",
-    membersCount: 258724,
-    members: "258.724",
-    url: "https://www.facebook.com/groups/hoibuonbanonlinetoanquoc",
-    note: "—",
-    initialChecked: true,
-  },
-  {
-    id: "g-2",
-    categoryId: "cat-1",
-    stt: 2,
-    keyword: "marketing",
-    name: "Marketing Online - Chia Sẻ Kinh Nghiệm",
-    type: "public",
-    membersCount: 186392,
-    members: "186.392",
-    url: "https://www.facebook.com/groups/marketingonlinechiasekinhnghiem",
-    note: "—",
-    initialChecked: true,
-  },
-  {
-    id: "g-3",
-    categoryId: "cat-1",
-    stt: 3,
-    keyword: "kinh doanh",
-    name: "Cộng Đồng Kinh Doanh & Khởi Nghiệp",
-    type: "private",
-    membersCount: 412567,
-    members: "412.567",
-    url: "https://www.facebook.com/groups/congdongkinhdoanhvakhoinghiep",
-    note: "Đã tham gia",
-    initialChecked: true,
-  },
-  {
-    id: "g-4",
-    categoryId: "cat-1",
-    stt: 4,
-    keyword: "bán hàng online",
-    name: "Hội Sỉ Lẻ Toàn Quốc (VIP)",
-    type: "private",
-    membersCount: null,
-    members: "—",
-    url: "https://www.facebook.com/groups/hoisiletoanquocvip",
-    note: "Đang chờ QTV duyệt",
-    initialChecked: false,
-  },
-  {
-    id: "g-5",
-    categoryId: "cat-1",
-    stt: 5,
-    keyword: "bán hàng online",
-    name: "Shop Online Việt Nam",
-    type: "public",
-    membersCount: 98243,
-    members: "98.243",
-    url: "https://www.facebook.com/groups/shoponlinevietnam",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-6",
-    categoryId: "cat-1",
-    stt: 6,
-    keyword: "affiliate",
-    name: "Chiến Binh Kiếm Tiền MMO Kín",
-    type: "private",
-    membersCount: null,
-    members: "—",
-    url: "https://www.facebook.com/groups/chienbinhkiemtienmmokin",
-    note: "Đang chờ QTV duyệt",
-    initialChecked: false,
-  },
-  {
-    id: "g-7",
-    categoryId: "cat-1",
-    stt: 7,
-    keyword: "dropship",
-    name: "Cộng Đồng Fulfillment Toàn Quốc",
-    type: "private",
-    membersCount: 145200,
-    members: "145.200",
-    url: "https://www.facebook.com/groups/congdongfulfillmenttoanquoc",
-    note: "Đã tham gia",
-    initialChecked: false,
-  },
-  {
-    id: "g-8",
-    categoryId: "cat-1",
-    stt: 8,
-    keyword: "mẹ và bé",
-    name: "Hội Các Mẹ Bỉm Sữa Chia Sẻ Kinh Nghiệm",
-    type: "public",
-    membersCount: 520190,
-    members: "520.190",
-    url: "https://www.facebook.com/groups/hoicacmebimsuachiasekinhnghiem",
-    note: "—",
-    initialChecked: false,
-  },
-  // Các nhóm bổ sung để đủ tổng số 28 nhóm như trên ảnh thiết kế
-  {
-    id: "g-9",
-    categoryId: "cat-1",
-    stt: 9,
-    keyword: "thời trang",
-    name: "Chợ Sỉ Quần Áo Miền Nam",
-    type: "public",
-    membersCount: 165300,
-    members: "165.300",
-    url: "https://www.facebook.com/groups/chosiquanaomiennam",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-10",
-    categoryId: "cat-1",
-    stt: 10,
-    keyword: "kinh doanh",
-    name: "Gia Đình Khởi Nghiệp Trẻ",
-    type: "public",
-    membersCount: 88400,
-    members: "88.400",
-    url: "https://www.facebook.com/groups/giadinhkhoinghieptre",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-11",
-    categoryId: "cat-1",
-    stt: 11,
-    keyword: "bất động sản",
-    name: "Cộng Đồng Nhà Đất Đầu Tư",
-    type: "private",
-    membersCount: 220000,
-    members: "220.000",
-    url: "https://www.facebook.com/groups/congdongnhadatdautu",
-    note: "Đã tham gia",
-    initialChecked: false,
-  },
-  {
-    id: "g-12",
-    categoryId: "cat-1",
-    stt: 12,
-    keyword: "phụ kiện",
-    name: "Hội Buôn Nguồn Hàng Quảng Châu",
-    type: "public",
-    membersCount: 310500,
-    members: "310.500",
-    url: "https://www.facebook.com/groups/hoibuonnguonhangquangchau",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-13",
-    categoryId: "cat-1",
-    stt: 13,
-    keyword: "quảng cáo",
-    name: "Thủ Thuật Chạy Ads Chuyên Nghiệp",
-    type: "private",
-    membersCount: null,
-    members: "—",
-    url: "https://www.facebook.com/groups/thuthuatchayads",
-    note: "Đang chờ QTV duyệt",
-    initialChecked: false,
-  },
-  {
-    id: "g-14",
-    categoryId: "cat-1",
-    stt: 14,
-    keyword: "đồ gia dụng",
-    name: "Kho Sỉ Tổng Hợp Toàn Quốc",
-    type: "public",
-    membersCount: 142000,
-    members: "142.000",
-    url: "https://www.facebook.com/groups/khositonghop",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-15",
-    categoryId: "cat-1",
-    stt: 15,
-    keyword: "mỹ phẩm",
-    name: "Hội Phân Phối Mỹ Phẩm Chính Hãng",
-    type: "public",
-    membersCount: 95400,
-    members: "95.400",
-    url: "https://www.facebook.com/groups/phanphoimypham",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-16",
-    categoryId: "cat-1",
-    stt: 16,
-    keyword: "kinh doanh",
-    name: "Cộng Đồng F&B Việt Nam",
-    type: "private",
-    membersCount: 195000,
-    members: "195.000",
-    url: "https://www.facebook.com/groups/congdongfbvn",
-    note: "Đã tham gia",
-    initialChecked: false,
-  },
-  {
-    id: "g-17",
-    categoryId: "cat-1",
-    stt: 17,
-    keyword: "bán hàng online",
-    name: "Hội Chủ Shop Livestream",
-    type: "public",
-    membersCount: 112000,
-    members: "112.000",
-    url: "https://www.facebook.com/groups/chushoplivestream",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-18",
-    categoryId: "cat-1",
-    stt: 18,
-    keyword: "marketing",
-    name: "Content Marketing Master",
-    type: "public",
-    membersCount: 84300,
-    members: "84.300",
-    url: "https://www.facebook.com/groups/contentmaster",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-19",
-    categoryId: "cat-1",
-    stt: 19,
-    keyword: "affiliate",
-    name: "TikTok Shop & KOC Vietnam",
-    type: "public",
-    membersCount: 230000,
-    members: "230.000",
-    url: "https://www.facebook.com/groups/tiktokshopkoc",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-20",
-    categoryId: "cat-1",
-    stt: 20,
-    keyword: "dropship",
-    name: "Shopee & Lazada Seller Club",
-    type: "public",
-    membersCount: 175000,
-    members: "175.000",
-    url: "https://www.facebook.com/groups/sellerclub",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-21",
-    categoryId: "cat-1",
-    stt: 21,
-    keyword: "mẹ và bé",
-    name: "Review Đồ Dùng Trẻ Em",
-    type: "public",
-    membersCount: 68000,
-    members: "68.000",
-    url: "https://www.facebook.com/groups/reviewdodungtreem",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-22",
-    categoryId: "cat-1",
-    stt: 22,
-    keyword: "bán hàng online",
-    name: "Nhóm Hàng Tiêu Dùng Giá Rẻ",
-    type: "public",
-    membersCount: 92100,
-    members: "92.100",
-    url: "https://www.facebook.com/groups/hangtieudunggiare",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-23",
-    categoryId: "cat-1",
-    stt: 23,
-    keyword: "kinh doanh",
-    name: "Cộng Đồng Nhượng Quyền Việt",
-    type: "private",
-    membersCount: 54000,
-    members: "54.000",
-    url: "https://www.facebook.com/groups/nhuongquyen",
-    note: "Đã tham gia",
-    initialChecked: false,
-  },
-  {
-    id: "g-24",
-    categoryId: "cat-1",
-    stt: 24,
-    keyword: "marketing",
-    name: "SEO & Growth Hacking Group",
-    type: "public",
-    membersCount: 76000,
-    members: "76.000",
-    url: "https://www.facebook.com/groups/seogrowth",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-25",
-    categoryId: "cat-1",
-    stt: 25,
-    keyword: "bán hàng online",
-    name: "Nguồn Hàng Độc Lạ Hot Trend",
-    type: "public",
-    membersCount: 135000,
-    members: "135.000",
-    url: "https://www.facebook.com/groups/nguonhangdocla",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-26",
-    categoryId: "cat-1",
-    stt: 26,
-    keyword: "affiliate",
-    name: "Cộng Đồng Kiếm Tiền Online Dễ Dàng",
-    type: "private",
-    membersCount: null,
-    members: "—",
-    url: "https://www.facebook.com/groups/kiemtienonlinededang",
-    note: "Đang chờ QTV duyệt",
-    initialChecked: false,
-  },
-  {
-    id: "g-27",
-    categoryId: "cat-1",
-    stt: 27,
-    keyword: "thời trang",
-    name: "Xưởng May Gia Công Xuất Khẩu",
-    type: "public",
-    membersCount: 48900,
-    members: "48.900",
-    url: "https://www.facebook.com/groups/xuongmaygiacong",
-    note: "—",
-    initialChecked: false,
-  },
-  {
-    id: "g-28",
-    categoryId: "cat-1",
-    stt: 28,
-    keyword: "kinh doanh",
-    name: "Cộng Đồng Doanh Nhân Tương Lai",
-    type: "public",
-    membersCount: 162000,
-    members: "162.000",
-    url: "https://www.facebook.com/groups/doanhnhantuonglai",
-    note: "—",
-    initialChecked: false,
-  },
-];
+import {
+  getScannedGroups,
+  deleteScannedGroup,
+  deleteScannedGroupsBulk,
+  createScanCategory,
+  updateScanCategory,
+  deleteScanCategory,
+  moveGroupsToCategory,
+} from "../service";
 
 export default function GroupScanListPage() {
-  // State quản lý danh mục và nhóm
-  const [categories, setCategories] = useState(INITIAL_CATEGORIES);
-  const [activeCategoryId, setActiveCategoryId] = useState("cat-1");
+  const [loading, setLoading] = useState(true);
+  const [categories, setCategories] = useState([
+    {
+      id: "cat-all",
+      name: "Tất cả nhóm đã quét",
+      description: "Toàn bộ nhóm lưu trong CSDL",
+      sub: "0 nhóm FB",
+    },
+  ]);
+  const [activeCategoryId, setActiveCategoryId] = useState("cat-all");
   const [categorySearch, setCategorySearch] = useState("");
-  const [groups, setGroups] = useState(INITIAL_GROUPS);
+  const [groups, setGroups] = useState([]);
+  const [dbKeywords, setDbKeywords] = useState([]);
 
   // Bộ lọc bên phải
   const [tableSearch, setTableSearch] = useState("");
@@ -443,9 +51,7 @@ export default function GroupScanListPage() {
   const [noteFilter, setNoteFilter] = useState("all");
 
   // Selection
-  const [selectedIds, setSelectedIds] = useState(
-    () => new Set(INITIAL_GROUPS.filter((g) => g.initialChecked).map((g) => g.id))
-  );
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
 
   // Phân trang
   const [page, setPage] = useState(1);
@@ -460,9 +66,77 @@ export default function GroupScanListPage() {
   const [targetCatId, setTargetCatId] = useState("");
   const [activeMenuCatId, setActiveMenuCatId] = useState(null);
 
+  // Nạp danh sách nhóm từ Database (chỉ làm việc với các bảng chuẩn trong DB)
+  const loadGroups = useCallback(async (isRefresh = false) => {
+    setLoading(true);
+    try {
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.removeItem("fb_scanned_groups_cache");
+        } catch {}
+      }
+
+      const res = await getScannedGroups();
+      const loadedGroups = res?.groups || [];
+      const kws = res?.keywords || [];
+      const dbCats = res?.categories || [];
+
+      setGroups(loadedGroups);
+      setDbKeywords(kws);
+
+      const catAll = {
+        id: "cat-all",
+        name: "Tất cả nhóm đã quét",
+        description: "Toàn bộ nhóm lưu trong CSDL",
+        sub: `${loadedGroups.length} nhóm FB`,
+      };
+
+      // 1. Mỗi từ khóa quét được là 1 DANH MỤC
+      const kwCats = kws.map((k) => ({
+        id: `kw-${k.keyword}`,
+        keyword: k.keyword,
+        name: k.keyword,
+        isKeyword: true,
+        description: `Từ khóa quét: ${k.keyword}`,
+        sub: `${k.count} nhóm FB • ${k.total_members ? k.total_members.toLocaleString("vi-VN") : 0} TV`,
+        count: k.count,
+      }));
+
+      // 2. Các danh mục chung được lưu từ Database (bảng scanned_group_categories)
+      const customCats = dbCats.map((c) => ({
+        id: c.id,
+        name: c.name,
+        isCustom: true,
+        description: c.description || "Danh mục nhóm chung",
+        sub: `${c.count || 0} nhóm FB`,
+        count: c.count || 0,
+      }));
+
+      setCategories([catAll, ...kwCats, ...customCats]);
+
+      if (isRefresh) {
+        toast.success("Đã làm mới danh sách nhóm từ Database!");
+      }
+    } catch (err) {
+      console.warn("[Group List]", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadGroups();
+  }, [loadGroups]);
+
   // Active Category Object
   const activeCategory = useMemo(() => {
-    return categories.find((c) => c.id === activeCategoryId) || categories[0];
+    return (
+      categories.find((c) => c.id === activeCategoryId) ||
+      categories[0] || {
+        id: "cat-all",
+        name: "Tất cả nhóm đã quét",
+      }
+    );
   }, [categories, activeCategoryId]);
 
   // Lọc danh mục bên trái theo từ khóa
@@ -474,15 +148,37 @@ export default function GroupScanListPage() {
 
   // Các nhóm thuộc danh mục đang chọn
   const categoryGroups = useMemo(() => {
-    return groups.filter((g) => g.categoryId === activeCategoryId);
-  }, [groups, activeCategoryId]);
+    if (activeCategoryId === "cat-all") return groups;
+    return groups.filter((g) => {
+      // 1. Danh mục từ khóa: khớp keyword
+      if (activeCategory?.isKeyword || activeCategoryId.startsWith("kw-")) {
+        const kw = activeCategory?.keyword || activeCategory?.name;
+        if (kw && (g.keyword || "").toLowerCase() === kw.toLowerCase()) return true;
+      }
+      // 2. Danh mục chung: khớp category_name hoặc id
+      if (activeCategory?.isCustom || activeCategoryId.startsWith("cat-")) {
+        const cname = activeCategory?.name;
+        if (cname && (g.category_name || "").toLowerCase() === cname.toLowerCase()) return true;
+        if (g.categoryId === activeCategoryId) return true;
+      }
+      // 3. Fallback
+      if (g.categoryId === activeCategoryId) return true;
+      if (
+        activeCategory?.name &&
+        (g.keyword || "").toLowerCase() === activeCategory.name.toLowerCase()
+      ) {
+        return true;
+      }
+      return false;
+    });
+  }, [groups, activeCategoryId, activeCategory]);
 
   // Thống kê 4 thẻ Summary Cards
   const stats = useMemo(() => {
     const totalGroups = categoryGroups.length;
     let totalMembersCount = 0;
-    let nonModerated = 0; // Không kiểm duyệt (Công khai)
-    let moderated = 0; // Có kiểm duyệt (Riêng tư)
+    let nonModerated = 0; // Công khai
+    let moderated = 0; // Riêng tư
 
     categoryGroups.forEach((g) => {
       if (g.membersCount) {
@@ -495,14 +191,11 @@ export default function GroupScanListPage() {
       }
     });
 
-    // Định dạng số thành viên có dấu chấm phân cách hàng nghìn
-    const formatNumber = (num) => {
-      return num.toLocaleString("vi-VN");
-    };
+    const formatNumber = (num) => num.toLocaleString("vi-VN");
 
     return {
       totalGroups,
-      totalMembersFormatted: totalMembersCount ? formatNumber(totalMembersCount) : "3.245.000",
+      totalMembersFormatted: formatNumber(totalMembersCount),
       nonModerated,
       moderated,
     };
@@ -514,10 +207,11 @@ export default function GroupScanListPage() {
       // 1. Text search (tên nhóm hoặc UID / keyword / URL)
       if (tableSearch.trim()) {
         const term = tableSearch.toLowerCase().trim();
-        const matchName = g.name.toLowerCase().includes(term);
-        const matchKey = g.keyword.toLowerCase().includes(term);
-        const matchUrl = g.url.toLowerCase().includes(term);
-        if (!matchName && !matchKey && !matchUrl) return false;
+        const matchName = (g.name || "").toLowerCase().includes(term);
+        const matchKey = (g.keyword || "").toLowerCase().includes(term);
+        const matchUrl = (g.url || "").toLowerCase().includes(term);
+        const matchGid = (g.group_id || "").toLowerCase().includes(term);
+        if (!matchName && !matchKey && !matchUrl && !matchGid) return false;
       }
 
       // 2. Filter Loại nhóm
@@ -530,15 +224,17 @@ export default function GroupScanListPage() {
       if (membersFilter !== "all") {
         const count = g.membersCount || 0;
         if (membersFilter === "under50k" && count >= 50000) return false;
-        if (membersFilter === "50k_200k" && (count < 50000 || count > 200000)) return false;
+        if (membersFilter === "50k_200k" && (count < 50000 || count > 200000))
+          return false;
         if (membersFilter === "over200k" && count <= 200000) return false;
       }
 
       // 4. Filter Ghi chú
       if (noteFilter !== "all") {
-        if (noteFilter === "joined" && !g.note.includes("Đã tham gia")) return false;
-        if (noteFilter === "pending" && !g.note.includes("Đang chờ")) return false;
-        if (noteFilter === "none" && g.note !== "—") return false;
+        const note = g.note || "—";
+        if (noteFilter === "joined" && !note.includes("Đã tham gia")) return false;
+        if (noteFilter === "pending" && !note.includes("Đang chờ")) return false;
+        if (noteFilter === "none" && note !== "—") return false;
       }
 
       return true;
@@ -580,85 +276,109 @@ export default function GroupScanListPage() {
     setSelectedIds(next);
   };
 
-  // Thêm danh mục
-  const handleAddCategory = () => {
+  // Thêm danh mục tự tạo lưu vào Database
+  const handleAddCategory = async () => {
     if (!newCatName.trim()) {
       toast.warn("Vui lòng nhập tên danh mục!");
       return;
     }
-    const newId = `cat-${Date.now()}`;
-    const newCat = {
-      id: newId,
-      name: newCatName.trim(),
-      description: "Danh mục nhóm tự tạo",
-      sub: "0 nhóm FB • 0 TV",
-    };
-    setCategories([...categories, newCat]);
-    setActiveCategoryId(newId);
-    setNewCatName("");
-    setShowAddCatModal(false);
-    toast.success(`Đã tạo danh mục "${newCat.name}" thành công!`);
+    const catName = newCatName.trim();
+    try {
+      await createScanCategory(catName);
+      await loadGroups();
+      setNewCatName("");
+      setShowAddCatModal(false);
+      toast.success(`Đã tạo danh mục "${catName}" thành công!`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Không thể tạo danh mục");
+    }
   };
 
-  // Sửa danh mục
-  const handleEditCategory = () => {
+  // Sửa danh mục trong Database (bảng scanned_group_categories)
+  const handleEditCategory = async () => {
     if (!editCatName.trim()) {
       toast.warn("Tên danh mục không được để trống!");
       return;
     }
-    setCategories(
-      categories.map((c) =>
-        c.id === activeCategoryId ? { ...c, name: editCatName.trim() } : c
-      )
-    );
-    setShowEditCatModal(false);
-    toast.success("Đã cập nhật danh mục thành công!");
+    const targetCat = categories.find((c) => c.id === activeCategoryId);
+    const catIdOrName = targetCat?.id || activeCategoryId;
+    try {
+      await updateScanCategory(catIdOrName, editCatName.trim());
+      await loadGroups();
+      setShowEditCatModal(false);
+      toast.success("Đã cập nhật danh mục thành công trong Database!");
+    } catch (err) {
+      console.error(err);
+      toast.error("Không thể cập nhật danh mục trong Database");
+    }
   };
 
-  // Xóa danh mục
-  const handleDeleteCategory = (catId) => {
-    if (categories.length <= 1) {
-      toast.error("Không thể xóa danh mục cuối cùng!");
+  // Xóa danh mục khỏi Database (bảng scanned_group_categories và liên kết nhóm)
+  const handleDeleteCategory = async (catId) => {
+    if (catId === "cat-all") {
+      toast.error("Không thể xóa danh mục tổng!");
       return;
     }
     const catToDelete = categories.find((c) => c.id === catId);
-    const remaining = categories.filter((c) => c.id !== catId);
-    setCategories(remaining);
-    if (activeCategoryId === catId) {
-      setActiveCategoryId(remaining[0].id);
+    try {
+      await deleteScanCategory(catId);
+      await loadGroups();
+      if (activeCategoryId === catId) {
+        setActiveCategoryId("cat-all");
+      }
+      setShowEditCatModal(false);
+      setActiveMenuCatId(null);
+      toast.success(`Đã xóa danh mục "${catToDelete?.name || ""}" khỏi Database!`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Không thể xóa danh mục trong Database");
     }
-    // Xóa nhóm thuộc danh mục đó hoặc chuyển sang danh mục đầu
-    setGroups(groups.filter((g) => g.categoryId !== catId));
-    setShowEditCatModal(false);
-    setActiveMenuCatId(null);
-    toast.success(`Đã xóa danh mục "${catToDelete?.name || ""}"!`);
   };
 
-  // Chuyển nhóm sang danh mục khác
-  const handleMoveGroups = () => {
+  // Chuyển nhóm sang danh mục khác trong Database (bảng scanned_group_category_groups)
+  const handleMoveGroups = async () => {
     if (!targetCatId) {
       toast.warn("Vui lòng chọn danh mục đích!");
       return;
     }
     const count = selectedIds.size;
-    setGroups(
-      groups.map((g) =>
-        selectedIds.has(g.id) ? { ...g, categoryId: targetCatId } : g
-      )
-    );
     const targetCat = categories.find((c) => c.id === targetCatId);
-    setSelectedIds(new Set());
-    setShowMoveModal(false);
-    toast.success(`Đã chuyển ${count} nhóm sang "${targetCat?.name || "danh mục mới"}"!`);
+    if (!targetCat?.name) {
+      toast.warn("Danh mục đích không hợp lệ!");
+      return;
+    }
+    try {
+      await moveGroupsToCategory({
+        categoryName: targetCat.name,
+        groupIds: Array.from(selectedIds),
+      });
+      await loadGroups();
+      setSelectedIds(new Set());
+      setShowMoveModal(false);
+      toast.success(
+        `Đã chuyển ${count} nhóm sang danh mục "${targetCat.name}" trong Database!`
+      );
+    } catch (err) {
+      console.error(err);
+      toast.error("Lỗi khi chuyển danh mục nhóm!");
+    }
   };
 
-  // Xóa các nhóm đã chọn
-  const handleDeleteSelectedGroups = () => {
+  // Xóa các nhóm đã chọn khỏi Database (bảng scanned_groups)
+  const handleDeleteSelectedGroups = async () => {
     if (selectedIds.size === 0) return;
     const count = selectedIds.size;
-    setGroups(groups.filter((g) => !selectedIds.has(g.id)));
-    setSelectedIds(new Set());
-    toast.success(`Đã xóa ${count} nhóm thành công!`);
+    const ids = Array.from(selectedIds);
+    try {
+      await deleteScannedGroupsBulk(ids);
+      await loadGroups();
+      setSelectedIds(new Set());
+      toast.success(`Đã xóa ${count} nhóm thành công khỏi Database!`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Lỗi khi xóa nhóm khỏi Database!");
+    }
   };
 
   return (
@@ -691,10 +411,18 @@ export default function GroupScanListPage() {
             </div>
 
             {/* Stats summary */}
-            <div className="py-2.5">
+            <div className="py-2.5 flex items-center justify-between">
               <span className="text-xs font-semibold text-[#1E293B]">
                 {categories.length} Thư mục ({groups.length} nhóm FB)
               </span>
+              <button
+                type="button"
+                onClick={() => loadGroups(true)}
+                title="Đồng bộ lại từ DB"
+                className="text-slate-400 hover:text-blue-600 transition-colors p-1"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin text-blue-600" : ""}`} />
+              </button>
             </div>
 
             {/* Filter input */}
@@ -711,9 +439,24 @@ export default function GroupScanListPage() {
 
             {/* Folder Item List */}
             <div className="flex flex-col gap-2 max-h-[460px] overflow-y-auto pr-0.5">
-              {filteredCategories.map((cat, idx) => {
+              {filteredCategories.map((cat) => {
                 const isActive = cat.id === activeCategoryId;
-                const catGroupCount = groups.filter((g) => g.categoryId === cat.id).length;
+                const catGroupCount =
+                  cat.id === "cat-all"
+                    ? groups.length
+                    : cat.isKeyword || cat.id.startsWith("kw-")
+                    ? groups.filter(
+                        (g) =>
+                          (g.keyword || "").toLowerCase() ===
+                          (cat.keyword || cat.name).toLowerCase()
+                      ).length
+                    : groups.filter(
+                        (g) =>
+                          (g.category_name || "").toLowerCase() ===
+                            cat.name.toLowerCase() ||
+                          g.categoryId === cat.id
+                      ).length;
+
                 return (
                   <div
                     key={cat.id}
@@ -728,19 +471,32 @@ export default function GroupScanListPage() {
                     }`}
                   >
                     <div className="flex flex-col gap-0.5 min-w-0 pr-2">
-                      <span
-                        className={`text-sm font-semibold truncate ${
-                          isActive ? "text-[#0F172A]" : "text-[#1E293B]"
-                        }`}
-                      >
-                        {cat.name}
-                      </span>
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span
+                          className={`text-sm font-semibold truncate ${
+                            isActive ? "text-[#0F172A]" : "text-[#1E293B]"
+                          }`}
+                        >
+                          {cat.name}
+                        </span>
+                        {cat.isKeyword && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-blue-50 text-blue-600 shrink-0 border border-blue-100">
+                            Từ khóa
+                          </span>
+                        )}
+                        {cat.isCustom && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 shrink-0 border border-amber-100">
+                            Danh mục
+                          </span>
+                        )}
+                      </div>
                       <span
                         className={`text-xs truncate ${
                           isActive ? "text-[#64748B]" : "text-[#94A3B8]"
                         }`}
                       >
-                        {catGroupCount} nhóm FB • 1.8M TV
+                        {catGroupCount} nhóm FB
+                        {cat.sub && cat.sub.includes("•") ? ` • ${cat.sub.split("•")[1].trim()}` : ""}
                       </span>
                     </div>
 
@@ -748,43 +504,47 @@ export default function GroupScanListPage() {
                       {isActive && (
                         <span className="w-2 h-2 rounded-full bg-[#2563EB]" />
                       )}
-                      <div className="relative">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveMenuCatId(activeMenuCatId === cat.id ? null : cat.id);
-                          }}
-                          className="p-1 rounded hover:bg-slate-100 text-[#94A3B8] hover:text-slate-600 transition-colors"
-                        >
-                          <MoreVertical className="w-3.5 h-3.5" />
-                        </button>
-                        {activeMenuCatId === cat.id && (
-                          <div
-                            onClick={(e) => e.stopPropagation()}
-                            className="absolute right-0 top-full mt-1 w-32 bg-white rounded-lg border border-slate-200 shadow-lg py-1 z-50 text-xs"
+                      {cat.id !== "cat-all" && !cat.id.startsWith("kw-") && (
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveMenuCatId(
+                                activeMenuCatId === cat.id ? null : cat.id
+                              );
+                            }}
+                            className="p-1 rounded hover:bg-slate-100 text-[#94A3B8] hover:text-slate-600 transition-colors"
                           >
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditCatName(cat.name);
-                                setShowEditCatModal(true);
-                                setActiveMenuCatId(null);
-                              }}
-                              className="w-full px-3 py-1.5 text-left text-slate-700 hover:bg-slate-50 flex items-center gap-1.5"
+                            <MoreVertical className="w-3.5 h-3.5" />
+                          </button>
+                          {activeMenuCatId === cat.id && (
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              className="absolute right-0 top-full mt-1 w-32 bg-white rounded-lg border border-slate-200 shadow-lg py-1 z-50 text-xs"
                             >
-                              <Pencil className="w-3 h-3" /> Đổi tên
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteCategory(cat.id)}
-                              className="w-full px-3 py-1.5 text-left text-red-600 hover:bg-red-50 flex items-center gap-1.5"
-                            >
-                              <Trash2 className="w-3 h-3" /> Xóa
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditCatName(cat.name);
+                                  setShowEditCatModal(true);
+                                  setActiveMenuCatId(null);
+                                }}
+                                className="w-full px-3 py-1.5 text-left text-slate-700 hover:bg-slate-50 flex items-center gap-1.5"
+                              >
+                                <Pencil className="w-3 h-3" /> Đổi tên
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteCategory(cat.id)}
+                                className="w-full px-3 py-1.5 text-left text-red-600 hover:bg-red-50 flex items-center gap-1.5"
+                              >
+                                <Trash2 className="w-3 h-3" /> Xóa
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -809,20 +569,40 @@ export default function GroupScanListPage() {
         <div className="flex-1 w-full bg-white border border-[#E2E8F0] shadow-sm rounded-xl p-6 flex flex-col gap-4 min-w-0">
           {/* Detail Title & Action */}
           <div className="flex items-center justify-between">
-            <h2 className="text-xl font-bold tracking-tight text-[#0F172A]">
-              {activeCategory.name}
-            </h2>
-            <button
-              type="button"
-              onClick={() => {
-                setEditCatName(activeCategory.name);
-                setShowEditCatModal(true);
-              }}
-              className="h-[30px] px-3.5 py-1.5 bg-white border border-[#CBD5E1] shadow-sm rounded-lg text-xs font-medium text-[#334155] flex items-center gap-1.5 hover:bg-slate-50 transition-colors"
-            >
-              <Pencil className="w-3 h-3 text-[#64748B]" />
-              <span>Sửa danh mục</span>
-            </button>
+            <div className="flex items-center gap-3">
+              <h2 className="text-xl font-bold tracking-tight text-[#0F172A]">
+                {activeCategory.name}
+              </h2>
+              {loading && (
+                <span className="flex items-center gap-1 text-xs text-blue-600">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Đang tải...
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => loadGroups(true)}
+                title="Tải lại từ DB"
+                className="h-[30px] px-3 bg-white border border-[#CBD5E1] shadow-sm rounded-lg text-xs font-medium text-[#334155] flex items-center gap-1.5 hover:bg-slate-50 transition-colors"
+              >
+                <RefreshCw className="w-3 h-3 text-[#64748B]" />
+                <span>Làm mới</span>
+              </button>
+              {activeCategory.id !== "cat-all" && !activeCategory.id.startsWith("kw-") && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditCatName(activeCategory.name);
+                    setShowEditCatModal(true);
+                  }}
+                  className="h-[30px] px-3.5 py-1.5 bg-white border border-[#CBD5E1] shadow-sm rounded-lg text-xs font-medium text-[#334155] flex items-center gap-1.5 hover:bg-slate-50 transition-colors"
+                >
+                  <Pencil className="w-3 h-3 text-[#64748B]" />
+                  <span>Sửa danh mục</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {/* 4 Summary Stat Cards */}
@@ -880,7 +660,7 @@ export default function GroupScanListPage() {
                   setTableSearch(e.target.value);
                   setPage(1);
                 }}
-                placeholder="Tìm theo tên nhóm hoặc UID..."
+                placeholder="Tìm theo tên nhóm, UID, từ khóa hoặc URL..."
                 className="w-full h-[34px] rounded-lg border border-[#E2E8F0] bg-white pl-8 pr-3 text-xs text-[#1E293B] placeholder:text-[#6B7280] focus:outline-none focus:border-blue-500 transition-colors"
               />
             </div>
@@ -895,7 +675,7 @@ export default function GroupScanListPage() {
                 }}
                 className="w-full sm:w-auto h-[34px] px-3 rounded-lg border border-[#E2E8F0] bg-white text-xs text-[#334155] focus:outline-none focus:border-blue-500 cursor-pointer"
               >
-                <option value="all">Loại nhóm</option>
+                <option value="all">Loại nhóm: Tất cả</option>
                 <option value="public">Công khai</option>
                 <option value="private">Riêng tư</option>
               </select>
@@ -911,7 +691,7 @@ export default function GroupScanListPage() {
                 }}
                 className="w-full sm:w-auto h-[34px] px-3 rounded-lg border border-[#E2E8F0] bg-white text-xs text-[#334155] focus:outline-none focus:border-blue-500 cursor-pointer"
               >
-                <option value="all">Thành viên</option>
+                <option value="all">Thành viên: Tất cả</option>
                 <option value="under50k">Dưới 50.000</option>
                 <option value="50k_200k">50.000 - 200.000</option>
                 <option value="over200k">Trên 200.000</option>
@@ -959,7 +739,9 @@ export default function GroupScanListPage() {
                     toast.warn("Chưa có danh mục khác để chuyển!");
                     return;
                   }
-                  const otherCat = categories.find((c) => c.id !== activeCategoryId);
+                  const otherCat = categories.find(
+                    (c) => c.id !== activeCategoryId
+                  );
                   setTargetCatId(otherCat ? otherCat.id : "");
                   setShowMoveModal(true);
                 }}
@@ -1018,9 +800,21 @@ export default function GroupScanListPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#F1F5F9]">
-                {paginatedGroups.length === 0 ? (
+                {loading ? (
                   <tr>
-                    <td colSpan={8} className="py-12 text-center text-xs text-slate-400">
+                    <td colSpan={8} className="py-12 text-center text-xs text-slate-500">
+                      <div className="flex items-center justify-center gap-2">
+                        <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                        <span>Đang tải danh sách nhóm từ Database...</span>
+                      </div>
+                    </td>
+                  </tr>
+                ) : paginatedGroups.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={8}
+                      className="py-12 text-center text-xs text-slate-400"
+                    >
                       Không tìm thấy nhóm nào phù hợp trong danh mục này.
                     </td>
                   </tr>
@@ -1051,7 +845,7 @@ export default function GroupScanListPage() {
 
                         {/* TỪ KHÓA */}
                         <td className="px-3 py-4 text-xs font-medium text-[#1E293B]">
-                          {g.keyword}
+                          {g.keyword || "—"}
                         </td>
 
                         {/* TÊN NHÓM */}
@@ -1074,18 +868,18 @@ export default function GroupScanListPage() {
 
                         {/* THÀNH VIÊN */}
                         <td className="px-3 py-4 text-xs font-medium text-[#0F172A] text-right">
-                          {g.members}
+                          {g.members || "—"}
                         </td>
 
                         {/* LIÊN KẾT / URL NHÓM */}
                         <td className="px-3 py-4">
                           <a
-                            href={g.url}
+                            href={g.url || g.href}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 text-xs font-medium text-[#2563EB] hover:underline max-w-[190px] truncate"
                           >
-                            <span className="truncate">{g.url}</span>
+                            <span className="truncate">{g.url || g.href}</span>
                             <ExternalLink className="w-3 h-3 shrink-0 text-[#94A3B8]" />
                           </a>
                         </td>
@@ -1306,7 +1100,8 @@ export default function GroupScanListPage() {
                 <span>Chuyển {selectedIds.size} nhóm sang danh mục khác</span>
               </h3>
               <button
-                type="button"
+
+type="button"
                 onClick={() => setShowMoveModal(false)}
                 className="p-1 rounded hover:bg-slate-100 text-slate-400"
               >

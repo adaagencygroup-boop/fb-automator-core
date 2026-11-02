@@ -9,8 +9,9 @@ import bcrypt
 import jwt
 
 TOKEN_EXPIRE_DAYS = 365
-ACCESS_TOKEN_MINUTES = 15
-REFRESH_TOKEN_DAYS = 30
+# Desktop + automation chạy dài: access 12h, refresh 180 ngày (tránh đá phiên giữa job).
+ACCESS_TOKEN_MINUTES = 12 * 60
+REFRESH_TOKEN_DAYS = 180
 ALGORITHM = "HS256"
 
 

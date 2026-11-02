@@ -142,7 +142,7 @@ function DetailRow({ account, isClosing, onClosed, onClose }) {
 export default function AccountTable({
   categories = [], onMoveCategory, onChangeAccountCategory, categoryUnavailable = false,
   accounts = [],
-  tableRef, total = 0, hasMore = false, isLoadingMore = false, moreError, onLoadMore, onRetryMore,
+  tableRef, total = 0, refreshError = null,
   searchTerm, setSearchTerm, accountFilter, setAccountFilter, loginFilter, setLoginFilter,
   isLoading = false,
   isRefreshing = false,
@@ -182,7 +182,6 @@ export default function AccountTable({
   }, []);
   const scrollRef = useRef(null);
   const selectedUidsRef = useRef(selectedUids);
-  const sentinelRef = useRef(null);
   const anchorRef = useRef(null);
   const rowsRef = useRef(accounts);
   useLayoutEffect(() => { rowsRef.current = accounts; }, [accounts]);
@@ -208,15 +207,6 @@ export default function AccountTable({
     const row = [...root.querySelectorAll("[data-account-uid]")].find(row => row.dataset.accountUid === anchor.uid);
     if (row) root.scrollTop += row.getBoundingClientRect().top - root.getBoundingClientRect().top - anchor.offset;
   }, [accounts]);
-  useEffect(() => {
-    if (!hasMore || isLoading || isLoadingMore || moreError || !sentinelRef.current) return;
-    const observer = new IntersectionObserver(entries => {
-      if (entries.some(entry => entry.isIntersecting)) onLoadMore();
-    }, { root: scrollRef.current, rootMargin: "160px" });
-    observer.observe(sentinelRef.current);
-    return () => observer.disconnect();
-  }, [hasMore, isLoading, isLoadingMore, moreError, onLoadMore]);
-
   useEffect(() => {
     selectedUidsRef.current = selectedUids;
   }, [selectedUids]);
@@ -711,9 +701,7 @@ export default function AccountTable({
             )}
           </tbody>
         </table>
-        <div ref={sentinelRef} className="h-1" />
-        {isLoadingMore && <p role="status" className="p-3 text-center text-sm text-slate-500">Đang tải thêm...</p>}
-        {moreError && <div role="alert" className="p-3 text-center text-sm text-red-600">{moreError} <button type="button" onClick={onRetryMore} className="ml-2 text-blue-600 underline">Thử lại</button></div>}
+        {refreshError && <div role="alert" className="p-3 text-center text-sm text-red-600">{refreshError} <button type="button" onClick={onRetry} className="ml-2 text-blue-600 underline">Thử lại</button></div>}
       </div>
     </div>
 
@@ -722,7 +710,7 @@ export default function AccountTable({
         {/* Cụm trái: Đã chọn X trên Y tài khoản */}
         <div className="flex flex-wrap items-center gap-2">
           <span role="status" className="flex h-5 basis-full items-center gap-1.5 text-sm text-slate-600">
-            {isRefreshing ? <><Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />Đang cập nhật…</> : <>Đã tải {accounts.length} / {total} tài khoản</>}
+            {isRefreshing ? <><Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />Đang cập nhật…</> : <>Đang hiển thị {accounts.length} / {total} tài khoản</>}
           </span>
           <span className="w-2 h-2 rounded-full bg-[#2563EB]" />
           <span className="text-[#475569] text-sm">

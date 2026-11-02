@@ -200,7 +200,8 @@ class FacebookSyncService:
                                                 timestamp=timestamp,
                                                 direction=direction,
                                                 is_read=True,
-                                                is_replied=True
+                                                is_replied=True,
+                                                created_at=dt
                                             )
                                             db.add(new_msg)
                                             db.commit()

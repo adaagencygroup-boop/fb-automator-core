@@ -49,19 +49,19 @@ import { EmergencyStopModal } from "./EmergencyStopModal";
 import { PastScheduleModal } from "./PastScheduleModal";
 
 const DEFAULT_GEMINI_MODELS = [
-  { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash" },
-  { value: "gemini-1.5-pro", label: "Gemini 1.5 Pro" },
-  { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
-  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
   { value: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Khuyên dùng - Nhanh & Mới nhất)" },
   { value: "gemini-3.7-flash", label: "Gemini 3.7 Flash (Tốc độ cao & Thông minh)" },
   { value: "gemini-3.6-flash", label: "Gemini 3.6 Flash" },
   { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
   { value: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite (Siêu nhanh)" },
-  { value: "gemini-4-argon", label: "Gemini 4 Argon (Suy luận cao cấp)" },
   { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview (Sáng tạo & Chi tiết)" },
   { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite" },
   { value: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" },
+  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+  { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
+  { value: "gemini-1.5-pro", label: "Gemini 1.5 Pro" },
+  { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash" },
+  { value: "gemini-4-argon", label: "Gemini 4 Argon (Suy luận cao cấp)" },
   { value: "gemini-flash-latest", label: "Gemini Flash Latest" },
   { value: "gemini-pro-latest", label: "Gemini Pro Latest" },
 ];
@@ -116,7 +116,7 @@ export function StatusPostView({ initialState = "config" }) {
   const [apiKeyContent, setApiKeyContent] = useState("");
   const [pixabayKey, setPixabayKey] = useState("");
   const [showPixabayKey, setShowPixabayKey] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("gemini-1.5-flash");
+  const [selectedModel, setSelectedModel] = useState("gemini-3.8-flash");
   const [modelOptions, setModelOptions] = useState(DEFAULT_GEMINI_MODELS);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [prompt, setPrompt] = useState("");
@@ -552,8 +552,14 @@ export function StatusPostView({ initialState = "config" }) {
     );
   };
 
+  const hasPrompt = Boolean(String(prompt || "").trim());
+
   // Sinh bài viết AI
   const handleGenerateDrafts = async () => {
+    if (!String(prompt || "").trim()) {
+      toast.warning("Vui lòng nhập Khung Prompt AI trước khi thực thi!", "CHƯA CÓ PROMPT");
+      return;
+    }
     const selectedAccs = accounts.filter((a) => a.selected);
     if (selectedAccs.length === 0) {
       toast.warning("Vui lòng tick chọn ít nhất một tài khoản ở Bước 2 để tạo bài viết!", "CHƯA CHỌN TÀI KHOẢN");
@@ -605,6 +611,10 @@ export function StatusPostView({ initialState = "config" }) {
 
   // Nút THỰC THI ở Bước 2: gọi AI sinh bài và cuộn tới Khu vực xem trước
   const handleExecuteGenerate = async () => {
+    if (!String(prompt || "").trim()) {
+      toast.warning("Vui lòng nhập Khung Prompt AI trước khi thực thi!", "CHƯA CÓ PROMPT");
+      return;
+    }
     const selected = accounts.filter((a) => a.selected);
     if (selected.length === 0) {
       toast.warning("Vui lòng tick chọn ít nhất một tài khoản ở Bước 2 trước khi thực thi!", "CHƯA CHỌN TÀI KHOẢN");
@@ -617,6 +627,10 @@ export function StatusPostView({ initialState = "config" }) {
   };
 
   const handleGenerateForSingleAccount = async (acc) => {
+    if (!String(prompt || "").trim()) {
+      toast.warning("Vui lòng nhập Khung Prompt AI trước khi tạo bài!", "CHƯA CÓ PROMPT");
+      return;
+    }
     try {
       setGeneratingCardUid(acc.uid);
       const res = await api.post("/api/post/drafts/generate", {
@@ -1584,12 +1598,12 @@ export function StatusPostView({ initialState = "config" }) {
 
           {/* ── Nút THỰC THI ở Bước 2 (Chuẩn Figma) ── */}
           {viewState === "config" && (
-            <div className="p-4 bg-white border-t border-slate-100">
+            <div className="space-y-2 border-t border-slate-100 bg-white p-4">
               <button
                 type="button"
                 onClick={handleExecuteGenerate}
-                disabled={isGeneratingDrafts || selectedCount === 0}
-                className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 active:scale-[0.99] text-white rounded-xl font-bold text-xs tracking-wider shadow-sm flex items-center justify-center gap-2 cursor-pointer transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-blue-500/10"
+                disabled={isGeneratingDrafts || selectedCount === 0 || !hasPrompt}
+                className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-blue-600 py-3.5 text-xs font-bold tracking-wider text-white shadow-sm shadow-blue-500/10 transition-all hover:bg-blue-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isGeneratingDrafts ? (
                   <>
@@ -1603,6 +1617,11 @@ export function StatusPostView({ initialState = "config" }) {
                   </>
                 )}
               </button>
+              {!hasPrompt && (
+                <p className="pt-0.5 text-center text-[11px] font-medium text-amber-600">
+                  Nhập Khung Prompt AI ở Bước 1 trước khi thực thi.
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -1641,14 +1660,14 @@ export function StatusPostView({ initialState = "config" }) {
                 </div>
               ) : (
                 <>
-                  {/* Grid 3 cột chuẩn Figma */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {/* Grid 3 cột chuẩn Figma — min-w-0 để card không đẩy tràn cột */}
+                  <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3 [&>*]:min-w-0">
                     {paginatedCards.map((card) => {
                       const isEmojiMenuOpen = emojiPickerCard?.cardKey === card.key;
                       return (
                         <div
                           key={card.key}
-                          className={`bg-[#F8FAFC] rounded-2xl border border-[#E2E8F0] p-4 sm:p-5 flex flex-col justify-between transition-all hover:shadow-xs relative ${
+                          className={`relative flex min-w-0 flex-col justify-between overflow-hidden rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] p-4 transition-all hover:shadow-xs sm:p-5 ${
                             isEmojiMenuOpen ? "z-30 shadow-md ring-1 ring-blue-300" : "z-10"
                           }`}
                         >
@@ -1725,25 +1744,25 @@ export function StatusPostView({ initialState = "config" }) {
                           </div>
                         </div>
 
-                        {/* Footer: 4 nút hành động nằm ngang chuẩn Figma, vừa vặn không tràn viền */}
-                        <div className="flex items-center justify-between gap-1.5 mt-4 pt-3 border-t border-[#E2E8F0] w-full">
-                          {/* [Ảnh (X)] - icon_post_image.svg */}
+                        {/* Footer: 2x2 trên card hẹp, 1 hàng khi đủ rộng — không tràn viền */}
+                        <div className="mt-4 grid w-full min-w-0 grid-cols-2 gap-1.5 border-t border-[#E2E8F0] pt-3 xl:grid-cols-4">
+                          {/* [Ảnh (X)] */}
                           <button
                             type="button"
                             onClick={() => setViewingImageCard(card)}
-                            className="h-[30px] px-2 sm:px-2.5 rounded-lg border border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#565E74] text-[11px] font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                            className="flex h-[30px] min-w-0 cursor-pointer items-center justify-center gap-1 rounded-lg border border-[#E2E8F0] bg-white px-1.5 text-[11px] font-semibold text-[#565E74] transition-colors hover:bg-slate-50"
                             title="Xem và quản lý ảnh đính kèm"
                           >
-                            <Image src="/icons/icon_post_image.svg" width={12} height={12} alt="image" className="block" />
-                            <span>Ảnh ({card.imageCount})</span>
+                            <Image src="/icons/icon_post_image.svg" width={12} height={12} alt="image" className="block shrink-0" />
+                            <span className="truncate">Ảnh ({card.imageCount})</span>
                           </button>
 
-                          {/* [Tạo lại] - icon_post_reload.svg */}
+                          {/* [Tạo lại] */}
                           <button
                             type="button"
                             onClick={() => handleGenerateForSingleAccount(card.account)}
-                            disabled={isGeneratingDrafts || generatingCardUid === card.account.uid}
-                            className="h-[30px] px-2 sm:px-2.5 rounded-lg border border-[#E2E8F0] bg-white hover:bg-slate-50 text-[#565E74] text-[11px] font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
+                            disabled={isGeneratingDrafts || generatingCardUid === card.account.uid || !hasPrompt}
+                            className="flex h-[30px] min-w-0 cursor-pointer items-center justify-center gap-1 rounded-lg border border-[#E2E8F0] bg-white px-1.5 text-[11px] font-semibold text-[#565E74] transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                             title="Tạo lại nội dung bài này bằng AI"
                           >
                             <Image
@@ -1751,41 +1770,41 @@ export function StatusPostView({ initialState = "config" }) {
                               width={10}
                               height={14}
                               alt="reload"
-                              className={`block ${generatingCardUid === card.account.uid ? "animate-spin" : ""}`}
+                              className={`block shrink-0 ${generatingCardUid === card.account.uid ? "animate-spin" : ""}`}
                             />
-                            <span>Tạo lại</span>
+                            <span className="truncate">Tạo lại</span>
                           </button>
 
-                          {/* [Xóa] - icon_post_delete.svg */}
+                          {/* [Xóa] */}
                           <button
                             type="button"
                             onClick={() => handleDeleteDraftItem(card.draftId, card.account.uid)}
-                            className="h-[30px] px-2 rounded-lg border border-[#E2E8F0] bg-white hover:bg-rose-50 hover:text-rose-600 text-[#565E74] text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+                            className="flex h-[30px] min-w-0 cursor-pointer items-center justify-center gap-1 rounded-lg border border-[#E2E8F0] bg-white px-1.5 text-[11px] font-semibold text-[#565E74] transition-colors hover:bg-rose-50 hover:text-rose-600"
                             title="Xóa bài viết và bỏ chọn nick này"
                           >
-                            <Image src="/icons/icon_post_delete.svg" width={12} height={14} alt="delete" className="block" />
-                            <span>Xóa</span>
+                            <Image src="/icons/icon_post_delete.svg" width={12} height={14} alt="delete" className="block shrink-0" />
+                            <span className="truncate">Xóa</span>
                           </button>
 
-                          {/* [Lưu] / [Đã lưu] - icon_post_save.svg */}
+                          {/* [Lưu] / [Đã lưu] */}
                           <button
                             type="button"
                             onClick={() => handleSaveDraftItem(card.account.uid, card.draftId, card.content)}
-                            className={`h-[30px] px-2.5 sm:px-3 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 shadow-xs ${
+                            className={`flex h-[30px] min-w-0 cursor-pointer items-center justify-center gap-1 rounded-lg px-1.5 text-[11px] font-bold shadow-xs transition-all ${
                               card.isSaved
-                                ? "bg-[#059669] hover:bg-emerald-700 text-white"
-                                : "bg-[#2563EB] hover:bg-blue-700 text-white"
+                                ? "bg-[#059669] text-white hover:bg-emerald-700"
+                                : "bg-[#2563EB] text-white hover:bg-blue-700"
                             }`}
                           >
                             {card.isSaved ? (
                               <>
-                                <Check size={12} className="stroke-[3]" />
-                                <span>Đã lưu</span>
+                                <Check size={12} className="shrink-0 stroke-[3]" />
+                                <span className="truncate">Đã lưu</span>
                               </>
                             ) : (
                               <>
-                                <Image src="/icons/icon_post_save.svg" width={12} height={12} alt="save" className="block" />
-                                <span>Lưu</span>
+                                <Image src="/icons/icon_post_save.svg" width={12} height={12} alt="save" className="block shrink-0" />
+                                <span className="truncate">Lưu</span>
                               </>
                             )}
                           </button>
@@ -2289,6 +2308,28 @@ export function StatusPostView({ initialState = "config" }) {
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!logs.length) {
+                        toast.warning("Chưa có log để sao chép.");
+                        return;
+                      }
+                      const text = logs
+                        .map((l) => `[${l.timestamp}] [${l.thread}] ${l.message}`)
+                        .join("\n");
+                      navigator.clipboard
+                        ?.writeText(text)
+                        .then(() => toast.success(`Đã sao chép ${logs.length} dòng log`))
+                        .catch(() => toast.error("Không thể sao chép log"));
+                    }}
+                    disabled={!logs.length}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 bg-slate-800/80 px-2.5 py-1 font-mono text-[10px] font-semibold text-slate-300 transition hover:border-slate-500 hover:bg-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                    title="Sao chép toàn bộ log"
+                  >
+                    <Copy className="size-3.5" />
+                    Copy log
+                  </button>
                   <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[10px] font-mono font-semibold ${isPaused
                     ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
                     : isStopped

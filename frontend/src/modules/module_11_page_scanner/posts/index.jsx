@@ -1,10 +1,9 @@
 "use client";
 
-import React, { useState, useMemo, useRef, useEffect } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Users,
-  Plus,
-  Minus,
+  Globe,
   Trash2,
   Play,
   Pause,
@@ -12,828 +11,835 @@ import {
   Download,
   Search,
   ExternalLink,
-  Terminal,
-  RefreshCw,
-  FileSpreadsheet,
-  SlidersHorizontal,
   Eye,
-  X,
+  Loader2,
   ThumbsUp,
   MessageSquare,
-  Share2,
-  Calendar,
+  FileSpreadsheet,
 } from "lucide-react";
+import Link from "next/link";
+import { toast } from "@/lib/toast";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
+import { normalizeAccount, initialsOf } from "@/modules/module_07_group_spam/shared/components";
+import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
+import {
+  createPostScanSession,
+  getScannedPages,
+  getScannedPosts,
+  stopScanSession,
+  pauseScanSession,
+  resumeScanSession,
+  getScanSessionDetail,
+} from "../service";
+import { LiveLogConsole, nowStamp, LIVE_STATUSES } from "../_shared";
 import {
   DEFAULT_SCANNED_PAGES,
   SelectAccountsModal,
   SelectPagesModal,
 } from "../shared/SelectPagesModal";
 
-const INITIAL_POST_PAGES = [
-  {
-    id: "1000894123991",
-    page_id: "1000894123991",
-    name: "Nội Thất Cao Cấp Sài Gòn",
-    category: "Nội thất & Thiết kế",
-    followers_text: "324.500",
-    followers_count: 324500,
-    posts_count: 184,
-    status: "RUNNING",
-    status_label: "Đang thu thập...",
-    avatar_initials: "NT",
-    avatar_color: "bg-indigo-100 text-indigo-700",
-  },
-  {
-    id: "1000648291042",
-    page_id: "1000648291042",
-    name: "Faslink Vietnam",
-    category: "Thương hiệu Thời trang",
-    followers_text: "185.200",
-    followers_count: 185200,
-    posts_count: 112,
-    status: "DONE",
-    status_label: "Hoàn tất quét",
-    avatar_initials: "FV",
-    avatar_color: "bg-emerald-100 text-emerald-700",
-  },
-  {
-    id: "1000512398401",
-    page_id: "1000512398401",
-    name: "Gia Dụng Thông Minh Store",
-    category: "Mua sắm & Bán lẻ",
-    followers_text: "412.000",
-    followers_count: 412000,
-    posts_count: 78,
+const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
+
+function Stepper({ value, onChange, min = 1, max = 5000, step = 1, disabled, width = "w-8" }) {
+  return (
+    <div className="flex h-7 items-center rounded-lg border border-[#CBD5E1] bg-white">
+      <button
+        type="button"
+        disabled={disabled || value <= min}
+        onClick={() => onChange(Math.max(min, Number(value || min) - step))}
+        className="flex h-full w-5 items-center justify-center rounded-l-lg bg-[#F1F5F9] text-xs font-medium text-[#475569] hover:bg-slate-200 disabled:opacity-40"
+      >
+        -
+      </button>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          if (!Number.isNaN(v)) onChange(Math.min(max, Math.max(min, v)));
+        }}
+        className={`${width} bg-transparent text-center text-xs font-medium text-[#1E293B] outline-none disabled:opacity-50`}
+      />
+      <button
+        type="button"
+        disabled={disabled || value >= max}
+        onClick={() => onChange(Math.min(max, Number(value || min) + step))}
+        className="flex h-full w-5 items-center justify-center rounded-r-lg bg-[#F1F5F9] text-xs font-medium text-[#475569] hover:bg-slate-200 disabled:opacity-40"
+      >
+        +
+      </button>
+    </div>
+  );
+}
+
+function mapKhoToPage(p, idx = 0) {
+  const uid = String(p.page_key || "").replace(/^id:|^user:/, "") || String(idx);
+  return {
+    id: p.id || p.page_key || `pg_${idx}`,
+    page_key: p.page_key,
+    page_id: uid,
+    page_name: p.page_name || p.page_key,
+    name: p.page_name || p.page_key,
+    uid,
+    page_url: p.page_url,
+    category: p.category || "Fanpage",
+    follower_count: p.follower_count || 0,
+    followers_count: p.follower_count || 0,
+    followers_text: p.follower_count ? Number(p.follower_count).toLocaleString("vi-VN") : "—",
+    scanned_post_count: p.scanned_post_count || 0,
+    posts_count: p.scanned_post_count || 0,
+    avatar_initials: initialsOf(p.page_name || p.page_key || "PG"),
+    avatar_color: AVATAR_COLORS[idx % AVATAR_COLORS.length],
     status: "QUEUE",
     status_label: "Đang chờ hàng đợi",
-    avatar_initials: "GD",
-    avatar_color: "bg-amber-100 text-amber-700",
-  },
-  {
-    id: "1000938271654",
-    page_id: "1000938271654",
-    name: "Thế Giới Skincare Chính Hãng",
-    category: "Sức khỏe / Sắc đẹp",
-    followers_text: "260.800",
-    followers_count: 260800,
-    posts_count: 54,
-    status: "DONE",
-    status_label: "Hoàn tất quét",
-    avatar_initials: "SK",
-    avatar_color: "bg-pink-100 text-pink-700",
-  },
-  {
-    id: "1000772819203",
-    page_id: "1000772819203",
-    name: "Bất Động Sản Khu Đông TP.HCM",
-    category: "Bất động sản",
-    followers_text: "98.400",
-    followers_count: 98400,
-    posts_count: 34,
-    status: "DONE",
-    status_label: "Hoàn tất quét",
-    avatar_initials: "BĐ",
-    avatar_color: "bg-blue-100 text-blue-700",
-  },
-];
+  };
+}
 
-const INITIAL_POSTS_BY_PAGE = {
-  "1000894123991": [
-    {
-      id: "p_991823741",
-      content:
-        "[SIÊU SALE CUỐI TUẦN] Giảm ngay 35% trọn bộ Sofa Da Bò Ý nhập khẩu cao cấp. Bảo hành 10 năm khung sườn, miễn phí giao hàng nội thành TP.HCM! #NoiThatCaoCap #SofaDaBo #SaleNoiThat",
-      post_url: "fb.com/1000894123991/posts/991823741",
-      published_date: "26/10/2026",
-      published_time: "14:20",
-      days_ago: 0,
-      likes: 1245,
-      comments: 342,
-      shares: 89,
-    },
-    {
-      id: "p_991823610",
-      content:
-        "Bàn giao hoàn thiện căn hộ Penthouse 240m2 tại Thủ Thiêm River Park. Phong cách Modern Luxury tinh tế từng đường nét, thiết kế độc bản theo gu gia chủ. Inbox nhận báo giá thiết kế 3D!",
-      post_url: "fb.com/1000894123991/posts/991823610",
-      published_date: "25/10/2026",
-      published_time: "09:15",
-      days_ago: 1,
-      likes: 856,
-      comments: 194,
-      shares: 45,
-    },
-    {
-      id: "p_991823402",
-      content:
-        "Bàn ăn mặt đá Ceramic chống trầy xước, chống thấm ố tuyệt đối kết hợp 6 ghế bọc da Microfiber êm ái. Chỉ còn 5 bộ giá ưu đãi trải nghiệm tại Showroom Quận 7!",
-      post_url: "fb.com/1000894123991/posts/991823402",
-      published_date: "24/10/2026",
-      published_time: "19:45",
-      days_ago: 2,
-      likes: 530,
-      comments: 118,
-      shares: 27,
-    },
-    {
-      id: "p_991823118",
-      content:
-        "Tổng hợp 25+ mẫu phòng ngủ Master chuẩn khách sạn 5 sao xu hướng 2026. Tặng ngay gói tư vấn phong thủy và khảo sát thực tế trị giá 5.000.000đ khi đăng ký trong tuần này.",
-      post_url: "fb.com/1000894123991/posts/991823118",
-      published_date: "22/10/2026",
-      published_time: "11:30",
-      days_ago: 4,
-      likes: 2140,
-      comments: 615,
-      shares: 312,
-    },
-    {
-      id: "p_991822905",
-      content:
-        "Xưởng sản xuất trực tiếp rộng 5.000m2 không qua trung gian - Cam kết chuẩn gỗ An Cường 100%, đền gấp đôi nếu phát hiện pha trộn ván kém chất lượng. Hotline: 0909.888.777",
-      post_url: "fb.com/1000894123991/posts/991822905",
-      published_date: "20/10/2026",
-      published_time: "16:05",
-      days_ago: 6,
-      likes: 412,
-      comments: 67,
-      shares: 19,
-    },
-  ],
-  "1000648291042": [
-    {
-      id: "p_882716101",
-      content:
-        "Ra mắt BST Áo Sơ Mi Sợi Tre Kháng Khuẩn Thu Đông 2026 - Chống nhăn tự nhiên, thoáng khí gấp 3 lần cotton thông thường. Mua 2 tặng 1 trên toàn hệ thống showroom Faslink!",
-      post_url: "fb.com/1000648291042/posts/882716101",
-      published_date: "26/10/2026",
-      published_time: "10:00",
-      days_ago: 0,
-      likes: 940,
-      comments: 215,
-      shares: 64,
-    },
-    {
-      id: "p_882715890",
-      content:
-        "Đồng phục doanh nghiệp xanh bền vững từ sợi Cafe & Sen: Giải pháp nâng tầm thương hiệu chuẩn ESG cho hơn 500 tập đoàn hàng đầu Việt Nam.",
-      post_url: "fb.com/1000648291042/posts/882715890",
-      published_date: "23/10/2026",
-      published_time: "15:30",
-      days_ago: 3,
-      likes: 620,
-      comments: 88,
-      shares: 51,
-    },
-  ],
-};
+function padStt(n) {
+  return n < 10 ? `0${n}` : String(n);
+}
 
-function exportPostsToCsv(posts, filename = "ket_qua_quet_bai_viet_fanpage.csv") {
-  const headers = [
-    "STT",
-    "ID Bài Viết",
-    "Nội dung bài viết",
-    "Link Post",
-    "Ngày đăng",
-    "Giờ đăng",
-    "Lượt Like",
-    "Bình luận",
-    "Chia sẻ",
-  ];
-  const rows = posts.map((p, idx) => [
-    idx + 1,
-    p.id,
-    `"${(p.content || "").replace(/"/g, '""')}"`,
-    `https://${p.post_url}`,
-    p.published_date,
-    p.published_time,
-    p.likes,
-    p.comments,
-    p.shares,
-  ]);
-  const csv = "\uFEFF" + [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.setAttribute("download", filename);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+function fmtNum(n) {
+  return Number(n || 0).toLocaleString("vi-VN");
+}
+
+function normalizePostRow(p, idx = 0) {
+  return {
+    id: p.id || p.post_id || `post_${idx}`,
+    page_key: p.page_key || "",
+    content: p.content || p.text || p.message || "(Không có nội dung)",
+    post_url: p.post_url || p.url || "",
+    published_at: p.published_at || p.posted_at || p.created_at || "",
+    likes: Number(p.likes ?? p.reaction_count ?? p.reactions ?? 0),
+    comments: Number(p.comments ?? p.comment_count ?? 0),
+    shares: Number(p.shares ?? p.share_count ?? 0),
+  };
 }
 
 export default function PageScannerPosts() {
-  // Accounts & Pages Selection
   const [accounts, setAccounts] = useState([]);
-  const [selectedAccountIds, setSelectedAccountIds] = useState([
-    "100089234101",
-    "100045612890",
-    "100099887766",
-  ]);
+  const [accountsLoading, setAccountsLoading] = useState(true);
+  const [selectedUids, setSelectedUids] = useState([]);
   const [showAccountModal, setShowAccountModal] = useState(false);
 
-  const [selectedPages, setSelectedPages] = useState(INITIAL_POST_PAGES);
-  const [showSelectPagesModal, setShowSelectPagesModal] = useState(false);
+  const [availablePages, setAvailablePages] = useState(DEFAULT_SCANNED_PAGES);
+  const [selectedPages, setSelectedPages] = useState([]);
+  const [showPageModal, setShowPageModal] = useState(false);
 
-  // Card 1 & Card 2 Settings
   const [delayMin, setDelayMin] = useState(5);
   const [delayMax, setDelayMax] = useState(10);
   const [autoRotateOnCheckpoint, setAutoRotateOnCheckpoint] = useState(true);
-
   const [postsPerAccountSwitch, setPostsPerAccountSwitch] = useState(50);
   const [maxPostsPerPage, setMaxPostsPerPage] = useState(100);
   const [onlyRecentDays, setOnlyRecentDays] = useState(true);
   const [recentDaysLimit, setRecentDaysLimit] = useState(7);
   const [skipPinnedPosts, setSkipPinnedPosts] = useState(true);
   const [deduplicatePosts, setDeduplicatePosts] = useState(true);
+  const keepBrowser = false;
 
-  // Execution state
-  const [scanState, setScanState] = useState("IDLE"); // IDLE | RUNNING | PAUSED
-  const [postsByPage, setPostsByPage] = useState(INITIAL_POSTS_BY_PAGE);
-  const [activePageId, setActivePageId] = useState("1000894123991");
+  const [runPhase, setRunPhase] = useState("idle");
+  const [sessionId, setSessionId] = useState(null);
+  const [resultCount, setResultCount] = useState(0);
+  const [logs, setLogs] = useState([]);
+  const [scannedPosts, setScannedPosts] = useState([]);
+  const [activePageKey, setActivePageKey] = useState(null);
   const [sidebarSearch, setSidebarSearch] = useState("");
-
-  // Filters & Selection in right table
   const [postSearch, setPostSearch] = useState("");
-  const [sortBy, setSortBy] = useState("NEWEST");
   const [dateFilter, setDateFilter] = useState("ALL");
   const [likeFilter, setLikeFilter] = useState("ALL");
   const [commentFilter, setCommentFilter] = useState("ALL");
   const [shareFilter, setShareFilter] = useState("ALL");
-  const [selectedPostIds, setSelectedPostIds] = useState([]);
+  const [sortBy, setSortBy] = useState("NEWEST");
+  const [selectedPostIds, setSelectedPostIds] = useState(new Set());
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [previewPost, setPreviewPost] = useState(null);
 
-  // Console logs
-  const [logs, setLogs] = useState([
-    {
-      time: "14:38:10",
-      tag: "SYS",
-      color: "text-blue-400",
-      text: "Khởi tạo tiến trình Quét Bài Viết Fanpage (5 page mục tiêu, 3 tài khoản khả dụng).",
-    },
-    {
-      time: "14:38:16",
-      tag: "SCAN",
-      color: "text-emerald-400",
-      text: "[1000894123991] Nội Thất Cao Cấp Sài Gòn -> Đã bóc tách 184 bài viết (Bỏ qua 2 bài ghim Admin).",
-    },
-    {
-      time: "14:38:28",
-      tag: "INFO",
-      color: "text-amber-400",
-      text: "[1000648291042] Faslink Vietnam -> Hoàn tất thu thập 112 bài viết mới nhất trong 7 ngày qua.",
-    },
-    {
-      time: "14:38:34",
-      tag: "WAIT",
-      color: "text-purple-400",
-      text: "Đang nghỉ ngẫu nhiên 7s trước khi chuyển sang luồng quét tiếp theo...",
-    },
-  ]);
+  const logId = useRef(0);
+  const pollRef = useRef(null);
 
-  const timerRef = useRef(null);
+  const isBusy = runPhase === "running" || runPhase === "paused";
+  const isPaused = runPhase === "paused";
+  const isExecuting = isBusy;
+  const showResults = runPhase === "done";
+
+  const pushLog = useCallback((message, type = "info") => {
+    logId.current += 1;
+    setLogs((prev) => [...prev.slice(-200), { id: logId.current, timestamp: nowStamp(), message, type }]);
+  }, []);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => stopPolling(), [stopPolling]);
+
+  const syncSessionLogs = useCallback(
+    (session) => {
+      let lines = session?.logs;
+      if (typeof lines === "string") {
+        try {
+          lines = JSON.parse(lines);
+        } catch {
+          lines = [];
+        }
+      }
+      if (!Array.isArray(lines) || !lines.length) return;
+      setLogs(
+        lines.slice(-500).map((line, i) => ({
+          id: `s${session.id || sessionId}_${line.ts}_${i}`,
+          timestamp: line.ts || "—",
+          message: line.message,
+          type:
+            line.level === "success"
+              ? "success"
+              : line.level === "warn"
+                ? "warn"
+                : line.level === "error"
+                  ? "error"
+                  : "info",
+        })),
+      );
+    },
+    [sessionId],
+  );
+
+  const refreshPosts = useCallback(async (sid) => {
+    if (!sid) return;
+    try {
+      const data = await getScannedPosts({ session_id: sid, page: 1, page_size: 200 });
+      const items = (data.items || data.posts || []).map(normalizePostRow);
+      setScannedPosts(items);
+      setResultCount(data.total ?? items.length);
+      setLastUpdatedAt(new Date());
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const startPoll = useCallback(
+    (sid) => {
+      stopPolling();
+      pollRef.current = setInterval(async () => {
+        try {
+          const session = await getScanSessionDetail(sid);
+          if (session.status === "PAUSED") setRunPhase("paused");
+          else if (session.status === "RUNNING") setRunPhase("running");
+          syncSessionLogs(session);
+          const count = session.total_unique || 0;
+          setResultCount(count);
+          if (count > 0) refreshPosts(sid);
+          if (DONE_STATUSES.includes(session.status)) {
+            stopPolling();
+            setRunPhase("done");
+            await refreshPosts(sid);
+            toast.success(
+              `Phiên POST_SCAN #${sid} · ${session.status}/${session.stop_reason || "—"} · ${count} bài`,
+            );
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }, 1500);
+    },
+    [stopPolling, syncSessionLogs, refreshPosts],
+  );
 
   useEffect(() => {
-    let mounted = true;
-    getAccounts()
-      .then((res) => {
-        if (!mounted) return;
-        const list = Array.isArray(res?.accounts)
-          ? res.accounts
-          : Array.isArray(res)
-            ? res
-            : [];
-        if (list.length > 0) {
-          setAccounts(list);
-          setSelectedAccountIds(list.slice(0, 3).map((a) => String(a.id)));
-        }
-      })
-      .catch(() => {});
+    let cancelled = false;
+    (async () => {
+      try {
+        setAccountsLoading(true);
+        const data = await getAccounts();
+        if (cancelled) return;
+        const list = (Array.isArray(data) ? data : data?.accounts || []).map((a, i) =>
+          normalizeAccount(a, i),
+        );
+        setAccounts(list);
+        setSelectedUids(list.filter((a) => LIVE_STATUSES.has(String(a.status))).map((a) => a.uid));
+      } catch (err) {
+        toast.error(`Lỗi tải tài khoản: ${err.message}`);
+      } finally {
+        if (!cancelled) setAccountsLoading(false);
+      }
+    })();
     return () => {
-      mounted = false;
-      if (timerRef.current) clearInterval(timerRef.current);
+      cancelled = true;
     };
   }, []);
 
-  const appendLog = (tag, color, text) => {
-    const now = new Date().toTimeString().slice(0, 8);
-    setLogs((prev) => [...prev.slice(-60), { time: now, tag, color, text }]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await getScannedPages({ page: 1, page_size: 100, sort_by: "followers" });
+        if (cancelled || !data?.items?.length) return;
+        const mapped = data.items.map(mapKhoToPage);
+        const combined = [...DEFAULT_SCANNED_PAGES];
+        for (const m of mapped) {
+          if (!combined.some((c) => c.page_key === m.page_key)) combined.push(m);
+        }
+        setAvailablePages(combined);
+      } catch {
+        /* keep defaults */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedPages.length) {
+      setActivePageKey(null);
+      return;
+    }
+    if (!activePageKey || !selectedPages.some((p) => p.page_key === activePageKey)) {
+      setActivePageKey(selectedPages[0].page_key);
+    }
+  }, [selectedPages, activePageKey]);
+
+  const computeDateFrom = () => {
+    if (!onlyRecentDays) return null;
+    const d = new Date();
+    d.setDate(d.getDate() - Math.max(1, recentDaysLimit));
+    return d.toISOString().slice(0, 10);
   };
 
-  const handleStartScan = () => {
-    if (selectedPages.length === 0) return;
-    setScanState("RUNNING");
-    appendLog(
-      "START",
-      "text-emerald-400",
-      `Bắt đầu quét bài viết cho ${selectedPages.length} Fanpage (Giới hạn ${maxPostsPerPage} bài/page, delay ${delayMin}-${delayMax}s).`
-    );
+  const handleStart = async () => {
+    try {
+      if (!selectedPages.length) throw new Error("Chọn ít nhất 1 Page muốn quét.");
+      const live = accounts.filter(
+        (a) => selectedUids.includes(a.uid) && LIVE_STATUSES.has(String(a.status)),
+      );
+      const accountUid = live[0]?.uid || selectedUids[0] || null;
+      if (!accountUid) throw new Error("Chọn ít nhất 1 tài khoản Live.");
 
-    if (timerRef.current) clearInterval(timerRef.current);
-    let step = 0;
-    timerRef.current = setInterval(() => {
-      step += 1;
-      const targetPage = selectedPages[step % selectedPages.length];
-      if (!targetPage) return;
+      const pageKeys = selectedPages.map((p) => p.page_key).filter(Boolean);
+      if (!pageKeys.length) throw new Error("Danh sách page thiếu page_key.");
 
-      const newPostId = `p_${Math.floor(100000000 + Math.random() * 899999999)}`;
-      const likes = Math.floor(120 + Math.random() * 1900);
-      const comments = Math.floor(25 + Math.random() * 450);
-      const shares = Math.floor(10 + Math.random() * 180);
-      const now = new Date();
-      const dateStr = now.toLocaleDateString("vi-VN");
-      const timeStr = now.toTimeString().slice(0, 5);
+      stopPolling();
+      setRunPhase("running");
+      setLogs([]);
+      setResultCount(0);
+      setScannedPosts([]);
+      setSelectedPostIds(new Set());
+      pushLog(
+        `Tạo phiên POST_SCAN · ${pageKeys.length} Page · max/page=${maxPostsPerPage} · delay ${delayMin}-${delayMax}s`,
+        "info",
+      );
 
-      const samplePost = {
-        id: newPostId,
-        content: `[CẬP NHẬT MỚI #${step}] Tổng hợp ưu đãi đặc quyền tại ${targetPage.name} — Đặt hàng trực tiếp nhận ngay voucher giảm 25% hôm nay! #HotDeal #FanpageUpdate`,
-        post_url: `fb.com/${targetPage.page_id || targetPage.id}/posts/${newPostId.replace("p_", "")}`,
-        published_date: dateStr,
-        published_time: timeStr,
-        days_ago: 0,
-        likes,
-        comments,
-        shares,
-      };
-
-      setPostsByPage((prev) => {
-        const key = targetPage.page_id || targetPage.id;
-        const current = prev[key] || [];
-        return {
-          ...prev,
-          [key]: [samplePost, ...current],
-        };
+      const res = await createPostScanSession({
+        page_keys: pageKeys,
+        account_uid: accountUid,
+        keep_browser: keepBrowser,
+        max_posts_per_page: maxPostsPerPage,
+        date_from: computeDateFrom(),
+        date_to: null,
+        post_types: ["all"],
+        idle_timeout_s: 90,
+        skip_existing: deduplicatePosts,
+        page_delay_s: delayMin,
+        scroll_delay_s: delayMax,
       });
 
-      setSelectedPages((prev) =>
-        prev.map((p) =>
-          (p.page_id || p.id) === (targetPage.page_id || targetPage.id)
-            ? {
-                ...p,
-                posts_count: (p.posts_count || 0) + 1,
-                status: "RUNNING",
-                status_label: "Đang thu thập...",
-              }
-            : p
-        )
-      );
-
-      appendLog(
-        "POST",
-        "text-emerald-400",
-        `[${targetPage.name}] Thu thập bài viết ${newPostId} (${likes} Likes, ${comments} Comments, ${shares} Shares).`
-      );
-    }, 2600);
+      setSessionId(res.session_id);
+      pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
+      if (autoRotateOnCheckpoint) {
+        pushLog(`Đảo acc khi checkpoint · đổi sau ${postsPerAccountSwitch} bài/nick`, "info");
+      }
+      if (skipPinnedPosts) pushLog("Bỏ qua bài ghim (UI flag).", "info");
+      toast.success(`Đã khởi động POST_SCAN #${res.session_id}`);
+      startPoll(res.session_id);
+    } catch (err) {
+      setRunPhase("idle");
+      const msg = err.message || "Lỗi tạo phiên";
+      toast.error(msg);
+      pushLog(msg, "error");
+    }
   };
 
-  const handlePauseScan = () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    setScanState("PAUSED");
-    appendLog("PAUSE", "text-amber-400", "Đã tạm dừng tiến trình quét bài viết Fanpage.");
+  const handleToggleExecution = () => {
+    if (isExecuting) {
+      handleStop();
+    } else {
+      handleStart();
+    }
   };
 
-  const handleStopScan = () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    setScanState("IDLE");
-    appendLog("STOP", "text-rose-400", "Đã dừng khẩn cấp toàn bộ luồng quét bài viết.");
+  const handlePauseResume = async () => {
+    if (!sessionId) return;
+    try {
+      if (isPaused) {
+        await resumeScanSession(sessionId);
+        setRunPhase("running");
+        pushLog("Tiếp tục phiên.", "info");
+      } else {
+        await pauseScanSession(sessionId);
+        setRunPhase("paused");
+        pushLog("Tạm dừng phiên.", "warn");
+      }
+    } catch (err) {
+      toast.error(err.message);
+    }
   };
 
-  const handleRemovePreviewPage = (id) => {
-    setSelectedPages((prev) => prev.filter((p) => (p.page_id || p.id) !== id));
+  const handleStop = async () => {
+    if (!sessionId) {
+      setRunPhase("idle");
+      return;
+    }
+    try {
+      await stopScanSession(sessionId);
+      pushLog("Dừng khẩn cấp.", "warn");
+      stopPolling();
+      setRunPhase("done");
+    } catch (err) {
+      toast.error(err.message);
+    }
   };
+
+  const handleRemovePage = (pageKey) => {
+    setSelectedPages((prev) => prev.filter((p) => p.page_key !== pageKey));
+  };
+
+  const postsByPage = useMemo(() => {
+    const map = {};
+    for (const post of scannedPosts) {
+      const key = post.page_key || "_unknown";
+      if (!map[key]) map[key] = [];
+      map[key].push(post);
+    }
+    return map;
+  }, [scannedPosts]);
 
   const filteredSidebarPages = useMemo(() => {
     const q = sidebarSearch.trim().toLowerCase();
-    if (!q) return selectedPages;
-    return selectedPages.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        String(p.page_id || p.id).toLowerCase().includes(q)
-    );
+    return selectedPages.filter((p) => {
+      if (!q) return true;
+      return `${p.name} ${p.page_id} ${p.page_key}`.toLowerCase().includes(q);
+    });
   }, [selectedPages, sidebarSearch]);
 
-  const activePage = useMemo(() => {
-    return (
-      selectedPages.find((p) => String(p.page_id || p.id) === String(activePageId)) ||
-      selectedPages[0] ||
-      INITIAL_POST_PAGES[0]
-    );
-  }, [selectedPages, activePageId]);
+  const activePage = selectedPages.find((p) => p.page_key === activePageKey) || selectedPages[0];
+  const activePostsRaw = postsByPage[activePage?.page_key] || [];
 
-  const currentPosts = useMemo(() => {
-    const key = activePage?.page_id || activePage?.id;
-    const raw = postsByPage[key] || INITIAL_POSTS_BY_PAGE["1000894123991"] || [];
+  const filteredPosts = useMemo(() => {
+    let list = [...activePostsRaw];
     const q = postSearch.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (p) =>
+          p.content.toLowerCase().includes(q) ||
+          String(p.id).toLowerCase().includes(q) ||
+          (p.post_url || "").toLowerCase().includes(q),
+      );
+    }
 
-    let list = raw.filter((item) => {
-      if (
-        q &&
-        !item.content.toLowerCase().includes(q) &&
-        !item.post_url.toLowerCase().includes(q) &&
-        !item.id.toLowerCase().includes(q)
-      ) {
-        return false;
-      }
-      if (dateFilter === "TODAY" && item.days_ago > 0) return false;
-      if (dateFilter === "3DAYS" && item.days_ago > 3) return false;
-      if (dateFilter === "7DAYS" && item.days_ago > 7) return false;
+    const now = Date.now();
+    if (dateFilter !== "ALL") {
+      const days = dateFilter === "TODAY" ? 1 : dateFilter === "3DAYS" ? 3 : 7;
+      const cutoff = now - days * 86400000;
+      list = list.filter((p) => {
+        const t = Date.parse(p.published_at);
+        return Number.isFinite(t) ? t >= cutoff : true;
+      });
+    }
+    if (likeFilter === "GT_500") list = list.filter((p) => p.likes > 500);
+    if (likeFilter === "GT_1000") list = list.filter((p) => p.likes > 1000);
+    if (commentFilter === "GT_100") list = list.filter((p) => p.comments > 100);
+    if (commentFilter === "GT_300") list = list.filter((p) => p.comments > 300);
+    if (shareFilter === "GT_50") list = list.filter((p) => p.shares > 50);
+    if (shareFilter === "GT_100") list = list.filter((p) => p.shares > 100);
 
-      if (likeFilter === "GT_500" && item.likes < 500) return false;
-      if (likeFilter === "GT_1000" && item.likes < 1000) return false;
-
-      if (commentFilter === "GT_100" && item.comments < 100) return false;
-      if (commentFilter === "GT_300" && item.comments < 300) return false;
-
-      if (shareFilter === "GT_50" && item.shares < 50) return false;
-      if (shareFilter === "GT_100" && item.shares < 100) return false;
-
-      return true;
+    list.sort((a, b) => {
+      if (sortBy === "LIKES_DESC") return b.likes - a.likes;
+      if (sortBy === "COMMENTS_DESC") return b.comments - a.comments;
+      return String(b.published_at).localeCompare(String(a.published_at));
     });
-
-    if (sortBy === "LIKES_DESC") {
-      list = [...list].sort((a, b) => b.likes - a.likes);
-    } else if (sortBy === "COMMENTS_DESC") {
-      list = [...list].sort((a, b) => b.comments - a.comments);
-    } else {
-      list = [...list].sort((a, b) => a.days_ago - b.days_ago);
-    }
-
     return list;
-  }, [
-    activePage,
-    postsByPage,
-    postSearch,
-    dateFilter,
-    likeFilter,
-    commentFilter,
-    shareFilter,
-    sortBy,
-  ]);
+  }, [activePostsRaw, postSearch, dateFilter, likeFilter, commentFilter, shareFilter, sortBy]);
 
-  const totalPostsCount = useMemo(() => {
-    return selectedPages.reduce((sum, p) => sum + (Number(p.posts_count) || 0), 0);
-  }, [selectedPages]);
+  const allFilteredSelected =
+    filteredPosts.length > 0 && filteredPosts.every((p) => selectedPostIds.has(p.id));
 
-  const togglePostSelect = (postId) => {
-    setSelectedPostIds((prev) =>
-      prev.includes(postId) ? prev.filter((id) => id !== postId) : [...prev, postId]
-    );
+  const handleToggleSelectAllPosts = () => {
+    if (allFilteredSelected) setSelectedPostIds(new Set());
+    else setSelectedPostIds(new Set(filteredPosts.map((p) => p.id)));
   };
 
-  const toggleSelectAllPosts = () => {
-    if (
-      currentPosts.length > 0 &&
-      currentPosts.every((p) => selectedPostIds.includes(p.id))
-    ) {
-      setSelectedPostIds([]);
-    } else {
-      setSelectedPostIds(currentPosts.map((p) => p.id));
+  const handleToggleSelectPost = (id) => {
+    setSelectedPostIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const exportCsv = (rows, filename) => {
+    if (!rows.length) {
+      toast.info("Chưa có bài viết để xuất.");
+      return;
     }
+    const header = ["id", "page_key", "content", "post_url", "published_at", "likes", "comments", "shares"];
+    const lines = [header.join(",")];
+    for (const r of rows) {
+      lines.push(
+        header
+          .map((k) => `"${String(r[k] ?? "").replace(/"/g, '""')}"`)
+          .join(","),
+      );
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Đã xuất ${rows.length} bài viết.`);
   };
+
+  const pageStatusMeta = (page) => {
+    const count = (postsByPage[page.page_key] || []).length;
+    if (runPhase === "running" && activePageKey === page.page_key) {
+      return { label: "Đang thu thập...", color: "text-blue-600", status: "RUNNING" };
+    }
+    if (count > 0 || runPhase === "done") {
+      return { label: "Hoàn tất quét", color: "text-emerald-600", status: "DONE" };
+    }
+    if (isBusy) return { label: "Đang chờ hàng đợi", color: "text-amber-600", status: "QUEUE" };
+    return { label: "Chưa quét", color: "text-slate-500", status: "IDLE" };
+  };
+
+  const runningPagesCount = useMemo(() => {
+    if (!isBusy) return selectedPages.filter((p) => (postsByPage[p.page_key] || []).length > 0).length;
+    return Math.max(
+      1,
+      selectedPages.filter((p) => (postsByPage[p.page_key] || []).length > 0).length,
+    );
+  }, [isBusy, selectedPages, postsByPage]);
+
+  const lastUpdatedLabel = lastUpdatedAt
+    ? lastUpdatedAt.toLocaleTimeString("vi-VN", { hour12: false })
+    : "—";
 
   return (
-    <div className="space-y-5 pb-10">
-      {/* Top 2 Configuration Cards */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* Card 1: Cấu hình chung, Chọn tài khoản & Nhóm quét */}
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-5">
-          <div className="flex items-center gap-2.5 pb-3.5 mb-4 border-b border-slate-100">
-            <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">
+    <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
+      <div>
+        <h1 className="font-heading text-xl font-bold text-[#0B1C30]">Quét bài viết page</h1>
+        <p className="mt-1 text-xs text-[#64748B]">
+          Tìm kiếm và thu thập bài đăng, liên kết trích xuất và đo lường đa chỉ số tương tác
+          (Reactions, Comments, Shares) Fanpage Facebook.
+          {sessionId ? (
+            <span className="text-[#475569]">
+              {" "}
+              Phiên #{sessionId}
+              {resultCount > 0 ? ` · ${fmtNum(resultCount)} bài` : ""} ·{" "}
+            </span>
+          ) : (
+            " "
+          )}
+          <Link href="/scanner/list-posts" className="text-[#1877F2] hover:underline">
+            Xem DS bài viết
+          </Link>
+        </p>
+      </div>
+
+      {/* SECTION 1 & 2 — Figma 2931-42744 */}
+      <div className="grid items-start gap-5 xl:grid-cols-2">
+        <section className="space-y-4 rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] ">
+          <div className="flex items-center gap-2.5 border-b border-[#F1F5F9] pb-3">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[#1877F2] text-[11px] font-bold text-white">
               1
             </span>
-            <h2 className="text-[15px] font-bold text-slate-800">
+            <h2 className="font-heading text-sm font-bold text-[#0B1C30]">
               Cấu hình chung, Chọn tài khoản &amp; Nhóm quét
             </h2>
           </div>
 
           <div className="space-y-4">
-            {/* Row 1: Chọn tài khoản */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-slate-600">
+            <div className="space-y-2">
+              <p className="text-[11px] font-semibold tracking-wide text-[#475569] uppercase">
                 Tài khoản Facebook thực thi:
-              </span>
-              <div className="flex items-center gap-2">
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
+                  disabled={isBusy}
                   onClick={() => setShowAccountModal(true)}
-                  className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50/70 hover:bg-blue-100 text-blue-700 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#1877F2] px-3.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-blue-600 disabled:opacity-50"
                 >
-                  <Users className="w-3.5 h-3.5" />
-                  Chọn tài khoản
+                  <Users className="size-3.5" />
+                  <span>Chọn tài khoản</span>
                 </button>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-bold">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  Đã chọn: {selectedAccountIds.length} / {Math.max(accounts.length, 4)} tài khoản
-                </span>
+                <div className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-3 text-xs font-medium text-[#059669]">
+                  <span className="size-1.5 shrink-0 rounded-full bg-[#10B981]" />
+                  <span>
+                    Đã chọn:{" "}
+                    <strong className="font-bold text-emerald-950">
+                      {selectedUids.length} / {Math.max(accounts.length, 1)}
+                    </strong>{" "}
+                    tài khoản
+                  </span>
+                </div>
               </div>
             </div>
 
-            {/* Row 2: Danh sách nhóm mục tiêu */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-slate-600">
+            <div className="space-y-2">
+              <p className="text-[11px] font-semibold tracking-wide text-[#475569] uppercase">
                 Danh sách nhóm mục tiêu:
-              </span>
-              <div className="flex items-center gap-2">
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => setShowSelectPagesModal(true)}
-                  className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50/70 hover:bg-blue-100 text-blue-700 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
+                  disabled={isBusy}
+                  onClick={() => setShowPageModal(true)}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#1877F2] px-3.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-blue-600 disabled:opacity-50"
                 >
-                  <SlidersHorizontal className="w-3.5 h-3.5" />
-                  Chọn page muốn quét
+                  <Globe className="size-3.5" />
+                  <span>Chọn page muốn quét</span>
                 </button>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-bold">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  Đã chọn: {selectedPages.length} page
-                </span>
+                <div className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-3 text-xs font-medium text-[#059669]">
+                  <span className="size-1.5 shrink-0 rounded-full bg-[#10B981]" />
+                  <span>
+                    Đã chọn: <strong className="text-emerald-950">{selectedPages.length} page</strong>
+                  </span>
+                </div>
               </div>
             </div>
 
-            {/* Row 3: Khoảng cách giữa các lần quét */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-              <span className="text-xs font-semibold text-slate-600">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-[#334155]">
                 Khoảng cách giữa các lần quét:
               </span>
-              <div className="flex items-center gap-2 text-xs text-slate-700 font-semibold">
-                <span>Từ</span>
-                <div className="inline-flex items-center border border-slate-200 rounded-lg overflow-hidden bg-slate-50">
-                  <button
-                    type="button"
-                    onClick={() => setDelayMin((v) => Math.max(1, v - 1))}
-                    className="px-2 py-1 hover:bg-slate-200/70 text-slate-600 cursor-pointer"
-                  >
-                    <Minus className="w-3 h-3" />
-                  </button>
-                  <input
-                    type="number"
-                    value={delayMin}
-                    onChange={(e) => setDelayMin(Math.max(1, Number(e.target.value) || 1))}
-                    className="w-10 text-center bg-white py-1 text-xs font-bold text-slate-800 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setDelayMin((v) => v + 1)}
-                    className="px-2 py-1 hover:bg-slate-200/70 text-slate-600 cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" />
-                  </button>
-                </div>
-                <span>-</span>
-                <div className="inline-flex items-center border border-slate-200 rounded-lg overflow-hidden bg-slate-50">
-                  <button
-                    type="button"
-                    onClick={() => setDelayMax((v) => Math.max(delayMin, v - 1))}
-                    className="px-2 py-1 hover:bg-slate-200/70 text-slate-600 cursor-pointer"
-                  >
-                    <Minus className="w-3 h-3" />
-                  </button>
-                  <input
-                    type="number"
-                    value={delayMax}
-                    onChange={(e) =>
-                      setDelayMax(Math.max(delayMin, Number(e.target.value) || delayMin))
-                    }
-                    className="w-10 text-center bg-white py-1 text-xs font-bold text-slate-800 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setDelayMax((v) => v + 1)}
-                    className="px-2 py-1 hover:bg-slate-200/70 text-slate-600 cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" />
-                  </button>
-                </div>
-                <span className="text-slate-500">giây</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-[#64748B]">Từ</span>
+                <Stepper
+                  value={delayMin}
+                  onChange={(v) => {
+                    setDelayMin(v);
+                    if (v > delayMax) setDelayMax(v);
+                  }}
+                  min={1}
+                  max={180}
+                  disabled={isBusy}
+                />
+                <span className="text-xs text-[#64748B]">-</span>
+                <Stepper
+                  value={delayMax}
+                  onChange={(v) => setDelayMax(Math.max(delayMin, v))}
+                  min={1}
+                  max={180}
+                  disabled={isBusy}
+                />
+                <span className="text-xs text-[#64748B]">giây</span>
               </div>
             </div>
 
-            {/* Row 4: Checkbox */}
-            <label className="flex items-center gap-2.5 pt-2 cursor-pointer select-none">
+            <label className="flex cursor-pointer items-start gap-2 select-none">
               <input
                 type="checkbox"
                 checked={autoRotateOnCheckpoint}
+                disabled={isBusy}
                 onChange={(e) => setAutoRotateOnCheckpoint(e.target.checked)}
-                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                className="mt-0.5 size-4 shrink-0 cursor-pointer rounded border-slate-300 text-[#1877F2] focus:ring-blue-500"
               />
-              <span className="text-xs font-medium text-slate-700">
+              <span className="text-xs leading-5 font-medium text-[#334155]">
                 Tự động đảo tài khoản khi bị checkpoint hoặc rate limit
               </span>
             </label>
           </div>
-        </div>
+        </section>
 
-        {/* Card 2: Cấu hình quét nâng cao & Giới hạn */}
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-5">
-          <div className="flex items-center gap-2.5 pb-3.5 mb-4 border-b border-slate-100">
-            <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">
+        <section className="space-y-4 rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div className="flex items-center gap-2.5 border-b border-[#F1F5F9] pb-3">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[#1877F2] text-[11px] font-bold text-white">
               2
             </span>
-            <h2 className="text-[15px] font-bold text-slate-800">
+            <h2 className="font-heading text-sm font-bold text-[#0B1C30]">
               Cấu hình quét nâng cao &amp; Giới hạn
             </h2>
           </div>
 
           <div className="space-y-3.5">
-            {/* Đổi tài khoản mới khi quét được */}
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-slate-600">
+              <span className="text-xs font-medium text-[#334155]">
                 Đổi tài khoản mới khi quét được:
               </span>
               <div className="flex items-center gap-2">
-                <div className="inline-flex items-center border border-slate-200 rounded-lg overflow-hidden bg-slate-50">
-                  <button
-                    type="button"
-                    onClick={() => setPostsPerAccountSwitch((v) => Math.max(10, v - 10))}
-                    className="px-2 py-1 hover:bg-slate-200/70 text-slate-600 cursor-pointer"
-                  >
-                    <Minus className="w-3 h-3" />
-                  </button>
-                  <input
-                    type="number"
-                    value={postsPerAccountSwitch}
-                    onChange={(e) =>
-                      setPostsPerAccountSwitch(Math.max(1, Number(e.target.value) || 50))
-                    }
-                    className="w-14 text-center bg-white py-1 text-xs font-bold text-slate-800 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setPostsPerAccountSwitch((v) => v + 10)}
-                    className="px-2 py-1 hover:bg-slate-200/70 text-slate-600 cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" />
-                  </button>
-                </div>
-                <span className="text-xs font-semibold text-slate-500">bài / nick</span>
-              </div>
-            </div>
-
-            {/* Mỗi page quét tối đa */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-slate-600">
-                Mỗi page quét tối đa:
-              </span>
-              <div className="flex items-center gap-2">
-                <div className="inline-flex items-center border border-slate-200 rounded-lg overflow-hidden bg-slate-50">
-                  <button
-                    type="button"
-                    onClick={() => setMaxPostsPerPage((v) => Math.max(10, v - 10))}
-                    className="px-2 py-1 hover:bg-slate-200/70 text-slate-600 cursor-pointer"
-                  >
-                    <Minus className="w-3 h-3" />
-                  </button>
-                  <input
-                    type="number"
-                    value={maxPostsPerPage}
-                    onChange={(e) =>
-                      setMaxPostsPerPage(Math.max(1, Number(e.target.value) || 100))
-                    }
-                    className="w-14 text-center bg-white py-1 text-xs font-bold text-slate-800 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setMaxPostsPerPage((v) => v + 10)}
-                    className="px-2 py-1 hover:bg-slate-200/70 text-slate-600 cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" />
-                  </button>
-                </div>
-                <span className="text-xs font-semibold text-slate-500">bài mới nhất</span>
-              </div>
-            </div>
-
-            {/* Checkboxes */}
-            <div className="space-y-2 pt-1">
-              <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={onlyRecentDays}
-                  onChange={(e) => setOnlyRecentDays(e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                <Stepper
+                  value={postsPerAccountSwitch}
+                  onChange={setPostsPerAccountSwitch}
+                  min={5}
+                  max={500}
+                  step={5}
+                  disabled={isBusy}
+                  width="w-10"
                 />
-                <span className="text-xs font-medium text-slate-700 flex items-center gap-1.5">
-                  Chỉ quét các bài viết đăng trong vòng
-                  <input
-                    type="number"
-                    value={recentDaysLimit}
-                    onChange={(e) =>
-                      setRecentDaysLimit(Math.max(1, Number(e.target.value) || 7))
-                    }
-                    className="w-11 px-1.5 py-0.5 text-center rounded border border-slate-300 text-xs font-bold text-blue-700 bg-blue-50/40"
-                  />
-                  ngày qua
-                </span>
-              </label>
+                <span className="text-xs text-[#64748B]">bài / nick</span>
+              </div>
+            </div>
 
-              <label className="flex items-center gap-2.5 cursor-pointer select-none">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-[#334155]">Mỗi page quét tối đa:</span>
+              <div className="flex items-center gap-2">
+                <Stepper
+                  value={maxPostsPerPage}
+                  onChange={setMaxPostsPerPage}
+                  min={10}
+                  max={5000}
+                  step={10}
+                  disabled={isBusy}
+                  width="w-10"
+                />
+                <span className="text-xs text-[#64748B]">bài mới nhất</span>
+              </div>
+            </div>
+
+            <div className="space-y-2 border-t border-[#F1F5F9] pt-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex cursor-pointer items-center gap-2 select-none">
+                  <input
+                    type="checkbox"
+                    checked={onlyRecentDays}
+                    disabled={isBusy}
+                    onChange={(e) => setOnlyRecentDays(e.target.checked)}
+                    className="size-4 cursor-pointer rounded border-slate-300 text-[#1877F2] focus:ring-blue-500"
+                  />
+                  <span className="text-xs font-medium text-[#334155]">
+                    Chỉ quét các bài viết đăng trong vòng
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  disabled={isBusy || !onlyRecentDays}
+                  value={recentDaysLimit}
+                  onChange={(e) => setRecentDaysLimit(Math.max(1, Number(e.target.value) || 7))}
+                  className="h-6 w-12 rounded border border-[#CBD5E1] text-center text-xs font-medium text-[#1E293B] outline-none disabled:bg-slate-100"
+                />
+                <span className="text-xs text-[#64748B]">ngày qua</span>
+              </div>
+
+              <label className="flex cursor-pointer items-center gap-2 select-none">
                 <input
                   type="checkbox"
                   checked={skipPinnedPosts}
+                  disabled={isBusy}
                   onChange={(e) => setSkipPinnedPosts(e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  className="size-4 cursor-pointer rounded border-slate-300 text-[#1877F2] focus:ring-blue-500"
                 />
-                <span className="text-xs font-medium text-slate-700">
+                <span className="text-xs font-medium text-[#334155]">
                   Bỏ qua bài viết ghim của Quản trị viên
                 </span>
               </label>
 
-              <label className="flex items-center gap-2.5 cursor-pointer select-none">
+              <label className="flex cursor-pointer items-center gap-2 select-none">
                 <input
                   type="checkbox"
                   checked={deduplicatePosts}
+                  disabled={isBusy}
                   onChange={(e) => setDeduplicatePosts(e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  className="size-4 cursor-pointer rounded border-slate-300 text-[#1877F2] focus:ring-blue-500"
                 />
-                <span className="text-xs font-medium text-slate-700">
+                <span className="text-xs font-medium text-[#334155]">
                   Tự động lọc trùng lặp bài viết giữa các page
                 </span>
               </label>
             </div>
           </div>
-        </div>
+        </section>
       </div>
 
-      {/* Middle Card: Xem trước danh sách page muốn quét */}
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <h3 className="text-sm font-bold text-slate-800">
-              Xem trước danh sách page muốn quét
-            </h3>
-            <span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[11px] font-bold">
-              {selectedPages.length} page đã chọn
-            </span>
+      {/* Preview pages */}
+      <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] px-5 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-[#EFF6FF] text-[#2563EB]">
+              <Eye className="size-4" />
+            </div>
+            <div className="flex flex-col">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-heading text-sm font-bold text-[#0F172A]">
+                  Xem trước danh sách page muốn quét
+                </h3>
+                <span className="rounded-full bg-[#DBEAFE] px-2.5 py-0.5 text-[11px] font-semibold text-[#1D4ED8]">
+                  {selectedPages.length} page đã chọn
+                </span>
+              </div>
+              <p className="text-xs text-[#94A3B8]">
+                Kiểm tra ngành nghề và quy mô followers trước khi tiến hành quét
+              </p>
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setShowSelectPagesModal(true)}
-            className="px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Quản lý / Thay đổi page
-          </button>
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50/80 border-b border-slate-100 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                <th className="py-2.5 px-4 w-14">STT</th>
-                <th className="py-2.5 px-4">TÊN FANPAGE &amp; ID</th>
-                <th className="py-2.5 px-4">NGÀNH NGHỀ / LOẠI PAGE</th>
-                <th className="py-2.5 px-4">QUY MÔ / FOLLOWERS</th>
-                <th className="py-2.5 px-4 text-right w-24">THAO TÁC</th>
+          <table className="w-full min-w-[700px] text-left text-xs">
+            <thead className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-[10px] font-bold tracking-wide text-[#64748B] uppercase">
+              <tr>
+                <th className="w-14 px-4 py-3 text-center">STT</th>
+                <th className="px-4 py-3">TÊN FANPAGE &amp; ID</th>
+                <th className="w-44 px-4 py-3">NGÀNH NGHỀ / LOẠI PAGE</th>
+                <th className="w-44 px-4 py-3">QUY MÔ / FOLLOWERS</th>
+                <th className="w-20 px-4 py-3 text-center">THAO TÁC</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 text-xs">
+            <tbody className="divide-y divide-[#F1F5F9]">
               {selectedPages.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-6 text-center text-slate-400">
-                    Chưa có Fanpage nào được chọn. Nhấn &ldquo;Quản lý / Thay đổi page&rdquo; để thêm.
+                  <td colSpan={5} className="px-4 py-8 text-center text-[#94A3B8]">
+                    Chưa chọn Fanpage. Nhấn &ldquo;Chọn page muốn quét&rdquo; để thêm.
                   </td>
                 </tr>
               ) : (
-                selectedPages.slice(0, 5).map((page, index) => (
-                  <tr key={page.page_id || page.id} className="hover:bg-slate-50/70">
-                    <td className="py-2.5 px-4 font-semibold text-slate-500">
-                      #{index + 1}
+                selectedPages.map((page, idx) => (
+                  <tr key={page.page_key || page.id} className="transition-colors hover:bg-slate-50">
+                    <td className="px-4 py-3 text-center font-bold text-[#94A3B8]">
+                      {padStt(idx + 1)}
                     </td>
-                    <td className="py-2.5 px-4">
-                      <div className="flex items-center gap-2.5">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
                         <div
-                          className={`w-7 h-7 rounded-lg flex items-center justify-center text-[11px] font-bold shrink-0 ${
-                            page.avatar_color || "bg-blue-100 text-blue-700"
+                          className={`flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                            page.avatar_color || "bg-indigo-100 text-indigo-700"
                           }`}
                         >
-                          {page.avatar_initials || page.name.slice(0, 2).toUpperCase()}
+                          {page.avatar_initials || initialsOf(page.name)}
                         </div>
-                        <div>
-                          <div className="font-bold text-slate-800">{page.name}</div>
-                          <div className="text-[11px] text-slate-400">
-                            ID: {page.page_id || page.id}
-                          </div>
+                        <div className="flex min-w-0 flex-col">
+                          <span className="line-clamp-1 text-xs font-semibold text-[#0F172A]">
+                            {page.name || page.page_name}
+                          </span>
+                          <span className="font-mono text-[11px] text-[#94A3B8]">
+                            UID: {page.page_id || page.uid}
+                          </span>
                         </div>
                       </div>
                     </td>
-                    <td className="py-2.5 px-4">
-                      <span className="px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium text-[11px]">
-                        {page.category || "Thương hiệu / Fanpage"}
+                    <td className="px-4 py-3">
+                      <span className="inline-flex rounded bg-[#F1F5F9] px-2 py-0.5 text-[10px] font-semibold text-[#475569]">
+                        {page.category || "Fanpage"}
                       </span>
                     </td>
-                    <td className="py-2.5 px-4 font-bold text-slate-700">
-                      {page.followers_text ||
-                        Number(page.followers_count || 125000).toLocaleString("vi-VN")}{" "}
-                      <span className="font-normal text-slate-400">followers</span>
+                    <td className="px-4 py-3 font-semibold text-[#0F172A]">
+                      {page.followers_text || fmtNum(page.follower_count)} Followers
                     </td>
-                    <td className="py-2.5 px-4 text-right">
+                    <td className="px-4 py-3 text-center">
                       <button
                         type="button"
-                        onClick={() => handleRemovePreviewPage(page.page_id || page.id)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                        title="Xóa khỏi danh sách quét"
+                        disabled={isBusy}
+                        onClick={() => handleRemovePage(page.page_key)}
+                        className="rounded p-1 text-[#94A3B8] transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+                        title="Xóa page"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="size-4" />
                       </button>
                     </td>
                   </tr>
@@ -842,500 +848,476 @@ export default function PageScannerPosts() {
             </tbody>
           </table>
         </div>
-      </div>
+      </section>
 
-      {/* Execution Action Bar */}
-      <div className="flex flex-wrap items-center justify-center gap-3">
-        {scanState !== "RUNNING" ? (
+      {/* CTA */}
+      <div className="space-y-2.5">
+        <button
+          type="button"
+          onClick={handleToggleExecution}
+          disabled={!isExecuting && accountsLoading}
+          className={`inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl text-sm font-bold tracking-wide text-white shadow-sm transition-colors ${
+            isExecuting
+              ? "bg-[#DC2626] hover:bg-rose-700"
+              : "bg-[#004AC6] hover:bg-blue-800 disabled:opacity-60"
+          }`}
+        >
+          {isExecuting ? (
+            <>
+              <Square className="size-4 fill-white" />
+              <span>DỪNG THỰC THI QUÉT BÀI VIẾT</span>
+            </>
+          ) : (
+            <>
+              <Play className="size-4 fill-white" />
+              <span>BẮT ĐẦU THỰC THI</span>
+            </>
+          )}
+        </button>
+        {isBusy && (
           <button
             type="button"
-            onClick={handleStartScan}
-            className="px-8 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm shadow-md shadow-blue-600/20 transition-all flex items-center gap-2 cursor-pointer"
+            onClick={handlePauseResume}
+            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-[#F59E0B] bg-white text-xs font-bold text-[#D97706] hover:bg-amber-50"
           >
-            <Play className="w-4 h-4 fill-current" />
-            BẮT ĐẦU THỰC THI
+            {isPaused ? (
+              <>
+                <Play className="size-3.5 fill-current" />
+                TIẾP TỤC QUÉT
+              </>
+            ) : (
+              <>
+                <Pause className="size-3.5" />
+                TẠM DỪNG QUÉT
+              </>
+            )}
           </button>
-        ) : (
-          <>
-            <button
-              type="button"
-              onClick={handlePauseScan}
-              className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-sm flex items-center gap-2 cursor-pointer"
-            >
-              <Pause className="w-4 h-4" />
-              TẠM DỪNG QUÉT
-            </button>
-            <button
-              type="button"
-              onClick={handleStopScan}
-              className="px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-sm flex items-center gap-2 cursor-pointer"
-            >
-              <Square className="w-4 h-4 fill-current" />
-              DỪNG KHẨN CẤP
-            </button>
-          </>
         )}
       </div>
 
-      {/* Results Section Header */}
+      {/* Results — chỉ hiện khi quét xong */}
+      {showResults ? (
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <h2 className="text-base font-bold text-slate-800">
+            <h2 className="font-heading text-base font-bold text-slate-800">
               Kết quả quét bài viết Fanpage
             </h2>
-            <span className="px-3 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-bold">
-              Tổng {totalPostsCount} bài viết
+            <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
+              Tổng {fmtNum(resultCount || scannedPosts.length)} bài viết
             </span>
           </div>
           <button
             type="button"
-            onClick={() =>
-              exportPostsToCsv(
-                Object.values(postsByPage).flat(),
-                "toan_bo_bai_viet_fanpage.csv"
-              )
-            }
-            className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs flex items-center gap-2 transition-colors cursor-pointer"
+            onClick={() => exportCsv(scannedPosts, "toan_bo_bai_viet_fanpage.csv")}
+            className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-xs transition-colors hover:bg-emerald-700"
           >
-            <FileSpreadsheet className="w-4 h-4" />
+            <FileSpreadsheet className="size-4" />
             Xuất toàn bộ file Excel
           </button>
         </div>
 
-        {/* Master - Detail Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-          {/* Left Sidebar: DANH MỤC PAGE */}
-          <div className="lg:col-span-3 bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
-            <div className="p-3.5 border-b border-slate-100 flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+          {/* Left: DANH MỤC PAGE */}
+          <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs lg:col-span-3">
+            <div className="flex items-center justify-between border-b border-slate-100 p-3.5">
+              <span className="text-xs font-bold tracking-wider text-slate-700 uppercase">
                 DANH MỤC PAGE ({selectedPages.length})
               </span>
-              <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
-                Đang chạy {scanState === "RUNNING" ? "3" : "1"}/{selectedPages.length}
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                Đang chạy {isBusy ? runningPagesCount : Math.min(runningPagesCount, selectedPages.length)}/
+                {selectedPages.length || 0}
               </span>
             </div>
 
-            <div className="p-3 border-b border-slate-100">
+            <div className="border-b border-slate-100 p-3">
               <div className="relative">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Search className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-slate-400" />
                 <input
                   type="text"
                   value={sidebarSearch}
                   onChange={(e) => setSidebarSearch(e.target.value)}
-                  placeholder="Tìm tên page trong danh sách..."
-                  className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 text-xs focus:outline-none focus:border-blue-500"
+                  placeholder="Tìm tên hoặc ID Fanpage..."
+                  className="w-full rounded-lg border border-slate-200 py-1.5 pr-3 pl-8 text-xs focus:border-blue-500 focus:outline-none"
                 />
               </div>
             </div>
 
-            <div className="divide-y divide-slate-100 max-h-[520px] overflow-y-auto">
-              {filteredSidebarPages.map((p) => {
-                const pid = String(p.page_id || p.id);
-                const isSelected = String(activePage?.page_id || activePage?.id) === pid;
-                const statusBadge =
-                  p.status === "RUNNING"
-                    ? "text-blue-600"
-                    : p.status === "DONE"
-                      ? "text-emerald-600"
-                      : "text-amber-600";
-
-                return (
-                  <button
-                    key={pid}
-                    type="button"
-                    onClick={() => setActivePageId(pid)}
-                    className={`w-full text-left p-3.5 transition-colors flex items-start justify-between gap-2 cursor-pointer ${
-                      isSelected
-                        ? "bg-blue-50/80 border-l-4 border-l-blue-600"
-                        : "hover:bg-slate-50"
-                    }`}
-                  >
-                    <div className="min-w-0">
-                      <div className="font-bold text-xs text-slate-800 truncate">
-                        {p.name}
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">
-                        ID: {pid}
-                      </div>
-                      <div className={`text-[11px] font-semibold mt-1 ${statusBadge}`}>
-                        ● {p.status_label || "Hoàn tất quét"}
-                      </div>
-                    </div>
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-[11px] font-bold shrink-0 ${
+            <div className="max-h-[520px] divide-y divide-slate-100 overflow-y-auto">
+              {filteredSidebarPages.length === 0 ? (
+                <p className="px-4 py-8 text-center text-xs text-slate-400">Chưa chọn page</p>
+              ) : (
+                filteredSidebarPages.map((page) => {
+                  const isSelected = page.page_key === activePage?.page_key;
+                  const count = (postsByPage[page.page_key] || []).length;
+                  const st = pageStatusMeta(page);
+                  return (
+                    <button
+                      key={page.page_key}
+                      type="button"
+                      onClick={() => setActivePageKey(page.page_key)}
+                      className={`flex w-full cursor-pointer items-start justify-between gap-2 p-3.5 text-left transition-colors ${
                         isSelected
-                          ? "bg-blue-600 text-white"
-                          : "bg-slate-100 text-slate-700"
+                          ? "border-l-4 border-l-blue-600 bg-blue-50/80"
+                          : "hover:bg-slate-50"
                       }`}
                     >
-                      {p.posts_count || 0} bài
-                    </span>
-                  </button>
-                );
-              })}
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-bold text-slate-800">{page.name}</div>
+                        <div className="mt-0.5 text-[11px] text-slate-400">
+                          ID: {page.page_id || page.uid}
+                        </div>
+                        <div className={`mt-1 text-[11px] font-semibold ${st.color}`}>
+                          ● {st.label}
+                        </div>
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                          isSelected ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-700"
+                        }`}
+                      >
+                        {count} bài
+                      </span>
+                    </button>
+                  );
+                })
+              )}
             </div>
           </div>
 
-          {/* Right Detail Area */}
-          <div className="lg:col-span-9 bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
-            {/* Page Header */}
-            <div className="p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold text-slate-900">
-                    {activePage?.name}
-                  </h3>
-                  <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-[11px] font-bold">
-                    {activePage?.category || "Fanpage"}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 mt-1">
-                  Quy mô:{" "}
-                  <strong className="text-slate-700">
-                    {activePage?.followers_text || "324.500"} Followers
-                  </strong>{" "}
-                  • Đã quét:{" "}
-                  <strong className="text-blue-600">
-                    {currentPosts.length} bài viết
-                  </strong>{" "}
-                  • Cập nhật lúc: 14:38:34
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() =>
-                  exportPostsToCsv(
-                    currentPosts,
-                    `bai_viet_${activePage?.page_id || "page"}.csv`
-                  )
-                }
-                className="px-3.5 py-2 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Xuất Page này
-              </button>
-            </div>
-
-            {/* Search + Sort + 4 Filters */}
-            <div className="p-4 bg-slate-50/60 border-b border-slate-100 space-y-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="relative flex-1 min-w-[240px]">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={postSearch}
-                    onChange={(e) => setPostSearch(e.target.value)}
-                    placeholder="Tìm từ khóa trong nội dung bài viết, ID post, hashtag..."
-                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 bg-white text-xs focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-slate-500">Sắp xếp:</span>
-                  <select
-                    value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value)}
-                    className="px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 focus:outline-none"
+          {/* Right detail */}
+          <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs lg:col-span-9">
+            {activePage ? (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-4">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-bold text-slate-900">{activePage.name}</h3>
+                      <span className="rounded-md bg-blue-50 px-2 py-0.5 text-[11px] font-bold text-blue-700">
+                        {activePage.category || "Fanpage"}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Quy mô:{" "}
+                      <strong className="text-slate-700">
+                        {activePage.followers_text || fmtNum(activePage.follower_count)} Followers
+                      </strong>{" "}
+                      • Đã quét:{" "}
+                      <strong className="text-blue-600">
+                        {(postsByPage[activePage.page_key] || []).length} bài viết
+                      </strong>{" "}
+                      • Cập nhật lúc: {lastUpdatedLabel}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      exportCsv(
+                        postsByPage[activePage.page_key] || [],
+                        `bai_viet_${activePage.page_id || "page"}.csv`,
+                      )
+                    }
+                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs font-bold text-emerald-700 transition-colors hover:bg-emerald-100"
                   >
-                    <option value="NEWEST">Mới nhất</option>
-                    <option value="LIKES_DESC">Lượt Like cao nhất</option>
-                    <option value="COMMENTS_DESC">Bình luận nhiều nhất</option>
-                  </select>
+                    <Download className="size-3.5" />
+                    Xuất Page này
+                  </button>
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                <select
-                  value={dateFilter}
-                  onChange={(e) => setDateFilter(e.target.value)}
-                  className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs text-slate-700 font-medium"
-                >
-                  <option value="ALL">Lọc Ngày Đăng: Tất cả</option>
-                  <option value="TODAY">Hôm nay</option>
-                  <option value="3DAYS">3 ngày gần đây</option>
-                  <option value="7DAYS">7 ngày gần đây</option>
-                </select>
-
-                <select
-                  value={likeFilter}
-                  onChange={(e) => setLikeFilter(e.target.value)}
-                  className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs text-slate-700 font-medium"
-                >
-                  <option value="ALL">Lọc Lượt Like: Tất cả</option>
-                  <option value="GT_500">Trên 500 Likes</option>
-                  <option value="GT_1000">Trên 1.000 Likes</option>
-                </select>
-
-                <select
-                  value={commentFilter}
-                  onChange={(e) => setCommentFilter(e.target.value)}
-                  className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs text-slate-700 font-medium"
-                >
-                  <option value="ALL">Lọc Bình Luận: Tất cả</option>
-                  <option value="GT_100">Trên 100 Comments</option>
-                  <option value="GT_300">Trên 300 Comments</option>
-                </select>
-
-                <select
-                  value={shareFilter}
-                  onChange={(e) => setShareFilter(e.target.value)}
-                  className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs text-slate-700 font-medium"
-                >
-                  <option value="ALL">Lọc Lượt Share: Tất cả</option>
-                  <option value="GT_50">Trên 50 Shares</option>
-                  <option value="GT_100">Trên 100 Shares</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Posts Table */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100 text-[11px] font-bold text-slate-500 uppercase">
-                    <th className="py-3 px-3 w-10 text-center">
+                <div className="space-y-3 border-b border-slate-100 bg-slate-50/60 p-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="relative min-w-[240px] flex-1">
+                      <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-slate-400" />
                       <input
-                        type="checkbox"
-                        checked={
-                          currentPosts.length > 0 &&
-                          currentPosts.every((p) => selectedPostIds.includes(p.id))
-                        }
-                        onChange={toggleSelectAllPosts}
-                        className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600"
+                        type="text"
+                        value={postSearch}
+                        onChange={(e) => setPostSearch(e.target.value)}
+                        placeholder="Tìm từ khóa trong nội dung bài viết, ID post, hashtag..."
+                        className="w-full rounded-xl border border-slate-200 bg-white py-2 pr-3 pl-9 text-xs focus:border-blue-500 focus:outline-none"
                       />
-                    </th>
-                    <th className="py-3 px-3 w-12">STT</th>
-                    <th className="py-3 px-3 min-w-[260px]">NỘI DUNG BÀI VIẾT</th>
-                    <th className="py-3 px-3">LINK POST</th>
-                    <th className="py-3 px-3">NGÀY ĐĂNG</th>
-                    <th className="py-3 px-3 text-center">LƯỢT LIKE</th>
-                    <th className="py-3 px-3 text-center">BÌNH LUẬN</th>
-                    <th className="py-3 px-3 text-center">CHIA SẺ</th>
-                    <th className="py-3 px-3 text-center w-14">HĐ</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-xs">
-                  {currentPosts.map((post, idx) => (
-                    <tr key={post.id} className="hover:bg-slate-50/80">
-                      <td className="py-3 px-3 text-center">
-                        <input
-                          type="checkbox"
-                          checked={selectedPostIds.includes(post.id)}
-                          onChange={() => togglePostSelect(post.id)}
-                          className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600"
-                        />
-                      </td>
-                      <td className="py-3 px-3 font-semibold text-slate-500">
-                        {idx + 1}
-                      </td>
-                      <td className="py-3 px-3 max-w-md">
-                        <p className="text-slate-800 font-medium line-clamp-2 leading-relaxed">
-                          {post.content}
-                        </p>
-                        <span className="text-[10px] text-slate-400">
-                          Post ID: {post.id.replace("p_", "")}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3">
-                        <a
-                          href={`https://${post.post_url}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 text-blue-600 hover:underline font-medium text-[11px]"
-                        >
-                          {post.post_url.slice(0, 26)}...
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </td>
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        <div className="font-semibold text-slate-700">
-                          {post.published_date}
-                        </div>
-                        <div className="text-[11px] text-slate-400">
-                          {post.published_time}
-                        </div>
-                      </td>
-                      <td className="py-3 px-3 text-center">
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 font-bold text-[11px]">
-                          <ThumbsUp className="w-3 h-3" />
-                          {post.likes.toLocaleString("vi-VN")}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-center">
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-700 font-bold text-[11px]">
-                          <MessageSquare className="w-3 h-3" />
-                          {post.comments.toLocaleString("vi-VN")}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-center font-semibold text-slate-600">
-                        {post.shares.toLocaleString("vi-VN")}
-                      </td>
-                      <td className="py-3 px-3 text-center">
-                        <button
-                          type="button"
-                          onClick={() => setPreviewPost(post)}
-                          className="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition-colors cursor-pointer"
-                          title="Xem chi tiết bài viết"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-500">Sắp xếp:</span>
+                      <select
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value)}
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 focus:outline-none"
+                      >
+                        <option value="NEWEST">Mới nhất</option>
+                        <option value="LIKES_DESC">Lượt Like cao nhất</option>
+                        <option value="COMMENTS_DESC">Bình luận nhiều nhất</option>
+                      </select>
+                    </div>
+                  </div>
 
-            {/* Pagination Footer */}
-            <div className="px-4 py-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-              <span>
-                Hiển thị <strong>1 - {currentPosts.length}</strong> trong tổng số{" "}
-                <strong>{activePage?.posts_count || currentPosts.length}</strong> bài viết
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  className="px-2.5 py-1 rounded border border-slate-200 hover:bg-slate-50 text-slate-600"
-                >
-                  Trước
-                </button>
-                <button
-                  type="button"
-                  className="px-2.5 py-1 rounded bg-blue-600 text-white font-bold"
-                >
-                  1
-                </button>
-                <button
-                  type="button"
-                  className="px-2.5 py-1 rounded border border-slate-200 hover:bg-slate-50 text-slate-600"
-                >
-                  2
-                </button>
-                <button
-                  type="button"
-                  className="px-2.5 py-1 rounded border border-slate-200 hover:bg-slate-50 text-slate-600"
-                >
-                  Sau
-                </button>
+                  <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                    <select
+                      value={dateFilter}
+                      onChange={(e) => setDateFilter(e.target.value)}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
+                    >
+                      <option value="ALL">Lọc Ngày Đăng: Tất cả</option>
+                      <option value="TODAY">Hôm nay</option>
+                      <option value="3DAYS">3 ngày gần đây</option>
+                      <option value="7DAYS">7 ngày gần đây</option>
+                    </select>
+                    <select
+                      value={likeFilter}
+                      onChange={(e) => setLikeFilter(e.target.value)}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
+                    >
+                      <option value="ALL">Lọc Lượt Like: Tất cả</option>
+                      <option value="GT_500">Trên 500 Likes</option>
+                      <option value="GT_1000">Trên 1.000 Likes</option>
+                    </select>
+                    <select
+                      value={commentFilter}
+                      onChange={(e) => setCommentFilter(e.target.value)}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
+                    >
+                      <option value="ALL">Lọc Bình Luận: Tất cả</option>
+                      <option value="GT_100">Trên 100 Comments</option>
+                      <option value="GT_300">Trên 300 Comments</option>
+                    </select>
+                    <select
+                      value={shareFilter}
+                      onChange={(e) => setShareFilter(e.target.value)}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
+                    >
+                      <option value="ALL">Lọc Lượt Share: Tất cả</option>
+                      <option value="GT_50">Trên 50 Shares</option>
+                      <option value="GT_100">Trên 100 Shares</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-100 bg-slate-50 text-[11px] font-bold text-slate-500 uppercase">
+                        <th className="w-10 px-3 py-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={allFilteredSelected}
+                            onChange={handleToggleSelectAllPosts}
+                            className="size-3.5 rounded border-slate-300 text-blue-600"
+                          />
+                        </th>
+                        <th className="w-12 px-3 py-3">STT</th>
+                        <th className="min-w-[260px] px-3 py-3">NỘI DUNG BÀI VIẾT</th>
+                        <th className="px-3 py-3">LINK POST</th>
+                        <th className="px-3 py-3">NGÀY ĐĂNG</th>
+                        <th className="px-3 py-3 text-center">LƯỢT LIKE</th>
+                        <th className="px-3 py-3 text-center">BÌNH LUẬN</th>
+                        <th className="px-3 py-3 text-center">CHIA SẺ</th>
+                        <th className="w-14 px-3 py-3 text-center">HĐ</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {isBusy && filteredPosts.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
+                            <Loader2 className="mx-auto mb-2 size-5 animate-spin text-blue-600" />
+                            Đang thu thập bài viết...
+                          </td>
+                        </tr>
+                      ) : filteredPosts.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="px-4 py-10 text-center text-slate-400">
+                            Không có bài viết nào được thu thập cho page này.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredPosts.map((post, idx) => {
+                          const url = post.post_url
+                            ? post.post_url.startsWith("http")
+                              ? post.post_url
+                              : `https://${post.post_url}`
+                            : "";
+                          const dateStr = post.published_at
+                            ? String(post.published_at).slice(0, 10)
+                            : "—";
+                          const timeStr =
+                            post.published_at && String(post.published_at).includes("T")
+                              ? String(post.published_at).slice(11, 16)
+                              : "";
+                          return (
+                            <tr key={post.id} className="hover:bg-slate-50/80">
+                              <td className="px-3 py-3 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedPostIds.has(post.id)}
+                                  onChange={() => handleToggleSelectPost(post.id)}
+                                  className="size-3.5 rounded border-slate-300 text-blue-600"
+                                />
+                              </td>
+                              <td className="px-3 py-3 font-semibold text-slate-500">{idx + 1}</td>
+                              <td className="max-w-md px-3 py-3">
+                                <p className="line-clamp-2 leading-relaxed font-medium text-slate-800">
+                                  {post.content}
+                                </p>
+                                <span className="text-[10px] text-slate-400">
+                                  Post ID: {String(post.id).replace(/^p_/, "")}
+                                </span>
+                              </td>
+                              <td className="px-3 py-3">
+                                {url ? (
+                                  <a
+                                    href={url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:underline"
+                                  >
+                                    {(post.post_url || "").slice(0, 26)}
+                                    {(post.post_url || "").length > 26 ? "..." : ""}
+                                    <ExternalLink className="size-3" />
+                                  </a>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-3 whitespace-nowrap">
+                                <div className="font-semibold text-slate-700">{dateStr}</div>
+                                {timeStr ? (
+                                  <div className="text-[11px] text-slate-400">{timeStr}</div>
+                                ) : null}
+                              </td>
+                              <td className="px-3 py-3 text-center">
+                                <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-[11px] font-bold text-blue-700">
+                                  <ThumbsUp className="size-3" />
+                                  {fmtNum(post.likes)}
+                                </span>
+                              </td>
+                              <td className="px-3 py-3 text-center">
+                                <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2.5 py-0.5 text-[11px] font-bold text-purple-700">
+                                  <MessageSquare className="size-3" />
+                                  {fmtNum(post.comments)}
+                                </span>
+                              </td>
+                              <td className="px-3 py-3 text-center font-semibold text-slate-600">
+                                {fmtNum(post.shares)}
+                              </td>
+                              <td className="px-3 py-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewPost(post)}
+                                  className="cursor-pointer rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-blue-50 hover:text-blue-600"
+                                  title="Xem chi tiết bài viết"
+                                >
+                                  <Eye className="size-4" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+                  <span>
+                    Hiển thị <strong>1 - {filteredPosts.length}</strong> trong tổng số{" "}
+                    <strong>
+                      {(postsByPage[activePage.page_key] || []).length || filteredPosts.length}
+                    </strong>{" "}
+                    bài viết
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      className="rounded border border-slate-200 px-2.5 py-1 text-slate-600 hover:bg-slate-50"
+                    >
+                      Trước
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded bg-blue-600 px-2.5 py-1 font-bold text-white"
+                    >
+                      1
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border border-slate-200 px-2.5 py-1 text-slate-600 hover:bg-slate-50"
+                    >
+                      Sau
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex min-h-[320px] items-center justify-center text-sm text-slate-400">
+                Chọn page ở cột trái để xem kết quả
               </div>
-            </div>
+            )}
           </div>
         </div>
       </div>
+      ) : null}
 
-      {/* Live Automation Log Console */}
-      <div className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden shadow-md">
-        <div className="px-4 py-2.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Terminal className="w-4 h-4 text-emerald-400" />
-            <span className="text-xs font-mono font-bold text-slate-200">
-              Live Automation Log Console [Thread-01]
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setLogs([])}
-            className="text-[11px] font-mono text-slate-400 hover:text-white flex items-center gap-1 cursor-pointer"
-          >
-            <RefreshCw className="w-3 h-3" />
-            Clear console
-          </button>
-        </div>
-        <div className="p-4 font-mono text-xs space-y-1.5 max-h-44 overflow-y-auto">
-          {logs.map((log, i) => (
-            <div key={i} className="flex items-start gap-2 leading-relaxed">
-              <span className="text-slate-500 shrink-0">[{log.time}]</span>
-              <span className={`font-bold shrink-0 [${log.color}] ${log.color}`}>
-                [{log.tag}]
-              </span>
-              <span className="text-slate-300">{log.text}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Post Detail Preview Modal */}
-      {previewPost && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-xl border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h4 className="text-sm font-bold text-slate-800">
-                  Chi tiết bài viết #{previewPost.id.replace("p_", "")}
-                </h4>
-                <p className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
-                  <Calendar className="w-3 h-3" />
-                  Đăng lúc {previewPost.published_time} - {previewPost.published_date}
-                </p>
-              </div>
+      {previewPost ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <h3 className="text-sm font-bold text-slate-900">Chi tiết bài viết</h3>
               <button
                 type="button"
                 onClick={() => setPreviewPost(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+                className="rounded-lg px-2 py-1 text-xs font-semibold text-slate-500 hover:bg-slate-100"
               >
-                <X className="w-4 h-4" />
+                Đóng
               </button>
             </div>
-            <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap bg-slate-50 p-3.5 rounded-xl border border-slate-100">
+            <p className="text-sm leading-relaxed whitespace-pre-wrap text-slate-700">
               {previewPost.content}
             </p>
-            <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="p-2.5 rounded-xl bg-blue-50 text-blue-700">
-                <div className="text-sm font-bold">
-                  {previewPost.likes.toLocaleString("vi-VN")}
-                </div>
-                <div className="text-[11px]">Lượt Thích</div>
-              </div>
-              <div className="p-2.5 rounded-xl bg-purple-50 text-purple-700">
-                <div className="text-sm font-bold">
-                  {previewPost.comments.toLocaleString("vi-VN")}
-                </div>
-                <div className="text-[11px]">Bình Luận</div>
-              </div>
-              <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-700">
-                <div className="text-sm font-bold">
-                  {previewPost.shares.toLocaleString("vi-VN")}
-                </div>
-                <div className="text-[11px]">Chia Sẻ</div>
-              </div>
+            <div className="mt-4 flex flex-wrap gap-3 text-xs text-slate-500">
+              <span>Like: {fmtNum(previewPost.likes)}</span>
+              <span>Cmt: {fmtNum(previewPost.comments)}</span>
+              <span>Share: {fmtNum(previewPost.shares)}</span>
             </div>
+            {previewPost.post_url ? (
+              <a
+                href={
+                  previewPost.post_url.startsWith("http")
+                    ? previewPost.post_url
+                    : `https://${previewPost.post_url}`
+                }
+                target="_blank"
+                rel="noreferrer"
+                className="mt-4 inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:underline"
+              >
+                Mở trên Facebook <ExternalLink className="size-3" />
+              </a>
+            ) : null}
           </div>
         </div>
+      ) : null}
+
+      {(runPhase !== "idle" || logs.length > 0) && (
+        <LiveLogConsole title="Live Log · Quét bài viết page" logs={logs} phase={runPhase} />
       )}
 
-      {/* Modals */}
       <SelectAccountsModal
         open={showAccountModal}
         onClose={() => setShowAccountModal(false)}
         accounts={accounts}
-        selectedUids={selectedAccountIds}
-        onConfirm={(ids) => {
-          setSelectedAccountIds(ids);
+        loading={accountsLoading}
+        selectedUids={selectedUids}
+        onConfirm={(uids) => {
+          setSelectedUids(uids);
           setShowAccountModal(false);
         }}
       />
 
       <SelectPagesModal
-        open={showSelectPagesModal}
-        onClose={() => setShowSelectPagesModal(false)}
+        open={showPageModal}
+        onClose={() => setShowPageModal(false)}
+        availablePages={availablePages}
         selectedPages={selectedPages}
         onConfirm={(pages) => {
-          const normalized = pages.map((p) => ({
-            ...p,
-            id: p.page_id || p.uid || p.id,
-            page_id: p.page_id || p.uid || p.id,
-            name: p.name || p.page_name || "Fanpage",
-            posts_count: p.posts_count || p.scanned_post_count || 65,
-            followers_text:
-              p.followers_text ||
-              Number(p.follower_count || p.followers_count || 125000).toLocaleString("vi-VN"),
-            status: p.status || "DONE",
-            status_label: p.status_label || "Hoàn tất quét",
-          }));
-          setSelectedPages(normalized.length > 0 ? normalized : DEFAULT_SCANNED_PAGES);
-          setShowSelectPagesModal(false);
+          setSelectedPages(pages.map((p, i) => mapKhoToPage(p, i)));
+          setShowPageModal(false);
         }}
       />
     </div>

@@ -49,6 +49,8 @@ data/accounts.txt
 data/browser_profiles/
 data/module_02_account_manager/
 data/module_07_group_spam/
+# Ảnh avatar/cover/post do Module 4 sinh runtime — không commit
+data/creator_assets/
 *.db
 *.sqlite
 *.sqlite3
@@ -118,9 +120,10 @@ src-tauri/target/
 # Schema sinh tự động khi `tauri build` / `tauri dev`
 src-tauri/gen/
 
-# Sidecar binary ~1GB — build bằng: python scripts/build_sidecar.py
+# Sidecar binary / onedir runtime — build bằng: python scripts/build_sidecar.py
 src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
+src-tauri/engine-runtime/
 
 # Icon sinh bởi `npx tauri icon` (android/ios/store…) — chỉ giữ 2 file nguồn
 src-tauri/icons/**

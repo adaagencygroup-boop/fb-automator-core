@@ -95,6 +95,9 @@ export default function LoginPage() {
       const data = await api.adminLogin(finalUsername, finalPassword, remember);
       console.log("[Admin Login] Login successful, redirecting to dashboard...");
       localStorage.setItem("admin_token", data.access_token);
+      if (typeof data.refresh_token === "string" && data.refresh_token) {
+        localStorage.setItem("admin_refresh_token", data.refresh_token);
+      }
       if (remember) localStorage.setItem(REMEMBER_KEY, finalUsername);
       else localStorage.removeItem(REMEMBER_KEY);
       window.location.href = "/dashboard/users";

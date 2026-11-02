@@ -25,15 +25,24 @@
       "csp": null
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["fbautomator"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "icon": [
       "icons/icon.png",
       "icons/icon.ico"
     ],
-    "externalBin": [
-      "binaries/local_engine"
-    ]
+    "resources": {
+      "engine-runtime/": "local_engine/"
+    }
   }
 }

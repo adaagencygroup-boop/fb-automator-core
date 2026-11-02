@@ -1,3 +1,4 @@
+import time
 import os
 import requests
 import asyncio
@@ -76,7 +77,7 @@ class FacebookChatService:
                 page_id=page_id,
                 sender_id=recipient_id,
                 text=text,
-                timestamp=int(datetime.utcnow().timestamp() * 1000),
+                timestamp=int(time.time() * 1000),
                 direction="outbound",
                 is_read=False,
                 reply_to_message_id=reply_to_message_id
@@ -172,7 +173,7 @@ class FacebookChatService:
                 page_id=page_id,
                 sender_id=recipient_id,
                 text=media_text,
-                timestamp=int(datetime.utcnow().timestamp() * 1000),
+                timestamp=int(time.time() * 1000),
                 direction="outbound",
                 is_read=False,
                 reply_to_message_id=reply_to_message_id

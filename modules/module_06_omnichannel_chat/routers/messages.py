@@ -3,6 +3,7 @@ import shutil
 import time
 import math
 import asyncio
+from config.constants import UPLOADS_DIR
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, or_
@@ -32,7 +33,7 @@ router = APIRouter(prefix="/api/facebook", tags=["Messages"])
 
 from urllib.parse import quote
 
-UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../uploads"))
+UPLOAD_DIR = str(UPLOADS_DIR)
 
 # Facebook phai TAI DUOC file dinh kem tu Internet, nen URL gui cho Graph API phai la dia chi cong khai.
 # Chay local thi dat PUBLIC_MEDIA_BASE_URL tro toi tunnel (ngrok/cloudflared) cua engine nay.
@@ -53,7 +54,8 @@ def get_messages(
     if facebook_user_id:
         query = query.join(Page, Page.page_id == Message.page_id).filter(Page.facebook_user_id == facebook_user_id)
 
-    msgs = query.order_by(Message.created_at.asc()).all()
+    # Sắp xếp ưu tiên theo timestamp (thời gian thực từ Facebook), fallback sang created_at
+    msgs = query.order_by(func.coalesce(Message.timestamp, func.extract('epoch', Message.created_at) * 1000).asc(), Message.id.asc()).all()
     return msgs
 
 @router.get("/conversations", response_model=Union[PaginatedConversationsOut, List[dict]])
@@ -399,11 +401,26 @@ async def send_attachment_file(
     filename = f"{int(time.time())}_{file.filename}"
     filepath = os.path.join(UPLOAD_DIR, filename)
 
+    file_bytes = await file.read()
     with open(filepath, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+        buffer.write(file_bytes)
 
     local_file_url = f"/uploads/{quote(filename)}"  # ten file co dau cach/ngoac -> phai encode
     public_url = f"{PUBLIC_MEDIA_BASE_URL}{local_file_url}"
+
+    # ?u ti?n t?i l?n Supabase Storage n?u c? c?u h?nh
+    try:
+        from modules.module_06_omnichannel_chat.services.storage_service import upload_file_bytes
+        sb_url = await asyncio.to_thread(
+            upload_file_bytes,
+            file_bytes,
+            filename,
+            file.content_type
+        )
+        if sb_url:
+            public_url = sb_url
+    except Exception as sb_err:
+        print(f"[Supabase Storage Upload Warning] {sb_err}")
 
     try:
         res = await sync_service.send_attachment_by_url(
@@ -426,11 +443,26 @@ async def upload_media(
     filename = f"{int(time.time())}_{file.filename}"
     filepath = os.path.join(UPLOAD_DIR, filename)
 
+    file_bytes = await file.read()
     with open(filepath, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+        buffer.write(file_bytes)
 
     local_file_url = f"/uploads/{quote(filename)}"  # ten file co dau cach/ngoac -> phai encode
     public_url = f"{PUBLIC_MEDIA_BASE_URL}{local_file_url}"
+
+    # ?u ti?n t?i l?n Supabase Storage n?u c? c?u h?nh
+    try:
+        from modules.module_06_omnichannel_chat.services.storage_service import upload_file_bytes
+        sb_url = await asyncio.to_thread(
+            upload_file_bytes,
+            file_bytes,
+            filename,
+            file.content_type
+        )
+        if sb_url:
+            public_url = sb_url
+    except Exception as sb_err:
+        print(f"[Supabase Storage Upload Warning] {sb_err}")
 
     return {"success": True, "url": public_url}
 

@@ -73,6 +73,9 @@ const DOT = {
   SKIPPED: "bg-amber-400 ring-amber-100",
 };
 
+// Nhiều hơn số dòng này thì nhật ký chắc chắn cao hơn 240px: màn thấp vẫn giữ ô nhật ký tối thiểu 240px
+const LOG_MIN_ROWS = 4;
+
 const COUNT_BADGES = [
   ["actions_success", "thành công", "bg-emerald-100 text-emerald-700"],
   ["actions_failed", "lỗi", "bg-rose-100 text-rose-700"],
@@ -280,7 +283,8 @@ export default function HistoryDetail({ id, onClose }) {
       className="fixed inset-0 z-[100000] flex items-start justify-center overflow-y-auto bg-slate-900/60 p-4 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="relative my-8 w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+      {/* Hộp cao tối đa vừa màn hình; nhật ký chiếm phần còn lại và cuộn bên trong */}
+      <div className="relative flex max-h-[calc(100dvh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
         <button
           type="button"
           onClick={onClose}
@@ -299,7 +303,7 @@ export default function HistoryDetail({ id, onClose }) {
         {h && (
           <>
             {/* Đầu: ai, kết quả gì, chạy lúc nào bao lâu */}
-            <div className={cn("border-b bg-gradient-to-r to-white px-6 py-5", HEADER_TONE[h.final_status] || "from-slate-50 border-slate-200")}>
+            <div className={cn("shrink-0 border-b bg-gradient-to-r to-white px-6 py-5", HEADER_TONE[h.final_status] || "from-slate-50 border-slate-200")}>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Lượt tương tác #{id}</div>
               <div className="mt-1 flex flex-wrap items-center gap-3">
                 <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-sm font-bold text-white">
@@ -334,11 +338,12 @@ export default function HistoryDetail({ id, onClose }) {
               )}
             </div>
 
-            <div className="space-y-6 px-6 py-5">
+            {/* Màn thấp không đủ chỗ cho nhật ký tối thiểu 240px thì cả phần thân cuộn */}
+            <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-6 py-5">
               {/* Kết quả từng kịch bản */}
               <section>
                 <SectionTitle icon={ShieldCheck}>Kết quả kịch bản</SectionTitle>
-                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
                   {SCENARIO_ORDER.map((action) => {
                     const theme = SCENARIO_THEME[action];
                     const Icon = theme.icon;
@@ -435,30 +440,32 @@ export default function HistoryDetail({ id, onClose }) {
                 </section>
               </div>
 
-              {/* Nhật ký dạng timeline */}
-              <section>
+              {/* Nhật ký dạng timeline: phần duy nhất co lại khi thiếu chỗ, cuộn trong khung để hộp không dài quá màn hình */}
+              <section className={cn("flex min-h-0 flex-col", data.logs.length > LOG_MIN_ROWS && "min-h-[240px]")}>
                 <SectionTitle icon={Clock}>Nhật ký hành động ({data.logs.length})</SectionTitle>
                 {data.logs.length ? (
-                  <ol className="relative ml-2 border-l-2 border-slate-100">
-                    {data.logs.map((log, idx) => {
-                      const meta = ACTION_STATUS[log.status] || ACTION_STATUS.PENDING;
-                      const theme = SCENARIO_THEME[log.action_type];
-                      return (
-                        <li key={idx} className="relative pb-4 pl-5 last:pb-0">
-                          <span className={cn("absolute -left-[7px] top-1.5 h-3 w-3 rounded-full ring-4", DOT[log.status] || "bg-slate-400 ring-slate-100")} />
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-mono text-[11px] text-slate-400">{formatVietnamDateTime(log.created_at).timeWithSeconds}</span>
-                            <span className={cn("text-sm font-semibold", theme?.title || "text-slate-700")}>
-                              {ACTION_FULL_LABELS[log.action_type] || log.action_type}
-                            </span>
-                            <span className={cn("rounded-md border px-1.5 py-0.5 text-[10px] font-semibold", meta.badge)}>{meta.label}</span>
-                          </div>
-                          {log.details && <div className="mt-0.5 text-xs text-slate-600">{log.details}</div>}
-                          {log.targets?.length > 0 && <LogTargets action={log.action_type} targets={log.targets} />}
-                        </li>
-                      );
-                    })}
-                  </ol>
+                  <div className="min-h-0 overflow-y-auto rounded-xl border border-slate-200 py-3 pl-2 pr-3">
+                    <ol className="relative ml-2 border-l-2 border-slate-100">
+                      {data.logs.map((log, idx) => {
+                        const meta = ACTION_STATUS[log.status] || ACTION_STATUS.PENDING;
+                        const theme = SCENARIO_THEME[log.action_type];
+                        return (
+                          <li key={idx} className="relative pb-4 pl-5 last:pb-0">
+                            <span className={cn("absolute -left-[7px] top-1.5 h-3 w-3 rounded-full ring-4", DOT[log.status] || "bg-slate-400 ring-slate-100")} />
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono text-[11px] text-slate-400">{formatVietnamDateTime(log.created_at).timeWithSeconds}</span>
+                              <span className={cn("text-sm font-semibold", theme?.title || "text-slate-700")}>
+                                {ACTION_FULL_LABELS[log.action_type] || log.action_type}
+                              </span>
+                              <span className={cn("rounded-md border px-1.5 py-0.5 text-[10px] font-semibold", meta.badge)}>{meta.label}</span>
+                            </div>
+                            {log.details && <div className="mt-0.5 text-xs text-slate-600">{log.details}</div>}
+                            {log.targets?.length > 0 && <LogTargets action={log.action_type} targets={log.targets} />}
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  </div>
                 ) : (
                   <div className="rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-xs text-slate-400">
                     Không có nhật ký hành động (nick dừng trước khi chạy kịch bản)

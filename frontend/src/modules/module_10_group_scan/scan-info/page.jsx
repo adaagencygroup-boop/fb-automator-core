@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Check, FileText, Loader2, Trash2, CloudUpload, X, Activity } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { Checkbox } from "@/components/ui/checkbox";
 import AccountSelectModal, { isScanReady } from "../components/AccountSelectModal";
+import SaveSharedGroupModal from "../components/SaveSharedGroupModal";
 import {
   IconClose,
   IconDownload,
@@ -32,7 +33,7 @@ import {
 const METHOD_TABS = [
   { id: "keyword", label: "Theo từ khóa", Icon: IconTags },
   { id: "link", label: "Nhập Link", Icon: IconLink },
-  { id: "file", label: "Tải tệp (.txt / .csv)", Icon: IconUpload },
+  { id: "file", label: "Tải tệp (.txt / .csv / .excel)", Icon: IconUpload },
 ];
 
 const KEYWORD_STATS_SEED = {};
@@ -199,16 +200,23 @@ export default function GroupScanInfoPage() {
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [selectedUids, setSelectedUids] = useState([]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
 
   const [method, setMethod] = useState("keyword");
   const [keywordInput, setKeywordInput] = useState("");
-  const [keywords, setKeywords] = useState(["Bán hàng online", "marketing", "kinh doanh sỉ"]);
+  const [keywords, setKeywords] = useState([]);
+  const [quotas, setQuotas] = useState({});
+
+  // Tab Nhập Link (Ảnh 1) — không dùng mock
   const [linkText, setLinkText] = useState("");
-  const [quotas, setQuotas] = useState({
-    "Bán hàng online": 30,
-    marketing: 20,
-    "kinh doanh sỉ": 50,
-  });
+  const [parsedLinks, setParsedLinks] = useState([]);
+  const [linkQuotas, setLinkQuotas] = useState({});
+
+  // Tab Tải tệp (Ảnh 2) — không dùng mock
+  const [fileData, setFileData] = useState(null);
+  const [fileQuotas, setFileQuotas] = useState({});
+  const [fileFilter, setFileFilter] = useState("all"); // all | valid | duplicate
+
   const [rotateAfter, setRotateAfter] = useState(50);
   const [delayMin, setDelayMin] = useState(5);
   const [delayMax, setDelayMax] = useState(10);
@@ -234,6 +242,19 @@ export default function GroupScanInfoPage() {
       tone: "info",
     },
   ]);
+
+  // Nạp kết quả quét đã lưu gần nhất khi mở lại trang để kết quả không bị mất
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("fb_scan_info_active_results");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setResults(parsed);
+        }
+      }
+    } catch {}
+  }, []);
 
   const pushLog = useCallback((text, tone = "info") => {
     const time = new Date().toLocaleTimeString("vi-VN", { hour12: false });
@@ -330,6 +351,156 @@ export default function GroupScanInfoPage() {
     setKeywords((current) => current.filter((item) => item !== word));
   };
 
+  // Handler Phương thức Nhập Link (Ảnh 1)
+  const handleClearAllLinks = () => {
+    setLinkText("");
+    setParsedLinks([]);
+    toast.info("Đã xóa toàn bộ liên kết.");
+  };
+
+  const handleCheckAndDeduplicateLinks = () => {
+    const lines = linkText
+      .split(/[\r\n]+/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (!lines.length) {
+      toast.warning("Vui lòng nhập ít nhất 1 liên kết Facebook.");
+      return;
+    }
+    const seen = new Set();
+    const list = [];
+    lines.forEach((line) => {
+      let clean = line;
+      if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+        clean = `https://${clean}`;
+      }
+      const key = clean.toLowerCase().replace(/\/+$/, "");
+      if (seen.has(key)) return;
+      seen.add(key);
+      list.push({
+        id: `link-${list.length + 1}`,
+        stt: list.length + 1,
+        url: clean,
+        raw: line,
+        status: "valid",
+      });
+    });
+    setParsedLinks(list);
+    setLinkQuotas((current) => {
+      const next = { ...current };
+      list.forEach((item) => {
+        if (next[item.url] == null) next[item.url] = 30;
+      });
+      return next;
+    });
+    toast.success(`Đã nhận diện và lọc trùng ${list.length} liên kết hợp lệ!`);
+  };
+
+  const handleRemoveLink = (id) => {
+    setParsedLinks((curr) => {
+      const next = curr.filter((l) => l.id !== id).map((l, idx) => ({ ...l, stt: idx + 1 }));
+      setLinkText(next.map((l) => l.url).join("\n"));
+      return next;
+    });
+  };
+
+  // Handler Phương thức Tải tệp (Ảnh 2)
+  const handleFileUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const name = file.name;
+      const ext = name.split(".").pop()?.toLowerCase();
+      let rawLines = [];
+      if (ext === "xlsx" || ext === "xls") {
+        const XLSX = await import("xlsx");
+        const data = await file.arrayBuffer();
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const json = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+        json.forEach((row) => {
+          if (Array.isArray(row)) {
+            row.forEach((cell) => {
+              const text = String(cell || "").trim();
+              if (text && !text.startsWith("#") && !/^(stt|tên|link|nhóm|keyword|group)/i.test(text)) {
+                rawLines.push(text);
+              }
+            });
+          }
+        });
+      } else {
+        const text = await file.text();
+        rawLines = text
+          .split(/[\r\n]+/)
+          .map((l) => l.trim())
+          .filter((l) => l && !l.startsWith("#"));
+      }
+
+      const seen = new Set();
+      const rows = [];
+      let validCount = 0;
+      let dupCount = 0;
+
+      rawLines.forEach((line, idx) => {
+        const norm = line.toLowerCase().replace(/\/+$/, "");
+        if (seen.has(norm)) {
+          dupCount += 1;
+          rows.push({
+            id: `f-${idx + 1}`,
+            line: idx + 1,
+            raw: line,
+            status: "duplicate",
+          });
+        } else {
+          seen.add(norm);
+          validCount += 1;
+          rows.push({
+            id: `f-${idx + 1}`,
+            line: idx + 1,
+            raw: line,
+            status: "valid",
+          });
+        }
+      });
+
+      const sizeStr = (file.size / 1024).toFixed(1) + " KB";
+      setFileData({
+        fileName: name,
+        fileSize: sizeStr,
+        totalCount: rows.length,
+        validCount,
+        dupCount,
+        rows,
+      });
+      setFileQuotas((current) => {
+        const next = { ...current };
+        rows.forEach((item) => {
+          if (item.status === "valid" && next[item.raw] == null) next[item.raw] = 30;
+        });
+        return next;
+      });
+      toast.success(`Đã nhận diện tệp ${name}: ${validCount} dòng hợp lệ, ${dupCount} trùng lặp.`);
+    } catch (err) {
+      console.error(err);
+      toast.error("Lỗi đọc tệp: " + (err.message || "Định dạng không hỗ trợ"));
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const displayedFileRows = useMemo(() => {
+    if (!fileData?.rows) return [];
+    if (fileFilter === "valid") return fileData.rows.filter((r) => r.status === "valid");
+    if (fileFilter === "duplicate") return fileData.rows.filter((r) => r.status === "duplicate");
+    return fileData.rows;
+  }, [fileData, fileFilter]);
+
+  const validFileRows = useMemo(
+    () => (fileData?.rows || []).filter((r) => r.status === "valid"),
+    [fileData],
+  );
+
   /** Kiểm tra = đọc DB: số nhóm đã quét / từ khóa + fill bảng kết quả (không mở Chrome). */
   const runKeywordCheck = async () => {
     const committed = keywordInput.trim() ? commitKeywords(keywordInput, { quiet: true }) : [];
@@ -375,14 +546,30 @@ export default function GroupScanInfoPage() {
     }
   };
 
-  const buildScanBody = (wordList) => {
-    const payloadKeywords = wordList.map((word) => ({
-      keyword: word,
-      limit: Math.max(1, Math.min(200, Number(quotas[word]) || 30)),
-    }));
+  const buildScanBody = (wordList = []) => {
+    let payloadKeywords = [];
+    if (method === "keyword") {
+      payloadKeywords = wordList.map((word) => ({
+        keyword: word,
+        limit: Math.max(1, Math.min(200, Number(quotas[word]) || 30)),
+      }));
+    } else if (method === "link") {
+      payloadKeywords = (parsedLinks || []).map((l) => ({
+        keyword: l.url,
+        limit: Math.max(1, Math.min(200, Number(linkQuotas[l.url]) || 30)),
+      }));
+    } else if (method === "file") {
+      const validRows = (fileData?.rows || []).filter((r) => r.status === "valid");
+      payloadKeywords = validRows.map((r) => ({
+        keyword: r.raw,
+        limit: Math.max(1, Math.min(200, Number(fileQuotas[r.raw]) || 30)),
+      }));
+    }
+
+    const firstWord = payloadKeywords[0]?.keyword || "";
     return {
       uid: selectedUids[0],
-      keyword: wordList[0],
+      keyword: firstWord,
       keywords: payloadKeywords,
       delay_min: Math.max(0, Number(delayMin) || 0),
       delay_max: Math.max(Number(delayMin) || 0, Number(delayMax) || 0),
@@ -419,7 +606,12 @@ export default function GroupScanInfoPage() {
 
         const groups = Array.isArray(status.groups) ? status.groups : [];
         if (groups.length) {
-          setResults(groups.map(mapGroupRow));
+          const mapped = groups.map(mapGroupRow);
+          setResults(mapped);
+          try {
+            localStorage.setItem("fb_scan_info_active_results", JSON.stringify(mapped));
+            localStorage.setItem("fb_scanned_groups_cache", JSON.stringify(mapped));
+          } catch {}
         }
 
         const remoteStats = status.keyword_stats && typeof status.keyword_stats === "object"
@@ -457,6 +649,54 @@ export default function GroupScanInfoPage() {
             finishedNotified = true;
             if (status.status === "done") {
               toast.success(`Đã quét ${groups.length} nhóm (${(status.keywords || []).length || 1} từ khóa).`);
+              try {
+                const now = new Date();
+                const timeStr = now.toLocaleDateString("vi-VN") + " " + now.toLocaleTimeString("vi-VN");
+                const cachedSessions = JSON.parse(localStorage.getItem("fb_scanned_sessions_cache") || "[]");
+                const newSession = {
+                  id: jobId || `SCN-2026-${Math.floor(1000 + Math.random() * 9000)}`,
+                  type: "GROUP_INFO",
+                  title: `Quét thông tin nhóm theo từ khóa «${(status.keywords || []).join(", ") || "Tổng hợp"}»`,
+                  target: (status.keywords || []).join(", ") || "Từ khóa quét",
+                  targetType: "keywords",
+                  account: {
+                    uid: selectedAccount?.uid || "",
+                    name: selectedAccount?.profile_name || "Tài khoản quét",
+                    avatarText: (selectedAccount?.profile_name || "FB").slice(0, 2).toUpperCase(),
+                    avatarBg: "bg-blue-600",
+                  },
+                  progress: {
+                    collected: groups.length,
+                    target: groups.length || 30,
+                    percentage: 100,
+                    unit: "nhóm",
+                  },
+                  startTime: timeStr,
+                  endTime: timeStr,
+                  duration: "Hoàn tất",
+                  status: "SUCCESS",
+                  config: {
+                    delay: `${delayMin} - ${delayMax}s`,
+                    privacy: publicOnly ? "Công khai" : privateOnly ? "Riêng tư" : "Tất cả",
+                    minMembers: minMembers ? `${minMembers.toLocaleString("vi-VN")} TV` : "—",
+                    maxKeywords: (status.keywords || []).length || 1,
+                  },
+                  logs: remoteLogs.map((l) => ({
+                    time: l.time || timeStr,
+                    level: (l.tone || l.level || "INFO").toUpperCase(),
+                    message: l.text || l.message || "",
+                  })),
+                  sampleResults: groups.slice(0, 10).map((g) => ({
+                    id: g.id || g.url,
+                    name: g.name,
+                    privacy: g.type === "public" ? "Công khai" : "Riêng tư",
+                    members: g.members,
+                    url: g.href || `https://${g.url}`,
+                  })),
+                };
+                const merged = [newSession, ...cachedSessions.filter((s) => s.id !== newSession.id)];
+                localStorage.setItem("fb_scanned_sessions_cache", JSON.stringify(merged));
+              } catch {}
             } else if (status.status === "aborted") {
               toast.warning(status.error || "Đã dừng khẩn cấp.");
             } else if (status.error) {
@@ -495,21 +735,52 @@ export default function GroupScanInfoPage() {
       toast.warning("Thêm ít nhất một từ khóa, bấm Kiểm tra rồi Bắt đầu thực thi.");
       return;
     }
+    if (method === "link" && (!parsedLinks || !parsedLinks.length)) {
+      toast.warning("Vui lòng nhập danh sách liên kết và bấm Kiểm tra & Lọc trùng lặp.");
+      return;
+    }
+    if (method === "file") {
+      const validRows = (fileData?.rows || []).filter((r) => r.status === "valid");
+      if (!validRows.length) {
+        toast.warning("Vui lòng tải tệp danh sách nhóm trước khi bắt đầu.");
+        return;
+      }
+    }
+
+    // CHỈ XÓA KẾT QUẢ CŨ KHI BẮT ĐẦU CHẠY CÁI MỚI!
+    setResults([]);
+    setSelectedRows(new Set());
+    try {
+      localStorage.removeItem("fb_scan_info_active_results");
+    } catch {}
 
     const uid = selectedUids[0];
     const body = buildScanBody(wordList);
     setRunState("running");
-    setKeywordStats((current) => {
-      const next = { ...current };
-      wordList.forEach((word, idx) => {
-        next[word] = { count: "…", status: idx === 0 ? "running" : "idle" };
+    if (method === "keyword") {
+      setKeywordStats((current) => {
+        const next = { ...current };
+        wordList.forEach((word, idx) => {
+          next[word] = { count: "…", status: idx === 0 ? "running" : "idle" };
+        });
+        return next;
       });
-      return next;
-    });
-    pushLog(
-      `Bắt đầu thực thi: nick ${uid}, ${wordList.length} từ khóa (limit + delay + bộ lọc)…`,
-      "info",
-    );
+      pushLog(
+        `Bắt đầu thực thi: nick ${uid}, ${wordList.length} từ khóa (limit + delay + bộ lọc)…`,
+        "info",
+      );
+    } else if (method === "link") {
+      pushLog(
+        `Bắt đầu thực thi quét liên kết: nick ${uid}, ${parsedLinks.length} link nhóm Facebook…`,
+        "info",
+      );
+    } else {
+      const validCnt = (fileData?.rows || []).filter((r) => r.status === "valid").length;
+      pushLog(
+        `Bắt đầu thực thi quét theo tệp: nick ${uid}, ${validCnt} mục từ ${fileData?.fileName || "tệp"}…`,
+        "info",
+      );
+    }
 
     try {
       let res;
@@ -701,13 +972,13 @@ export default function GroupScanInfoPage() {
                   key={tab.id}
                   type="button"
                   onClick={() => setMethod(tab.id)}
-                  className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[11px] font-semibold transition-colors ${
+                  className={`inline-flex h-9 items-center gap-2 rounded-lg px-3.5 text-xs font-bold transition-all shadow-xs ${
                     active
-                      ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#2563EB]"
-                      : "border-[#E2E8F0] bg-white text-[#64748B] hover:bg-slate-50"
+                      ? "bg-[#2563EB] text-white shadow-sm"
+                      : "border border-[#E2E8F0] bg-white text-[#475569] hover:bg-slate-50 font-medium"
                   }`}
                 >
-                  <Icon color={active ? "#2563EB" : "#64748B"} />
+                  <Icon color={active ? "#ffffff" : "#475569"} />
                   {tab.label}
                 </button>
               );
@@ -816,28 +1087,234 @@ export default function GroupScanInfoPage() {
             </div>
           ) : null}
 
+          {/* Phương thức Nhập Link — Thiết kế theo đúng Ảnh 1 */}
           {method === "link" ? (
-            <textarea
-              value={linkText}
-              onChange={(event) => setLinkText(event.target.value)}
-              rows={6}
-              placeholder={"Dán link nhóm, mỗi dòng một link\nhttps://facebook.com/groups/..."}
-              className="w-full rounded-lg border border-[#E2E8F0] px-3 py-2 text-xs text-[#0F172A] outline-none focus:border-[#2563EB]"
-            />
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-[#0F172A]">Dán danh sách liên kết Group Facebook</span>
+                <span className="inline-flex items-center rounded-lg bg-[#EFF6FF] px-2.5 py-1 text-xs font-semibold text-[#2563EB]">
+                  Đã nhận diện: {parsedLinks.length} link
+                </span>
+              </div>
+
+              <textarea
+                value={linkText}
+                onChange={(event) => setLinkText(event.target.value)}
+                rows={7}
+                placeholder={`https://www.facebook.com/groups/109283749210\nhttps://facebook.com/groups/congdongmarketingvn\nhttps://www.facebook.com/groups/kinhdoanhonline99`}
+                className="w-full rounded-xl border border-[#CBD5E1] bg-white p-3 font-mono text-xs text-[#0F172A] leading-relaxed outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] resize-y shadow-2xs"
+              />
+
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={handleClearAllLinks}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-[#EF4444] hover:text-[#DC2626] transition-colors"
+                >
+                  <Trash2 className="size-4" />
+                  Xóa tất cả
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCheckAndDeduplicateLinks}
+                  className="inline-flex h-9 items-center rounded-lg bg-[#2563EB] px-4 text-xs font-bold text-white shadow-sm hover:bg-blue-600 transition-colors"
+                >
+                  Kiểm tra & Lọc trùng lặp
+                </button>
+              </div>
+
+              {/* Khối Xem trước danh sách link đã nhập (Ảnh 1) */}
+              <div className="space-y-2 pt-1">
+                <div className="rounded-lg bg-[#F8FAFC] px-4 py-2.5 font-bold text-xs uppercase tracking-wide text-[#334155] border border-[#F1F5F9]">
+                  XEM TRƯỚC DANH SÁCH LINK ĐÃ NHẬP ({parsedLinks.length} LINK)
+                </div>
+
+                <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-[#F8FAFC] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
+                      <tr>
+                        <th className="w-14 px-3 py-2.5 text-center">STT</th>
+                        <th className="px-3 py-2.5">Đường dẫn Group Facebook</th>
+                        <th className="w-24 px-3 py-2.5 text-center">Trạng thái</th>
+                        <th className="w-10 px-2 py-2.5"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {parsedLinks.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-3 py-6 text-center text-[#94A3B8]">
+                            Chưa có liên kết nào. Hãy dán link và bấm Kiểm tra & Lọc trùng lặp.
+                          </td>
+                        </tr>
+                      ) : (
+                        parsedLinks.map((item) => (
+                          <tr key={item.id} className="border-t border-[#F1F5F9] hover:bg-[#F8FAFC]/60">
+                            <td className="px-3 py-2 text-center text-[#64748B] font-mono">{item.stt}</td>
+                            <td className="px-3 py-2">
+                              <span
+                                className="font-mono text-xs text-[#2563EB] hover:underline cursor-pointer"
+                                title={item.url}
+                              >
+                                {item.url.replace(/^https?:\/\/(www\.)?/, "").length > 42
+                                  ? `...${item.url.replace(/^https?:\/\/(www\.)?/, "").slice(0, 38)}...`
+                                  : item.url.replace(/^https?:\/\/(www\.)?/, "")}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <span className="inline-flex items-center rounded-full bg-[#ECFDF5] border border-[#A7F3D0] px-2.5 py-0.5 text-[10px] font-semibold text-[#059669]">
+                                Hợp lệ
+                              </span>
+                            </td>
+                            <td className="px-2 py-2 text-center">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveLink(item.id)}
+                                className="rounded p-1 text-[#94A3B8] hover:text-[#EF4444] hover:bg-rose-50 transition-colors"
+                                title="Xóa dòng này"
+                              >
+                                <X className="size-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
           ) : null}
 
+          {/* Phương thức Tải tệp — Thiết kế theo đúng Ảnh 2 */}
           {method === "file" ? (
-            <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[#CBD5E1] bg-[#F8FAFC] px-4 py-10 text-center">
-              <IconUpload className="size-6" color="#94A3B8" />
-              <span className="text-xs font-semibold text-[#0F172A]">Chọn tệp .txt hoặc .csv</span>
-              <span className="text-[11px] text-[#94A3B8]">Mỗi dòng một từ khóa hoặc một link nhóm</span>
-              <input
-                type="file"
-                accept=".txt,.csv"
-                className="hidden"
-                onChange={() => toast.info("Đọc tệp sẽ nối ở bước quét tiếp theo.")}
-              />
-            </label>
+            <div className="space-y-4">
+              {/* Vùng kéo thả file */}
+              <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[#BFDBFE] bg-[#F8FAFC] py-6 px-4 text-center hover:bg-blue-50/20 hover:border-[#60A5FA] transition-colors">
+                <div className="flex size-11 items-center justify-center rounded-full bg-[#DBEAFE] text-[#2563EB]">
+                  <CloudUpload className="size-5" />
+                </div>
+                <p className="text-xs text-[#0F172A]">
+                  Kéo thả file <strong className="text-[#2563EB]">.txt</strong> hoặc <strong className="text-[#2563EB]">.csv</strong> vào đây hoặc{" "}
+                  <span className="font-semibold text-[#2563EB] underline">Bấm để tải lên</span>
+                </p>
+                <input
+                  type="file"
+                  accept=".txt,.csv,.xlsx,.xls"
+                  className="hidden"
+                  onChange={handleFileUpload}
+                />
+              </label>
+
+              {/* Khung thông tin file đã tải lên */}
+              {fileData ? (
+                <div className="flex items-center justify-between rounded-xl border border-[#E2E8F0] bg-white p-3.5 shadow-2xs">
+                  <div className="flex items-center gap-3">
+                    <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[#DCFCE7] text-[#16A34A]">
+                      <FileText className="size-5" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-[#0F172A]">
+                        {fileData.fileName} <span className="font-normal text-[#64748B]">({fileData.fileSize})</span>
+                      </p>
+                      <p className="text-[11px] font-medium text-[#16A34A]">
+                        ✓ Đã nhận diện: {fileData.totalCount} dòng dữ liệu
+                      </p>
+                    </div>
+                  </div>
+                  <label className="text-xs font-semibold text-[#2563EB] hover:underline cursor-pointer">
+                    Thay đổi tệp
+                    <input
+                      type="file"
+                      accept=".txt,.csv,.xlsx,.xls"
+                      className="hidden"
+                      onChange={handleFileUpload}
+                    />
+                  </label>
+                </div>
+              ) : null}
+
+              {/* Khối Xem trước danh sách tải lên (Ảnh 2) */}
+              {fileData ? (
+                <div className="space-y-2.5 pt-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-[#0B1C30]">
+                      <Activity className="size-4 text-[#2563EB]" />
+                      <span>XEM TRƯỚC DANH SÁCH TẢI LÊN</span>
+                    </div>
+                    <div className="flex items-center gap-1 text-[11px]">
+                      <button
+                        type="button"
+                        onClick={() => setFileFilter("all")}
+                        className={`rounded-full px-2.5 py-1 font-semibold transition-colors ${
+                          fileFilter === "all"
+                            ? "bg-[#DBEAFE] text-[#1D4ED8]"
+                            : "bg-[#F1F5F9] text-[#64748B] hover:bg-slate-200"
+                        }`}
+                      >
+                        Tất cả ({fileData.totalCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFileFilter("valid")}
+                        className={`rounded-full px-2.5 py-1 font-semibold transition-colors ${
+                          fileFilter === "valid"
+                            ? "bg-[#DCFCE7] text-[#15803D]"
+                            : "bg-[#F1F5F9] text-[#64748B] hover:bg-slate-200"
+                        }`}
+                      >
+                        Hợp lệ ({fileData.validCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFileFilter("duplicate")}
+                        className={`rounded-full px-2.5 py-1 font-semibold transition-colors ${
+                          fileFilter === "duplicate"
+                            ? "bg-[#FEF3C7] text-[#D97706]"
+                            : "bg-[#F1F5F9] text-[#64748B] hover:bg-slate-200"
+                        }`}
+                      >
+                        Trùng lặp ({fileData.dupCount})
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-[#F8FAFC] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
+                        <tr>
+                          <th className="w-16 px-4 py-2.5 text-center">Dòng</th>
+                          <th className="px-3 py-2.5">Dữ liệu tệp</th>
+                          <th className="w-24 px-3 py-2.5 text-center">Trạng thái</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {displayedFileRows.slice(0, 10).map((r, idx) => (
+                          <tr key={r.id || idx} className="border-t border-[#F1F5F9] hover:bg-[#F8FAFC]/60">
+                            <td className="px-4 py-2 text-center text-[#64748B] font-mono">{r.line}</td>
+                            <td className="px-3 py-2 font-mono text-xs text-[#0F172A]">{r.raw}</td>
+                            <td className="px-3 py-2 text-center">
+                              {r.status === "valid" ? (
+                                <span className="inline-flex items-center rounded-full bg-[#ECFDF5] border border-[#A7F3D0] px-2.5 py-0.5 text-[10px] font-semibold text-[#059669]">
+                                  Hợp lệ
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center rounded-full bg-[#FEF3C7] border border-[#FDE68A] px-2.5 py-0.5 text-[10px] font-semibold text-[#D97706]">
+                                  Trùng lặp
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <p className="text-right text-[11px] text-[#64748B]">
+                    Hiển thị {Math.min(displayedFileRows.length, 5)} trên {fileData.totalCount} dòng được phân tích
+                  </p>
+                </div>
+              ) : null}
+            </div>
           ) : null}
         </section>
 
@@ -851,34 +1328,146 @@ export default function GroupScanInfoPage() {
           </div>
 
           <div className="mb-4 space-y-2">
-            <p className="text-[11px] font-semibold text-[#64748B]">Số nhóm cần quét / từ khóa</p>
-            {keywords.length === 0 ? (
-              <p className="text-xs text-[#94A3B8]">Thêm từ khóa ở cột trái để đặt hạn mức.</p>
-            ) : (
-              keywords.map((word) => (
-                <div
-                  key={word}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-[#F1F5F9] bg-[#F8FAFC] px-3 py-2"
-                >
-                  <span className="truncate text-xs font-medium text-[#0F172A]">{word}</span>
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="number"
-                      min={1}
-                      max={5000}
-                      value={quotas[word] ?? 30}
-                      onChange={(event) =>
-                        setQuotas((current) => ({
-                          ...current,
-                          [word]: Math.max(1, Math.min(5000, Number(event.target.value) || 1)),
-                        }))
-                      }
-                      className={`${inputClass} w-16`}
-                    />
-                    <span className="text-[11px] text-[#94A3B8]">nhóm</span>
-                  </div>
+            {/* Phương thức 1: Theo từ khóa */}
+            {method === "keyword" && (
+              <>
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] font-semibold text-[#64748B]">
+                    Số nhóm cần quét / từ khóa {keywords.length > 0 && `(${keywords.length})`}
+                  </p>
+                  {keywords.length > 5 && (
+                    <span className="text-[10px] text-blue-600 font-medium">Cuộn để xem thêm ({keywords.length} mục)</span>
+                  )}
                 </div>
-              ))
+                {keywords.length === 0 ? (
+                  <p className="text-xs text-[#94A3B8]">Thêm từ khóa ở cột trái để đặt hạn mức số nhóm.</p>
+                ) : (
+                  <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                    {keywords.map((word) => (
+                      <div
+                        key={word}
+                        className="flex items-center justify-between gap-3 rounded-lg border border-[#F1F5F9] bg-[#F8FAFC] px-3 py-2"
+                      >
+                        <span className="truncate text-xs font-medium text-[#0F172A]">{word}</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <input
+                            type="number"
+                            min={1}
+                            max={5000}
+                            value={quotas[word] ?? 30}
+                            onChange={(event) =>
+                              setQuotas((current) => ({
+                                ...current,
+                                [word]: Math.max(1, Math.min(5000, Number(event.target.value) || 1)),
+                              }))
+                            }
+                            className={`${inputClass} w-16`}
+                          />
+                          <span className="text-[11px] text-[#94A3B8]">nhóm</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Phương thức 2: Nhập Link */}
+            {method === "link" && (
+              <>
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] font-semibold text-[#64748B]">
+                    Số nhóm cần quét / liên kết {parsedLinks.length > 0 && `(${parsedLinks.length})`}
+                  </p>
+                  {parsedLinks.length > 5 && (
+                    <span className="text-[10px] text-blue-600 font-medium">Cuộn để xem thêm ({parsedLinks.length} mục)</span>
+                  )}
+                </div>
+                {parsedLinks.length === 0 ? (
+                  <p className="text-xs text-[#94A3B8]">Dán danh sách link và bấm Kiểm tra & Lọc trùng lặp ở cột trái để đặt hạn mức.</p>
+                ) : (
+                  <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                    {parsedLinks.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex items-center justify-between gap-3 rounded-lg border border-[#F1F5F9] bg-[#F8FAFC] px-3 py-2"
+                      >
+                        <div className="min-w-0 flex items-center gap-2">
+                          <span className="text-xs font-bold text-[#2563EB]">#{item.stt}</span>
+                          <span className="truncate text-xs font-medium text-[#0F172A]" title={item.url}>
+                            {item.url}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <input
+                            type="number"
+                            min={1}
+                            max={5000}
+                            value={linkQuotas[item.url] ?? 30}
+                            onChange={(event) =>
+                              setLinkQuotas((current) => ({
+                                ...current,
+                                [item.url]: Math.max(1, Math.min(5000, Number(event.target.value) || 1)),
+                              }))
+                            }
+                            className={`${inputClass} w-16`}
+                          />
+                          <span className="text-[11px] text-[#94A3B8]">nhóm</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Phương thức 3: Tải tệp */}
+            {method === "file" && (
+              <>
+                <div className="flex items-center justify-between">
+                  <p className="text-[11px] font-semibold text-[#64748B]">
+                    Số nhóm cần quét / mục tiêu tệp {validFileRows.length > 0 && `(${validFileRows.length})`}
+                  </p>
+                  {validFileRows.length > 5 && (
+                    <span className="text-[10px] text-blue-600 font-medium">Cuộn để xem thêm ({validFileRows.length} mục)</span>
+                  )}
+                </div>
+                {!fileData || validFileRows.length === 0 ? (
+                  <p className="text-xs text-[#94A3B8]">Tải file .txt hoặc .csv ở cột trái để đặt hạn mức số nhóm.</p>
+                ) : (
+                  <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                    {validFileRows.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex items-center justify-between gap-3 rounded-lg border border-[#F1F5F9] bg-[#F8FAFC] px-3 py-2"
+                      >
+                        <div className="min-w-0 flex items-center gap-2">
+                          <span className="text-xs font-bold text-[#2563EB]">Dòng {item.line}</span>
+                          <span className="truncate text-xs font-medium text-[#0F172A]" title={item.raw}>
+                            {item.raw}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <input
+                            type="number"
+                            min={1}
+                            max={5000}
+                            value={fileQuotas[item.raw] ?? 30}
+                            onChange={(event) =>
+                              setFileQuotas((current) => ({
+                                ...current,
+                                [item.raw]: Math.max(1, Math.min(5000, Number(event.target.value) || 1)),
+                              }))
+                            }
+                            className={`${inputClass} w-16`}
+                          />
+                          <span className="text-[11px] text-[#94A3B8]">nhóm</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
 
@@ -1045,13 +1634,27 @@ export default function GroupScanInfoPage() {
               <IconDownload color="#64748B" />
               Xuất Excel
             </button>
-            <button
-              type="button"
-              onClick={() => toast.info("Lưu danh sách chung sẽ làm ở bước sau.")}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#2563EB] px-3 text-xs font-bold text-white"
-            >
-              Lưu vào danh sách chung
-            </button>
+            {method !== "keyword" && (
+              <button
+                type="button"
+                onClick={() => {
+                  const toSave =
+                    selectedRows.size > 0
+                      ? results.filter((r) => selectedRows.has(r.id))
+                      : results;
+                  if (!toSave || toSave.length === 0) {
+                    toast.warning(
+                      "Chưa có nhóm nào trong kết quả quét để lưu. Hãy quét trước!"
+                    );
+                    return;
+                  }
+                  setSaveModalOpen(true);
+                }}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#2563EB] px-3 text-xs font-bold text-white shadow-xs hover:bg-blue-700 transition-colors"
+              >
+                Lưu vào danh sách chung
+              </button>
+            )}
           </div>
         </div>
 
@@ -1205,6 +1808,19 @@ export default function GroupScanInfoPage() {
         onConfirm={(uids) => {
           setSelectedUids(uids);
           toast.success(`Đã chọn ${uids.length} tài khoản để quét nhóm.`);
+        }}
+      />
+
+      <SaveSharedGroupModal
+        isOpen={saveModalOpen}
+        onClose={() => setSaveModalOpen(false)}
+        groups={
+          selectedRows.size > 0
+            ? results.filter((r) => selectedRows.has(r.id))
+            : results
+        }
+        onSaved={(catName) => {
+          pushLog(`Đã lưu các nhóm vào danh mục «${catName}»`, "success");
         }}
       />
     </div>

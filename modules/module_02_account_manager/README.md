@@ -208,7 +208,7 @@ with SessionLocal() as db:
 
 Nếu các worker chạy độc lập hoặc gọi từ Desktop UI/Frontend Tauri:
 
-* **Lấy danh sách nick sẵn sàng chạy**: `GET /api/accounts` (hỗ trợ phân trang, lọc theo status, search).
+* **Lấy danh sách nick**: `GET /api/accounts` trả toàn bộ tài khoản của người dùng theo ID giảm dần. Màn hình Module 2 tìm kiếm/lọc trên frontend và cuộn danh sách trong khung bảng hiện tại, không tải thêm từ backend. `GET /api/accounts/page` vẫn phục vụ bộ chọn tài khoản của các module khác.
 * **Mở trình duyệt trực quan cho người dùng xem**: `POST /api/accounts/open-browser` (body: `{"uid": "..."}`).
 * **Đồng bộ Cookie mới nhất sau phiên chạy**: `POST /api/accounts/{uid}/sync-cookies`.
 * **Kiểm tra Proxy**: `POST /api/accounts/test-proxy` (body: `{"proxy": "ip:port:user:pass"}`).

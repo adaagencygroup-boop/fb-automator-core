@@ -5,7 +5,9 @@ import {
   clearAuthTokens,
   getAccessToken,
   getRefreshToken,
+  getRegistrationToken,
   setAuthTokens,
+  setRegistrationToken,
 } from "./authTokens.mjs";
 
 export const api = axios.create({
@@ -20,7 +22,7 @@ export const api = axios.create({
 
 api.interceptors.request.use((config) => {
   const userId = getSessionUserId();
-  const identityFree = ["/auth/login", "/auth/register", "/verify-license", "/registration-status"].some((path) =>
+  const identityFree = ["/auth/login", "/auth/register", "/verify-license", "/registration-status", "/claim-approval"].some((path) =>
     String(config.url).includes(path)
   );
   if (userId && !identityFree) config.headers["X-Auth-User-Id"] = userId;
@@ -30,6 +32,14 @@ api.interceptors.request.use((config) => {
   const token = getAccessToken();
   if (token && !identityFree) config.headers.Authorization = `Bearer ${token}`;
   else if (identityFree) delete config.headers.Authorization;
+
+  const registrationToken = getRegistrationToken();
+  if (
+    registrationToken
+    && ["/registration-status", "/claim-approval"].some((path) => String(config.url).includes(path))
+  ) {
+    config.headers["X-Registration-Token"] = registrationToken;
+  }
 
   return config;
 });
@@ -105,6 +115,9 @@ function captureTokensFromPayload(payload) {
       refresh_token: payload.refresh_token,
     });
   }
+  if (payload.registration_token) {
+    setRegistrationToken(payload.registration_token);
+  }
 }
 
 function refreshAccess() {
@@ -135,7 +148,7 @@ function refreshAccess() {
 }
 
 function shouldSkipRefresh(url) {
-  return ["/auth/refresh", "/auth/login", "/registration-status", "/verify-license", "/admin/login", "/auth/register", "/auth/logout"].some((part) =>
+  return ["/auth/refresh", "/auth/login", "/registration-status", "/claim-approval", "/verify-license", "/admin/login", "/auth/register", "/auth/logout"].some((part) =>
     String(url || "").includes(part)
   );
 }
@@ -146,10 +159,16 @@ api.interceptors.response.use(
     if (path.endsWith("/api/v1/auth/me")) acceptSessionUser(response.data);
     if (
       path.endsWith("/api/v1/auth/login")
+      || path.endsWith("/api/v1/auth/register")
       || path.endsWith("/api/v1/auth/verify-license")
       || path.endsWith("/api/v1/auth/refresh")
+      || path.endsWith("/api/v1/auth/claim-approval")
     ) {
       captureTokensFromPayload(response.data);
+    }
+    // Login pending/banned trả 403 kèm registration_token trong body lỗi
+    if (path.endsWith("/api/v1/auth/login") && response.data?.registration_token) {
+      setRegistrationToken(response.data.registration_token);
     }
     warned.delete("network");
     return response.data;
@@ -158,9 +177,15 @@ api.interceptors.response.use(
     if (!error.response && error.request) {
       warnOnce("network", NETWORK_ERROR_MESSAGE);
     }
+    const regToken = error.response?.data?.registration_token;
+    if (typeof regToken === "string" && regToken) {
+      setRegistrationToken(regToken);
+    }
     const status = error.response?.status;
     const original = error.config;
     const detail = authDetail(error);
+    const canRefreshMissingAuth =
+      detail === "Thiếu thông tin xác thực đăng nhập" && Boolean(getRefreshToken());
     if (
       status === 401
       && original
@@ -168,7 +193,7 @@ api.interceptors.response.use(
       && !shouldSkipRefresh(original.url)
       && !TERMINAL_AUTH.has(detail)
       && detail !== "SESSION_IDENTITY_CHANGED"
-      && detail !== "Thiếu thông tin xác thực đăng nhập"
+      && (detail !== "Thiếu thông tin xác thực đăng nhập" || canRefreshMissingAuth)
     ) {
       original._retry = true;
       try {

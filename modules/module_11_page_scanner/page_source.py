@@ -19,10 +19,43 @@ logger = logging.getLogger(__name__)
 # Các slug hệ thống của Facebook không phải là Fanpage cá nhân/doanh nghiệp
 SYSTEM_SLUGS = {
     "search", "watch", "marketplace", "gaming", "events", "help",
-    "login", "messages", "friends", "groups", "reel", "stories",
-    "share", "settings", "photo", "photos", "video", "videos",
-    "hashtag", "bookmarks", "notifications", "saved", "pages",
+    "login", "messages", "friends", "groups", "reel", "reels",
+    "stories", "story", "share", "settings", "photo", "photos",
+    "video", "videos", "permalink", "hashtag", "bookmarks",
+    "notifications", "saved", "pages",
+    "l.php", "ls.php", "sharer.php", "dialog",
 }
+
+# Host / path redirect ngoài — không bao giờ là tác giả Page
+EXTERNAL_REDIRECT_MARKERS = (
+    "l.php",
+    "lm.facebook.com",
+    "l.facebook.com",
+    "/l.php?",
+    "facebook.com/l.php",
+)
+
+# Tên hiển thị trông như URL/domain (bit.ly, shopee.vn, …)
+_AUTHOR_NAME_URL_RE = re.compile(
+    r"(?i)(?:https?://|www\.)|"
+    r"(?:^|[\s/])[\w\-]+(?:\.[\w\-]+)+(?:/[\w\-./?=&%]*)?$|"
+    r"\b[\w\-]+\.(?:com|vn|net|org|ly|me|shop|store|io|co|info|biz)\b"
+)
+
+# Path media — không bao giờ dùng làm link tác giả Page
+MEDIA_PATH_MARKERS = (
+    "/reel/",
+    "/reels/",
+    "/stories/",
+    "/story/",
+    "story.php",
+    "/watch/",
+    "/videos/",
+    "/photos/",
+    "/posts/",
+    "/permalink/",
+    "/share/",
+)
 
 # Các sub-path con thường gặp trên trang Page
 SUB_PATHS = {
@@ -90,6 +123,11 @@ def clean_page_url(raw_url: str) -> str:
         page_id = pages_match.group(1)
         return f"https://{norm_host}/pages/{page_id}"
 
+    # Trường hợp 2b: /people/Name/123456...
+    people_match = re.search(r"^/people/[^/]+/(\d{6,25})/?$", path, flags=re.IGNORECASE)
+    if people_match:
+        return f"https://{norm_host}/profile.php?id={people_match.group(1)}"
+
     # Trường hợp 3: /<username>[/sub-path]
     parts = [p for p in path.split("/") if p]
     if not parts:
@@ -116,16 +154,152 @@ def clean_page_url(raw_url: str) -> str:
     return f"https://{norm_host}/{first_segment}"
 
 
+def is_media_facebook_url(url: str) -> bool:
+    """True nếu URL là reel/story/watch/posts/... — không phải trang tác giả."""
+    if not url:
+        return False
+    lower = str(url).lower()
+    if any(m in lower for m in MEDIA_PATH_MARKERS):
+        return True
+    # /reel /reels /stories /story /watch đứng một mình (sau clean)
+    try:
+        parts = [p for p in urlparse(lower if "://" in lower else f"https://x/{lower}").path.split("/") if p]
+    except Exception:
+        parts = []
+    if parts and parts[0] in (
+        "reel", "reels", "stories", "story", "watch", "share",
+        "photo", "photos", "video", "videos", "permalink",
+    ):
+        return True
+    return False
+
+
+def is_external_or_redirect_url(url: str) -> bool:
+    """True nếu l.php / lm.facebook / host ngoài Facebook."""
+    if not url or not str(url).strip():
+        return False
+    lower = str(url).strip().lower()
+    if any(m in lower for m in EXTERNAL_REDIRECT_MARKERS):
+        return True
+    try:
+        text = lower if "://" in lower else f"https://{lower.lstrip('/')}"
+        host = (urlparse(text).netloc or "").lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+    if host in ("facebook.com", "www.facebook.com", "m.facebook.com", "fb.com", "www.fb.com"):
+        return False
+    if host.endswith(".facebook.com") or host.endswith(".fb.com"):
+        # l.facebook.com / lm.facebook.com đã bắt ở trên; subdomain khác cũng không phải profile
+        return True
+    return True
+
+
+def author_name_looks_like_url(name: str) -> bool:
+    """Tên hiển thị bản thân đã là URL/domain → không phải tên tác giả."""
+    n = (name or "").strip()
+    if not n or len(n) < 3:
+        return False
+    if " " in n and "://" not in n and not re.search(r"\.\w{2,6}(?:/|$)", n):
+        # Tên người có khoảng trắng, không domain → OK
+        return False
+    return bool(_AUTHOR_NAME_URL_RE.search(n))
+
+
+def is_valid_author_candidate_url(url: str) -> Tuple[bool, str, str]:
+    """
+    Kiểm tra URL có đủ điều kiện làm link tác giả trước khi mở tab.
+    Chỉ chấp nhận facebook.com/<slug> root hoặc profile.php?id=<id>.
+    Trả về (ok, quality, reason).
+    """
+    if not url or not str(url).strip():
+        return (False, "weak", "empty_url")
+    if is_external_or_redirect_url(url):
+        return (False, "weak", "external_or_lphp")
+    if is_media_facebook_url(url):
+        return (False, "weak", "media_url")
+
+    cleaned = clean_page_url(url)
+    if not cleaned:
+        return (False, "weak", "clean_failed")
+    if is_external_or_redirect_url(cleaned):
+        return (False, "weak", "external_after_clean")
+    if is_media_facebook_url(cleaned):
+        return (False, "weak", "media_after_clean")
+    # l.php sau clean → https://www.facebook.com/l.php
+    if re.search(r"facebook\.com/l\.php\b", cleaned, re.I) or cleaned.rstrip("/").endswith("/l.php"):
+        return (False, "weak", "lphp_after_clean")
+
+    page_key, quality = extract_page_identifier(cleaned)
+    if not page_key:
+        return (False, "weak", "no_page_key")
+    if quality == "weak":
+        return (False, "weak", "weak_identifier")
+    if page_key.startswith("user:"):
+        slug = page_key.split(":", 1)[-1]
+        if slug in SYSTEM_SLUGS or slug in ("l.php", "ls.php"):
+            return (False, "weak", f"system_slug:{page_key}")
+    return (True, quality, "ok")
+
+
+def author_verify_cache_key(raw_url: str) -> str:
+    """
+    Key cache = định danh gốc (page_key slug/id, hoặc raw href trước clean).
+    Không bao giờ dùng cleaned l.php / user:l.php.
+    """
+    raw = (raw_url or "").strip()
+    if not raw:
+        return ""
+    if is_external_or_redirect_url(raw):
+        return ""
+    ok, _q, _reason = is_valid_author_candidate_url(raw)
+    if not ok:
+        return ""
+    cleaned = clean_page_url(raw) or raw
+    page_key, quality = extract_page_identifier(cleaned)
+    if page_key and quality != "weak" and "l.php" not in page_key.lower():
+        return page_key
+    # Fallback: raw href gốc (không phải cleaned l.php)
+    if "l.php" in raw.lower():
+        return ""
+    return raw
+
+
+def purge_invalid_author_cache_keys(cache: Optional[Dict[str, Any]]) -> int:
+    """Xóa entry cache có key l.php / external khi session bắt đầu hoặc định kỳ."""
+    if not cache:
+        return 0
+    removed = 0
+    for k in list(cache.keys()):
+        kl = str(k).lower()
+        if "l.php" in kl or kl.startswith("user:l.php") or kl.endswith("/l.php"):
+            del cache[k]
+            removed += 1
+            continue
+        # Key dạng URL đầy đủ không hợp lệ
+        if ("http://" in kl or "https://" in kl) and not is_valid_author_candidate_url(str(k))[0]:
+            del cache[k]
+            removed += 1
+    return removed
+
+
 def extract_page_identifier(url: str) -> Tuple[str, str]:
     """
     Trích xuất định danh chuẩn (page_key) và chất lượng (quality: 'high' | 'weak'):
     - profile.php?id=123456 -> ('id:123456', 'high')
     - /pages/<id> hoặc /pages/<name>/<id> -> ('id:<id>', 'high')
     - /username -> ('user:<username_lowercase>', 'high')
-    - Không tách được -> ('url:<normalized_url>', 'weak')
+    - Link media / slug hệ thống -> ('', 'weak') hoặc url:… weak — không bao giờ user:reels
     """
+    if is_media_facebook_url(url or ""):
+        return ("", "weak")
+
     cleaned = clean_page_url(url)
     if not cleaned:
+        return ("", "weak")
+
+    if is_media_facebook_url(cleaned):
         return ("", "weak")
 
     # 1. profile.php?id=...
@@ -138,6 +312,11 @@ def extract_page_identifier(url: str) -> Tuple[str, str]:
     if match_pages:
         return (f"id:{match_pages.group(1)}", "high")
 
+    # 2b. /people/Name/<id>
+    match_people = re.search(r"/people/[^/]+/(\d{6,25})", cleaned, flags=re.IGNORECASE)
+    if match_people:
+        return (f"id:{match_people.group(1)}", "high")
+
     # 3. UID số thuần
     match_pure_id = re.search(r"facebook\.com/(\d{6,25})$", cleaned)
     if match_pure_id:
@@ -149,7 +328,10 @@ def extract_page_identifier(url: str) -> Tuple[str, str]:
     if parts:
         slug = parts[0]
         slug_lower = slug.lower()
-        if slug_lower not in SYSTEM_SLUGS and re.match(r"^[a-zA-Z0-9._\-]+$", slug):
+        # Tuyệt đối không trả user:reels / user:stories / user:watch …
+        if slug_lower in SYSTEM_SLUGS:
+            return ("", "weak")
+        if re.match(r"^[a-zA-Z0-9._\-]+$", slug):
             return (f"user:{slug_lower}", "high")
 
     # Fallback cho link lạ hoặc không tách được
@@ -162,11 +344,14 @@ def is_valid_page_entry(line: str) -> bool:
         return False
     lower = line.lower().strip()
 
-    # Loại bỏ các link tìm kiếm, nhóm, reel, watch, login...
+    # Loại bỏ các link tìm kiếm, nhóm, reel/reels/story, watch, login...
     if any(bad in lower for bad in [
-        "/search", "/groups/", "/groups", "/reel/", "/stories/",
+        "/search", "/groups/", "/groups", "/reel/", "/reels/",
+        "/stories/", "/story/", "/watch/",
         "/events/", "/marketplace/", "/login", "/messages/",
     ]):
+        return False
+    if is_media_facebook_url(lower):
         return False
 
     # UID số thuần
@@ -249,6 +434,91 @@ def parse_follower_count(text: Optional[str]) -> Tuple[Optional[int], str]:
         return (int(val), clean_text)
     except (ValueError, TypeError):
         return (None, clean_text)
+
+
+def parse_compact_count(text: Optional[str]) -> Optional[int]:
+    """
+    Parse số compact kiểu reaction/comment/share — tái dùng quy tắc đơn vị
+    của parse_follower_count (“1,2K”, “12 N”, “1.200”) nhưng không cần nhãn followers.
+    """
+    if not text:
+        return None
+    clean_text = str(text).strip()
+    if not clean_text:
+        return None
+    lower = clean_text.lower().replace("\u00a0", " ")
+
+    match = re.search(
+        r"([\d]+(?:[.,][\d]+)*)\s*(nghìn|ngàn|triệu|n|k|tr|m)?\b",
+        lower,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+
+    num_str = match.group(1).strip()
+    unit_str = (match.group(2) or "").strip().lower()
+    try:
+        if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", num_str):
+            val = float(num_str.replace(".", ""))
+        elif re.fullmatch(r"\d{1,3}(?:,\d{3})+", num_str):
+            val = float(num_str.replace(",", ""))
+        elif "," in num_str and "." not in num_str:
+            val = float(num_str.replace(",", "."))
+        elif re.fullmatch(r"\d+\.\d{1,2}", num_str) and unit_str:
+            val = float(num_str)
+        else:
+            val = float(num_str.replace(",", "."))
+
+        if unit_str in ("triệu", "m", "tr"):
+            val *= 1_000_000
+        elif unit_str in ("nghìn", "ngàn", "n", "k"):
+            val *= 1_000
+        return int(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def normalize_post_key(url_or_key: str) -> str:
+    """
+    Chuẩn hóa post_key: /posts/, /permalink.php, /videos/, /reel/, /watch/
+    của cùng một bài → một key ổn định (story_fbid / numeric id / path id).
+    """
+    raw = (url_or_key or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("post:"):
+        return raw.lower()
+
+    lower = raw.lower()
+    # Query ids
+    for param in ("story_fbid", "fbid", "v", "video_id", "multi_permalinks"):
+        m = re.search(rf"[?&]{param}=(\d{{6,30}})", lower)
+        if m:
+            return f"post:{m.group(1)}"
+
+    # /posts/<id>, /permalink/<id>, /videos/<id>, /reel/<id>, /watch/<id>
+    m = re.search(
+        r"/(?:posts|permalink|videos?|reels?|watch|photo\.php)/(?:[^/?#]+/)?(\d{6,30})",
+        lower,
+    )
+    if m:
+        return f"post:{m.group(1)}"
+
+    m = re.search(r"permalink\.php\?[^#]*?(?:story_fbid|fbid)=(\d{6,30})", lower)
+    if m:
+        return f"post:{m.group(1)}"
+
+    m = re.search(r"story\.php\?[^#]*?story_fbid=(\d{6,30})", lower)
+    if m:
+        return f"post:{m.group(1)}"
+
+    # Fallback: cleaned path without protocol/query noise
+    cleaned = re.sub(r"^https?://(www\.|m\.)?facebook\.com", "", lower)
+    cleaned = cleaned.split("?")[0].split("#")[0].rstrip("/")
+    if cleaned:
+        return f"url:{cleaned}"
+    return f"url:{lower[:200]}"
 
 
 def parse_page_file_content(

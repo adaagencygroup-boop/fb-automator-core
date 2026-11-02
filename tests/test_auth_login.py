@@ -63,7 +63,9 @@ class LoginTests(unittest.TestCase):
             response = self.client.post("/api/v1/auth/login", json={"username": "member", "password": "secret123", "remember_me": False})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["role"], "admin")
-        self.assertNotIn("access_token", response.json())
+        # Desktop/Tauri cần bearer trong body; cookie vẫn set cho browser.
+        self.assertEqual(response.json()["access_token"], "browser-access")
+        self.assertEqual(response.json()["refresh_token"], "browser-refresh")
         self.assertNotIn("cookie_access", response.json())
         self.assertEqual(self.client.cookies.get("fb_access"), "browser-access")
         self.assertFalse(admin_login.call_args.args[-1])
@@ -113,8 +115,9 @@ class LoginTests(unittest.TestCase):
                     })
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json()["status"], "approved")
-                self.assertNotIn("access_token", response.json())
-                self.assertNotIn("refresh_token", response.json())
+                # Bearer trong body (Tauri) + cookie HttpOnly (browser)
+                self.assertIn("access_token", response.json())
+                self.assertIn("refresh_token", response.json())
                 cookies = [c for c in response.headers.get_list("set-cookie") if not c.startswith("fb_registration=")]
                 self.assertEqual(len(cookies), 2)
                 for cookie in cookies:
@@ -169,12 +172,15 @@ class LoginTests(unittest.TestCase):
         self.assertNotIn("access_token", response.json())
         self.assertNotIn("set-cookie", response.headers)
 
-    def test_user_refresh_does_not_expose_bearer_token(self):
+    def test_user_refresh_returns_bearer_for_desktop_clients(self):
         token = self.security.create_refresh_token({"sub": "member"})
         self.client.cookies.set("fb_refresh", token, path="/api/v1/auth")
         with patch.object(self.router, "refresh_access_token", return_value="new-access"):
             response = self.client.post("/api/v1/auth/refresh")
-        self.assertEqual(response.json(), {"ok": True})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["ok"], True)
+        self.assertEqual(response.json()["access_token"], "new-access")
+        self.assertEqual(response.json()["refresh_token"], token)
 
     def test_revoked_admin_refresh_returns_no_token(self):
         self.client.cookies.set("fb_refresh", "revoked", path="/api/v1/auth")

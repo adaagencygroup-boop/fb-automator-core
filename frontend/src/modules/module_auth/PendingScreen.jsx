@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import api from "@/services/api";
+import { clearRegistrationToken, getRegistrationToken } from "@/services/authTokens.mjs";
 import { PendingStatusHeader } from "./components/PendingStatusHeader";
 import { PendingSupportCards } from "./components/PendingSupportCards";
 import { PendingFooter } from "./components/PendingFooter";
@@ -11,7 +12,7 @@ const ZALO_PHONE = "0988.888.247";
 const RAW_ZALO_PHONE = "0988888247";
 const TELEGRAM_HANDLE = "@admin_support";
 
-export default function PendingScreen({ onBack, onStatus }) {
+export default function PendingScreen({ onBack, onStatus, onApproved }) {
   const [copiedPhone, setCopiedPhone] = useState(false);
   const [copiedTele, setCopiedTele] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -26,6 +27,42 @@ export default function PendingScreen({ onBack, onStatus }) {
     timers.current.add(timer);
   }, []);
 
+  const enterApproved = useCallback(async () => {
+    setFeedback({
+      success: true,
+      title: "ĐÃ ĐƯỢC DUYỆT",
+      message: "Tài khoản đã được phê duyệt! Đang vào hệ thống...",
+    });
+    try {
+      await api.post("/api/v1/auth/claim-approval", {
+        registration_token: getRegistrationToken() || undefined,
+        remember_me: true,
+      });
+      clearRegistrationToken();
+      localStorage.removeItem("pending_username");
+      if (typeof onApproved === "function") {
+        await onApproved();
+        return;
+      }
+      later(onBack, 400);
+    } catch (error) {
+      const code = String(error.message || "");
+      if (code === "ERR_HWID_MISMATCH") {
+        later(() => onStatus("hwid"), 600);
+        return;
+      }
+      // Ticket hết hạn / claim fail → về login để user đăng nhập lại
+      setFeedback({
+        success: true,
+        title: "ĐÃ ĐƯỢC DUYỆT",
+        message: "Tài khoản đã được phê duyệt. Vui lòng đăng nhập để tiếp tục.",
+      });
+      clearRegistrationToken();
+      localStorage.removeItem("pending_username");
+      later(onBack, 1000);
+    }
+  }, [later, onApproved, onBack, onStatus]);
+
   const checkStatus = useCallback(async (manual = false) => {
     if (checking.current || moving.current) return;
     checking.current = true;
@@ -35,12 +72,11 @@ export default function PendingScreen({ onBack, onStatus }) {
       if (!alive.current) return;
       if (["approved", "ACTIVE", "expired"].includes(profile.status)) {
         moving.current = true;
-        localStorage.removeItem("pending_username");
-        setFeedback({ success: true, title: "ĐÃ ĐƯỢC DUYỆT", message: "Tài khoản của bạn đã được phê duyệt! Đang chuyển đến trang đăng nhập..." });
-        later(onBack, 1000);
+        await enterApproved();
       } else if (["rejected", "banned", "locked"].includes(profile.status)) {
         moving.current = true;
         localStorage.removeItem("pending_username");
+        clearRegistrationToken();
         setFeedback({ title: profile.status === "rejected" ? "TÀI KHOẢN TỪ CHỐI" : "TÀI KHOẢN KHÓA", message: profile.status === "rejected" ? "Tài khoản của bạn đã bị từ chối! Đang chuyển hướng..." : "Tài khoản của bạn đã bị khóa! Đang chuyển hướng..." });
         later(() => onStatus(profile.status === "rejected" ? "rejected" : "banned", profile.username), 1000);
       } else if (manual) {
@@ -52,7 +88,7 @@ export default function PendingScreen({ onBack, onStatus }) {
       checking.current = false;
       if (manual) later(() => setRefreshing(false), 600);
     }
-  }, [later, onBack, onStatus]);
+  }, [enterApproved, later, onStatus]);
 
   useEffect(() => {
     alive.current = true;

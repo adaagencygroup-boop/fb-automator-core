@@ -1,6 +1,19 @@
+import { Inter, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import AppShell from "@/components/AppShell";
 import Toaster from "@/components/Toaster";
+
+const fontSans = Inter({
+  subsets: ["latin", "latin-ext", "vietnamese"],
+  variable: "--font-sans",
+  display: "swap",
+});
+
+const fontHeading = Plus_Jakarta_Sans({
+  subsets: ["latin", "latin-ext"],
+  variable: "--font-heading",
+  display: "swap",
+});
 
 export const metadata = {
   title: "Facebook Automator Pro",
@@ -16,15 +29,13 @@ export default function RootLayout({ children }) {
   return (
     <html
       lang="vi"
-      className="font-sans h-full antialiased"
+      className={`${fontSans.variable} ${fontHeading.variable} h-full font-sans antialiased`}
       style={{
-        "--font-heading": '"Segoe UI", "Helvetica Neue", Arial, sans-serif',
-        "--font-sans": '"Segoe UI", "Helvetica Neue", Arial, sans-serif',
-        "--font-display": '"Segoe UI", "Helvetica Neue", Arial, sans-serif',
+        "--font-display": "var(--font-heading)",
         "--font-mono": '"SFMono-Regular", Menlo, Consolas, monospace',
       }}
     >
-      <body className="min-h-full flex flex-col bg-background text-foreground">
+      <body className="flex min-h-full flex-col bg-background text-foreground">
         <AppShell>{children}</AppShell>
         <Toaster />
       </body>

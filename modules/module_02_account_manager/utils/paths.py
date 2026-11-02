@@ -6,6 +6,8 @@ from pathlib import Path
 from ..context import owner_context
 
 _DEFAULT = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "FBAutomator" if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[3] / "data"
+if getattr(sys, "frozen", False) and sys.platform.startswith("linux"):
+    _DEFAULT = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "FBAutomator" / "data"
 BASE_DIR = str(Path(os.environ.get("FB_ACCOUNT_DATA_DIR", _DEFAULT / "module_02_account_manager")).resolve())
 PROFILES_DIR = str(Path(BASE_DIR) / "browser_profiles")
 

@@ -10,8 +10,9 @@
     "admin:dev": "npm --prefix web-admin run dev",
     "frontend:build": "npm --prefix frontend run build",
     "build:sidecar": "python scripts/build_sidecar.py",
+    "build:linux": "python3 scripts/build_sidecar.py && tauri build --config src-tauri/tauri.linux.conf.json",
     "tauri": "tauri",
-    "tauri:dev": "npx @tauri-apps/cli dev",
+    "tauri:dev": "npx @tauri-apps/cli dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build": "npx @tauri-apps/cli build",
     "build:all": "npm run frontend:build && python scripts/build_sidecar.py && npx @tauri-apps/cli build"
   },

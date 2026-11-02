@@ -286,22 +286,25 @@ export default function OmnichannelChatModule() {
                     (m) =>
                       String(m.id).startsWith("local-") &&
                       m.direction === "out" &&
-                      (m.text || "") === (incomingMsg.text || ""),
+                      (
+                        (m.text || "") === (incomingMsg.text || "") ||
+                        (m.attachment && incomingMsg.attachment)
+                      ),
                   );
                   if (idx !== -1) {
                     const next = currentList.slice();
+                    const existingAtt = next[idx].attachment;
                     next[idx] = {
                       ...next[idx],
                       id: incomingMsg.id,
                       status: undefined,
-                      // Đổi ảnh xem trước (blob:) sang URL công khai thật do server trả về.
-                      // Bản echo không mang tên tệp gốc -> giữ lại tên của tin optimistic.
-                      attachment: incomingMsg.attachment
+                      attachment: existingAtt?.url
                         ? {
                             ...incomingMsg.attachment,
-                            name: incomingMsg.attachment.name || next[idx].attachment?.name,
+                            url: existingAtt.url,
+                            name: existingAtt.name || incomingMsg.attachment?.name,
                           }
-                        : next[idx].attachment,
+                        : incomingMsg.attachment,
                     };
                     return { ...all, [convId]: next };
                   }

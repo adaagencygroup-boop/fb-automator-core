@@ -31,8 +31,9 @@ class DatabaseManager:
             raise RuntimeError("DATABASE_URL phải là PostgreSQL production. Không dùng SQLite local.")
         try:
             # maxconn thấp dễ khiến getconn() chờ vô hạn khi nhiều API/chạy song song → FE treo /me.
+            # minconn=1: máy mạng chậm / AV không mở sẵn 2 TCP tới Supabase lúc boot.
             self._pg_pool = pool.ThreadedConnectionPool(
-                minconn=2,
+                minconn=1,
                 maxconn=20,
                 dsn=DATABASE_URL,
                 connect_timeout=10,

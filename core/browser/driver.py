@@ -422,6 +422,9 @@ def open_browser(
     options = Options()
     options.add_argument(f"--user-data-dir={profile_path}")
     options.add_argument("--profile-directory=Default")
+    # Module 11 page scanner: không chờ document complete (FB feed/video load mãi)
+    if scope == "page_scanner":
+        options.page_load_strategy = "eager"
     if detach:
         options.add_experimental_option("detach", True)
 
@@ -553,6 +556,12 @@ def open_browser(
         for script in extra_init_scripts or ():
             driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": script})
         driver.implicitly_wait(0)
+        if scope == "page_scanner":
+            try:
+                # Eager + timeout: không kẹt 300s mặc định khi FB load video/feed mãi
+                driver.set_page_load_timeout(18)
+            except Exception:
+                pass
         logger.info(f"[{uid}] Fingerprint mode={config.mode}, window={w}x{h}, lang={config.lang_flag}")
 
         driver.browser_config = config

@@ -9,8 +9,8 @@ import logging
 import random
 import urllib.parse
 import httpx
-from pathlib import Path
 from PIL import Image
+from config.constants import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ AVATAR_SIZE = (800, 800)
 COVER_SIZE = (1640, 624)
 POST_SIZE = (1080, 1080)
 
-ASSETS_DIR = Path(__file__).resolve().parents[3] / "data" / "creator_assets"
+ASSETS_DIR = DATA_DIR / "creator_assets"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
 

@@ -88,3 +88,103 @@ export async function deleteScanHistory(id) {
   }
 }
 
+/** Xóa nhiều bản ghi lịch sử phiên quét */
+export async function deleteScanHistoryBulk(ids = []) {
+  try {
+    return await api.post("/api/group-scan/history/delete-bulk", { ids });
+  } catch {
+    return null;
+  }
+}
+
+/** Lấy danh sách các nhóm đã quét từ Database */
+export async function getScannedGroups(params = {}) {
+  try {
+    return await api.get("/api/group-scan/groups", { params });
+  } catch {
+    return { groups: [], total: 0, keywords: [] };
+  }
+}
+
+/** Xóa 1 nhóm đã quét khỏi Database */
+export async function deleteScannedGroup(id) {
+  try {
+    return await api.delete(`/api/group-scan/groups/${id}`);
+  } catch {
+    return null;
+  }
+}
+
+/** Xóa nhiều nhóm đã quét khỏi Database */
+export async function deleteScannedGroupsBulk(ids = []) {
+  try {
+    return await api.post("/api/group-scan/groups/delete-bulk", { ids });
+  } catch {
+    return null;
+  }
+}
+
+/** Lấy danh sách danh mục nhóm có sẵn từ Database */
+export async function getScanCategories() {
+  try {
+    const res = await api.get("/api/group-scan/categories");
+    return res?.categories || [];
+  } catch {
+    return [];
+  }
+}
+
+/** Tạo danh mục nhóm mới */
+export async function createScanCategory(name, description = "") {
+  try {
+    return await api.post("/api/group-scan/categories", { name, description });
+  } catch {
+    return null;
+  }
+}
+
+/** Cập nhật tên danh mục nhóm */
+export async function updateScanCategory(id, name) {
+  try {
+    return await api.put(`/api/group-scan/categories/${id}`, { name });
+  } catch (err) {
+    throw err;
+  }
+}
+
+/** Xóa danh mục nhóm khỏi Database */
+export async function deleteScanCategory(id) {
+  try {
+    return await api.delete(`/api/group-scan/categories/${id}`);
+  } catch (err) {
+    throw err;
+  }
+}
+
+/** Chuyển nhóm sang danh mục khác */
+export async function moveGroupsToCategory({ categoryName, groupIds = [] }) {
+  try {
+    return await api.post("/api/group-scan/categories/move-groups", {
+      category_name: categoryName,
+      group_ids: groupIds,
+    });
+  } catch (err) {
+    throw err;
+  }
+}
+
+/** Lưu danh sách nhóm vào danh mục chung */
+export async function saveGroupsToCategory({ categoryName, groups, deduplicate = true }) {
+  try {
+    return await api.post("/api/group-scan/save-to-category", {
+      category_name: categoryName,
+      groups,
+      deduplicate,
+    });
+  } catch (err) {
+    throw err;
+  }
+}
+
+
+
