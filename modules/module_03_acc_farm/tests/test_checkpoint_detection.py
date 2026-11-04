@@ -1,10 +1,11 @@
 import threading
 import unittest
 from datetime import datetime
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, PropertyMock, patch
 
 from modules.module_03_acc_farm import routes as farm_routes
 from modules.module_03_acc_farm.browser import login_flow
+from modules.module_03_acc_farm.browser.errors import BROWSER_HUNG
 from modules.module_03_acc_farm.farming import flow as farming_flow
 
 LF = "modules.module_03_acc_farm.browser.login_flow"
@@ -120,8 +121,8 @@ class FarmCheckpointStateTests(unittest.TestCase):
 
 
 class WorkerCheckpointTests(unittest.TestCase):
-    def run_worker(self, login_result, other_status="PENDING"):
-        driver = Mock()
+    def run_worker(self, login_result, other_status="PENDING", driver=None):
+        driver = driver or Mock()
         driver.current_url = "https://www.facebook.com/"
         farm_routes._control = farming_flow.FarmControl()
         emitted, statuses = [], []
@@ -144,6 +145,7 @@ class WorkerCheckpointTests(unittest.TestCase):
                 patch.object(farm_routes.random, "uniform", return_value=0), \
                 patch("core.browser.open_browser", return_value=driver), \
                 patch("core.browser.get_profile_lock", return_value=threading.Lock()), \
+                patch("core.browser.force_kill_driver"), \
                 patch("core.browser.extract_cookies_as_string", return_value=""), \
                 patch("modules.module_03_acc_farm.browser.login_flow.ensure_logged_in", return_value=login_result):
             farm_routes._farm_worker("1", 1, farm_routes.FarmScenarioConfig(enabled_add_friends=True), None)
@@ -171,6 +173,29 @@ class WorkerCheckpointTests(unittest.TestCase):
         _, statuses, alerts = self.run_worker({"success": False, "error": "Xác thực mã 2FA thất bại", "checkpoint": None})
         self.assertEqual(statuses, [("1", "failed")])
         self.assertEqual(alerts, [])
+
+    def test_browser_error_at_login_keeps_account_status(self):
+        emitted, statuses, alerts = self.run_worker({"success": False, "error": "Trang Facebook tải quá lâu.",
+                                                     "checkpoint": None, "browser_error": True})
+        self.assertEqual(statuses, [])
+        self.assertEqual(alerts, [])
+        self.assertEqual(emitted[-1], ("error", "Trang Facebook tải quá lâu."))
+
+    def test_lost_session_while_browser_hung_keeps_account_status(self):
+        # Lệnh đọc cookie treo nên ensure_logged_in báo mất phiên: không được coi là nick hỏng
+        driver = Mock()
+        type(driver).title = PropertyMock(side_effect=TimeoutError("Read timed out"))
+        emitted, statuses, _ = self.run_worker({"success": False, "error": "Đăng nhập thất bại", "checkpoint": None},
+                                               driver=driver)
+        self.assertEqual(statuses, [])
+        self.assertEqual(emitted[-1], ("error", BROWSER_HUNG))
+
+    def test_checkpoint_counts_even_if_browser_hangs_after(self):
+        driver = Mock()
+        type(driver).title = PropertyMock(side_effect=TimeoutError("Read timed out"))
+        _, statuses, _ = self.run_worker({"success": False, "error": "Checkpoint nhẹ (6), URL: x", "checkpoint": "light"},
+                                         driver=driver)
+        self.assertEqual(statuses, [("1", "checkpoint")])
 
     def test_warning_without_running_others_has_no_stop_hint(self):
         emitted, _, _ = self.run_worker({"success": False, "error": "Checkpoint nặng, URL: x", "checkpoint": "heavy"},

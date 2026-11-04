@@ -251,7 +251,7 @@ def check_account_state(driver) -> Optional[str]:
     if is_checkpoint_url(url):
         raise_checkpoint_dead(driver)
     if "facebook.com" in url and not _check_logged_in(driver):
-        raise FarmAccountDead(f"Phiên đăng nhập không còn hợp lệ ({url})")
+        raise FarmAccountDead(f"Phiên đăng nhập không còn hợp lệ ({url.split('?')[0]})")
     # Facebook có thể hủy phiên phía server trong khi c_user còn sót: trang nào cũng hiện form đăng nhập
     if _find_visible(driver, ['//input[@type="password"]']):
         raise FarmAccountDead(f"Facebook đã đăng xuất tài khoản, trang yêu cầu đăng nhập lại ({url.split('?')[0]})")

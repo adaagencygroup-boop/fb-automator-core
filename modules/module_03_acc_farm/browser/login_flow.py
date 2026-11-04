@@ -17,6 +17,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 
 from core.browser import extract_cookies_as_string, human_click, human_sleep, human_type, load_cookies, wait_and_find
+from modules.module_03_acc_farm.browser.errors import friendly_error, is_browser_gone, is_technical_error
 from modules.module_03_acc_farm.browser.locators import LOGIN
 from modules.module_03_acc_farm.browser.otp import generate_totp
 
@@ -89,7 +90,10 @@ def _checkpoint_failure(driver: webdriver.Chrome, result: dict) -> dict:
 
 
 def _check_logged_in(driver: webdriver.Chrome) -> bool:
-    """Only an authenticated Facebook session outside login/checkpoint is valid."""
+    """
+    Only an authenticated Facebook session outside login/checkpoint is valid.
+    Trình duyệt treo / đã đóng thì ném lỗi, không trả False: "chưa đăng nhập" sẽ khiến nick bị coi là mất phiên.
+    """
     try:
         current_url = driver.current_url or ""
         parsed = urlparse(current_url)
@@ -112,11 +116,14 @@ def _check_logged_in(driver: webdriver.Chrome) -> bool:
             has_visible_pass = any(el.is_displayed() for el in pass_inputs if el)
             if has_visible_pass and parsed.path.lower() in ("/", "", "/login.php"):
                 return False
-        except Exception:
-            pass
+        except Exception as pass_error:
+            if is_browser_gone(pass_error):
+                raise
 
         return True
     except Exception as cookie_error:
+        if is_browser_gone(cookie_error):
+            raise
         logger.debug(f"Could not inspect Facebook cookies: {cookie_error}")
         return False
 
@@ -680,8 +687,9 @@ def ensure_logged_in(
     Nếu phiên bị hết hạn / văng ra trang login: Tự động đăng nhập lại (Cookie hoặc Form + 2FA).
     Không đóng trình duyệt driver khi hoàn tất.
     Đang ở checkpoint thì dừng ngay (không bơm cookie, không điền form), result["checkpoint"] = "light" / "heavy".
+    Lỗi trình duyệt / trang, không nói lên điều gì về nick: result["browser_error"] = True.
     """
-    result = {"success": False, "error": "", "reloaded": False, "checkpoint": None}
+    result = {"success": False, "error": "", "reloaded": False, "checkpoint": None, "browser_error": False}
 
     try:
         current_url = (driver.current_url or "").lower()
@@ -709,6 +717,10 @@ def ensure_logged_in(
                 break
     except Exception as e:
         logger.debug(f"[{uid}] Quick session check exception: {e}")
+        if is_browser_gone(e):
+            result["error"] = friendly_error(e)
+            result["browser_error"] = True
+            return result
 
     # Nick đã bị Facebook khóa: bơm cookie / đăng nhập lại chỉ thêm lượt bị chặn, không mở được checkpoint
     if _on_checkpoint(driver):
@@ -775,11 +787,12 @@ def ensure_logged_in(
             if _on_checkpoint(driver):
                 return _checkpoint_failure(driver, result)
             current_url = driver.current_url
-            result["error"] = f"Đăng nhập thất bại (URL: {current_url})"
+            result["error"] = f"Đăng nhập thất bại (URL: {(current_url or '').split('?')[0]})"
             return result
     except Exception as e:
         logger.exception(f"[{uid}] Lỗi khi tự động đăng nhập trong ensure_logged_in: {e}")
-        if _on_checkpoint(driver):
+        if not is_browser_gone(e) and _on_checkpoint(driver):
             return _checkpoint_failure(driver, result)
-        result["error"] = str(e)
+        result["error"] = friendly_error(e)
+        result["browser_error"] = is_technical_error(e)
         return result
