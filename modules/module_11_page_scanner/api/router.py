@@ -172,6 +172,7 @@ class PostSessionInput(BaseModel):
     post_types: Optional[List[str]] = Field(default_factory=lambda: ["all"])
     idle_timeout_s: float = Field(90, ge=5, le=600)
     skip_existing: bool = Field(True)
+    skip_pinned_posts: bool = Field(False)
     page_delay_s: float = Field(2.0, ge=0, le=120)
     scroll_delay_s: float = Field(1.5, ge=0.2, le=30)
     source_list_id: Optional[str] = None
@@ -1417,3 +1418,115 @@ async def resolve_page_keys_from_links(item: ParseInput):
         owner_key=owner if item.filter_existing else None,
     )
     return parsed
+
+
+class DeletePagesInput(BaseModel):
+    page_keys: List[str] = Field(default_factory=list)
+
+
+class DeletePostsInput(BaseModel):
+    post_ids: List[Any] = Field(default_factory=list)
+
+
+class DeleteFollowersInput(BaseModel):
+    follower_ids: List[int] = Field(default_factory=list)
+
+
+@router.get("/followers/pages")
+async def list_pages_with_followers():
+    """Sidebar DS followers: page có followers đã quét + số UID."""
+    owner = _get_owner()
+    rows = db.fetch_all(
+        """
+        SELECT
+            f.page_key,
+            COALESCE(sp.page_name, f.page_key) AS page_name,
+            sp.page_url,
+            sp.avatar_url,
+            sp.follower_count,
+            COUNT(*)::int AS scanned_uid_count,
+            MAX(f.updated_at) AS last_follower_at
+        FROM scanned_page_followers f
+        LEFT JOIN scanned_pages sp
+          ON sp.owner_key = f.owner_key AND sp.page_key = f.page_key
+        WHERE f.owner_key = %s
+        GROUP BY f.page_key, sp.page_name, sp.page_url, sp.avatar_url, sp.follower_count
+        ORDER BY MAX(f.updated_at) DESC NULLS LAST, COUNT(*) DESC
+        """,
+        (owner,),
+    )
+    items = []
+    total_uids = 0
+    for r in rows or []:
+        cnt = int(r.get("scanned_uid_count") or 0)
+        total_uids += cnt
+        items.append(
+            {
+                "page_key": r.get("page_key"),
+                "page_name": r.get("page_name"),
+                "page_url": r.get("page_url"),
+                "avatar_url": r.get("avatar_url"),
+                "follower_count": r.get("follower_count"),
+                "scanned_uid_count": cnt,
+                "last_follower_at": r.get("last_follower_at"),
+            }
+        )
+    return {"items": items, "total": len(items), "total_uids": total_uids}
+
+
+@router.delete("/pages")
+async def delete_scanned_pages(item: DeletePagesInput):
+    """Xóa hàng loạt page khỏi kho scanned_pages."""
+    owner = _get_owner()
+    keys = [str(k).strip() for k in (item.page_keys or []) if str(k).strip()]
+    deleted = 0
+    for k in keys:
+        try:
+            db.execute(
+                "DELETE FROM scanned_pages WHERE owner_key = %s AND page_key = %s",
+                (owner, k),
+            )
+            deleted += 1
+        except Exception as exc:
+            logger.warning(f"[PageScanner] delete page {k} fail: {exc}")
+    return {"deleted": deleted}
+
+
+@router.delete("/posts")
+async def delete_scanned_posts(item: DeletePostsInput):
+    """Xóa bài viết đã quét theo id hoặc post_key."""
+    owner = _get_owner()
+    deleted = 0
+    for raw_id in item.post_ids or []:
+        try:
+            if str(raw_id).isdigit():
+                db.execute(
+                    "DELETE FROM scanned_posts WHERE owner_key = %s AND id = %s",
+                    (owner, int(raw_id)),
+                )
+            else:
+                db.execute(
+                    "DELETE FROM scanned_posts WHERE owner_key = %s AND post_key = %s",
+                    (owner, str(raw_id)),
+                )
+            deleted += 1
+        except Exception as exc:
+            logger.warning(f"[PageScanner] delete post {raw_id} fail: {exc}")
+    return {"deleted": deleted}
+
+
+@router.delete("/followers")
+async def delete_scanned_followers(item: DeleteFollowersInput):
+    """Xóa followers đã quét theo id."""
+    owner = _get_owner()
+    deleted = 0
+    for fid in item.follower_ids or []:
+        try:
+            db.execute(
+                "DELETE FROM scanned_page_followers WHERE owner_key = %s AND id = %s",
+                (owner, int(fid)),
+            )
+            deleted += 1
+        except Exception as exc:
+            logger.warning(f"[PageScanner] delete follower {fid} fail: {exc}")
+    return {"deleted": deleted}

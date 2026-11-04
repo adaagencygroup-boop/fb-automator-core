@@ -195,6 +195,7 @@ DDL_STATEMENTS = [
         avatar_url TEXT,
         gender VARCHAR(50),
         location TEXT,
+        friend_count INT,
         first_session_id INT REFERENCES page_scan_sessions(id) ON DELETE SET NULL,
         last_session_id INT REFERENCES page_scan_sessions(id) ON DELETE SET NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -309,6 +310,7 @@ MIGRATION_STATEMENTS = [
     """,
     # 9. last_session_id — FE lọc đúng phiên (re-scan cập nhật)
     "ALTER TABLE scanned_page_followers ADD COLUMN IF NOT EXISTS last_session_id INT;",
+    "ALTER TABLE scanned_page_followers ADD COLUMN IF NOT EXISTS friend_count INT;",
     "ALTER TABLE scanned_posts ADD COLUMN IF NOT EXISTS last_session_id INT;",
 ]
 
