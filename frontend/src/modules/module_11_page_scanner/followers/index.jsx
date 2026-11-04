@@ -16,6 +16,7 @@ import {
   ListChecks,
   SlidersHorizontal,
   FolderInput,
+  Eye,
 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "@/lib/toast";
@@ -120,7 +121,7 @@ function mapFollowerRow(row, idx = 0) {
     follower_key: key,
     profile_url: row.profile_url || (uid ? `https://www.facebook.com/${uid}` : ""),
     location: row.location || "—",
-    friends: row.friend_count != null ? Number(row.friend_count).toLocaleString("vi-VN") : "—",
+    friends: row.friend_count != null ? `${Number(row.friend_count).toLocaleString("vi-VN")} bạn bè` : "—",
     time: row.updated_at || row.created_at || "",
     page_key: row.page_key || "",
     page_name: row.page_name || row.page_key || "",
@@ -193,7 +194,7 @@ export default function PageScannerFollowers() {
 
   const isBusy = runPhase === "running" || runPhase === "paused";
   const isPaused = runPhase === "paused";
-  const showResults = runPhase === "done";
+  const showResults = runPhase !== "idle";
 
   const pushLog = useCallback((message, type = "info") => {
     logId.current += 1;
@@ -1114,12 +1115,13 @@ export default function PageScannerFollowers() {
                       <th className="px-3 py-2.5">ĐỊA CHỈ</th>
                       <th className="px-3 py-2.5">SỐ BẠN BÈ</th>
                       <th className="px-3 py-2.5 text-right">THỜI GIAN</th>
+                      <th className="px-3 py-2.5 text-right">THAO TÁC</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#F1F5F9]">
                     {pagedFollowers.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="px-3 py-10 text-center text-[#94A3B8]">
+                        <td colSpan={8} className="px-3 py-10 text-center text-[#94A3B8]">
                           Không có UID nào được thu thập cho page này.
                         </td>
                       </tr>
@@ -1167,6 +1169,36 @@ export default function PageScannerFollowers() {
                             <td className="px-3 py-3 font-semibold text-[#1E293B]">{u.friends}</td>
                             <td className="px-3 py-3 text-right font-mono text-[#64748B]">
                               {u.time ? String(u.time).replace("T", " ").slice(0, 19) : "—"}
+                            </td>
+                            <td className="px-3 py-3 text-right">
+                              <div className="inline-flex items-center justify-end gap-1.5">
+                                <a
+                                  href={u.profile_url || `https://www.facebook.com/${u.uid}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title="Xem trang cá nhân"
+                                  className="rounded p-1 text-[#94A3B8] hover:bg-slate-100 hover:text-[#1877F2]"
+                                >
+                                  <Eye className="size-3.5" />
+                                </a>
+                                <button
+                                  type="button"
+                                  title="Xóa UID"
+                                  onClick={() => {
+                                    setFollowersByPage((prev) => ({
+                                      ...prev,
+                                      [activePageKey]: (prev[activePageKey] || []).filter(
+                                        (f) => f.id !== u.id,
+                                      ),
+                                    }));
+                                    setSelectedRowIds((prev) => prev.filter((id) => id !== u.id));
+                                    toast.success(`Đã xóa UID ${u.uid}`);
+                                  }}
+                                  className="rounded p-1 text-[#94A3B8] hover:bg-red-50 hover:text-[#DC2626]"
+                                >
+                                  <Trash2 className="size-3.5" />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
