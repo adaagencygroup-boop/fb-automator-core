@@ -22,6 +22,8 @@ import {
   AlertTriangle,
   Plus,
   Copy,
+  Trash2,
+  FileSpreadsheet,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -32,6 +34,7 @@ import { WS_BASE } from "@/config/constants";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import { normalizeAccount, initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
+import { SelectAccountsModal } from "../shared/SelectPagesModal";
 import {
   searchPages,
   searchPagesByHashtag,
@@ -144,7 +147,7 @@ function KeywordDraftInput({ disabled, placeholder, onAdd, onBackspaceEmpty }) {
 const SOURCE_MODES = [
   { id: "keyword", label: "Theo hashtag", Icon: Hash },
   { id: "paste", label: "Nhập Link", Icon: Link2 },
-  { id: "upload", label: "Tải tệp (.txt / .csv)", Icon: FileUp },
+  { id: "upload", label: "Tải tệp (.txt / .csv / .excel)", Icon: FileUp },
 ];
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
@@ -152,6 +155,30 @@ const LIVE_STATUSES = new Set(["LIVE", "live", "Live"]);
 
 function nowStamp() {
   return new Date().toLocaleTimeString("vi-VN", { hour12: false });
+}
+
+function parseRawLinesToPreview(rawText) {
+  const lines = String(rawText || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const seen = new Set();
+  return lines.map((line, idx) => {
+    const key = line.toLowerCase().replace(/\/+$/, "");
+    const isValid =
+      /^(https?:\/\/)?(www\.|m\.|mbasic\.)?(facebook\.com|fb\.com)\/.+/i.test(line) ||
+      /^\d{6,25}$/.test(line);
+    let status = "valid";
+    if (!isValid) status = "invalid";
+    else if (seen.has(key)) status = "duplicate";
+    else seen.add(key);
+    return {
+      id: `ln_${idx}_${line}`,
+      lineNo: idx + 1,
+      raw: line,
+      status,
+    };
+  });
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -175,7 +202,15 @@ export default function PageScannerSearch() {
   const [topN, setTopN] = useState(""); // Top N sau lọc — khác max_results
   const [pasteContent, setPasteContent] = useState("");
   const [uploadResult, setUploadResult] = useState(null);
+  const [uploadFileMeta, setUploadFileMeta] = useState(null);
+  const [uploadPreviewRows, setUploadPreviewRows] = useState([]);
+  const [uploadFilterTab, setUploadFilterTab] = useState("ALL");
   const fileInputRef = useRef(null);
+
+  const pastePreviewRows = useMemo(
+    () => parseRawLinesToPreview(pasteContent),
+    [pasteContent],
+  );
 
   const { keywords: plainKeywords, hashtags: manualHashtags } = useMemo(
     () => splitMixedChips(keywords),
@@ -191,6 +226,8 @@ export default function PageScannerSearch() {
   const [delayMin, setDelayMin] = useState(5);
   const [delayMax, setDelayMax] = useState(10);
   const [applyAllTarget, setApplyAllTarget] = useState(30);
+  const [targetPagesCount, setTargetPagesCount] = useState(30);
+  const [publicOnly, setPublicOnly] = useState(true);
   const [keywordTargets, setKeywordTargets] = useState({}); // keyword -> max_results
   const [minFollowersEnabled, setMinFollowersEnabled] = useState(true);
   const [minFollowers, setMinFollowers] = useState(1000);
@@ -913,12 +950,20 @@ export default function PageScannerSearch() {
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const rawText = await file.text().catch(() => "");
+    const parsedRows = parseRawLinesToPreview(rawText);
+    setUploadPreviewRows(parsedRows);
+    setUploadFileMeta({
+      name: file.name,
+      sizeKb: Math.max(0.1, Number((file.size / 1024).toFixed(1))),
+      totalRows: parsedRows.length,
+    });
     const formData = new FormData();
     formData.append("file", file);
     try {
       const res = await uploadPageFile(formData);
       setUploadResult(res);
-      toast.success(`Đã nhập ${res.valid_count} Page từ "${file.name}"`);
+      toast.success(`Đã nhận diện ${parsedRows.length || res.valid_count} dòng dữ liệu từ "${file.name}"`);
     } catch (err) {
       toast.error(`Lỗi đọc file: ${err.message}`);
     }
@@ -1121,28 +1166,142 @@ export default function PageScannerSearch() {
 
           {sourceMode === "paste" && (
             <div className="space-y-3">
-              <span className="text-xs font-bold text-[#1E293B]">
-                Dán danh sách liên kết Fanpage Facebook
-              </span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-[#1E293B]">
+                  Dán danh sách liên kết Fanpage Facebook
+                </span>
+                <span className="rounded-full bg-[#EFF6FF] px-3 py-0.5 text-[11px] font-bold text-[#1877F2]">
+                  Đã nhận diện: {pastePreviewRows.length} link
+                </span>
+              </div>
               <textarea
                 value={pasteContent}
                 onChange={(e) => setPasteContent(e.target.value)}
                 disabled={isBusy}
                 rows={5}
                 placeholder={
-                  "https://www.facebook.com/tenpage\nhttps://facebook.com/profile.php?id=..."
+                  "https://www.facebook.com/groups/109283749218\nhttps://facebook.com/groups/congdongmarketingvn"
                 }
                 className="w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] p-3 font-mono text-xs leading-relaxed text-[#0F172A] outline-none transition focus:border-[#1877F2] focus:bg-white disabled:opacity-60"
               />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  disabled={isBusy || !pasteContent.trim()}
+                  onClick={() => setPasteContent("")}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-[#EF4444] hover:underline disabled:opacity-40"
+                >
+                  <Trash2 className="size-3.5" />
+                  Xóa tất cả
+                </button>
+                <button
+                  type="button"
+                  disabled={isBusy || !pasteContent.trim()}
+                  onClick={() => {
+                    const uniqueLines = [];
+                    const seen = new Set();
+                    pasteContent
+                      .split(/\r?\n/)
+                      .map((l) => l.trim())
+                      .filter(Boolean)
+                      .forEach((l) => {
+                        const k = l.toLowerCase().replace(/\/+$/, "");
+                        if (!seen.has(k)) {
+                          seen.add(k);
+                          uniqueLines.push(l);
+                        }
+                      });
+                    const removed = pastePreviewRows.length - uniqueLines.length;
+                    setPasteContent(uniqueLines.join("\n"));
+                    toast.success(
+                      removed > 0
+                        ? `Đã lọc bỏ ${removed} link trùng lặp, còn ${uniqueLines.length} link hợp lệ.`
+                        : `Tất cả ${uniqueLines.length} link đều không trùng lặp.`,
+                    );
+                  }}
+                  className="inline-flex h-8 items-center rounded-lg bg-[#1877F2] px-3.5 text-xs font-bold text-white shadow-sm hover:bg-[#166FE5] disabled:opacity-50"
+                >
+                  Kiểm tra & Lọc trùng lặp
+                </button>
+              </div>
+
+              {/* XEM TRƯỚC DANH SÁCH LINK ĐÃ NHẬP (Ảnh 9) */}
+              {pastePreviewRows.length > 0 && (
+                <div className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white">
+                  <div className="border-b border-[#E2E8F0] bg-[#F8FAFC] px-3.5 py-2 text-[11px] font-bold uppercase tracking-wide text-[#334155]">
+                    XEM TRƯỚC DANH SÁCH LINK ĐÃ NHẬP ({pastePreviewRows.length} LINK)
+                  </div>
+                  <div className="max-h-[210px] overflow-y-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="sticky top-0 bg-white text-[11px] font-semibold text-[#64748B]">
+                        <tr className="border-b border-[#F1F5F9]">
+                          <th className="w-12 px-3 py-2">STT</th>
+                          <th className="px-3 py-2">Đường dẫn Fanpage Facebook</th>
+                          <th className="w-24 px-3 py-2 text-center">Trạng thái</th>
+                          <th className="w-10 px-2 py-2" />
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#F1F5F9]">
+                        {pastePreviewRows.map((row, idx) => (
+                          <tr key={row.id} className="hover:bg-[#F8FAFC]">
+                            <td className="px-3 py-2 font-mono text-[#64748B]">
+                              {idx + 1}
+                            </td>
+                            <td className="max-w-[260px] truncate px-3 py-2 font-mono text-[#1877F2]">
+                              {row.raw}
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              {row.status === "valid" ? (
+                                <span className="rounded-full bg-[#ECFDF5] px-2.5 py-0.5 text-[10px] font-bold text-[#059669]">
+                                  Hợp lệ
+                                </span>
+                              ) : row.status === "duplicate" ? (
+                                <span className="rounded-full bg-[#FEF3C7] px-2.5 py-0.5 text-[10px] font-bold text-[#D97706]">
+                                  Trùng lặp
+                                </span>
+                              ) : (
+                                <span className="rounded-full bg-[#FEF2F2] px-2.5 py-0.5 text-[10px] font-bold text-[#DC2626]">
+                                  Lỗi link
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-2 py-2 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const lines = pasteContent
+                                    .split(/\r?\n/)
+                                    .map((l) => l.trim())
+                                    .filter(Boolean);
+                                  lines.splice(idx, 1);
+                                  setPasteContent(lines.join("\n"));
+                                }}
+                                className="rounded p-1 text-[#94A3B8] hover:bg-slate-100 hover:text-[#EF4444]"
+                              >
+                                <X className="size-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           {sourceMode === "upload" && (
-            <div>
-              <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[#CBD5E1] bg-[#F8FAFC] px-4 py-10 text-center hover:border-[#1877F2]/50">
-                <FileUp className="size-6 text-[#94A3B8]" />
-                <span className="text-xs font-semibold text-[#0F172A]">Chọn tệp .txt hoặc .csv</span>
-                <span className="text-[11px] text-[#94A3B8]">Mỗi dòng một link Page</span>
+            <div className="space-y-3">
+              <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[#93C5FD] bg-[#F8FAFC] px-4 py-7 text-center hover:border-[#1877F2]">
+                <div className="flex size-10 items-center justify-center rounded-full bg-[#EFF6FF] text-[#1877F2]">
+                  <FileUp className="size-5" />
+                </div>
+                <span className="text-xs font-semibold text-[#0F172A]">
+                  Kéo thả file <span className="text-[#1877F2]">.txt</span> hoặc{" "}
+                  <span className="text-[#1877F2]">.csv</span> vào đây hoặc{" "}
+                  <span className="text-[#1877F2] underline">Bấm để tải lên</span>
+                </span>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -1151,16 +1310,136 @@ export default function PageScannerSearch() {
                   onChange={handleFileUpload}
                 />
               </label>
-              {uploadResult && (
-                <p className="mt-2 text-[11px] font-semibold text-emerald-700">
-                  ✓ Hợp lệ {uploadResult.valid_count} · Trùng {uploadResult.dedup_count} · Lỗi{" "}
-                  {uploadResult.invalid_count}
-                </p>
+
+              {/* Card thông tin file đã chọn (Ảnh 8) */}
+              {uploadFileMeta && (
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-[#E2E8F0] bg-white px-3.5 py-2.5">
+                  <div className="flex items-center gap-2.5">
+                    <div className="flex size-9 items-center justify-center rounded-lg bg-[#ECFDF5] text-[#059669]">
+                      <FileSpreadsheet className="size-5" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-[#0F172A]">
+                        {uploadFileMeta.name}{" "}
+                        <span className="font-normal text-[#94A3B8]">
+                          ({uploadFileMeta.sizeKb} KB)
+                        </span>
+                      </p>
+                      <p className="text-[11px] font-semibold text-[#059669]">
+                        ✓ Đã nhận diện: {uploadFileMeta.totalRows} dòng dữ liệu
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-xs font-semibold text-[#1877F2] hover:underline"
+                  >
+                    Thay đổi tệp
+                  </button>
+                </div>
               )}
+
+              {/* XEM TRƯỚC DANH SÁCH TẢI LÊN (Ảnh 8) */}
+              {uploadPreviewRows.length > 0 && (() => {
+                const validRows = uploadPreviewRows.filter((r) => r.status === "valid");
+                const dupRows = uploadPreviewRows.filter((r) => r.status === "duplicate");
+                const displayRows =
+                  uploadFilterTab === "VALID"
+                    ? validRows
+                    : uploadFilterTab === "DUP"
+                      ? dupRows
+                      : uploadPreviewRows;
+                return (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wide text-[#0F172A]">
+                        XEM TRƯỚC DANH SÁCH TẢI LÊN
+                      </span>
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => setUploadFilterTab("ALL")}
+                          className={`rounded-full px-2.5 py-0.5 font-bold ${
+                            uploadFilterTab === "ALL"
+                              ? "bg-[#DBEAFE] text-[#1D4ED8]"
+                              : "bg-[#F1F5F9] text-[#64748B]"
+                          }`}
+                        >
+                          Tất cả ({uploadPreviewRows.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUploadFilterTab("VALID")}
+                          className={`rounded-full px-2.5 py-0.5 font-bold ${
+                            uploadFilterTab === "VALID"
+                              ? "bg-[#D1FAE5] text-[#059669]"
+                              : "bg-[#F1F5F9] text-[#64748B]"
+                          }`}
+                        >
+                          Hợp lệ ({validRows.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUploadFilterTab("DUP")}
+                          className={`rounded-full px-2.5 py-0.5 font-bold ${
+                            uploadFilterTab === "DUP"
+                              ? "bg-[#FEF3C7] text-[#D97706]"
+                              : "bg-[#FEF3C7]/60 text-[#D97706]"
+                          }`}
+                        >
+                          Trùng lặp ({dupRows.length})
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white">
+                      <div className="max-h-[200px] overflow-y-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="sticky top-0 bg-[#F8FAFC] text-[11px] font-semibold text-[#64748B]">
+                            <tr className="border-b border-[#E2E8F0]">
+                              <th className="w-14 px-3 py-2">Dòng</th>
+                              <th className="px-3 py-2">Dữ liệu tệp</th>
+                              <th className="w-24 px-3 py-2 text-center">Trạng thái</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[#F1F5F9]">
+                            {displayRows.map((r) => (
+                              <tr key={r.id} className="hover:bg-[#F8FAFC]">
+                                <td className="px-3 py-2 font-mono text-[#64748B]">
+                                  {r.lineNo}
+                                </td>
+                                <td className="max-w-[260px] truncate px-3 py-2 font-mono text-[#334155]">
+                                  {r.raw}
+                                </td>
+                                <td className="px-3 py-2 text-center">
+                                  {r.status === "valid" ? (
+                                    <span className="rounded-full bg-[#ECFDF5] px-2.5 py-0.5 text-[10px] font-bold text-[#059669]">
+                                      Hợp lệ
+                                    </span>
+                                  ) : (
+                                    <span className="rounded-full bg-[#FEF3C7] px-2.5 py-0.5 text-[10px] font-bold text-[#D97706]">
+                                      Trùng lặp
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="border-t border-[#F1F5F9] bg-[#F8FAFC] px-3 py-1.5 text-right text-[11px] text-[#94A3B8]">
+                        Hiển thị {Math.min(5, displayRows.length)} trên {uploadPreviewRows.length} dòng được phân tích
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <button
                 type="button"
                 onClick={downloadPageTemplate}
-                className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-[#1877F2] hover:underline"
+                className="flex items-center gap-1.5 text-[11px] font-semibold text-[#1877F2] hover:underline"
               >
                 <Download className="size-3" /> Tải file mẫu
               </button>
@@ -1173,7 +1452,9 @@ export default function PageScannerSearch() {
           {sourceMode === "keyword" && (
             <div className="mb-4 space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-[11px] font-semibold text-[#64748B]">Số page cần quét / hashtag</p>
+                <p className="text-[11px] font-semibold text-[#64748B]">
+                  Cấu hình số nhóm mục tiêu theo từng hashtag
+                </p>
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] text-[#94A3B8]">Áp dụng tất cả:</span>
                   <input
@@ -1229,84 +1510,97 @@ export default function PageScannerSearch() {
             </div>
           )}
 
-          {sourceMode === "keyword" && (
-            <div className="mb-4 flex items-start gap-2.5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-3 py-2.5">
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
-              <p className="min-w-0 flex-1 text-[11px] leading-5 text-[#92400E]">
-                Kết quả đứng top thường có tương tác tốt hơn. Đặt hạn mức vừa phải theo từng hashtag để ưu
-                tiên page chất lượng.
-              </p>
-            </div>
-          )}
-
-          <div className="space-y-3 border-t border-[#F1F5F9] pt-4">
-            <label className="flex flex-wrap items-center gap-2 text-xs text-[#0F172A]">
+          <div className="space-y-3.5 border-t border-[#F1F5F9] pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#0F172A]">
               <span>Đổi tài khoản mới khi quét được</span>
-              <input
-                type="number"
-                min={1}
-                max={500}
-                disabled={isBusy}
-                value={rotateEvery}
-                onChange={(e) => setRotateEvery(Math.max(1, Number(e.target.value) || 1))}
-                className={`${FIGMA.input} w-16`}
-              />
-              <span className="text-[#64748B]">page / tài khoản</span>
-            </label>
+              <div className="flex items-center gap-2">
+                <NumCtrl
+                  value={rotateEvery}
+                  onChange={setRotateEvery}
+                  min={1}
+                  max={500}
+                  step={10}
+                  disabled={isBusy}
+                />
+                <span className="text-[#64748B]">page / tài khoản</span>
+              </div>
+            </div>
 
-            <label className="flex flex-wrap items-center gap-2 text-xs text-[#0F172A]">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#0F172A]">
               <span>Khoảng cách giữa các lần quét</span>
-              <input
-                type="number"
-                min={1}
-                max={120}
-                disabled={isBusy}
-                value={delayMin}
-                onChange={(e) => setDelayMin(Math.max(1, Number(e.target.value) || 1))}
-                className={`${FIGMA.input} w-14`}
-              />
-              <span className="text-[#64748B]">đến</span>
-              <input
-                type="number"
-                min={1}
-                max={180}
-                disabled={isBusy}
-                value={delayMax}
-                onChange={(e) => setDelayMax(Math.max(delayMin, Number(e.target.value) || delayMin))}
-                className={`${FIGMA.input} w-14`}
-              />
-              <span className="text-[#64748B]">giây</span>
-            </label>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <NumCtrl
+                  value={delayMin}
+                  onChange={(v) => {
+                    setDelayMin(v);
+                    if (v > delayMax) setDelayMax(v);
+                  }}
+                  min={1}
+                  max={120}
+                  step={1}
+                  disabled={isBusy}
+                />
+                <span className="text-[#64748B]">đến</span>
+                <NumCtrl
+                  value={delayMax}
+                  onChange={(v) => setDelayMax(Math.max(delayMin, v))}
+                  min={1}
+                  max={180}
+                  step={1}
+                  disabled={isBusy}
+                />
+                <span className="text-[#64748B]">giây</span>
+              </div>
+            </div>
 
-            <label className="flex cursor-pointer flex-wrap items-center gap-2 text-xs text-[#0F172A]">
-              <Checkbox
-                checked={minFollowersEnabled}
-                disabled={isBusy}
-                onCheckedChange={(c) => setMinFollowersEnabled(!!c)}
-              />
-              <span>Chỉ quét page có số lượng followers lớn hơn</span>
-              <input
-                type="number"
-                min={0}
-                disabled={isBusy || !minFollowersEnabled}
-                value={minFollowers}
-                onChange={(e) => setMinFollowers(Math.max(0, Number(e.target.value) || 0))}
-                className={`${FIGMA.input} w-20`}
-              />
-              <span className="text-[#64748B]">Followers</span>
-            </label>
+            {sourceMode !== "keyword" && (
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#0F172A]">
+                <span>Số nhóm mục tiêu bạn muốn quét</span>
+                <div className="flex items-center gap-2">
+                  <NumCtrl
+                    value={targetPagesCount}
+                    onChange={setTargetPagesCount}
+                    min={1}
+                    max={1000}
+                    step={5}
+                    disabled={isBusy}
+                  />
+                  <span className="text-[#64748B]">Page</span>
+                </div>
+              </div>
+            )}
 
-            <label className="flex cursor-pointer items-start gap-2.5 pl-6">
-              <Checkbox
-                checked={skipSaveBelowThreshold}
-                disabled={isBusy || !minFollowersEnabled}
-                onCheckedChange={(c) => setSkipSaveBelowThreshold(!!c)}
-                className="mt-0.5"
-              />
-              <span className="text-[11px] text-[#64748B]">
-                Không lưu page dưới ngưỡng vào DB{" "}
-                <span className="text-[#94A3B8]">(mặc định: lưu hết, chỉ lọc khi xem)</span>
-              </span>
+            {sourceMode !== "keyword" && (
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-[#0F172A]">
+                <Checkbox
+                  checked={publicOnly}
+                  disabled={isBusy}
+                  onCheckedChange={(c) => setPublicOnly(!!c)}
+                />
+                <span>Chỉ quét nhóm đang ở chế độ công khai</span>
+              </label>
+            )}
+
+            <label className="flex cursor-pointer flex-wrap items-center justify-between gap-2 text-xs text-[#0F172A]">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  checked={minFollowersEnabled}
+                  disabled={isBusy}
+                  onCheckedChange={(c) => setMinFollowersEnabled(!!c)}
+                />
+                <span>Chỉ quét page có số lượng followers lớn hơn</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  disabled={isBusy || !minFollowersEnabled}
+                  value={minFollowers}
+                  onChange={(e) => setMinFollowers(Math.max(0, Number(e.target.value) || 0))}
+                  className={`${FIGMA.input} w-20`}
+                />
+                <span className="text-[#64748B]">Followers</span>
+              </div>
             </label>
           </div>
         </SectionCard>
@@ -1697,102 +1991,15 @@ export default function PageScannerSearch() {
         </>
       )}
 
-      {/* Account multi-select modal */}
-      {showAccountModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-2xl rounded-xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
-              <div>
-                <h2 className="font-bold text-slate-800">Chọn tài khoản thực thi</h2>
-                <p className="mt-0.5 text-[11px] text-slate-400">Có thể chọn nhiều acc — luân phiên theo từng từ khóa</p>
-              </div>
-              <button type="button" onClick={() => setShowAccountModal(false)} className="rounded-lg p-1.5 hover:bg-slate-100">
-                <X className="size-4 text-slate-500" />
-              </button>
-            </div>
-            <div className="max-h-[400px] overflow-auto px-6 py-4">
-              {accountsLoading ? (
-                <div className="py-10 text-center text-slate-400">
-                  <Loader2 className="mx-auto mb-2 size-6 animate-spin" />
-                  Đang tải tài khoản…
-                </div>
-              ) : (
-                <table className="w-full text-[11px]">
-                  <thead className="sticky top-0 bg-slate-50">
-                    <tr className="border-b border-slate-200">
-                      <th className="w-10 px-3 py-2.5">
-                        <Checkbox
-                          checked={accounts.length > 0 && modalUids.length === accounts.filter((a) => LIVE_STATUSES.has(String(a.status))).length}
-                          onCheckedChange={(c) => {
-                            if (c) setModalUids(accounts.filter((a) => LIVE_STATUSES.has(String(a.status))).map((a) => a.uid));
-                            else setModalUids([]);
-                          }}
-                        />
-                      </th>
-                      <th className="px-3 py-2.5 text-left font-semibold text-slate-500">TÀI KHOẢN</th>
-                      <th className="px-3 py-2.5 text-left font-semibold text-slate-500">UID</th>
-                      <th className="px-3 py-2.5 text-left font-semibold text-slate-500">TRẠNG THÁI</th>
-                      <th className="px-3 py-2.5 text-left font-semibold text-slate-500">PROXY</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {accounts.map((acc, idx) => {
-                      const checked = modalUids.includes(acc.uid);
-                      return (
-                        <tr
-                          key={acc.uid}
-                          onClick={() =>
-                            setModalUids((prev) => (checked ? prev.filter((u) => u !== acc.uid) : [...prev, acc.uid]))
-                          }
-                          className={`cursor-pointer ${checked ? "bg-blue-50" : "hover:bg-slate-50"}`}
-                        >
-                          <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
-                            <Checkbox
-                              checked={checked}
-                              onCheckedChange={(c) =>
-                                setModalUids((prev) => (c ? [...prev, acc.uid] : prev.filter((u) => u !== acc.uid)))
-                              }
-                            />
-                          </td>
-                          <td className="px-3 py-2.5">
-                            <div className="flex items-center gap-2">
-                              <Avatar className="size-8">
-                                <AvatarFallback className={AVATAR_COLORS[idx % AVATAR_COLORS.length]}>{initialsOf(acc.name)}</AvatarFallback>
-                              </Avatar>
-                              <span className="font-semibold text-slate-700">{acc.name}</span>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2.5 font-mono text-slate-500">{acc.uid}</td>
-                          <td className="px-3 py-2.5">
-                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${LIVE_STATUSES.has(String(acc.status)) ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-600"}`}>
-                              • {acc.status}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2.5 font-mono text-[10px] text-slate-400">{acc.proxy || "—"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-            <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4">
-              <span className="text-[11px] text-slate-500">Đã chọn tạm: {modalUids.length}</span>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setShowAccountModal(false)}>Hủy</Button>
-                <Button
-                  onClick={() => {
-                    setSelectedUids(modalUids);
-                    setShowAccountModal(false);
-                  }}
-                >
-                  <Check className="mr-1.5 size-3.5" /> Xác nhận ({modalUids.length})
-              </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Account multi-select modal (Ảnh 2) */}
+      <SelectAccountsModal
+        open={showAccountModal}
+        onClose={() => setShowAccountModal(false)}
+        accounts={accounts}
+        loading={accountsLoading}
+        selectedUids={selectedUids}
+        onConfirm={(uids) => setSelectedUids(uids)}
+      />
     </div>
   );
 }
