@@ -60,6 +60,9 @@ NOTIF_CLICK_RATE = 0.20
 REACT_RATE = 0.50
 REACTION_BAR_WAIT = 3.0
 REACTION_HOVER_TRIES = 2
+# Không thấy nút Like của chừng này video liên tiếp / sau chừng này lần cuộn feed thì báo: có thể Facebook đã đổi giao diện
+REACT_NO_LIKE_VIDEOS = 3
+REACT_NO_LIKE_SCROLLS = 10
 
 
 class FarmStopped(Exception):
@@ -426,15 +429,17 @@ def _on_home_feed(driver, landing_path: str = "") -> bool:
 
 # Nhãn nút thả cảm xúc của bài (đo thật): giao diện mới (2026-10-30) "React with Like to <Tên>'s post", đã thả
 # "Remove <Loại> from <Tên>'s post"; giao diện cũ (2026-10-22, có thể còn ở 1 số nick) "Like" / "Remove <Loại>".
-# Reel vẫn là "Like" / "Remove <Loại>". Tiếng Việt (2026-10-30): bài "Bày tỏ cảm xúc Thích về bài viết của <Tên>" /
-# "Gỡ <Loại> khỏi bài viết của <Tên>", reel "Thích" / "Gỡ <Loại>"; loại đọc được quy về tên tiếng Anh (KIND).
-# So nguyên nhãn: "Like: 17 people" là nút đếm, không phải nút thả. Bình luận nổi dưới bài vẫn có nút "Like" /
+# Reel "Like" / "Remove <Loại>", từ 2026-11-04 có thêm số đếm: "Like, 860 reactions" / "Remove Love, 861 reactions".
+# Tiếng Việt (2026-10-30): bài "Bày tỏ cảm xúc Thích về bài viết của <Tên>" / "Gỡ <Loại> khỏi bài viết của <Tên>", reel
+# "Thích" / "Gỡ <Loại>", từ 2026-11-04 "Thích, 1,6K cảm xúc" / "Gỡ Haha, 4K cảm xúc"; loại đọc được quy về tên tiếng Anh
+# (KIND). Chỉ nhận phần đuôi sau dấu phẩy, không so "bắt đầu bằng Like": "Like: 17 people" là nút đếm, không phải nút
+# thả. Bình luận nổi dưới bài vẫn có nút "Like" /
 # "Remove <Loại>" riêng, nằm trong khối [role=article] "Comment by ..." / "Reply by ..." (tiếng Việt "Bình luận dưới
 # tên ..." / "Phản hồi bình luận của ...") -> luôn loại theo khối đó, không theo nhãn (Facebook đổi nhãn nút thì cùng
 # lắm không thả, không bao giờ thả nhầm vào bình luận).
 _REACT_LABELS_JS = r"""
-const UNREACTED = /^(React with Like to .+|Like|Bày tỏ cảm xúc Thích về .+|Thích)$/;
-const REACTED = /^(?:Remove (Like|Love|Care|Haha|Wow|Sad|Angry)(?: from .+)?|Gỡ (Thích|Yêu thích|Thương thương|Haha|Wow|Buồn|Phẫn nộ)(?: khỏi .+)?)$/;
+const UNREACTED = /^(?:(?:Like|Thích)(?:,\s.*)?|React with Like to .+|Bày tỏ cảm xúc Thích về .+)$/;
+const REACTED = /^(?:Remove (Like|Love|Care|Haha|Wow|Sad|Angry)|Gỡ (Thích|Yêu thích|Thương thương|Haha|Wow|Buồn|Phẫn nộ))(?:(?: from | khỏi |,\s).*)?$/;
 const KIND = {'Thích': 'Like', 'Yêu thích': 'Love', 'Thương thương': 'Care', 'Buồn': 'Sad', 'Phẫn nộ': 'Angry'};
 const reactedKind = (label) => {
   const m = label.match(REACTED);
@@ -484,6 +489,15 @@ for (const post of document.querySelectorAll('[aria-posinset]')) {
   if (UNREACTED.test(like.getAttribute('aria-label').trim())) out.push([post, like]);
 }
 return out;
+"""
+
+# Feed có nút Like của bài nào không (kể cả bài đã thả), khối không phải bài thì không có: chỉ để biết Facebook đổi nhãn.
+_FEED_HAS_LIKE_JS = _REACT_LABELS_JS + r"""
+return Array.from(document.querySelectorAll('[aria-posinset]')).some((post) =>
+  Array.from(post.querySelectorAll('[role="button"][aria-label]')).some((b) => {
+    const label = b.getAttribute('aria-label').trim();
+    return (UNREACTED.test(label) || REACTED.test(label)) && !inComment(b, post);
+  }));
 """
 
 # Nút Like của video đang xem: tầng tổ tiên gần nhất của video có nút Like / Remove <Loại>. Trình xem reel có 2 video
@@ -656,14 +670,18 @@ def _react(driver, ctl: FarmControl, box, like_button, types: list) -> Optional[
 # ─────────────────────────── KỊCH BẢN ────────────────────────────
 
 def run_newsfeed(driver, ctl: FarmControl, total_seconds: float, delay_min: float, delay_max: float,
-                 report: Callable[[str], None], react: Optional[list] = None) -> dict:
+                 report: Callable[[str], None], react: Optional[list] = None,
+                 log: Optional[Callable[[str, str], None]] = None) -> dict:
     """
     Lướt Newsfeed tự nhiên: cuộn mượt 500-800px, 10-15% cuộn ngược, dừng đọc theo delay.
     Trang bị chuyển khỏi Trang chủ (người dùng bấm sang chỗ khác) thì mở lại Trang chủ, tối đa NEWSFEED_MAX_REOPENS lần.
     react: loại cảm xúc được chọn; mỗi bài vào màn hình có REACT_RATE khả năng được thả 1 cảm xúc.
+    Cuộn REACT_NO_LIKE_SCROLLS lần mà chưa thấy nút Like của bài nào thì báo qua log.
     """
     if total_seconds <= 0:
         return _result("SKIPPED", "Thời gian lướt = 0")
+    log = log or (lambda level, text: None)
+    like_seen = False
     _open(driver, ctl, FB_HOME, reuse=True)
     landing_path = urlparse(driver.current_url or "").path
     timer = ActiveTimer(ctl, total_seconds)
@@ -696,6 +714,10 @@ def run_newsfeed(driver, ctl: FarmControl, total_seconds: float, delay_min: floa
                 report(f"Lướt Newsfeed: {timer.elapsed() / 60:.1f}/{total_seconds / 60:.1f} phút, {scrolls} lần cuộn")
             ctl.sleep(min(random.uniform(delay_min, delay_max), max(timer.remaining(), 0)))
             if react and timer.remaining() > 0:
+                like_seen = like_seen or _feed_has_like(driver)
+                if not like_seen and scrolls == REACT_NO_LIKE_SCROLLS:
+                    log("warning", f"cuộn {scrolls} lần chưa thấy nút Like của bài nào, "
+                                   "có thể Facebook đã đổi giao diện nên không thả được cảm xúc")
                 for post, like in _feed_react_candidates(driver):
                     if random.random() >= REACT_RATE:
                         continue
@@ -718,6 +740,13 @@ def _feed_react_candidates(driver) -> list:
         return driver.execute_script(_FEED_REACT_CANDIDATES_JS) or []
     except WebDriverException:
         return []
+
+
+def _feed_has_like(driver) -> bool:
+    try:
+        return bool(driver.execute_script(_FEED_HAS_LIKE_JS))
+    except WebDriverException:
+        return False
 
 
 _VISIBLE_VIDEO_JS = """
@@ -833,13 +862,17 @@ def _advance_video(driver, video, stuck: int):
 
 
 def run_watch(driver, ctl: FarmControl, total_seconds: float, view_min: float, view_max: float,
-              report: Callable[[str], None], react: Optional[list] = None) -> dict:
+              report: Callable[[str], None], react: Optional[list] = None,
+              log: Optional[Callable[[str, str], None]] = None) -> dict:
     """
     Đếm mỗi video Watch một lần, sau khi xác nhận video mới đã phát.
     react: loại cảm xúc được chọn; mỗi video đã tính "đã xem" có REACT_RATE khả năng được thả 1 cảm xúc.
+    REACT_NO_LIKE_VIDEOS video liên tiếp không thấy nút Like thì báo qua log.
     """
     if total_seconds <= 0:
         return _result("SKIPPED", "Thời gian xem = 0")
+    log = log or (lambda level, text: None)
+    no_like = 0
     _open(driver, ctl, FB_WATCH)
     landing_path = urlparse(driver.current_url or "").path
     timer = ActiveTimer(ctl, total_seconds)
@@ -951,11 +984,18 @@ def run_watch(driver, ctl: FarmControl, total_seconds: float, view_min: float, v
                 seen_videos.update(current.get("keys") or [])
                 watched += 1
                 report(progress_text("vừa xem xong 1 video"))
-                if react and random.random() < REACT_RATE:
-                    kind = _react_video(driver, ctl, video, react)
-                    if kind:
-                        reactions[kind] = reactions.get(kind, 0) + 1
-                        report(progress_text(f"đã thả {kind}"))
+                if react:
+                    found = _video_like(driver, video)
+                    no_like = 0 if found else no_like + 1
+                    if no_like == REACT_NO_LIKE_VIDEOS:
+                        log("warning", f"{no_like} video liên tiếp không thấy nút Like, "
+                                       "có thể Facebook đã đổi giao diện nên không thả được cảm xúc")
+                    # Video đã thả từ trước (found[2] False) thì bỏ qua
+                    if found and found[2] and random.random() < REACT_RATE:
+                        kind = _react(driver, ctl, found[0], found[1], react)
+                        if kind:
+                            reactions[kind] = reactions.get(kind, 0) + 1
+                            report(progress_text(f"đã thả {kind}"))
             check_account_state(driver)
             _advance_video(driver, video, 0)
             ctl.sleep(min(random.uniform(1.0, 2.5), max(timer.remaining(), 0)))
@@ -973,18 +1013,12 @@ def run_watch(driver, ctl: FarmControl, total_seconds: float, view_min: float, v
             "seconds": int(timer.elapsed()), **_reaction_result(reactions)}
 
 
-def _react_video(driver, ctl: FarmControl, video, types: list) -> Optional[str]:
-    """Thả cảm xúc lên video đang xem (nút Like trong khối của chính video đó); video đã thả trước thì bỏ qua."""
+def _video_like(driver, video) -> Optional[list]:
+    """Nút Like trong khối của chính video đang xem: [khối, nút, chưa thả?], không thấy thì None."""
     try:
-        found = driver.execute_script(_VIDEO_LIKE_JS, video)
+        return driver.execute_script(_VIDEO_LIKE_JS, video)
     except WebDriverException:
         return None
-    if not found:
-        return None
-    box, like, fresh = found
-    if not fresh:
-        return None
-    return _react(driver, ctl, box, like, types)
 
 
 STORY_MAX_STUCK = 3  # Bấm sang khung kế liên tiếp chừng này lần mà khung không đổi thì coi như hết story

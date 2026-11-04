@@ -361,6 +361,53 @@ class NewsfeedReactTests(unittest.TestCase):
         candidates.assert_not_called()
         self.assertEqual(result["reactions"], 0)
 
+    def run_feed_like_check(self, has_like, rounds, react=("Love",)):
+        driver = Mock()
+        driver.current_url = "https://www.facebook.com/"
+        ctl = farming_flow.FarmControl()
+        scrolls, logs = [], []
+        timer = Mock()
+        timer.remaining.side_effect = lambda: 10 if len(scrolls) < rounds else 0
+        timer.elapsed.return_value = 30
+        with patch(f"{FLOW}._open"), patch(f"{FLOW}.ActiveTimer", return_value=timer), \
+                patch(f"{FLOW}.human_scroll", side_effect=lambda *a, **k: scrolls.append(a)), \
+                patch(f"{FLOW}.check_account_state"), patch(f"{FLOW}._feed_react_candidates", return_value=[]), \
+                patch(f"{FLOW}._feed_has_like", side_effect=has_like) as check, \
+                patch(f"{FLOW}.random.random", return_value=0.99), patch.object(ctl, "sleep"):
+            farming_flow.run_newsfeed(driver, ctl, 60, 1, 2, Mock(), react=list(react) if react else None,
+                                      log=lambda level, text: logs.append((level, text)))
+        return logs, check
+
+    def test_warns_once_when_no_like_button_after_scrolls(self):
+        logs, _ = self.run_feed_like_check(lambda _: False, farming_flow.REACT_NO_LIKE_SCROLLS + 3)
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0][0], "warning")
+        self.assertIn("chưa thấy nút Like", logs[0][1])
+
+    def test_no_warning_before_enough_scrolls(self):
+        logs, _ = self.run_feed_like_check(lambda _: False, farming_flow.REACT_NO_LIKE_SCROLLS - 2)
+        self.assertEqual(logs, [])
+
+    def test_like_seen_once_stops_checking(self):
+        logs, check = self.run_feed_like_check(lambda _: True, farming_flow.REACT_NO_LIKE_SCROLLS + 3)
+        self.assertEqual(logs, [])
+        self.assertEqual(check.call_count, 1)
+
+    def test_no_like_check_when_react_off(self):
+        logs, check = self.run_feed_like_check(lambda _: False, farming_flow.REACT_NO_LIKE_SCROLLS + 3, react=None)
+        self.assertEqual(logs, [])
+        check.assert_not_called()
+
+
+class ReactWarningWiringTests(unittest.TestCase):
+    def test_action_passes_log_to_newsfeed_and_watch(self):
+        log = Mock()
+        params = {"total_seconds": 60, "delay": (1, 2), "react": ["Love"]}
+        for action, target in (("NEWSFEED", "run_newsfeed"), ("WATCH", "run_watch")):
+            with self.subTest(action), patch(f"modules.module_03_acc_farm.routes.{target}") as run:
+                farm_routes._run_action(Mock(), Mock(), "a", action, params, Mock(), Mock(), log=log)
+                self.assertIs(run.call_args.kwargs["log"], log)
+
 
 if __name__ == "__main__":
     unittest.main()
