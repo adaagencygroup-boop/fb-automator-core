@@ -883,9 +883,10 @@ def _run_action(driver, ctl: FarmControl, uid: str, action: str, params: dict,
     if action == "CHECK_NOTIF":
         return run_check_notifications(driver, ctl, report)
     if action == "NEWSFEED":
-        return run_newsfeed(driver, ctl, params["total_seconds"], *params["delay"], report, react=params.get("react"))
+        return run_newsfeed(driver, ctl, params["total_seconds"], *params["delay"], report, react=params.get("react"),
+                            log=log)
     if action == "WATCH":
-        return run_watch(driver, ctl, params["total_seconds"], *params["delay"], report, react=params.get("react"))
+        return run_watch(driver, ctl, params["total_seconds"], *params["delay"], report, react=params.get("react"), log=log)
     if action == "STORY":
         return run_story(driver, ctl, params["target"], *params["delay"], report, react=params.get("react"))
     if action == "LEAVE_GROUP":
