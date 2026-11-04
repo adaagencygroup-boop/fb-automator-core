@@ -17,51 +17,11 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "@/lib/toast";
+import Pagination from "@/components/ui/pagination";
+import CustomSelect from "@/components/ui/custom-select";
 import AccountSelectModal, { isScanReady } from "../components/AccountSelectModal";
-import { getScanAccounts } from "../service";
-
-const DEFAULT_SCAN_ACCOUNTS = [
-  {
-    id: "acc-1",
-    uid: "81594788917102",
-    profile_name: "Riska Nasution (Nick Trâu)",
-    email: "riska.nasution@gmail.com",
-    status: "live",
-    login_status: "logged_in",
-  },
-  {
-    id: "acc-2",
-    uid: "100084729182312",
-    profile_name: "Hoàng Minh Thuận (Scan Post 01)",
-    email: "thuandz99@gmail.com",
-    status: "live",
-    login_status: "logged_in",
-  },
-  {
-    id: "acc-3",
-    uid: "100091823761294",
-    profile_name: "Trần Mai Anh (Seeding 02)",
-    email: "maianh.tran@gmail.com",
-    status: "live",
-    login_status: "logged_in",
-  },
-  {
-    id: "acc-4",
-    uid: "100062819451290",
-    profile_name: "Nguyễn Hải Đăng (Acc Backup 03)",
-    email: "haidang.dev@gmail.com",
-    status: "live",
-    login_status: "logged_in",
-  },
-  {
-    id: "acc-5",
-    uid: "100037194012893",
-    profile_name: "Lê Ngọc Bích (Farm 04)",
-    email: "ngocbich.le@gmail.com",
-    status: "live",
-    login_status: "logged_in",
-  },
-];
+import GroupPickerModal from "../components/GroupPickerModal";
+import { getScanAccounts, getScanCategories, getScannedGroups } from "../service";
 
 function normalizeAccount(raw) {
   const status = String(raw.status || "").toLowerCase();
@@ -78,231 +38,18 @@ function normalizeAccount(raw) {
   };
 }
 
-// ==========================================
-// DỮ LIỆU MẪU BAN ĐẦU CHUẨN FIGMA IMAGE 1
-// ==========================================
-
-const INITIAL_SELECTED_GROUPS = [
-  {
-    id: "g-1",
-    stt: "01",
-    name: "Hội Buôn Bán Online Toàn Quốc",
-    uid: "81594788917102",
-    tag: "HB",
-    tagBg: "bg-[#DBEAFE]",
-    tagText: "text-[#2563EB]",
-    type: "public",
-    typeLabel: "Công khai",
-    members: "258.724 TV",
-    memberCount: 258724,
-  },
-  {
-    id: "g-2",
-    stt: "02",
-    name: "Marketing Sài Gòn Hub - Tuyển dụng & Thảo luận",
-    uid: "49204918231032",
-    tag: "MK",
-    tagBg: "bg-[#F3E8FF]",
-    tagText: "text-[#9333EA]",
-    type: "private",
-    typeLabel: "Riêng tư",
-    members: "186.392 TV",
-    memberCount: 186392,
-  },
-  {
-    id: "g-3",
-    stt: "03",
-    name: "Bất Động Sản & Đầu Tư Hà Nội 2024",
-    uid: "92837192837123",
-    tag: "BĐ",
-    tagBg: "bg-[#FFEDD5]",
-    tagText: "text-[#EA580C]",
-    type: "public",
-    typeLabel: "Công khai",
-    members: "142.050 TV",
-    memberCount: 142050,
-  },
-  {
-    id: "g-4",
-    stt: "04",
-    name: "Cộng Đồng Thương Mại Điện Tử & Dropship VN",
-    uid: "37492817293847",
-    tag: "TM",
-    tagBg: "bg-[#D1FAE5]",
-    tagText: "text-[#059669]",
-    type: "public",
-    typeLabel: "Công khai",
-    members: "95.400 TV",
-    memberCount: 95400,
-  },
-  {
-    id: "g-5",
-    stt: "05",
-    name: "Khởi Nghiệp & Kinh Doanh Thực Chiến",
-    uid: "61928371928312",
-    tag: "KV",
-    tagBg: "bg-[#FCE7F3]",
-    tagText: "text-[#DB2777]",
-    type: "private",
-    typeLabel: "Riêng tư",
-    members: "312.800 TV",
-    memberCount: 312800,
-  },
-];
-
-const CATEGORIES_DATA = [
-  {
-    id: "cat-1",
-    name: "Hội Buôn Bán Online Toàn Quốc",
-    stats: "15 nhóm FB • 1.8M TV",
-    membersTotal: 1820,
-    memberSizeStr: "258.724",
-  },
-  {
-    id: "cat-2",
-    name: "Marketing Sài Gòn Hub",
-    stats: "15 nhóm FB • 1.8M TV",
-    membersTotal: 960,
-    memberSizeStr: "186.392",
-  },
-  {
-    id: "cat-3",
-    name: "Bất Động Sản & Đầu Tư",
-    stats: "15 nhóm FB • 1.8M TV",
-    membersTotal: 740,
-    memberSizeStr: "142.050",
-  },
-  {
-    id: "cat-4",
-    name: "Cộng Đồng E-commerce VN",
-    stats: "15 nhóm FB • 1.8M TV",
-    membersTotal: 520,
-    memberSizeStr: "95.400",
-  },
-];
-
-const INITIAL_MEMBERS = [
-  {
-    id: "m-1",
-    stt: "01",
-    name: "Nguyễn Văn An",
-    uid: "100084729182312",
-    shortUid: "fb.com/1000847291...",
-    friends: "50 bạn bè",
-    friendCount: 50,
-    time: "10:35:48",
-  },
-  {
-    id: "m-2",
-    stt: "02",
-    name: "Trần Thị Mai",
-    uid: "100091823761294",
-    shortUid: "fb.com/1000918237...",
-    friends: "50 bạn bè",
-    friendCount: 50,
-    time: "10:35:46",
-  },
-  {
-    id: "m-3",
-    stt: "03",
-    name: "Lê Hoàng Quân",
-    uid: "100062819451290",
-    shortUid: "fb.com/1000628194...",
-    friends: "50 bạn bè",
-    friendCount: 50,
-    time: "10:35:44",
-  },
-  {
-    id: "m-4",
-    stt: "04",
-    name: "Phạm Thu Trang",
-    uid: "100037194012893",
-    shortUid: "fb.com/1000371940...",
-    friends: "50 bạn bè",
-    friendCount: 50,
-    time: "10:35:40",
-  },
-  {
-    id: "m-5",
-    stt: "05",
-    name: "Vũ Đức Duy",
-    uid: "100010948219482",
-    shortUid: "fb.com/1000109482...",
-    friends: "50 bạn bè",
-    friendCount: 50,
-    time: "10:35:36",
-  },
-  {
-    id: "m-6",
-    stt: "06",
-    name: "Bùi Yến Nhi",
-    uid: "100058291048192",
-    shortUid: "fb.com/1000582910...",
-    friends: "50 bạn bè",
-    friendCount: 50,
-    time: "10:35:32",
-  },
-];
-
-const INITIAL_LOGS = [
-  {
-    time: "14:26:41",
-    thread: "Thread-01",
-    color: "text-slate-200",
-    message: "Khởi chạy Chrome Profile cho UID 81594788917102 (Riska Nasution)...",
-  },
-  {
-    time: "14:26:44",
-    thread: "Thread-01",
-    color: "text-amber-400",
-    message: "Proxy: nick không có proxy, đang chạy bằng IP của máy",
-  },
-  {
-    time: "14:26:51",
-    thread: "Thread-01",
-    color: "text-slate-300",
-    message: "Kế hoạch: Check thông báo → Tham gia nhóm → Lướt Newsfeed → Kết bạn theo gợi ý → Xem Video Watch",
-  },
-  {
-    time: "14:26:51",
-    thread: "Thread-01",
-    color: "text-emerald-400",
-    message: "Bắt đầu: Check thông báo",
-  },
-  {
-    time: "14:26:59",
-    thread: "Thread-01",
-    color: "text-slate-300",
-    message: "Check thông báo: Đã xem danh sách thông báo",
-  },
-  {
-    time: "14:26:59",
-    thread: "Thread-01",
-    color: "text-emerald-400",
-    message: "Bắt đầu: Tham gia nhóm",
-  },
-  {
-    time: "14:27:14",
-    thread: "Thread-01",
-    color: "text-teal-300",
-    message: "Tham gia nhóm: Đã tham gia 1/1 nhóm (nhóm đề xuất)",
-  },
-  {
-    time: "14:27:14",
-    thread: "Thread-01",
-    color: "text-emerald-400",
-    message: "Bắt đầu: Lướt Newsfeed",
-  },
+const FRIEND_FILTER_OPTIONS = [
+  { value: "all", label: "Tất cả số bạn bè" },
+  { value: "under500", label: "Dưới 500 bạn bè" },
+  { value: "over500", label: "Trên 500 bạn bè" },
 ];
 
 export default function GroupScanMembersPage() {
   // --- Account Selection State ---
   const [accountsModalOpen, setAccountsModalOpen] = useState(false);
   const [accountsLoading, setAccountsLoading] = useState(false);
-  const [moduleAccounts, setModuleAccounts] = useState(DEFAULT_SCAN_ACCOUNTS);
-  const [selectedUids, setSelectedUids] = useState(
-    DEFAULT_SCAN_ACCOUNTS.map((a) => a.uid)
-  );
+  const [moduleAccounts, setModuleAccounts] = useState([]);
+  const [selectedUids, setSelectedUids] = useState([]);
 
   // Load accounts from Module 2 API
   const loadAccounts = useCallback(async () => {
@@ -316,7 +63,7 @@ export default function GroupScanMembersPage() {
         : Array.isArray(res?.data)
         ? res.data
         : [];
-      const list = rawList.length > 0 ? rawList.map(normalizeAccount) : DEFAULT_SCAN_ACCOUNTS;
+      const list = rawList.map(normalizeAccount);
       setModuleAccounts(list);
       setSelectedUids((current) => {
         const readyUids = list.filter(isScanReady).map((acc) => acc.uid);
@@ -326,44 +73,16 @@ export default function GroupScanMembersPage() {
         return list.slice(0, 5).map((a) => a.uid);
       });
     } catch {
-      setModuleAccounts(DEFAULT_SCAN_ACCOUNTS);
-      setSelectedUids(DEFAULT_SCAN_ACCOUNTS.map((a) => a.uid));
+      setModuleAccounts([]);
+      setSelectedUids([]);
     } finally {
       setAccountsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    let ignore = false;
-    getScanAccounts()
-      .then((res) => {
-        if (ignore) return;
-        const rawList = Array.isArray(res)
-          ? res
-          : Array.isArray(res?.accounts)
-          ? res.accounts
-          : Array.isArray(res?.data)
-          ? res.data
-          : [];
-        const list = rawList.length > 0 ? rawList.map(normalizeAccount) : DEFAULT_SCAN_ACCOUNTS;
-        setModuleAccounts(list);
-        setSelectedUids((current) => {
-          const readyUids = list.filter(isScanReady).map((acc) => acc.uid);
-          const kept = current.filter((uid) => readyUids.includes(uid));
-          if (kept.length > 0) return kept;
-          if (readyUids.length > 0) return readyUids.slice(0, 5);
-          return list.slice(0, 5).map((a) => a.uid);
-        });
-      })
-      .catch(() => {
-        if (ignore) return;
-        setModuleAccounts(DEFAULT_SCAN_ACCOUNTS);
-        setSelectedUids(DEFAULT_SCAN_ACCOUNTS.map((a) => a.uid));
-      });
-    return () => {
-      ignore = true;
-    };
-  }, []);
+    loadAccounts();
+  }, [loadAccounts]);
 
   const selectedAccountNames = useMemo(() => {
     return moduleAccounts
@@ -373,8 +92,58 @@ export default function GroupScanMembersPage() {
   }, [moduleAccounts, selectedUids]);
 
   // --- Group Selection State ---
-  const [selectedGroups, setSelectedGroups] = useState(INITIAL_SELECTED_GROUPS);
+  const [selectedGroups, setSelectedGroups] = useState([]);
+  const [availableGroups, setAvailableGroups] = useState([]);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState("");
+
+  // Load available groups & categories from Database
+  const [categories, setCategories] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState("");
+  const [members, setMembers] = useState([]);
+
+  useEffect(() => {
+    getScannedGroups()
+      .then((res) => {
+        const list = res?.groups || [];
+        setAvailableGroups(
+          list.map((g, idx) => ({
+            id: g.id || g.group_id,
+            stt: String(idx + 1).padStart(2, "0"),
+            name: g.name || g.group_id,
+            uid: g.group_id || g.id,
+            tag: (g.name || "FB").slice(0, 2).toUpperCase(),
+            tagBg: "bg-[#DBEAFE]",
+            tagText: "text-[#2563EB]",
+            type: g.type === "private" ? "private" : "public",
+            typeLabel: g.type === "private" ? "Riêng tư" : "Công khai",
+            members: g.members || "—",
+            memberCount: g.membersCount || 0,
+          }))
+        );
+      })
+      .catch(() => setAvailableGroups([]));
+
+    getScanCategories()
+      .then((data) => {
+        const cats = Array.isArray(data) ? data : [];
+        setCategories(
+          cats.map((c) => ({
+            id: c.id,
+            name: c.name,
+            stats: `${c.count || 0} nhóm FB`,
+            membersTotal: 0,
+            memberSizeStr: "0",
+          }))
+        );
+        if (cats.length > 0) {
+          setSelectedCategory(cats[0].id);
+        } else {
+          setSelectedCategory("");
+        }
+      })
+      .catch(() => setCategories([]));
+  }, []);
 
   // --- Section 2: Config Steppers & Checkboxes ---
   const [minDelay, setMinDelay] = useState(5);
@@ -387,7 +156,6 @@ export default function GroupScanMembersPage() {
   const [newMembersOnly, setNewMembersOnly] = useState(true);
 
   // --- Section 4: Master-Detail Category & Members ---
-  const [selectedCategory, setSelectedCategory] = useState("cat-1");
   const [categorySearch, setCategorySearch] = useState("");
   const [memberSearch, setMemberSearch] = useState("");
   const [friendFilter, setFriendFilter] = useState("all");
@@ -396,7 +164,7 @@ export default function GroupScanMembersPage() {
   const [currentPage, setCurrentPage] = useState(1);
 
   // --- Section 5: Logs & Execution ---
-  const [logs, setLogs] = useState(INITIAL_LOGS);
+  const [logs, setLogs] = useState([]);
   const [isExecuting, setIsExecuting] = useState(false);
   const [copiedLog, setCopiedLog] = useState(false);
 
@@ -460,15 +228,15 @@ export default function GroupScanMembersPage() {
 
   // Filter Categories
   const filteredCategories = useMemo(() => {
-    if (!categorySearch.trim()) return CATEGORIES_DATA;
-    return CATEGORIES_DATA.filter((c) =>
+    if (!categorySearch.trim()) return categories;
+    return categories.filter((c) =>
       c.name.toLowerCase().includes(categorySearch.toLowerCase())
     );
-  }, [categorySearch]);
+  }, [categories, categorySearch]);
 
   // Filter Members
   const filteredMembers = useMemo(() => {
-    return INITIAL_MEMBERS.filter((m) => {
+    return members.filter((m) => {
       const matchQuery =
         !memberSearch.trim() ||
         m.name.toLowerCase().includes(memberSearch.toLowerCase()) ||
@@ -479,7 +247,14 @@ export default function GroupScanMembersPage() {
         (friendFilter === "over500" && m.friendCount > 500);
       return matchQuery && matchFriend;
     });
-  }, [memberSearch, friendFilter]);
+  }, [members, memberSearch, friendFilter]);
+
+  const pageSize = 15;
+  const totalPages = Math.max(1, Math.ceil(filteredMembers.length / pageSize));
+  const paginatedMembers = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredMembers.slice(start, start + pageSize);
+  }, [filteredMembers, currentPage, pageSize]);
 
   // Select all members toggle
   const allFilteredSelected =
@@ -503,27 +278,47 @@ export default function GroupScanMembersPage() {
     });
   };
 
+  const currentCategoryData =
+    categories.find((c) => c.id === selectedCategory) || categories[0] || null;
+
   // Export handlers
   const handleExportAll = () => {
-    toast.success("Đang trích xuất toàn bộ danh sách thành viên ra file Excel / CSV...");
+    if (members.length === 0) {
+      toast.warning("Chưa có thành viên nào để xuất!");
+      return;
+    }
+    toast.success(`Đang trích xuất toàn bộ ${members.length} thành viên ra file Excel / CSV...`);
   };
 
   const handleExportGroup = () => {
-    const curCat = CATEGORIES_DATA.find((c) => c.id === selectedCategory);
-    toast.success(`Đang xuất file thành viên của nhóm: ${curCat?.name || "nhóm đang chọn"}...`);
+    if (!currentCategoryData) {
+      toast.warning("Vui lòng chọn một danh mục nhóm!");
+      return;
+    }
+    toast.success(`Đang xuất file thành viên của nhóm: ${currentCategoryData.name}...`);
   };
 
-  const currentCategoryData = CATEGORIES_DATA.find((c) => c.id === selectedCategory) || CATEGORIES_DATA[0];
-
   return (
-    <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
-      <div className="space-y-5">
+    <>
+      {/* Ẩn nút mũi tên tăng giảm số chỉ cho riêng Module 10 */}
+      <style>{`
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+          -webkit-appearance: none !important;
+          margin: 0 !important;
+        }
+        input[type="number"] {
+          -moz-appearance: textfield !important;
+          appearance: textfield !important;
+        }
+      `}</style>
+      <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
         {/* =======================================================
             SECTION 1 & SECTION 2: 2 Column Configuration Grids
         ======================================================= */}
-        <div className="grid items-start gap-5 xl:grid-cols-2">
+        <div className="grid items-stretch gap-5 xl:grid-cols-2">
           {/* Card 1: Chọn tài khoản & Nhóm quét */}
-          <section className="rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] space-y-4">
+          <section className="flex flex-col h-full rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] space-y-4">
             {/* Header */}
             <div className="flex items-center gap-2.5 pb-3 border-b border-[#F1F5F9]">
               <span className="flex size-6 items-center justify-center rounded-full bg-[#2563EB] text-[11px] font-bold text-white shrink-0">
@@ -594,7 +389,7 @@ export default function GroupScanMembersPage() {
           </section>
 
           {/* Card 2: Cấu hình quét nâng cao & Bộ lọc */}
-          <section className="rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] space-y-4">
+          <section className="flex flex-col h-full rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] space-y-4">
             {/* Header */}
             <div className="flex items-center gap-2.5 pb-3 border-b border-[#F1F5F9]">
               <span className="flex size-6 items-center justify-center rounded-full bg-[#2563EB] text-[11px] font-bold text-white shrink-0">
@@ -624,7 +419,7 @@ export default function GroupScanMembersPage() {
                     type="number"
                     value={minDelay}
                     onChange={(e) => setMinDelay(Number(e.target.value) || 1)}
-                    className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none"
+                    className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                   />
                   <button
                     type="button"
@@ -650,7 +445,7 @@ export default function GroupScanMembersPage() {
                     type="number"
                     value={maxDelay}
                     onChange={(e) => setMaxDelay(Number(e.target.value) || minDelay)}
-                    className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none"
+                    className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                   />
                   <button
                     type="button"
@@ -683,7 +478,7 @@ export default function GroupScanMembersPage() {
                     type="number"
                     value={switchAccThreshold}
                     onChange={(e) => setSwitchAccThreshold(Number(e.target.value) || 10)}
-                    className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none"
+                    className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                   />
                   <button
                     type="button"
@@ -715,7 +510,7 @@ export default function GroupScanMembersPage() {
                     type="number"
                     value={membersLimit}
                     onChange={(e) => setMembersLimit(Number(e.target.value) || 10)}
-                    className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none"
+                    className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                   />
                   <button
                     type="button"
@@ -913,10 +708,10 @@ export default function GroupScanMembersPage() {
 
           {/* 2 Column Master-Detail Split */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 w-full">
-            {/* Left: Danh mục nhóm (4) */}
+            {/* Left: Danh mục nhóm */}
             <div className="lg:col-span-4 flex flex-col gap-3 w-full">
               <span className="text-xs font-bold text-[#334155]">
-                Danh mục nhóm ({CATEGORIES_DATA.length})
+                Danh mục nhóm ({categories.length})
               </span>
 
               {/* Quick Search inside list */}
@@ -933,28 +728,34 @@ export default function GroupScanMembersPage() {
 
               {/* Group Cards List */}
               <div className="flex flex-col gap-2 w-full">
-                {filteredCategories.map((cat) => {
-                  const isSelected = cat.id === selectedCategory;
-                  return (
-                    <button
-                      type="button"
-                      key={cat.id}
-                      onClick={() => setSelectedCategory(cat.id)}
-                      className={`flex flex-col items-start p-2.5 gap-0.5 w-full rounded-lg text-left transition-all ${
-                        isSelected
-                          ? "bg-[#EFF6FF]/60 border border-[#3B82F6] shadow-xs"
-                          : "bg-white border border-[#E2E8F0] hover:border-slate-300"
-                      }`}
-                    >
-                      <span className="font-semibold text-xs leading-4 text-[#0F172A] line-clamp-1">
-                        {cat.name}
-                      </span>
-                      <span className="text-[11px] leading-4 text-[#64748B]">
-                        {cat.stats}
-                      </span>
-                    </button>
-                  );
-                })}
+                {filteredCategories.length === 0 ? (
+                  <div className="text-center py-8 text-xs text-[#94A3B8]">
+                    Chưa có danh mục nào từ cơ sở dữ liệu.
+                  </div>
+                ) : (
+                  filteredCategories.map((cat) => {
+                    const isSelected = cat.id === selectedCategory;
+                    return (
+                      <button
+                        type="button"
+                        key={cat.id}
+                        onClick={() => setSelectedCategory(cat.id)}
+                        className={`flex flex-col items-start p-2.5 gap-0.5 w-full rounded-lg text-left transition-all ${
+                          isSelected
+                            ? "bg-[#EFF6FF]/60 border border-[#3B82F6] shadow-xs"
+                            : "bg-white border border-[#E2E8F0] hover:border-slate-300"
+                        }`}
+                      >
+                        <span className="font-semibold text-xs leading-4 text-[#0F172A] line-clamp-1">
+                          {cat.name}
+                        </span>
+                        <span className="text-[11px] leading-4 text-[#64748B]">
+                          {cat.stats}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </div>
 
@@ -964,10 +765,14 @@ export default function GroupScanMembersPage() {
               <div className="flex flex-wrap justify-between items-center w-full gap-2 pb-1">
                 <div className="flex flex-col">
                   <h4 className="font-bold text-xs text-[#0F172A]">
-                    {currentCategoryData.name}
+                    {currentCategoryData ? currentCategoryData.name : "Chưa chọn danh mục"}
                   </h4>
                   <span className="text-[11px] text-[#64748B]">
-                    Quy mô: <strong className="text-slate-800">{currentCategoryData.memberSizeStr}</strong> Thành viên
+                    Quy mô:{" "}
+                    <strong className="text-slate-800">
+                      {currentCategoryData?.memberSizeStr || "0"}
+                    </strong>{" "}
+                    Thành viên
                   </span>
                 </div>
 
@@ -985,62 +790,17 @@ export default function GroupScanMembersPage() {
                   </div>
 
                   {/* Filter Friends */}
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setFriendDropdownOpen(!friendDropdownOpen)}
-                      className="inline-flex items-center justify-between px-2.5 h-7 border border-[#E2E8F0] rounded-lg text-xs font-medium text-[#475569] bg-white hover:bg-slate-50 gap-1.5"
-                    >
-                      <span>
-                        {friendFilter === "all"
-                          ? "Tất cả số bạn bè"
-                          : friendFilter === "under500"
-                          ? "Dưới 500 bạn bè"
-                          : "Trên 500 bạn bè"}
-                      </span>
-                      <ChevronDown className="size-3 text-[#64748B]" />
-                    </button>
-
-                    {friendDropdownOpen && (
-                      <div className="absolute right-0 mt-1 w-36 bg-white border border-[#E2E8F0] rounded-lg shadow-lg z-20 py-1 text-xs">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setFriendFilter("all");
-                            setFriendDropdownOpen(false);
-                          }}
-                          className={`w-full text-left px-3 py-1.5 hover:bg-slate-100 ${
-                            friendFilter === "all" ? "text-blue-600 font-bold" : "text-slate-700"
-                          }`}
-                        >
-                          Tất cả số bạn bè
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setFriendFilter("under500");
-                            setFriendDropdownOpen(false);
-                          }}
-                          className={`w-full text-left px-3 py-1.5 hover:bg-slate-100 ${
-                            friendFilter === "under500" ? "text-blue-600 font-bold" : "text-slate-700"
-                          }`}
-                        >
-                          Dưới 500 bạn bè
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setFriendFilter("over500");
-                            setFriendDropdownOpen(false);
-                          }}
-                          className={`w-full text-left px-3 py-1.5 hover:bg-slate-100 ${
-                            friendFilter === "over500" ? "text-blue-600 font-bold" : "text-slate-700"
-                          }`}
-                        >
-                          Trên 500 bạn bè
-                        </button>
-                      </div>
-                    )}
+                  <div className="w-36 shrink-0">
+                    <CustomSelect
+                      value={friendFilter}
+                      onChange={(val) => {
+                        setFriendFilter(val);
+                        setCurrentPage(1);
+                      }}
+                      options={FRIEND_FILTER_OPTIONS}
+                      size="sm"
+                      buttonClassName="h-7 text-xs"
+                    />
                   </div>
 
                   {/* Button Xuất nhóm */}
@@ -1076,49 +836,57 @@ export default function GroupScanMembersPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#F1F5F9]">
-                    {filteredMembers.map((member) => {
-                      const isChecked = selectedMembers.has(member.id);
-                      return (
-                        <tr
-                          key={member.id}
-                          className={`hover:bg-slate-50 transition-colors ${
-                            isChecked ? "bg-[#EFF6FF]/30" : ""
-                          }`}
-                        >
-                          <td className="py-2 px-3 text-center">
-                            <input
-                              type="checkbox"
-                              checked={isChecked}
-                              onChange={() => handleToggleSelectMember(member.id)}
-                              className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
-                            />
-                          </td>
-                          <td className="py-2 px-3 text-center font-medium text-xs text-[#94A3B8]">
-                            {member.stt}
-                          </td>
-                          <td className="py-2 px-3 font-semibold text-xs text-[#0F172A]">
-                            {member.name}
-                          </td>
-                          <td className="py-2 px-3">
-                            <a
-                              href={`https://facebook.com/${member.uid}`}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex items-center gap-1 font-mono text-[11px] text-[#2563EB] hover:underline"
-                            >
-                              <span>{member.shortUid}</span>
-                              <ExternalLink className="size-3 text-[#2563EB]" />
-                            </a>
-                          </td>
-                          <td className="py-2 px-3 font-medium text-xs text-[#334155]">
-                            {member.friends}
-                          </td>
-                          <td className="py-2 px-3 text-right font-mono text-[11px] text-[#94A3B8]">
-                            {member.time}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {paginatedMembers.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="text-center py-10 text-xs text-slate-400">
+                          Chưa có thành viên nào được quét trong danh mục này.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedMembers.map((member) => {
+                        const isChecked = selectedMembers.has(member.id);
+                        return (
+                          <tr
+                            key={member.id}
+                            className={`hover:bg-slate-50 transition-colors ${
+                              isChecked ? "bg-[#EFF6FF]/30" : ""
+                            }`}
+                          >
+                            <td className="py-2 px-3 text-center">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => handleToggleSelectMember(member.id)}
+                                className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
+                              />
+                            </td>
+                            <td className="py-2 px-3 text-center font-medium text-xs text-[#94A3B8]">
+                              {member.stt}
+                            </td>
+                            <td className="py-2 px-3 font-semibold text-xs text-[#0F172A]">
+                              {member.name}
+                            </td>
+                            <td className="py-2 px-3">
+                              <a
+                                href={`https://facebook.com/${member.uid}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 font-mono text-[11px] text-[#2563EB] hover:underline"
+                              >
+                                <span>{member.shortUid}</span>
+                                <ExternalLink className="size-3 text-[#2563EB]" />
+                              </a>
+                            </td>
+                            <td className="py-2 px-3 font-medium text-xs text-[#334155]">
+                              {member.friends}
+                            </td>
+                            <td className="py-2 px-3 text-right font-mono text-[11px] text-[#94A3B8]">
+                              {member.time}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -1126,62 +894,14 @@ export default function GroupScanMembersPage() {
               {/* Table Pagination */}
               <div className="flex flex-row justify-between items-center w-full pt-1">
                 <span className="text-xs text-[#64748B]">
-                  Hiển thị 1 - {filteredMembers.length} của {currentCategoryData.membersTotal.toLocaleString("vi-VN")} UID
+                  Hiển thị {filteredMembers.length > 0 ? `${(currentPage - 1) * pageSize + 1} - ${Math.min(currentPage * pageSize, filteredMembers.length)}` : "0"} của {currentCategoryData?.membersTotal?.toLocaleString("vi-VN") || filteredMembers.length} UID
                 </span>
 
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    className="size-7 flex items-center justify-center border border-[#E2E8F0] rounded text-xs font-semibold text-[#64748B] hover:bg-slate-100"
-                  >
-                    &lt;
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage(1)}
-                    className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                      currentPage === 1 ? "bg-[#2563EB] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                    }`}
-                  >
-                    1
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage(2)}
-                    className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                      currentPage === 2 ? "bg-[#2563EB] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                    }`}
-                  >
-                    2
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage(3)}
-                    className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                      currentPage === 3 ? "bg-[#2563EB] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                    }`}
-                  >
-                    3
-                  </button>
-                  <span className="px-1 text-xs font-semibold text-[#94A3B8]">...</span>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage(182)}
-                    className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                      currentPage === 182 ? "bg-[#2563EB] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                    }`}
-                  >
-                    182
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage((p) => p + 1)}
-                    className="size-7 flex items-center justify-center border border-[#E2E8F0] rounded text-xs font-semibold text-[#64748B] hover:bg-slate-100"
-                  >
-                    &gt;
-                  </button>
-                </div>
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  onPageChange={setCurrentPage}
+                />
               </div>
             </div>
           </div>
@@ -1234,7 +954,6 @@ export default function GroupScanMembersPage() {
             ))}
           </div>
         </section>
-      </div>
 
       {/* Account Selection Modal */}
       <AccountSelectModal
@@ -1251,65 +970,18 @@ export default function GroupScanMembersPage() {
       />
 
       {/* Group Picker Modal */}
-      {groupPickerOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-xl p-5 space-y-4">
-            <div className="flex items-center justify-between border-b pb-3 border-slate-100">
-              <h3 className="font-bold text-base text-slate-800 flex items-center gap-2">
-                <Globe className="size-5 text-blue-600" />
-                Chọn nhóm muốn quét
-              </h3>
-              <button
-                type="button"
-                onClick={() => setGroupPickerOpen(false)}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <X className="size-5" />
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-500">
-              Đang có {selectedGroups.length} nhóm được chọn để thực thi quét thành viên.
-            </p>
-
-            <div className="max-h-60 overflow-y-auto space-y-2">
-              {selectedGroups.map((g) => (
-                <div
-                  key={g.id}
-                  className="flex items-center justify-between p-2.5 border rounded-lg bg-slate-50"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <span className={`size-7 rounded ${g.tagBg} ${g.tagText} flex items-center justify-center text-xs font-bold`}>
-                      {g.tag}
-                    </span>
-                    <div>
-                      <p className="text-xs font-bold text-slate-800">{g.name}</p>
-                      <p className="text-[11px] text-slate-400">ID: {g.uid} • {g.members}</p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveGroup(g.id)}
-                    className="text-slate-400 hover:text-rose-600 p-1"
-                  >
-                    <Trash2 className="size-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setGroupPickerOpen(false)}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold"
-              >
-                Hoàn tất
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <GroupPickerModal
+        open={groupPickerOpen}
+        onClose={() => setGroupPickerOpen(false)}
+        selectedGroups={selectedGroups}
+        onConfirm={(newGroups) => {
+          setSelectedGroups(newGroups);
+          setGroupPickerOpen(false);
+          toast.success(`Đã chọn ${newGroups.length} nhóm!`);
+        }}
+        targetType="members"
+      />
     </div>
+    </>
   );
 }

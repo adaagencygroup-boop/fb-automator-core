@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, FileText, Loader2, Trash2, CloudUpload, X, Activity } from "lucide-react";
+import { Check, FileText, Loader2, Trash2, CloudUpload, X, Activity, Users } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { Checkbox } from "@/components/ui/checkbox";
+import CustomSelect from "@/components/ui/custom-select";
 import AccountSelectModal, { isScanReady } from "../components/AccountSelectModal";
 import SaveSharedGroupModal from "../components/SaveSharedGroupModal";
 import {
@@ -24,11 +25,32 @@ import {
 import {
   clearKeywordCheck,
   controlScanJob,
+  createScanCategory,
   getCheckStatus,
   getScanAccounts,
   lookupKeywords,
   startGroupScan,
 } from "../service";
+
+const RESULT_TYPE_OPTIONS = [
+  { value: "all", label: "Loại nhóm: Tất cả" },
+  { value: "public", label: "Công khai" },
+  { value: "private", label: "Riêng tư" },
+];
+
+const RESULT_MEMBERS_OPTIONS = [
+  { value: "all", label: "Thành viên: Tất cả" },
+  { value: "under50k", label: "Dưới 50.000" },
+  { value: "50k_200k", label: "50.000 - 200.000" },
+  { value: "over200k", label: "Trên 200.000" },
+];
+
+const RESULT_NOTE_OPTIONS = [
+  { value: "all", label: "Ghi chú: Tất cả" },
+  { value: "not_joined", label: "Chưa vào nhóm" },
+  { value: "joined", label: "Đã tham gia" },
+  { value: "pending", label: "Đang chờ QTV duyệt" },
+];
 
 const METHOD_TABS = [
   { id: "keyword", label: "Theo từ khóa", Icon: IconTags },
@@ -136,12 +158,22 @@ function mapGroupRow(g) {
   let note = g?.note || "—";
   if (type === "private" && (!note || note === "—")) note = "not_joined";
   let members = g?.members || "";
+  let membersCount = Number(g?.members_count) || 0;
   if ((!members || members === "—") && g?.members_count != null) {
     const n = Number(g.members_count);
     if (Number.isFinite(n)) {
       if (n >= 1_000_000) members = `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
       else if (n >= 1_000) members = `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
       else members = String(n);
+    }
+  } else if (!membersCount && members) {
+    const str = String(members).trim().toUpperCase();
+    if (str.endsWith("M")) {
+      membersCount = parseFloat(str.replace("M", "").replace(",", ".")) * 1_000_000;
+    } else if (str.endsWith("K")) {
+      membersCount = parseFloat(str.replace("K", "").replace(",", ".")) * 1_000;
+    } else {
+      membersCount = parseInt(str.replace(/[^0-9]/g, ""), 10) || 0;
     }
   }
   let name = String(g?.name || "")
@@ -153,6 +185,7 @@ function mapGroupRow(g) {
     name: name || g.name || "",
     type: type === "unknown" ? "public" : type,
     members: members || "—",
+    membersCount,
     url: g.url || String(g.href || "").replace(/^https?:\/\/(www\.)?/, ""),
     href: g.href || "",
     note,
@@ -230,6 +263,8 @@ export default function GroupScanInfoPage() {
   const running = runState === "running" || runState === "paused";
   const [resultQuery, setResultQuery] = useState("");
   const [filterType, setFilterType] = useState("all");
+  const [filterMembers, setFilterMembers] = useState("all");
+  const [filterKeyword, setFilterKeyword] = useState("all");
   const [filterNote, setFilterNote] = useState("all");
   const [results, setResults] = useState([]);
   const [keywordStats, setKeywordStats] = useState(() => ({ ...KEYWORD_STATS_SEED }));
@@ -243,16 +278,12 @@ export default function GroupScanInfoPage() {
     },
   ]);
 
-  // Nạp kết quả quét đã lưu gần nhất khi mở lại trang để kết quả không bị mất
+  // Dọn dẹp cache cũ khi mở trang để luôn phản ánh dữ liệu thực từ CSDL
   useEffect(() => {
     try {
-      const saved = localStorage.getItem("fb_scan_info_active_results");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setResults(parsed);
-        }
-      }
+      localStorage.removeItem("fb_scan_info_active_results");
+      localStorage.removeItem("fb_scanned_groups_cache");
+      localStorage.removeItem("fb_scanned_sessions_cache");
     } catch {}
   }, []);
 
@@ -527,9 +558,7 @@ export default function GroupScanInfoPage() {
       });
 
       const groups = Array.isArray(res?.groups) ? res.groups : [];
-      if (groups.length) {
-        setResults(groups.map(mapGroupRow));
-      }
+      setResults(groups.map(mapGroupRow));
 
       toast.success(res?.message || `Đã kiểm tra ${wordList.length} từ khóa từ DB.`);
       pushLog(res?.message || `Kiểm tra DB: ${wordList.length} từ khóa.`, "success");
@@ -608,10 +637,6 @@ export default function GroupScanInfoPage() {
         if (groups.length) {
           const mapped = groups.map(mapGroupRow);
           setResults(mapped);
-          try {
-            localStorage.setItem("fb_scan_info_active_results", JSON.stringify(mapped));
-            localStorage.setItem("fb_scanned_groups_cache", JSON.stringify(mapped));
-          } catch {}
         }
 
         const remoteStats = status.keyword_stats && typeof status.keyword_stats === "object"
@@ -649,54 +674,6 @@ export default function GroupScanInfoPage() {
             finishedNotified = true;
             if (status.status === "done") {
               toast.success(`Đã quét ${groups.length} nhóm (${(status.keywords || []).length || 1} từ khóa).`);
-              try {
-                const now = new Date();
-                const timeStr = now.toLocaleDateString("vi-VN") + " " + now.toLocaleTimeString("vi-VN");
-                const cachedSessions = JSON.parse(localStorage.getItem("fb_scanned_sessions_cache") || "[]");
-                const newSession = {
-                  id: jobId || `SCN-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-                  type: "GROUP_INFO",
-                  title: `Quét thông tin nhóm theo từ khóa «${(status.keywords || []).join(", ") || "Tổng hợp"}»`,
-                  target: (status.keywords || []).join(", ") || "Từ khóa quét",
-                  targetType: "keywords",
-                  account: {
-                    uid: selectedAccount?.uid || "",
-                    name: selectedAccount?.profile_name || "Tài khoản quét",
-                    avatarText: (selectedAccount?.profile_name || "FB").slice(0, 2).toUpperCase(),
-                    avatarBg: "bg-blue-600",
-                  },
-                  progress: {
-                    collected: groups.length,
-                    target: groups.length || 30,
-                    percentage: 100,
-                    unit: "nhóm",
-                  },
-                  startTime: timeStr,
-                  endTime: timeStr,
-                  duration: "Hoàn tất",
-                  status: "SUCCESS",
-                  config: {
-                    delay: `${delayMin} - ${delayMax}s`,
-                    privacy: publicOnly ? "Công khai" : privateOnly ? "Riêng tư" : "Tất cả",
-                    minMembers: minMembers ? `${minMembers.toLocaleString("vi-VN")} TV` : "—",
-                    maxKeywords: (status.keywords || []).length || 1,
-                  },
-                  logs: remoteLogs.map((l) => ({
-                    time: l.time || timeStr,
-                    level: (l.tone || l.level || "INFO").toUpperCase(),
-                    message: l.text || l.message || "",
-                  })),
-                  sampleResults: groups.slice(0, 10).map((g) => ({
-                    id: g.id || g.url,
-                    name: g.name,
-                    privacy: g.type === "public" ? "Công khai" : "Riêng tư",
-                    members: g.members,
-                    url: g.href || `https://${g.url}`,
-                  })),
-                };
-                const merged = [newSession, ...cachedSessions.filter((s) => s.id !== newSession.id)];
-                localStorage.setItem("fb_scanned_sessions_cache", JSON.stringify(merged));
-              } catch {}
             } else if (status.status === "aborted") {
               toast.warning(status.error || "Đã dừng khẩn cấp.");
             } else if (status.error) {
@@ -758,6 +735,17 @@ export default function GroupScanInfoPage() {
     const body = buildScanBody(wordList);
     setRunState("running");
     if (method === "keyword") {
+      // Tự động tạo mỗi từ khóa thành 1 danh mục trong scanned_group_categories ngay khi bắt đầu thực thi
+      try {
+        await Promise.all(
+          wordList.map((word) =>
+            createScanCategory(word, `Danh mục từ khóa: ${word}`).catch(() => null)
+          )
+        );
+      } catch (err) {
+        console.warn("[Group Scan] auto create categories on startRun:", err);
+      }
+
       setKeywordStats((current) => {
         const next = { ...current };
         wordList.forEach((word, idx) => {
@@ -849,15 +837,44 @@ export default function GroupScanInfoPage() {
     }
   };
 
+  const keywordOptions = useMemo(() => {
+    const set = new Set();
+    results.forEach((r) => {
+      if (r.keyword && String(r.keyword).trim()) {
+        set.add(String(r.keyword).trim());
+      }
+    });
+    keywords.forEach((k) => {
+      if (k && String(k).trim()) {
+        set.add(String(k).trim());
+      }
+    });
+    const list = Array.from(set);
+    return [
+      { value: "all", label: "Từ khóa: Tất cả" },
+      ...list.map((kw) => ({ value: kw, label: kw })),
+    ];
+  }, [results, keywords]);
+
   const filteredResults = useMemo(() => {
     const q = resultQuery.trim().toLowerCase();
     return results.filter((row) => {
       if (filterType !== "all" && row.type !== filterType) return false;
+      if (filterMembers !== "all") {
+        const count = row.membersCount || 0;
+        if (filterMembers === "under50k" && count >= 50000) return false;
+        if (filterMembers === "50k_200k" && (count < 50000 || count > 200000)) return false;
+        if (filterMembers === "over200k" && count <= 200000) return false;
+      }
+      if (filterKeyword !== "all") {
+        const kw = String(row.keyword || "").trim().toLowerCase();
+        if (kw !== filterKeyword.trim().toLowerCase()) return false;
+      }
       if (filterNote !== "all" && row.note !== filterNote) return false;
       if (!q) return true;
       return `${row.name || ""} ${row.url || ""} ${row.keyword || ""}`.toLowerCase().includes(q);
     });
-  }, [results, resultQuery, filterType, filterNote]);
+  }, [results, resultQuery, filterType, filterMembers, filterKeyword, filterNote]);
 
   const exportExcel = async () => {
     const rows = selectedRows.size
@@ -931,33 +948,59 @@ export default function GroupScanInfoPage() {
   };
 
   return (
-    <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
-      <div className="grid items-start gap-5 xl:grid-cols-2">
-        {/* (1) Tài khoản + phương thức */}
-        <section className="rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-          <div className="mb-4 flex items-center gap-2.5">
-            <span className="flex size-6 items-center justify-center rounded-full bg-[#2563EB] text-[11px] font-bold text-white">
-              1
-            </span>
-            <h2 className="text-sm font-bold text-[#0B1C30]">Chọn tài khoản & Thiết lập phiên quét</h2>
-          </div>
+    <>
+      {/* Ẩn nút mũi tên tăng giảm số chỉ cho riêng Module 10 */}
+      <style>{`
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+          -webkit-appearance: none !important;
+          margin: 0 !important;
+        }
+        input[type="number"] {
+          -moz-appearance: textfield !important;
+          appearance: textfield !important;
+        }
+      `}</style>
+      <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
+        <div className="grid items-stretch gap-5 xl:grid-cols-2">
+          {/* (1) Tài khoản + phương thức */}
+          <section className="flex flex-col h-full rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+            <div className="flex items-center gap-2.5 pb-3 mb-4 border-b border-[#F1F5F9]">
+              <span className="flex size-6 items-center justify-center rounded-full bg-[#2563EB] text-[11px] font-bold text-white shrink-0">
+                1
+              </span>
+              <h2 className="text-sm font-bold text-[#0B1C30]">Chọn tài khoản & Thiết lập phiên quét</h2>
+            </div>
 
-          <div className="mb-4 flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setPickerOpen(true)}
-              className="inline-flex h-9 items-center gap-2 rounded-lg bg-[#2563EB] px-3.5 text-xs font-bold text-white hover:bg-blue-600"
-            >
-              <IconUsers color="#fff" />
-              Chọn tài khoản
-            </button>
-            <span className="text-xs font-medium text-[#64748B]">
-              Đã chọn:{" "}
-              <strong className="text-[#0B1C30]">
-                {accountsLoading ? "..." : `${selectedAccounts.length} tài khoản`}
-              </strong>
-            </span>
-            {accountsLoading ? <Loader2 className="size-3.5 animate-spin text-slate-400" /> : null}
+          <div className="space-y-2 mb-4">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-[#475569]">
+              TÀI KHOẢN FACEBOOK THỰC THI:
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setPickerOpen(true)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#1877F2] px-3.5 text-xs font-semibold text-white hover:bg-blue-600 transition-colors shadow-sm"
+              >
+                <Users className="size-3.5 shrink-0" />
+                <span>Chọn tài khoản</span>
+              </button>
+
+              <div
+                title={selectedAccounts.map((a) => a.profile_name || a.uid).join(", ")}
+                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-3 text-xs font-medium text-[#059669] cursor-help"
+              >
+                <span className="size-1.5 rounded-full bg-[#10B981] shrink-0" />
+                <span>
+                  Đã chọn:{" "}
+                  <strong className="text-emerald-950 font-bold">
+                    {accountsLoading ? "..." : `${selectedAccounts.length} / ${accounts.length}`}
+                  </strong>{" "}
+                  tài khoản
+                </span>
+              </div>
+              {accountsLoading ? <Loader2 className="size-3.5 animate-spin text-slate-400" /> : null}
+            </div>
           </div>
 
           <p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-[#64748B]">
@@ -986,25 +1029,10 @@ export default function GroupScanInfoPage() {
           </div>
 
           {method === "keyword" ? (
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] p-2.5">
-                  {keywords.map((word) => (
-                    <span
-                      key={word}
-                      className="inline-flex items-center gap-1 rounded-md border border-[#BFDBFE] bg-white px-2 py-1 text-[11px] font-medium text-[#0F172A]"
-                    >
-                      {word}
-                      <button
-                        type="button"
-                        onClick={() => removeKeyword(word)}
-                        className="rounded p-0.5 text-[#94A3B8] hover:bg-slate-100 hover:text-slate-700"
-                        aria-label={`Xóa ${word}`}
-                      >
-                        <IconClose />
-                      </button>
-                    </span>
-                  ))}
+            <div className="flex-1 flex flex-col min-h-0 space-y-3">
+              <div className="space-y-2 shrink-0">
+                {/* Thanh nhập từ khóa cố định 1 dòng theo yêu cầu */}
+                <div className="flex items-center gap-2 h-10 rounded-lg border border-[#CBD5E1] bg-[#F8FAFC] px-3 shadow-2xs shrink-0 focus-within:border-[#2563EB] focus-within:bg-white focus-within:ring-1 focus-within:ring-[#2563EB] transition-all">
                   <input
                     value={keywordInput}
                     onChange={(event) => {
@@ -1026,12 +1054,12 @@ export default function GroupScanInfoPage() {
                       if (keywordInput.trim()) commitKeywords(keywordInput, { quiet: true });
                     }}
                     placeholder="VD: marketing — Enter hoặc dấu phẩy để thêm"
-                    className="min-w-[180px] flex-1 bg-transparent text-xs text-[#0F172A] outline-none placeholder:text-[#94A3B8]"
+                    className="flex-1 bg-transparent text-xs text-[#0F172A] outline-none placeholder:text-[#94A3B8]"
                   />
                   <button
                     type="button"
                     onClick={addKeywords}
-                    className="inline-flex h-7 items-center rounded-md border border-[#E2E8F0] bg-white px-2.5 text-[11px] font-semibold text-[#0F172A] hover:bg-slate-50"
+                    className="inline-flex h-7 items-center rounded-md border border-[#CBD5E1] bg-white px-3 text-[11px] font-semibold text-[#0F172A] hover:bg-slate-50 shrink-0 shadow-2xs transition-colors"
                   >
                     Thêm
                   </button>
@@ -1039,28 +1067,66 @@ export default function GroupScanInfoPage() {
                     type="button"
                     onClick={runKeywordCheck}
                     disabled={running}
-                    className="inline-flex h-7 items-center gap-1.5 rounded-md bg-[#2563EB] px-2.5 text-[11px] font-bold text-white disabled:opacity-60"
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md bg-[#2563EB] px-3 text-[11px] font-bold text-white hover:bg-blue-600 disabled:opacity-60 shrink-0 shadow-2xs transition-colors"
                   >
                     Kiểm tra
                   </button>
                 </div>
-                <p className="px-0.5 text-[11px] text-[#94A3B8]">
-                  {keywords.length
-                    ? `Đã thêm ${keywords.length} từ khóa. Bấm Kiểm tra để điền bảng bên dưới — Bắt đầu thực thi mới mở Chrome quét.`
-                    : "Nhập xong Enter / Thêm / dấu phẩy → thẻ. Kiểm tra = xác nhận vào bảng. Bắt đầu thực thi = quét."}
-                </p>
+
+                {/* Danh sách thẻ từ khóa đã thêm (hiển thị riêng biệt bên dưới thanh nhập cố định) */}
+                {keywords.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 max-h-[58px] overflow-y-auto pr-1">
+                    {keywords.map((word) => (
+                      <span
+                        key={word}
+                        className="inline-flex items-center gap-1 rounded-md border border-[#BFDBFE] bg-white px-2 py-0.5 text-[11px] font-medium text-[#0F172A] shadow-2xs"
+                      >
+                        {word}
+                        <button
+                          type="button"
+                          onClick={() => removeKeyword(word)}
+                          className="rounded p-0.5 text-[#94A3B8] hover:bg-slate-100 hover:text-rose-600 transition-colors"
+                          aria-label={`Xóa ${word}`}
+                        >
+                          <IconClose />
+                        </button>
+                      </span>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setKeywords([])}
+                      className="text-[10px] text-rose-500 hover:underline font-medium ml-1"
+                    >
+                      Xóa tất cả
+                    </button>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between px-0.5">
+                  <p className="text-[11px] text-[#94A3B8]">
+                    {keywords.length
+                      ? `Đã thêm ${keywords.length} từ khóa. Bấm Kiểm tra để điền bảng bên dưới.`
+                      : "Nhập xong Enter / Thêm / dấu phẩy → thẻ. Kiểm tra = xác nhận vào bảng."}
+                  </p>
+                  {keywords.length > 5 && (
+                    <span className="text-[10px] text-blue-600 font-medium shrink-0 ml-2">
+                      Cuộn để xem thêm ({keywords.length} mục)
+                    </span>
+                  )}
+                </div>
               </div>
 
-              <div className="overflow-hidden rounded-lg border border-[#E2E8F0]">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-[#F8FAFC] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
+              {/* Bảng Từ khóa: Cuộn xuống khi dài, thead cố định, chiều cao giới hạn */}
+              <div className="flex-1 min-h-[140px] max-h-[260px] overflow-y-auto rounded-lg border border-[#E2E8F0] shadow-2xs">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="sticky top-0 z-10 bg-[#F8FAFC] border-b border-[#E2E8F0] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
                     <tr>
-                      <th className="px-3 py-2.5">Từ khóa</th>
-                      <th className="px-3 py-2.5">Số nhóm quét được</th>
-                      <th className="px-3 py-2.5">Trạng thái</th>
+                      <th className="px-3 py-2.5 bg-[#F8FAFC]">Từ khóa</th>
+                      <th className="px-3 py-2.5 bg-[#F8FAFC]">Số nhóm quét được</th>
+                      <th className="px-3 py-2.5 bg-[#F8FAFC]">Trạng thái</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="divide-y divide-[#F1F5F9]">
                     {keywords.length === 0 ? (
                       <tr>
                         <td colSpan={3} className="px-3 py-6 text-center text-[#94A3B8]">
@@ -1071,7 +1137,7 @@ export default function GroupScanInfoPage() {
                       keywords.map((word) => {
                         const stat = keywordStats[word] || { count: "—", status: "idle" };
                         return (
-                          <tr key={word} className="border-t border-[#F1F5F9]">
+                          <tr key={word} className="hover:bg-slate-50/60 transition-colors">
                             <td className="px-3 py-2.5 font-medium text-[#0F172A]">{word}</td>
                             <td className="px-3 py-2.5 tabular-nums text-[#64748B]">{stat.count}</td>
                             <td className="px-3 py-2.5">
@@ -1129,14 +1195,14 @@ export default function GroupScanInfoPage() {
                   XEM TRƯỚC DANH SÁCH LINK ĐÃ NHẬP ({parsedLinks.length} LINK)
                 </div>
 
-                <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-[#F8FAFC] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
+                <div className="max-h-[220px] overflow-y-auto rounded-lg border border-[#E2E8F0] bg-white shadow-2xs">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead className="sticky top-0 z-10 bg-[#F8FAFC] border-b border-[#E2E8F0] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
                       <tr>
-                        <th className="w-14 px-3 py-2.5 text-center">STT</th>
-                        <th className="px-3 py-2.5">Đường dẫn Group Facebook</th>
-                        <th className="w-24 px-3 py-2.5 text-center">Trạng thái</th>
-                        <th className="w-10 px-2 py-2.5"></th>
+                        <th className="w-14 px-3 py-2.5 text-center bg-[#F8FAFC]">STT</th>
+                        <th className="px-3 py-2.5 bg-[#F8FAFC]">Đường dẫn Group Facebook</th>
+                        <th className="w-24 px-3 py-2.5 text-center bg-[#F8FAFC]">Trạng thái</th>
+                        <th className="w-10 px-2 py-2.5 bg-[#F8FAFC]"></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1278,13 +1344,13 @@ export default function GroupScanInfoPage() {
                     </div>
                   </div>
 
-                  <div className="overflow-hidden rounded-lg border border-[#E2E8F0] bg-white">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-[#F8FAFC] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
+                  <div className="max-h-[220px] overflow-y-auto rounded-lg border border-[#E2E8F0] bg-white shadow-2xs">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="sticky top-0 z-10 bg-[#F8FAFC] border-b border-[#E2E8F0] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
                         <tr>
-                          <th className="w-16 px-4 py-2.5 text-center">Dòng</th>
-                          <th className="px-3 py-2.5">Dữ liệu tệp</th>
-                          <th className="w-24 px-3 py-2.5 text-center">Trạng thái</th>
+                          <th className="w-16 px-4 py-2.5 text-center bg-[#F8FAFC]">Dòng</th>
+                          <th className="px-3 py-2.5 bg-[#F8FAFC]">Dữ liệu tệp</th>
+                          <th className="w-24 px-3 py-2.5 text-center bg-[#F8FAFC]">Trạng thái</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1319,9 +1385,9 @@ export default function GroupScanInfoPage() {
         </section>
 
         {/* (2) Cấu hình mục tiêu */}
-        <section className="rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-          <div className="mb-4 flex items-center gap-2.5">
-            <span className="flex size-6 items-center justify-center rounded-full bg-[#2563EB] text-[11px] font-bold text-white">
+        <section className="flex flex-col h-full rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div className="flex items-center gap-2.5 pb-3 mb-4 border-b border-[#F1F5F9]">
+            <span className="flex size-6 items-center justify-center rounded-full bg-[#2563EB] text-[11px] font-bold text-white shrink-0">
               2
             </span>
             <h2 className="text-sm font-bold text-[#0B1C30]">Thiết lập cấu hình quét mục tiêu</h2>
@@ -1479,43 +1545,99 @@ export default function GroupScanInfoPage() {
             </p>
           </div>
 
-          <div className="space-y-3 border-t border-[#F1F5F9] pt-4">
-            <label className="flex flex-wrap items-center gap-2 text-xs text-[#0F172A]">
-              <span>Đổi tài khoản mới khi quét được</span>
-              <input
-                type="number"
-                min={1}
-                max={5000}
-                value={rotateAfter}
-                onChange={(event) => setRotateAfter(Math.max(1, Number(event.target.value) || 1))}
-                className={`${inputClass} w-16`}
-                title="Chỉ giao diện — chưa đổi nick tự động"
-              />
-              <span className="text-[#64748B]">nhóm / tài khoản</span>
-              <span className="text-[10px] font-medium text-[#94A3B8]">(UI tạm — chưa chạy)</span>
-            </label>
+          <div className="space-y-3.5 border-t border-[#F1F5F9] pt-4">
+            {/* Stepper 1: Switch Account Threshold (Đồng nhất theo trang Quét thành viên) */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-[#334155]">
+                Đổi tài khoản mới khi quét được:
+              </span>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
+                  <button
+                    type="button"
+                    onClick={() => setRotateAfter((v) => Math.max(5, v - 5))}
+                    className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    value={rotateAfter}
+                    onChange={(event) => setRotateAfter(Math.max(1, Number(event.target.value) || 1))}
+                    className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    title="Chỉ giao diện — chưa đổi nick tự động"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setRotateAfter((v) => v + 5)}
+                    className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
+                  >
+                    +
+                  </button>
+                </div>
+                <span className="text-xs text-[#64748B]">nhóm / tài khoản</span>
+              </div>
+            </div>
 
-            <label className="flex flex-wrap items-center gap-2 text-xs text-[#0F172A]">
-              <span>Khoảng cách giữa các lần quét</span>
-              <input
-                type="number"
-                min={0}
-                max={3600}
-                value={delayMin}
-                onChange={(event) => setDelayMin(Math.max(0, Number(event.target.value) || 0))}
-                className={`${inputClass} w-14`}
-              />
-              <span className="text-[#64748B]">đến</span>
-              <input
-                type="number"
-                min={0}
-                max={3600}
-                value={delayMax}
-                onChange={(event) => setDelayMax(Math.max(delayMin, Number(event.target.value) || 0))}
-                className={`${inputClass} w-14`}
-              />
-              <span className="text-[#64748B]">giây</span>
-            </label>
+            {/* Stepper 2: Delay interval (Đồng nhất theo Ảnh 4 trang Quét thành viên) */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-[#334155]">
+                Khoảng cách giữa các lần quét:
+              </span>
+              <div className="flex items-center gap-2">
+                {/* Min delay stepper */}
+                <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
+                  <button
+                    type="button"
+                    onClick={() => setDelayMin((v) => Math.max(0, v - 1))}
+                    className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    value={delayMin}
+                    onChange={(event) => setDelayMin(Math.max(0, Number(event.target.value) || 0))}
+                    className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setDelayMin((v) => v + 1)}
+                    className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
+                  >
+                    +
+                  </button>
+                </div>
+
+                <span className="text-xs text-[#94A3B8]">-</span>
+
+                {/* Max delay stepper */}
+                <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
+                  <button
+                    type="button"
+                    onClick={() => setDelayMax((v) => Math.max(delayMin, v - 1))}
+                    className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    value={delayMax}
+                    onChange={(event) => setDelayMax(Math.max(delayMin, Number(event.target.value) || delayMin))}
+                    className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setDelayMax((v) => v + 1)}
+                    className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
+                  >
+                    +
+                  </button>
+                </div>
+
+                <span className="text-xs text-[#64748B]">giây</span>
+              </div>
+            </div>
 
             <label className="flex cursor-pointer items-center gap-2 text-xs text-[#0F172A]">
               <Checkbox
@@ -1557,30 +1679,51 @@ export default function GroupScanInfoPage() {
               Chỉ quét nhóm đang ở chế độ riêng tư
             </label>
 
-            <label className="flex flex-wrap items-center gap-2 text-xs text-[#0F172A]">
-              <Checkbox
-                checked={minMembersEnabled}
-                onCheckedChange={(value) => {
-                  const on = Boolean(value);
-                  setMinMembersEnabled(on);
-                  toast.info(
-                    on
-                      ? `Đã bật: chỉ quét nhóm > ${minMembers} thành viên.`
-                      : "Đã tắt lọc số thành viên.",
-                  );
-                }}
-              />
-              <span>Chỉ quét nhóm có số lượng thành viên lớn hơn</span>
-              <input
-                type="number"
-                min={0}
-                disabled={!minMembersEnabled}
-                value={minMembers}
-                onChange={(event) => setMinMembers(Math.max(0, Number(event.target.value) || 0))}
-                className={`${inputClass} w-20`}
-              />
-              <span className="text-[#64748B]">thành viên</span>
-            </label>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-[#0F172A]">
+                <Checkbox
+                  checked={minMembersEnabled}
+                  onCheckedChange={(value) => {
+                    const on = Boolean(value);
+                    setMinMembersEnabled(on);
+                    toast.info(
+                      on
+                        ? `Đã bật: chỉ quét nhóm > ${minMembers} thành viên.`
+                        : "Đã tắt lọc số thành viên.",
+                    );
+                  }}
+                />
+                <span>Chỉ quét nhóm có số lượng thành viên lớn hơn</span>
+              </label>
+              <div className="flex items-center gap-2">
+                <div className={`flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7 ${!minMembersEnabled ? "opacity-50 pointer-events-none" : ""}`}>
+                  <button
+                    type="button"
+                    disabled={!minMembersEnabled}
+                    onClick={() => setMinMembers((v) => Math.max(0, v - 1000))}
+                    className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    disabled={!minMembersEnabled}
+                    value={minMembers}
+                    onChange={(event) => setMinMembers(Math.max(0, Number(event.target.value) || 0))}
+                    className="w-16 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  />
+                  <button
+                    type="button"
+                    disabled={!minMembersEnabled}
+                    onClick={() => setMinMembers((v) => v + 1000)}
+                    className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
+                  >
+                    +
+                  </button>
+                </div>
+                <span className="text-xs text-[#64748B]">thành viên</span>
+              </div>
+            </div>
           </div>
         </section>
       </div>
@@ -1658,37 +1801,54 @@ export default function GroupScanInfoPage() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 border-b border-[#F1F5F9] px-5 py-3">
-          <div className="relative">
+        <div className="flex flex-wrap items-center gap-2.5 border-b border-[#F1F5F9] px-5 py-3 w-full">
+          <div className="relative flex-1 min-w-[200px]">
             <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[#94A3B8]">
               <IconSearch color="#94A3B8" />
             </span>
             <input
               value={resultQuery}
               onChange={(event) => setResultQuery(event.target.value)}
-              placeholder="Tìm Tên, Link"
-              className="h-8 w-48 rounded-lg border border-[#E2E8F0] pl-8 pr-3 text-xs outline-none focus:border-[#2563EB]"
+              placeholder="Tìm Tên, Link, Từ khóa..."
+              className="h-8 w-full rounded-lg border border-[#E2E8F0] pl-8 pr-3 text-xs outline-none focus:border-[#2563EB] transition-colors"
             />
           </div>
-          <select
-            value={filterType}
-            onChange={(event) => setFilterType(event.target.value)}
-            className="h-8 rounded-lg border border-[#E2E8F0] bg-white px-2 text-xs text-[#64748B] outline-none"
-          >
-            <option value="all">Loại nhóm</option>
-            <option value="public">Công khai</option>
-            <option value="private">Riêng tư</option>
-          </select>
-          <select
-            value={filterNote}
-            onChange={(event) => setFilterNote(event.target.value)}
-            className="h-8 rounded-lg border border-[#E2E8F0] bg-white px-2 text-xs text-[#64748B] outline-none"
-          >
-            <option value="all">Ghi chú</option>
-            <option value="not_joined">Chưa vào nhóm</option>
-            <option value="joined">Đã tham gia</option>
-            <option value="pending">Đang chờ QTV duyệt</option>
-          </select>
+          <div className="w-full sm:w-auto sm:flex-1 sm:min-w-[130px]">
+            <CustomSelect
+              value={filterType}
+              onChange={(val) => setFilterType(val)}
+              options={RESULT_TYPE_OPTIONS}
+              size="sm"
+              className="w-full"
+            />
+          </div>
+          <div className="w-full sm:w-auto sm:flex-1 sm:min-w-[130px]">
+            <CustomSelect
+              value={filterMembers}
+              onChange={(val) => setFilterMembers(val)}
+              options={RESULT_MEMBERS_OPTIONS}
+              size="sm"
+              className="w-full"
+            />
+          </div>
+          <div className="w-full sm:w-auto sm:flex-1 sm:min-w-[130px]">
+            <CustomSelect
+              value={filterKeyword}
+              onChange={(val) => setFilterKeyword(val)}
+              options={keywordOptions}
+              size="sm"
+              className="w-full"
+            />
+          </div>
+          <div className="w-full sm:w-auto sm:flex-1 sm:min-w-[130px]">
+            <CustomSelect
+              value={filterNote}
+              onChange={(val) => setFilterNote(val)}
+              options={RESULT_NOTE_OPTIONS}
+              size="sm"
+              className="w-full"
+            />
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -1824,5 +1984,6 @@ export default function GroupScanInfoPage() {
         }}
       />
     </div>
+    </>
   );
 }

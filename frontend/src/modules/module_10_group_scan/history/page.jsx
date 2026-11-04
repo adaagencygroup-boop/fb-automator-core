@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   Search,
   Filter,
@@ -34,13 +35,46 @@ import {
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { toast } from "@/lib/toast";
+import Pagination from "@/components/ui/pagination";
+import CustomSelect from "@/components/ui/custom-select";
 import {
   getScanHistory,
   deleteScanHistory,
   deleteScanHistoryBulk,
 } from "../service";
 
+const FILTER_TYPE_OPTIONS = [
+  { value: "ALL", label: "Tất cả loại quét" },
+  { value: "GROUP_INFO", label: "Quét thông tin nhóm" },
+  { value: "MEMBERS", label: "Quét thành viên nhóm" },
+  { value: "POSTS", label: "Quét bài viết nhóm" },
+];
+
+const FILTER_STATUS_OPTIONS = [
+  { value: "ALL", label: "Tất cả trạng thái" },
+  { value: "SUCCESS", label: "Hoàn thành" },
+  { value: "RUNNING", label: "Đang quét" },
+  { value: "PAUSED", label: "Tạm dừng" },
+  { value: "FAILED", label: "Thất bại" },
+];
+
+const FILTER_DATE_RANGE_OPTIONS = [
+  { value: "ALL", label: "Toàn bộ thời gian" },
+  { value: "TODAY", label: "Hôm nay" },
+];
+
+const PAGE_SIZE_OPTIONS = [
+  { value: 10, label: "10" },
+  { value: 20, label: "20" },
+  { value: 50, label: "50" },
+];
+
 export default function GroupScanHistoryPage() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const [historyList, setHistoryList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -439,48 +473,43 @@ export default function GroupScanHistoryPage() {
           {/* Quick Filters Group */}
           <div className="flex flex-wrap items-center gap-2">
             {/* Loại quét */}
-            <select
-              value={filterType}
-              onChange={(e) => {
-                setFilterType(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="h-9 px-3 text-xs font-medium text-[#1E293B] border border-[#CBD5E1] bg-white rounded-lg outline-none focus:border-[#2563EB] cursor-pointer"
-            >
-              <option value="ALL">Tất cả loại quét</option>
-              <option value="GROUP_INFO">🔍 Quét thông tin nhóm</option>
-              <option value="MEMBERS">👥 Quét thành viên nhóm</option>
-              <option value="POSTS">📝 Quét bài viết nhóm</option>
-            </select>
+            <div className="min-w-[170px]">
+              <CustomSelect
+                value={filterType}
+                onChange={(val) => {
+                  setFilterType(val);
+                  setCurrentPage(1);
+                }}
+                options={FILTER_TYPE_OPTIONS}
+                size="md"
+              />
+            </div>
 
             {/* Trạng thái */}
-            <select
-              value={filterStatus}
-              onChange={(e) => {
-                setFilterStatus(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="h-9 px-3 text-xs font-medium text-[#1E293B] border border-[#CBD5E1] bg-white rounded-lg outline-none focus:border-[#2563EB] cursor-pointer"
-            >
-              <option value="ALL">Tất cả trạng thái</option>
-              <option value="SUCCESS">🟢 Hoàn thành</option>
-              <option value="RUNNING">🔵 Đang quét</option>
-              <option value="PAUSED">🟡 Tạm dừng</option>
-              <option value="FAILED">🔴 Thất bại</option>
-            </select>
+            <div className="min-w-[160px]">
+              <CustomSelect
+                value={filterStatus}
+                onChange={(val) => {
+                  setFilterStatus(val);
+                  setCurrentPage(1);
+                }}
+                options={FILTER_STATUS_OPTIONS}
+                size="md"
+              />
+            </div>
 
             {/* Thời gian */}
-            <select
-              value={filterDateRange}
-              onChange={(e) => {
-                setFilterDateRange(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="h-9 px-3 text-xs font-medium text-[#1E293B] border border-[#CBD5E1] bg-white rounded-lg outline-none focus:border-[#2563EB] cursor-pointer"
-            >
-              <option value="ALL">Toàn bộ thời gian</option>
-              <option value="TODAY">Hôm nay</option>
-            </select>
+            <div className="min-w-[160px]">
+              <CustomSelect
+                value={filterDateRange}
+                onChange={(val) => {
+                  setFilterDateRange(val);
+                  setCurrentPage(1);
+                }}
+                options={FILTER_DATE_RANGE_OPTIONS}
+                size="md"
+              />
+            </div>
 
             {/* Action Buttons */}
             <button
@@ -759,65 +788,41 @@ export default function GroupScanHistoryPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 border-t border-[#F1F5F9] bg-[#F8FAFC]/40 text-xs text-[#64748B]">
           <div className="flex items-center gap-2">
             <span>Hiển thị</span>
-            <select
+            <CustomSelect
               value={pageSize}
-              onChange={(e) => {
-                setPageSize(Number(e.target.value));
+              onChange={(val) => {
+                setPageSize(Number(val));
                 setCurrentPage(1);
               }}
-              className="h-7 px-2 border border-[#CBD5E1] rounded bg-white text-xs text-[#1E293B]"
-            >
-              <option value={10}>10</option>
-              <option value={20}>20</option>
-              <option value={50}>50</option>
-            </select>
+              options={PAGE_SIZE_OPTIONS}
+              size="sm"
+              direction="up"
+              className="w-16"
+              buttonClassName="h-7 px-2 text-xs"
+            />
             <span>
               trên tổng số <b>{filteredList.length}</b> phiên
             </span>
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="size-7 flex items-center justify-center rounded border border-[#CBD5E1] bg-white text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50 transition-colors"
-            >
-              <ChevronLeft className="size-3.5" />
-            </button>
-
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-              <button
-                key={page}
-                type="button"
-                onClick={() => setCurrentPage(page)}
-                className={`size-7 text-xs font-semibold rounded transition-colors ${
-                  currentPage === page
-                    ? "bg-[#2563EB] text-white"
-                    : "border border-[#CBD5E1] bg-white text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                {page}
-              </button>
-            ))}
-
-            <button
-              type="button"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="size-7 flex items-center justify-center rounded border border-[#CBD5E1] bg-white text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50 transition-colors"
-            >
-              <ChevronRight className="size-3.5" />
-            </button>
-          </div>
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            onPageChange={(p) => setCurrentPage(p)}
+          />
         </div>
       </div>
 
       {/* ======================================================== */}
       {/* 4. DETAIL MODAL: XEM CHI TIẾT PHIÊN QUÉT                */}
       {/* ======================================================== */}
-      {selectedSession && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-xs">
+      {mounted && selectedSession && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs animate-in fade-in duration-150"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedSession(null);
+          }}
+        >
           <div className="relative w-full max-w-3xl rounded-2xl bg-white shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150 flex flex-col max-h-[90vh]">
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-[#F1F5F9] px-6 py-4 bg-[#F8FAFC]">
@@ -1091,7 +1096,8 @@ export default function GroupScanHistoryPage() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

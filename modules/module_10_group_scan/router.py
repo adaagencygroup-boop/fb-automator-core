@@ -184,6 +184,15 @@ def check_keyword(body: CheckKeywordRequest, db: Session = Depends(get_db)):
         private_only = False
     min_members = body.min_members if body.min_members and body.min_members > 0 else None
 
+    # Đảm bảo mỗi từ khóa tạo thành 1 DANH MỤC trong bảng scanned_group_categories
+    for it in items:
+        kw = str(it.get("keyword") or "").strip()
+        if kw:
+            try:
+                create_scan_category(owner, kw, f"Danh mục từ khóa: {kw}")
+            except Exception as exc:
+                print(f"[Module 10 Router] auto create category error: {exc}")
+
     try:
         result = start_keyword_check(
             owner=owner,

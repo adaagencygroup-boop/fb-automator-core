@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   RotateCcw,
   Download,
@@ -13,155 +14,71 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "@/lib/toast";
+import Pagination from "@/components/ui/pagination";
+import CustomSelect from "@/components/ui/custom-select";
+import { getScanCategories, createScanCategory } from "../service";
 
-// ==========================================
-// DỮ LIỆU MẪU BAN ĐẦU CHUẨN FIGMA IMAGE 2
-// ==========================================
-
-const INITIAL_CATEGORIES = [
-  {
-    id: "cat-1",
-    name: "Hội Buôn",
-    fullName: "Hội Buôn Bán Online Toàn Quốc",
-    membersSummary: "1.8M TV • 12 nhóm",
-    fullMeta: "Quy mô: 258.724 Thành viên • Group Public • Quét gần nhất: 10:35 AM hôm nay",
-    totalUidCount: 1820,
-  },
-  {
-    id: "cat-2",
-    name: "Marketing Sài Gòn Hub",
-    fullName: "Marketing Sài Gòn Hub - Tuyển dụng & Thảo luận",
-    membersSummary: "1.8M TV • 5 nhóm",
-    fullMeta: "Quy mô: 186.392 Thành viên • Group Private • Quét gần nhất: 10:15 AM hôm nay",
-    totalUidCount: 960,
-  },
-  {
-    id: "cat-3",
-    name: "Bất Động Sản & Đầu Tư",
-    fullName: "Bất Động Sản & Đầu Tư Toàn Quốc",
-    membersSummary: "620K TV • 3 nhóm",
-    fullMeta: "Quy mô: 620.000 Thành viên • Group Public • Quét gần nhất: 09:40 AM hôm nay",
-    totalUidCount: 740,
-  },
-  {
-    id: "cat-4",
-    name: "Cộng Đồng E-commerce VN",
-    fullName: "Cộng Đồng E-commerce & Dropshipping VN",
-    membersSummary: "940K TV • 8 nhóm",
-    fullMeta: "Quy mô: 940.000 Thành viên • Group Public • Quét gần nhất: 09:20 AM hôm nay",
-    totalUidCount: 520,
-  },
-  {
-    id: "cat-5",
-    name: "Tuyển Dụng Việc Làm Online",
-    fullName: "Tuyển Dụng Việc Làm Online & Remote VN",
-    membersSummary: "410K TV • 2 nhóm",
-    fullMeta: "Quy mô: 410.000 Thành viên • Group Public • Quét gần nhất: 08:50 AM hôm nay",
-    totalUidCount: 310,
-  },
-];
-
-const INITIAL_MEMBERS = [
-  {
-    id: "m-1",
-    stt: "01",
-    name: "Nguyễn Văn An",
-    initial: "A",
-    avatarBg: "bg-[#DBEAFE]",
-    avatarText: "text-[#1D4ED8]",
-    uid: "100084729182312",
-    shortUid: "fb.com/1000847291...",
-    friends: "50 bạn bè",
-    friendCount: 50,
-    time: "10:35:48",
-  },
-  {
-    id: "m-2",
-    stt: "02",
-    name: "Trần Thị Mai",
-    initial: "M",
-    avatarBg: "bg-[#FCE7F3]",
-    avatarText: "text-[#BE185D]",
-    uid: "100091823761294",
-    shortUid: "fb.com/1000918237...",
-    friends: "1.240 bạn bè",
-    friendCount: 1240,
-    time: "10:35:46",
-  },
-  {
-    id: "m-3",
-    stt: "03",
-    name: "Lê Hoàng Quân",
-    initial: "Q",
-    avatarBg: "bg-[#D1FAE5]",
-    avatarText: "text-[#047857]",
-    uid: "100062819451290",
-    shortUid: "fb.com/1000628194...",
-    friends: "3.820 bạn bè",
-    friendCount: 3820,
-    time: "10:35:44",
-  },
-  {
-    id: "m-4",
-    stt: "04",
-    name: "Phạm Thu Trang",
-    initial: "T",
-    avatarBg: "bg-[#F3E8FF]",
-    avatarText: "text-[#7E22CE]",
-    uid: "100037194012893",
-    shortUid: "fb.com/1000371940...",
-    friends: "50 bạn bè",
-    friendCount: 50,
-    time: "10:35:40",
-  },
-  {
-    id: "m-5",
-    stt: "05",
-    name: "Vũ Đức Duy",
-    initial: "D",
-    avatarBg: "bg-[#FEF3C7]",
-    avatarText: "text-[#B45309]",
-    uid: "100010948219482",
-    shortUid: "fb.com/1000109482...",
-    friends: "920 bạn bè",
-    friendCount: 920,
-    time: "10:35:36",
-  },
-  {
-    id: "m-6",
-    stt: "06",
-    name: "Bùi Yến Nhi",
-    initial: "N",
-    avatarBg: "bg-[#FFE4E6]",
-    avatarText: "text-[#E11D48]",
-    uid: "100058291048192",
-    shortUid: "fb.com/1000582910...",
-    friends: "4.120 bạn bè",
-    friendCount: 4120,
-    time: "10:35:32",
-  },
+const FRIEND_FILTER_OPTIONS = [
+  { value: "all", label: "Tất cả số bạn bè" },
+  { value: "under500", label: "Dưới 500 bạn bè" },
+  { value: "500to2000", label: "500 - 2.000 bạn bè" },
+  { value: "over2000", label: "Trên 2.000 bạn bè" },
 ];
 
 export default function GroupScanMemberListPage() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   // Categories state
-  const [categories, setCategories] = useState(INITIAL_CATEGORIES);
-  const [selectedCatId, setSelectedCatId] = useState("cat-1");
+  const [categories, setCategories] = useState([]);
+  const [selectedCatId, setSelectedCatId] = useState("");
   const [categorySearch, setCategorySearch] = useState("");
   const [createCategoryModalOpen, setCreateCategoryModalOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
 
   // Members state
-  const [members, setMembers] = useState(INITIAL_MEMBERS);
+  const [members, setMembers] = useState([]);
   const [memberSearch, setMemberSearch] = useState("");
   const [friendFilter, setFriendFilter] = useState("all");
   const [friendDropdownOpen, setFriendDropdownOpen] = useState(false);
-  // Default selected: 3 members according to image 2
-  const [selectedMemberIds, setSelectedMemberIds] = useState(new Set(["m-1", "m-2", "m-3"]));
+  const [selectedMemberIds, setSelectedMemberIds] = useState(new Set());
   const [currentPage, setCurrentPage] = useState(1);
+
+  const loadCategories = useCallback(async () => {
+    try {
+      const data = await getScanCategories();
+      const cats = Array.isArray(data) ? data : [];
+      if (cats.length > 0) {
+        setCategories(
+          cats.map((c) => ({
+            id: c.id,
+            name: c.name,
+            fullName: c.name,
+            membersSummary: `${c.count || 0} nhóm`,
+            fullMeta: c.description || `Danh mục nhóm: ${c.name}`,
+            totalUidCount: 0,
+          }))
+        );
+        setSelectedCatId((prev) => (cats.some((c) => c.id === prev) ? prev : cats[0].id));
+      } else {
+        setCategories([]);
+        setSelectedCatId("");
+      }
+    } catch {
+      setCategories([]);
+      setSelectedCatId("");
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCategories();
+  }, [loadCategories]);
 
   // Selected Category Object
   const currentCategory = useMemo(() => {
-    return categories.find((c) => c.id === selectedCatId) || categories[0];
+    return categories.find((c) => c.id === selectedCatId) || categories[0] || null;
   }, [categories, selectedCatId]);
 
   // Filter Categories
@@ -187,6 +104,13 @@ export default function GroupScanMemberListPage() {
       return matchQuery && matchFriend;
     });
   }, [members, memberSearch, friendFilter]);
+
+  const pageSize = 15;
+  const totalPages = Math.max(1, Math.ceil(filteredMembers.length / pageSize));
+  const paginatedMembers = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredMembers.slice(start, start + pageSize);
+  }, [filteredMembers, currentPage, pageSize]);
 
   // Toggle selection
   const allFilteredSelected =
@@ -230,16 +154,25 @@ export default function GroupScanMemberListPage() {
   };
 
   // Actions & Exports
-  const handleRefresh = () => {
-    toast.info("Đang làm mới danh sách thành viên...");
+  const handleRefresh = async () => {
+    await loadCategories();
+    toast.info("Đã làm mới danh mục và danh sách thành viên.");
   };
 
   const handleExportAll = () => {
-    toast.success("Đang xuất toàn bộ 1.820 UID ra file Excel / CSV...");
+    if (members.length === 0) {
+      toast.warning("Chưa có thành viên nào để xuất!");
+      return;
+    }
+    toast.success(`Đang xuất toàn bộ ${members.length} UID ra file...`);
   };
 
   const handleExportGroup = () => {
-    toast.success(`Đang xuất file nhóm ${currentCategory.fullName}...`);
+    if (!currentCategory) {
+      toast.warning("Vui lòng chọn một danh mục!");
+      return;
+    }
+    toast.success(`Đang xuất file nhóm ${currentCategory.fullName || currentCategory.name}...`);
   };
 
   const handleExportSelected = () => {
@@ -251,26 +184,22 @@ export default function GroupScanMemberListPage() {
   };
 
   // Create Category
-  const handleCreateCategory = (e) => {
+  const handleCreateCategory = async (e) => {
     e.preventDefault();
     if (!newCategoryName.trim()) {
       toast.error("Vui lòng nhập tên danh mục!");
       return;
     }
-    const newId = `cat-${Date.now()}`;
-    const newCat = {
-      id: newId,
-      name: newCategoryName.trim(),
-      fullName: newCategoryName.trim(),
-      membersSummary: "0 TV • 0 nhóm",
-      fullMeta: `Quy mô: 0 Thành viên • Group Public • Vừa tạo`,
-      totalUidCount: 0,
-    };
-    setCategories((prev) => [...prev, newCat]);
-    setSelectedCatId(newId);
-    setNewCategoryName("");
-    setCreateCategoryModalOpen(false);
-    toast.success("Đã thêm danh mục nhóm mới thành công!");
+    const catName = newCategoryName.trim();
+    try {
+      await createScanCategory(catName);
+      await loadCategories();
+      setNewCategoryName("");
+      setCreateCategoryModalOpen(false);
+      toast.success("Đã thêm danh mục nhóm mới thành công!");
+    } catch {
+      toast.error("Không thể tạo danh mục");
+    }
   };
 
   return (
@@ -284,7 +213,7 @@ export default function GroupScanMemberListPage() {
               DANH SÁCH THÀNH VIÊN ĐÃ QUÉT
             </h2>
             <span className="rounded-full bg-[#EFF6FF] border border-[#BFDBFE] px-2.5 py-0.5 text-[11px] font-semibold text-[#1D4ED8]">
-              1.820 UID
+              {members.length.toLocaleString("vi-VN")} UID
             </span>
           </div>
 
@@ -344,48 +273,54 @@ export default function GroupScanMemberListPage() {
 
             {/* Category Group Cards List */}
             <div className="flex flex-col gap-2 w-full max-h-[480px] overflow-y-auto pr-0.5">
-              {filteredCategories.map((cat) => {
-                const isSelected = cat.id === selectedCatId;
-                return (
-                  <button
-                    type="button"
-                    key={cat.id}
-                    onClick={() => setSelectedCatId(cat.id)}
-                    className={`flex flex-col items-start p-3 gap-0.5 w-full rounded-xl text-left transition-all ${
-                      isSelected
-                        ? "bg-[#EFF6FF]/60 border border-[#3B82F6] shadow-xs"
-                        : "bg-white border border-[#E2E8F0] hover:border-slate-300"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between w-full">
-                      <span
-                        className={`text-xs leading-4 ${
-                          isSelected ? "font-bold text-[#1E3A8A]" : "font-semibold text-[#1E293B]"
-                        } line-clamp-1`}
-                      >
-                        {cat.name}
-                      </span>
-                      {isSelected && (
-                        <span className="size-2 rounded-full bg-[#2563EB] shrink-0" />
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className={`size-1.5 rounded-full shrink-0 ${
-                          isSelected ? "bg-[#3B82F6]" : "bg-[#CBD5E1]"
-                        }`}
-                      />
-                      <span
-                        className={`text-[11px] leading-4 ${
-                          isSelected ? "text-[#2563EB]/90 font-medium" : "text-[#94A3B8]"
-                        }`}
-                      >
-                        {cat.membersSummary}
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
+              {filteredCategories.length === 0 ? (
+                <div className="text-center py-8 text-xs text-[#94A3B8]">
+                  Chưa có danh mục nào từ cơ sở dữ liệu.
+                </div>
+              ) : (
+                filteredCategories.map((cat) => {
+                  const isSelected = cat.id === selectedCatId;
+                  return (
+                    <button
+                      type="button"
+                      key={cat.id}
+                      onClick={() => setSelectedCatId(cat.id)}
+                      className={`flex flex-col items-start p-3 gap-0.5 w-full rounded-xl text-left transition-all ${
+                        isSelected
+                          ? "bg-[#EFF6FF]/60 border border-[#3B82F6] shadow-xs"
+                          : "bg-white border border-[#E2E8F0] hover:border-slate-300"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span
+                          className={`text-xs leading-4 ${
+                            isSelected ? "font-bold text-[#1E3A8A]" : "font-semibold text-[#1E293B]"
+                          } line-clamp-1`}
+                        >
+                          {cat.name}
+                        </span>
+                        {isSelected && (
+                          <span className="size-2 rounded-full bg-[#2563EB] shrink-0" />
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`size-1.5 rounded-full shrink-0 ${
+                            isSelected ? "bg-[#3B82F6]" : "bg-[#CBD5E1]"
+                          }`}
+                        />
+                        <span
+                          className={`text-[11px] leading-4 ${
+                            isSelected ? "text-[#2563EB]/90 font-medium" : "text-[#94A3B8]"
+                          }`}
+                        >
+                          {cat.membersSummary}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
             </div>
           </div>
 
@@ -397,11 +332,11 @@ export default function GroupScanMemberListPage() {
                 <div className="flex items-center gap-2">
                   <span className="size-2 rounded-full bg-[#10B981] shrink-0" />
                   <h3 className="text-sm font-bold text-[#0F172A]">
-                    {currentCategory.fullName}
+                    {currentCategory ? (currentCategory.fullName || currentCategory.name) : "Chưa chọn danh mục"}
                   </h3>
                 </div>
                 <p className="text-xs text-[#64748B]">
-                  {currentCategory.fullMeta}
+                  {currentCategory ? (currentCategory.fullMeta || currentCategory.description || "—") : "Vui lòng chọn hoặc thêm danh mục"}
                 </p>
               </div>
 
@@ -429,111 +364,54 @@ export default function GroupScanMemberListPage() {
                 />
               </div>
 
-              {/* Friend Count Filter Dropdown */}
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setFriendDropdownOpen(!friendDropdownOpen)}
-                  className="inline-flex items-center justify-between w-44 h-7 px-3 border border-[#E2E8F0] bg-white rounded-lg text-xs text-[#334155] hover:bg-slate-50 gap-2"
-                >
-                  <span>
-                    {friendFilter === "all"
-                      ? "Lọc theo số bạn bè"
-                      : friendFilter === "under500"
-                      ? "Dưới 500 bạn bè"
-                      : friendFilter === "500to2000"
-                      ? "500 - 2.000 bạn bè"
-                      : "Trên 2.000 bạn bè"}
+              {/* Friend Count Filter */}
+              <div className="w-48 shrink-0">
+                <CustomSelect
+                  value={friendFilter}
+                  onChange={(val) => {
+                    setFriendFilter(val);
+                    setCurrentPage(1);
+                  }}
+                  options={FRIEND_FILTER_OPTIONS}
+                  size="sm"
+                  buttonClassName="h-7 text-xs"
+                />
+              </div>
+            </div>
+
+            {/* Tick chọn / Bulk Actions Toolbar - Chỉ hiển thị khi có ít nhất 1 thành viên được tích chọn */}
+            {selectedMemberIds.size > 0 && (
+              <div className="flex flex-wrap justify-between items-center p-2.5 px-3 bg-[#EFF6FF] border border-[#BFDBFE] rounded-lg gap-2 animate-in fade-in duration-150">
+                <div className="flex items-center gap-2">
+                  <span className="size-5 bg-[#2563EB] text-white rounded flex items-center justify-center font-bold text-[11px]">
+                    {selectedMemberIds.size}
                   </span>
-                  <ChevronDown className="size-3 text-[#6B7280]" />
-                </button>
+                  <span className="font-medium text-xs text-[#1E3A8A]">
+                    thành viên đang được tick chọn
+                  </span>
+                </div>
 
-                {friendDropdownOpen && (
-                  <div className="absolute right-0 mt-1 w-44 bg-white border border-[#E2E8F0] rounded-lg shadow-lg z-20 py-1 text-xs">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFriendFilter("all");
-                        setFriendDropdownOpen(false);
-                      }}
-                      className={`w-full text-left px-3 py-1.5 hover:bg-slate-100 ${
-                        friendFilter === "all" ? "text-blue-600 font-bold" : "text-slate-700"
-                      }`}
-                    >
-                      Tất cả số bạn bè
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFriendFilter("under500");
-                        setFriendDropdownOpen(false);
-                      }}
-                      className={`w-full text-left px-3 py-1.5 hover:bg-slate-100 ${
-                        friendFilter === "under500" ? "text-blue-600 font-bold" : "text-slate-700"
-                      }`}
-                    >
-                      Dưới 500 bạn bè
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFriendFilter("500to2000");
-                        setFriendDropdownOpen(false);
-                      }}
-                      className={`w-full text-left px-3 py-1.5 hover:bg-slate-100 ${
-                        friendFilter === "500to2000" ? "text-blue-600 font-bold" : "text-slate-700"
-                      }`}
-                    >
-                      500 - 2.000 bạn bè
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFriendFilter("over2000");
-                        setFriendDropdownOpen(false);
-                      }}
-                      className={`w-full text-left px-3 py-1.5 hover:bg-slate-100 ${
-                        friendFilter === "over2000" ? "text-blue-600 font-bold" : "text-slate-700"
-                      }`}
-                    >
-                      Trên 2.000 bạn bè
-                    </button>
-                  </div>
-                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleExportSelected}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-[#BFDBFE] rounded text-xs font-semibold text-[#1E40AF] hover:bg-blue-50 transition-colors"
+                  >
+                    <Download className="size-3 text-[#2563EB]" />
+                    <span>Xuất file chọn</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleBulkDelete}
+                    className="size-7 flex items-center justify-center text-[#DC2626] hover:bg-red-50 rounded transition-colors"
+                    title="Xóa các mục đã chọn"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
               </div>
-            </div>
-
-            {/* Tick chọn / Bulk Actions Toolbar */}
-            <div className="flex flex-wrap justify-between items-center p-2.5 px-3 bg-[#EFF6FF] border border-[#BFDBFE] rounded-lg gap-2">
-              <div className="flex items-center gap-2">
-                <span className="size-5 bg-[#2563EB] text-white rounded flex items-center justify-center font-bold text-[11px]">
-                  {selectedMemberIds.size}
-                </span>
-                <span className="font-medium text-xs text-[#1E3A8A]">
-                  thành viên đang được tick chọn
-                </span>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleExportSelected}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-[#BFDBFE] rounded text-xs font-semibold text-[#1E40AF] hover:bg-blue-50 transition-colors"
-                >
-                  <Download className="size-3 text-[#2563EB]" />
-                  <span>Xuất file chọn</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleBulkDelete}
-                  className="size-7 flex items-center justify-center text-[#DC2626] hover:bg-red-50 rounded transition-colors"
-                  title="Xóa các mục đã chọn"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
-              </div>
-            </div>
+            )}
 
             {/* Member Data Table */}
             <div className="w-full border border-[#E2E8F0] rounded-lg overflow-x-auto">
@@ -557,68 +435,76 @@ export default function GroupScanMemberListPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#F1F5F9] bg-white">
-                  {filteredMembers.map((member) => {
-                    const isChecked = selectedMemberIds.has(member.id);
-                    return (
-                      <tr
-                        key={member.id}
-                        className={`transition-colors hover:bg-slate-50 ${
-                          isChecked ? "bg-[#EFF6FF]/25" : ""
-                        }`}
-                      >
-                        <td className="py-2 px-3 text-center">
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => handleToggleSelect(member.id)}
-                            className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
-                          />
-                        </td>
-                        <td className="py-2 px-3 text-center font-mono text-xs text-[#94A3B8]">
-                          {member.stt}
-                        </td>
-                        <td className="py-2 px-3">
-                          <div className="flex items-center gap-2.5">
-                            <span
-                              className={`size-6 rounded-full ${member.avatarBg} ${member.avatarText} font-bold text-[11px] flex items-center justify-center shrink-0 uppercase`}
+                  {paginatedMembers.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="text-center py-10 text-xs text-slate-400">
+                        Chưa có dữ liệu thành viên nào được quét trong danh mục này.
+                      </td>
+                    </tr>
+                  ) : (
+                    paginatedMembers.map((member) => {
+                      const isChecked = selectedMemberIds.has(member.id);
+                      return (
+                        <tr
+                          key={member.id}
+                          className={`transition-colors hover:bg-slate-50 ${
+                            isChecked ? "bg-[#EFF6FF]/25" : ""
+                          }`}
+                        >
+                          <td className="py-2 px-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => handleToggleSelect(member.id)}
+                              className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
+                            />
+                          </td>
+                          <td className="py-2 px-3 text-center font-mono text-xs text-[#94A3B8]">
+                            {member.stt}
+                          </td>
+                          <td className="py-2 px-3">
+                            <div className="flex items-center gap-2.5">
+                              <span
+                                className={`size-6 rounded-full ${member.avatarBg} ${member.avatarText} font-bold text-[11px] flex items-center justify-center shrink-0 uppercase`}
+                              >
+                                {member.initial}
+                              </span>
+                              <span className="font-semibold text-xs text-[#1E293B]">
+                                {member.name}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-2 px-3">
+                            <a
+                              href={`https://facebook.com/${member.uid}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 font-mono text-[11px] text-[#2563EB] hover:underline"
                             >
-                              {member.initial}
-                            </span>
-                            <span className="font-semibold text-xs text-[#1E293B]">
-                              {member.name}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="py-2 px-3">
-                          <a
-                            href={`https://facebook.com/${member.uid}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 font-mono text-[11px] text-[#2563EB] hover:underline"
-                          >
-                            <span>{member.shortUid}</span>
-                            <ExternalLink className="size-3 text-[#2563EB]" />
-                          </a>
-                        </td>
-                        <td className="py-2 px-3 font-semibold text-xs text-[#334155]">
-                          {member.friends}
-                        </td>
-                        <td className="py-2 px-3 font-mono text-[11px] text-[#64748B]">
-                          {member.time}
-                        </td>
-                        <td className="py-2 px-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveMember(member.id)}
-                            className="rounded p-1 text-[#94A3B8] hover:bg-rose-50 hover:text-rose-600 transition-colors"
-                            title="Xóa thành viên"
-                          >
-                            <Trash2 className="size-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                              <span>{member.shortUid}</span>
+                              <ExternalLink className="size-3 text-[#2563EB]" />
+                            </a>
+                          </td>
+                          <td className="py-2 px-3 font-semibold text-xs text-[#334155]">
+                            {member.friends}
+                          </td>
+                          <td className="py-2 px-3 font-mono text-[11px] text-[#64748B]">
+                            {member.time}
+                          </td>
+                          <td className="py-2 px-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveMember(member.id)}
+                              className="rounded p-1 text-[#94A3B8] hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                              title="Xóa thành viên"
+                            >
+                              <Trash2 className="size-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -626,73 +512,31 @@ export default function GroupScanMemberListPage() {
             {/* Table Pagination */}
             <div className="flex flex-row justify-between items-center w-full pt-1">
               <span className="text-xs text-[#64748B]">
-                Hiển thị 1 - {filteredMembers.length} của {currentCategory.totalUidCount.toLocaleString("vi-VN")} UID
+                Hiển thị {filteredMembers.length > 0 ? `${(currentPage - 1) * pageSize + 1} - ${Math.min(currentPage * pageSize, filteredMembers.length)}` : "0"} của{" "}
+                {currentCategory?.totalUidCount ? currentCategory.totalUidCount.toLocaleString("vi-VN") : filteredMembers.length} UID
               </span>
 
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  className="size-7 flex items-center justify-center border border-[#E2E8F0] rounded text-xs font-semibold text-[#64748B] hover:bg-slate-100"
-                >
-                  &lt;
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage(1)}
-                  className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                    currentPage === 1 ? "bg-[#2563EB] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                  }`}
-                >
-                  1
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage(2)}
-                  className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                    currentPage === 2 ? "bg-[#2563EB] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                  }`}
-                >
-                  2
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage(3)}
-                  className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                    currentPage === 3 ? "bg-[#2563EB] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                  }`}
-                >
-                  3
-                </button>
-                <span className="px-1 text-xs font-semibold text-[#94A3B8]">...</span>
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage(182)}
-                  className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                    currentPage === 182 ? "bg-[#2563EB] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                  }`}
-                >
-                  182
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((p) => p + 1)}
-                  className="size-7 flex items-center justify-center border border-[#E2E8F0] rounded text-xs font-semibold text-[#64748B] hover:bg-slate-100"
-                >
-                  &gt;
-                </button>
-              </div>
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setCurrentPage}
+              />
             </div>
           </div>
         </div>
       </section>
 
       {/* Modal Thêm Mới Danh Mục Nhóm */}
-      {createCategoryModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      {mounted && createCategoryModalOpen && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setCreateCategoryModalOpen(false);
+          }}
+        >
           <form
             onSubmit={handleCreateCategory}
-            className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 space-y-4"
+            className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 space-y-4 animate-in zoom-in-95 duration-150"
           >
             <div className="flex items-center justify-between border-b pb-3 border-slate-100">
               <h3 className="font-bold text-base text-slate-800 flex items-center gap-2">
@@ -736,7 +580,8 @@ export default function GroupScanMemberListPage() {
               </button>
             </div>
           </form>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

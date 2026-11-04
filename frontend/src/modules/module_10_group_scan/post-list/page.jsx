@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   Folder,
   Plus,
@@ -15,6 +16,9 @@ import {
   FolderInput,
 } from "lucide-react";
 import { toast } from "@/lib/toast";
+import Pagination from "@/components/ui/pagination";
+import CustomSelect from "@/components/ui/custom-select";
+import { getScannedGroups } from "../service";
 
 function IconLike() {
   return (
@@ -40,167 +44,111 @@ function IconShare() {
   );
 }
 
-// ==========================================
-// DỮ LIỆU MẪU BAN ĐẦU CHUẨN FIGMA IMAGE 2
-// ==========================================
-
-const INITIAL_GROUPS = [
-  {
-    id: "grp-1",
-    name: "Nhóm A",
-    category: "Hội buôn",
-    postCount: 20,
-    status: "active",
-    statusLabel: "Đang hoạt động",
-    updateTime: "Cập nhật 10 phút trước",
-  },
-  {
-    id: "grp-2",
-    name: "Hội Buôn Online Toàn Quốc",
-    category: "Hội buôn",
-    postCount: 30,
-    status: "active",
-    statusLabel: "Đang hoạt động",
-    updateTime: "Cập nhật 25 phút trước",
-  },
-  {
-    id: "grp-3",
-    name: "Marketing Thực Chiến Sài Gòn",
-    category: "Kinh doanh",
-    postCount: 45,
-    status: "active",
-    statusLabel: "Đang hoạt động",
-    updateTime: "Cập nhật 1 giờ trước",
-  },
-  {
-    id: "grp-4",
-    name: "Bất Động Sản & Đầu Tư 2025",
-    category: "Đầu tư",
-    postCount: 52,
-    status: "active",
-    statusLabel: "Đang hoạt động",
-    updateTime: "Cập nhật 2 giờ trước",
-  },
-  {
-    id: "grp-5",
-    name: "Cộng Đồng E-commerce VN",
-    category: "Thương mại điện tử",
-    postCount: 18,
-    status: "active",
-    statusLabel: "Đang hoạt động",
-    updateTime: "Cập nhật 3 giờ trước",
-  },
-  {
-    id: "grp-6",
-    name: "Nguồn Hàng Gia Dụng Giá Sỉ",
-    category: "Hội buôn",
-    postCount: 64,
-    status: "active",
-    statusLabel: "Đang hoạt động",
-    updateTime: "Cập nhật 4 giờ trước",
-  },
+const DATE_FILTER_OPTIONS = [
+  { value: "all", label: "Ngày đăng: Tất cả" },
+  { value: "today", label: "Hôm nay" },
+  { value: "7days", label: "7 ngày qua" },
+  { value: "30days", label: "30 ngày qua" },
 ];
 
-const INITIAL_POSTS = [
-  {
-    id: "post-1",
-    stt: "01",
-    title: "Cần tìm xưởng may gia công áo...",
-    linkText: "fb.com/groups/post/89123891",
-    authorName: "Nguyễn Văn An",
-    authorTag: "NA",
-    authorTagBg: "bg-[#E0E7FF]",
-    authorTagText: "text-[#4338CA]",
-    likes: "1,420",
-    comments: "684",
-    shares: "112",
-    postedDate: "16/05/2025 14:20",
-  },
-  {
-    id: "post-2",
-    stt: "02",
-    title: "Tổng hợp file tài liệu bí quyết...",
-    linkText: "fb.com/groups/post/78100234",
-    authorName: "Trần Thị Mai",
-    authorTag: "TM",
-    authorTagBg: "bg-[#FFE4E6]",
-    authorTagText: "text-[#BE123C]",
-    likes: "950",
-    comments: "430",
-    shares: "88",
-    postedDate: "15/05/2025 21:05",
-  },
-  {
-    id: "post-3",
-    stt: "03",
-    title: "Thanh lý lô 300 tai nghe...",
-    linkText: "fb.com/groups/post/61902812",
-    authorName: "Lê Hoàng Quân",
-    authorTag: "LQ",
-    authorTagBg: "bg-[#FEF3C7]",
-    authorTagText: "text-[#B45309]",
-    likes: "340",
-    comments: "192",
-    shares: "15",
-    postedDate: "14/05/2025 09:12",
-  },
-  {
-    id: "post-4",
-    stt: "04",
-    title: "Cảnh báo chiêu trò lừa đảo cọc...",
-    linkText: "fb.com/groups/post/55219011",
-    authorName: "Phạm Thu Trang",
-    authorTag: "PT",
-    authorTagBg: "bg-[#F3E8FF]",
-    authorTagText: "text-[#7E22CE]",
-    likes: "2,150",
-    comments: "1,208",
-    shares: "340",
-    postedDate: "12/05/2025 18:45",
-  },
-  {
-    id: "post-5",
-    stt: "05",
-    title: "Chia sẻ tệp khách hàng tiềm...",
-    linkText: "fb.com/groups/post/44910283",
-    authorName: "Vũ Đức Duy",
-    authorTag: "VD",
-    authorTagBg: "bg-[#D1FAE5]",
-    authorTagText: "text-[#047857]",
-    likes: "520",
-    comments: "85",
-    shares: "42",
-    postedDate: "10/05/2025 11:30",
-  },
+const LIKE_FILTER_OPTIONS = [
+  { value: "all", label: "Tất cả like" },
+  { value: "100", label: "> 100 like" },
+  { value: "500", label: "> 500 like" },
+  { value: "1000", label: "> 1,000 like" },
+];
+
+const SHARE_FILTER_OPTIONS = [
+  { value: "all", label: "Tất cả share" },
+  { value: "10", label: "> 10 share" },
+  { value: "50", label: "> 50 share" },
+  { value: "100", label: "> 100 share" },
+];
+
+const COMMENT_FILTER_OPTIONS = [
+  { value: "all", label: "Tất cả comment" },
+  { value: "20", label: "> 20 cmt" },
+  { value: "100", label: "> 100 cmt" },
+  { value: "500", label: "> 500 cmt" },
+];
+
+const PAGE_SIZE_OPTIONS = [
+  { value: 5, label: "5" },
+  { value: 10, label: "10" },
+  { value: 20, label: "20" },
+];
+
+const NEW_GROUP_CATEGORY_OPTIONS = [
+  { value: "Hội buôn", label: "Hội buôn" },
+  { value: "Kinh doanh", label: "Kinh doanh" },
+  { value: "Đầu tư", label: "Đầu tư" },
+  { value: "Thương mại điện tử", label: "Thương mại điện tử" },
 ];
 
 export default function GroupScanPostListPage() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   // Groups State
-  const [groups, setGroups] = useState(INITIAL_GROUPS);
-  const [selectedGroupId, setSelectedGroupId] = useState("grp-1");
+  const [groups, setGroups] = useState([]);
+  const [selectedGroupId, setSelectedGroupId] = useState("");
   const [groupSearch, setGroupSearch] = useState("");
   const [addGroupModalOpen, setAddGroupModalOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupCategory, setNewGroupCategory] = useState("Hội buôn");
 
   // Posts State
-  const [posts, setPosts] = useState(INITIAL_POSTS);
+  const [posts, setPosts] = useState([]);
   const [postSearch, setPostSearch] = useState("");
   const [dateFilter, setDateFilter] = useState("all");
   const [likeFilter, setLikeFilter] = useState("all");
   const [shareFilter, setShareFilter] = useState("all");
   const [commentFilter, setCommentFilter] = useState("all");
 
-  // Selection: 3 posts checked initially according to Image 2
-  const [selectedPostIds, setSelectedPostIds] = useState(
-    new Set(["post-1", "post-2", "post-3"])
-  );
+  const [selectedPostIds, setSelectedPostIds] = useState(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(5);
 
+  const loadGroups = useCallback(async () => {
+    try {
+      const res = await getScannedGroups();
+      const loaded = res?.groups || [];
+      if (loaded.length > 0) {
+        setGroups(
+          loaded.map((g) => ({
+            id: g.id || g.group_id,
+            name: g.name || g.group_id,
+            category: g.category_name || g.keyword || "Chung",
+            postCount: 0,
+            status: "active",
+            statusLabel: "Đang hoạt động",
+            updateTime: g.created_at || "Vừa cập nhật",
+          }))
+        );
+        setSelectedGroupId((prev) =>
+          loaded.some((g) => (g.id || g.group_id) === prev)
+            ? prev
+            : loaded[0].id || loaded[0].group_id
+        );
+      } else {
+        setGroups([]);
+        setSelectedGroupId("");
+      }
+    } catch {
+      setGroups([]);
+      setSelectedGroupId("");
+    }
+  }, []);
+
+  useEffect(() => {
+    loadGroups();
+  }, [loadGroups]);
+
   // Active group details
   const activeGroup = useMemo(() => {
-    return groups.find((g) => g.id === selectedGroupId) || groups[0];
+    return groups.find((g) => g.id === selectedGroupId) || groups[0] || null;
   }, [groups, selectedGroupId]);
 
   // Filter Groups
@@ -223,6 +171,12 @@ export default function GroupScanPostListPage() {
       return matchQuery;
     });
   }, [posts, postSearch]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredPosts.length / pageSize));
+  const paginatedPosts = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredPosts.slice(start, start + pageSize);
+  }, [filteredPosts, currentPage, pageSize]);
 
   // Select all checkbox
   const allFilteredSelected =
@@ -268,6 +222,10 @@ export default function GroupScanPostListPage() {
 
   // Export handlers
   const handleExportExcel = () => {
+    if (!activeGroup) {
+      toast.warning("Chưa có nhóm nào để xuất bài viết!");
+      return;
+    }
     toast.success(`Đang xuất file Excel bài viết của ${activeGroup.name}...`);
   };
 
@@ -335,7 +293,7 @@ export default function GroupScanPostListPage() {
                 Đã quét {groups.length} nhóm
               </span>
               <span className="text-[11px] text-[#94A3B8]">
-                1,240 bài viết
+                {posts.length} bài viết
               </span>
             </div>
 
@@ -353,51 +311,57 @@ export default function GroupScanPostListPage() {
 
           {/* Group Items List */}
           <div className="p-2.5 flex flex-col gap-1.5 max-h-[500px] overflow-y-auto">
-            {filteredGroups.map((grp) => {
-              const isActive = grp.id === selectedGroupId;
-              return (
-                <div
-                  key={grp.id}
-                  onClick={() => setSelectedGroupId(grp.id)}
-                  className={`p-2.5 rounded-lg flex items-center justify-between cursor-pointer transition-all ${
-                    isActive
-                      ? "bg-[#EFF6FF]/60 border border-[#3B82F6] shadow-xs"
-                      : "bg-white border border-transparent hover:border-slate-200"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0 pr-1">
-                    <span
-                      className={`size-2 rounded-full shrink-0 ${
-                        isActive ? "bg-[#2563EB]" : "bg-[#CBD5E1]"
-                      }`}
-                    />
-                    <div className="flex flex-col min-w-0">
-                      <span
-                        className={`text-xs truncate ${
-                          isActive ? "font-bold text-[#0F172A]" : "font-semibold text-[#1E293B]"
-                        }`}
-                      >
-                        {grp.name}
-                      </span>
-                      <span className="text-[11px] text-[#64748B] truncate">
-                        {grp.postCount} bài viết • {grp.category}
-                      </span>
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toast.info(`Tùy chọn cho nhóm: ${grp.name}`);
-                    }}
-                    className="p-1 text-slate-400 hover:text-slate-600 rounded"
+            {filteredGroups.length === 0 ? (
+              <div className="text-center py-8 text-xs text-[#94A3B8]">
+                Chưa có nhóm nào trong cơ sở dữ liệu.
+              </div>
+            ) : (
+              filteredGroups.map((grp) => {
+                const isActive = grp.id === selectedGroupId;
+                return (
+                  <div
+                    key={grp.id}
+                    onClick={() => setSelectedGroupId(grp.id)}
+                    className={`p-2.5 rounded-lg flex items-center justify-between cursor-pointer transition-all ${
+                      isActive
+                        ? "bg-[#EFF6FF]/60 border border-[#3B82F6] shadow-xs"
+                        : "bg-white border border-transparent hover:border-slate-200"
+                    }`}
                   >
-                    <MoreVertical className="size-3.5" />
-                  </button>
-                </div>
-              );
-            })}
+                    <div className="flex items-center gap-2.5 min-w-0 pr-1">
+                      <span
+                        className={`size-2 rounded-full shrink-0 ${
+                          isActive ? "bg-[#2563EB]" : "bg-[#CBD5E1]"
+                        }`}
+                      />
+                      <div className="flex flex-col min-w-0">
+                        <span
+                          className={`text-xs truncate ${
+                            isActive ? "font-bold text-[#0F172A]" : "font-semibold text-[#1E293B]"
+                          }`}
+                        >
+                          {grp.name}
+                        </span>
+                        <span className="text-[11px] text-[#64748B] truncate">
+                          {grp.postCount} bài viết • {grp.category}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toast.info(`Tùy chọn cho nhóm: ${grp.name}`);
+                      }}
+                      className="p-1 text-slate-400 hover:text-slate-600 rounded"
+                    >
+                      <MoreVertical className="size-3.5" />
+                    </button>
+                  </div>
+                );
+              })
+            )}
           </div>
         </section>
 
@@ -408,16 +372,18 @@ export default function GroupScanPostListPage() {
             <div className="flex flex-col gap-1">
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-bold text-[#0F172A]">
-                  {activeGroup.name}
+                  {activeGroup ? activeGroup.name : "Chưa chọn nhóm"}
                 </h3>
-                <span className="rounded-full bg-[#ECFDF5] border border-[#D1FAE5] px-2.5 py-0.5 text-[11px] font-semibold text-[#059669]">
-                  {activeGroup.statusLabel}
-                </span>
+                {activeGroup && (
+                  <span className="rounded-full bg-[#ECFDF5] border border-[#D1FAE5] px-2.5 py-0.5 text-[11px] font-semibold text-[#059669]">
+                    {activeGroup.statusLabel}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-[#64748B]">
-                {activeGroup.postCount} Bài viết • Danh mục:{" "}
-                <strong className="text-slate-700">{activeGroup.category}</strong> •{" "}
-                {activeGroup.updateTime}
+                {activeGroup
+                  ? `${activeGroup.postCount} Bài viết • Danh mục: ${activeGroup.category} • ${activeGroup.updateTime}`
+                  : "Vui lòng chọn hoặc quét nhóm"}
               </p>
             </div>
 
@@ -444,82 +410,92 @@ export default function GroupScanPostListPage() {
               />
             </div>
 
-            <select
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value)}
-              className="h-7 px-2.5 border border-[#E2E8F0] bg-white rounded-lg text-xs font-medium text-[#334155] outline-none"
-            >
-              <option value="all">Ngày đăng</option>
-              <option value="today">Hôm nay</option>
-              <option value="7days">7 ngày qua</option>
-              <option value="30days">30 ngày qua</option>
-            </select>
-
-            <select
-              value={likeFilter}
-              onChange={(e) => setLikeFilter(e.target.value)}
-              className="h-7 px-2.5 border border-[#E2E8F0] bg-white rounded-lg text-xs font-medium text-[#334155] outline-none"
-            >
-              <option value="all">Tất cả like</option>
-              <option value="100">&gt; 100 like</option>
-              <option value="500">&gt; 500 like</option>
-              <option value="1000">&gt; 1,000 like</option>
-            </select>
-
-            <select
-              value={shareFilter}
-              onChange={(e) => setShareFilter(e.target.value)}
-              className="h-7 px-2.5 border border-[#E2E8F0] bg-white rounded-lg text-xs font-medium text-[#334155] outline-none"
-            >
-              <option value="all">Tất cả share</option>
-              <option value="10">&gt; 10 share</option>
-              <option value="50">&gt; 50 share</option>
-              <option value="100">&gt; 100 share</option>
-            </select>
-
-            <select
-              value={commentFilter}
-              onChange={(e) => setCommentFilter(e.target.value)}
-              className="h-7 px-2.5 border border-[#E2E8F0] bg-white rounded-lg text-xs font-medium text-[#334155] outline-none"
-            >
-              <option value="all">Tất cả comment</option>
-              <option value="20">&gt; 20 cmt</option>
-              <option value="100">&gt; 100 cmt</option>
-              <option value="500">&gt; 500 cmt</option>
-            </select>
-          </div>
-
-          {/* Action Toolbar Bar */}
-          <div className="flex flex-wrap justify-between items-center p-2.5 px-3 bg-[#EFF6FF] border border-[#BFDBFE] rounded-lg gap-2">
-            <div className="flex items-center gap-2">
-              <span className="size-5 bg-[#2563EB] text-white rounded flex items-center justify-center font-bold text-[11px]">
-                {selectedPostIds.size}
-              </span>
-              <span className="font-medium text-xs text-[#1E3A8A]">
-                Đã chọn {selectedPostIds.size} / 28 bài viết
-              </span>
+            <div className="w-32 shrink-0">
+              <CustomSelect
+                value={dateFilter}
+                onChange={(val) => {
+                  setDateFilter(val);
+                  setCurrentPage(1);
+                }}
+                options={DATE_FILTER_OPTIONS}
+                size="sm"
+                buttonClassName="h-7 text-xs"
+              />
             </div>
 
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleMoveCategory}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-[#CBD5E1] rounded text-xs font-medium text-[#334155] hover:bg-slate-50 transition-colors"
-              >
-                <FolderInput className="size-3.5 text-[#64748B]" />
-                <span>Chuyển mục</span>
-              </button>
+            <div className="w-32 shrink-0">
+              <CustomSelect
+                value={likeFilter}
+                onChange={(val) => {
+                  setLikeFilter(val);
+                  setCurrentPage(1);
+                }}
+                options={LIKE_FILTER_OPTIONS}
+                size="sm"
+                buttonClassName="h-7 text-xs"
+              />
+            </div>
 
-              <button
-                type="button"
-                onClick={handleBulkDelete}
-                className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-rose-200 text-rose-600 rounded text-xs font-medium hover:bg-rose-50 transition-colors"
-              >
-                <Trash2 className="size-3.5" />
-                <span>Xóa ({selectedPostIds.size})</span>
-              </button>
+            <div className="w-32 shrink-0">
+              <CustomSelect
+                value={shareFilter}
+                onChange={(val) => {
+                  setShareFilter(val);
+                  setCurrentPage(1);
+                }}
+                options={SHARE_FILTER_OPTIONS}
+                size="sm"
+                buttonClassName="h-7 text-xs"
+              />
+            </div>
+
+            <div className="w-36 shrink-0">
+              <CustomSelect
+                value={commentFilter}
+                onChange={(val) => {
+                  setCommentFilter(val);
+                  setCurrentPage(1);
+                }}
+                options={COMMENT_FILTER_OPTIONS}
+                size="sm"
+                buttonClassName="h-7 text-xs"
+              />
             </div>
           </div>
+
+          {/* Action Toolbar Bar - Chỉ hiển thị khi có ít nhất 1 bài viết được tích chọn */}
+          {selectedPostIds.size > 0 && (
+            <div className="flex flex-wrap justify-between items-center p-2.5 px-3 bg-[#EFF6FF] border border-[#BFDBFE] rounded-lg gap-2 animate-in fade-in duration-150">
+              <div className="flex items-center gap-2">
+                <span className="size-5 bg-[#2563EB] text-white rounded flex items-center justify-center font-bold text-[11px]">
+                  {selectedPostIds.size}
+                </span>
+                <span className="font-medium text-xs text-[#1E3A8A]">
+                  Đã chọn {selectedPostIds.size} / 28 bài viết
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleMoveCategory}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-[#CBD5E1] rounded text-xs font-medium text-[#334155] hover:bg-slate-50 transition-colors"
+                >
+                  <FolderInput className="size-3.5 text-[#64748B]" />
+                  <span>Chuyển mục</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleBulkDelete}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-rose-200 text-rose-600 rounded text-xs font-medium hover:bg-rose-50 transition-colors"
+                >
+                  <Trash2 className="size-3.5" />
+                  <span>Xóa ({selectedPostIds.size})</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Posts Data Table */}
           <div className="w-full border border-[#E2E8F0] rounded-xl overflow-x-auto">
@@ -545,104 +521,112 @@ export default function GroupScanPostListPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#F1F5F9]">
-                {filteredPosts.map((post) => {
-                  const isChecked = selectedPostIds.has(post.id);
-                  return (
-                    <tr
-                      key={post.id}
-                      className={`hover:bg-slate-50 transition-colors ${
-                        isChecked ? "bg-[#EFF6FF]/25" : ""
-                      }`}
-                    >
-                      <td className="py-2.5 px-3 text-center">
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => handleToggleSelectPost(post.id)}
-                          className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
-                        />
-                      </td>
-                      <td className="py-2.5 px-2 text-center font-mono text-xs text-[#94A3B8]">
-                        {post.stt}
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <div className="flex flex-col gap-1">
-                          <p className="text-xs font-medium text-[#1E293B] line-clamp-2">
-                            {post.title}
-                          </p>
-                          <a
-                            href={`https://${post.linkText}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 font-mono text-[11px] text-[#2563EB] hover:underline"
-                          >
-                            <span className="truncate max-w-[200px]">{post.linkText}</span>
-                            <ExternalLink className="size-3 text-[#2563EB] shrink-0" />
-                          </a>
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`size-6 rounded-full ${post.authorTagBg} ${post.authorTagText} font-bold text-[11px] flex items-center justify-center shrink-0 uppercase`}
-                          >
-                            {post.authorTag}
-                          </span>
-                          <span className="font-semibold text-xs text-[#0F172A] truncate">
-                            {post.authorName}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#EFF6FF] text-[#1D4ED8] text-xs font-semibold">
-                            <IconLike />
-                            <span>{post.likes}</span>
-                          </span>
-                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#ECFDF5] text-[#047857] text-xs font-semibold">
-                            <IconComment />
-                            <span>{post.comments}</span>
-                          </span>
-                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#F3E8FF] text-[#7E22CE] text-xs font-semibold">
-                            <IconShare />
-                            <span>{post.shares}</span>
-                          </span>
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3 font-mono text-[11px] text-[#64748B]">
-                        {post.postedDate}
-                      </td>
-                      <td className="py-2.5 px-3 text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          <button
-                            type="button"
-                            title="Xem trước"
-                            className="p-1 text-slate-400 hover:text-blue-600 rounded"
-                          >
-                            <Eye className="size-3.5" />
-                          </button>
-                          <a
-                            href={`https://${post.linkText}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            title="Mở bài viết"
-                            className="p-1 text-slate-400 hover:text-blue-600 rounded"
-                          >
-                            <ExternalLink className="size-3.5" />
-                          </a>
-                          <button
-                            type="button"
-                            onClick={() => handleRemovePost(post.id)}
-                            title="Xóa bài viết"
-                            className="p-1 text-slate-400 hover:text-rose-600 rounded"
-                          >
-                            <Trash2 className="size-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {paginatedPosts.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="text-center py-10 text-xs text-slate-400">
+                      Chưa có bài viết nào được quét trong nhóm này.
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedPosts.map((post) => {
+                    const isChecked = selectedPostIds.has(post.id);
+                    return (
+                      <tr
+                        key={post.id}
+                        className={`hover:bg-slate-50 transition-colors ${
+                          isChecked ? "bg-[#EFF6FF]/25" : ""
+                        }`}
+                      >
+                        <td className="py-2.5 px-3 text-center">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => handleToggleSelectPost(post.id)}
+                            className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
+                          />
+                        </td>
+                        <td className="py-2.5 px-2 text-center font-mono text-xs text-[#94A3B8]">
+                          {post.stt}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="flex flex-col gap-1">
+                            <p className="text-xs font-medium text-[#1E293B] line-clamp-2">
+                              {post.title}
+                            </p>
+                            <a
+                              href={`https://${post.linkText}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 font-mono text-[11px] text-[#2563EB] hover:underline"
+                            >
+                              <span className="truncate max-w-[200px]">{post.linkText}</span>
+                              <ExternalLink className="size-3 text-[#2563EB] shrink-0" />
+                            </a>
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`size-6 rounded-full ${post.authorTagBg} ${post.authorTagText} font-bold text-[11px] flex items-center justify-center shrink-0 uppercase`}
+                            >
+                              {post.authorTag}
+                            </span>
+                            <span className="font-semibold text-xs text-[#0F172A] truncate">
+                              {post.authorName}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#EFF6FF] text-[#1D4ED8] text-xs font-semibold">
+                              <IconLike />
+                              <span>{post.likes}</span>
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#ECFDF5] text-[#047857] text-xs font-semibold">
+                              <IconComment />
+                              <span>{post.comments}</span>
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#F3E8FF] text-[#7E22CE] text-xs font-semibold">
+                              <IconShare />
+                              <span>{post.shares}</span>
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 font-mono text-[11px] text-[#64748B]">
+                          {post.postedDate}
+                        </td>
+                        <td className="py-2.5 px-3 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              title="Xem trước"
+                              className="p-1 text-slate-400 hover:text-blue-600 rounded"
+                            >
+                              <Eye className="size-3.5" />
+                            </button>
+                            <a
+                              href={`https://${post.linkText}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              title="Mở bài viết"
+                              className="p-1 text-slate-400 hover:text-blue-600 rounded"
+                            >
+                              <ExternalLink className="size-3.5" />
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => handleRemovePost(post.id)}
+                              title="Xóa bài viết"
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded"
+                            >
+                              <Trash2 className="size-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -650,84 +634,45 @@ export default function GroupScanPostListPage() {
           {/* Phân trang Footer */}
           <div className="flex flex-wrap justify-between items-center w-full pt-1 gap-2">
             <div className="flex items-center gap-2 text-xs text-[#64748B]">
-              <span>Hiển thị 1 - {filteredPosts.length} trong tổng số 28 bài viết</span>
+              <span>Hiển thị {filteredPosts.length > 0 ? `${(currentPage - 1) * pageSize + 1} - ${Math.min(currentPage * pageSize, filteredPosts.length)}` : "0"} trong tổng số {filteredPosts.length} bài viết</span>
               <span>•</span>
               <div className="flex items-center gap-1">
                 <span>Hàng mỗi trang:</span>
-                <select
+                <CustomSelect
                   value={pageSize}
-                  onChange={(e) => setPageSize(Number(e.target.value) || 5)}
-                  className="h-6 px-1.5 border border-[#E2E8F0] rounded text-xs text-slate-700 bg-white"
-                >
-                  <option value={5}>5</option>
-                  <option value={10}>10</option>
-                  <option value={20}>20</option>
-                </select>
+                  onChange={(val) => {
+                    setPageSize(Number(val) || 5);
+                    setCurrentPage(1);
+                  }}
+                  options={PAGE_SIZE_OPTIONS}
+                  size="sm"
+                  direction="up"
+                  className="w-16"
+                  buttonClassName="h-6 px-1.5 text-xs"
+                />
               </div>
             </div>
 
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                className="size-7 flex items-center justify-center border border-[#E2E8F0] rounded text-xs font-semibold text-[#64748B] hover:bg-slate-100"
-              >
-                &lt;
-              </button>
-              <button
-                type="button"
-                onClick={() => setCurrentPage(1)}
-                className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                  currentPage === 1 ? "bg-[#1877F2] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                }`}
-              >
-                1
-              </button>
-              <button
-                type="button"
-                onClick={() => setCurrentPage(2)}
-                className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                  currentPage === 2 ? "bg-[#1877F2] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                }`}
-              >
-                2
-              </button>
-              <button
-                type="button"
-                onClick={() => setCurrentPage(3)}
-                className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                  currentPage === 3 ? "bg-[#1877F2] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                }`}
-              >
-                3
-              </button>
-              <button
-                type="button"
-                onClick={() => setCurrentPage(4)}
-                className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                  currentPage === 4 ? "bg-[#1877F2] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                }`}
-              >
-                4
-              </button>
-              <button
-                type="button"
-                onClick={() => setCurrentPage((p) => p + 1)}
-                className="size-7 flex items-center justify-center border border-[#E2E8F0] rounded text-xs font-semibold text-[#64748B] hover:bg-slate-100"
-              >
-                &gt;
-              </button>
-            </div>
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              onPageChange={setCurrentPage}
+            />
           </div>
         </section>
       </div>
 
       {/* Modal Thêm Mới Nhóm */}
-      {addGroupModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      {mounted && addGroupModalOpen && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setAddGroupModalOpen(false);
+          }}
+        >
           <form
             onSubmit={handleAddGroup}
-            className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 space-y-4"
+            className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 space-y-4 animate-in zoom-in-95 duration-150"
           >
             <div className="flex items-center justify-between border-b pb-3 border-slate-100">
               <h3 className="font-bold text-base text-slate-800 flex items-center gap-2">
@@ -758,16 +703,13 @@ export default function GroupScanPostListPage() {
 
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-slate-700">Phân loại thư mục</label>
-                <select
+                <CustomSelect
                   value={newGroupCategory}
-                  onChange={(e) => setNewGroupCategory(e.target.value)}
-                  className="w-full h-8 px-2.5 text-xs border border-slate-300 rounded-lg outline-none focus:border-blue-600 bg-white"
-                >
-                  <option value="Hội buôn">Hội buôn</option>
-                  <option value="Kinh doanh">Kinh doanh</option>
-                  <option value="Đầu tư">Đầu tư</option>
-                  <option value="Thương mại điện tử">Thương mại điện tử</option>
-                </select>
+                  onChange={(val) => setNewGroupCategory(val)}
+                  options={NEW_GROUP_CATEGORY_OPTIONS}
+                  size="sm"
+                  buttonClassName="h-8"
+                />
               </div>
             </div>
 
@@ -787,7 +729,8 @@ export default function GroupScanPostListPage() {
               </button>
             </div>
           </form>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

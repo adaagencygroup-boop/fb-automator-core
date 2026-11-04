@@ -156,7 +156,33 @@ def init_models() -> None:
         except Exception as exc:
             print(f"[Module 10 DB] DDL error: {exc}")
     _normalize_existing_keywords()
+    _sync_keywords_to_categories()
     print("[Module 10 DB] Schema scanned_groups / scanned_group_keywords / scanned_group_sessions ready.")
+
+
+def _sync_keywords_to_categories() -> None:
+    """Tự động đồng bộ các từ khóa hiện có trong scanned_groups vào bảng scanned_group_categories và liên kết nhóm."""
+    try:
+        db.execute(
+            """
+            INSERT INTO scanned_group_categories (owner_username, name, description)
+            SELECT DISTINCT owner_username, keyword, 'Danh mục từ khóa: ' || keyword
+            FROM scanned_groups
+            WHERE keyword IS NOT NULL AND TRIM(keyword) != ''
+            ON CONFLICT (owner_username, name) DO NOTHING;
+            """
+        )
+        db.execute(
+            """
+            INSERT INTO scanned_group_category_groups (owner_username, category_name, group_id)
+            SELECT DISTINCT owner_username, keyword, group_id
+            FROM scanned_groups
+            WHERE keyword IS NOT NULL AND TRIM(keyword) != ''
+            ON CONFLICT (owner_username, category_name, group_id) DO NOTHING;
+            """
+        )
+    except Exception as exc:
+        print(f"[Module 10 DB] sync keyword categories error: {exc}")
 
 
 def normalize_keyword(raw: Any) -> str:
@@ -287,28 +313,28 @@ def list_all_scanned_groups(
     if not owner:
         return {"groups": [], "total": 0, "keywords": []}
 
-    conditions = ["owner_username = ?"]
+    conditions = ["g.owner_username = ?"]
     params: list[Any] = [owner]
 
     if keyword and str(keyword).strip() and str(keyword).strip().lower() != "all":
-        conditions.append("keyword = ?")
+        conditions.append("g.keyword = ?")
         params.append(normalize_keyword(keyword))
 
     if privacy and str(privacy).strip() and str(privacy).strip().lower() != "all":
-        conditions.append("privacy = ?")
+        conditions.append("g.privacy = ?")
         params.append(str(privacy).strip().lower())
 
     if search and str(search).strip():
         s = f"%{str(search).strip().lower()}%"
         conditions.append(
-            "(lower(group_name) LIKE ? OR lower(group_id) LIKE ? OR lower(keyword) LIKE ? OR lower(group_url) LIKE ?)"
+            "(lower(g.group_name) LIKE ? OR lower(g.group_id) LIKE ? OR lower(g.keyword) LIKE ? OR lower(g.group_url) LIKE ?)"
         )
         params.extend([s, s, s, s])
 
     where_clause = " AND ".join(conditions)
 
     count_row = db.fetch_one(
-        f"SELECT COUNT(*) AS c FROM scanned_groups WHERE {where_clause}",
+        f"SELECT COUNT(*) AS c FROM scanned_groups g WHERE {where_clause}",
         tuple(params),
     )
     total = int((count_row or {}).get("c") or 0)
@@ -318,7 +344,8 @@ def list_all_scanned_groups(
         SELECT g.id, g.owner_username, g.group_id, g.group_url, g.group_name, g.privacy,
                g.members_label, g.members_count, g.keyword, g.source_uid,
                g.created_at, g.last_seen_at,
-               COALESCE(cg.category_name, '') AS category_name
+               COALESCE(NULLIF(cg.category_name, ''), g.keyword, '') AS category_name,
+               c.id as category_db_id
         FROM scanned_groups g
         LEFT JOIN (
             SELECT group_id, MAX(category_name) as category_name
@@ -326,6 +353,8 @@ def list_all_scanned_groups(
             WHERE owner_username = ?
             GROUP BY group_id
         ) cg ON cg.group_id = g.group_id
+        LEFT JOIN scanned_group_categories c
+            ON c.owner_username = g.owner_username AND lower(c.name) = lower(COALESCE(NULLIF(cg.category_name, ''), g.keyword))
         WHERE {where_clause}
         ORDER BY g.created_at DESC
         LIMIT ? OFFSET ?
@@ -355,12 +384,13 @@ def list_all_scanned_groups(
             if hasattr(created_dt, "strftime")
             else str(created_dt or "")
         )
-        cat_name = r.get("category_name") or ""
+        cat_name = r.get("category_name") or r.get("keyword") or ""
+        cat_db_id = r.get("category_db_id")
         out_groups.append({
             "id": str(r.get("id") or gid),
             "stt": idx,
             "group_id": gid,
-            "categoryId": f"cat-{cat_name}" if cat_name else f"kw-{r.get('keyword')}",
+            "categoryId": f"cat-{cat_db_id}" if cat_db_id else (f"cat-{cat_name}" if cat_name else ""),
             "category_name": cat_name,
             "keyword": r.get("keyword") or "",
             "name": r.get("group_name") or gid,
@@ -514,6 +544,21 @@ def upsert_scanned_group(
         """,
         (owner, keyword, gid),
     )
+
+    # Đảm bảo từ khóa tạo thành 1 DANH MỤC trong scanned_group_categories và liên kết nhóm
+    try:
+        create_scan_category(owner, keyword, f"Danh mục từ khóa: {keyword}")
+        db.execute(
+            """
+            INSERT INTO scanned_group_category_groups (owner_username, category_name, group_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT (owner_username, category_name, group_id) DO NOTHING
+            """,
+            (owner, keyword, gid),
+        )
+    except Exception as exc:
+        print(f"[Module 10 DB] link category error: {exc}")
+
     return is_new
 
 
@@ -793,61 +838,6 @@ def delete_scan_sessions_bulk(owner: Optional[str], session_ids: list[str]) -> i
     return cnt
 
 
-def ensure_historical_sessions(owner: Optional[str]) -> None:
-    """Tự động tạo các phiên lịch sử từ dữ liệu `scanned_groups` có sẵn nếu chưa có session."""
-    owner = (owner or "").strip()
-    if not owner:
-        return
-    try:
-        existing_cnt = db.fetch_one(
-            "SELECT COUNT(*) as c FROM scanned_group_sessions WHERE owner_username = ?",
-            (owner,),
-        )
-        if existing_cnt and int(existing_cnt.get("c") or 0) > 0:
-            return
-
-        groups = db.fetch_all(
-            """
-            SELECT keyword, source_uid, COUNT(*) as cnt, MIN(created_at) as started, MAX(last_seen_at) as finished
-            FROM scanned_groups
-            WHERE owner_username = ?
-            GROUP BY keyword, source_uid
-            """,
-            (owner,),
-        )
-        if not groups:
-            return
-
-        for g in groups:
-            kw = g.get("keyword") or "Chung"
-            cnt = int(g.get("cnt") or 0)
-            uid = g.get("source_uid") or ""
-            started = g.get("started")
-            finished = g.get("finished")
-            sid = f"SCN-2026-{abs(hash(f'{owner}_{kw}_{uid}')) % 9000 + 1000}"
-            cfg_str = json.dumps(
-                {"delay": "5 - 10s", "privacy": "Tất cả", "minMembers": "—", "maxKeywords": 1},
-                ensure_ascii=False,
-            )
-            create_scan_session(
-                owner=owner,
-                session_id=sid,
-                scan_type="GROUP_INFO",
-                title=f"Quét thông tin nhóm theo từ khóa «{kw}»",
-                target=kw,
-                target_type="keywords",
-                source_uid=uid,
-                account_name=f"Nick {uid}" if uid else "Facebook Account",
-                target_count=max(cnt, 30),
-                config=cfg_str,
-            )
-            update_scan_session(sid, total_found=cnt, status="SUCCESS", finished=True)
-            add_session_log(sid, "INFO", f"Khởi động phiên quét cho từ khóa «{kw}»")
-            add_session_log(sid, "SUCCESS", f"Đã thu thập {cnt} nhóm vào cơ sở dữ liệu Supabase.")
-    except Exception as exc:
-        print(f"[Module 10 DB] ensure_historical_sessions error: {exc}")
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # CATEGORIES & SHARED LIST
 # ─────────────────────────────────────────────────────────────────────────────
@@ -867,22 +857,24 @@ def list_scan_categories(owner: Optional[str]) -> list[dict[str, Any]]:
 
         cat_counts_rows = db.fetch_all(
             """
-            SELECT c.name, COUNT(DISTINCT cg.group_id) as count
+            SELECT c.name, COUNT(DISTINCT COALESCE(cg.group_id, g.group_id)) as count
             FROM scanned_group_categories c
             LEFT JOIN scanned_group_category_groups cg
-                ON cg.owner_username = c.owner_username AND cg.category_name = c.name
+                ON cg.owner_username = c.owner_username AND lower(cg.category_name) = lower(c.name)
+            LEFT JOIN scanned_groups g
+                ON g.owner_username = c.owner_username AND lower(g.keyword) = lower(c.name)
             WHERE c.owner_username = ?
             GROUP BY c.id, c.name
             ORDER BY c.id ASC
             """,
             (owner,),
         )
-        counts_map = {r["name"]: int(r.get("count") or 0) for r in cat_counts_rows}
+        counts_map = {str(r["name"]).lower(): int(r.get("count") or 0) for r in cat_counts_rows if r.get("name")}
 
         result = []
         for c in existing:
             cname = c.get("name") or ""
-            count = counts_map.get(cname, 0)
+            count = counts_map.get(cname.lower(), 0)
             result.append({
                 "id": f"cat-{c.get('id')}",
                 "name": cname,
@@ -1018,29 +1010,34 @@ def move_groups_to_category(owner: Optional[str], target_category_name: str, gro
 
 def create_scan_category(owner: Optional[str], name: str, description: str = "") -> dict[str, Any]:
     owner = (owner or "").strip()
-    name = (name or "").strip()
+    name = re.sub(r"\s+", " ", (name or "").strip())
     if not owner or not name:
         return {"ok": False, "error": "Thiếu tên danh mục"}
     try:
-        db.execute(
-            """
-            INSERT INTO scanned_group_categories (owner_username, name, description)
-            VALUES (?, ?, ?)
-            ON CONFLICT (owner_username, name) DO NOTHING
-            """,
-            (owner, name, description or "Danh mục nhóm tự tạo"),
-        )
         row = db.fetch_one(
-            "SELECT id, name, description FROM scanned_group_categories WHERE owner_username = ? AND name = ?",
+            "SELECT id, name, description FROM scanned_group_categories WHERE owner_username = ? AND lower(name) = lower(?)",
             (owner, name),
         )
+        if not row:
+            db.execute(
+                """
+                INSERT INTO scanned_group_categories (owner_username, name, description)
+                VALUES (?, ?, ?)
+                ON CONFLICT (owner_username, name) DO NOTHING
+                """,
+                (owner, name, description or "Danh mục nhóm tự tạo"),
+            )
+            row = db.fetch_one(
+                "SELECT id, name, description FROM scanned_group_categories WHERE owner_username = ? AND lower(name) = lower(?)",
+                (owner, name),
+            )
         return {
             "ok": True,
             "category": {
                 "id": f"cat-{row['id']}" if row else f"cat-{abs(hash(name)) % 10000}",
-                "name": name,
+                "name": row["name"] if row else name,
                 "count": 0,
-                "description": description,
+                "description": (row["description"] if row else description) or "",
             },
         }
     except Exception as exc:
