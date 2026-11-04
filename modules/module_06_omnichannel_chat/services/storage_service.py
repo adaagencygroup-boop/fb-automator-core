@@ -5,12 +5,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+# ?u ti?n c?u h?nh _1 ri?ng c?a Module 06
+SUPABASE_URL = os.getenv("SUPABASE_URL_1") or os.getenv("SUPABASE_URL", "")
 if SUPABASE_URL and not SUPABASE_URL.startswith("http"):
     SUPABASE_URL = f"https://{SUPABASE_URL}"
 
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY", "")
-BUCKET_NAME = os.getenv("SUPABASE_STORAGE_BUCKET", "chat-attachments")
+SUPABASE_KEY = (
+    os.getenv("SUPABASE_KEY_1")
+    or os.getenv("SUPABASE_SERVICE_ROLE_KEY_1")
+    or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    or os.getenv("SUPABASE_KEY", "")
+)
+BUCKET_NAME = (
+    os.getenv("SUPABASE_STORAGE_BUCKET_1")
+    or os.getenv("SUPABASE_CHAT_BUCKET")
+    or os.getenv("SUPABASE_STORAGE_BUCKET", "chat-attachments")
+)
 
 _client = None
 

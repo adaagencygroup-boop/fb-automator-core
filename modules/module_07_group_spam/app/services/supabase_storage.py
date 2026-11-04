@@ -26,18 +26,20 @@ UPLOAD_MEDIA_DIR = (DATA_DIR / "module_07_group_spam" / "uploads").resolve()
 
 
 def get_supabase_url() -> str:
-    url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+    url = (os.getenv("SUPABASE_URL_2") or os.getenv("SUPABASE_URL", "")).strip().rstrip("/")
     if not url:
         url = "https://jnjvyvgvutdjozcljhiv.supabase.co"
+    if url and not url.startswith("http"):
+        url = f"https://{url}"
     return url
 
 
 def get_supabase_service_key() -> str:
-    return os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    return (os.getenv("SUPABASE_SERVICE_ROLE_KEY_2") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")).strip()
 
 
 def get_storage_bucket() -> str:
-    return os.getenv("SUPABASE_STORAGE_BUCKET", "campaign").strip() or "campaign"
+    return (os.getenv("SUPABASE_STORAGE_BUCKET_2") or os.getenv("SUPABASE_STORAGE_BUCKET", "campaign")).strip() or "campaign"
 
 
 def is_supabase_storage_available() -> bool:
