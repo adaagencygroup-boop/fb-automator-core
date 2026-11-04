@@ -438,8 +438,8 @@ def _on_home_feed(driver, landing_path: str = "") -> bool:
 # tên ..." / "Phản hồi bình luận của ...") -> luôn loại theo khối đó, không theo nhãn (Facebook đổi nhãn nút thì cùng
 # lắm không thả, không bao giờ thả nhầm vào bình luận).
 _REACT_LABELS_JS = r"""
-const UNREACTED = /^(?:(?:Like|Thích)(?:,\s.*)?|React with Like to .+|Bày tỏ cảm xúc Thích về .+)$/;
-const REACTED = /^(?:Remove (Like|Love|Care|Haha|Wow|Sad|Angry)|Gỡ (Thích|Yêu thích|Thương thương|Haha|Wow|Buồn|Phẫn nộ))(?:(?: from | khỏi |,\s).*)?$/;
+const UNREACTED = /^(?:(?:Like|Thích)(?=,|$)|React with Like to |Bày tỏ cảm xúc Thích về )/;
+const REACTED = /^(?:Remove (Like|Love|Care|Haha|Wow|Sad|Angry)|Gỡ (Thích|Yêu thích|Thương thương|Haha|Wow|Buồn|Phẫn nộ))(?=,| from | khỏi |$)/;
 const KIND = {'Thích': 'Like', 'Yêu thích': 'Love', 'Thương thương': 'Care', 'Buồn': 'Sad', 'Phẫn nộ': 'Angry'};
 const reactedKind = (label) => {
   const m = label.match(REACTED);

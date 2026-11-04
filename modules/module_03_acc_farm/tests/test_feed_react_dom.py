@@ -235,8 +235,20 @@ class FeedReactDomTests(unittest.TestCase):
         self.assertEqual(state("reel-vi-reacted-counted"), "Love")
         self.assertIsNone(state("reel-counted"))
 
+    def test_label_without_space_after_comma(self):
+        # Chưa gặp thật, phòng Facebook bỏ khoảng trắng sau dấu phẩy
+        self.page.set_content(f'<div id="fresh">{_button("Like,860")}</div><div id="reacted">{_button("Remove Love,861")}</div>')
+        like = self.page.evaluate("""(js) => new Function('label', js + 'return UNREACTED.test(label);')('Like,860')""",
+                                  flow._REACT_LABELS_JS)
+        self.assertTrue(like)
+        state = lambda box: self.page.evaluate(RUN_STATE, [flow._REACTION_STATE_JS, box])  # noqa: E731
+        self.assertEqual(state("reacted"), "Love")
+        self.assertIsNone(state("fresh"))
+
     def test_lookalike_labels_are_not_like_button(self):
         self.page.set_content(f'<body>{_button("Like: 47 people")}{_button("Like Page")}{_button("Liked by Mai")}'
+                              f'{_button("Remove Mai")}{_button("Remove Mai, 3 mutual friends")}'
+                              f'{_button("Remove recommendation for Mai")}{_button("React")}{_button("Change Love reaction")}'
                               f'<div id="box">{_button("Thích: 11 người")}{_button("Thích trang này")}</div></body>')
         labels = self.page.evaluate("""(js) => Array.from(document.querySelectorAll('[aria-label]'))
             .filter((b) => new Function('label', js + 'return UNREACTED.test(label) || REACTED.test(label);')(b.getAttribute('aria-label')))
