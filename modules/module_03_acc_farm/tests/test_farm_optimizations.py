@@ -195,7 +195,7 @@ class NewsfeedLeavesHomeTests(unittest.TestCase):
         farm_routes._control = farming_flow.FarmControl()
         with patch.object(farm_routes, "_set_account"), \
                 patch.object(farm_routes, "_record_action", side_effect=lambda *a: logs.append(a)), \
-                patch.object(farm_routes, "_emit"), \
+                patch.object(farm_routes, "_emit") as emitted, \
                 patch.object(farm_routes, "_uid_has_other_browser", return_value=False), \
                 patch.object(farm_routes, "_build_plan", return_value=[("WATCH", {"total_seconds": 1800, "delay": (5, 9)})]), \
                 patch.object(farm_routes, "run_watch", side_effect=hung), \
@@ -205,9 +205,15 @@ class NewsfeedLeavesHomeTests(unittest.TestCase):
                 patch.object(farm_routes.random, "uniform", return_value=0), \
                 patch("core.browser.open_browser", return_value=driver), \
                 patch("core.browser.get_profile_lock", return_value=threading.Lock()), \
-                patch("core.browser.extract_cookies_as_string", return_value=""), \
+                patch("core.browser.force_kill_driver") as killed, \
+                patch("core.browser.extract_cookies_as_string", return_value="") as cookies, \
                 patch("modules.module_03_acc_farm.browser.login_flow.ensure_logged_in", return_value={"success": True}):
             farm_routes._farm_worker("100", 1, farm_routes.FarmScenarioConfig(enabled_watch=True), None)
+        # Chrome treo: tắt cả cây tiến trình, không chờ lấy cookie
+        killed.assert_called_once_with(driver)
+        cookies.assert_not_called()
+        driver.quit.assert_called_once()
+        self.assertEqual(emitted.call_args[0][:2], ("error", farm_routes.BROWSER_HUNG))
         result = logs[0][2]
         self.assertEqual((result["status"], result["quantity"], result["seconds"]), ("FAILED", 12, 1680))
         summary = repository.summarize_actions([{"action": "WATCH", **result}])

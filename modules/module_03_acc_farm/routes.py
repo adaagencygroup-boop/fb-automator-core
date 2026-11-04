@@ -36,6 +36,7 @@ from pydantic import BaseModel
 
 from core.browser import ProxyError, parse_proxy
 from modules.module_03_acc_farm import adapters, repository
+from modules.module_03_acc_farm.browser.errors import BROWSER_CLOSED, BROWSER_HUNG, friendly_error
 from modules.module_03_acc_farm.browser.login_flow import CHECKPOINT_HEAVY, HEAVY_CHECKPOINT_PREFIX
 from modules.module_03_acc_farm.farming.flow import (
     FarmAccountDead,
@@ -472,7 +473,7 @@ def _group_history_skips(uid: str) -> Dict[str, str]:
     try:
         rows = repository.group_target_history(uid)
     except Exception as e:
-        raise RuntimeError(f"Không đọc được lịch sử nhóm của nick (lỗi CSDL), bỏ qua để không vào lại nhóm cũ: {e}") from e
+        raise RuntimeError("Không đọc được lịch sử nhóm của nick (lỗi CSDL), bỏ qua để không vào lại nhóm cũ") from e
     latest: Dict[str, tuple] = {}
     for row in rows:
         try:
@@ -577,7 +578,7 @@ class TargetOwners:
         except Exception as e:
             if self.enforce:
                 raise RuntimeError(f"Không ghi được nick nhận {'nhóm' if self.kind == 'group' else 'người'} này "
-                                   f"(lỗi CSDL), dừng để không trùng nick khác: {e}") from e
+                                   "(lỗi CSDL), dừng để không trùng nick khác") from e
             logger.warning(f"[{self.uid}] Không ghi được chủ {keys}: {e}")
             return None
         return other if self.enforce else None
@@ -796,7 +797,7 @@ def _recent_joined_groups(uid: str, days: int, current_run_id: Optional[int]) ->
     try:
         rows = repository.group_target_history(uid)
     except Exception as e:
-        raise RuntimeError(f"Không đọc được lịch sử nhóm của nick (lỗi CSDL): {e}") from e
+        raise RuntimeError("Không đọc được lịch sử nhóm của nick (lỗi CSDL)") from e
     now = repository.utc_now()
     joined: Dict[str, float] = {}
     for row in rows:
@@ -844,7 +845,7 @@ def _apply_daily_limit(uid: str, action: str, target: int, cfg: FarmScenarioConf
     try:
         done_today = repository.sum_today(uid, action)
     except Exception as e:
-        raise RuntimeError(f"Không kiểm tra được giới hạn ngày (lỗi CSDL), bỏ qua để không vượt giới hạn: {e}") from e
+        raise RuntimeError("Không kiểm tra được giới hạn ngày (lỗi CSDL), bỏ qua để không vượt giới hạn") from e
     return max(0, min(target, limit - done_today)), done_today, limit
 
 
@@ -1042,8 +1043,26 @@ def _farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[s
         _run_farm_worker(uid, slot, cfg, owner)
 
 
+# Selenium thử lại lệnh đọc 4 lần, mỗi lần chờ 120s: kiểm tra Chrome còn sống mất tới 8 phút nếu giữ thời gian chờ mặc định
+BROWSER_PROBE_TIMEOUT = 10
+
+
+def _browser_responds(driver) -> bool:
+    """Chrome / chromedriver còn trả lời trong thời gian ngắn (tối đa ~40s khi treo)."""
+    config = driver.command_executor.client_config
+    original = config.timeout
+    config.timeout = BROWSER_PROBE_TIMEOUT
+    try:
+        _ = driver.title
+        return True
+    except Exception:
+        return False
+    finally:
+        config.timeout = original
+
+
 def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Optional[str]):
-    from core.browser import extract_cookies_as_string, get_profile_lock, open_browser
+    from core.browser import extract_cookies_as_string, force_kill_driver, get_profile_lock, open_browser
     from modules.module_03_acc_farm.browser.login_flow import ensure_logged_in, is_checkpoint_url
 
     ctl = _control
@@ -1074,6 +1093,7 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
     error_msg = None
     save_cookie = True
     cookie_saved = False
+    browser_hung = False
     # Bị chặn kết bạn / tham gia nhóm vẫn tính Hoàn thành: chỉ ghi ở ô hành động và log
     blocked_labels = []
 
@@ -1119,6 +1139,9 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
         for notice in pop_notices():
             _emit("warning", notice, uid, slot)
         if not login.get("success"):
+            if login.get("browser_error"):
+                save_cookie = False
+                raise RuntimeError(login.get("error"))
             raise FarmAccountDead(login.get("error") or "Phiên đăng nhập không hợp lệ", checkpoint=login.get("checkpoint"))
 
         with _state_lock:
@@ -1184,17 +1207,18 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
                 raise
             except FarmAccountDead as e:
                 quantity, partial = partial_of(e)
-                _record_action(uid, action, {"status": "FAILED", "quantity": quantity,
-                                             "details": f"Tài khoản chết giữa chừng: {e}"[:300], **partial}, owner)
+                browser_hung = not e.checkpoint and not _browser_responds(driver)
+                details = "Trình duyệt bị đóng hoặc không phản hồi giữa chừng" if browser_hung \
+                    else f"Tài khoản chết giữa chừng: {e}"[:300]
+                _record_action(uid, action, {"status": "FAILED", "quantity": quantity, "details": details, **partial}, owner)
                 actions[action] = "FAILED"
                 _set_account(uid, actions=actions)
                 raise
             except Exception as e:
                 # Lỗi 1 hoạt động: ghi nhận rồi chạy tiếp (BR-STS-02); trình duyệt chết thì để vòng ngoài xử lý
                 quantity, partial = partial_of(e)
-                try:
-                    _ = driver.title
-                except Exception:
+                if not _browser_responds(driver):
+                    browser_hung = True
                     _record_action(uid, action, {"status": "FAILED", "quantity": quantity,
                                                  "details": "Trình duyệt bị đóng hoặc không phản hồi giữa chừng",
                                                  **partial}, owner)
@@ -1202,7 +1226,7 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
                     _set_account(uid, actions=actions)
                     raise
                 logger.exception(f"[{uid}] Lỗi kịch bản {action}: {e}")
-                result = {"status": "FAILED", "quantity": quantity, "details": f"Lỗi: {str(e)[:200]}", **partial}
+                result = {"status": "FAILED", "quantity": quantity, "details": friendly_error(e, still_open=True), **partial}
 
             _record_action(uid, action, result, owner)
 
@@ -1222,26 +1246,39 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
         error_msg = "Dừng bởi người dùng"
     except ProxyError as e:
         final_status = "FAILED"
-        error_msg = str(e)[:300]
+        error_msg = friendly_error(e)
         save_cookie = False
     except FarmAccountDead as e:
-        final_status = "DIE"
-        error_msg = str(e)
         save_cookie = False
-        try:
-            # "checkpoint" để tách nick cần xác minh với nick chỉ mất phiên; cả hai đều bị loại khỏi lượt chạy sau
-            adapters.set_login_status(uid, "checkpoint" if e.checkpoint else "failed")
-        except Exception as db_err:
-            logger.warning(f"[{uid}] Không cập nhật được trạng thái đăng nhập: {db_err}")
-        if e.checkpoint == CHECKPOINT_HEAVY:
-            _alert_heavy_checkpoint(uid, error_msg)
+        # "Mất phiên" đọc được lúc trình duyệt treo / đã đóng không nói lên điều gì về nick: giữ nguyên trạng thái nick
+        browser_hung = browser_hung or (not e.checkpoint and not _browser_responds(driver))
+        if browser_hung:
+            final_status = "FAILED"
+            error_msg = BROWSER_HUNG
+        else:
+            final_status = "DIE"
+            error_msg = str(e)
+            try:
+                # "checkpoint" để tách nick cần xác minh với nick chỉ mất phiên; cả hai đều bị loại khỏi lượt chạy sau
+                adapters.set_login_status(uid, "checkpoint" if e.checkpoint else "failed")
+            except Exception as db_err:
+                logger.warning(f"[{uid}] Không cập nhật được trạng thái đăng nhập: {db_err}")
+            if e.checkpoint == CHECKPOINT_HEAVY:
+                _alert_heavy_checkpoint(uid, error_msg)
     except Exception as e:
         logger.exception(f"[{uid}] Lỗi tiến trình tương tác: {e}")
         final_status = "FAILED"
-        error_msg = str(e)[:300]
+        error_msg = friendly_error(e)
+        if browser_hung and error_msg not in (BROWSER_HUNG, BROWSER_CLOSED):
+            error_msg = BROWSER_HUNG
     finally:
         if driver is not None:
-            if save_cookie:
+            # Chrome treo: lấy cookie và quit() mỗi lệnh chờ tới 8 phút, quit() lại chỉ tắt chromedriver, Chrome vẫn sống
+            # (tái hiện 2026-11-04) -> tắt cả cây tiến trình, quit() sau đó chỉ còn dọn bridge + đăng ký driver.
+            browser_hung = browser_hung or not _browser_responds(driver)
+            if browser_hung:
+                force_kill_driver(driver)
+            elif save_cookie:
                 try:
                     cookie_str = extract_cookies_as_string(driver)
                     if cookie_str and "c_user=" in cookie_str:
@@ -1262,7 +1299,7 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
                       + ("đã lưu cookie mới và đóng trình duyệt" if cookie_saved else "đóng trình duyệt (không có cookie mới để lưu)")),
         "STOPPED": ("warning", "Đã dừng theo yêu cầu"),
         "DIE": ("error", f"Tài khoản cần xác minh / mất phiên: {error_msg}"),
-        "FAILED": ("error", f"Lỗi hệ thống: {error_msg}"),
+        "FAILED": ("error", error_msg),
     }[final_status]
     _emit(summary[0], summary[1], uid, slot)
     _set_account(uid, status=final_status, activity=summary[1], error=error_msg, finished_at=time.time())
@@ -1428,7 +1465,7 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
                 await loop.run_in_executor(_farm_executor, _farm_worker, uid, slot, cfg, owner)
             except Exception as e:
                 logger.exception(f"[{uid}] Farm worker crashed: {e}")
-                _set_account(uid, status="FAILED", error=str(e)[:300], activity="Lỗi hệ thống")
+                _set_account(uid, status="FAILED", error=friendly_error(e), activity="Lỗi hệ thống")
             finally:
                 slots.put_nowait(slot)
                 try:
