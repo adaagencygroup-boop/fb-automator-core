@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
+  selectReelsFolder,
   getReelsAccountsPages,
   scanReelsFolders,
   startReelsJob,
@@ -43,6 +44,7 @@ const DEFAULT_REELS_CONFIG = {
   sleepMin: 600,
   sleepMax: 900,
   pageFolderOverrides: {},
+  selectedPageIds: null,
 };
 
 function renderLogMessage(text) {
@@ -101,7 +103,10 @@ export default function ReelsPoster() {
   const [logs, setLogs] = useState([]);
   const logBoxRef = useRef(null);
   const folderInputRef = useRef(null);
+
   const isInitializedRef = useRef(false);
+  const savedSelectedPageIdsRef = useRef(null);
+  const isPagesLoadedRef = useRef(false);
 
   // Cập nhật phút hiện tại định kỳ để hiển thị đếm ngược chính xác
   useEffect(() => {
@@ -126,13 +131,16 @@ export default function ReelsPoster() {
           sleepMin,
           sleepMax,
           pageFolderOverrides,
+          selectedPageIds: isPagesLoadedRef.current
+            ? Array.from(selectedPageIds)
+            : (savedSelectedPageIdsRef.current !== null ? Array.from(savedSelectedPageIdsRef.current) : null),
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(configToSave));
       }
     } catch (e) {
       console.warn("Lỗi lưu cấu hình vào localStorage:", e);
     }
-  }, [rootDir, scheduleEnabled, scheduleTimes, sleepMin, sleepMax, pageFolderOverrides]);
+  }, [rootDir, scheduleEnabled, scheduleTimes, sleepMin, sleepMax, pageFolderOverrides, selectedPageIds]);
 
   // 3. Khôi phục cấu hình về mặc định ban đầu
   const handleResetConfig = () => {
@@ -140,12 +148,16 @@ export default function ReelsPoster() {
       if (typeof window !== "undefined") {
         localStorage.removeItem(STORAGE_KEY);
       }
+      savedSelectedPageIdsRef.current = null;
       setRootDir(DEFAULT_REELS_CONFIG.rootDir);
       setScheduleEnabled(DEFAULT_REELS_CONFIG.scheduleEnabled);
       setScheduleTimes(DEFAULT_REELS_CONFIG.scheduleTimes);
       setSleepMin(DEFAULT_REELS_CONFIG.sleepMin);
       setSleepMax(DEFAULT_REELS_CONFIG.sleepMax);
       setPageFolderOverrides(DEFAULT_REELS_CONFIG.pageFolderOverrides);
+      const all = new Set();
+      accounts.forEach((a) => (a.pages || []).forEach((p) => all.add(String(p.page_id))));
+      setSelectedPageIds(all);
       toast.success("Đã khôi phục cài đặt mặc định thành công!", "ĐẶT LẠI CẤU HÌNH");
       setLogs((prev) => [
         ...prev,
@@ -160,31 +172,27 @@ export default function ReelsPoster() {
     }
   };
 
-  // Mở hộp thoại chọn thư mục từ máy tính
+  // Mở hộp thoại chọn thư mục Windows Native (hỗ trợ chuẩn xác mọi ổ đĩa C, D, E...)
   const handleOpenFolderPicker = async () => {
-    if (typeof window !== "undefined" && window.__TAURI__) {
-      try {
-        const { open } = await import("@tauri-apps/api/dialog");
-        const selected = await open({
-          directory: true,
-          multiple: false,
-          title: "Chọn thư mục gốc chứa video Reels"
-        });
-        if (selected && typeof selected === "string") {
-          setRootDir(selected);
-          handleScanFolders(selected, true);
-          return;
-        }
-      } catch (err) {
-        console.warn("Tauri dialog fallback:", err);
+    try {
+      setIsScanningFolders(true);
+      const res = await selectReelsFolder(rootDir);
+      if (res?.success && res.folder) {
+        setRootDir(res.folder);
+        await handleScanFolders(res.folder, true);
+        return;
       }
-    }
-    if (folderInputRef.current) {
-      folderInputRef.current.click();
+    } catch (err) {
+      console.warn("Lỗi mở hộp thoại chọn thư mục native:", err);
+      if (folderInputRef.current) {
+        folderInputRef.current.click();
+      }
+    } finally {
+      setIsScanningFolders(false);
     }
   };
 
-  // Xử lý sau khi người dùng chọn thư mục từ trình duyệt web
+  // Xử lý sau khi người dùng chọn thư mục từ trình duyệt web (không fix cứng đường dẫn)
   const handlePickFolderFromDisk = (e) => {
     const files = e.target.files;
     if (files && files.length > 0) {
@@ -192,15 +200,32 @@ export default function ReelsPoster() {
       const relPath = firstFile.webkitRelativePath || "";
       const rootFolderName = relPath.split("/")[0] || "";
       const fullPath = firstFile.path ? firstFile.path.substring(0, firstFile.path.lastIndexOf(firstFile.name)) : "";
-      const determinedPath = fullPath || (rootFolderName ? `D:\\Projects\\Work\\tool_facebook\\${rootFolderName}` : rootDir);
-      
-      setRootDir(determinedPath);
-      handleScanFolders(determinedPath, true);
+      const determinedPath = fullPath || rootFolderName || rootDir;
+      if (determinedPath) {
+        setRootDir(determinedPath);
+        handleScanFolders(determinedPath, true);
+      }
     }
+    e.target.value = "";
   };
+
   const loadAccountsAndPages = useCallback(async () => {
     setLoadingData(true);
     try {
+      if (savedSelectedPageIdsRef.current === null && typeof window !== "undefined") {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed.selectedPageIds)) {
+              savedSelectedPageIdsRef.current = new Set(parsed.selectedPageIds.map(String));
+            }
+          }
+        } catch (e) {
+          console.warn("Lỗi đọc selectedPageIds từ localStorage:", e);
+        }
+      }
+
       const data = await getReelsAccountsPages();
       if (data?.success && Array.isArray(data.accounts)) {
         setAccounts(data.accounts);
@@ -208,7 +233,18 @@ export default function ReelsPoster() {
         data.accounts.forEach((acc) => {
           (acc.pages || []).forEach((p) => allPageIds.add(String(p.page_id)));
         });
-        setSelectedPageIds(allPageIds);
+
+        if (savedSelectedPageIdsRef.current !== null) {
+          const validSavedIds = new Set(
+            [...savedSelectedPageIdsRef.current].filter((id) => allPageIds.has(id))
+          );
+          setSelectedPageIds(validSavedIds);
+        } else {
+          setSelectedPageIds(allPageIds);
+        }
+
+        isPagesLoadedRef.current = true;
+
         if (data.accounts.length > 0) {
           setExpandedAccounts(new Set([(data.accounts[0]?.group_key || data.accounts[0]?.account_uid)]));
         }
@@ -258,6 +294,9 @@ export default function ReelsPoster() {
       ]);
 
       if (data?.success && Array.isArray(data.folders) && data.folders.length > 0) {
+        if (data.root_dir) {
+          setRootDir(data.root_dir);
+        }
         setAvailableFolders(data.folders);
         let matchedCount = 0;
         if (data.matches) {
@@ -301,6 +340,7 @@ export default function ReelsPoster() {
           ]);
         }
       } else {
+        setAvailableFolders([]);
         const errMsg = data?.error || "Thư mục không tồn tại hoặc không thể truy cập.";
         if (isManual) {
           toast.error(errMsg, "QUÉT THẤT BẠI");
@@ -316,6 +356,7 @@ export default function ReelsPoster() {
       }
     } catch (err) {
       console.warn("Scan folders error:", err);
+      setAvailableFolders([]);
       if (isManual) {
         const errMsg = err?.response?.data?.detail || err?.message || "Không thể kết nối đến máy chủ để quét thư mục.";
         toast.error(errMsg, "QUÉT THẤT BẠI");
@@ -365,6 +406,13 @@ export default function ReelsPoster() {
             }
             if (parsed.pageFolderOverrides && typeof parsed.pageFolderOverrides === "object") {
               setPageFolderOverrides(parsed.pageFolderOverrides);
+            }
+            if (Array.isArray(parsed.selectedPageIds)) {
+              const savedSet = new Set(parsed.selectedPageIds.map(String));
+              savedSelectedPageIdsRef.current = savedSet;
+              if (isPagesLoadedRef.current) {
+                setSelectedPageIds((prev) => new Set([...savedSet].filter((id) => prev.has(id))));
+              }
             }
           }
         }
@@ -537,9 +585,10 @@ export default function ReelsPoster() {
   };
 
   const formatTimeRemaining = (mins) => {
-    if (!mins || mins <= 0) return "dưới 1 phút";
-    const h = Math.floor(mins / 60);
-    const m = mins % 60;
+    const num = Number(mins);
+    if (isNaN(num) || num <= 0) return "dưới 1 phút";
+    const h = Math.floor(num / 60);
+    const m = num % 60;
     if (h > 0) return `${h} giờ ${m} phút`;
     return `${m} phút`;
   };
@@ -602,18 +651,16 @@ export default function ReelsPoster() {
   // Lấy tên thư mục video hiện tại của một Page
   const getPageFolder = useCallback((page) => {
     const pid = String(page.page_id);
-    return pageFolderOverrides[pid] !== undefined ? pageFolderOverrides[pid] : (page.reels_folder || page.page_name || "");
+    return pageFolderOverrides[pid] !== undefined ? pageFolderOverrides[pid] : (page.reels_folder || "");
   }, [pageFolderOverrides]);
 
   // Kiểm tra một Page đã được gán thư mục video hợp lệ chưa
   const isPageAssigned = useCallback((page) => {
+    if (!rootDir || availableFolders.length === 0) return false;
     const folder = getPageFolder(page);
     if (!folder) return false;
-    if (availableFolders.length > 0) {
-      return availableFolders.some((f) => f.folder_name === folder);
-    }
-    return Boolean(folder);
-  }, [getPageFolder, availableFolders]);
+    return availableFolders.some((f) => f.folder_name === folder);
+  }, [rootDir, availableFolders, getPageFolder]);
 
   // Lọc tài khoản theo dropdown & trạng thái gán thư mục
   const [selectedAccountUid, setSelectedAccountUid] = useState("ALL");
@@ -963,9 +1010,16 @@ export default function ReelsPoster() {
                   type="text"
                   value={rootDir}
                   onChange={(e) => setRootDir(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleScanFolders(rootDir, true);
+                    }
+                  }}
                   onBlur={() => handleScanFolders(rootDir, false)}
-                  placeholder="D:\Projects\Work\tool_facebook\sample_video_reels"
-                  className="w-full pl-3 pr-9 py-2 text-[12px] text-[#334155] bg-white border border-[#CBD5E1] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#2563EB] truncate"
+                  placeholder="Chưa chọn thư mục video (Bấm chọn hoặc dán đường dẫn)..."
+                  className="w-full pl-3 pr-9 py-2 text-[12px] text-[#334155] bg-white border border-[#CBD5E1] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#2563EB] truncate hover:border-[#94A3B8] transition-colors"
+                  title={rootDir ? `Thư mục hiện tại: ${rootDir}` : "Dán đường dẫn hoặc bấm biểu tượng bên phải để chọn"}
                 />
                 <input
                   type="file"
@@ -1003,6 +1057,10 @@ export default function ReelsPoster() {
             {isScanningFolders ? (
               <p className="text-[11px] text-[#2563EB] flex items-center gap-1 mt-0.5 animate-pulse font-medium">
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Đang quét thư mục và phân tích video...
+              </p>
+            ) : !rootDir ? (
+              <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
+                <FolderX className="w-3.5 h-3.5 text-slate-400" /> Chưa chọn thư mục video
               </p>
             ) : availableFolders.length > 0 ? (
               <p className="text-[11px] text-[#059669] flex items-center gap-1 mt-0.5">
@@ -1380,8 +1438,8 @@ export default function ReelsPoster() {
                   filteredPages.map((page, index) => {
                     const pid = String(page.page_id);
                     const isChecked = selectedPageIds.has(pid);
-                    const currentFolder = pageFolderOverrides[pid] || page.reels_folder || page.page_name;
-                    const hasFolder = availableFolders.some((f) => f.folder_name === currentFolder);
+                    const currentFolder = pageFolderOverrides[pid] !== undefined ? pageFolderOverrides[pid] : (page.reels_folder || "");
+                    const hasFolder = Boolean(currentFolder) && availableFolders.some((f) => f.folder_name === currentFolder);
 
                     const avatarColors = [
                       "bg-emerald-100 text-emerald-700",
@@ -1436,7 +1494,7 @@ export default function ReelsPoster() {
                         <td className="py-2 px-3 w-[190px]" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
                           <div className="relative inline-block w-full">
                             <select
-                              value={currentFolder}
+                              value={hasFolder ? currentFolder : ""}
                               onChange={(e) => {
                                 setPageFolderOverrides({
                                   ...pageFolderOverrides,
@@ -1560,7 +1618,7 @@ export default function ReelsPoster() {
                 <span className="font-semibold text-blue-950">Chế độ hẹn giờ: </span>
                 <span className="text-blue-900">
                   Khung giờ đăng tiếp theo là <strong className="font-mono text-[13px] bg-blue-100/80 px-1.5 py-0.5 rounded text-blue-950">{nextSlotInfo.time}</strong>
-                  {nextSlotInfo.isTomorrow ? " (ngày mai)" : ""} — còn <strong className="text-blue-950">{formatTimeRemaining(nextSlotInfo.diffMinutes)}</strong> nữa.
+                  {(nextSlotInfo.isTomorrow || nextSlotInfo.is_tomorrow) ? " (ngày mai)" : ""} — còn <strong className="text-blue-950">{formatTimeRemaining(nextSlotInfo.diffMinutes ?? nextSlotInfo.diff_minutes)}</strong> nữa.
                 </span>
               </div>
             </div>

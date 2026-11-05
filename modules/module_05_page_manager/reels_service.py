@@ -22,8 +22,25 @@ def scan_root_directory(root_dir: str) -> Dict[str, Any]:
     Quét thư mục gốc và trả về danh sách các thư mục con (mỗi thư mục đại diện cho 1 Fanpage).
     Đếm số video có trong từng thư mục.
     """
-    if not root_dir or not os.path.exists(root_dir):
+    if not root_dir:
+        return {"success": False, "error": "Đường dẫn thư mục không được để trống.", "folders": []}
+    root_dir = os.path.normpath(root_dir.strip().strip('"').strip("'"))
+    if not os.path.isabs(root_dir) or not os.path.exists(root_dir):
+        # Hỗ trợ đường dẫn tương đối (ví dụ chọn từ trình duyệt hoặc thư mục con trong dự án)
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        candidate = os.path.join(base_dir, root_dir)
+        if os.path.exists(candidate) and os.path.isdir(candidate):
+            root_dir = candidate
+        else:
+            parent_candidate = os.path.join(os.path.dirname(base_dir), root_dir)
+            if os.path.exists(parent_candidate) and os.path.isdir(parent_candidate):
+                root_dir = parent_candidate
+            elif os.path.exists(root_dir) and os.path.isdir(root_dir):
+                root_dir = os.path.abspath(root_dir)
+    if not os.path.exists(root_dir):
         return {"success": False, "error": f"Thư mục không tồn tại: {root_dir}", "folders": []}
+
+    root_dir = os.path.abspath(root_dir)
 
     try:
         subdirs = [d for d in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, d))]
@@ -148,13 +165,13 @@ def get_next_reel_video(page_id: str, page_folder_path: str, last_index: int = 0
     numbered_dirs = []
     for item in items:
         if item.isdigit() and os.path.isdir(os.path.join(page_folder_path, item)):
-            numbered_dirs.append(int(item))
-    numbered_dirs.sort()
+            numbered_dirs.append((int(item), item))
+    numbered_dirs.sort(key=lambda x: x[0])
 
     if numbered_dirs:
-        for num in numbered_dirs:
+        for num, dir_name in numbered_dirs:
             if num > last_index:
-                sub_dir_path = os.path.join(page_folder_path, str(num))
+                sub_dir_path = os.path.join(page_folder_path, dir_name)
                 video_file = None
                 caption = ""
                 try:

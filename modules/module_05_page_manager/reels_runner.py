@@ -109,26 +109,32 @@ class ReelsTaskRunner:
             return None
         now = datetime.datetime.now()
         current_minutes = now.hour * 60 + now.minute
+        sorted_times = sorted(schedule_times)
 
-        for t in schedule_times:
+        for t in sorted_times:
             parts = t.split(":")
             slot_min = int(parts[0]) * 60 + int(parts[1])
             if slot_min > current_minutes:
+                diff = slot_min - current_minutes
                 return {
                     "time": t,
-                    "diff_minutes": slot_min - current_minutes,
-                    "is_tomorrow": False
+                    "diff_minutes": diff,
+                    "diffMinutes": diff,
+                    "is_tomorrow": False,
+                    "isTomorrow": False
                 }
 
         # Nếu đã qua hết các giờ trong ngày, lấy giờ đầu tiên ngày mai
-        first_t = schedule_times[0]
+        first_t = sorted_times[0]
         parts = first_t.split(":")
         slot_min = int(parts[0]) * 60 + int(parts[1])
         diff = (1440 - current_minutes) + slot_min
         return {
             "time": first_t,
             "diff_minutes": diff,
-            "is_tomorrow": True
+            "diffMinutes": diff,
+            "is_tomorrow": True,
+            "isTomorrow": True
         }
 
     def _log_next_slot(self, schedule_times: List[str]):
