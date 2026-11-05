@@ -34,6 +34,7 @@ import {
   Loader2,
   Maximize2,
   Minimize2,
+  RotateCw,
   ShieldCheck,
   Trash2,
   Upload,
@@ -297,6 +298,24 @@ export default function AccountManagerModule() {
     return () => { cancelled = true; };
   }, [deleteTarget]);
 
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+
+  const handleManualRefresh = async () => {
+    if (isManualRefreshing || isRefreshing) return;
+    setIsManualRefreshing(true);
+    try {
+      await Promise.all([
+        categoryData.refresh(),
+        fetchAccounts(true),
+      ]);
+      toast.success("Đã làm mới dữ liệu thành công!", "LÀM MỚI");
+    } catch (err) {
+      toast.error("Không thể làm mới: " + (err.message || String(err)), "LỖI LÀM MỚI");
+    } finally {
+      setIsManualRefreshing(false);
+    }
+  };
+
   const handleCloseDelete = () => {
     if (!deletingRef.current) setDeleteTarget(null);
   };
@@ -477,6 +496,18 @@ export default function AccountManagerModule() {
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center gap-3">
+          {/* Nút Refresh (Icon only) */}
+          <button
+            type="button"
+            onClick={handleManualRefresh}
+            disabled={isManualRefreshing || isRefreshing}
+            title="Làm mới dữ liệu trang"
+            aria-label="Làm mới dữ liệu trang"
+            className="flex items-center justify-center w-10 h-10 rounded-xl border border-slate-200/90 bg-white hover:bg-slate-50 text-slate-700 shadow-sm transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <RotateCw className={`w-4 h-4 text-slate-600 ${isManualRefreshing || isRefreshing ? "animate-spin text-primary" : ""}`} />
+          </button>
+
           {/* Nút chính Figma: Thêm nhiều tài khoản */}
           <button
             type="button"
