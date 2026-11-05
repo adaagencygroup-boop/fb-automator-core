@@ -19,9 +19,48 @@ from core.database.connection import db
 
 logger = logging.getLogger(__name__)
 
+MAX_STATUS_IMAGES = 3
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def normalize_image_paths(
+    image_paths: Optional[Any] = None,
+    image_path: Optional[str] = None,
+) -> List[str]:
+    """Chuẩn hóa list path ảnh Status (tối đa 3), bỏ trống/trùng."""
+    paths: List[str] = []
+    raw = image_paths
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text:
+            try:
+                parsed = json.loads(text)
+                raw = parsed if isinstance(parsed, list) else [text]
+            except Exception:
+                raw = [text]
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            p = str(item or "").strip()
+            if p and p not in paths:
+                paths.append(p)
+    if not paths and image_path:
+        p = str(image_path).strip()
+        if p and p != "__REMOVE__":
+            paths.append(p)
+    return paths[:MAX_STATUS_IMAGES]
+
+
+def serialize_image_paths(paths: List[str]) -> Optional[str]:
+    if not paths:
+        return None
+    return json.dumps(paths, ensure_ascii=False)
+
+
+def primary_image_path(paths: List[str]) -> Optional[str]:
+    return paths[0] if paths else None
 
 
 # ==============================================================================
@@ -194,6 +233,7 @@ def create_post(
     content: str = '',
     hashtags: Optional[str] = None,
     image_path: Optional[str] = None,
+    image_paths: Optional[Any] = None,
     media_path: Optional[str] = None,
     thumbnail_path: Optional[str] = None,
     media_hash: Optional[str] = None,
@@ -203,19 +243,22 @@ def create_post(
     schedule_time: Optional[str] = None
 ) -> Dict[str, Any]:
     post_id = str(uuid.uuid4())
+    paths = normalize_image_paths(image_paths, image_path)
+    primary = primary_image_path(paths)
+    paths_json = serialize_image_paths(paths)
     sql = """
         INSERT INTO posts (
             id, session_id, account_id, account_uid, account_name,
-            post_type, content, hashtags, image_path, media_path,
+            post_type, content, hashtags, image_path, image_paths, media_path,
             thumbnail_path, media_hash, schedule_time, status,
             created_at, updated_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
         RETURNING *;
     """
     params = (
         post_id, session_id, account_id, account_uid, account_name,
-        post_type, content, hashtags, image_path, media_path,
+        post_type, content, hashtags, primary, paths_json, media_path,
         thumbnail_path, media_hash, schedule_time, status
     )
     res = db.fetch_one(sql, params)
@@ -249,8 +292,20 @@ def save_or_update_draft(
     account_name: str = "",
     status: str = "READY",
     image_path: Optional[str] = None,
+    image_paths: Optional[Any] = None,
     clear_image: bool = False
 ) -> Dict[str, Any]:
+    touch_images = clear_image or image_path is not None or image_paths is not None
+    if clear_image or image_path == "__REMOVE__":
+        paths: List[str] = []
+    elif touch_images:
+        paths = normalize_image_paths(image_paths, image_path)
+    else:
+        paths = []  # unused when not touching images
+
+    primary = primary_image_path(paths) if touch_images else None
+    paths_json = serialize_image_paths(paths) if touch_images else None
+
     if draft_id:
         check_sql = "SELECT id FROM posts WHERE id = %s;"
         existing = db.fetch_one(check_sql, (draft_id,))
@@ -262,23 +317,28 @@ def save_or_update_draft(
                         account_name = CASE WHEN %s != '' THEN %s ELSE account_name END,
                         status = %s,
                         image_path = NULL,
+                        image_paths = NULL,
                         updated_at = NOW()
                     WHERE id = %s
                     RETURNING *;
                 """
                 res = db.fetch_one(update_sql, (content, account_name, account_name, status, draft_id))
-            elif image_path is not None:
+            elif touch_images:
                 update_sql = """
                     UPDATE posts
                     SET content = %s,
                         account_name = CASE WHEN %s != '' THEN %s ELSE account_name END,
                         status = %s,
                         image_path = %s,
+                        image_paths = %s,
                         updated_at = NOW()
                     WHERE id = %s
                     RETURNING *;
                 """
-                res = db.fetch_one(update_sql, (content, account_name, account_name, status, image_path, draft_id))
+                res = db.fetch_one(
+                    update_sql,
+                    (content, account_name, account_name, status, primary, paths_json, draft_id),
+                )
             else:
                 update_sql = """
                     UPDATE posts
@@ -294,29 +354,67 @@ def save_or_update_draft(
                 return res
 
     delete_drafts_by_account(account_uid, post_type)
-    final_img = None if (clear_image or image_path == "__REMOVE__") else image_path
     return create_post(
         post_type=post_type,
         account_uid=account_uid,
         account_name=account_name,
         content=content,
-        image_path=final_img,
+        image_path=primary if touch_images else image_path,
+        image_paths=paths if touch_images else image_paths,
         status=status
     )
 
 
 
 
-def claim_next_pending_post(session_id: str) -> Optional[Dict[str, Any]]:
+def claim_next_pending_post(
+    session_id: str,
+    prefer_uid: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """
     Lấy bài PENDING an toàn tránh đụng độ giữa 2 luồng đồng thời.
     Sử dụng FOR UPDATE SKIP LOCKED.
-    Đồng thời loại trừ các account_uid đang có bài ở trạng thái RUNNING để đảm bảo
-    mỗi profile Chrome chỉ chạy đơn luồng tại một thời điểm.
+
+    prefer_uid: lấy clip tiếp theo của nick đang giữ browser (không loại RUNNING
+    của chính nick đó — worker hiện tại đã sở hữu profile Chrome).
+    Không prefer: loại UID đang RUNNING để tránh 2 luồng cùng 1 profile.
     """
+    if prefer_uid:
+        # Worker đang giữ Chrome của prefer_uid → lấy tiếp PENDING cùng nick.
+        # Không dùng NOT IN RUNNING: vừa finish clip trước (PUBLISHED) cần claim
+        # ngay clip sau mà không đóng browser.
+        sql_prefer = """
+            SELECT * FROM posts
+            WHERE session_id = %s
+              AND status = 'PENDING'
+              AND account_uid = %s
+            ORDER BY created_at ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1;
+        """
+        with db.session() as cursor:
+            cursor.execute(
+                db._normalize_query(sql_prefer),
+                (session_id, prefer_uid),
+            )
+            row = cursor.fetchone()
+            if row:
+                post = dict(row)
+                cursor.execute(
+                    db._normalize_query(
+                        "UPDATE posts SET status = 'RUNNING', updated_at = NOW() WHERE id = %s;"
+                    ),
+                    (post["id"],),
+                )
+                post["status"] = "RUNNING"
+                return post
+            # Hết clip của nick đang giữ → không fallback sang nick khác trong
+            # cùng lần gọi; caller sẽ đóng browser rồi claim lại không prefer.
+            return None
+
     sql = """
         SELECT * FROM posts
-        WHERE session_id = %s 
+        WHERE session_id = %s
           AND status = 'PENDING'
           AND account_uid NOT IN (
               SELECT account_uid FROM posts WHERE session_id = %s AND status = 'RUNNING'
@@ -339,11 +437,19 @@ def claim_next_pending_post(session_id: str) -> Optional[Dict[str, Any]]:
         return post
 
 
-def count_pending_posts(session_id: str) -> int:
-    """Đếm số lượng bài viết còn đang PENDING trong session."""
-    sql = "SELECT COUNT(*) as cnt FROM posts WHERE session_id = %s AND status = 'PENDING';"
+def count_pending_posts(session_id: str, account_uid: Optional[str] = None) -> int:
+    """Đếm số PENDING trong session; có thể lọc theo 1 account_uid."""
+    if account_uid:
+        sql = (
+            "SELECT COUNT(*) as cnt FROM posts "
+            "WHERE session_id = %s AND status = 'PENDING' AND account_uid = %s;"
+        )
+        params = (session_id, account_uid)
+    else:
+        sql = "SELECT COUNT(*) as cnt FROM posts WHERE session_id = %s AND status = 'PENDING';"
+        params = (session_id,)
     with db.session() as cursor:
-        cursor.execute(db._normalize_query(sql), (session_id,))
+        cursor.execute(db._normalize_query(sql), params)
         row = cursor.fetchone()
         return row['cnt'] if row else 0
 
@@ -560,6 +666,7 @@ def get_post_history(
     search: Optional[str] = None,
     time_slot: Optional[str] = None,
     date: Optional[str] = None,
+    account_uid: Optional[str] = None,
     limit: int = 50,
     offset: int = 0
 ) -> tuple:
@@ -586,6 +693,10 @@ def get_post_history(
     if date and date != "all":
         conditions.append("DATE(created_at) = %s")
         params.append(date)
+
+    if account_uid and str(account_uid).strip() and str(account_uid).strip().lower() != "all":
+        conditions.append("account_uid = %s")
+        params.append(str(account_uid).strip())
 
     if search and search.strip():
         term = f"%{search.strip()}%"

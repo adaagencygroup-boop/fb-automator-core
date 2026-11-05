@@ -511,7 +511,48 @@ class PostRunner:
                 logger.error(f"Lỗi khi cập nhật post_session hoàn tất: {e}")
 
     def _worker_loop(self, session_id: str, thread_name: str, post_type: str, min_delay: int, max_delay: int):
-        """Vòng lặp lấy bài từ hàng đợi posts và thực thi."""
+        """Vòng lặp lấy bài từ hàng đợi posts và thực thi.
+
+        Reels/Story: giữ 1 Chrome / account — đăng hết clip của nick rồi mới đóng.
+        """
+        driver = None
+        held_uid = None
+        held_owner = None
+
+        def _close_held_driver(reason: str = ""):
+            nonlocal driver, held_uid, held_owner
+            if not driver:
+                held_uid = None
+                held_owner = None
+                return
+            close_uid = held_uid
+            close_owner = held_owner
+            try:
+                try:
+                    driver.get("about:blank")
+                    time.sleep(3)
+                except Exception:
+                    pass
+                from modules.module_02_account_manager.context import owner_scope
+                from modules.module_03_acc_farm.browser.manager import safe_close_driver
+                with owner_scope(close_owner):
+                    safe_close_driver(driver, uid=close_uid)
+            except Exception:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+            self._active_drivers.pop(thread_name, None)
+            if reason:
+                self.log(
+                    thread_name,
+                    "info",
+                    f"Đã đóng Chrome Profile UID {close_uid or '?'} ({reason}).",
+                )
+            driver = None
+            held_uid = None
+            held_owner = None
+
         try:
             # Chờ đến giờ hẹn (nếu phiên có thiết lập hẹn giờ)
             while not self._schedule_event.is_set():
@@ -526,17 +567,37 @@ class PostRunner:
                         return
                     time.sleep(1)
 
-                # Lấy 1 bài PENDING
-                post = post_repository.claim_next_pending_post(session_id)
+                # Ưu tiên clip cùng nick đang giữ browser — không đóng Chrome giữa các vid
+                post = post_repository.claim_next_pending_post(
+                    session_id, prefer_uid=held_uid
+                )
+                if not post and held_uid:
+                    pending_same = post_repository.count_pending_posts(
+                        session_id, account_uid=held_uid
+                    )
+                    if pending_same > 0:
+                        # Transient: vẫn còn clip cùng nick → giữ browser, thử lại
+                        self.log(
+                            thread_name,
+                            "info",
+                            f"Còn {pending_same} clip PENDING cho UID {held_uid} — giữ Chrome, thử claim lại...",
+                        )
+                        time.sleep(1)
+                        continue
+                    # Hết clip của nick đang giữ → đóng 1 lần rồi nhận nick khác
+                    _close_held_driver("hết clip của nick hiện tại")
+                    post = post_repository.claim_next_pending_post(session_id)
+
                 if not post:
-                    # Kiểm tra xem session có còn bài PENDING nào khác đang chờ (do nick đó đang chạy ở luồng khác) không?
                     pending_cnt = post_repository.count_pending_posts(session_id)
                     if pending_cnt > 0:
-                        # Vẫn còn bài PENDING trong hàng đợi, luồng tạm chờ luồng kia hoàn tất để nhận bài
+                        _close_held_driver("chờ tài khoản khác sẵn sàng")
                         with self._lock:
                             if thread_name in self._active_threads:
                                 self._active_threads[thread_name]["status"] = "Đang chờ"
-                                self._active_threads[thread_name]["currentActivity"] = "Đang chờ tài khoản sẵn sàng để nhận bài tiếp theo..."
+                                self._active_threads[thread_name]["currentActivity"] = (
+                                    "Đang chờ tài khoản sẵn sàng để nhận bài tiếp theo..."
+                                )
                         time.sleep(3)
                         continue
 
@@ -544,13 +605,15 @@ class PostRunner:
                     with self._lock:
                         if thread_name in self._active_threads:
                             self._active_threads[thread_name]["status"] = "Hoàn thành"
-                            self._active_threads[thread_name]["currentActivity"] = "Đã xử lý xong toàn bộ bài viết được giao."
+                            self._active_threads[thread_name]["currentActivity"] = (
+                                "Đã xử lý xong toàn bộ bài viết được giao."
+                            )
                     break
 
-                uid = post['account_uid']
-                name = post.get('account_name', uid)
-                m_file = os.path.basename(post.get('media_path') or '')
-                c_text = (post.get('content') or '').strip().replace('\n', ' ')
+                uid = post["account_uid"]
+                name = post.get("account_name", uid)
+                m_file = os.path.basename(post.get("media_path") or "")
+                c_text = (post.get("content") or "").strip().replace("\n", " ")
                 if m_file and c_text:
                     content_preview = f"[{m_file}] {c_text}"
                 elif m_file:
@@ -560,120 +623,161 @@ class PostRunner:
                 if len(content_preview) > 45:
                     content_preview = content_preview[:45] + "..."
 
+                reuse_browser = bool(driver and held_uid == uid)
+                if driver and held_uid and held_uid != uid:
+                    _close_held_driver(f"đổi nick {held_uid} → {uid}")
+
+                activity = (
+                    f"Tái sử dụng Chrome — đăng clip tiếp theo cho {name}..."
+                    if reuse_browser
+                    else f"Bắt đầu khởi tạo Chrome Profile cho {name}..."
+                )
                 with self._lock:
                     self._active_threads[thread_name] = {
-                        "id": str(post['id']),
+                        "id": str(post["id"]),
                         "threadId": thread_name,
                         "accountUid": uid,
                         "accountName": name,
                         "status": "Đang chạy",
                         "contentPreview": content_preview or f"Đang chuẩn bị {post_type.upper()}...",
-                        "currentActivity": f"Bắt đầu khởi tạo Chrome Profile cho {name}...",
+                        "currentActivity": activity,
                         "startTime": time.time(),
                     }
-                    self._metrics["running"] = len([t for t in self._active_threads.values() if t.get("status") == "Đang chạy"])
+                    self._metrics["running"] = len(
+                        [t for t in self._active_threads.values() if t.get("status") == "Đang chạy"]
+                    )
 
                 post_logs = []
-                init_msg = f"Bắt đầu xử lý bài đăng cho tài khoản {name} (UID: {uid})..."
+                init_msg = (
+                    f"Đăng clip tiếp theo cho {name} (UID: {uid}) — giữ nguyên Chrome Profile..."
+                    if reuse_browser
+                    else f"Bắt đầu xử lý bài đăng cho tài khoản {name} (UID: {uid})..."
+                )
                 self.log(thread_name, "info", init_msg)
-                post_logs.append({
-                    "timestamp": time.strftime("%H:%M:%S"),
-                    "thread": thread_name,
-                    "type": "info",
-                    "message": init_msg
-                })
-
-                def on_progress(msg: str):
-                    self.log(thread_name, "info", msg)
-                    post_logs.append({
+                post_logs.append(
+                    {
                         "timestamp": time.strftime("%H:%M:%S"),
                         "thread": thread_name,
                         "type": "info",
-                        "message": msg
-                    })
+                        "message": init_msg,
+                    }
+                )
+
+                def on_progress(msg: str):
+                    self.log(thread_name, "info", msg)
+                    post_logs.append(
+                        {
+                            "timestamp": time.strftime("%H:%M:%S"),
+                            "thread": thread_name,
+                            "type": "info",
+                            "message": msg,
+                        }
+                    )
                     with self._lock:
                         if thread_name in self._active_threads:
                             self._active_threads[thread_name]["currentActivity"] = msg
 
-                # Khởi tạo browser (HIỆN BROWSER - không dùng headless)
-                driver = None
+                close_browser_after = False
+                same_uid_continue = False
+                owner = held_owner
                 try:
-                    # Lớp kiểm tra định dạng media (Validation Layer) trước khi mở Chrome
-                    if post_type == 'story':
-                        m_path = post.get('media_path')
+                    # Validate media trước khi mở / reuse Chrome
+                    if post_type == "story":
+                        m_path = post.get("media_path")
                         if not m_path or not os.path.isfile(m_path):
                             raise FileNotFoundError(f"File media Story không tồn tại: {m_path}")
                         m_ext = os.path.splitext(m_path)[1].lower()
-                        if m_ext not in {'.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mov'}:
+                        if m_ext not in {".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov"}:
                             raise ValueError(
                                 f"Chế độ Story chỉ hỗ trợ video (.mp4, .mov) hoặc ảnh (.jpg, .png, .webp). "
                                 f"File '{os.path.basename(m_path)}' không đúng định dạng."
                             )
-                    elif post_type == 'reels':
-                        m_path = post.get('media_path')
+                    elif post_type == "reels":
+                        m_path = post.get("media_path")
                         if not m_path or not os.path.isfile(m_path):
                             raise FileNotFoundError(f"File video Reels không tồn tại: {m_path}")
                         m_ext = os.path.splitext(m_path)[1].lower()
-                        if m_ext not in {'.mp4', '.mov'}:
+                        if m_ext not in {".mp4", ".mov"}:
                             raise ValueError(
-                                f"Chế độ Reels chỉ hỗ trợ video (.mp4, .mov). File '{os.path.basename(m_path)}' không đúng định dạng video."
+                                f"Chế độ Reels chỉ hỗ trợ video (.mp4, .mov). "
+                                f"File '{os.path.basename(m_path)}' không đúng định dạng video."
                             )
 
-                    on_progress("Đang mở Chrome Profile (hiển thị trực tiếp)...")
                     creds = self.get_account_credentials(uid)
                     proxy = creds.get("proxy") or None
                     owner = creds.get("user_id")
 
-                    from modules.module_02_account_manager.context import owner_scope
-                    with owner_scope(owner):
-                        try:
-                            from modules.module_03_acc_farm.browser.manager import create_driver as farm_create_driver
-                            # headless=False: luôn mở cửa sổ Chrome trên màn hình để xem tiến trình
-                            driver = farm_create_driver(uid, headless=False, proxy=proxy, scope="post")
-                        except Exception as b_err:
-                            self.log(thread_name, "warn", f"Browser Manager ({b_err}) fallback sang Chrome trực tiếp...")
-                            from selenium import webdriver
-                            from modules.module_02_account_manager.automation.browser_manager import get_profile_path
-                            opts = webdriver.ChromeOptions()
-                            profile_dir = creds.get("profile_path") or get_profile_path(uid)
-                            opts.add_argument(f"--user-data-dir={profile_dir}")
-                            opts.add_argument("--disable-blink-features=AutomationControlled")
-                            opts.add_argument("--start-maximized")
-                            opts.add_argument("--disable-infobars")
-                            opts.add_argument("--no-first-run")
-                            # KHÔNG DÙNG headless để user xem trực tiếp
-                            driver = webdriver.Chrome(options=opts)
-
-                    self._active_drivers[thread_name] = driver
-                    try:
-                        from core.browser.driver import bring_chrome_to_front
-                        bring_chrome_to_front(driver)
-                    except Exception:
-                        pass
-
-                    # Đảm bảo phiên Facebook hợp lệ và đã vào Newsfeed:
-                    # Tự động vượt qua màn hình One-Click Login (Tiếp tục / Mật khẩu / 2FA) nếu xuất hiện
-                    on_progress("Kiểm tra phiên đăng nhập Facebook từ Chrome Profile...")
                     import importlib
                     import modules.module_03_acc_farm.post_flow as _post_flow_mod
+
                     try:
                         importlib.reload(_post_flow_mod)
                     except Exception:
                         pass
 
-                    try:
-                        _post_flow_mod.ensure_facebook_session(
-                            driver=driver,
-                            uid=uid,
-                            password=creds.get("password", ""),
-                            two_fa_secret=creds.get("two_fa", ""),
-                            cookie_str=creds.get("cookie", ""),
-                            account_name=name,
-                            log_cb=on_progress
+                    if not reuse_browser:
+                        on_progress("Đang mở Chrome Profile (hiển thị trực tiếp)...")
+                        from modules.module_02_account_manager.context import owner_scope
+
+                        with owner_scope(owner):
+                            try:
+                                from modules.module_03_acc_farm.browser.manager import (
+                                    create_driver as farm_create_driver,
+                                )
+
+                                driver = farm_create_driver(
+                                    uid, headless=False, proxy=proxy, scope="post"
+                                )
+                            except Exception as b_err:
+                                self.log(
+                                    thread_name,
+                                    "warn",
+                                    f"Browser Manager ({b_err}) fallback sang Chrome trực tiếp...",
+                                )
+                                from selenium import webdriver
+                                from modules.module_02_account_manager.automation.browser_manager import (
+                                    get_profile_path,
+                                )
+
+                                opts = webdriver.ChromeOptions()
+                                profile_dir = creds.get("profile_path") or get_profile_path(uid)
+                                opts.add_argument(f"--user-data-dir={profile_dir}")
+                                opts.add_argument("--disable-blink-features=AutomationControlled")
+                                opts.add_argument("--start-maximized")
+                                opts.add_argument("--disable-infobars")
+                                opts.add_argument("--no-first-run")
+                                driver = webdriver.Chrome(options=opts)
+
+                        held_uid = uid
+                        held_owner = owner
+                        self._active_drivers[thread_name] = driver
+                        try:
+                            from core.browser.driver import bring_chrome_to_front
+
+                            bring_chrome_to_front(driver)
+                        except Exception:
+                            pass
+
+                        on_progress("Kiểm tra phiên đăng nhập Facebook từ Chrome Profile...")
+                        try:
+                            _post_flow_mod.ensure_facebook_session(
+                                driver=driver,
+                                uid=uid,
+                                password=creds.get("password", ""),
+                                two_fa_secret=creds.get("two_fa", ""),
+                                cookie_str=creds.get("cookie", ""),
+                                account_name=name,
+                                log_cb=on_progress,
+                            )
+                        except _post_flow_mod.PostAccountDead as _dead:
+                            raise PostAccountDead(
+                                f"Chrome Profile chưa đăng nhập hoặc gặp sự cố: {_dead}"
+                            )
+                        on_progress("Phiên đăng nhập hợp lệ — bắt đầu đăng bài...")
+                    else:
+                        on_progress(
+                            f"Giữ Chrome Profile UID {uid} — đăng clip tiếp theo không mở browser mới..."
                         )
-                    except _post_flow_mod.PostAccountDead as _dead:
-                        raise PostAccountDead(f"Chrome Profile chưa đăng nhập hoặc gặp sự cố: {_dead}")
-                    on_progress("Phiên đăng nhập hợp lệ — bắt đầu đăng bài...")
 
                     def check_pause(step_log_cb=None):
                         """Đóng băng ngay lập tức các thao tác tự động nếu người dùng nhấn Tạm dừng."""
@@ -699,61 +803,69 @@ class PostRunner:
                                     self._active_threads[thread_name]["status"] = "Đang chạy"
                                     self._active_threads[thread_name]["currentActivity"] = resume_msg
 
-                    if post_type == 'status':
+                    if post_type == "status":
                         res_url = _post_flow_mod.publish_status_post(
                             driver,
-                            post['content'],
-                            post.get('image_path'),
+                            post["content"],
+                            post.get("image_path"),
                             on_progress,
                             check_pause=check_pause,
-                            uid=uid
+                            uid=uid,
+                            image_paths=post.get("image_paths"),
                         )
-                    elif post_type == 'reels':
+                    elif post_type == "reels":
                         res_url = _post_flow_mod.publish_reels_post(
                             driver,
-                            post['media_path'],
-                            post.get('content', ''),
+                            post["media_path"],
+                            post.get("content", ""),
                             on_progress,
                             check_pause=check_pause,
-                            uid=uid
+                            uid=uid,
                         )
-                    elif post_type == 'story':
+                    elif post_type == "story":
                         res_url = _post_flow_mod.publish_story_post(
                             driver,
-                            post['media_path'],
-                            post.get('content'),
+                            post["media_path"],
+                            post.get("content"),
                             on_progress,
                             check_pause=check_pause,
-                            uid=uid
+                            uid=uid,
                         )
                     else:
                         res_url = None
 
-                    # Đảm bảo luôn có liên kết hợp lệ tương ứng với từng loại post
                     if not res_url and uid:
-                        if post_type == 'reels':
+                        if post_type == "reels":
                             res_url = f"https://www.facebook.com/{uid}/reels"
-                        elif post_type == 'story':
+                        elif post_type == "story":
                             res_url = f"https://www.facebook.com/stories/{uid}"
                         else:
                             res_url = f"https://www.facebook.com/{uid}"
 
-                    # Cập nhật thành công
                     success_msg = f"XUẤT BẢN THÀNH CÔNG {post_type.upper()}! Link: {res_url or 'N/A'}"
-                    post_logs.append({
-                        "timestamp": time.strftime("%H:%M:%S"),
-                        "thread": thread_name,
-                        "type": "success",
-                        "message": success_msg
-                    })
-                    post_repository.finish_post(post['id'], uid, 'PUBLISHED', url=res_url, logs=post_logs)
+                    post_logs.append(
+                        {
+                            "timestamp": time.strftime("%H:%M:%S"),
+                            "thread": thread_name,
+                            "type": "success",
+                            "message": success_msg,
+                        }
+                    )
+                    post_repository.finish_post(
+                        post["id"], uid, "PUBLISHED", url=res_url, logs=post_logs
+                    )
                     try:
                         from modules.module_02_account_manager.database.connection import SessionLocal
-                        from modules.module_02_account_manager.database.repository import AccountRepository
+                        from modules.module_02_account_manager.database.repository import (
+                            AccountRepository,
+                        )
                         from modules.module_02_account_manager.context import owner_scope
+
                         with SessionLocal() as db_session:
                             with owner_scope(owner):
-                                AccountRepository.update_profile_statuses(db_session, {uid: "live"}, owner_username=owner)
+                                AccountRepository.update_profile_statuses(
+                                    db_session, {uid: "live"}, owner_username=owner
+                                )
                     except Exception:
                         pass
                     with self._lock:
@@ -761,35 +873,79 @@ class PostRunner:
                         if thread_name in self._active_threads:
                             self._active_threads[thread_name]["status"] = "Hoàn thành"
                             self._active_threads[thread_name]["currentActivity"] = success_msg
-                        self._metrics["running"] = len([t for t in self._active_threads.values() if t.get("status") == "Đang chạy"])
-                    self.log(thread_name, "info", f"XUẤT BẢN THÀNH CÔNG {post_type.upper()} cho UID {uid}. Link: {res_url or 'N/A'}")
-                    self.log(thread_name, "info", f"Đã cập nhật trạng thái bài viết ID {post['id']} sang SUCCESS trong CSDL.")
+                        self._metrics["running"] = len(
+                            [
+                                t
+                                for t in self._active_threads.values()
+                                if t.get("status") == "Đang chạy"
+                            ]
+                        )
+                    self.log(
+                        thread_name,
+                        "info",
+                        f"XUẤT BẢN THÀNH CÔNG {post_type.upper()} cho UID {uid}. Link: {res_url or 'N/A'}",
+                    )
+                    self.log(
+                        thread_name,
+                        "info",
+                        f"Đã cập nhật trạng thái bài viết ID {post['id']} sang SUCCESS trong CSDL.",
+                    )
+                    # Reels + Story: còn clip cùng nick → giữ Chrome, đăng tiếp
+                    remaining_same = post_repository.count_pending_posts(
+                        session_id, account_uid=uid
+                    )
+                    same_uid_continue = remaining_same > 0
+                    clip_label = "Story" if post_type == "story" else "video"
+                    if same_uid_continue:
+                        self.log(
+                            thread_name,
+                            "info",
+                            f"Còn {remaining_same} {clip_label} cho UID {uid} — giữ Chrome, đăng tiếp (không đóng browser)...",
+                        )
+                    else:
+                        self.log(
+                            thread_name,
+                            "info",
+                            f"Đã hết {clip_label} trong hàng đợi của UID {uid}.",
+                        )
 
                 except Exception as e:
-                    # Kiểm tra nếu tiến trình bị dừng bởi người dùng (Dừng khẩn cấp)
                     if self._stop_event.is_set():
                         status = "STOPPED"
                         err_msg = "Tiến trình đã dừng theo yêu cầu của người dùng (Dừng khẩn cấp)."
                     else:
                         status, err_msg = classify_error(e)
 
-                    post_logs.append({
-                        "timestamp": time.strftime("%H:%M:%S"),
-                        "thread": thread_name,
-                        "type": "warn" if status == "STOPPED" else "error",
-                        "message": f"[{status}] {err_msg}"
-                    })
-                    post_repository.finish_post(post['id'], uid, status, message=err_msg, logs=post_logs)
+                    post_logs.append(
+                        {
+                            "timestamp": time.strftime("%H:%M:%S"),
+                            "thread": thread_name,
+                            "type": "warn" if status == "STOPPED" else "error",
+                            "message": f"[{status}] {err_msg}",
+                        }
+                    )
+                    post_repository.finish_post(
+                        post["id"], uid, status, message=err_msg, logs=post_logs
+                    )
                     if status == "DIE":
                         try:
-                            from modules.module_02_account_manager.database.connection import SessionLocal
-                            from modules.module_02_account_manager.database.repository import AccountRepository
+                            from modules.module_02_account_manager.database.connection import (
+                                SessionLocal,
+                            )
+                            from modules.module_02_account_manager.database.repository import (
+                                AccountRepository,
+                            )
                             from modules.module_02_account_manager.context import owner_scope
+
                             with SessionLocal() as db_session:
                                 with owner_scope(owner):
-                                    AccountRepository.update_profile_statuses(db_session, {uid: "die"}, owner_username=owner)
+                                    AccountRepository.update_profile_statuses(
+                                        db_session, {uid: "die"}, owner_username=owner
+                                    )
                         except Exception as e_status:
-                            logger.error(f"Failed to persist dead status for UID {uid}: {e_status}")
+                            logger.error(
+                                f"Failed to persist dead status for UID {uid}: {e_status}"
+                            )
                     with self._lock:
                         if status == "DIE":
                             self._metrics["deadAccount"] += 1
@@ -798,9 +954,19 @@ class PostRunner:
                         else:
                             self._metrics["systemError"] += 1
                         if thread_name in self._active_threads:
-                            self._active_threads[thread_name]["status"] = "Acc chết" if status == "DIE" else ("Đã dừng" if status == "STOPPED" else "Lỗi hệ thống")
+                            self._active_threads[thread_name]["status"] = (
+                                "Acc chết"
+                                if status == "DIE"
+                                else ("Đã dừng" if status == "STOPPED" else "Lỗi hệ thống")
+                            )
                             self._active_threads[thread_name]["currentActivity"] = err_msg
-                        self._metrics["running"] = len([t for t in self._active_threads.values() if t.get("status") == "Đang chạy"])
+                        self._metrics["running"] = len(
+                            [
+                                t
+                                for t in self._active_threads.values()
+                                if t.get("status") == "Đang chạy"
+                            ]
+                        )
 
                     if status == "DIE":
                         self.log(thread_name, "error", f"ACC CHẾT: {err_msg}")
@@ -809,35 +975,69 @@ class PostRunner:
                     elif status == "STOPPED":
                         self.log(thread_name, "warn", f"TIẾN TRÌNH ĐÃ DỪNG: {err_msg}")
                     else:
-                        self.log(thread_name, "error", f"LỖI HỆ THỐNG ({type(e).__name__}): {err_msg}")
-                    self.log(thread_name, "info", f"Đã cập nhật trạng thái bài viết ID {post['id']} sang {status} trong CSDL.")
+                        self.log(
+                            thread_name,
+                            "error",
+                            f"LỖI HỆ THỐNG ({type(e).__name__}): {err_msg}",
+                        )
+                    self.log(
+                        thread_name,
+                        "info",
+                        f"Đã cập nhật trạng thái bài viết ID {post['id']} sang {status} trong CSDL.",
+                    )
+                    # Chỉ đóng browser khi DIE/BLOCKED/STOPPED.
+                    # Lỗi 1 clip (Reels/Story): giữ Chrome nếu còn PENDING cùng nick.
+                    remaining_after_err = post_repository.count_pending_posts(
+                        session_id, account_uid=uid
+                    )
+                    if status in ("DIE", "BLOCKED", "STOPPED"):
+                        close_browser_after = True
+                        same_uid_continue = False
+                    elif remaining_after_err > 0 and driver and held_uid == uid:
+                        close_browser_after = False
+                        same_uid_continue = True
+                        self.log(
+                            thread_name,
+                            "warn",
+                            f"Clip lỗi nhưng còn {remaining_after_err} PENDING cùng UID {uid} — giữ Chrome đăng tiếp...",
+                        )
+                    else:
+                        close_browser_after = True
+                        same_uid_continue = False
 
-                finally:
-                    if driver:
-                        try:
-                            # Điều hướng về blank để Chrome flush cookies/session xuống đĩa
-                            # trước khi đóng — tránh Facebook phát hiện multiple sessions lần sau
-                            try:
-                                driver.get("about:blank")
-                                time.sleep(3)
-                            except Exception:
-                                pass
-                            from modules.module_02_account_manager.context import owner_scope
-                            from modules.module_03_acc_farm.browser.manager import safe_close_driver
-                            with owner_scope(owner):
-                                safe_close_driver(driver, uid=uid)
-                        except Exception:
-                            try:
-                                driver.quit()
-                            except Exception:
-                                pass
-                        self._active_drivers.pop(thread_name, None)
+                if close_browser_after:
+                    _close_held_driver("lỗi nặng / dừng / acc chết / hết clip")
+                elif (
+                    not close_browser_after
+                    and not same_uid_continue
+                    and driver
+                    and held_uid == uid
+                ):
+                    # Hết clip của nick này sau khi đăng xong → đóng trước khi nghỉ đổi nick
+                    _close_held_driver("hết clip sau khi đăng xong")
 
-                # Delay an toàn giữa 2 nick
+                # Delay: ngắn giữa 2 clip cùng nick (Reels/Story giữ Chrome); đầy đủ khi đổi nick
                 if not self._stop_event.is_set():
-                    delay = random.randint(min(min_delay, max_delay), max(min_delay, max_delay))
-                    self.log(thread_name, "info", f"Nghỉ giãn cách {delay}s trước khi chuyển nick tiếp theo...")
-                    time.sleep(min(delay, 5)) # Giới hạn 5s nếu test
+                    if same_uid_continue and driver and held_uid == uid:
+                        delay = random.randint(2, min(5, max(2, max_delay)))
+                        self.log(
+                            thread_name,
+                            "info",
+                            f"Nghỉ {delay}s rồi đăng {post_type} tiếp theo (cùng Chrome UID {uid})...",
+                        )
+                        time.sleep(delay)
+                    else:
+                        delay = random.randint(
+                            min(min_delay, max_delay), max(min_delay, max_delay)
+                        )
+                        self.log(
+                            thread_name,
+                            "info",
+                            f"Nghỉ giãn cách {delay}s trước khi chuyển nick tiếp theo...",
+                        )
+                        time.sleep(min(delay, 5))
+
+            _close_held_driver("hết hàng đợi")
 
         except Exception as ex:
             self.log(thread_name, "error", f"Worker loop crashed: {type(ex).__name__}: {ex}")
@@ -846,15 +1046,20 @@ class PostRunner:
                     self._active_threads[thread_name]["status"] = "Lỗi hệ thống"
                     self._active_threads[thread_name]["currentActivity"] = f"Lỗi luồng: {ex}"
         finally:
+            _close_held_driver("worker exit")
             with self._lock:
                 if thread_name in self._active_threads:
                     if self._active_threads[thread_name]["status"] in ("Đang chạy", "Đang chờ"):
                         if self._stop_event.is_set():
                             self._active_threads[thread_name]["status"] = "Đã dừng"
-                            self._active_threads[thread_name]["currentActivity"] = "Luồng đã dừng theo yêu cầu."
+                            self._active_threads[thread_name]["currentActivity"] = (
+                                "Luồng đã dừng theo yêu cầu."
+                            )
                         else:
                             self._active_threads[thread_name]["status"] = "Hoàn thành"
-                            self._active_threads[thread_name]["currentActivity"] = "Luồng đã kết thúc xử lý."
+                            self._active_threads[thread_name]["currentActivity"] = (
+                                "Luồng đã kết thúc xử lý."
+                            )
             self._check_all_threads_finished(session_id)
 
 runner = PostRunner()

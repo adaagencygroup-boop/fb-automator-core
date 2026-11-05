@@ -540,6 +540,10 @@ def _history_where(machine_id: str, filters: Dict[str, Any]) -> Tuple[str, list]
         where.append("(LOWER(h.fb_uid) LIKE ? OR LOWER(COALESCE(h.fb_name, '')) LIKE ?)")
         pattern = f"%{search.lower()}%"
         params += [pattern, pattern]
+    fb_uid = (filters.get("fb_uid") or "").strip()
+    if fb_uid and fb_uid.lower() != "all":
+        where.append("h.fb_uid = ?")
+        params.append(fb_uid)
     if filters.get("action"):
         where.append("EXISTS (SELECT 1 FROM farm_interaction_logs l WHERE l.run_id = h.run_id AND l.action_type = ?)")
         params.append(filters["action"])

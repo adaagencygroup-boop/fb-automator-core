@@ -33,12 +33,14 @@ import {
   Code,
   Trash2,
   CheckCheck,
-  ShieldCheck
+  ShieldCheck,
+  FileText,
+  X,
 } from "lucide-react";
 import { api } from "@/services/api";
 import { openFilePicker } from "@/lib/file-bridge";
 import { toast } from "@/lib/toast";
-import { PostImageModal } from "./PostImageModal";
+import { PostImageModal, normalizeImagePaths } from "./PostImageModal";
 import { FacebookEmojiMenu } from "./FacebookEmojiModal";
 import CustomSelect from "@/components/ui/custom-select";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -47,6 +49,7 @@ import { Badge } from "@/components/ui/badge";
 import Image from "next/image";
 import { EmergencyStopModal } from "./EmergencyStopModal";
 import { PastScheduleModal } from "./PastScheduleModal";
+import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
 
 const DEFAULT_GEMINI_MODELS = [
   { value: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Khuyên dùng - Nhanh & Mới nhất)" },
@@ -104,7 +107,7 @@ const loginFilterOptions = [
   { value: "failed", label: "Đăng nhập lỗi" },
 ];
 
-export function StatusPostView({ initialState = "config" }) {
+export function StatusPostView({ initialState = "config", onHasPostsChange }) {
   const router = useRouter();
   const [viewState, setViewState] = useState(initialState);
   const [viewingImageCard, setViewingImageCard] = useState(null);
@@ -114,6 +117,8 @@ export function StatusPostView({ initialState = "config" }) {
   // ── Step 1: API Configuration State ──
   const [keyFileName, setKeyFileName] = useState("");
   const [apiKeyContent, setApiKeyContent] = useState("");
+  /** true = đã chọn file (hiện chip + nút X); false = nhập đường dẫn/text tay */
+  const [keyFromFile, setKeyFromFile] = useState(false);
   const [pixabayKey, setPixabayKey] = useState("");
   const [showPixabayKey, setShowPixabayKey] = useState(false);
   const [selectedModel, setSelectedModel] = useState("gemini-3.8-flash");
@@ -164,11 +169,21 @@ export function StatusPostView({ initialState = "config" }) {
         if (text) {
           setKeyFileName(file.name || "keys.txt");
           setApiKeyContent(text.trim());
+          setKeyFromFile(true);
           fetchGeminiModels(text.trim());
         }
       };
       reader.readAsText(file);
     }
+    // Cho phép chọn lại cùng file
+    e.target.value = "";
+  };
+
+  const handleClearKeyFile = () => {
+    setKeyFileName("");
+    setApiKeyContent("");
+    setKeyFromFile(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   // ── Step 2: Account List State (Real DB from Module 02 /api/accounts) ──
@@ -212,8 +227,100 @@ export function StatusPostView({ initialState = "config" }) {
   const [showPastScheduleModal, setShowPastScheduleModal] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [statusFilter, setStatusFilter] = useState("all");
+  const [showConfigErrors, setShowConfigErrors] = useState(false);
 
   const pollingRef = useRef(null);
+  const settingsBaselineRef = useRef(null);
+
+  const snapshotSettings = ({
+    keyFileName: k,
+    selectedModel: m,
+    prompt: p,
+    scheduleEnabled: se,
+    scheduleTime: st,
+    minDelay: mind,
+    maxDelay: maxd,
+    threadCount: tc,
+  }) =>
+    JSON.stringify({
+      keyFileName: k || "",
+      selectedModel: m || "",
+      prompt: p || "",
+      scheduleEnabled: !!se,
+      scheduleTime: st || "",
+      minDelay: Number(mind) || 0,
+      maxDelay: Number(maxd) || 0,
+      threadCount: Number(tc) || 0,
+    });
+
+  // Có bài viết (nội dung/ảnh) — kể cả đã lưu
+  const hasDisplayedPosts = useMemo(
+    () =>
+      drafts.some(
+        (d) =>
+          ((d.content || "").trim().length > 0) ||
+          (d.imageCount || 0) > 0 ||
+          (d.imagePaths || []).length > 0,
+      ),
+    [drafts],
+  );
+
+  // Có nhập Khung Prompt AI
+  const hasPromptContent = Boolean(String(prompt || "").trim());
+
+  // Modal khi: có Prompt AI HOẶC có ≥ 1 bài viết đang hiển thị
+  const needsLeaveConfirm = hasDisplayedPosts || hasPromptContent;
+
+  useEffect(() => {
+    onHasPostsChange?.(needsLeaveConfirm);
+    return () => onHasPostsChange?.(false);
+  }, [needsLeaveConfirm, onHasPostsChange]);
+
+  // Option A: bấm "Rời đi" → bỏ trạng thái Đã lưu, lần sau phải Lưu lại
+  const handleLeaveConfirmCleanup = async () => {
+    const savedDrafts = drafts.filter(
+      (d) =>
+        d.isSaved &&
+        (((d.content || "").trim().length > 0) ||
+          (d.imageCount || 0) > 0 ||
+          (d.imagePaths || []).length > 0),
+    );
+
+    // FE: đánh dấu chưa lưu ngay
+    if (savedDrafts.length > 0) {
+      setDrafts((prev) =>
+        prev.map((d) => (d.isSaved ? { ...d, isSaved: false } : d)),
+      );
+    }
+
+    // BE: READY → DRAFT (giữ nội dung/ảnh)
+    await Promise.all(
+      savedDrafts.map(async (d) => {
+        try {
+          const imgs = normalizeImagePaths(d);
+          await api.post("/api/post/drafts", {
+            id: d.id,
+            account_uid: String(d.accountUid),
+            account_name: d.authorName || "",
+            post_type: "status",
+            content: d.content || "",
+            image_path: imgs[0] || null,
+            image_paths: imgs,
+            status: "DRAFT",
+          });
+        } catch (err) {
+          console.warn("Không thể chuyển draft về DRAFT khi rời trang:", err);
+        }
+      }),
+    );
+  };
+
+  useUnsavedChanges(
+    needsLeaveConfirm,
+    "Bạn đang có Prompt AI hoặc bài viết trên màn Đăng Status. Nếu rời đi, bài đã lưu sẽ chuyển về chưa lưu và cần Lưu lại lần sau.",
+    "status-post",
+    handleLeaveConfirmCleanup,
+  );
 
   // Load Settings from /api/post/settings
   const loadSettingsFromDb = async () => {
@@ -221,20 +328,67 @@ export function StatusPostView({ initialState = "config" }) {
       const res = await api.get("/api/post/settings?post_type=status");
       const s = res?.data ?? res;
       if (s && typeof s === "object") {
-        if (s.api_key_file_path) setKeyFileName(s.api_key_file_path);
-        if (s.gemini_model) {
-          const norm = String(s.gemini_model).trim().toLowerCase().replace(/\s+/g, "-");
-          setSelectedModel(norm);
+        const nextKey = s.api_key_file_path || "";
+        const nextModel = s.gemini_model
+          ? String(s.gemini_model).trim().toLowerCase().replace(/\s+/g, "-")
+          : selectedModel;
+        const nextScheduleEnabled =
+          s.schedule_enabled !== undefined ? s.schedule_enabled : scheduleEnabled;
+        const nextScheduleTime = s.schedule_time
+          ? s.schedule_time.slice(0, 5)
+          : scheduleTime;
+        const nextMin = s.min_delay || minDelay;
+        const nextMax = s.max_delay || maxDelay;
+        const nextThreads = s.thread_count || threadCount;
+
+        if (s.api_key_file_path) {
+          setKeyFileName(s.api_key_file_path);
+          // Đường dẫn đã lưu từ lần chọn file trước → hiện dạng file chip
+          setKeyFromFile(true);
         }
-        if (s.prompt_template) setPrompt(s.prompt_template);
+        if (s.gemini_model) setSelectedModel(nextModel);
+        // Mỗi lần vào/quay lại trang: luôn xóa prompt cũ, hiện placeholder
+        setPrompt("");
         if (s.schedule_enabled !== undefined) setScheduleEnabled(s.schedule_enabled);
         if (s.schedule_time) setScheduleTime(s.schedule_time.slice(0, 5));
         if (s.min_delay) setMinDelay(s.min_delay);
         if (s.max_delay) setMaxDelay(s.max_delay);
         if (s.thread_count) setThreadCount(s.thread_count);
+
+        settingsBaselineRef.current = snapshotSettings({
+          keyFileName: nextKey || keyFileName,
+          selectedModel: nextModel,
+          prompt: "",
+          scheduleEnabled: nextScheduleEnabled,
+          scheduleTime: nextScheduleTime,
+          minDelay: nextMin,
+          maxDelay: nextMax,
+          threadCount: nextThreads,
+        });
+      } else {
+        settingsBaselineRef.current = snapshotSettings({
+          keyFileName,
+          selectedModel,
+          prompt,
+          scheduleEnabled,
+          scheduleTime,
+          minDelay,
+          maxDelay,
+          threadCount,
+        });
       }
     } catch (err) {
       console.error("Lỗi khi tải cấu hình status:", err);
+      settingsBaselineRef.current = snapshotSettings({
+        keyFileName,
+        selectedModel,
+        prompt,
+        scheduleEnabled,
+        scheduleTime,
+        minDelay,
+        maxDelay,
+        threadCount,
+      });
     }
   };
 
@@ -251,6 +405,16 @@ export function StatusPostView({ initialState = "config" }) {
         max_delay: maxDelay,
         thread_count: threadCount,
       });
+      settingsBaselineRef.current = snapshotSettings({
+        keyFileName,
+        selectedModel,
+        prompt,
+        scheduleEnabled,
+        scheduleTime,
+        minDelay,
+        maxDelay,
+        threadCount,
+      });
     } catch (err) {
       console.error("Lỗi khi lưu cấu hình status:", err);
     }
@@ -262,18 +426,22 @@ export function StatusPostView({ initialState = "config" }) {
       const data = Array.isArray(res) ? res : (res?.data || []);
       if (Array.isArray(data)) {
         setDrafts(
-          data.map((d) => ({
-            id: d.id,
-            authorName: d.account_name || (d.account_uid ? `Tài khoản ${d.account_uid}` : "Tài khoản"),
-            content: d.content || "",
-            charCount: (d.content || "").length,
-            imageCount: d.image_path ? 1 : 0,
-            imagePath: d.image_path || null,
-            accountUid: String(d.account_uid),
-            selected: true,
-            mediaType: "status",
-            isSaved: d.status === "READY",
-          }))
+          data.map((d) => {
+            const imgs = normalizeImagePaths(d);
+            return {
+              id: d.id,
+              authorName: d.account_name || (d.account_uid ? `Tài khoản ${d.account_uid}` : "Tài khoản"),
+              content: d.content || "",
+              charCount: (d.content || "").length,
+              imagePaths: imgs,
+              imageCount: imgs.length,
+              imagePath: imgs[0] || null,
+              accountUid: String(d.account_uid),
+              selected: true,
+              mediaType: "status",
+              isSaved: d.status === "READY",
+            };
+          })
         );
       }
     } catch (err) {
@@ -552,18 +720,46 @@ export function StatusPostView({ initialState = "config" }) {
     );
   };
 
+  const hasApiKeySource = Boolean(
+    String(keyFileName || "").trim() || String(apiKeyContent || "").trim(),
+  );
+  const hasModel = Boolean(String(selectedModel || "").trim());
   const hasPrompt = Boolean(String(prompt || "").trim());
+  const hasRequiredConfig = hasApiKeySource && hasModel && hasPrompt;
 
-  // Sinh bài viết AI
-  const handleGenerateDrafts = async () => {
-    if (!String(prompt || "").trim()) {
+  const validateRequiredConfig = () => {
+    setShowConfigErrors(true);
+    if (!hasApiKeySource) {
+      toast.warning(
+        "Vui lòng chọn hoặc nhập File Gemini API Keys trước khi thực thi!",
+        "THIẾU FILE API KEY",
+      );
+      return false;
+    }
+    if (!hasModel) {
+      toast.warning("Vui lòng chọn Model Gemini trước khi thực thi!", "THIẾU MODEL");
+      return false;
+    }
+    if (!hasPrompt) {
       toast.warning("Vui lòng nhập Khung Prompt AI trước khi thực thi!", "CHƯA CÓ PROMPT");
-      return;
+      return false;
+    }
+    return true;
+  };
+
+  // Sinh bài viết AI — trả về true nếu đã gọi API sinh bài
+  const handleGenerateDrafts = async () => {
+    if (!validateRequiredConfig()) {
+      document.getElementById("status-step1-config")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      return false;
     }
     const selectedAccs = accounts.filter((a) => a.selected);
     if (selectedAccs.length === 0) {
       toast.warning("Vui lòng tick chọn ít nhất một tài khoản ở Bước 2 để tạo bài viết!", "CHƯA CHỌN TÀI KHOẢN");
-      return;
+      return false;
     }
 
     try {
@@ -573,25 +769,29 @@ export function StatusPostView({ initialState = "config" }) {
         prompt: prompt,
         model: selectedModel,
         accounts: selectedAccs.map((a) => ({ uid: String(a.uid), name: a.name })),
-        api_key_source: apiKeyContent || keyFileName || "keys.txt",
+        api_key_source: apiKeyContent || keyFileName,
         pixabay_key: pixabayKey || undefined,
       });
 
       const rawDrafts = res?.data ?? res;
       const newDrafts = Array.isArray(rawDrafts) ? rawDrafts : (rawDrafts?.data || []);
       if (Array.isArray(newDrafts) && newDrafts.length > 0) {
-        const formattedNew = newDrafts.map((d) => ({
-          id: d.id,
-          authorName: d.account_name || `Tài khoản ${d.account_uid}`,
-          accountUid: String(d.account_uid),
-          content: d.content || "",
-          charCount: (d.content || "").length,
-          imageCount: d.image_path ? 1 : 0,
-          imagePath: d.image_path || null,
-          selected: true,
-          mediaType: "status",
-          isSaved: false, // Mặc định bài AI mới sinh ở trạng thái Chưa lưu
-        }));
+        const formattedNew = newDrafts.map((d) => {
+          const imgs = normalizeImagePaths(d);
+          return {
+            id: d.id,
+            authorName: d.account_name || `Tài khoản ${d.account_uid}`,
+            accountUid: String(d.account_uid),
+            content: d.content || "",
+            charCount: (d.content || "").length,
+            imagePaths: imgs,
+            imageCount: imgs.length,
+            imagePath: imgs[0] || null,
+            selected: true,
+            mediaType: "status",
+            isSaved: false, // Mặc định bài AI mới sinh ở trạng thái Chưa lưu
+          };
+        });
         setDrafts((prev) => {
           const newUids = new Set(formattedNew.map((d) => d.accountUid));
           return [...prev.filter((d) => !newUids.has(d.accountUid)), ...formattedNew];
@@ -604,33 +804,29 @@ export function StatusPostView({ initialState = "config" }) {
     } catch (err) {
       console.error("Lỗi sinh bài viết:", err);
       toast.error("Lỗi khi gọi AI sinh bài: " + (err.message || "Kiểm tra lại kết nối hoặc API Key."), "LỖI AI");
+      return false;
     } finally {
       setIsGeneratingDrafts(false);
     }
+    return true;
   };
 
   // Nút THỰC THI ở Bước 2: gọi AI sinh bài và cuộn tới Khu vực xem trước
   const handleExecuteGenerate = async () => {
-    if (!String(prompt || "").trim()) {
-      toast.warning("Vui lòng nhập Khung Prompt AI trước khi thực thi!", "CHƯA CÓ PROMPT");
-      return;
-    }
     const selected = accounts.filter((a) => a.selected);
     if (selected.length === 0) {
       toast.warning("Vui lòng tick chọn ít nhất một tài khoản ở Bước 2 trước khi thực thi!", "CHƯA CHỌN TÀI KHOẢN");
       return;
     }
-    await handleGenerateDrafts();
+    const ok = await handleGenerateDrafts();
+    if (!ok) return;
     setTimeout(() => {
       previewSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 400);
   };
 
   const handleGenerateForSingleAccount = async (acc) => {
-    if (!String(prompt || "").trim()) {
-      toast.warning("Vui lòng nhập Khung Prompt AI trước khi tạo bài!", "CHƯA CÓ PROMPT");
-      return;
-    }
+    if (!validateRequiredConfig()) return;
     try {
       setGeneratingCardUid(acc.uid);
       const res = await api.post("/api/post/drafts/generate", {
@@ -638,7 +834,7 @@ export function StatusPostView({ initialState = "config" }) {
         prompt: prompt,
         model: selectedModel,
         accounts: [{ uid: String(acc.uid), name: acc.name }],
-        api_key_source: apiKeyContent || keyFileName || "keys.txt",
+        api_key_source: apiKeyContent || keyFileName,
         pixabay_key: pixabayKey || undefined,
       });
 
@@ -646,6 +842,7 @@ export function StatusPostView({ initialState = "config" }) {
       const list = Array.isArray(raw) ? raw : (raw?.data || []);
       if (Array.isArray(list) && list.length > 0) {
         const d = list[0];
+        const imgs = normalizeImagePaths(d);
         setDrafts((prev) => {
           const filtered = prev.filter((item) => String(item.accountUid) !== String(acc.uid));
           return [
@@ -656,8 +853,9 @@ export function StatusPostView({ initialState = "config" }) {
               accountUid: String(acc.uid),
               content: d.content || "",
               charCount: (d.content || "").length,
-              imageCount: d.image_path ? 1 : 0,
-              imagePath: d.image_path || null,
+              imagePaths: imgs,
+              imageCount: imgs.length,
+              imagePath: imgs[0] || null,
               selected: true,
               mediaType: "status",
               isSaved: false, // Khi tạo lại, chuyển về Chưa lưu
@@ -697,6 +895,8 @@ export function StatusPostView({ initialState = "config" }) {
           charCount: newContent.length,
           imageCount: 0,
           selected: true,
+          imagePaths: [],
+          imagePath: null,
           mediaType: "status",
           isSaved: false,
         },
@@ -764,6 +964,8 @@ export function StatusPostView({ initialState = "config" }) {
       charCount: 0,
       imageCount: 0,
       selected: true,
+      imagePaths: [],
+      imagePath: null,
       mediaType: "status",
       isSaved: false,
     };
@@ -798,20 +1000,24 @@ export function StatusPostView({ initialState = "config" }) {
   // Lưu 1 bài viết
   const handleSaveDraftItem = async (accountUid, draftId, content, showAlert = true) => {
     const uidStr = String(accountUid);
+    const currentDraft = drafts.find(
+      (d) => String(d.accountUid) === uidStr || (draftId && String(d.id) === String(draftId))
+    );
+    // Đã lưu rồi thì bỏ qua — tránh spam toast / gọi API lại
+    if (currentDraft?.isSaved) return;
+
     try {
       const targetAcc = accounts.find((a) => String(a.uid) === uidStr);
       const accName = targetAcc?.name || (uidStr ? `UID: ${uidStr}` : "Tài khoản");
-      const currentDraft = drafts.find(
-        (d) => String(d.accountUid) === uidStr || (draftId && String(d.id) === String(draftId))
-      );
-      const imgPath = currentDraft?.imagePath || null;
+      const imgs = normalizeImagePaths(currentDraft);
       const res = await api.post("/api/post/drafts", {
         id: draftId,
         account_uid: uidStr,
         account_name: accName,
         post_type: "status",
         content: content || "",
-        image_path: imgPath,
+        image_path: imgs[0] || null,
+        image_paths: imgs,
         status: "READY",
       });
       const savedObj = res?.data?.id ? res.data : (res?.id ? res : (res?.data || {}));
@@ -828,11 +1034,12 @@ export function StatusPostView({ initialState = "config" }) {
             accountUid: uidStr,
             content: content || "",
             charCount: (content || "").length,
-            imageCount: imgPath ? 1 : 0,
-            imagePath: imgPath,
+            imagePaths: imgs,
+            imageCount: imgs.length,
+            imagePath: imgs[0] || null,
             selected: true,
             mediaType: "status",
-            isSaved: true, // Đánh dấu đã lưu
+            isSaved: true,
           },
         ];
       });
@@ -878,6 +1085,7 @@ export function StatusPostView({ initialState = "config" }) {
       const draft = drafts.find((d) => String(d.accountUid) === accUidStr);
       const contentStr = draft?.content || "";
       const currentImg = draft?.imagePath || null;
+      const imgs = normalizeImagePaths(draft);
       return {
         key: `acc-${accUidStr}`,
         draftId: draft?.id,
@@ -885,9 +1093,9 @@ export function StatusPostView({ initialState = "config" }) {
         authorName: acc.name && acc.name.trim() !== "" ? acc.name : (acc.uid ? `UID: ${acc.uid}` : "Tài khoản"),
         content: contentStr,
         charCount: contentStr.length,
-        imageCount: currentImg ? 1 : (draft?.imageCount || 0),
-        imagePath: currentImg,
-        hasContent: contentStr.trim().length > 0,
+        imagePaths: imgs,
+        imageCount: imgs.length,
+        imagePath: imgs[0] || null,
         isSaved: !!draft?.isSaved,
       };
     });
@@ -932,6 +1140,13 @@ export function StatusPostView({ initialState = "config" }) {
         reason: "Chưa chọn tài khoản nào (Vui lòng tick chọn ít nhất 1 nick ở Bước 2).",
       };
     }
+    const threads = parseInt(threadCount, 10) || 0;
+    if (threads > selectedAccs.length) {
+      return {
+        ready: false,
+        reason: `Số luồng chạy (${threads}) không được vượt quá số tài khoản đã chọn (${selectedAccs.length}).`,
+      };
+    }
     const missingAccounts = selectedAccs.filter((acc) => {
       const accUidStr = String(acc.uid || acc.id);
       const draft = drafts.find((d) => String(d.accountUid) === accUidStr);
@@ -958,7 +1173,7 @@ export function StatusPostView({ initialState = "config" }) {
       ready: true,
       reason: `Đã lưu đầy đủ ${selectedAccs.length} bài viết. Sẵn sàng khởi chạy đăng bài!`,
     };
-  }, [scheduleEnabled, scheduleTime, scheduleTimeInvalid, selectedAccs, drafts]);
+  }, [scheduleEnabled, scheduleTime, scheduleTimeInvalid, selectedAccs, drafts, threadCount]);
 
   // BR-M03-PUB-01: Kiểm tra giờ hẹn ở Quá khứ
   const scheduleIsInPast = useMemo(() => {
@@ -1065,12 +1280,15 @@ export function StatusPostView({ initialState = "config" }) {
       const accountsWithContent = selectedAccs.map((acc) => {
         const accUidStr = String(acc.uid || acc.id);
         const matched = drafts.find((d) => String(d.accountUid) === accUidStr);
+        const imgs = normalizeImagePaths(matched);
         return {
           ...acc,
           uid: accUidStr,
           content: matched?.content || "",
-          image_path: matched?.imagePath || matched?.image_path || null,
-          imagePath: matched?.imagePath || matched?.image_path || null,
+          image_path: imgs[0] || null,
+          imagePath: imgs[0] || null,
+          image_paths: imgs,
+          imagePaths: imgs,
         };
       });
 
@@ -1199,16 +1417,28 @@ export function StatusPostView({ initialState = "config" }) {
     setIsStopped(false);
     // Bỏ tick chọn tài khoản để trở về mặc định không chọn nick nào ở màn hình config
     setAccounts((prev) => prev.map((a) => ({ ...a, selected: false })));
+    // Xóa nội dung prompt cũ khi quay lại màn cấu hình
+    setPrompt("");
     // UC-M03-07: Tải lại nháp sạch từ CSDL (những bài đã PUBLISHED thành công đã được xóa)
     loadDraftsFromDb();
   };
 
   const selectedCount = accounts.filter((a) => a.selected).length;
+  const threadCountNum = parseInt(threadCount, 10) || 0;
+  const threadExceedsAccounts =
+    selectedCount > 0 && threadCountNum > selectedCount;
+
+  // Tự hạ số luồng khi bỏ chọn acc khiến số luồng > số acc đã chọn
+  useEffect(() => {
+    if (selectedCount <= 0) return;
+    const val = parseInt(threadCount, 10);
+    if (val > selectedCount) setThreadCount(selectedCount);
+  }, [selectedCount, threadCount]);
 
   return (
     <div className="space-y-6  pb-20">
       {/* ── BƯỚC 1: THIẾT LẬP CẤU HÌNH HỆ THỐNG ── */}
-      <div className="space-y-3">
+      <div id="status-step1-config" className="space-y-3">
         <div className="flex items-center gap-2.5">
           <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
             1
@@ -1229,23 +1459,68 @@ export function StatusPostView({ initialState = "config" }) {
             {/* File chứa danh sách Gemini API Keys */}
             <div className="space-y-2">
               <label className="text-xs sm:text-sm font-bold text-[#0F172A] flex items-center">
-                <span>File chứa danh sách Gemini API Keys</span>
-                <span className="w-3.5 h-3.5 rounded-full border border-[#94A3B8] text-[#94A3B8] inline-flex items-center justify-center text-[10px] font-normal leading-none shrink-0 ml-1 cursor-help select-none" title="Chọn file text (.txt) chứa danh sách API Key của Gemini">
+                <span>
+                  File chứa danh sách Gemini API Keys{" "}
+                  <span className="text-red-500" aria-hidden="true">*</span>
+                </span>
+                <span className="w-3.5 h-3.5 rounded-full border border-[#94A3B8] text-[#94A3B8] inline-flex items-center justify-center text-[10px] font-normal leading-none shrink-0 ml-1 cursor-help select-none" title="Chọn file text (.txt) chứa danh sách API Key của Gemini, hoặc nhập đường dẫn file">
                   ?
                 </span>
               </label>
               <div className="flex items-center gap-3">
-                <input
-                  type="text"
-                  name="gemini_api_key_source"
-                  autoComplete="off"
-                  data-lpignore="true"
-                  data-1p-ignore="true"
-                  value={keyFileName}
-                  onChange={(e) => setKeyFileName(e.target.value)}
-                  placeholder="Keys.txt...."
-                  className="flex-1 h-11 px-4 bg-white border border-[#E2E8F0] rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-all"
-                />
+                {keyFromFile && keyFileName ? (
+                  <div
+                    className={`flex-1 min-w-0 h-11 px-3 bg-[#F8FAFC] border rounded-xl flex items-center gap-2 ${
+                      showConfigErrors && !hasApiKeySource
+                        ? "border-red-400"
+                        : "border-[#BFDBFE]"
+                    }`}
+                  >
+                    <span className="inline-flex items-center gap-1.5 max-w-full min-w-0 rounded-lg bg-[#EFF6FF] border border-[#BFDBFE] pl-2.5 pr-1.5 py-1">
+                      <FileText size={14} className="text-[#2563EB] shrink-0" />
+                      <span
+                        className="text-xs sm:text-sm font-medium text-[#1E40AF] truncate"
+                        title={keyFileName}
+                      >
+                        {keyFileName}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleClearKeyFile}
+                        className="ml-0.5 p-0.5 rounded-md text-[#64748B] hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
+                        title="Xóa file đã chọn"
+                        aria-label="Xóa file đã chọn"
+                      >
+                        <X size={14} />
+                      </button>
+                    </span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-[#64748B] shrink-0 hidden sm:inline">
+                      File
+                    </span>
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    name="gemini_api_key_source"
+                    autoComplete="off"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    value={keyFileName}
+                    onChange={(e) => {
+                      setKeyFromFile(false);
+                      setApiKeyContent("");
+                      setKeyFileName(e.target.value);
+                    }}
+                    placeholder="Nhập đường dẫn file key hoặc chọn file..."
+                    aria-required="true"
+                    aria-invalid={showConfigErrors && !hasApiKeySource}
+                    className={`flex-1 h-11 px-4 bg-white border rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] outline-none focus:ring-1 transition-all ${
+                      showConfigErrors && !hasApiKeySource
+                        ? "border-red-400 focus:border-red-500 focus:ring-red-500"
+                        : "border-[#E2E8F0] focus:border-[#2563EB] focus:ring-[#2563EB]"
+                    }`}
+                  />
+                )}
                 <input
                   type="file"
                   ref={fileInputRef}
@@ -1256,11 +1531,26 @@ export function StatusPostView({ initialState = "config" }) {
                 <button
                   type="button"
                   onClick={handleSelectKeyFile}
-                  className="h-11 px-6 bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#2563EB] text-xs sm:text-sm font-semibold rounded-xl flex items-center justify-center transition-colors cursor-pointer shrink-0"
+                  className="h-11 px-6 bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#2563EB] text-xs sm:text-sm font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
                 >
-                  <span>Chọn File Key</span>
+                  <Upload size={14} />
+                  <span>{keyFromFile && keyFileName ? "Đổi File" : "Chọn File Key"}</span>
                 </button>
               </div>
+              {keyFromFile && keyFileName ? (
+                <p className="text-[11px] text-[#64748B]">
+                  Đã chọn file key. Bấm <span className="font-semibold">×</span> để xóa hoặc <span className="font-semibold">Đổi File</span> để chọn lại.
+                </p>
+              ) : (
+                <p className="text-[11px] text-[#64748B]">
+                  Có thể chọn file .txt hoặc nhập đường dẫn file key thủ công.
+                </p>
+              )}
+              {showConfigErrors && !hasApiKeySource && (
+                <p className="text-[11px] font-medium text-red-500">
+                  Vui lòng chọn hoặc nhập File Gemini API Keys.
+                </p>
+              )}
             </div>
 
             {/* Pixabay API Key (tùy chọn) */}
@@ -1297,7 +1587,10 @@ export function StatusPostView({ initialState = "config" }) {
             {/* Model Gemini */}
             <div className="space-y-2">
               <label className="text-xs sm:text-sm font-bold text-[#0F172A] flex items-center">
-                <span>Model Gemini</span>
+                <span>
+                  Model Gemini{" "}
+                  <span className="text-red-500" aria-hidden="true">*</span>
+                </span>
                 <span className="w-3.5 h-3.5 rounded-full border border-[#94A3B8] text-[#94A3B8] inline-flex items-center justify-center text-[10px] font-normal leading-none shrink-0 ml-1 cursor-help select-none" title="Chọn phiên bản mô hình Gemini để sinh nội dung bài viết">
                   ?
                 </span>
@@ -1308,15 +1601,27 @@ export function StatusPostView({ initialState = "config" }) {
                 options={modelOptions}
                 placeholder="Chọn Model Gemini..."
                 className="w-full"
-                buttonClassName="h-11 px-4 bg-white border border-[#E2E8F0] rounded-xl text-xs sm:text-sm text-[#0F172A] font-normal hover:border-slate-300"
+                buttonClassName={`h-11 px-4 bg-white border rounded-xl text-xs sm:text-sm text-[#0F172A] font-normal hover:border-slate-300 ${
+                  showConfigErrors && !hasModel
+                    ? "border-red-400"
+                    : "border-[#E2E8F0]"
+                }`}
                 dropdownClassName="rounded-xl border-[#E2E8F0] shadow-lg text-xs sm:text-sm max-h-64 overflow-y-auto"
               />
+              {showConfigErrors && !hasModel && (
+                <p className="text-[11px] font-medium text-red-500">
+                  Vui lòng chọn Model Gemini.
+                </p>
+              )}
             </div>
 
             {/* Khung Prompt AI cấu trúc bài đăng */}
             <div className="space-y-2">
               <label className="text-xs sm:text-sm font-bold text-[#0F172A] flex items-center">
-                <span>Khung Prompt AI cấu trúc bài đăng</span>
+                <span>
+                  Khung Prompt AI cấu trúc bài đăng{" "}
+                  <span className="text-red-500" aria-hidden="true">*</span>
+                </span>
                 <span className="w-3.5 h-3.5 rounded-full border border-[#94A3B8] text-[#94A3B8] inline-flex items-center justify-center text-[10px] font-normal leading-none shrink-0 ml-1 cursor-help select-none" title="Nhập yêu cầu câu lệnh hướng dẫn AI tạo bài viết">
                   ?
                 </span>
@@ -1326,8 +1631,19 @@ export function StatusPostView({ initialState = "config" }) {
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder={"Ví dụ:\nHãy tạo 1 bài viết về chủ đề du lịch Việt Nam, ngắn gọn, hấp dẫn, có icon, phù hợp đăng Facebook. Nội dung cần thu hút người xem, khuyến khích tương tác."}
-                className="w-full min-h-[140px] p-4 bg-white border border-[#E2E8F0] rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-all resize-y leading-relaxed"
+                aria-required="true"
+                aria-invalid={showConfigErrors && !hasPrompt}
+                className={`w-full min-h-[140px] p-4 bg-white border rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:ring-1 transition-all resize-y leading-relaxed ${
+                  showConfigErrors && !hasPrompt
+                    ? "border-red-400 focus:border-red-500 focus:ring-red-500"
+                    : "border-[#E2E8F0] focus:border-[#2563EB] focus:ring-[#2563EB]"
+                }`}
               />
+              {showConfigErrors && !hasPrompt && (
+                <p className="text-[11px] font-medium text-red-500">
+                  Vui lòng nhập Khung Prompt AI.
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -1602,7 +1918,7 @@ export function StatusPostView({ initialState = "config" }) {
               <button
                 type="button"
                 onClick={handleExecuteGenerate}
-                disabled={isGeneratingDrafts || selectedCount === 0 || !hasPrompt}
+                disabled={isGeneratingDrafts || selectedCount === 0}
                 className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-blue-600 py-3.5 text-xs font-bold tracking-wider text-white shadow-sm shadow-blue-500/10 transition-all hover:bg-blue-700 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isGeneratingDrafts ? (
@@ -1617,9 +1933,13 @@ export function StatusPostView({ initialState = "config" }) {
                   </>
                 )}
               </button>
-              {!hasPrompt && (
+              {!hasRequiredConfig && (
                 <p className="pt-0.5 text-center text-[11px] font-medium text-amber-600">
-                  Nhập Khung Prompt AI ở Bước 1 trước khi thực thi.
+                  {!hasApiKeySource
+                    ? "Chọn File Gemini API Keys ở Bước 1 trước khi thực thi."
+                    : !hasModel
+                      ? "Chọn Model Gemini ở Bước 1 trước khi thực thi."
+                      : "Nhập Khung Prompt AI ở Bước 1 trước khi thực thi."}
                 </p>
               )}
             </div>
@@ -1786,14 +2106,19 @@ export function StatusPostView({ initialState = "config" }) {
                             <span className="truncate">Xóa</span>
                           </button>
 
-                          {/* [Lưu] / [Đã lưu] */}
+                          {/* [Lưu] / [Đã lưu] — đã lưu thì khóa, sửa nội dung/ảnh mới mở lại */}
                           <button
                             type="button"
-                            onClick={() => handleSaveDraftItem(card.account.uid, card.draftId, card.content)}
-                            className={`flex h-[30px] min-w-0 cursor-pointer items-center justify-center gap-1 rounded-lg px-1.5 text-[11px] font-bold shadow-xs transition-all ${
+                            onClick={() => {
+                              if (card.isSaved) return;
+                              handleSaveDraftItem(card.account.uid, card.draftId, card.content);
+                            }}
+                            disabled={card.isSaved}
+                            title={card.isSaved ? "Đã lưu — sửa nội dung hoặc ảnh để lưu lại" : "Lưu bài viết"}
+                            className={`flex h-[30px] min-w-0 items-center justify-center gap-1 rounded-lg px-1.5 text-[11px] font-bold shadow-xs transition-all ${
                               card.isSaved
-                                ? "bg-[#059669] text-white hover:bg-emerald-700"
-                                : "bg-[#2563EB] text-white hover:bg-blue-700"
+                                ? "cursor-default bg-[#059669] text-white opacity-90"
+                                : "cursor-pointer bg-[#2563EB] text-white hover:bg-blue-700 active:scale-[0.98]"
                             }`}
                           >
                             {card.isSaved ? (
@@ -1914,32 +2239,48 @@ export function StatusPostView({ initialState = "config" }) {
                     )}
                   </div>
 
-                  {/* Số lượng chạy (VR-M03-CFG-01, BR-M03-CFG-02) */}
-                  <div className="flex items-center justify-start sm:justify-center gap-3">
-                    <span className="text-xs font-bold text-slate-700 whitespace-nowrap">
-                      SỐ LUỒNG CHẠY
-                    </span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={threadCount}
-                      onChange={(e) => {
-                        // Chỉ cho phép nhập số (VR-M03-CFG-01)
-                        const cleaned = e.target.value.replace(/\D/g, "");
-                        setThreadCount(cleaned);
-                      }}
-                      onBlur={() => {
-                        // Nếu để trống hoặc = 0 -> tự động set mặc định = 1 luồng (BR-M03-CFG-02)
-                        const val = parseInt(threadCount, 10);
-                        if (!val || val <= 0) {
-                          setThreadCount(1);
-                        } else {
+                  {/* Số lượng chạy (VR-M03-CFG-01, BR-M03-CFG-02): ≤ số acc đã chọn */}
+                  <div className="flex flex-col items-start sm:items-center gap-1">
+                    <div className="flex items-center justify-start sm:justify-center gap-3">
+                      <span className="text-xs font-bold text-slate-700 whitespace-nowrap">
+                        SỐ LUỒNG CHẠY
+                      </span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={threadCount}
+                        onChange={(e) => {
+                          // Chỉ cho phép nhập số (VR-M03-CFG-01)
+                          const cleaned = e.target.value.replace(/\D/g, "");
+                          setThreadCount(cleaned);
+                        }}
+                        onBlur={() => {
+                          // Nếu để trống hoặc = 0 -> mặc định = 1 (BR-M03-CFG-02)
+                          // Không vượt quá số tài khoản đã chọn
+                          let val = parseInt(threadCount, 10);
+                          if (!val || val <= 0) val = 1;
+                          if (selectedCount > 0 && val > selectedCount) {
+                            toast.warning(
+                              `Số luồng tối đa bằng số tài khoản đã chọn (${selectedCount}).`,
+                              "GIỚI HẠN LUỒNG",
+                            );
+                            val = selectedCount;
+                          }
                           setThreadCount(val);
-                        }
-                      }}
-                      className="w-16 h-8 text-center bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:bg-white focus:border-blue-500 focus:outline-none font-mono"
-                    />
-                    <span className="text-xs text-slate-500 font-medium">Luồng</span>
+                        }}
+                        className={`w-16 h-8 text-center bg-slate-50 border rounded-lg text-xs font-semibold focus:bg-white focus:outline-none font-mono ${
+                          threadExceedsAccounts
+                            ? "border-red-400 focus:border-red-500"
+                            : "border-slate-200 focus:border-blue-500"
+                        }`}
+                      />
+                      <span className="text-xs text-slate-500 font-medium">Luồng</span>
+                    </div>
+                    {threadExceedsAccounts && (
+                      <span className="text-[10px] font-medium text-red-500">
+                        Tối đa {selectedCount} (theo số acc đã chọn)
+                      </span>
+                    )}
                   </div>
 
                   {/* Giãn cách (VR-M03-PUB-01: Auto-swap khi Min > Max) */}
@@ -2376,8 +2717,10 @@ export function StatusPostView({ initialState = "config" }) {
         card={viewingImageCard}
         onClose={() => setViewingImageCard(null)}
         pixabayKey={pixabayKey}
-        onUpdateImage={(newPath) => {
+        apiKeySource={apiKeyContent || keyFileName || undefined}
+        onUpdateImages={(nextPaths) => {
           if (!viewingImageCard) return;
+          const imgs = normalizeImagePaths(nextPaths);
           const uidStr = String(viewingImageCard.account?.uid || "");
           setDrafts((prev) => {
             const idx = prev.findIndex((d) => String(d.accountUid) === uidStr);
@@ -2385,8 +2728,11 @@ export function StatusPostView({ initialState = "config" }) {
               const updated = [...prev];
               updated[idx] = {
                 ...updated[idx],
-                imagePath: newPath,
-                imageCount: newPath ? 1 : 0,
+                imagePaths: imgs,
+                imagePath: imgs[0] || null,
+                imageCount: imgs.length,
+                // Modal đã persist DB — giữ trạng thái đã lưu
+                isSaved: true,
               };
               return updated;
             }
@@ -2398,15 +2744,24 @@ export function StatusPostView({ initialState = "config" }) {
                 accountUid: uidStr,
                 content: viewingImageCard.content,
                 charCount: viewingImageCard.charCount,
-                imagePath: newPath,
-                imageCount: newPath ? 1 : 0,
+                imagePaths: imgs,
+                imagePath: imgs[0] || null,
+                imageCount: imgs.length,
                 selected: true,
                 mediaType: "status",
+                isSaved: true,
               },
             ];
           });
           setViewingImageCard((prev) =>
-            prev ? { ...prev, imagePath: newPath, imageCount: newPath ? 1 : 0 } : null
+            prev
+              ? {
+                  ...prev,
+                  imagePaths: imgs,
+                  imagePath: imgs[0] || null,
+                  imageCount: imgs.length,
+                }
+              : null
           );
         }}
       />

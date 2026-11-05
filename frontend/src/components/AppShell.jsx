@@ -13,6 +13,7 @@ import { findNavItem, findNavItemByPath, pathOf } from "@/config/navigation";
 import { usePersistentBoolean } from "@/lib/usePersistentBoolean";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { MiniProgress } from "@/components/MiniProgress";
+import UnsavedChangesGuard from "@/components/UnsavedChangesGuard";
 
 // Khung "Nhật ký hệ thống realtime" ở cuối màn hình — đang ẩn. Đổi thành true để hiện lại.
 const SHOW_SYSTEM_LOG = false;
@@ -143,6 +144,7 @@ function Workspace({ session, children }) {
 
         {/* Global floating mini progress widget */}
         <MiniProgress />
+        <UnsavedChangesGuard />
       </div>
     </div>
   );

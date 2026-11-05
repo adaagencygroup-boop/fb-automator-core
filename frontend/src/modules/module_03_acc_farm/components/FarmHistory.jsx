@@ -6,6 +6,7 @@ import CustomSelect from "@/components/ui/custom-select";
 import Pagination from "@/components/ui/pagination";
 import { toast } from "@/lib/toast";
 import { formatVietnamDateTime } from "@/lib/date-utils";
+import { api } from "@/services/api";
 import { ACTION_FULL_LABELS, FINAL_STATUSES, FRIEND_SOURCE_LABELS, GROUP_SOURCE_LABELS, PROXY_MODE_LABELS, RUN_STATUS } from "../constants";
 import { cleanupFarmHistory, downloadFarmHistoryCsv, downloadFarmHistoryXlsx, getFarmHistory } from "../service";
 import HistoryDetail from "./HistoryDetail";
@@ -13,7 +14,7 @@ import { HistoryView } from "./HistoryView";
 import { ActionChip, NumberInput, PageTitle, RunStatusBadge, UidCopy, formatDuration } from "./parts";
 
 const PAGE_SIZE = 10;
-const EMPTY_FILTERS = { search: "", action: "", status: "", proxy: "", date_from: "", date_to: "" };
+const EMPTY_FILTERS = { search: "", fb_uid: "", action: "", status: "", proxy: "", date_from: "", date_to: "" };
 
 const ACTION_OPTIONS = [{ value: "", label: "Tất cả hành động" }, ...Object.entries(ACTION_FULL_LABELS).map(([value, label]) => ({ value, label }))];
 const STATUS_OPTIONS = [{ value: "", label: "Tất cả trạng thái" }, ...FINAL_STATUSES.map((value) => ({ value, label: RUN_STATUS[value].label }))];
@@ -156,6 +157,38 @@ function InteractionHistory() {
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [accountOptions, setAccountOptions] = useState([{ value: "", label: "Tất cả tài khoản" }]);
+
+  // Tải danh sách tài khoản cho bộ lọc theo từng acc
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get("/api/accounts");
+        if (cancelled) return;
+        let raw = [];
+        if (Array.isArray(res)) raw = res;
+        else if (Array.isArray(res?.accounts)) raw = res.accounts;
+        else if (Array.isArray(res?.data)) raw = res.data;
+
+        const opts = [{ value: "", label: "Tất cả tài khoản" }];
+        const seen = new Set();
+        raw.forEach((acc) => {
+          const uid = String(acc.uid || acc.fb_uid || acc.account_uid || "").trim();
+          if (!uid || seen.has(uid)) return;
+          seen.add(uid);
+          const name = acc.name || acc.fb_name || acc.account_name || uid;
+          opts.push({ value: uid, label: `${name} (${uid})` });
+        });
+        setAccountOptions(opts);
+      } catch (err) {
+        console.error("Lỗi tải tài khoản cho bộ lọc lịch sử tương tác:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Gõ tìm kiếm: chờ 400ms mới gọi API
   useEffect(() => {
@@ -226,6 +259,13 @@ function InteractionHistory() {
   return (
     <>
       <div className="flex flex-col gap-2 rounded-2xl border border-border bg-white p-4 shadow-subtle lg:flex-row lg:items-center">
+        <CustomSelect
+          className="lg:w-56"
+          value={filters.fb_uid}
+          onChange={setFilter("fb_uid")}
+          options={accountOptions}
+          placeholder="Chọn tài khoản..."
+        />
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary" />
           <input

@@ -26,9 +26,11 @@ from modules.module_03_acc_farm.content_service import (
     load_gemini_keys,
     search_and_download_pixabay_image,
     crawl_or_fetch_image,
+    optimize_pixabay_keyword,
     auto_map_accounts_to_subfolders,
     scan_folder_media,
-    generate_caption_from_filename
+    generate_caption_from_filename,
+    save_optimized_image,
 )
 from modules.module_03_acc_farm.post_runner import runner
 
@@ -82,12 +84,14 @@ class SaveDraftPayload(BaseModel):
     post_type: str = "status"
     content: str
     image_path: Optional[str] = None
+    image_paths: Optional[List[str]] = None
     clear_image: Optional[bool] = False
     status: Optional[str] = "READY"
 
 class CrawlImagePayload(BaseModel):
     query: str
     pixabay_key: Optional[str] = None
+    api_key_source: Optional[str] = None
     draft_id: Optional[str] = None
     account_uid: Optional[str] = None
 
@@ -268,10 +272,17 @@ def generate_drafts(payload: GenerateDraftsPayload):
                 content, img_kw = gen_res, None
 
             img_path = None
-            # Nếu prompt có yêu cầu/ngụ ý ảnh, tự động cào hoặc lấy ảnh minh họa
+            # Ảnh minh họa: Pixabay (nếu có key) → Gemini; chỉ lấy đúng 1 ảnh
             if img_kw:
-                logger.info(f"Prompt yêu cầu ảnh với từ khóa '{img_kw}'. Bắt đầu cào/tải ảnh...")
-                img_path = crawl_or_fetch_image(img_kw, pixabay_key=payload.pixabay_key)
+                logger.info(
+                    f"Prompt yêu cầu ảnh với từ khóa '{img_kw}'. "
+                    f"Ưu tiên Pixabay rồi fallback Gemini (tối đa 1 ảnh)..."
+                )
+                img_path = crawl_or_fetch_image(
+                    img_kw,
+                    pixabay_key=payload.pixabay_key,
+                    gemini_keys=keys,
+                )
 
             post_repository.delete_drafts_by_account(uid, payload.post_type)
             post = post_repository.create_post(
@@ -280,6 +291,7 @@ def generate_drafts(payload: GenerateDraftsPayload):
                 account_name=name,
                 content=content,
                 image_path=img_path,
+                image_paths=[img_path] if img_path else None,
                 status='DRAFT'
             )
             created_drafts.append(post)
@@ -305,6 +317,7 @@ def save_draft(payload: SaveDraftPayload):
         account_name=payload.account_name or "",
         status=payload.status or "READY",
         image_path=payload.image_path,
+        image_paths=payload.image_paths,
         clear_image=payload.clear_image or False
     )
     return {"success": True, "data": post}
@@ -350,42 +363,113 @@ def get_media_file(path: str = Query(...)):
 @router.post("/media/upload")
 async def upload_post_image(file: UploadFile = File(...)):
     """Upload ảnh từ máy tính lưu vào uploads/posts và trả về đường dẫn file."""
-    save_dir = str(UPLOADS_DIR / "posts")
-    os.makedirs(save_dir, exist_ok=True)
+    try:
+        save_dir = str(UPLOADS_DIR / "posts")
+        os.makedirs(save_dir, exist_ok=True)
 
-    content = await file.read()
-    saved_path = save_optimized_image(content, save_dir)
-    if not saved_path:
-        raise HTTPException(status_code=400, detail="File tải lên không phải là ảnh hợp lệ hoặc bị lỗi")
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="File tải lên rỗng")
 
-    filename = os.path.basename(saved_path)
-    return {
-        "success": True,
-        "image_path": saved_path,
-        "filename": filename,
-        "size": os.path.getsize(saved_path)
-    }
+        saved_path = save_optimized_image(content, save_dir)
+        if not saved_path:
+            raise HTTPException(
+                status_code=400,
+                detail="File tải lên không phải là ảnh hợp lệ hoặc bị lỗi",
+            )
+
+        filename = os.path.basename(saved_path)
+        return {
+            "success": True,
+            "image_path": saved_path,
+            "filename": filename,
+            "size": os.path.getsize(saved_path),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Upload ảnh Status thất bại")
+        raise HTTPException(status_code=500, detail=f"Upload ảnh thất bại: {e}") from e
 
 
 @router.post("/media/crawl")
 def crawl_image_for_draft(payload: CrawlImagePayload):
-    """Cào ảnh theo từ khóa hoặc nội dung bài viết và đính kèm vào bài nháp."""
-    img_path = crawl_or_fetch_image(payload.query, pixabay_key=payload.pixabay_key)
+    """
+    Cào đúng 1 ảnh từ Pixabay:
+      1) Bắt buộc có Pixabay API Key
+      2) Gemini tối ưu từ khóa (tiếng Anh ngắn) rồi mới search Pixabay
+    """
+    pixabay_key = (payload.pixabay_key or "").strip()
+    if not pixabay_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Cần nhập Pixabay API Key ở Bước 1 trước khi cào ảnh.",
+        )
+
+    gemini_keys = []
+    if payload.api_key_source:
+        gemini_keys = load_gemini_keys(payload.api_key_source)
+    if not gemini_keys:
+        settings = post_repository.get_post_settings("status")
+        if settings and settings.get("api_key_file_path"):
+            gemini_keys = load_gemini_keys(settings["api_key_file_path"])
+    if not gemini_keys:
+        gemini_keys = load_gemini_keys()
+
+    raw_query = (payload.query or "").strip()
+    if not raw_query:
+        raise HTTPException(status_code=400, detail="Vui lòng nhập từ khóa tìm ảnh.")
+
+    optimized = optimize_pixabay_keyword(raw_query, api_keys=gemini_keys)
+    # Không bao giờ search Pixabay bằng tiếng Việt thuần (chỉ ASCII)
+    is_ascii = bool(re.fullmatch(r"[A-Za-z0-9 ,\-_/]+", raw_query or ""))
+    candidates = []
+    for q in (
+        optimized,
+        raw_query if is_ascii else "",
+        (optimized.split()[0] if optimized else ""),
+    ):
+        q = (q or "").strip()
+        if q and q not in candidates:
+            candidates.append(q)
+    if not candidates:
+        candidates = ["nature landscape"]
+
+    logger.info(f"Cào ảnh: raw='{raw_query[:80]}' → candidates={candidates}")
+
+    save_dir = str(UPLOADS_DIR / "posts")
+    img_path = None
+    used_query = candidates[0]
+    for q in candidates:
+        img_path = search_and_download_pixabay_image(q, pixabay_key, save_dir)
+        if img_path:
+            used_query = q
+            break
+
     if not img_path:
-        raise HTTPException(status_code=404, detail=f"Không tìm thấy ảnh phù hợp với từ khóa '{payload.query}'")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Pixabay không tìm thấy ảnh phù hợp "
+                f"(đã thử: {', '.join(candidates)}). "
+                f"Kiểm tra Pixabay API Key hoặc thử từ khóa khác."
+            ),
+        )
 
     if payload.draft_id and payload.account_uid:
         post_repository.save_or_update_draft(
             account_uid=payload.account_uid,
             content="",
             draft_id=payload.draft_id,
-            image_path=img_path
+            image_path=img_path,
+            image_paths=[img_path],
         )
 
     return {
         "success": True,
         "image_path": img_path,
-        "message": f"Đã cào ảnh thành công cho từ khóa '{payload.query}'"
+        "optimized_keyword": used_query,
+        "message": f"Đã cào 1 ảnh Pixabay (từ khóa: '{used_query}')",
     }
 
 
@@ -489,14 +573,20 @@ def start_posting(payload: StartPostPayload):
                 )
                 inserted_count += 1
         else:
-            # Status Post: xác định nội dung & ảnh đính kèm
-            img_path = acc.get('image_path') or acc.get('imagePath')
-            if not img_path:
+            # Status Post: xác định nội dung & ảnh đính kèm (tối đa 3)
+            img_paths = post_repository.normalize_image_paths(
+                acc.get("image_paths") or acc.get("imagePaths"),
+                acc.get("image_path") or acc.get("imagePath"),
+            )
+            if not img_paths:
                 try:
                     db_drafts = post_repository.get_drafts(payload.post_type)
-                    matched_draft = next((d for d in db_drafts if str(d.get('account_uid')) == uid), None)
-                    if matched_draft and matched_draft.get('image_path'):
-                        img_path = matched_draft.get('image_path')
+                    matched_draft = next((d for d in db_drafts if str(d.get("account_uid")) == uid), None)
+                    if matched_draft:
+                        img_paths = post_repository.normalize_image_paths(
+                            matched_draft.get("image_paths"),
+                            matched_draft.get("image_path"),
+                        )
                 except Exception:
                     pass
 
@@ -516,7 +606,8 @@ def start_posting(payload: StartPostPayload):
                 account_uid=uid,
                 account_name=name,
                 content=draft_content,
-                image_path=img_path,
+                image_path=post_repository.primary_image_path(img_paths),
+                image_paths=img_paths,
                 schedule_time=schedule_time_val,
                 status='PENDING'
             )
@@ -589,6 +680,7 @@ def get_history(
     search: Optional[str] = Query(None),
     time_slot: Optional[str] = Query(None),
     date: Optional[str] = Query(None),
+    account_uid: Optional[str] = Query(None),
     limit: int = Query(50),
     offset: int = Query(0)
 ):
@@ -598,6 +690,7 @@ def get_history(
         search=search,
         time_slot=time_slot,
         date=date,
+        account_uid=account_uid,
         limit=limit,
         offset=offset
     )

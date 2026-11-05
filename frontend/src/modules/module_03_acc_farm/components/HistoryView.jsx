@@ -64,6 +64,7 @@ const CLEANUP_OPTIONS = [
 
 export function HistoryView() {
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedAccountUid, setSelectedAccountUid] = useState("all");
   const [selectedFormat, setSelectedFormat] = useState("all");
   const [selectedTimeSlot, setSelectedTimeSlot] = useState("all");
   const [selectedStatus, setSelectedStatus] = useState("all");
@@ -74,6 +75,9 @@ export function HistoryView() {
   const [isLoading, setIsLoading] = useState(false);
   const [postHistory, setPostHistory] = useState([]);
   const [totalRecords, setTotalRecords] = useState(0);
+  const [accountOptions, setAccountOptions] = useState([
+    { value: "all", label: "Tất cả tài khoản" },
+  ]);
 
   const [copiedUid, setCopiedUid] = useState(null);
   const [copiedMedia, setCopiedMedia] = useState(false);
@@ -119,6 +123,41 @@ export function HistoryView() {
     }
   }, []);
 
+  // ── Tải danh sách tài khoản cho bộ lọc ──
+  useEffect(() => {
+    let ignore = false;
+    async function loadAccounts() {
+      try {
+        const res = await api.get("/api/accounts");
+        if (ignore) return;
+        let raw = [];
+        if (Array.isArray(res)) raw = res;
+        else if (Array.isArray(res?.accounts)) raw = res.accounts;
+        else if (Array.isArray(res?.data)) raw = res.data;
+
+        const opts = [{ value: "all", label: "Tất cả tài khoản" }];
+        const seen = new Set();
+        raw.forEach((acc) => {
+          const uid = String(acc.uid || acc.fb_uid || acc.account_uid || "").trim();
+          if (!uid || seen.has(uid)) return;
+          seen.add(uid);
+          const name = acc.name || acc.fb_name || acc.account_name || uid;
+          opts.push({
+            value: uid,
+            label: `${name} (${uid})`,
+          });
+        });
+        setAccountOptions(opts);
+      } catch (err) {
+        console.error("Lỗi khi tải danh sách tài khoản cho bộ lọc lịch sử:", err);
+      }
+    }
+    loadAccounts();
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
   // ── Tải dữ liệu lịch sử từ API ──
   useEffect(() => {
     let ignore = false;
@@ -131,6 +170,9 @@ export function HistoryView() {
         };
 
         if (searchTerm.trim()) params.search = searchTerm.trim();
+        if (selectedAccountUid && selectedAccountUid !== "all") {
+          params.account_uid = selectedAccountUid;
+        }
         if (selectedFormat !== "all") params.post_type = selectedFormat;
         if (selectedTimeSlot !== "all") params.time_slot = selectedTimeSlot;
         if (selectedStatus !== "all") params.status = selectedStatus;
@@ -154,7 +196,16 @@ export function HistoryView() {
     return () => {
       ignore = true;
     };
-  }, [currentPage, searchTerm, selectedFormat, selectedTimeSlot, selectedStatus, selectedDate, reloadCounter]);
+  }, [
+    currentPage,
+    searchTerm,
+    selectedAccountUid,
+    selectedFormat,
+    selectedTimeSlot,
+    selectedStatus,
+    selectedDate,
+    reloadCounter,
+  ]);
 
   const handleCopyUid = (uid) => {
     if (!uid) return;
@@ -328,9 +379,21 @@ export function HistoryView() {
 
   return (
     <div className="space-y-4">
-      {/* ── Filter Bar: Kính lúp, Hình thức, Khung giờ, Trạng thái, Ngày ── */}
+      {/* ── Filter Bar: Tài khoản, tìm kiếm, Hình thức, Khung giờ, Trạng thái, Ngày ── */}
       <div className="flex items-center gap-2.5 flex-wrap">
-        <div className="relative flex-1 min-w-[280px]">
+        <CustomSelect
+          value={selectedAccountUid}
+          onChange={(val) => {
+            setSelectedAccountUid(val);
+            setCurrentPage(1);
+          }}
+          options={accountOptions}
+          className="min-w-[220px] max-w-[320px]"
+          buttonClassName="h-10 rounded-lg border-border text-xs text-slate-700 font-medium"
+          placeholder="Chọn tài khoản..."
+        />
+
+        <div className="relative flex-1 min-w-[220px]">
           <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-blue-500" />
           <input
             type="search"
@@ -339,7 +402,7 @@ export function HistoryView() {
               setSearchTerm(e.target.value);
               setCurrentPage(1);
             }}
-            placeholder="Tìm theo Fanpage, UID nick, bài viết..."
+            placeholder="Tìm theo nội dung bài viết..."
             className="h-10 w-full rounded-lg border border-blue-200 bg-white pl-9 pr-3 text-sm text-slate-800 placeholder:text-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
         </div>

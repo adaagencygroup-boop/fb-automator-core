@@ -32,7 +32,6 @@ import { toast } from "@/lib/toast";
 import { Switch } from "@/components/ui/switch";
 import { EmergencyStopModal } from "./EmergencyStopModal";
 import { PastScheduleModal } from "./PastScheduleModal";
-
 export function ReelsPostView({ mode, initialState = "config" }) {
   const router = useRouter();
   const isReels = mode === "reels";
@@ -88,6 +87,18 @@ export function ReelsPostView({ mode, initialState = "config" }) {
   const [statusFilter, setStatusFilter] = useState("all");
 
   const pollingRef = useRef(null);
+  const settingsBaselineRef = useRef(null);
+
+  const snapshotSettings = (vals) =>
+    JSON.stringify({
+      masterFolder: vals.masterFolder || "",
+      checkDuplicate: !!vals.checkDuplicate,
+      scheduleEnabled: !!vals.scheduleEnabled,
+      scheduleTime: vals.scheduleTime || "",
+      minDelay: Number(vals.minDelay) || 0,
+      maxDelay: Number(vals.maxDelay) || 0,
+      threadCount: Number(vals.threadCount) || 0,
+    });
 
   // Tải cấu hình
   const loadSettingsFromDb = async () => {
@@ -95,6 +106,16 @@ export function ReelsPostView({ mode, initialState = "config" }) {
       const res = await api.get(`/api/post/settings?post_type=${mode}`);
       const s = res?.data ?? res;
       if (s && typeof s === "object") {
+        const nextFolder = s.master_folder_path || masterFolder;
+        const nextDup =
+          s.check_duplicate !== undefined ? s.check_duplicate : checkDuplicate;
+        const nextSched =
+          s.schedule_enabled !== undefined ? s.schedule_enabled : scheduleEnabled;
+        const nextTime = s.schedule_time ? s.schedule_time.slice(0, 5) : scheduleTime;
+        const nextMin = s.min_delay || minDelay;
+        const nextMax = s.max_delay || maxDelay;
+        const nextThreads = s.thread_count || threadCount;
+
         if (s.master_folder_path) setMasterFolder(s.master_folder_path);
         if (s.check_duplicate !== undefined) setCheckDuplicate(s.check_duplicate);
         if (s.schedule_enabled !== undefined) setScheduleEnabled(s.schedule_enabled);
@@ -102,23 +123,62 @@ export function ReelsPostView({ mode, initialState = "config" }) {
         if (s.min_delay) setMinDelay(s.min_delay);
         if (s.max_delay) setMaxDelay(s.max_delay);
         if (s.thread_count) setThreadCount(s.thread_count);
+
+        settingsBaselineRef.current = snapshotSettings({
+          masterFolder: nextFolder,
+          checkDuplicate: nextDup,
+          scheduleEnabled: nextSched,
+          scheduleTime: nextTime,
+          minDelay: nextMin,
+          maxDelay: nextMax,
+          threadCount: nextThreads,
+        });
+      } else {
+        settingsBaselineRef.current = snapshotSettings({
+          masterFolder,
+          checkDuplicate,
+          scheduleEnabled,
+          scheduleTime,
+          minDelay,
+          maxDelay,
+          threadCount,
+        });
       }
     } catch (err) {
       console.error("Lỗi khi tải cấu hình:", err);
+      settingsBaselineRef.current = snapshotSettings({
+        masterFolder,
+        checkDuplicate,
+        scheduleEnabled,
+        scheduleTime,
+        minDelay,
+        maxDelay,
+        threadCount,
+      });
     }
   };
 
   const handleSaveSettingsToDb = async (overrideCheckDup = null) => {
     try {
+      const dup = overrideCheckDup !== null ? overrideCheckDup : checkDuplicate;
       await api.post("/api/post/settings", {
         post_type: mode,
         master_folder_path: masterFolder,
-        check_duplicate: overrideCheckDup !== null ? overrideCheckDup : checkDuplicate,
+        check_duplicate: dup,
         schedule_enabled: scheduleEnabled,
         schedule_time: scheduleTime,
         min_delay: minDelay,
         max_delay: maxDelay,
         thread_count: threadCount,
+      });
+      settingsBaselineRef.current = snapshotSettings({
+        masterFolder,
+        checkDuplicate: dup,
+        scheduleEnabled,
+        scheduleTime,
+        minDelay,
+        maxDelay,
+        threadCount,
       });
     } catch (err) {
       console.error("Lỗi khi lưu cấu hình:", err);
@@ -520,6 +580,13 @@ export function ReelsPostView({ mode, initialState = "config" }) {
         reason: "Chưa chọn tài khoản nào (Vui lòng tick chọn ít nhất 1 nick ở Bước 2).",
       };
     }
+    const threads = parseInt(threadCount, 10) || 0;
+    if (threads > selectedAccs.length) {
+      return {
+        ready: false,
+        reason: `Số luồng chạy (${threads}) không được vượt quá số tài khoản đã chọn (${selectedAccs.length}).`,
+      };
+    }
     const missingAccounts = selectedAccs.filter((acc) => {
       return !acc.subfolder || acc.mappingStatus !== "Đã gán";
     });
@@ -554,7 +621,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
       ready: true,
       reason: `Đã sẵn sàng kích hoạt đăng cho ${selectedAccs.length} tài khoản.`,
     };
-  }, [scheduleEnabled, scheduleTime, scheduleTimeInvalid, selectedAccs, checkDuplicate]);
+  }, [scheduleEnabled, scheduleTime, scheduleTimeInvalid, selectedAccs, checkDuplicate, threadCount]);
 
   // BR-M03-PUB-01: Kiểm tra giờ hẹn ở Quá khứ
   const scheduleIsInPast = useMemo(() => {
@@ -779,6 +846,15 @@ export function ReelsPostView({ mode, initialState = "config" }) {
   };
 
   const selectedCount = accounts.filter((a) => a.selected).length;
+  const threadCountNum = parseInt(threadCount, 10) || 0;
+  const threadExceedsAccounts =
+    selectedCount > 0 && threadCountNum > selectedCount;
+
+  useEffect(() => {
+    if (selectedCount <= 0) return;
+    const val = parseInt(threadCount, 10);
+    if (val > selectedCount) setThreadCount(selectedCount);
+  }, [selectedCount, threadCount]);
 
   return (
     <div className="space-y-6 pb-20">
@@ -1175,32 +1251,45 @@ export function ReelsPostView({ mode, initialState = "config" }) {
               )}
             </div>
 
-            {/* Số lượng chạy (VR-M03-CFG-01, BR-M03-CFG-02) */}
-            <div className="flex items-center justify-start sm:justify-center gap-3">
-              <span className="text-xs font-bold text-slate-700 whitespace-nowrap">
-                SỐ LUỒNG CHẠY
-              </span>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={threadCount}
-                onChange={(e) => {
-                  // Chỉ cho phép nhập số (VR-M03-CFG-01)
-                  const cleaned = e.target.value.replace(/\D/g, "");
-                  setThreadCount(cleaned);
-                }}
-                onBlur={() => {
-                  // Nếu để trống hoặc = 0 -> tự động set mặc định = 1 luồng (BR-M03-CFG-02)
-                  const val = parseInt(threadCount, 10);
-                  if (!val || val <= 0) {
-                    setThreadCount(1);
-                  } else {
+            {/* Số lượng chạy (VR-M03-CFG-01, BR-M03-CFG-02): ≤ số acc đã chọn */}
+            <div className="flex flex-col items-start sm:items-center gap-1">
+              <div className="flex items-center justify-start sm:justify-center gap-3">
+                <span className="text-xs font-bold text-slate-700 whitespace-nowrap">
+                  SỐ LUỒNG CHẠY
+                </span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={threadCount}
+                  onChange={(e) => {
+                    const cleaned = e.target.value.replace(/\D/g, "");
+                    setThreadCount(cleaned);
+                  }}
+                  onBlur={() => {
+                    let val = parseInt(threadCount, 10);
+                    if (!val || val <= 0) val = 1;
+                    if (selectedCount > 0 && val > selectedCount) {
+                      toast.warning(
+                        `Số luồng tối đa bằng số tài khoản đã chọn (${selectedCount}).`,
+                        "GIỚI HẠN LUỒNG",
+                      );
+                      val = selectedCount;
+                    }
                     setThreadCount(val);
-                  }
-                }}
-                className="w-16 h-8 text-center bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold focus:bg-white focus:border-blue-500 focus:outline-none font-mono"
-              />
-              <span className="text-xs text-slate-500 font-medium">Luồng</span>
+                  }}
+                  className={`w-16 h-8 text-center bg-slate-50 border rounded-lg text-xs font-semibold focus:bg-white focus:outline-none font-mono ${
+                    threadExceedsAccounts
+                      ? "border-red-400 focus:border-red-500"
+                      : "border-slate-200 focus:border-blue-500"
+                  }`}
+                />
+                <span className="text-xs text-slate-500 font-medium">Luồng</span>
+              </div>
+              {threadExceedsAccounts && (
+                <span className="text-[10px] font-medium text-red-500">
+                  Tối đa {selectedCount} (theo số acc đã chọn)
+                </span>
+              )}
             </div>
 
             {/* Giãn cách (VR-M03-PUB-01: Auto-swap khi Min > Max) */}

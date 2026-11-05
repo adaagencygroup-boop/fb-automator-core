@@ -105,7 +105,8 @@ CREATE TABLE IF NOT EXISTS posts (
   post_type         TEXT NOT NULL CHECK (post_type IN ('status', 'reels', 'story')),
   content           TEXT NOT NULL DEFAULT '' CHECK (char_length(content) <= 63206),
   hashtags          TEXT,
-  image_path        TEXT,      -- chỉ Status (ảnh minh họa Pixabay)
+  image_path        TEXT,      -- chỉ Status (ảnh minh họa); sync = phần tử đầu image_paths
+  image_paths       TEXT,      -- JSON array path ảnh Status (tối đa 3); DB cũ: 012_posts_image_paths.sql
   media_path        TEXT,      -- chỉ Reels/Story (file được chọn lúc chạy)
   thumbnail_path    TEXT,      -- ảnh bìa Reels
   media_hash        TEXT,      -- SHA-256 nội dung file, dùng kiểm tra chống đăng trùng

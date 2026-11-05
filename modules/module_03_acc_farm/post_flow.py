@@ -8,6 +8,7 @@ Bao gồm:
   4. Cơ chế kiểm tra sức khỏe nick chuẩn xác: Checkpoint, Hết hạn phiên (/login), Chặn tính năng.
 """
 import os
+import re
 import time
 import random
 import logging
@@ -16,7 +17,8 @@ import hmac
 import hashlib
 import struct
 from urllib.parse import urlparse, parse_qs, urlencode
-from typing import Optional, Any
+from typing import Optional, Any, List
+import json
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -1105,6 +1107,1258 @@ def ensure_post_audience_public(driver, human: HumanInteraction, log_cb: Optiona
     return closed
 
 
+def add_first_recommended_story_music(driver, human: HumanInteraction, log_cb: Optional[Any] = None) -> bool:
+    """
+    Story ảnh: bấm Add music → chọn bài đầu tiên trong mục For you / đề xuất.
+    Dùng JS click + re-query để tránh StaleElementReferenceException.
+    """
+    def log(msg: str):
+        if log_cb:
+            log_cb(msg)
+        logger.info(msg)
+
+    log("Story ảnh — chọn nhạc đề xuất đầu tiên...")
+    try:
+        opened = driver.execute_script(
+            """
+            function triggerClick(el) {
+                if (!el) return false;
+                try {
+                    el.scrollIntoView({block:'nearest', inline:'nearest'});
+                    ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
+                        el.dispatchEvent(new MouseEvent(evt, {bubbles:true, cancelable:true, view:window}));
+                    });
+                    if (typeof el.click === 'function') el.click();
+                    return true;
+                } catch (e) { return false; }
+            }
+            // Chỉ tìm Add music trong sidebar editor (trái), không đụng top-nav / profile
+            const nodes = Array.from(document.querySelectorAll("[role='button'], button"));
+            for (const el of nodes) {
+                const r = el.getBoundingClientRect();
+                if (r.top < 56) continue;          // bỏ top nav
+                if (r.left > window.innerWidth * 0.45) continue;  // Add music nằm sidebar trái
+                const label = ((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || '')).trim().toLowerCase();
+                if (!label || label.length > 40) continue;
+                if (label.includes('your profile') || label.includes('account') || label.includes('hồ sơ')) continue;
+                if (
+                    label === 'add music' || label === 'thêm nhạc' ||
+                    label.includes('add music') || label.includes('thêm nhạc')
+                ) {
+                    if (triggerClick(el)) return true;
+                }
+            }
+            return false;
+            """
+        )
+        if not opened:
+            log("Không tìm thấy nút Add music — bỏ qua nhạc.")
+            return False
+        time.sleep(2.0)
+
+        # Đóng menu Account nếu vô tình mở (avatar top-right)
+        try:
+            driver.execute_script(
+                """
+                const t = (document.body.innerText || '').toLowerCase();
+                if (t.includes('settings & privacy') || t.includes('log out') || t.includes('đăng xuất') ||
+                    t.includes('see all profiles') || t.includes('cài đặt và quyền riêng tư')) {
+                    document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', keyCode:27, bubbles:true}));
+                    document.dispatchEvent(new KeyboardEvent('keyup', {key:'Escape', keyCode:27, bubbles:true}));
+                }
+                """
+            )
+            time.sleep(0.3)
+        except Exception:
+            pass
+
+        # Chờ panel Search music / For you hiện (input search trong panel nhạc)
+        for _ in range(10):
+            panel_ready = driver.execute_script(
+                """
+                return !!document.querySelector(
+                    "input[placeholder*='Search music'], input[placeholder*='Tìm nhạc'], input[placeholder*='music'], input[placeholder*='Music']"
+                ) || (() => {
+                    const t = (document.body.innerText || '').toLowerCase();
+                    return t.includes('search music') && (t.includes('for you') || t.includes('dành cho bạn'));
+                })();
+                """
+            )
+            if panel_ready:
+                break
+            time.sleep(0.5)
+
+        # Click bài đầu: chỉ trong panel nhạc — tuyệt đối không click avatar profile / top-nav
+        selected = None
+        for attempt in range(5):
+            # Nếu menu account đang mở thì đóng trước
+            try:
+                acc_open = driver.execute_script(
+                    """
+                    const t = (document.body.innerText || '').toLowerCase();
+                    return t.includes('settings & privacy') && (t.includes('log out') || t.includes('đăng xuất') ||
+                           t.includes('see all profiles'));
+                    """
+                )
+                if acc_open:
+                    from selenium.webdriver.common.keys import Keys
+                    from selenium.webdriver.common.action_chains import ActionChains
+                    ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+                    time.sleep(0.4)
+                    log("Đã đóng menu Account (tránh click nhầm avatar).")
+            except Exception:
+                pass
+
+            selected = driver.execute_script(
+                """
+                function triggerClick(el) {
+                    if (!el) return null;
+                    try {
+                        el.scrollIntoView({block:'nearest', inline:'nearest'});
+                        const r = el.getBoundingClientRect();
+                        // Chặn click vùng top-nav / góc phải (avatar profile FB)
+                        if (r.top < 64) return null;
+                        if (r.right > window.innerWidth - 80 && r.top < 80) return null;
+                        const x = r.left + r.width / 2;
+                        const y = r.top + r.height / 2;
+                        ['pointerover','mouseover','pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
+                            el.dispatchEvent(new MouseEvent(evt, {
+                                bubbles:true, cancelable:true, view:window, clientX:x, clientY:y
+                            }));
+                        });
+                        if (typeof el.click === 'function') el.click();
+                        const title = (el.innerText || '').split('\\n').map(s => s.trim()).filter(Boolean)[0] || '';
+                        return title || true;
+                    } catch (e) { return null; }
+                }
+
+                function inChrome(el) {
+                    if (!el) return true;
+                    if (el.closest('[role="banner"], [role="navigation"], header')) return true;
+                    const aria = ((el.getAttribute('aria-label') || '') + ' ' +
+                                  (el.closest('[aria-label]')?.getAttribute('aria-label') || '')).toLowerCase();
+                    if (aria.includes('your profile') || aria.includes('account') ||
+                        aria.includes('hồ sơ của bạn') || aria.includes('menu')) return true;
+                    // Menu account: Settings & privacy / Log out
+                    let p = el;
+                    for (let i = 0; i < 6 && p; i++) {
+                        const tx = (p.innerText || '').toLowerCase();
+                        if (tx.includes('settings & privacy') && (tx.includes('log out') || tx.includes('đăng xuất'))) {
+                            return true;
+                        }
+                        p = p.parentElement;
+                    }
+                    const r = el.getBoundingClientRect();
+                    if (r.top < 64) return true;
+                    return false;
+                }
+
+                function isForbidden(el) {
+                    if (!el || inChrome(el)) return true;
+                    const tag = (el.tagName || '').toLowerCase();
+                    if (tag === 'img' || tag === 'image' || tag === 'svg') return true;
+                    if (el.closest('img, image, svg')) return true;
+                    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                    if (aria.includes('play') || aria.includes('pause') || aria.includes('save') ||
+                        aria.includes('bookmark') || aria.includes('close') || aria.includes('đóng') ||
+                        aria.includes('back') || aria.includes('quay lại') || aria.includes('profile')) return true;
+                    const r = el.getBoundingClientRect();
+                    // Thumbnail album trong list nhạc (vuông nhỏ) — không phải target
+                    if (r.width > 0 && r.height > 0 && r.width <= 72 && r.height <= 72 &&
+                        Math.abs(r.width - r.height) < 12 && !!el.querySelector('img')) {
+                        return true;
+                    }
+                    return false;
+                }
+
+                // Bắt buộc neo vào panel nhạc (input Search music / dialog For you)
+                let root = null;
+                const searchInput = document.querySelector(
+                    "input[placeholder*='Search music'], input[placeholder*='Tìm nhạc'], input[placeholder*='music'], input[placeholder*='Music']"
+                );
+                if (searchInput) {
+                    let p = searchInput.parentElement;
+                    for (let i = 0; i < 10 && p; i++) {
+                        const t = (p.innerText || '').toLowerCase();
+                        const pr = p.getBoundingClientRect();
+                        if (pr.width > 240 && pr.height > 200 &&
+                            (t.includes('for you') || t.includes('dành cho bạn') || t.includes('saved') || t.includes('browse'))) {
+                            root = p;
+                            break;
+                        }
+                        p = p.parentElement;
+                    }
+                    if (!root) root = searchInput.closest('[role="dialog"]') || searchInput.parentElement;
+                }
+                if (!root) {
+                    const dialogs = Array.from(document.querySelectorAll("[role='dialog']"));
+                    for (const d of dialogs) {
+                        const t = (d.innerText || '').toLowerCase();
+                        if ((t.includes('search music') || t.includes('tìm nhạc')) &&
+                            (t.includes('for you') || t.includes('dành cho bạn'))) {
+                            root = d;
+                            break;
+                        }
+                    }
+                }
+                if (!root) return null;
+
+                const rootBox = root.getBoundingClientRect();
+                // Panel nhạc không nằm ở top-right avatar
+                if (rootBox.top < 40 && rootBox.right > window.innerWidth - 120) return null;
+
+                function insideRoot(el) {
+                    return root.contains(el);
+                }
+
+                // Click span tên bài trong panel nhạc thôi
+                const spans = Array.from(root.querySelectorAll('span'));
+                for (const s of spans) {
+                    if (!s || s.offsetParent === null) continue;
+                    if (!insideRoot(s) || isForbidden(s)) continue;
+                    if (s.querySelector('img, svg, button')) continue;
+                    const tx = (s.innerText || '').trim();
+                    if (!tx || tx.length < 2 || tx.length > 80) continue;
+                    const low = tx.toLowerCase();
+                    if (low === 'for you' || low === 'dành cho bạn' || low === 'saved' || low === 'browse' ||
+                        low === 'search music' || low.includes('tìm nhạc') || low === 'add music') continue;
+                    if (!/[a-zA-ZÀ-ỹ0-9]/.test(tx)) continue;
+                    if (s.querySelectorAll('span').length > 4) continue;
+                    const box = s.getBoundingClientRect();
+                    if (box.width < 40 || box.height < 12 || box.height > 60) continue;
+                    if (box.top < rootBox.top + 40) continue; // bỏ header For you / search
+                    // Phải nằm trong panel, không phải mép avatar trái của row (~ thumbnail)
+                    if (box.left < rootBox.left + 56) continue;
+                    const hit = triggerClick(s);
+                    if (hit) return hit;
+                }
+
+                // Fallback: hàng bài trong panel — click span chữ, không click row chứa img đầu
+                const rows = Array.from(root.querySelectorAll("[role='button'], [role='option']"));
+                for (const row of rows) {
+                    if (!row || !insideRoot(row) || row.offsetParent === null) continue;
+                    if (inChrome(row)) continue;
+                    const txt = (row.innerText || '').trim();
+                    const low = txt.toLowerCase();
+                    const aria = (row.getAttribute('aria-label') || '').toLowerCase();
+                    if (!txt || txt.length < 3) continue;
+                    if (aria.includes('play') || aria.includes('profile') || aria.includes('account')) continue;
+                    if (low === 'for you' || low === 'saved' || low === 'browse') continue;
+                    const lines = txt.split('\\n').map(s => s.trim()).filter(Boolean);
+                    if (!lines.length || lines[0].length < 2 || lines[0].length > 80) continue;
+                    if (!row.querySelector('img')) continue;
+                    const r = row.getBoundingClientRect();
+                    if (r.width < 160 || r.height < 36 || r.height > 120) continue;
+                    if (r.top < 64) continue;
+
+                    const titleEl = Array.from(row.querySelectorAll('span')).find(s => {
+                        const t = (s.innerText || '').trim();
+                        const b = s.getBoundingClientRect();
+                        return t.length >= 2 && t.length < 80 && !s.querySelector('img,svg') &&
+                               !isForbidden(s) && b.left >= rootBox.left + 56;
+                    });
+                    if (!titleEl) continue;
+                    const hit = triggerClick(titleEl);
+                    if (hit) return typeof hit === 'string' && hit.length > 1 ? hit : lines[0];
+                }
+                return null;
+                """
+            )
+            if selected:
+                break
+            time.sleep(0.8)
+
+        if selected:
+            title = selected if isinstance(selected, str) else ""
+            log(f"✓ Đã chọn nhạc đề xuất đầu tiên{f': {title}' if title else ''}.")
+            time.sleep(1.8)
+            # Thu nhỏ sticker nhạc + kéo sang góc phải preview
+            _shrink_and_place_story_music_sticker(driver, human, log_cb=log)
+            return True
+
+        log("Không chọn được bài nhạc đề xuất — tiếp tục đăng không nhạc.")
+        try:
+            driver.execute_script(
+                """
+                const closes = Array.from(document.querySelectorAll("[aria-label='Close'], [aria-label='Đóng'], [aria-label='close']"));
+                for (const c of closes) { try { c.click(); return true; } catch(e) {} }
+                return false;
+                """
+            )
+        except Exception:
+            pass
+        return False
+    except StaleElementReferenceException:
+        log("Stale khi chọn nhạc — thử lại click title trong panel nhạc...")
+        try:
+            ok = driver.execute_script(
+                """
+                const input = document.querySelector(
+                    "input[placeholder*='Search music'], input[placeholder*='Tìm nhạc'], input[placeholder*='music']"
+                );
+                const root = input ? (input.closest('[role="dialog"]') || input.parentElement.parentElement) : null;
+                if (!root) return false;
+                const rootLeft = root.getBoundingClientRect().left;
+                const spans = Array.from(root.querySelectorAll('span'));
+                for (const s of spans) {
+                    if (!s || s.offsetParent === null) continue;
+                    if (s.querySelector('img, svg')) continue;
+                    if (s.closest('[role="banner"], header')) continue;
+                    const t = (s.innerText || '').trim();
+                    if (t.length < 3 || t.length > 80) continue;
+                    const low = t.toLowerCase();
+                    if (low.includes('search') || low === 'for you' || low === 'saved' || low === 'browse') continue;
+                    const box = s.getBoundingClientRect();
+                    if (box.top < 64 || box.left < rootLeft + 56 || box.width < 40) continue;
+                    s.click();
+                    return t;
+                }
+                return false;
+                """
+            )
+            if ok:
+                time.sleep(1.5)
+                _shrink_and_place_story_music_sticker(driver, human, log_cb=log)
+            return bool(ok)
+        except Exception:
+            return False
+    except Exception as e:
+        log(f"Bỏ qua chọn nhạc Story: {e}")
+        return False
+
+
+def _shrink_and_place_story_music_sticker(
+    driver, human: HumanInteraction, log_cb: Optional[Any] = None
+) -> bool:
+    """
+    Sau khi chọn bài: chọn kiểu sticker nhỏ (icon cuối) rồi kéo sang góc phải preview, Done.
+    """
+    def log(msg: str):
+        if log_cb:
+            log_cb(msg)
+        logger.info(msg)
+
+    log("Thu nhỏ hình nhạc và đặt sang góc phải...")
+    try:
+        # 1) Chọn style nhỏ nhất (thường là nút tròn thứ 4 cạnh Remove)
+        style_ok = driver.execute_script(
+            """
+            function triggerClick(el) {
+                if (!el) return false;
+                try {
+                    el.scrollIntoView({block:'center'});
+                    ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
+                        el.dispatchEvent(new MouseEvent(evt, {bubbles:true, cancelable:true, view:window}));
+                    });
+                    if (typeof el.click === 'function') el.click();
+                    return true;
+                } catch (e) { return false; }
+            }
+
+            // Panel có nút Remove + 4 icon style (icon cuối = sticker nhỏ dạng tag)
+            const removeBtns = Array.from(document.querySelectorAll("[role='button'], button, span"))
+                .filter(el => /^remove$|^gỡ$|^xóa$/i.test((el.innerText || '').trim()));
+            for (const rem of removeBtns) {
+                let panel = rem.closest('div');
+                for (let i = 0; i < 7 && panel; i++) {
+                    const circles = Array.from(panel.querySelectorAll("[role='button']"))
+                        .filter(el => {
+                            const box = el.getBoundingClientRect();
+                            return el.offsetParent !== null &&
+                                box.width >= 28 && box.width <= 56 &&
+                                Math.abs(box.width - box.height) < 10;
+                        });
+                    // Nhóm thành hàng ngang ~4 icon
+                    if (circles.length >= 3) {
+                        circles.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+                        // Lấy cụm gần nhau theo trục Y
+                        const top0 = circles[0].getBoundingClientRect().top;
+                        const row = circles.filter(c => Math.abs(c.getBoundingClientRect().top - top0) < 20);
+                        if (row.length >= 3) {
+                            const smallStyle = row[row.length - 1];
+                            return triggerClick(smallStyle) ? 'style_small_tag' : false;
+                        }
+                    }
+                    panel = panel.parentElement;
+                }
+            }
+
+            // Fallback: hàng 3–5 nút tròn
+            const all = Array.from(document.querySelectorAll("[role='button']")).filter(el => {
+                const box = el.getBoundingClientRect();
+                return box.width >= 28 && box.width <= 56 && Math.abs(box.width - box.height) < 10 && el.offsetParent !== null;
+            });
+            if (all.length >= 3) {
+                all.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+                return triggerClick(all[all.length - 1]) ? 'fallback_last' : false;
+            }
+            return false;
+            """
+        )
+        if style_ok:
+            log(f"✓ Đã chọn kiểu nhạc nhỏ ({style_ok}).")
+        else:
+            log("Không đổi được kiểu sticker — vẫn kéo góc phải nếu thấy sticker.")
+        time.sleep(1.0)
+
+        # 2) Kéo sticker nhạc sang góc phải (dưới-phải) của vùng Preview
+        placed = False
+        try:
+            from selenium.webdriver.common.action_chains import ActionChains
+
+            sticker = driver.execute_script(
+                """
+                // Sticker nhạc trên canvas preview — thường có ảnh album + tên bài
+                const candidates = Array.from(document.querySelectorAll("div, img")).filter(el => {
+                    if (!el || el.offsetParent === null) return false;
+                    const r = el.getBoundingClientRect();
+                    // Sau khi thu nhỏ: tag ngang nhỏ; trước đó: sticker vuông lớn
+                    if (r.width < 36 || r.height < 18 || r.width > 420 || r.height > 240) return false;
+                    // Nằm trong vùng preview (không phải sidebar trái)
+                    if (r.left < 280) return false;
+                    const t = (el.innerText || '').toLowerCase();
+                    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                    const hasMusicHint = t.includes('♪') || t.includes('♫') ||
+                        aria.includes('music') || aria.includes('nhạc') ||
+                        !!el.querySelector('img');
+                    return hasMusicHint || (r.width > 80 && r.height > 40 && r.left > 400);
+                });
+                // Ưu tiên phần tử gần giữa preview theo chiều dọc
+                candidates.sort((a,b) => {
+                    const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+                    return Math.abs((ra.top+ra.bottom)/2 - window.innerHeight/2) -
+                           Math.abs((rb.top+rb.bottom)/2 - window.innerHeight/2);
+                });
+                return candidates[0] || null;
+                """
+            )
+            if sticker:
+                preview = driver.execute_script(
+                    """
+                    // Vùng preview tối / canvas
+                    const nodes = Array.from(document.querySelectorAll("div"));
+                    let best = null, bestArea = 0;
+                    for (const n of nodes) {
+                        const r = n.getBoundingClientRect();
+                        if (r.width < 280 || r.height < 400) continue;
+                        if (r.left < 250) continue; // bỏ sidebar
+                        const area = r.width * r.height;
+                        if (area > bestArea) { bestArea = area; best = n; }
+                    }
+                    return best;
+                    """
+                )
+                if preview:
+                    pr = preview.rect
+                    sr = sticker.rect
+                    # Góc phải dưới preview
+                    target_x = int(pr["x"] + pr["width"] * 0.86)
+                    target_y = int(pr["y"] + pr["height"] * 0.82)
+                    start_x = int(sr["x"] + sr["width"] / 2)
+                    start_y = int(sr["y"] + sr["height"] / 2)
+                    offset_x = target_x - start_x
+                    offset_y = target_y - start_y
+                    ActionChains(driver).click_and_hold(sticker).pause(0.15).move_by_offset(
+                        offset_x, offset_y
+                    ).pause(0.1).release().perform()
+                    placed = True
+                    log("✓ Đã kéo sticker nhạc sang góc phải.")
+                    time.sleep(0.6)
+        except StaleElementReferenceException:
+            log("Stale khi kéo sticker — thử đặt bằng JS...")
+        except Exception as e:
+            logger.debug(f"Drag music sticker: {e}")
+
+        if not placed:
+            # JS fallback: pointer events drag
+            try:
+                ok = driver.execute_script(
+                    """
+                    const sticker = arguments[0];
+                    // re-find sticker roughly
+                    const all = Array.from(document.querySelectorAll("div")).filter(el => {
+                        const r = el.getBoundingClientRect();
+                        return r.left > 300 && r.width > 60 && r.width < 360 && r.height > 30 && r.height < 200;
+                    });
+                    const el = all[0];
+                    if (!el) return false;
+                    const preview = Array.from(document.querySelectorAll("div")).filter(n => {
+                        const r = n.getBoundingClientRect();
+                        return r.left > 250 && r.width > 280 && r.height > 400;
+                    }).sort((a,b) => (b.getBoundingClientRect().width*b.getBoundingClientRect().height) -
+                                    (a.getBoundingClientRect().width*a.getBoundingClientRect().height))[0];
+                    if (!preview) return false;
+                    const pr = preview.getBoundingClientRect();
+                    const sr = el.getBoundingClientRect();
+                    const fromX = sr.left + sr.width/2, fromY = sr.top + sr.height/2;
+                    const toX = pr.left + pr.width * 0.86, toY = pr.top + pr.height * 0.82;
+                    function fire(type, x, y) {
+                        el.dispatchEvent(new PointerEvent(type, {
+                            bubbles: true, cancelable: true, view: window,
+                            clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse', isPrimary: true
+                        }));
+                    }
+                    fire('pointerdown', fromX, fromY);
+                    fire('pointermove', (fromX+toX)/2, (fromY+toY)/2);
+                    fire('pointermove', toX, toY);
+                    fire('pointerup', toX, toY);
+                    return true;
+                    """
+                )
+                if ok:
+                    placed = True
+                    log("✓ Đã đặt sticker nhạc góc phải (JS).")
+            except Exception:
+                pass
+
+        # 3) Bấm Done / checkmark nếu có
+        try:
+            driver.execute_script(
+                """
+                function triggerClick(el) {
+                    if (!el) return false;
+                    try {
+                        el.click();
+                        return true;
+                    } catch (e) { return false; }
+                }
+                const btns = Array.from(document.querySelectorAll("[role='button'], button"));
+                for (const b of btns) {
+                    const a = (b.getAttribute('aria-label') || '').toLowerCase();
+                    const t = (b.innerText || '').trim().toLowerCase();
+                    if (a.includes('done') || a.includes('xong') || a === 'ok' || t === 'done' || t === 'xong') {
+                        if (triggerClick(b)) return true;
+                    }
+                }
+                // Nút check trắng nhỏ góc dưới editor
+                const checks = btns.filter(b => {
+                    const r = b.getBoundingClientRect();
+                    return r.width >= 28 && r.width <= 56 && r.height >= 28 && r.height <= 56 && b.offsetParent !== null;
+                });
+                if (checks.length) return triggerClick(checks[checks.length - 1]);
+                return false;
+                """
+            )
+            time.sleep(0.5)
+        except Exception:
+            pass
+
+        return bool(style_ok or placed)
+    except Exception as e:
+        log(f"Không thu nhỏ/kéo nhạc được: {e}")
+        return False
+
+
+def ensure_story_privacy_public(
+    driver,
+    human: HumanInteraction,
+    log_cb: Optional[Any] = None,
+    *,
+    open_panel: bool = True,
+) -> bool:
+    """
+    Xử lý modal 'Story privacy' / 'Who can see your story?':
+    chọn Public → Save → confirm Change story privacy.
+    Nếu Public đã chọn sẵn: đóng modal (Cancel), không Save lại.
+    open_panel=False: chỉ xử lý khi modal đang mở (không bấm bánh răng lại).
+    """
+    def log(msg: str):
+        if log_cb:
+            log_cb(msg)
+        logger.info(msg)
+
+    def _dialog_open():
+        """Modal chọn Public/Friends (không gồm modal xác nhận Change story privacy)."""
+        try:
+            return bool(
+                driver.execute_script(
+                    """
+                    const dialogs = Array.from(document.querySelectorAll("[role='dialog']"));
+                    for (const d of dialogs) {
+                        if (d.offsetParent === null && getComputedStyle(d).display === 'none') continue;
+                        const t = (d.innerText || '').toLowerCase();
+                        // Bỏ qua modal xác nhận sau khi đổi Public
+                        if (
+                            t.includes('change story privacy') ||
+                            t.includes('changes you make will apply') ||
+                            t.includes('thay đổi quyền riêng tư của tin') ||
+                            t.includes('thay đổi bạn thực hiện')
+                        ) continue;
+                        if (
+                            (t.includes('story privacy') || t.includes('who can see your story') ||
+                             t.includes('ai có thể xem tin') || t.includes('quyền riêng tư của tin')) &&
+                            (t.includes('public') || t.includes('công khai')) &&
+                            (t.includes('friends') || t.includes('bạn bè'))
+                        ) {
+                            return true;
+                        }
+                        if (t.includes('public') && t.includes('friends') && (t.includes('save') || t.includes('lưu'))) {
+                            return true;
+                        }
+                    }
+                    return false;
+                    """
+                )
+            )
+        except Exception:
+            return False
+
+    def _open_privacy_panel():
+        # Bắt buộc bấm bánh răng cạnh "Your story" để mở Story privacy
+        opened = driver.execute_script(
+            """
+            function triggerClick(el) {
+                if (!el) return false;
+                try {
+                    el.scrollIntoView({block:'center'});
+                    ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
+                        el.dispatchEvent(new MouseEvent(evt, {bubbles:true, cancelable:true, view:window}));
+                    });
+                    if (typeof el.click === 'function') el.click();
+                    return true;
+                } catch (e) { return false; }
+            }
+
+            // Ưu tiên: bánh răng (nút tròn có SVG) ngay cạnh "Your story" / "Tin của bạn"
+            const labels = Array.from(document.querySelectorAll('span, div, h1, h2'));
+            for (const h of labels) {
+                const raw = (h.innerText || '').trim();
+                // Chỉ lấy node chữ ngắn đúng tiêu đề (tránh div cha chứa cả sidebar)
+                if (raw.length > 24) continue;
+                const t = raw.toLowerCase();
+                if (t !== 'your story' && t !== 'tin của bạn') continue;
+
+                let row = h;
+                for (let i = 0; i < 6 && row; i++) {
+                    const btns = Array.from(row.querySelectorAll("[role='button'], button"));
+                    // Gear: nút nhỏ có svg, cạnh title (thường trong vòng tròn xanh)
+                    const gearCandidates = btns.filter(b => {
+                        const r = b.getBoundingClientRect();
+                        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                        const txt = (b.innerText || '').trim().toLowerCase();
+                        if (txt.includes('discard') || txt.includes('share') || txt.includes('chia sẻ') ||
+                            txt.includes('add text') || txt.includes('add music')) return false;
+                        if (r.width < 18 || r.width > 52 || r.height < 18 || r.height > 52) return false;
+                        if (Math.abs(r.width - r.height) > 10) return false;
+                        const hasSvg = !!b.querySelector('svg');
+                        const looksSettings = aria.includes('setting') || aria.includes('cài đặt') ||
+                            aria.includes('privacy') || aria.includes('riêng tư');
+                        return hasSvg || looksSettings;
+                    });
+                    // Ưu tiên nút gần title nhất theo khoảng cách ngang
+                    const hr = h.getBoundingClientRect();
+                    gearCandidates.sort((a, b) => {
+                        const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+                        return Math.abs(ar.left - hr.right) - Math.abs(br.left - hr.right);
+                    });
+                    for (const b of gearCandidates) {
+                        if (triggerClick(b)) return 'gear_near_title';
+                    }
+                    row = row.parentElement;
+                }
+            }
+
+            // Fallback aria-label Settings / Story privacy
+            const buttons = Array.from(document.querySelectorAll("[role='button'], button"));
+            for (const b of buttons) {
+                const label = ((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || '')).toLowerCase();
+                if (
+                    label.includes('setting') || label.includes('cài đặt') ||
+                    label.includes('privacy') || label.includes('riêng tư') ||
+                    label.includes('story privacy')
+                ) {
+                    if (triggerClick(b)) return 'aria';
+                }
+            }
+            return false;
+            """
+        )
+        return bool(opened)
+
+    def _pick_public():
+        """Chọn radio Public trên modal Story privacy (Friends đang chọn)."""
+        return driver.execute_script(
+            """
+            function triggerClick(el) {
+                if (!el) return false;
+                try {
+                    el.scrollIntoView({block:'center'});
+                    ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
+                        el.dispatchEvent(new MouseEvent(evt, {bubbles:true, cancelable:true, view:window}));
+                    });
+                    if (typeof el.click === 'function') el.click();
+                    return true;
+                } catch (e) { return false; }
+            }
+
+            const dialogs = Array.from(document.querySelectorAll("[role='dialog']"));
+            let dialog = null;
+            for (const d of dialogs) {
+                const t = (d.innerText || '').toLowerCase();
+                if (
+                    t.includes('change story privacy') ||
+                    t.includes('changes you make will apply') ||
+                    t.includes('thay đổi quyền riêng tư của tin')
+                ) continue;
+                if (
+                    t.includes('who can see your story') ||
+                    t.includes('ai có thể xem tin') ||
+                    ((t.includes('story privacy') || t.includes('quyền riêng tư')) &&
+                     (t.includes('public') || t.includes('công khai')) &&
+                     (t.includes('friends') || t.includes('bạn bè')))
+                ) {
+                    dialog = d;
+                    break;
+                }
+            }
+            if (!dialog) return { ok: false, reason: 'no_dialog' };
+
+            // Click đúng dòng Public (không Friends / Custom / Hide story from)
+            let picked = false;
+            // Ưu tiên: span đúng chữ "Public" / "Công khai"
+            const spans = Array.from(dialog.querySelectorAll('span'));
+            for (const s of spans) {
+                const t = (s.innerText || '').trim();
+                if (t !== 'Public' && t !== 'Công khai') continue;
+                const row = s.closest('[role="radio"]') ||
+                            s.closest('[role="listitem"]') ||
+                            s.closest('[role="button"]') ||
+                            s.closest('label') ||
+                            s.parentElement;
+                const radio = (row && row.querySelector('[role="radio"]')) ||
+                              (row && row.matches('[role="radio"]') ? row : null);
+                picked = triggerClick(radio || row || s);
+                if (picked) return { ok: true, via: 'public_label' };
+            }
+
+            const radios = Array.from(dialog.querySelectorAll("[role='radio'], [role='option'], label, div[role='button']"));
+            for (const item of radios) {
+                const txt = (item.innerText || item.textContent || item.getAttribute('aria-label') || '').trim();
+                const low = txt.toLowerCase();
+                if (!low || low.length > 120) continue;
+                if (low.includes('friends') || low.includes('bạn bè') || low.includes('custom') ||
+                    low.includes('hide story') || low.includes('ẩn tin')) continue;
+                const isPublicRow = (
+                    low.startsWith('public') || low.startsWith('công khai') ||
+                    low.includes('anyone on facebook') || low.includes('bất kỳ ai trên facebook')
+                );
+                if (!isPublicRow) continue;
+                const radio = item.matches('[role="radio"]') ? item : item.querySelector('[role="radio"]');
+                picked = triggerClick(radio || item);
+                if (picked) return { ok: true, via: 'public_row' };
+            }
+            return { ok: false, reason: 'public_not_found' };
+            """
+        )
+
+    def _find_story_privacy_save_btn():
+        """Tìm nút Save xanh trên modal Story privacy (không phải Change story privacy)."""
+        # XPath: dialog Story privacy có Public/Friends → nút Save
+        xpaths = [
+            (
+                "//div[@role='dialog']"
+                "[.//*[contains(text(),'Who can see your story') or contains(text(),'Story privacy') "
+                "or contains(text(),'Ai có thể xem tin')]]"
+                "[not(.//*[contains(text(),'Change story privacy')])]"
+                "[not(.//*[contains(text(),'Changes you make will apply')])]"
+                "//*[@role='button' or self::button]"
+                "[.//span[normalize-space()='Save' or normalize-space()='Lưu'] "
+                "or normalize-space()='Save' or normalize-space()='Lưu']"
+            ),
+            (
+                "//div[@role='dialog']"
+                "[contains(., 'Public') and contains(., 'Friends') and (contains(., 'Save') or contains(., 'Lưu'))]"
+                "[not(contains(., 'Change story privacy'))]"
+                "[not(contains(., 'Changes you make will apply'))]"
+                "//*[@role='button' or self::button]"
+                "[.//span[normalize-space()='Save' or normalize-space()='Lưu'] "
+                "or normalize-space()='Save' or normalize-space()='Lưu']"
+            ),
+        ]
+        for xp in xpaths:
+            try:
+                for el in driver.find_elements(By.XPATH, xp):
+                    try:
+                        if not el.is_displayed():
+                            continue
+                        label = (el.text or "").strip().lower()
+                        aria = (el.get_attribute("aria-label") or "").strip().lower()
+                        if "cancel" in label or "hủy" in label or "huỷ" in label:
+                            continue
+                        if "cancel" in aria:
+                            continue
+                        if label in ("save", "lưu") or "save" in label or "lưu" in label or aria in ("save", "lưu"):
+                            return el
+                        # span bên trong đúng Save
+                        if label == "" or "save" in label or "lưu" in label:
+                            return el
+                    except StaleElementReferenceException:
+                        continue
+            except Exception:
+                continue
+        return None
+
+    def _save_story_privacy_dialog():
+        """Bấm Save trên modal Story privacy (lần 1) — sau đó FB hiện Change story privacy."""
+        # 1) Selenium + human click (FB hay bỏ qua JS click thuần)
+        btn = _find_story_privacy_save_btn()
+        if btn is not None:
+            try:
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+                time.sleep(0.15)
+                try:
+                    human.click(btn)
+                    return True
+                except Exception:
+                    pass
+                try:
+                    from selenium.webdriver.common.action_chains import ActionChains
+                    ActionChains(driver).move_to_element(btn).pause(0.1).click().perform()
+                    return True
+                except Exception:
+                    pass
+                try:
+                    btn.click()
+                    return True
+                except Exception:
+                    pass
+                driver.execute_script("arguments[0].click();", btn)
+                return True
+            except StaleElementReferenceException:
+                pass
+            except Exception as e:
+                logger.debug(f"_save_story_privacy_dialog human: {e}")
+
+        # 2) JS fallback — tìm span Save rồi click parent button
+        try:
+            return bool(
+                driver.execute_script(
+                    """
+                    function triggerClick(el) {
+                        if (!el) return false;
+                        try {
+                            el.scrollIntoView({block:'center'});
+                            const r = el.getBoundingClientRect();
+                            const x = r.left + r.width/2, y = r.top + r.height/2;
+                            ['pointerover','pointerenter','mouseover','mouseenter','pointerdown','mousedown',
+                             'pointerup','mouseup','click'].forEach(evt => {
+                                el.dispatchEvent(new MouseEvent(evt, {
+                                    bubbles:true, cancelable:true, view:window, clientX:x, clientY:y
+                                }));
+                            });
+                            if (typeof el.click === 'function') el.click();
+                            return true;
+                        } catch (e) { return false; }
+                    }
+
+                    const dialogs = Array.from(document.querySelectorAll("[role='dialog']"));
+                    for (const d of dialogs) {
+                        const t = (d.innerText || '').toLowerCase();
+                        if (
+                            t.includes('change story privacy') ||
+                            t.includes('changes you make will apply') ||
+                            t.includes('thay đổi quyền riêng tư của tin')
+                        ) continue;
+                        if (!(
+                            t.includes('who can see your story') ||
+                            t.includes('story privacy') ||
+                            ((t.includes('public') || t.includes('công khai')) &&
+                             (t.includes('friends') || t.includes('bạn bè')))
+                        )) continue;
+
+                        // Ưu tiên span đúng chữ Save / Lưu
+                        const spans = Array.from(d.querySelectorAll('span'));
+                        for (const s of spans) {
+                            const tx = (s.innerText || '').trim();
+                            if (tx !== 'Save' && tx !== 'Lưu') continue;
+                            const btn = s.closest('[role="button"]') || s.closest('button') || s.parentElement;
+                            if (triggerClick(btn || s)) return true;
+                        }
+
+                        const btns = Array.from(d.querySelectorAll("[role='button'], button"));
+                        for (const b of btns) {
+                            const label = (b.innerText || b.textContent || b.getAttribute('aria-label') || '').trim().toLowerCase();
+                            if (!label || label.includes('cancel') || label.includes('hủy') || label.includes('huỷ')) continue;
+                            if (label === 'save' || label === 'lưu' || label.startsWith('save') || label.startsWith('lưu')) {
+                                if (triggerClick(b)) return true;
+                            }
+                        }
+                    }
+                    return false;
+                    """
+                )
+            )
+        except Exception:
+            return False
+
+    def _confirm_change_privacy_open():
+        """Modal xác nhận 'Change story privacy' sau khi Save lần 1."""
+        try:
+            return bool(
+                driver.execute_script(
+                    """
+                    const dialogs = Array.from(document.querySelectorAll("[role='dialog']"));
+                    for (const d of dialogs) {
+                        if (d.offsetParent === null && getComputedStyle(d).display === 'none') continue;
+                        const t = (d.innerText || '').toLowerCase();
+                        if (
+                            t.includes('change story privacy') ||
+                            t.includes('thay đổi quyền riêng tư của tin') ||
+                            t.includes('thay đổi quyền riêng tư tin') ||
+                            (t.includes('changes you make will apply') && (t.includes('save') || t.includes('lưu'))) ||
+                            (t.includes('thay đổi bạn thực hiện') && (t.includes('save') || t.includes('lưu')))
+                        ) {
+                            return true;
+                        }
+                    }
+                    return false;
+                    """
+                )
+            )
+        except Exception:
+            return False
+
+    def _confirm_change_privacy_save():
+        """Bấm Save trên modal 'Change story privacy' (không bấm Cancel)."""
+        # 1) JS click trong dialog
+        try:
+            ok = driver.execute_script(
+                """
+                function triggerClick(el) {
+                    if (!el) return false;
+                    try {
+                        el.scrollIntoView({block:'center'});
+                        ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
+                            el.dispatchEvent(new MouseEvent(evt, {bubbles:true, cancelable:true, view:window}));
+                        });
+                        if (typeof el.click === 'function') el.click();
+                        return true;
+                    } catch (e) { return false; }
+                }
+
+                const roots = Array.from(document.querySelectorAll("[role='dialog'], [role='alertdialog'], div"));
+                let dialog = null;
+                for (const d of roots) {
+                    const t = (d.innerText || '').toLowerCase();
+                    if (!t) continue;
+                    // Chỉ lấy node đủ nhỏ (đúng modal), không lấy cả page
+                    if (t.length > 800) continue;
+                    if (
+                        t.includes('change story privacy') ||
+                        t.includes('thay đổi quyền riêng tư của tin') ||
+                        t.includes('thay đổi quyền riêng tư tin') ||
+                        (t.includes('changes you make will apply') && (t.includes('save') || t.includes('lưu'))) ||
+                        (t.includes('thay đổi bạn thực hiện') && (t.includes('save') || t.includes('lưu')))
+                    ) {
+                        dialog = d;
+                        break;
+                    }
+                }
+                if (!dialog) return false;
+
+                const btns = Array.from(dialog.querySelectorAll("[role='button'], button"));
+                // Ưu tiên nút Save (xanh) — bỏ Cancel
+                for (const b of btns) {
+                    const label = (b.innerText || b.textContent || b.getAttribute('aria-label') || '').trim().toLowerCase();
+                    if (label === 'cancel' || label === 'hủy' || label === 'huỷ') continue;
+                    if (label === 'save' || label === 'lưu') {
+                        return triggerClick(b);
+                    }
+                }
+                // Span "Save" bên trong button
+                const spans = Array.from(dialog.querySelectorAll('span'));
+                for (const s of spans) {
+                    const t = (s.innerText || '').trim();
+                    if (t !== 'Save' && t !== 'Lưu') continue;
+                    const btn = s.closest('[role="button"]') || s.closest('button') || s;
+                    return triggerClick(btn);
+                }
+                return false;
+                """
+            )
+            if ok:
+                return True
+        except Exception:
+            pass
+
+        # 2) Selenium XPath fallback — Save trong modal Change story privacy
+        try:
+            xpaths = [
+                (
+                    "//div[@role='dialog']"
+                    "[.//*[contains(text(),'Change story privacy') or contains(text(),'Thay đổi quyền riêng tư') "
+                    "or contains(text(),'Changes you make will apply')]]"
+                    "//*[@role='button' or self::button]"
+                    "[.//span[normalize-space()='Save' or normalize-space()='Lưu'] "
+                    "or normalize-space()='Save' or normalize-space()='Lưu']"
+                ),
+                (
+                    "//*[@role='dialog' or @role='alertdialog']"
+                    "[contains(., 'Change story privacy') or contains(., 'Changes you make will apply')]"
+                    "//*[@role='button' or self::button]"
+                    "[normalize-space()='Save' or .//span[normalize-space()='Save' or normalize-space()='Lưu']]"
+                ),
+            ]
+            for xp in xpaths:
+                els = driver.find_elements(By.XPATH, xp)
+                for el in els:
+                    try:
+                        if not el.is_displayed():
+                            continue
+                        label = (el.text or "").strip().lower()
+                        if "cancel" in label or "hủy" in label:
+                            continue
+                        try:
+                            human.click(el)
+                        except Exception:
+                            driver.execute_script("arguments[0].click();", el)
+                        return True
+                    except StaleElementReferenceException:
+                        continue
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return False
+
+    def _force_close_dialog():
+        try:
+            driver.execute_script(
+                """
+                const dialogs = Array.from(document.querySelectorAll("[role='dialog']"));
+                for (const d of dialogs) {
+                    const t = (d.innerText || '').toLowerCase();
+                    if (!(t.includes('story privacy') || t.includes('who can see your story') ||
+                          t.includes('change story privacy') ||
+                          (t.includes('public') && t.includes('friends')))) continue;
+                    // Ưu tiên Save trên confirm nếu còn mở
+                    const btns = Array.from(d.querySelectorAll("[role='button'], button"));
+                    for (const b of btns) {
+                        const label = (b.getAttribute('aria-label') || b.innerText || '').trim().toLowerCase();
+                        if (label === 'save' || label === 'lưu') {
+                            b.click();
+                            return true;
+                        }
+                    }
+                    const closeBtn = d.querySelector("[aria-label='Close'], [aria-label='Đóng'], [aria-label='close']");
+                    if (closeBtn) { closeBtn.click(); return true; }
+                    for (const b of btns) {
+                        const label = (b.getAttribute('aria-label') || b.innerText || '').trim().toLowerCase();
+                        if (label === 'cancel' || label === 'hủy' || label === 'close' || label === 'đóng') {
+                            b.click();
+                            return true;
+                        }
+                    }
+                }
+                return false;
+                """
+            )
+        except Exception:
+            pass
+        try:
+            from selenium.webdriver.common.keys import Keys
+            from selenium.webdriver.common.action_chains import ActionChains
+            ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        except Exception:
+            pass
+
+    def _public_already_selected():
+        """Public radio đang checked trên modal Story privacy."""
+        try:
+            return bool(
+                driver.execute_script(
+                    """
+                    const dialogs = Array.from(document.querySelectorAll("[role='dialog']"));
+                    for (const d of dialogs) {
+                        const t = (d.innerText || '').toLowerCase();
+                        if (t.includes('change story privacy') || t.includes('changes you make will apply')) continue;
+                        if (!(t.includes('who can see your story') || t.includes('story privacy') ||
+                              (t.includes('public') && t.includes('friends')))) continue;
+
+                        const radios = Array.from(d.querySelectorAll('[role="radio"]'));
+                        for (const r of radios) {
+                            const label = ((r.getAttribute('aria-label') || '') + ' ' + (r.innerText || '')).toLowerCase();
+                            const checked = r.getAttribute('aria-checked') === 'true' ||
+                                            r.getAttribute('aria-selected') === 'true';
+                            if (!checked) continue;
+                            if (label.includes('public') || label.includes('công khai') ||
+                                label.includes('anyone on facebook')) {
+                                return true;
+                            }
+                            // Friends đang chọn → chưa Public
+                            if (label.includes('friends') || label.includes('bạn bè')) return false;
+                        }
+                        // Fallback: hàng Public có radio checked bên trong
+                        const spans = Array.from(d.querySelectorAll('span'));
+                        for (const s of spans) {
+                            const tx = (s.innerText || '').trim();
+                            if (tx !== 'Public' && tx !== 'Công khai') continue;
+                            const row = s.closest('[role="radio"]') || s.closest('[role="listitem"]') ||
+                                        s.closest('label') || s.parentElement;
+                            if (!row) continue;
+                            const radio = row.matches('[role="radio"]') ? row : row.querySelector('[role="radio"]');
+                            if (radio && (radio.getAttribute('aria-checked') === 'true' ||
+                                          radio.getAttribute('aria-selected') === 'true')) {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                    """
+                )
+            )
+        except Exception:
+            return False
+
+    def _cancel_or_close_privacy():
+        """Đóng Story privacy khi đã Public — Cancel/X, không Save lại."""
+        try:
+            return bool(
+                driver.execute_script(
+                    """
+                    function triggerClick(el) {
+                        if (!el) return false;
+                        try { el.click(); return true; } catch (e) { return false; }
+                    }
+                    const dialogs = Array.from(document.querySelectorAll("[role='dialog']"));
+                    for (const d of dialogs) {
+                        const t = (d.innerText || '').toLowerCase();
+                        if (t.includes('change story privacy') || t.includes('changes you make will apply')) continue;
+                        if (!(t.includes('who can see your story') || t.includes('story privacy') ||
+                              (t.includes('public') && t.includes('friends')))) continue;
+                        const btns = Array.from(d.querySelectorAll("[role='button'], button"));
+                        for (const b of btns) {
+                            const label = (b.innerText || b.getAttribute('aria-label') || '').trim().toLowerCase();
+                            if (label === 'cancel' || label === 'hủy' || label === 'huỷ') {
+                                return triggerClick(b);
+                            }
+                        }
+                        const closeBtn = d.querySelector("[aria-label='Close'], [aria-label='Đóng'], [aria-label='close']");
+                        if (closeBtn) return triggerClick(closeBtn);
+                    }
+                    return false;
+                    """
+                )
+            )
+        except Exception:
+            return False
+
+    # Confirm modal còn treo từ lần trước → Save rồi xong
+    if _confirm_change_privacy_open():
+        log("Modal Change story privacy đang mở — Save xác nhận...")
+        _confirm_change_privacy_save()
+        time.sleep(1.0)
+        if not _confirm_change_privacy_open() and not _dialog_open():
+            return True
+
+    if open_panel and not _dialog_open():
+        log("Bấm bánh răng Story privacy để kiểm tra (Friends → Public)...")
+        time.sleep(0.4)
+        for open_try in range(2):
+            try:
+                if _open_privacy_panel():
+                    log("✓ Đã mở panel privacy qua bánh răng.")
+                    time.sleep(1.2)
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+    if not _dialog_open():
+        if not open_panel:
+            return True
+        log("Không thấy modal Story privacy — bỏ qua.")
+        return True
+
+    # Đã Public sẵn → đóng modal, KHÔNG Save lại (tránh hiện confirm / lặp nhiều lần)
+    if _public_already_selected():
+        log("✓ Story privacy đã là Public — đóng modal, không Save lại.")
+        _cancel_or_close_privacy()
+        time.sleep(0.6)
+        if _dialog_open():
+            try:
+                from selenium.webdriver.common.keys import Keys
+                from selenium.webdriver.common.action_chains import ActionChains
+                ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+            except Exception:
+                _force_close_dialog()
+            time.sleep(0.4)
+        return not _dialog_open()
+
+    log("Chọn Public → Save Story privacy → modal Change story privacy → Save...")
+    for attempt in range(2):
+        try:
+            # 1) Chọn Public (Friends → Public)
+            pick = _pick_public() or {}
+            if not pick.get("ok"):
+                log(f"Chưa chọn được Public (lần {attempt + 1}) — thử lại...")
+                time.sleep(0.6)
+                continue
+            log(f"✓ Đã chọn Public ({pick.get('via', 'ok')}).")
+            time.sleep(0.5)
+
+            # 2) Save Story privacy (tối đa 2 lần — không spam 4 lần)
+            save_ok = False
+            for save_try in range(2):
+                if not _dialog_open() or _confirm_change_privacy_open():
+                    save_ok = True
+                    break
+                clicked = _save_story_privacy_dialog()
+                log(f"{'✓' if clicked else '✗'} Click Save Story privacy (thử {save_try + 1}/2)...")
+                time.sleep(1.0)
+                if _confirm_change_privacy_open() or not _dialog_open():
+                    save_ok = True
+                    break
+            if not save_ok and _dialog_open() and not _confirm_change_privacy_open():
+                log(f"Chưa Save được Story privacy (lần {attempt + 1})...")
+                time.sleep(0.4)
+                continue
+
+            # 3) Modal "Change story privacy" → Save
+            confirmed = False
+            for conf_try in range(5):
+                if _confirm_change_privacy_open():
+                    log("Modal 'Change story privacy' đã hiện — nhấn Save...")
+                    if _confirm_change_privacy_save():
+                        time.sleep(1.0)
+                        if not _confirm_change_privacy_open():
+                            log("✓ Đã Save Change story privacy.")
+                            confirmed = True
+                            break
+                    else:
+                        log(f"Chưa click được Save confirm (thử {conf_try + 1}/5)...")
+                elif not _dialog_open() and not _confirm_change_privacy_open():
+                    break
+                time.sleep(0.4)
+
+            if confirmed or (not _dialog_open() and not _confirm_change_privacy_open()):
+                log("✓ Story privacy = Public.")
+                return True
+
+            if _confirm_change_privacy_open():
+                _confirm_change_privacy_save()
+                time.sleep(1.0)
+                if not _confirm_change_privacy_open() and not _dialog_open():
+                    return True
+            time.sleep(0.4)
+        except Exception as e:
+            logger.debug(f"ensure_story_privacy_public attempt {attempt + 1}: {e}")
+
+    if _confirm_change_privacy_open():
+        log("Còn modal Change story privacy — thử Save lần cuối...")
+        _confirm_change_privacy_save()
+        time.sleep(1.0)
+        if not _confirm_change_privacy_open() and not _dialog_open():
+            return True
+
+    log("Cảnh báo: không set được Public — đóng modal để tránh kẹt Selenium.")
+    _force_close_dialog()
+    time.sleep(0.6)
+    if _dialog_open() or _confirm_change_privacy_open():
+        _force_close_dialog()
+    return not _dialog_open() and not _confirm_change_privacy_open()
+
+
 def ensure_reels_privacy_public(driver, human: HumanInteraction, log_cb: Optional[Any] = None) -> bool:
     """
     Kiểm tra và tự động chuyển quyền riêng tư Reels từ 'Bạn bè' (Friends)
@@ -1583,85 +2837,152 @@ def extract_status_post_url(driver, uid: Optional[str] = None, log_cb: Optional[
     return f"https://www.facebook.com/{uid}" if uid else None
 
 
-def extract_reels_post_url(driver, uid: Optional[str] = None, log_cb: Optional[Any] = None) -> Optional[str]:
+def _reel_id_from_url(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    m = re.search(r"/(?:reel|reels)/(\d{6,})", str(url))
+    return m.group(1) if m else None
+
+
+def _canonical_reel_url(reel_id: str) -> str:
+    return f"https://www.facebook.com/reel/{reel_id}"
+
+
+def _snapshot_profile_reel_ids(driver, uid: Optional[str] = None) -> list:
+    """Lấy danh sách ID Reels trên tab profile (mới → cũ). Không navigate nếu đang ở create."""
+    js_collect = """
+        const ids = [];
+        const seen = new Set();
+        const anchors = Array.from(document.querySelectorAll("a[href*='/reel/']"));
+        for (const a of anchors) {
+            const h = a.href || "";
+            if (!h.includes('/reel/') || h.includes('/create') || h.includes('/reel/?')) continue;
+            const m = h.match(/\\/reel\\/(\\d{6,})/);
+            if (m && !seen.has(m[1])) {
+                seen.add(m[1]);
+                ids.push(m[1]);
+            }
+        }
+        return ids;
     """
-    Trích xuất link trực tiếp của thước phim Reels vừa đăng của chính tài khoản này (https://www.facebook.com/reel/{id}).
-    Lưu ý quan trọng: Khi đăng xong, Facebook Desktop thường redirect về /reel/ (For You feed) và phát video của người khác.
-    Vì vậy, để lấy đúng bài của nick:
-    1. Kiểm tra Notification Toast hoặc Notification link chứa fb_shorts_video_processed ('Your reel is ready to view')
-    2. Điều hướng tới https://www.facebook.com/me để đọc thông báo xuất bản Reels của chính tài khoản
-    3. Quét bài viết trên trang cá nhân của tài khoản
+    try:
+        ids = driver.execute_script(js_collect) or []
+        return [str(x) for x in ids if x]
+    except Exception:
+        return []
+
+
+def extract_reels_post_url(
+    driver,
+    uid: Optional[str] = None,
+    log_cb: Optional[Any] = None,
+    known_reel_ids: Optional[Any] = None,
+) -> Optional[str]:
+    """
+    Link đúng video vừa đăng: https://www.facebook.com/reel/{id}.
+
+    Không dùng bare /reel/ (For You). Không lấy đại link /reel/{id} đầu tiên trên /me
+    (dễ gán nhầm ID video cũ khi đăng nhiều clip cùng nick).
+
+    known_reel_ids: ID đã có trước khi đăng — ưu tiên ID mới xuất hiện.
     """
     def _log(m):
         if log_cb:
             log_cb(m)
         logger.info(m)
 
+    known = {str(x) for x in (known_reel_ids or []) if x}
+
+    def _accept(rid: Optional[str], source: str) -> Optional[str]:
+        if not rid:
+            return None
+        if known and rid in known:
+            return None
+        url = _canonical_reel_url(rid)
+        _log(f"Lấy được URL Reels ({source}): {url}")
+        return url
+
+    js_find_notif_reel = """
+        const allAnchors = Array.from(document.querySelectorAll("a[href*='/reel/']"));
+        const notifAnchor = allAnchors.find(a =>
+            (a.href || '').includes('fb_shorts_video_processed') ||
+            (a.href || '').includes('notification_fb_shorts')
+        );
+        if (notifAnchor) {
+            const m = notifAnchor.href.match(/\\/reel\\/(\\d{6,})/);
+            if (m) return m[1];
+        }
+        const alertAnchors = Array.from(document.querySelectorAll(
+            "div[role='alert'] a[href*='/reel/'], [role='status'] a[href*='/reel/']"
+        ));
+        for (const a of alertAnchors) {
+            const m = (a.href || '').match(/\\/reel\\/(\\d{6,})/);
+            if (m) return m[1];
+        }
+        return null;
+    """
+
     try:
-        _log("Đang trích xuất liên kết Reels chính xác của tài khoản...")
-        time.sleep(2.0)
+        _log("Đang trích xuất liên kết Reels vừa đăng (bắt buộc có ID số)...")
 
-        # Tier 1: Quét thông báo xuất bản (Toast hoặc Header Notification) trên trang hiện tại
-        js_find_notif_reel = """
-            // 1. Tìm thẻ a có href chứa fb_shorts_video_processed (Thông báo Thước phim của bạn đã sẵn sàng)
-            const allAnchors = Array.from(document.querySelectorAll("a[href*='/reel/']"));
-            const notifAnchor = allAnchors.find(a => (a.href || '').includes('fb_shorts_video_processed') || (a.href || '').includes('notification_fb_shorts'));
-            if (notifAnchor) {
-                const m = notifAnchor.href.match(/\\/reel\\/(\\d{6,})/);
-                if (m) return "https://www.facebook.com/reel/" + m[1];
-            }
+        # Tier 0: current_url ngay sau đăng (có ID) — bỏ qua bare /reel/
+        for _ in range(8):
+            try:
+                cur = driver.current_url or ""
+            except Exception:
+                cur = ""
+            rid = _reel_id_from_url(cur)
+            hit = _accept(rid, "current_url")
+            if hit:
+                return hit
+            # Bare /reel/ = feed For You, không phải link video
+            time.sleep(0.75)
 
-            // 2. Tìm trong toast alert
-            const alertAnchors = Array.from(document.querySelectorAll("div[role='alert'] a[href*='/reel/']"));
-            for (const a of alertAnchors) {
-                const m = (a.href || '').match(/\\/reel\\/(\\d{6,})/);
-                if (m) return "https://www.facebook.com/reel/" + m[1];
-            }
-            return null;
-        """
+        # Tier 1: poll toast / notification ~15s
+        for attempt in range(8):
+            try:
+                rid = driver.execute_script(js_find_notif_reel)
+                hit = _accept(rid, "thông báo xuất bản")
+                if hit:
+                    return hit
+            except Exception:
+                pass
+            time.sleep(2.0 if attempt < 4 else 1.5)
 
-        try:
-            reel_url = driver.execute_script(js_find_notif_reel)
-            if reel_url:
-                _log(f"Lấy được URL Reels từ thông báo xuất bản của Facebook: {reel_url}")
-                return reel_url
-        except Exception:
-            pass
-
-        # Tier 2: Điều hướng tới https://www.facebook.com/me để lấy chính xác Reel của chính nick này
-        # (Tránh lấy nhầm video của người khác đang phát trên bảng tin Reels)
-        try:
-            _log("Mở trang cá nhân tài khoản (/me) để xác nhận link Thước phim chính chủ...")
-            driver.get("https://www.facebook.com/me")
-            time.sleep(4)
-
-            # Quét thông báo hoặc bài đăng Reels trên trang cá nhân
-            me_reel_url = driver.execute_script(js_find_notif_reel)
-            if me_reel_url:
-                _log(f"Lấy được URL Reels chính xác từ thông báo tài khoản: {me_reel_url}")
-                return me_reel_url
-
-            # Quét các thẻ a[href*='/reel/'] trên trang /me (loại trừ link chung /reel/?s=tab)
-            me_anchors_reel = driver.execute_script("""
-                const anchors = Array.from(document.querySelectorAll("a[href*='/reel/']"));
-                for (const a of anchors) {
-                    const h = a.href || "";
-                    if (h.includes('/reel/') && !h.includes('/reel/?s=tab') && !h.includes('/create')) {
-                        const m = h.match(/\\/reel\\/(\\d{6,})/);
-                        if (m) return "https://www.facebook.com/reel/" + m[1];
-                    }
-                }
-                return null;
-            """)
-            if me_anchors_reel:
-                _log(f"Lấy được URL Reels từ bài viết trang cá nhân: {me_anchors_reel}")
-                return me_anchors_reel
-        except Exception as e:
-            logger.debug(f"Không thể đọc reels từ /me: {e}")
-
-        # Tier 3: Fallback tới trang /reels của Profile
+        # Tier 2: tab Reels của chính nick — lấy ID mới nhất (đầu danh sách)
+        # Không quét timeline /me (dễ trúng video cũ / người khác).
+        profile_reels = None
         if uid:
-            return f"https://www.facebook.com/{uid}/reels"
+            profile_reels = f"https://www.facebook.com/{uid}/reels"
+        else:
+            profile_reels = "https://www.facebook.com/me/reels"
+
+        try:
+            _log(f"Mở tab Reels profile để lấy ID mới nhất: {profile_reels}")
+            driver.get(profile_reels)
+            time.sleep(4.0)
+            for attempt in range(5):
+                ids = _snapshot_profile_reel_ids(driver, uid)
+                if ids:
+                    # Ưu tiên ID chưa có trong known (video vừa đăng)
+                    for rid in ids:
+                        hit = _accept(rid, "tab Reels profile (mới)")
+                        if hit:
+                            return hit
+                    # Không có known → ID đầu = mới nhất trên tab
+                    if not known:
+                        hit = _accept(ids[0], "tab Reels profile (đầu danh sách)")
+                        if hit:
+                            return hit
+                time.sleep(2.0)
+        except Exception as e:
+            logger.debug(f"Không đọc được tab Reels profile: {e}")
+
+        # Tier 3: fallback — chỉ trang Reels profile (không gắn ID giả)
+        if uid:
+            fallback = f"https://www.facebook.com/{uid}/reels"
+            _log(f"Chưa bắt được ID Reels — fallback tạm: {fallback}")
+            return fallback
 
     except Exception as e:
         logger.debug(f"Lỗi nhẹ trong extract_reels_post_url: {e}")
@@ -1705,16 +3026,53 @@ def extract_story_post_url(driver, uid: Optional[str] = None, log_cb: Optional[A
 # 1. PUBLISH STATUS POST (FEED)
 # ==============================================================================
 
+def _normalize_status_image_paths(
+    image_paths: Optional[Any] = None,
+    image_path: Optional[str] = None,
+    max_images: int = 3,
+) -> List[str]:
+    """Chuẩn hóa list path ảnh Status (tối đa 3), bỏ path không tồn tại."""
+    paths: List[str] = []
+    raw = image_paths
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text:
+            try:
+                parsed = json.loads(text)
+                raw = parsed if isinstance(parsed, list) else [text]
+            except Exception:
+                raw = [text]
+    if isinstance(raw, (list, tuple)):
+        for item in raw:
+            p = str(item or "").strip()
+            if p and p not in paths:
+                paths.append(p)
+    if not paths and image_path:
+        p = str(image_path).strip()
+        if p:
+            paths.append(p)
+    existing: List[str] = []
+    for p in paths[:max_images]:
+        abs_p = os.path.abspath(p)
+        if os.path.isfile(abs_p):
+            existing.append(abs_p)
+        else:
+            logger.warning(f"Bỏ qua ảnh không tồn tại: {p}")
+    return existing
+
+
 def publish_status_post(
     driver,
     content: str,
     image_path: Optional[str] = None,
     log_cb: Optional[Any] = None,
     check_pause: Optional[Any] = None,
-    uid: Optional[str] = None
+    uid: Optional[str] = None,
+    image_paths: Optional[Any] = None,
 ) -> Optional[str]:
     """
     Đăng bài viết trạng thái lên Facebook Newsfeed / Page bằng HumanInteraction.
+    Hỗ trợ tối đa 3 ảnh (image_paths); image_path vẫn dùng làm fallback 1 ảnh.
     Trả về URL bài viết chính xác vừa đăng.
     """
     def log(msg: str):
@@ -1727,6 +3085,7 @@ def publish_status_post(
             check_pause(log_cb)
 
     human = HumanInteraction(driver)
+    status_images = _normalize_status_image_paths(image_paths, image_path)
 
     _chk()
     log("Điều hướng tới trang chủ Facebook...")
@@ -1918,20 +3277,15 @@ def publish_status_post(
         close_audience_dialog(driver, human, log_cb=log)
         time.sleep(1)
 
-    # 4. Tải ảnh lên nếu có (bấm icon ảnh trong thanh 'Add to your post' của hộp thoại)
-    if image_path:
+    # 4. Tải ảnh lên nếu có (1–3 ảnh): bấm icon ảnh trong 'Add to your post'
+    if status_images:
         _chk()
-        if not os.path.isfile(image_path):
-            raise FileNotFoundError(f"Không tìm thấy file ảnh: {image_path}")
-
-        abs_img = os.path.abspath(image_path)
-        log(f"Đính kèm hình ảnh: {os.path.basename(abs_img)}...")
+        names = ", ".join(os.path.basename(p) for p in status_images)
+        log(f"Đính kèm {len(status_images)} ảnh: {names}...")
         try:
-            # Bước 4.1: Nhấn vào icon Ảnh/video (màu xanh lá) trong thanh 'Add to your post' (Thêm vào bài viết)
-            # của hộp thoại tạo bài viết để mở khung dropzone tải ảnh
+            # Bước 4.1: Nhấn vào icon Ảnh/video trong thanh 'Add to your post'
             photo_btn_clicked = False
 
-            # JS tìm và kích hoạt click thật sự vào icon Ảnh/video trong dialog
             js_click_photo_icon = """
                 function triggerRealClick(el) {
                     if (!el) return false;
@@ -1961,11 +3315,10 @@ def publish_status_post(
                 const dialog = getComposerDialog();
                 if (!dialog) return false;
 
-                // 1. Tìm các button có aria-label là Photo/video hoặc Ảnh/video trong dialog
                 const allBtns = Array.from(dialog.querySelectorAll('div[role="button"], button, [role="button"]'));
                 for (const b of allBtns) {
                     const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-                    if (aria === 'photo/video' || aria === 'ảnh/video' || 
+                    if (aria === 'photo/video' || aria === 'ảnh/video' ||
                         aria.includes('photo/video') || aria.includes('ảnh/video') ||
                         aria === 'photo' || aria === 'ảnh') {
                         triggerRealClick(b);
@@ -1973,7 +3326,6 @@ def publish_status_post(
                     }
                 }
 
-                // 2. Tìm thanh 'Add to your post' / 'Thêm vào bài viết của bạn' và lấy nút icon đầu tiên
                 const allSpans = Array.from(dialog.querySelectorAll('span, div'));
                 for (const s of allSpans) {
                     const t = (s.innerText || '').trim().toLowerCase();
@@ -1989,7 +3341,6 @@ def publish_status_post(
                     }
                 }
 
-                // 3. Tìm img/svg icon ảnh bên trong dialog
                 for (const b of allBtns) {
                     const img = b.querySelector('img');
                     if (img) {
@@ -2005,7 +3356,6 @@ def publish_status_post(
                 return false;
             """
 
-            # Kiểm tra xem dropzone file input đã có sẵn trong dialog chưa
             existing_inputs = driver.find_elements(By.XPATH, "//div[@role='dialog']//input[@type='file']")
             if not existing_inputs:
                 log("Nhấn vào biểu tượng 'Ảnh/video' trong thanh công cụ bài viết để mở khung nạp ảnh...")
@@ -2036,20 +3386,29 @@ def publish_status_post(
 
                 time.sleep(random.uniform(1.2, 1.8))
 
-            # Bước 4.2: Đợi input type='file' xuất hiện DUY NHẤT BÊN TRONG dialog
-            log("Nạp file ảnh vào khung bài viết...")
+            # Bước 4.2: Nạp toàn bộ ảnh (Selenium: nhiều path nối bằng \\n)
+            log(f"Nạp {len(status_images)} file ảnh vào khung bài viết...")
             file_input = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.XPATH, "//div[@role='dialog']//input[@type='file']"))
             )
-            file_input.send_keys(abs_img)
+            try:
+                driver.execute_script(
+                    "arguments[0].setAttribute('multiple', 'multiple'); arguments[0].multiple = true;",
+                    file_input,
+                )
+            except Exception:
+                pass
+            file_input.send_keys("\n".join(status_images))
 
-            # Bước 4.3: Chờ preview ảnh hiển thị thực sự (kích thước lớn > 90px hoặc blob URL)
-            log("Đợi hình ảnh hiển thị bản xem trước (preview) trên bài viết...")
+            # Bước 4.3: Chờ preview — ưu tiên đủ số ảnh, tối thiểu 1 ảnh lớn/blob
+            expect_n = len(status_images)
+            log(f"Đợi preview {expect_n} ảnh trên bài viết...")
             img_preview_ready = False
             start_img_wait = time.time()
-            while time.time() - start_img_wait < 15:
+            while time.time() - start_img_wait < 20:
                 _chk()
                 js_check_preview = """
+                    const expectN = arguments[0];
                     function getComposerDialog() {
                         const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
                         return dialogs.find(d => {
@@ -2058,30 +3417,35 @@ def publish_status_post(
                         }) || dialogs[dialogs.length - 1];
                     }
                     const dialog = getComposerDialog();
-                    if (!dialog) return false;
+                    if (!dialog) return 0;
 
+                    let count = 0;
                     const imgs = Array.from(dialog.querySelectorAll('img'));
                     for (const img of imgs) {
                         const rect = img.getBoundingClientRect();
                         const src = img.src || '';
-                        // Bỏ qua ảnh đại diện avatar nhỏ (~40px)
-                        if (rect.width > 90 && rect.height > 70) return true;
-                        if (src.startsWith('blob:') && rect.width > 40) return true;
+                        if (rect.width > 90 && rect.height > 70) count += 1;
+                        else if (src.startsWith('blob:') && rect.width > 40) count += 1;
                     }
-                    return false;
+                    return count;
                 """
                 try:
-                    if driver.execute_script(js_check_preview):
-                        img_preview_ready = True
-                        break
+                    preview_count = int(driver.execute_script(js_check_preview, expect_n) or 0)
+                    if preview_count >= expect_n or (expect_n > 0 and preview_count >= 1 and time.time() - start_img_wait > 8):
+                        img_preview_ready = preview_count > 0
+                        if preview_count >= expect_n:
+                            break
+                        # Đã có ít nhất 1 preview sau 8s — chấp nhận tiếp tục (FB đôi khi gộp grid chậm)
+                        if preview_count >= 1 and time.time() - start_img_wait > 8:
+                            break
                 except Exception:
                     pass
                 time.sleep(0.5)
 
             if img_preview_ready:
-                log("✓ Hình ảnh đã được đính kèm và hiển thị preview thành công.")
+                log(f"✓ Đã đính kèm {expect_n} ảnh (preview sẵn sàng).")
             else:
-                log("Đã gửi file ảnh thành công vào bài viết.")
+                log(f"Đã gửi {expect_n} file ảnh vào bài viết.")
             time.sleep(random.uniform(1.0, 1.8))
         except Exception as e:
             check_account_health(driver)
@@ -2233,6 +3597,22 @@ def publish_reels_post(
 
     if not os.path.isfile(video_path):
         raise FileNotFoundError(f"File video không tồn tại: {video_path}")
+
+    # Snapshot ID Reels đã có TRƯỚC khi vào create — tránh gán nhầm ID video cũ
+    known_reel_ids = []
+    try:
+        snap_url = (
+            f"https://www.facebook.com/{uid}/reels"
+            if uid
+            else "https://www.facebook.com/me/reels"
+        )
+        log("Snapshot ID Reels hiện có trên profile (tránh gán nhầm link)...")
+        driver.get(snap_url)
+        time.sleep(3.0)
+        known_reel_ids = _snapshot_profile_reel_ids(driver, uid)
+        log(f"Đã ghi nhận {len(known_reel_ids)} Reels cũ trên profile.")
+    except Exception as e:
+        logger.debug(f"Snapshot reel IDs bỏ qua: {e}")
 
     _chk()
     log("Điều hướng tới trang tạo Reels (facebook.com/reels/create/)...")
@@ -2527,7 +3907,8 @@ def publish_reels_post(
     log("Chờ Facebook hoàn tất tải lên Reels...")
     try:
         WebDriverWait(driver, 120).until(
-            lambda d: not _is_reels_uploading_or_creating(d)
+            lambda d: (not _is_reels_uploading_or_creating(d))
+            or bool(_reel_id_from_url(getattr(d, "current_url", "") or ""))
         )
         log("Reels đã được đăng lên thành công!")
     except TimeoutException:
@@ -2535,8 +3916,14 @@ def publish_reels_post(
         raise PublishUnconfirmed("Quá thời gian chờ đăng Reels, không thể xác nhận bài đã lên.")
 
     check_account_health(driver)
-    # Trích xuất URL trực tiếp của Reels vừa đăng
-    res_url = extract_reels_post_url(driver, uid=uid, log_cb=log)
+    res_url = extract_reels_post_url(
+        driver, uid=uid, log_cb=log, known_reel_ids=known_reel_ids
+    )
+    # Không lưu bare /reel/ (For You) — thiếu ID thì fallback profile
+    if res_url and _reel_id_from_url(res_url) is None and uid:
+        if f"/{uid}/reels" not in (res_url or ""):
+            log(f"Loại URL không hợp lệ (thiếu ID): {res_url}")
+            res_url = f"https://www.facebook.com/{uid}/reels"
     return res_url
 
 
@@ -2576,87 +3963,7 @@ def publish_story_post(
     check_account_health(driver)
     _chk()
 
-    # 1. Thiết lập quyền riêng tư Story sang Công khai (Public) nếu có thể
-    try:
-        gear_btn = None
-        gear_xpaths = [
-            "//*[self::div or self::button][@role='button'][@aria-label='Cài đặt' or @aria-label='Settings' or contains(@aria-label, 'privacy') or contains(@aria-label, 'riêng tư')]",
-            "//div[contains(., 'Your story') or contains(., 'Tin của bạn')]//ancestor::div[2]//*[self::div or self::button][@role='button'][.//svg or .//i or @aria-label]",
-        ]
-        for xp in gear_xpaths:
-            for elem in driver.find_elements(By.XPATH, xp):
-                try:
-                    if elem.is_displayed():
-                        gear_btn = elem
-                        break
-                except Exception:
-                    pass
-            if gear_btn:
-                break
-
-        if not gear_btn:
-            gear_btn = driver.execute_script("""
-                const buttons = Array.from(document.querySelectorAll("[role='button'], button"));
-                for (const b of buttons) {
-                    const label = (b.getAttribute('aria-label') || '').toLowerCase();
-                    if (label.includes('setting') || label.includes('cài đặt') || label.includes('privacy') || label.includes('riêng tư')) {
-                        return b;
-                    }
-                }
-                for (const b of buttons) {
-                    const parent = b.closest("div");
-                    if (parent && (parent.innerText || '').toLowerCase().includes('story') && b.querySelector('svg, i')) {
-                        return b;
-                    }
-                }
-                return null;
-            """)
-
-        if gear_btn:
-            log("Mở cài đặt quyền riêng tư Story (Story privacy)...")
-            try:
-                human.click(gear_btn)
-            except Exception:
-                driver.execute_script("arguments[0].click();", gear_btn)
-            time.sleep(1.5)
-
-            # Chọn Public / Công khai trong modal Story privacy
-            selected_pub = driver.execute_script("""
-                const dialog = document.querySelector("[role='dialog']");
-                if (!dialog) return false;
-                const items = Array.from(dialog.querySelectorAll("[role='radio'], [role='button'], div"));
-                for (const item of items) {
-                    const txt = (item.innerText || item.textContent || '').trim();
-                    if (txt.startsWith('Public') || txt.startsWith('Công khai')) {
-                        item.click();
-                        return true;
-                    }
-                }
-                return false;
-            """)
-            time.sleep(0.8)
-
-            # Bấm Save / Lưu
-            save_clicked = driver.execute_script("""
-                const dialog = document.querySelector("[role='dialog']");
-                if (!dialog) return false;
-                const btns = Array.from(dialog.querySelectorAll("[role='button'], button"));
-                for (const b of btns) {
-                    const t = (b.innerText || b.textContent || b.getAttribute('aria-label') || '').trim().toLowerCase();
-                    if (t === 'save' || t === 'lưu') {
-                        b.click();
-                        return true;
-                    }
-                }
-                return false;
-            """)
-            if save_clicked:
-                log("Đã cập nhật quyền riêng tư Story sang Công khai (Public).")
-            time.sleep(1.2)
-    except Exception as e:
-        logger.debug(f"Bỏ qua thiết lập quyền riêng tư Story: {e}")
-
-    # 2. Nạp file Story trực tiếp qua thẻ input[type='file'] ẩn
+    # Nạp file Story trực tiếp qua thẻ input[type='file'] ẩn
     # TUYỆT ĐỐI KHÔNG click vào card 'Tạo tin ảnh'/'Tạo tin video' vì sẽ kích hoạt Windows Open Dialog
     _chk()
     log(f"Nạp file Story: {os.path.basename(media_path)} (Bypass Windows Dialog qua hidden input)...")
@@ -2681,24 +3988,66 @@ def publish_story_post(
         check_account_health(driver)
         raise RuntimeError(f"Không tìm thấy cổng nạp file Story ẩn: {e}")
 
-    # 2. Nhập text nếu có
+    # Một lần duy nhất: bánh răng → Public → Save → confirm (nếu đã Public thì đóng luôn)
+    _chk()
+    time.sleep(1.2)
+    try:
+        ensure_story_privacy_public(driver, human, log_cb=log, open_panel=True)
+    except Exception as e:
+        log(f"Cảnh báo Story privacy sau media: {e}")
+
+    media_ext = os.path.splitext(media_path)[1].lower()
+    is_story_image = media_ext in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+
+    # Story ảnh: chọn nhạc đề xuất đầu tiên (For you)
+    if is_story_image:
+        _chk()
+        try:
+            add_first_recommended_story_music(driver, human, log_cb=log)
+        except StaleElementReferenceException:
+            log("Stale khi chọn nhạc — bỏ qua, tiếp tục Share...")
+        except Exception as e:
+            log(f"Cảnh báo chọn nhạc Story ảnh: {e}")
+        # Chỉ xử lý nếu modal đang mở — không bấm bánh răng lại
+        try:
+            ensure_story_privacy_public(driver, human, log_cb=log, open_panel=False)
+        except Exception:
+            pass
+
+    # Nhập text nếu có
     if text:
         _chk()
         log("Thêm văn bản vào Story...")
         try:
             text_tool = WebDriverWait(driver, 5).until(
-                EC.element_to_be_clickable((By.XPATH, "//div[@role='button']//span[contains(text(), 'Văn bản') or contains(text(), 'Text')]"))
+                EC.element_to_be_clickable(
+                    (
+                        By.XPATH,
+                        "//div[@role='button'][.//span[contains(text(), 'Add text') or contains(text(), 'Thêm văn bản') or contains(text(), 'Văn bản') or contains(text(), 'Text')]]",
+                    )
+                )
             )
-            human.click(text_tool)
+            try:
+                human.click(text_tool)
+            except StaleElementReferenceException:
+                driver.execute_script(
+                    """
+                    const nodes = Array.from(document.querySelectorAll("[role='button']"));
+                    const b = nodes.find(n => /add text|thêm văn bản|văn bản|^text$/i.test((n.innerText||'').trim()));
+                    if (b) b.click();
+                    """
+                )
             time.sleep(random.uniform(0.8, 1.5))
-            text_input = driver.find_element(By.XPATH, "//textarea or //div[@role='textbox']")
+            text_input = WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located((By.XPATH, "//textarea | //div[@role='textbox']"))
+            )
             human.human_type(text_input, text)
         except Exception:
             log("Bỏ qua thêm text Story do không tìm thấy công cụ.")
 
-    # 3. Sử dụng "Chờ thông minh" (Explicit Wait): Đợi nút 'Chia sẻ lên tin' thực sự sáng (clickable)
+    # Chờ nút Share sáng — không giữ WebElement qua wait (tránh stale)
     _chk()
-    log("Kích hoạt Chờ thông minh (Explicit Wait): Đợi Facebook render/transcode media và nút 'Chia sẻ lên tin' sáng...")
+    log("Chờ Facebook render media và nút 'Share to story' sáng...")
     share_btn_xpath = (
         "//div[@role='button'][.//span[contains(text(), 'Chia sẻ lên tin') or contains(text(), 'Share to story')]]"
         " | //button[contains(., 'Chia sẻ lên tin') or contains(., 'Share to story')]"
@@ -2714,10 +4063,32 @@ def publish_story_post(
         now = time.time()
         if now - last_poll_log >= 15:
             elapsed = int(now - start_wait)
-            log(f"Đang chờ Facebook xử lý/transcoding media (đã chờ {elapsed}s/900s - kiên nhẫn đợi render xong)...")
+            log(f"Đang chờ Facebook xử lý media (đã chờ {elapsed}s/900s)...")
             last_poll_log = now
 
-        # Kiểm tra xem có thanh progress bar / loading overlay đang chạy không
+        try:
+            privacy_open = d.execute_script(
+                """
+                const dialogs = Array.from(document.querySelectorAll("[role='dialog']"));
+                for (const dlg of dialogs) {
+                    const t = (dlg.innerText || '').toLowerCase();
+                    if (t.includes('story privacy') || t.includes('who can see your story') ||
+                        t.includes('change story privacy') ||
+                        t.includes('changes you make will apply') ||
+                        (t.includes('public') && t.includes('friends') && (t.includes('save') || t.includes('lưu')))) {
+                        return true;
+                    }
+                }
+                return false;
+                """
+            )
+            if privacy_open:
+                log("Phát hiện Story privacy khi chờ Share — xử lý (không mở bánh răng lại)...")
+                ensure_story_privacy_public(d, human, log_cb=log, open_panel=False)
+                return False
+        except Exception:
+            pass
+
         try:
             progress_bars = d.find_elements(By.XPATH, "//*[@role='progressbar' or @aria-busy='true']")
             for p in progress_bars:
@@ -2727,74 +4098,109 @@ def publish_story_post(
             pass
 
         try:
-            candidates = d.find_elements(By.XPATH, share_btn_xpath)
-            for btn in candidates:
-                if not btn.is_displayed():
-                    continue
-                # Kiểm tra triệt để aria-disabled và disabled trên nút cùng các cấp thẻ cha
-                is_ready = d.execute_script("""
-                    let elem = arguments[0];
-                    if (!elem || elem.offsetParent === null) return false;
-                    let cur = elem;
-                    for (let i = 0; i < 4; i++) {
-                        if (!cur) break;
-                        if (cur.getAttribute('aria-disabled') === 'true') return false;
-                        if (cur.hasAttribute('disabled')) return false;
+            ready = d.execute_script(
+                """
+                const labels = ['share to story', 'chia sẻ lên tin'];
+                const nodes = Array.from(document.querySelectorAll("[role='button'], button"));
+                for (const btn of nodes) {
+                    if (!btn || btn.offsetParent === null) continue;
+                    const t = ((btn.getAttribute('aria-label') || '') + ' ' + (btn.innerText || '')).trim().toLowerCase();
+                    if (!labels.some(l => t.includes(l))) continue;
+                    let cur = btn;
+                    let disabled = false;
+                    for (let i = 0; i < 4 && cur; i++) {
+                        if (cur.getAttribute('aria-disabled') === 'true' || cur.hasAttribute('disabled')) {
+                            disabled = true; break;
+                        }
                         cur = cur.parentElement;
                     }
-                    return true;
-                """, btn)
-                if is_ready:
-                    return btn
+                    if (!disabled) return true;
+                }
+                return false;
+                """
+            )
+            return bool(ready)
+        except StaleElementReferenceException:
+            return False
         except Exception:
-            pass
-        return False
+            return False
 
     try:
-        # Explicit Wait tối đa 900s (15 phút), kiểm tra mỗi 1.5s
-        ready_btn = WebDriverWait(driver, 900, poll_frequency=1.5).until(check_share_button_ready)
+        WebDriverWait(driver, 900, poll_frequency=1.5).until(check_share_button_ready)
     except TimeoutException:
         check_account_health(driver)
-        raise RuntimeError("Nút 'Chia sẻ lên tin' không sáng sau 15 phút (Facebook bị treo transcoding video hoặc media không hợp lệ).")
+        raise RuntimeError(
+            "Nút 'Share to story' không sáng sau 15 phút (treo transcoding hoặc media lỗi)."
+        )
 
     _chk()
     elapsed_total = int(time.time() - start_wait)
-    log(f"Facebook đã xử lý media hoàn tất (sau {elapsed_total}s). Nút 'Chia sẻ lên tin' đã sáng!")
-    log("Di chuột Bézier và bấm 'Chia sẻ lên tin'...")
+    log(f"Media sẵn sàng (sau {elapsed_total}s). Bấm 'Share to story'...")
 
+    # Luôn re-find nút trước khi click — tránh StaleElementReferenceException
     clicked = False
-    try:
-        human.click(ready_btn)
-    except Exception:
-        pass
-
-    time.sleep(2)
-    if "/stories/create" not in driver.current_url.lower():
-        clicked = True
-    else:
-        # Fallback click JS nếu mô phỏng chưa kích hoạt
-        driver.execute_script("""
-            const btn = arguments[0];
-            if (btn && btn.click) {
-                btn.scrollIntoView({block: 'center'});
-                btn.click();
-            }
-        """, ready_btn)
-        time.sleep(2)
-        if "/stories/create" not in driver.current_url.lower():
-            clicked = True
+    for attempt in range(5):
+        try:
+            clicked_js = driver.execute_script(
+                """
+                function triggerClick(el) {
+                    if (!el) return false;
+                    el.scrollIntoView({block:'center'});
+                    ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
+                        el.dispatchEvent(new MouseEvent(evt, {bubbles:true, cancelable:true, view:window}));
+                    });
+                    if (typeof el.click === 'function') el.click();
+                    return true;
+                }
+                const labels = ['share to story', 'chia sẻ lên tin'];
+                const nodes = Array.from(document.querySelectorAll("[role='button'], button"));
+                for (const btn of nodes) {
+                    if (!btn || btn.offsetParent === null) continue;
+                    const t = ((btn.getAttribute('aria-label') || '') + ' ' + (btn.innerText || '')).trim().toLowerCase();
+                    if (!labels.some(l => t.includes(l))) continue;
+                    let cur = btn, disabled = false;
+                    for (let i = 0; i < 4 && cur; i++) {
+                        if (cur.getAttribute('aria-disabled') === 'true' || cur.hasAttribute('disabled')) {
+                            disabled = true; break;
+                        }
+                        cur = cur.parentElement;
+                    }
+                    if (disabled) continue;
+                    return triggerClick(btn);
+                }
+                return false;
+                """
+            )
+            time.sleep(1.5)
+            if "/stories/create" not in (driver.current_url or "").lower():
+                clicked = True
+                break
+            if clicked_js:
+                # Có thể chưa redirect ngay
+                time.sleep(1.0)
+                if "/stories/create" not in (driver.current_url or "").lower():
+                    clicked = True
+                    break
+        except StaleElementReferenceException:
+            log(f"Stale khi bấm Share (lần {attempt + 1}) — tìm lại nút...")
+            time.sleep(0.6)
+            continue
+        except Exception as e:
+            logger.debug(f"Share click attempt {attempt + 1}: {e}")
+            time.sleep(0.6)
 
     if not clicked:
-        # Chờ thêm 5 giây xem có chuyển trang trễ không
         for _ in range(5):
             time.sleep(1)
-            if "/stories/create" not in driver.current_url.lower():
+            if "/stories/create" not in (driver.current_url or "").lower():
                 clicked = True
                 break
 
     if not clicked:
         check_account_health(driver)
-        raise PublishUnconfirmed("Đã bấm 'Chia sẻ lên tin' nhưng giao diện không chuyển trang, không xác nhận được Story đã lên.")
+        raise PublishUnconfirmed(
+            "Đã bấm 'Share to story' nhưng giao diện không chuyển trang, không xác nhận Story đã lên."
+        )
 
     # Chờ điều hướng khỏi trang tạo story
     try:
