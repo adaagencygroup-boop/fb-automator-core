@@ -9,6 +9,7 @@ import {
   getNotifications,
   mapNotification,
   resyncChatData,
+  getSyncStatus,
   friendlyFbError,
   toUtcIso,
   parseAttachmentText,
@@ -125,7 +126,9 @@ export default function OmnichannelChatModule() {
     setConversations(c.conversations || []);
     setNotifications(n.notifications || []);
     setNotifMeta({
+      total: n.total ?? 0,
       unreadCounts: n.unreadCounts || {},
+      typeCounts: n.typeCounts || {},
       pageUnread: n.pageUnread || {},
       page: n.page || 1,
       totalPages: n.totalPages || 1,
@@ -193,7 +196,9 @@ export default function OmnichannelChatModule() {
       if (cancelled) return;
       setNotifications(res.notifications || []);
       setNotifMeta({
+        total: res.total ?? 0,
         unreadCounts: res.unreadCounts || {},
+        typeCounts: res.typeCounts || {},
         pageUnread: res.pageUnread || {},
         page: res.page || 1,
         totalPages: res.totalPages || 1,
@@ -222,7 +227,9 @@ export default function OmnichannelChatModule() {
         });
         setNotifMeta((m) => ({
           ...m,
+          total: res.total ?? m.total,
           unreadCounts: res.unreadCounts || m.unreadCounts,
+          typeCounts: res.typeCounts || m.typeCounts,
           pageUnread: res.pageUnread || m.pageUnread,
           page: res.page || m.page + 1,
           totalPages: res.totalPages || m.totalPages,
@@ -449,15 +456,66 @@ export default function OmnichannelChatModule() {
   const confirmReset = async () => {
     setResetConfirmOpen(false);
     setResetting(true);
+    setLoading(true); // Bật trạng thái loading skeleton y hệt như lúc mới mở Module 6
+
     await resyncChatData();
-    const data = await fetchAll(notifQuery);
-    applyData({ ...data, n: { ...data.n, forKey: notifQueryKey } });
+
+    // 1. Dọn dẹp lựa chọn hiện tại
     setActivePageId(null);
     setActiveConversationId(null);
     setOpenedNotificationId(null);
     setMessagesByConversation({});
     loadingMessages.current.clear();
-    setResetting(false);
+
+    // 2. Thăm dò ngầm cho đến khi đồng bộ hoàn tất thì mới tắt loading và hiển thị đầy đủ
+    const startTime = Date.now();
+    let pollCount = 0;
+    let consecutiveSameCount = 0;
+    let prevTotal = -1;
+    let latestData = null;
+
+    const checkInterval = setInterval(async () => {
+      pollCount++;
+      try {
+        const [status, freshData] = await Promise.all([
+          getSyncStatus(),
+          fetchAll(notifQueryRef.current || notifQuery),
+        ]);
+        latestData = freshData;
+
+        const currentTotal = (freshData.p?.pages?.length || 0) + (freshData.n?.total || 0) + (freshData.c?.conversations?.length || 0);
+        if (currentTotal === prevTotal && currentTotal > 0) {
+          consecutiveSameCount++;
+        } else {
+          consecutiveSameCount = 0;
+          prevTotal = currentTotal;
+        }
+
+        const elapsed = Date.now() - startTime;
+        // Chỉ kết thúc khi:
+        // Đã qua tối thiểu 15s VÀ backend báo đã hoàn tất sync VÀ dữ liệu đã ổn định qua 3 chu kỳ liên tiếp (hoặc chạm timeout an toàn)
+        const isDoneSyncing = !status?.syncing && consecutiveSameCount >= 3;
+        if ((pollCount >= 6 && isDoneSyncing) || elapsed >= 90000) {
+          clearInterval(checkInterval);
+          if (latestData) {
+            applyData({ ...latestData, n: { ...latestData.n, forKey: notifQueryKey } });
+          }
+          setResetting(false);
+          setLoading(false);
+        }
+      } catch (err) {
+        console.warn("[Polling Error during reset]", err);
+        const elapsed = Date.now() - startTime;
+        if (pollCount > 12 || elapsed >= 90000) {
+          clearInterval(checkInterval);
+          if (latestData) {
+            applyData({ ...latestData, n: { ...latestData.n, forKey: notifQueryKey } });
+          }
+          setResetting(false);
+          setLoading(false);
+        }
+      }
+    }, 2500);
   };
 
   /**
@@ -810,7 +868,9 @@ export default function OmnichannelChatModule() {
       onSortChange={setSort}
       conversations={visibleConversations}
       notifications={notifications}
+      totalNotifications={notifMeta.total}
       notificationCounts={notifMeta.unreadCounts}
+      notificationTypeCounts={notifMeta.typeCounts}
       notificationsLoading={notificationsLoading}
       onLoadMoreNotifications={loadMoreNotifications}
       hasMoreNotifications={notifMeta.page < notifMeta.totalPages}

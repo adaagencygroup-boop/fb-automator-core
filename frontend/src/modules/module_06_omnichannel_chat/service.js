@@ -263,6 +263,7 @@ export async function getNotifications({
     return {
       notifications: raw.map(mapNotification),
       unreadCounts: res?.unread_counts || {},
+      typeCounts: res?.type_counts || {},
       pageUnread: res?.page_unread || {},
       total: Number(res?.total ?? raw.length) || 0,
       page: Number(res?.page ?? page) || 1,
@@ -272,7 +273,7 @@ export async function getNotifications({
   } catch (error) {
     console.warn("[getNotifications] Lỗi tải thông báo từ Backend:", error.message);
     return {
-      notifications: [], unreadCounts: {}, pageUnread: {},
+      notifications: [], unreadCounts: {}, typeCounts: {}, pageUnread: {},
       total: 0, page: 1, totalPages: 1,
       isMock: false, error: error.message || "Không tải được thông báo",
     };
@@ -447,6 +448,18 @@ export async function markNotificationRead(notifId) {
  */
 export async function resyncChatData() {
   return api.post("/api/facebook/reset").catch(() => ({ success: false }));
+}
+
+/**
+ * Kiểm tra trạng thái tiến trình đồng bộ nền (/api/facebook/sync-status)
+ */
+export async function getSyncStatus() {
+  try {
+    const res = await api.get("/api/facebook/sync-status");
+    return res || { syncing: false, queue_size: 0 };
+  } catch {
+    return { syncing: false, queue_size: 0 };
+  }
 }
 
 /**
