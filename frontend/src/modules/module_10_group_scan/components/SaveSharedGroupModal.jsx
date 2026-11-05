@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import {
   Folder,
   Search,
@@ -20,6 +21,11 @@ export default function SaveSharedGroupModal({
   groups = [],
   onSaved,
 }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const [categories, setCategories] = useState([]);
   const [loadingCats, setLoadingCats] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -95,10 +101,15 @@ export default function SaveSharedGroupModal({
     }
   };
 
-  if (!isOpen) return null;
+  if (!isOpen || !mounted) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="relative w-full max-w-xl rounded-2xl bg-white shadow-2xl border border-slate-100 p-6 flex flex-col gap-4 animate-in zoom-in-95 duration-150">
         {/* Header */}
         <div className="flex items-center justify-between pb-1">
@@ -261,7 +272,8 @@ export default function SaveSharedGroupModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

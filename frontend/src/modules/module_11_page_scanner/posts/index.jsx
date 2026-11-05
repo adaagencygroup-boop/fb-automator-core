@@ -156,6 +156,8 @@ export default function PageScannerPosts() {
   const [selectedPostIds, setSelectedPostIds] = useState(new Set());
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [previewPost, setPreviewPost] = useState(null);
+  const [postTablePage, setPostTablePage] = useState(1);
+  const postPageSize = 5;
 
   const logId = useRef(0);
   const pollRef = useRef(null);
@@ -163,7 +165,7 @@ export default function PageScannerPosts() {
   const isBusy = runPhase === "running" || runPhase === "paused";
   const isPaused = runPhase === "paused";
   const isExecuting = isBusy;
-  const showResults = runPhase === "done";
+  const showResults = runPhase !== "idle";
 
   const pushLog = useCallback((message, type = "info") => {
     logId.current += 1;
@@ -344,6 +346,7 @@ export default function PageScannerPosts() {
         post_types: ["all"],
         idle_timeout_s: 90,
         skip_existing: deduplicatePosts,
+        skip_pinned_posts: skipPinnedPosts,
         page_delay_s: delayMin,
         scroll_delay_s: delayMax,
       });
@@ -353,7 +356,7 @@ export default function PageScannerPosts() {
       if (autoRotateOnCheckpoint) {
         pushLog(`Đảo acc khi checkpoint · đổi sau ${postsPerAccountSwitch} bài/nick`, "info");
       }
-      if (skipPinnedPosts) pushLog("Bỏ qua bài ghim (UI flag).", "info");
+      if (skipPinnedPosts) pushLog("Đã bật lọc bỏ bài viết ghim của Quản trị viên.", "info");
       toast.success(`Đã khởi động POST_SCAN #${res.session_id}`);
       startPoll(res.session_id);
     } catch (err) {
@@ -467,6 +470,12 @@ export default function PageScannerPosts() {
 
   const allFilteredSelected =
     filteredPosts.length > 0 && filteredPosts.every((p) => selectedPostIds.has(p.id));
+  const totalPostPages = Math.max(1, Math.ceil(filteredPosts.length / postPageSize));
+  const safePostPage = Math.min(postTablePage, totalPostPages);
+  const pagedPosts = filteredPosts.slice(
+    (safePostPage - 1) * postPageSize,
+    safePostPage * postPageSize,
+  );
 
   const handleToggleSelectAllPosts = () => {
     if (allFilteredSelected) setSelectedPostIds(new Set());
@@ -947,7 +956,7 @@ export default function PageScannerPosts() {
               {filteredSidebarPages.length === 0 ? (
                 <p className="px-4 py-8 text-center text-xs text-slate-400">Chưa chọn page</p>
               ) : (
-                filteredSidebarPages.map((page) => {
+                filteredSidebarPages.map((page, pIdx) => {
                   const isSelected = page.page_key === activePage?.page_key;
                   const count = (postsByPage[page.page_key] || []).length;
                   const st = pageStatusMeta(page);
@@ -955,20 +964,32 @@ export default function PageScannerPosts() {
                     <button
                       key={page.page_key}
                       type="button"
-                      onClick={() => setActivePageKey(page.page_key)}
-                      className={`flex w-full cursor-pointer items-start justify-between gap-2 p-3.5 text-left transition-colors ${
+                      onClick={() => {
+                        setActivePageKey(page.page_key);
+                        setPostTablePage(1);
+                      }}
+                      className={`flex w-full cursor-pointer items-start justify-between gap-2.5 p-3.5 text-left transition-colors ${
                         isSelected
                           ? "border-l-4 border-l-blue-600 bg-blue-50/80"
                           : "hover:bg-slate-50"
                       }`}
                     >
-                      <div className="min-w-0">
-                        <div className="truncate text-xs font-bold text-slate-800">{page.name}</div>
-                        <div className="mt-0.5 text-[11px] text-slate-400">
-                          ID: {page.page_id || page.uid}
+                      <div className="flex min-w-0 items-start gap-2.5">
+                        <div
+                          className={`flex size-9 shrink-0 items-center justify-center rounded-xl text-xs font-bold text-white ${
+                            page.avatar_color || AVATAR_COLORS[pIdx % AVATAR_COLORS.length]
+                          }`}
+                        >
+                          {page.avatar_initials || initialsOf(page.name)}
                         </div>
-                        <div className={`mt-1 text-[11px] font-semibold ${st.color}`}>
-                          ● {st.label}
+                        <div className="min-w-0">
+                          <div className="truncate text-xs font-bold text-slate-800">{page.name}</div>
+                          <div className="mt-0.5 text-[11px] text-slate-400">
+                            ID: {page.page_id || page.uid}
+                          </div>
+                          <div className={`mt-1 text-[11px] font-semibold ${st.color}`}>
+                            ● {st.label}
+                          </div>
                         </div>
                       </div>
                       <span
@@ -1110,7 +1131,7 @@ export default function PageScannerPosts() {
                         <th className="px-3 py-3 text-center">LƯỢT LIKE</th>
                         <th className="px-3 py-3 text-center">BÌNH LUẬN</th>
                         <th className="px-3 py-3 text-center">CHIA SẺ</th>
-                        <th className="w-14 px-3 py-3 text-center">HĐ</th>
+                        <th className="w-20 px-3 py-3 text-center">THAO TÁC</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -1128,7 +1149,8 @@ export default function PageScannerPosts() {
                           </td>
                         </tr>
                       ) : (
-                        filteredPosts.map((post, idx) => {
+                        pagedPosts.map((post, idx) => {
+                          const realIdx = (safePostPage - 1) * postPageSize + idx;
                           const url = post.post_url
                             ? post.post_url.startsWith("http")
                               ? post.post_url
@@ -1151,7 +1173,9 @@ export default function PageScannerPosts() {
                                   className="size-3.5 rounded border-slate-300 text-blue-600"
                                 />
                               </td>
-                              <td className="px-3 py-3 font-semibold text-slate-500">{idx + 1}</td>
+                              <td className="px-3 py-3 font-mono font-semibold text-slate-500">
+                                {String(realIdx + 1).padStart(2, "0")}
+                              </td>
                               <td className="max-w-md px-3 py-3">
                                 <p className="line-clamp-2 leading-relaxed font-medium text-slate-800">
                                   {post.content}
@@ -1198,14 +1222,32 @@ export default function PageScannerPosts() {
                                 {fmtNum(post.shares)}
                               </td>
                               <td className="px-3 py-3 text-center">
-                                <button
-                                  type="button"
-                                  onClick={() => setPreviewPost(post)}
-                                  className="cursor-pointer rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-blue-50 hover:text-blue-600"
-                                  title="Xem chi tiết bài viết"
-                                >
-                                  <Eye className="size-4" />
-                                </button>
+                                <div className="inline-flex items-center justify-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewPost(post)}
+                                    className="cursor-pointer rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-blue-50 hover:text-blue-600"
+                                    title="Xem chi tiết bài viết"
+                                  >
+                                    <Eye className="size-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setPostsByPage((prev) => ({
+                                        ...prev,
+                                        [activePage.page_key]: (
+                                          prev[activePage.page_key] || []
+                                        ).filter((p) => p.id !== post.id),
+                                      }));
+                                      toast.success("Đã xóa bài viết khỏi danh sách.");
+                                    }}
+                                    className="cursor-pointer rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                                    title="Xóa bài viết"
+                                  >
+                                    <Trash2 className="size-3.5" />
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           );
@@ -1217,7 +1259,16 @@ export default function PageScannerPosts() {
 
                 <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
                   <span>
-                    Hiển thị <strong>1 - {filteredPosts.length}</strong> trong tổng số{" "}
+                    Hiển thị{" "}
+                    <strong>
+                      {filteredPosts.length === 0
+                        ? 0
+                        : `${(safePostPage - 1) * postPageSize + 1} - ${Math.min(
+                            safePostPage * postPageSize,
+                            filteredPosts.length,
+                          )}`}
+                    </strong>{" "}
+                    trong tổng số{" "}
                     <strong>
                       {(postsByPage[activePage.page_key] || []).length || filteredPosts.length}
                     </strong>{" "}
@@ -1226,19 +1277,33 @@ export default function PageScannerPosts() {
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
-                      className="rounded border border-slate-200 px-2.5 py-1 text-slate-600 hover:bg-slate-50"
+                      disabled={safePostPage <= 1}
+                      onClick={() => setPostTablePage((p) => Math.max(1, p - 1))}
+                      className="rounded border border-slate-200 px-2.5 py-1 text-slate-600 hover:bg-slate-50 disabled:opacity-40"
                     >
                       Trước
                     </button>
+                    {Array.from({ length: totalPostPages }, (_, i) => i + 1)
+                      .slice(0, 5)
+                      .map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => setPostTablePage(p)}
+                          className={`rounded px-2.5 py-1 font-bold ${
+                            p === safePostPage
+                              ? "bg-blue-600 text-white"
+                              : "border border-slate-200 text-slate-600 hover:bg-slate-50"
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      ))}
                     <button
                       type="button"
-                      className="rounded bg-blue-600 px-2.5 py-1 font-bold text-white"
-                    >
-                      1
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded border border-slate-200 px-2.5 py-1 text-slate-600 hover:bg-slate-50"
+                      disabled={safePostPage >= totalPostPages}
+                      onClick={() => setPostTablePage((p) => Math.min(totalPostPages, p + 1))}
+                      className="rounded border border-slate-200 px-2.5 py-1 text-slate-600 hover:bg-slate-50 disabled:opacity-40"
                     >
                       Sau
                     </button>

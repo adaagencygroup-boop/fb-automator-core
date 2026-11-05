@@ -19,51 +19,11 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { toast } from "@/lib/toast";
+import Pagination from "@/components/ui/pagination";
+import CustomSelect from "@/components/ui/custom-select";
 import AccountSelectModal, { isScanReady } from "../components/AccountSelectModal";
-import { getScanAccounts } from "../service";
-
-const DEFAULT_SCAN_ACCOUNTS = [
-  {
-    id: "acc-1",
-    uid: "81594788917102",
-    profile_name: "Riska Nasution (Nick Trâu)",
-    email: "riska.nasution@gmail.com",
-    status: "live",
-    login_status: "logged_in",
-  },
-  {
-    id: "acc-2",
-    uid: "100084729182312",
-    profile_name: "Hoàng Minh Thuận (Scan Post 01)",
-    email: "thuandz99@gmail.com",
-    status: "live",
-    login_status: "logged_in",
-  },
-  {
-    id: "acc-3",
-    uid: "100091823761294",
-    profile_name: "Trần Mai Anh (Seeding 02)",
-    email: "maianh.tran@gmail.com",
-    status: "live",
-    login_status: "logged_in",
-  },
-  {
-    id: "acc-4",
-    uid: "100062819451290",
-    profile_name: "Nguyễn Hải Đăng (Acc Backup 03)",
-    email: "haidang.dev@gmail.com",
-    status: "live",
-    login_status: "logged_in",
-  },
-  {
-    id: "acc-5",
-    uid: "100037194012893",
-    profile_name: "Lê Ngọc Bích (Farm 04)",
-    email: "ngocbich.le@gmail.com",
-    status: "live",
-    login_status: "logged_in",
-  },
-];
+import GroupPickerModal from "../components/GroupPickerModal";
+import { getScanAccounts, getScanCategories, getScannedGroups } from "../service";
 
 function normalizeAccount(raw) {
   const status = String(raw.status || "").toLowerCase();
@@ -80,230 +40,40 @@ function normalizeAccount(raw) {
   };
 }
 
-// ==========================================
-// DỮ LIỆU MẪU BAN ĐẦU CHUẨN FIGMA IMAGE 1
-// ==========================================
-
-const INITIAL_SELECTED_GROUPS = [
-  {
-    id: "g-1",
-    stt: "01",
-    name: "Hội Buôn Bán Online Toàn Quốc",
-    uid: "81594788917102",
-    tag: "HB",
-    tagBg: "bg-[#DBEAFE]",
-    tagText: "text-[#2563EB]",
-    type: "public",
-    typeLabel: "Công khai",
-    members: "258.724 TV",
-  },
-  {
-    id: "g-2",
-    stt: "02",
-    name: "Marketing Sài Gòn Hub - Tuyển dụng & Thảo luận",
-    uid: "49204918231032",
-    tag: "MK",
-    tagBg: "bg-[#F3E8FF]",
-    tagText: "text-[#9333EA]",
-    type: "private",
-    typeLabel: "Riêng tư",
-    members: "186.392 TV",
-  },
-  {
-    id: "g-3",
-    stt: "03",
-    name: "Bất Động Sản & Đầu Tư Hà Nội 2024",
-    uid: "92837192837123",
-    tag: "BĐ",
-    tagBg: "bg-[#FFEDD5]",
-    tagText: "text-[#EA580C]",
-    type: "public",
-    typeLabel: "Công khai",
-    members: "142.050 TV",
-  },
-  {
-    id: "g-4",
-    stt: "04",
-    name: "Cộng Đồng Thương Mại Điện Tử & Dropship VN",
-    uid: "37492817293847",
-    tag: "TM",
-    tagBg: "bg-[#D1FAE5]",
-    tagText: "text-[#059669]",
-    type: "public",
-    typeLabel: "Công khai",
-    members: "95.400 TV",
-  },
-  {
-    id: "g-5",
-    stt: "05",
-    name: "Khởi Nghiệp & Kinh Doanh Thực Chiến",
-    uid: "61928371928312",
-    tag: "KV",
-    tagBg: "bg-[#FCE7F3]",
-    tagText: "text-[#DB2777]",
-    type: "private",
-    typeLabel: "Riêng tư",
-    members: "312.800 TV",
-  },
+const MIN_LIKE_OPTIONS = [
+  { value: "0", label: "Tất cả like" },
+  { value: "50", label: "> 50 like" },
+  { value: "100", label: "> 100 like" },
+  { value: "500", label: "> 500 like" },
 ];
 
-const CATEGORIES_DATA = [
-  {
-    id: "cat-1",
-    name: "Hội Buôn Bán Online Toàn...",
-    fullName: "Hội Buôn Bán Online Toàn Quốc",
-    memberSummary: "1.4M Thành viên",
-    postCount: 450,
-  },
-  {
-    id: "cat-2",
-    name: "Marketing Sài Gòn Hub",
-    fullName: "Marketing Sài Gòn Hub - Tuyển dụng & Thảo luận",
-    memberSummary: "1.8M Thành viên",
-    postCount: 320,
-  },
-  {
-    id: "cat-3",
-    name: "Cộng Đồng Bất Động Sản &...",
-    fullName: "Cộng Đồng Bất Động Sản & Đầu Tư",
-    memberSummary: "412K Thành viên",
-    postCount: 380,
-  },
-  {
-    id: "cat-4",
-    name: "Nguồn Hàng Sỉ & Dropship VN",
-    fullName: "Nguồn Hàng Sỉ & Dropship VN",
-    memberSummary: "650K Thành viên",
-    postCount: 270,
-  },
+const MIN_CMT_OPTIONS = [
+  { value: "0", label: "Tất cả cmt" },
+  { value: "10", label: "> 10 cmt" },
+  { value: "20", label: "> 20 cmt" },
+  { value: "50", label: "> 50 cmt" },
 ];
 
-const INITIAL_POSTS = [
-  {
-    id: "p-1",
-    stt: "01",
-    content: "Cần tìm xưởng may gia công áo thun số lượng lớn từ 2000-5000c/tháng tại HCM…",
-    linkText: "fb.com/groups/buonban/posts/89123891",
-    authorName: "Nguyễn Văn An",
-    authorUid: "1000847291...",
-    authorTag: "NA",
-    authorTagBg: "bg-[#E0E7FF]",
-    authorTagText: "text-[#4338CA]",
-    likes: 1250,
-    likesStr: "1.250",
-    comments: 342,
-    shares: 85,
-    postedTime: "Hôm nay 10:15",
-  },
-  {
-    id: "p-2",
-    stt: "02",
-    content: "Tổng hợp file tài liệu bí quyết chạy Ads Facebook tối ưu ngân sách 2024 mới nhất.",
-    linkText: "fb.com/groups/buonban/posts/78100234",
-    authorName: "Trần Thị Mai",
-    authorUid: "1000918237...",
-    authorTag: "TM",
-    authorTagBg: "bg-[#FFE4E6]",
-    authorTagText: "text-[#BE123C]",
-    likes: 890,
-    likesStr: "890",
-    comments: 512,
-    shares: 142,
-    postedTime: "Hôm qua 18:20",
-  },
-  {
-    id: "p-3",
-    stt: "03",
-    content: "Tổng hợp file tài liệu bí quyết chạy Ads Facebook tối ưu ngân sách 2024 mới nhất.",
-    linkText: "fb.com/groups/buonban/posts/78100234",
-    authorName: "Trần Thị Mai",
-    authorUid: "1000918237...",
-    authorTag: "TM",
-    authorTagBg: "bg-[#FFE4E6]",
-    authorTagText: "text-[#BE123C]",
-    likes: 890,
-    likesStr: "890",
-    comments: 512,
-    shares: 142,
-    postedTime: "Hôm qua 18:20",
-  },
-  {
-    id: "p-4",
-    stt: "04",
-    content: "Tổng hợp file tài liệu bí quyết chạy Ads Facebook tối ưu ngân sách 2024 mới nhất.",
-    linkText: "fb.com/groups/buonban/posts/78100234",
-    authorName: "Trần Thị Mai",
-    authorUid: "1000918237...",
-    authorTag: "TM",
-    authorTagBg: "bg-[#FFE4E6]",
-    authorTagText: "text-[#BE123C]",
-    likes: 890,
-    likesStr: "890",
-    comments: 512,
-    shares: 142,
-    postedTime: "Hôm qua 18:20",
-  },
+const MIN_SHARE_OPTIONS = [
+  { value: "0", label: "Tất cả share" },
+  { value: "5", label: "> 5 share" },
+  { value: "10", label: "> 10 share" },
+  { value: "50", label: "> 50 share" },
 ];
 
-const INITIAL_LOGS = [
-  {
-    time: "14:26:41",
-    thread: "Thread-01",
-    color: "text-slate-400",
-    message: "Khởi chạy Chrome Profile cho UID 81594788917102 (Riska Nasution)...",
-  },
-  {
-    time: "14:26:44",
-    thread: "Thread-01",
-    color: "text-amber-400",
-    message: "Proxy: Nick không có proxy cá nhân, đang chạy bằng IP trực tiếp của máy",
-  },
-  {
-    time: "14:26:51",
-    thread: "Thread-01",
-    color: "text-slate-300",
-    message: 'Kết nối Group: "Hội Buôn Bán Online Toàn Quốc" (ID: 81594788917102)',
-  },
-  {
-    time: "14:26:55",
-    thread: "Thread-01",
-    color: "text-emerald-400",
-    message: "Tìm thấy 50 bài viết mới đăng trong 7 ngày. Bắt đầu trích xuất tương tác...",
-  },
-  {
-    time: "14:27:01",
-    thread: "Thread-01",
-    color: "text-slate-300",
-    message: "PostID 89123891: Đã bóc tách tương tác [1.250 Likes - 342 Comments - 85 Shares] -> Lưu cơ sở dữ liệu",
-  },
-  {
-    time: "14:27:06",
-    thread: "Thread-01",
-    color: "text-slate-300",
-    message: "PostID 78100234: Đã bóc tách tương tác [890 Likes - 512 Comments - 142 Shares] -> Lưu cơ sở dữ liệu",
-  },
-  {
-    time: "14:27:14",
-    thread: "Thread-01",
-    color: "text-emerald-400",
-    message: "Đạt mốc 50 bài/tài khoản. Tiến hành chuyển đổi tài khoản theo quy chuẩn cấu hình",
-  },
-  {
-    time: "14:27:18",
-    thread: "Thread-01",
-    color: "text-cyan-400",
-    message: "Đang nghỉ 5 giây ngẫu nhiên trước khi chuyển sang nhóm tiếp theo...",
-  },
+const SORT_OPTIONS = [
+  { value: "highest_interaction", label: "Tương tác cao nhất" },
+  { value: "latest", label: "Mới nhất" },
+  { value: "most_likes", label: "Nhiều like nhất" },
+  { value: "most_comments", label: "Nhiều bình luận nhất" },
 ];
 
 export default function GroupScanPostsPage() {
   // Accounts State
   const [accountsModalOpen, setAccountsModalOpen] = useState(false);
   const [accountsLoading, setAccountsLoading] = useState(false);
-  const [moduleAccounts, setModuleAccounts] = useState(DEFAULT_SCAN_ACCOUNTS);
-  const [selectedUids, setSelectedUids] = useState(
-    DEFAULT_SCAN_ACCOUNTS.map((a) => a.uid)
-  );
+  const [moduleAccounts, setModuleAccounts] = useState([]);
+  const [selectedUids, setSelectedUids] = useState([]);
 
   // Load accounts from Module 2 API
   const loadAccounts = useCallback(async () => {
@@ -317,7 +87,7 @@ export default function GroupScanPostsPage() {
         : Array.isArray(res?.data)
         ? res.data
         : [];
-      const list = rawList.length > 0 ? rawList.map(normalizeAccount) : DEFAULT_SCAN_ACCOUNTS;
+      const list = rawList.map(normalizeAccount);
       setModuleAccounts(list);
       setSelectedUids((current) => {
         const readyUids = list.filter(isScanReady).map((acc) => acc.uid);
@@ -327,44 +97,16 @@ export default function GroupScanPostsPage() {
         return list.slice(0, 5).map((a) => a.uid);
       });
     } catch {
-      setModuleAccounts(DEFAULT_SCAN_ACCOUNTS);
-      setSelectedUids(DEFAULT_SCAN_ACCOUNTS.map((a) => a.uid));
+      setModuleAccounts([]);
+      setSelectedUids([]);
     } finally {
       setAccountsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    let ignore = false;
-    getScanAccounts()
-      .then((res) => {
-        if (ignore) return;
-        const rawList = Array.isArray(res)
-          ? res
-          : Array.isArray(res?.accounts)
-          ? res.accounts
-          : Array.isArray(res?.data)
-          ? res.data
-          : [];
-        const list = rawList.length > 0 ? rawList.map(normalizeAccount) : DEFAULT_SCAN_ACCOUNTS;
-        setModuleAccounts(list);
-        setSelectedUids((current) => {
-          const readyUids = list.filter(isScanReady).map((acc) => acc.uid);
-          const kept = current.filter((uid) => readyUids.includes(uid));
-          if (kept.length > 0) return kept;
-          if (readyUids.length > 0) return readyUids.slice(0, 5);
-          return list.slice(0, 5).map((a) => a.uid);
-        });
-      })
-      .catch(() => {
-        if (ignore) return;
-        setModuleAccounts(DEFAULT_SCAN_ACCOUNTS);
-        setSelectedUids(DEFAULT_SCAN_ACCOUNTS.map((a) => a.uid));
-      });
-    return () => {
-      ignore = true;
-    };
-  }, []);
+    loadAccounts();
+  }, [loadAccounts]);
 
   const selectedAccountNames = useMemo(() => {
     return moduleAccounts
@@ -374,8 +116,56 @@ export default function GroupScanPostsPage() {
   }, [moduleAccounts, selectedUids]);
 
   // Group selection state
-  const [selectedGroups, setSelectedGroups] = useState(INITIAL_SELECTED_GROUPS);
+  const [selectedGroups, setSelectedGroups] = useState([]);
+  const [availableGroups, setAvailableGroups] = useState([]);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState("");
+
+  // Load available groups & categories from Database
+  const [categories, setCategories] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState("");
+  const [posts, setPosts] = useState([]);
+
+  useEffect(() => {
+    getScannedGroups()
+      .then((res) => {
+        const list = res?.groups || [];
+        setAvailableGroups(
+          list.map((g, idx) => ({
+            id: g.id || g.group_id,
+            stt: String(idx + 1).padStart(2, "0"),
+            name: g.name || g.group_id,
+            uid: g.group_id || g.id,
+            tag: (g.name || "FB").slice(0, 2).toUpperCase(),
+            tagBg: "bg-[#DBEAFE]",
+            tagText: "text-[#2563EB]",
+            type: g.type === "private" ? "private" : "public",
+            typeLabel: g.type === "private" ? "Riêng tư" : "Công khai",
+            members: g.members || "—",
+            memberCount: g.membersCount || 0,
+          }))
+        );
+      })
+      .catch(() => setAvailableGroups([]));
+
+    getScanCategories()
+      .then((data) => {
+        const cats = Array.isArray(data) ? data : [];
+        setCategories(
+          cats.map((c) => ({
+            id: c.id,
+            name: c.name,
+            fullName: c.name,
+            memberSummary: `${c.group_count || 0} Nhóm`,
+            postCount: 0,
+          }))
+        );
+        if (cats.length > 0) {
+          setSelectedCategory(cats[0].id);
+        }
+      })
+      .catch(() => setCategories([]));
+  }, []);
 
   // Configuration options state
   const [minDelay, setMinDelay] = useState(5);
@@ -389,12 +179,11 @@ export default function GroupScanPostsPage() {
   const [autoDedupePosts, setAutoDedupePosts] = useState(true);
 
   // Master-Detail Post Results
-  const [selectedCategory, setSelectedCategory] = useState("cat-1");
   const [categorySearch, setCategorySearch] = useState("");
   const [postSearch, setPostSearch] = useState("");
-  const [minLikeFilter, setMinLikeFilter] = useState("100");
-  const [minCmtFilter, setMinCmtFilter] = useState("20");
-  const [minShareFilter, setMinShareFilter] = useState("10");
+  const [minLikeFilter, setMinLikeFilter] = useState("0");
+  const [minCmtFilter, setMinCmtFilter] = useState("0");
+  const [minShareFilter, setMinShareFilter] = useState("0");
   const [sortOption, setSortOption] = useState("highest_interaction");
 
   const [selectedPostIds, setSelectedPostIds] = useState(new Set());
@@ -402,7 +191,7 @@ export default function GroupScanPostsPage() {
 
   // Execution & Logs
   const [isExecuting, setIsExecuting] = useState(false);
-  const [logs, setLogs] = useState(INITIAL_LOGS);
+  const [logs, setLogs] = useState([]);
   const [copiedLog, setCopiedLog] = useState(false);
 
   // Remove Group handler
@@ -465,26 +254,33 @@ export default function GroupScanPostsPage() {
 
   // Filter Categories
   const filteredCategories = useMemo(() => {
-    if (!categorySearch.trim()) return CATEGORIES_DATA;
-    return CATEGORIES_DATA.filter((c) =>
-      c.fullName.toLowerCase().includes(categorySearch.toLowerCase())
+    if (!categorySearch.trim()) return categories;
+    return categories.filter((c) =>
+      (c.fullName || c.name || "").toLowerCase().includes(categorySearch.toLowerCase())
     );
-  }, [categorySearch]);
+  }, [categories, categorySearch]);
 
   // Filter Posts
   const filteredPosts = useMemo(() => {
-    return INITIAL_POSTS.filter((p) => {
+    return posts.filter((p) => {
       const matchQuery =
         !postSearch.trim() ||
-        p.content.toLowerCase().includes(postSearch.toLowerCase()) ||
-        p.authorName.toLowerCase().includes(postSearch.toLowerCase()) ||
-        p.linkText.includes(postSearch.trim());
-      const matchLike = !minLikeFilter || p.likes >= Number(minLikeFilter);
-      const matchCmt = !minCmtFilter || p.comments >= Number(minCmtFilter);
-      const matchShare = !minShareFilter || p.shares >= Number(minShareFilter);
+        (p.content || "").toLowerCase().includes(postSearch.toLowerCase()) ||
+        (p.authorName || "").toLowerCase().includes(postSearch.toLowerCase()) ||
+        (p.linkText || "").includes(postSearch.trim());
+      const matchLike = !minLikeFilter || minLikeFilter === "0" || (p.likes || 0) >= Number(minLikeFilter);
+      const matchCmt = !minCmtFilter || minCmtFilter === "0" || (p.comments || 0) >= Number(minCmtFilter);
+      const matchShare = !minShareFilter || minShareFilter === "0" || (p.shares || 0) >= Number(minShareFilter);
       return matchQuery && matchLike && matchCmt && matchShare;
     });
-  }, [postSearch, minLikeFilter, minCmtFilter, minShareFilter]);
+  }, [posts, postSearch, minLikeFilter, minCmtFilter, minShareFilter]);
+
+  const pageSize = 15;
+  const totalPages = Math.max(1, Math.ceil(filteredPosts.length / pageSize));
+  const paginatedPosts = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredPosts.slice(start, start + pageSize);
+  }, [filteredPosts, currentPage, pageSize]);
 
   // Select all posts
   const allFilteredSelected =
@@ -514,22 +310,34 @@ export default function GroupScanPostsPage() {
   };
 
   const handleExportGroup = () => {
-    const curCat = CATEGORIES_DATA.find((c) => c.id === selectedCategory);
-    toast.success(`Đang xuất bài viết của nhóm: ${curCat?.fullName || "nhóm đang chọn"}...`);
+    const curCat = categories.find((c) => c.id === selectedCategory);
+    toast.success(`Đang xuất bài viết của nhóm: ${curCat?.fullName || curCat?.name || "nhóm đang chọn"}...`);
   };
 
   const currentCategoryData =
-    CATEGORIES_DATA.find((c) => c.id === selectedCategory) || CATEGORIES_DATA[0];
+    categories.find((c) => c.id === selectedCategory) || categories[0] || null;
 
   return (
-    <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
-      <div className="space-y-5">
+    <>
+      {/* Ẩn nút mũi tên tăng giảm số chỉ cho riêng Module 10 */}
+      <style>{`
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+          -webkit-appearance: none !important;
+          margin: 0 !important;
+        }
+        input[type="number"] {
+          -moz-appearance: textfield !important;
+          appearance: textfield !important;
+        }
+      `}</style>
+      <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
         {/* =======================================================
             SECTION 1 & SECTION 2: 2 Column Configuration Grids
         ======================================================= */}
-        <div className="grid items-start gap-5 xl:grid-cols-2">
+        <div className="grid items-stretch gap-5 xl:grid-cols-2">
           {/* Card 1: Cấu hình chung & Chọn tài khoản/nhóm */}
-          <section className="rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] space-y-4">
+          <section className="flex flex-col h-full rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] space-y-4">
             <div className="flex items-center gap-2.5 pb-3 border-b border-[#F1F5F9]">
               <span className="flex size-6 items-center justify-center rounded-full bg-[#1877F2] text-[11px] font-bold text-white shrink-0">
                 1
@@ -589,7 +397,7 @@ export default function GroupScanPostsPage() {
                   <div className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-3 text-xs font-medium text-[#059669]">
                     <span className="size-1.5 rounded-full bg-[#10B981] shrink-0" />
                     <span>
-                      Đã chọn: <strong className="text-emerald-950">{selectedGroups.length} nhóm</strong>
+                      Đã chọn: <strong className="text-emerald-950 font-bold">{selectedGroups.length} nhóm</strong>
                     </span>
                   </div>
                 </div>
@@ -598,7 +406,7 @@ export default function GroupScanPostsPage() {
           </section>
 
           {/* Card 2: Cấu hình quét nâng cao & Giới hạn */}
-          <section className="rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] space-y-4">
+          <section className="flex flex-col h-full rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] space-y-4">
             <div className="flex items-center gap-2.5 pb-3 border-b border-[#F1F5F9]">
               <span className="flex size-6 items-center justify-center rounded-full bg-[#1877F2] text-[11px] font-bold text-white shrink-0">
                 2
@@ -609,18 +417,18 @@ export default function GroupScanPostsPage() {
             </div>
 
             <div className="space-y-3.5">
-              {/* Cài đặt khoảng cách quét */}
+              {/* Cài đặt khoảng cách quét (Stepper đồng nhất theo ảnh mẫu) */}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-medium text-[#334155]">
                   Khoảng cách giữa các lần quét:
                 </span>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-[#64748B]">Từ</span>
-                  <div className="flex items-center rounded-lg border border-[#CBD5E1] bg-white h-7">
+                  {/* Min delay stepper */}
+                  <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
                     <button
                       type="button"
                       onClick={() => setMinDelay((v) => Math.max(1, v - 1))}
-                      className="w-5 h-full flex items-center justify-center text-xs text-[#475569] bg-[#F1F5F9] hover:bg-slate-200 rounded-l-lg font-medium"
+                      className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
                     >
                       -
                     </button>
@@ -628,37 +436,38 @@ export default function GroupScanPostsPage() {
                       type="number"
                       value={minDelay}
                       onChange={(e) => setMinDelay(Number(e.target.value) || 1)}
-                      className="w-8 text-center text-xs font-medium text-[#475569] bg-transparent outline-none"
+                      className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                     <button
                       type="button"
                       onClick={() => setMinDelay((v) => v + 1)}
-                      className="w-5 h-full flex items-center justify-center text-xs text-[#475569] bg-[#F1F5F9] hover:bg-slate-200 rounded-r-lg font-medium"
+                      className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
                     >
                       +
                     </button>
                   </div>
 
-                  <span className="text-xs text-[#64748B]">-</span>
+                  <span className="text-xs text-[#94A3B8]">-</span>
 
-                  <div className="flex items-center rounded-lg border border-[#CBD5E1] bg-white h-7">
+                  {/* Max delay stepper */}
+                  <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
                     <button
                       type="button"
                       onClick={() => setMaxDelay((v) => Math.max(minDelay, v - 1))}
-                      className="w-5 h-full flex items-center justify-center text-xs text-[#475569] bg-[#F1F5F9] hover:bg-slate-200 rounded-l-lg font-medium"
+                      className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
                     >
                       -
                     </button>
                     <input
                       type="number"
                       value={maxDelay}
-                      onChange={(e) => setMaxDelay(Number(e.target.value) || minDelay)}
-                      className="w-8 text-center text-xs font-medium text-[#475569] bg-transparent outline-none"
+                      onChange={(e) => setMaxDelay(Math.max(minDelay, Number(e.target.value) || minDelay))}
+                      className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                     <button
                       type="button"
                       onClick={() => setMaxDelay((v) => v + 1)}
-                      className="w-5 h-full flex items-center justify-center text-xs text-[#475569] bg-[#F1F5F9] hover:bg-slate-200 rounded-r-lg font-medium"
+                      className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
                     >
                       +
                     </button>
@@ -668,17 +477,17 @@ export default function GroupScanPostsPage() {
                 </div>
               </div>
 
-              {/* Giới hạn đổi tài khoản */}
+              {/* Giới hạn đổi tài khoản (Stepper đồng nhất) */}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-medium text-[#334155]">
                   Đổi tài khoản mới khi quét được:
                 </span>
                 <div className="flex items-center gap-2">
-                  <div className="flex items-center rounded-lg border border-[#CBD5E1] bg-white h-7">
+                  <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
                     <button
                       type="button"
                       onClick={() => setSwitchAccThreshold((v) => Math.max(5, v - 5))}
-                      className="w-5 h-full flex items-center justify-center text-xs text-[#475569] bg-[#F1F5F9] hover:bg-slate-200 rounded-l-lg font-medium"
+                      className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
                     >
                       -
                     </button>
@@ -686,12 +495,12 @@ export default function GroupScanPostsPage() {
                       type="number"
                       value={switchAccThreshold}
                       onChange={(e) => setSwitchAccThreshold(Number(e.target.value) || 10)}
-                      className="w-10 text-center text-xs font-medium text-[#1E293B] bg-transparent outline-none"
+                      className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                     <button
                       type="button"
                       onClick={() => setSwitchAccThreshold((v) => v + 5)}
-                      className="w-5 h-full flex items-center justify-center text-xs text-[#475569] bg-[#F1F5F9] hover:bg-slate-200 rounded-r-lg font-medium"
+                      className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
                     >
                       +
                     </button>
@@ -700,17 +509,17 @@ export default function GroupScanPostsPage() {
                 </div>
               </div>
 
-              {/* Giới hạn bài mỗi nhóm */}
+              {/* Giới hạn bài mỗi nhóm (Stepper đồng nhất) */}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-medium text-[#334155]">
                   Mỗi nhóm quét tối đa:
                 </span>
                 <div className="flex items-center gap-2">
-                  <div className="flex items-center rounded-lg border border-[#CBD5E1] bg-white h-7">
+                  <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
                     <button
                       type="button"
                       onClick={() => setPostsPerGroupLimit((v) => Math.max(10, v - 10))}
-                      className="w-5 h-full flex items-center justify-center text-xs text-[#475569] bg-[#F1F5F9] hover:bg-slate-200 rounded-l-lg font-medium"
+                      className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
                     >
                       -
                     </button>
@@ -718,12 +527,12 @@ export default function GroupScanPostsPage() {
                       type="number"
                       value={postsPerGroupLimit}
                       onChange={(e) => setPostsPerGroupLimit(Number(e.target.value) || 10)}
-                      className="w-10 text-center text-xs font-medium text-[#1E293B] bg-transparent outline-none"
+                      className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                     <button
                       type="button"
                       onClick={() => setPostsPerGroupLimit((v) => v + 10)}
-                      className="w-5 h-full flex items-center justify-center text-xs text-[#475569] bg-[#F1F5F9] hover:bg-slate-200 rounded-r-lg font-medium"
+                      className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
                     >
                       +
                     </button>
@@ -734,7 +543,7 @@ export default function GroupScanPostsPage() {
 
               {/* Checkboxes Group */}
               <div className="space-y-2 pt-1 border-t border-[#F1F5F9]">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input
                       type="checkbox"
@@ -746,14 +555,34 @@ export default function GroupScanPostsPage() {
                       Chỉ quét các bài viết đăng trong vòng
                     </span>
                   </label>
-                  <input
-                    type="number"
-                    disabled={!filterDaysEnabled}
-                    value={filterDays}
-                    onChange={(e) => setFilterDays(Number(e.target.value) || 1)}
-                    className="w-12 h-6 rounded border border-[#CBD5E1] text-center text-xs font-medium text-[#1E293B] outline-none disabled:bg-slate-100"
-                  />
-                  <span className="text-xs text-[#64748B]">ngày qua</span>
+                  <div className="flex items-center gap-2">
+                    <div className={`flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7 ${!filterDaysEnabled ? "opacity-50 pointer-events-none" : ""}`}>
+                      <button
+                        type="button"
+                        disabled={!filterDaysEnabled}
+                        onClick={() => setFilterDays((v) => Math.max(1, v - 1))}
+                        className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
+                      >
+                        -
+                      </button>
+                      <input
+                        type="number"
+                        disabled={!filterDaysEnabled}
+                        value={filterDays}
+                        onChange={(e) => setFilterDays(Number(e.target.value) || 1)}
+                        className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                      <button
+                        type="button"
+                        disabled={!filterDaysEnabled}
+                        onClick={() => setFilterDays((v) => v + 1)}
+                        className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
+                      >
+                        +
+                      </button>
+                    </div>
+                    <span className="text-xs text-[#64748B]">ngày qua</span>
+                  </div>
                 </div>
 
                 <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -821,54 +650,62 @@ export default function GroupScanPostsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#F1F5F9]">
-                {selectedGroups.map((group, idx) => (
-                  <tr key={group.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-4 py-3 text-center font-bold text-[#94A3B8]">
-                      {group.stt || (idx < 9 ? `0${idx + 1}` : `${idx + 1}`)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`flex size-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold ${group.tagBg} ${group.tagText}`}
-                        >
-                          {group.tag}
-                        </div>
-                        <div className="flex flex-col">
-                          <span className="font-semibold text-xs text-[#0F172A] line-clamp-1">
-                            {group.name}
-                          </span>
-                          <span className="font-mono text-[11px] text-[#94A3B8]">
-                            ID: {group.uid}
-                          </span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      {group.type === "public" ? (
-                        <span className="inline-flex rounded border border-[#D1FAE5] bg-[#ECFDF5] px-2 py-0.5 text-[10px] font-semibold text-[#047857]">
-                          Công khai
-                        </span>
-                      ) : (
-                        <span className="inline-flex rounded bg-[#F1F5F9] px-2 py-0.5 text-[10px] font-semibold text-[#475569]">
-                          Riêng tư
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 font-semibold text-[#0F172A]">
-                      {group.members}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveGroup(group.id)}
-                        className="rounded p-1 text-[#94A3B8] hover:bg-rose-50 hover:text-rose-600 transition-colors"
-                        title="Xóa nhóm"
-                      >
-                        <Trash2 className="size-4" />
-                      </button>
+                {selectedGroups.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-8 text-center text-slate-400">
+                      Chưa có nhóm nào được chọn. Nhấn &apos;Chọn nhóm muốn quét&apos; để thêm nhóm từ cơ sở dữ liệu.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  selectedGroups.map((group, idx) => (
+                    <tr key={group.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-4 py-3 text-center font-bold text-[#94A3B8]">
+                        {group.stt || (idx < 9 ? `0${idx + 1}` : `${idx + 1}`)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={`flex size-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold ${group.tagBg} ${group.tagText}`}
+                          >
+                            {group.tag}
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="font-semibold text-xs text-[#0F172A] line-clamp-1">
+                              {group.name}
+                            </span>
+                            <span className="font-mono text-[11px] text-[#94A3B8]">
+                              ID: {group.uid}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        {group.type === "public" ? (
+                          <span className="inline-flex rounded border border-[#D1FAE5] bg-[#ECFDF5] px-2 py-0.5 text-[10px] font-semibold text-[#047857]">
+                            Công khai
+                          </span>
+                        ) : (
+                          <span className="inline-flex rounded bg-[#F1F5F9] px-2 py-0.5 text-[10px] font-semibold text-[#475569]">
+                            Riêng tư
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-[#0F172A]">
+                        {group.members}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveGroup(group.id)}
+                          className="rounded p-1 text-[#94A3B8] hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                          title="Xóa nhóm"
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -908,7 +745,7 @@ export default function GroupScanPostsPage() {
                 Kết quả quét bài viết
               </h3>
               <span className="rounded-full bg-[#DBEAFE] px-2.5 py-0.5 text-[11px] font-semibold text-[#1D4ED8]">
-                1.420 Bài viết
+                {filteredPosts.length} Bài viết
               </span>
             </div>
 
@@ -924,10 +761,10 @@ export default function GroupScanPostsPage() {
 
           {/* 2 Column Content */}
           <div className="grid grid-cols-1 lg:grid-cols-12 min-h-[580px]">
-            {/* Cột trái: Danh mục nhóm (4) */}
+            {/* Cột trái: Danh mục nhóm */}
             <div className="lg:col-span-4 p-4 bg-[#F8FAFC]/50 border-r border-[#E2E8F0] flex flex-col gap-3">
               <span className="text-[11px] font-bold uppercase tracking-wide text-[#334155]">
-                DANH MỤC NHÓM ({CATEGORIES_DATA.length})
+                DANH MỤC NHÓM ({categories.length})
               </span>
 
               <div className="relative w-full">
@@ -942,39 +779,45 @@ export default function GroupScanPostsPage() {
               </div>
 
               <div className="flex flex-col gap-2 max-h-[480px] overflow-y-auto pr-0.5">
-                {filteredCategories.map((cat) => {
-                  const isSelected = cat.id === selectedCategory;
-                  return (
-                    <button
-                      type="button"
-                      key={cat.id}
-                      onClick={() => setSelectedCategory(cat.id)}
-                      className={`flex flex-col items-start p-3 gap-1 w-full rounded-xl text-left transition-all ${
-                        isSelected
-                          ? "bg-white border-2 border-[#1877F2] shadow-xs"
-                          : "bg-white border border-[#E2E8F0] hover:border-slate-300"
-                      }`}
-                    >
-                      <span className="font-bold text-xs text-[#0F172A] line-clamp-1">
-                        {cat.name}
-                      </span>
-                      <div className="flex items-center justify-between w-full">
-                        <span className="text-[11px] text-[#64748B]">
-                          {cat.memberSummary}
+                {filteredCategories.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-slate-400">
+                    Chưa có danh mục nào từ cơ sở dữ liệu.
+                  </div>
+                ) : (
+                  filteredCategories.map((cat) => {
+                    const isSelected = cat.id === selectedCategory;
+                    return (
+                      <button
+                        type="button"
+                        key={cat.id}
+                        onClick={() => setSelectedCategory(cat.id)}
+                        className={`flex flex-col items-start p-3 gap-1 w-full rounded-xl text-left transition-all ${
+                          isSelected
+                            ? "bg-white border-2 border-[#1877F2] shadow-xs"
+                            : "bg-white border border-[#E2E8F0] hover:border-slate-300"
+                        }`}
+                      >
+                        <span className="font-bold text-xs text-[#0F172A] line-clamp-1">
+                          {cat.name}
                         </span>
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[11px] font-semibold ${
-                            isSelected
-                              ? "bg-[#EFF6FF] text-[#1877F2]"
-                              : "bg-[#F1F5F9] text-[#475569]"
-                          }`}
-                        >
-                          {cat.postCount} bài
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
+                        <div className="flex items-center justify-between w-full">
+                          <span className="text-[11px] text-[#64748B]">
+                            {cat.memberSummary}
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[11px] font-semibold ${
+                              isSelected
+                                ? "bg-[#EFF6FF] text-[#1877F2]"
+                                : "bg-[#F1F5F9] text-[#475569]"
+                            }`}
+                          >
+                            {cat.postCount} bài
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </div>
 
@@ -984,12 +827,10 @@ export default function GroupScanPostsPage() {
               <div className="flex flex-wrap justify-between items-center pb-3 border-b border-[#F1F5F9] gap-2">
                 <div className="flex flex-col gap-0.5">
                   <h4 className="font-bold text-sm text-[#0F172A]">
-                    {currentCategoryData.fullName}
+                    {currentCategoryData?.fullName || currentCategoryData?.name || "Chưa chọn danh mục"}
                   </h4>
                   <div className="flex items-center gap-2 text-xs text-[#64748B]">
-                    <span>Quy mô: 258.724 Thành viên</span>
-                    <span>•</span>
-                    <span className="text-[#059669] font-medium">Group Public</span>
+                    <span>Quy mô: {currentCategoryData?.memberSummary || "0 Nhóm"}</span>
                   </div>
                 </div>
 
@@ -1018,38 +859,44 @@ export default function GroupScanPostsPage() {
                     />
                   </div>
 
-                  <select
-                    value={minLikeFilter}
-                    onChange={(e) => setMinLikeFilter(e.target.value)}
-                    className="h-7 px-2.5 border border-[#E2E8F0] bg-white rounded-lg text-xs font-medium text-[#334155] outline-none"
-                  >
-                    <option value="0">Tất cả like</option>
-                    <option value="50">&gt; 50 like</option>
-                    <option value="100">&gt; 100 like</option>
-                    <option value="500">&gt; 500 like</option>
-                  </select>
+                  <div className="w-28 shrink-0">
+                    <CustomSelect
+                      value={minLikeFilter}
+                      onChange={(val) => {
+                        setMinLikeFilter(val);
+                        setCurrentPage(1);
+                      }}
+                      options={MIN_LIKE_OPTIONS}
+                      size="sm"
+                      buttonClassName="h-7 text-xs"
+                    />
+                  </div>
 
-                  <select
-                    value={minCmtFilter}
-                    onChange={(e) => setMinCmtFilter(e.target.value)}
-                    className="h-7 px-2.5 border border-[#E2E8F0] bg-white rounded-lg text-xs font-medium text-[#334155] outline-none"
-                  >
-                    <option value="0">Tất cả cmt</option>
-                    <option value="10">&gt; 10 cmt</option>
-                    <option value="20">&gt; 20 cmt</option>
-                    <option value="50">&gt; 50 cmt</option>
-                  </select>
+                  <div className="w-28 shrink-0">
+                    <CustomSelect
+                      value={minCmtFilter}
+                      onChange={(val) => {
+                        setMinCmtFilter(val);
+                        setCurrentPage(1);
+                      }}
+                      options={MIN_CMT_OPTIONS}
+                      size="sm"
+                      buttonClassName="h-7 text-xs"
+                    />
+                  </div>
 
-                  <select
-                    value={minShareFilter}
-                    onChange={(e) => setMinShareFilter(e.target.value)}
-                    className="h-7 px-2.5 border border-[#E2E8F0] bg-white rounded-lg text-xs font-medium text-[#334155] outline-none"
-                  >
-                    <option value="0">Tất cả share</option>
-                    <option value="5">&gt; 5 share</option>
-                    <option value="10">&gt; 10 share</option>
-                    <option value="50">&gt; 50 share</option>
-                  </select>
+                  <div className="w-28 shrink-0">
+                    <CustomSelect
+                      value={minShareFilter}
+                      onChange={(val) => {
+                        setMinShareFilter(val);
+                        setCurrentPage(1);
+                      }}
+                      options={MIN_SHARE_OPTIONS}
+                      size="sm"
+                      buttonClassName="h-7 text-xs"
+                    />
+                  </div>
                 </div>
 
                 {/* Sorting and Actions */}
@@ -1059,16 +906,15 @@ export default function GroupScanPostsPage() {
                       <Filter className="size-3 text-[#94A3B8]" />
                       Sắp xếp:
                     </span>
-                    <select
-                      value={sortOption}
-                      onChange={(e) => setSortOption(e.target.value)}
-                      className="h-7 px-2.5 border border-[#E2E8F0] bg-white rounded-lg text-xs font-semibold text-[#334155] outline-none"
-                    >
-                      <option value="highest_interaction">Tương tác cao nhất</option>
-                      <option value="latest">Mới nhất</option>
-                      <option value="most_likes">Nhiều like nhất</option>
-                      <option value="most_comments">Nhiều bình luận nhất</option>
-                    </select>
+                    <div className="w-44 shrink-0">
+                      <CustomSelect
+                        value={sortOption}
+                        onChange={(val) => setSortOption(val)}
+                        options={SORT_OPTIONS}
+                        size="sm"
+                        buttonClassName="h-7 text-xs font-semibold"
+                      />
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -1121,100 +967,108 @@ export default function GroupScanPostsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#F1F5F9]">
-                    {filteredPosts.map((post) => {
-                      const isChecked = selectedPostIds.has(post.id);
-                      return (
-                        <tr
-                          key={post.id}
-                          className={`hover:bg-slate-50 transition-colors ${
-                            isChecked ? "bg-[#EFF6FF]/25" : ""
-                          }`}
-                        >
-                          <td className="py-2.5 px-3 text-center">
-                            <input
-                              type="checkbox"
-                              checked={isChecked}
-                              onChange={() => handleToggleSelectPost(post.id)}
-                              className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
-                            />
-                          </td>
-                          <td className="py-2.5 px-2 text-center font-mono text-xs text-[#94A3B8]">
-                            {post.stt}
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <div className="flex flex-col gap-1">
-                              <p className="text-xs font-medium text-[#1E293B] line-clamp-2">
-                                {post.content}
-                              </p>
-                              <a
-                                href={`https://${post.linkText}`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1 font-mono text-[11px] text-[#1877F2] hover:underline"
-                              >
-                                <span className="truncate max-w-[220px]">{post.linkText}</span>
-                                <ExternalLink className="size-3 text-[#1877F2] shrink-0" />
-                              </a>
-                            </div>
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <div className="flex items-center gap-2">
-                              <span
-                                className={`size-7 rounded-full ${post.authorTagBg} ${post.authorTagText} font-bold text-xs flex items-center justify-center shrink-0 uppercase`}
-                              >
-                                {post.authorTag}
-                              </span>
-                              <div className="flex flex-col min-w-0">
-                                <span className="font-semibold text-xs text-[#0F172A] truncate">
-                                  {post.authorName}
-                                </span>
-                                <span className="font-mono text-[10px] text-[#94A3B8] truncate">
-                                  {post.authorUid}
-                                </span>
+                    {paginatedPosts.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="py-8 text-center text-slate-400">
+                          Chưa có bài viết nào được quét. Nhấn &apos;BẮT ĐẦU THỰC THI&apos; để quét bài viết.
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedPosts.map((post) => {
+                        const isChecked = selectedPostIds.has(post.id);
+                        return (
+                          <tr
+                            key={post.id}
+                            className={`hover:bg-slate-50 transition-colors ${
+                              isChecked ? "bg-[#EFF6FF]/25" : ""
+                            }`}
+                          >
+                            <td className="py-2.5 px-3 text-center">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => handleToggleSelectPost(post.id)}
+                                className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-0 cursor-pointer"
+                              />
+                            </td>
+                            <td className="py-2.5 px-2 text-center font-mono text-xs text-[#94A3B8]">
+                              {post.stt}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <div className="flex flex-col gap-1">
+                                <p className="text-xs font-medium text-[#1E293B] line-clamp-2">
+                                  {post.content}
+                                </p>
+                                <a
+                                  href={`https://${post.linkText}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center gap-1 font-mono text-[11px] text-[#1877F2] hover:underline"
+                                >
+                                  <span className="truncate max-w-[220px]">{post.linkText}</span>
+                                  <ExternalLink className="size-3 text-[#1877F2] shrink-0" />
+                                </a>
                               </div>
-                            </div>
-                          </td>
-                          <td className="py-2.5 px-2 text-center">
-                            <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full bg-[#EFF6FF] border border-[#DBEAFE] font-bold text-xs text-[#1D4ED8]">
-                              {post.likesStr}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-2 text-center">
-                            <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full bg-[#ECFDF5] border border-[#D1FAE5] font-bold text-xs text-[#047857]">
-                              {post.comments}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-2 text-center">
-                            <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full bg-[#FFFBEB] border border-[#FEF3C7] font-bold text-xs text-[#B45309]">
-                              {post.shares}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3 text-[11px] text-[#64748B]">
-                            {post.postedTime}
-                          </td>
-                          <td className="py-2.5 px-3 text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              <button
-                                type="button"
-                                title="Xem chi tiết"
-                                className="p-1 text-slate-400 hover:text-blue-600 rounded"
-                              >
-                                <Eye className="size-3.5" />
-                              </button>
-                              <a
-                                href={`https://${post.linkText}`}
-                                target="_blank"
-                                rel="noreferrer"
-                                title="Mở bài viết"
-                                className="p-1 text-slate-400 hover:text-blue-600 rounded"
-                              >
-                                <ExternalLink className="size-3.5" />
-                              </a>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`size-7 rounded-full ${post.authorTagBg} ${post.authorTagText} font-bold text-xs flex items-center justify-center shrink-0 uppercase`}
+                                >
+                                  {post.authorTag}
+                                </span>
+                                <div className="flex flex-col min-w-0">
+                                  <span className="font-semibold text-xs text-[#0F172A] truncate">
+                                    {post.authorName}
+                                  </span>
+                                  <span className="font-mono text-[10px] text-[#94A3B8] truncate">
+                                    {post.authorUid}
+                                  </span>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-2 text-center">
+                              <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full bg-[#EFF6FF] border border-[#DBEAFE] font-bold text-xs text-[#1D4ED8]">
+                                {post.likesStr || post.likes || 0}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-2 text-center">
+                              <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full bg-[#ECFDF5] border border-[#D1FAE5] font-bold text-xs text-[#047857]">
+                                {post.comments || 0}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-2 text-center">
+                              <span className="inline-flex items-center justify-center px-2 py-0.5 rounded-full bg-[#FFFBEB] border border-[#FEF3C7] font-bold text-xs text-[#B45309]">
+                                {post.shares || 0}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-[11px] text-[#64748B]">
+                              {post.postedTime || "—"}
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  title="Xem chi tiết"
+                                  className="p-1 text-slate-400 hover:text-blue-600 rounded"
+                                >
+                                  <Eye className="size-3.5" />
+                                </button>
+                                <a
+                                  href={`https://${post.linkText}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title="Mở bài viết"
+                                  className="p-1 text-slate-400 hover:text-blue-600 rounded"
+                                >
+                                  <ExternalLink className="size-3.5" />
+                                </a>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -1222,62 +1076,14 @@ export default function GroupScanPostsPage() {
               {/* Phân trang */}
               <div className="flex flex-row justify-between items-center w-full pt-1">
                 <span className="text-xs text-[#64748B]">
-                  Hiển thị 1 - {filteredPosts.length} của 1.420 bài viết
+                  Hiển thị {filteredPosts.length > 0 ? `${(currentPage - 1) * pageSize + 1} - ${Math.min(currentPage * pageSize, filteredPosts.length)}` : "0"} của {filteredPosts.length} bài viết
                 </span>
 
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    className="size-7 flex items-center justify-center border border-[#E2E8F0] rounded text-xs font-semibold text-[#64748B] hover:bg-slate-100"
-                  >
-                    &lt;
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage(1)}
-                    className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                      currentPage === 1 ? "bg-[#1877F2] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                    }`}
-                  >
-                    1
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage(2)}
-                    className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                      currentPage === 2 ? "bg-[#1877F2] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                    }`}
-                  >
-                    2
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage(3)}
-                    className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                      currentPage === 3 ? "bg-[#1877F2] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                    }`}
-                  >
-                    3
-                  </button>
-                  <span className="px-1 text-xs font-semibold text-[#94A3B8]">...</span>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage(142)}
-                    className={`size-7 flex items-center justify-center rounded text-xs font-semibold ${
-                      currentPage === 142 ? "bg-[#1877F2] text-white" : "border border-[#E2E8F0] text-[#64748B] hover:bg-slate-100"
-                    }`}
-                  >
-                    142
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage((p) => p + 1)}
-                    className="size-7 flex items-center justify-center border border-[#E2E8F0] rounded text-xs font-semibold text-[#64748B] hover:bg-slate-100"
-                  >
-                    &gt;
-                  </button>
-                </div>
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  onPageChange={setCurrentPage}
+                />
               </div>
             </div>
           </div>
@@ -1326,7 +1132,6 @@ export default function GroupScanPostsPage() {
             ))}
           </div>
         </section>
-      </div>
 
       {/* Account Selection Modal */}
       <AccountSelectModal
@@ -1343,65 +1148,18 @@ export default function GroupScanPostsPage() {
       />
 
       {/* Group Picker Modal */}
-      {groupPickerOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-xl p-5 space-y-4">
-            <div className="flex items-center justify-between border-b pb-3 border-slate-100">
-              <h3 className="font-bold text-base text-slate-800 flex items-center gap-2">
-                <Globe className="size-5 text-blue-600" />
-                Chọn nhóm muốn quét
-              </h3>
-              <button
-                type="button"
-                onClick={() => setGroupPickerOpen(false)}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <X className="size-5" />
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-500">
-              Đang có {selectedGroups.length} nhóm được chọn để thực thi quét bài viết.
-            </p>
-
-            <div className="max-h-60 overflow-y-auto space-y-2">
-              {selectedGroups.map((g) => (
-                <div
-                  key={g.id}
-                  className="flex items-center justify-between p-2.5 border rounded-lg bg-slate-50"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <span className={`size-7 rounded ${g.tagBg} ${g.tagText} flex items-center justify-center text-xs font-bold`}>
-                      {g.tag}
-                    </span>
-                    <div>
-                      <p className="text-xs font-bold text-slate-800">{g.name}</p>
-                      <p className="text-[11px] text-slate-400">ID: {g.uid} • {g.members}</p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveGroup(g.id)}
-                    className="text-slate-400 hover:text-rose-600 p-1"
-                  >
-                    <Trash2 className="size-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setGroupPickerOpen(false)}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold"
-              >
-                Hoàn tất
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <GroupPickerModal
+        open={groupPickerOpen}
+        onClose={() => setGroupPickerOpen(false)}
+        selectedGroups={selectedGroups}
+        onConfirm={(newGroups) => {
+          setSelectedGroups(newGroups);
+          setGroupPickerOpen(false);
+          toast.success(`Đã chọn ${newGroups.length} nhóm!`);
+        }}
+        targetType="posts"
+      />
     </div>
+    </>
   );
 }

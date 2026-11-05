@@ -355,6 +355,16 @@ def start_keyword_check(
             "started_at": time.time(),
         }
 
+    # Đảm bảo mỗi từ khóa tạo thành 1 DANH MỤC trong bảng scanned_group_categories ngay khi bắt đầu
+    try:
+        from modules.module_10_group_scan.models import create_scan_category
+        for item in items:
+            kw = str(item.get("keyword") or "").strip()
+            if kw:
+                create_scan_category(owner, kw, f"Danh mục từ khóa: {kw}")
+    except Exception as exc:
+        logger.debug(f"auto create_scan_category in check error: {exc}")
+
     try:
         from modules.module_10_group_scan.models import create_scan_session
         import json

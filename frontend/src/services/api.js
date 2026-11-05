@@ -218,7 +218,9 @@ api.interceptors.response.use(
       error.response?.data?.message ||
       error.message ||
       "Không thể kết nối tới Local Engine (Port 28129)";
-    console.error("[API Error]", errorMsg);
+    if (status !== 401 && status !== 403) {
+      console.warn("[API Error]", errorMsg);
+    }
     return Promise.reject(apiError(error));
   }
 );

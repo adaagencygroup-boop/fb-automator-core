@@ -74,9 +74,22 @@ class StaleVideoDriver(FakeVideoDriver):
         return super().execute_script(script, *args)
 
 
+class LikeDriver(FakeVideoDriver):
+    """likes[i]: kết quả tìm nút Like của video thứ i (theo thứ tự xem), hết danh sách thì không thấy nút."""
+
+    def __init__(self, ctl, video_ids, likes):
+        super().__init__(ctl, video_ids)
+        self.likes = list(likes)
+
+    def execute_script(self, script, *args):
+        if script == farming_flow._VIDEO_LIKE_JS:
+            return self.likes.pop(0) if self.likes else None
+        return super().execute_script(script, *args)
+
+
 class WatchCountingTests(unittest.TestCase):
     def run_scenario(self, video_ids, playing=True, url="https://www.facebook.com/watch/",
-                     arrow_advances=True, total=15, driver=None, open_url=None):
+                     arrow_advances=True, total=15, driver=None, open_url=None, react=None, log=None):
         ctl = driver.ctl if driver else FakeControl()
         driver = driver or FakeVideoDriver(ctl, video_ids, playing, url)
         self.driver = driver
@@ -107,7 +120,49 @@ class WatchCountingTests(unittest.TestCase):
              patch.object(farming_flow, "human_scroll",
                           side_effect=lambda *a, **k: (self.scrolls.append(k), driver.scroll())), \
              patch.object(farming_flow, "check_account_state"):
-            return farming_flow.run_watch(driver, ctl, total, 2, 2, lambda _: None)
+            return farming_flow.run_watch(driver, ctl, total, 2, 2, lambda _: None, react=react, log=log)
+
+    def run_react(self, count, likes, reacted="Love"):
+        ctl, logs = FakeControl(), []
+        driver = LikeDriver(ctl, [f"fb:{10000 + i}" for i in range(count)], likes)
+        with patch.object(farming_flow, "_react", return_value=reacted) as react, \
+                patch.object(farming_flow.random, "random", return_value=0.0):
+            result = self.run_scenario([], driver=driver, total=count * 3 + 2, react=["Love"],
+                                       log=lambda level, text: logs.append((level, text)))
+        return result, react, logs
+
+    def test_warns_once_after_consecutive_videos_without_like(self):
+        result, react, logs = self.run_react(5, [])
+        self.assertEqual(result["quantity"], 5)
+        react.assert_not_called()
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0][0], "warning")
+        self.assertIn("3 video liên tiếp không thấy nút Like", logs[0][1])
+
+    def test_no_warning_when_like_found_between_misses(self):
+        box, like = object(), object()
+        _, react, logs = self.run_react(5, [None, None, [box, like, True], None, None])
+        self.assertEqual(logs, [])
+        react.assert_called_once()
+        self.assertIs(react.call_args.args[2], box)
+        self.assertIs(react.call_args.args[3], like)
+
+    def test_already_reacted_video_is_not_reacted_and_not_a_miss(self):
+        reacted_button = [object(), object(), False]
+        _, react, logs = self.run_react(4, [reacted_button] * 4)
+        react.assert_not_called()
+        self.assertEqual(logs, [])
+
+    def test_reaction_counted_in_result(self):
+        result, _, _ = self.run_react(2, [[object(), object(), True]] * 2)
+        self.assertEqual(result.get("reactions"), 2)
+
+    def test_no_like_lookup_when_react_off(self):
+        ctl = FakeControl()
+        driver = LikeDriver(ctl, ["fb:10001", "fb:10002"], [])
+        with patch.object(driver, "execute_script", wraps=driver.execute_script) as script:
+            self.run_scenario([], driver=driver, total=8)
+        self.assertNotIn(farming_flow._VIDEO_LIKE_JS, [call.args[0] for call in script.call_args_list])
 
     def test_repeated_short_videos_count_once_each(self):
         result = self.run_scenario(["fb:12345", "fb:67890", "fb:12345"])

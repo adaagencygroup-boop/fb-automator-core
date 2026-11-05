@@ -179,6 +179,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
           status,
           ...(status === "pending" ? {} : { days }),
           ...(password.trim() ? { password: password.trim() } : {}),
+          hwid: hwid.trim(),
         });
       } else {
         // Add mode
@@ -189,6 +190,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
           days,
           status,
           role: "user",
+          ...(hwid.trim() ? { hwid: hwid.trim() } : {}),
         });
       }
       onSuccess();

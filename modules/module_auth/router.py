@@ -94,6 +94,7 @@ class CreateUserBody(BaseModel):
     days: int = 30
     status: str = "approved"
     role: Optional[str] = "user"
+    hwid: Optional[str] = None
 
 
 class EditUserBody(BaseModel):
@@ -103,6 +104,7 @@ class EditUserBody(BaseModel):
     password: Optional[str] = None
     status: Optional[str] = None
     role: Optional[str] = None
+    hwid: Optional[str] = None
 
 
 class PasswordBody(BaseModel):
@@ -457,7 +459,7 @@ def admins(authorization: Optional[str] = Header(None), status_filter: str = "")
 
 @admin_router.post("/users")
 def create_user(body: CreateUserBody, request: Request):
-    return create_user_admin(body.username, body.password, body.contact_info or "", body.days, body.status, body.role or "user", request)
+    return create_user_admin(body.username, body.password, body.contact_info or "", body.days, body.status, body.role or "user", request, hwid=body.hwid)
 
 
 @admin_router.put("/users/{user_id}")

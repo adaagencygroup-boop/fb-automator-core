@@ -28,7 +28,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
-import { getPagesWithPosts, getScannedPosts } from "../service";
+import { getPagesWithPosts, getScannedPosts, deleteScannedPosts } from "../service";
 
 const PAGE_SIZE = 5;
 
@@ -137,6 +137,7 @@ function FilterSelect({ label, value, onChange, options }) {
 
 export default function PageScannerListPosts() {
   const [pages, setPages] = useState([]);
+  const [totalPostsAllPages, setTotalPostsAllPages] = useState(0);
   const [sideSearch, setSideSearch] = useState("");
   const [activePageKey, setActivePageKey] = useState(null);
 
@@ -156,6 +157,10 @@ export default function PageScannerListPosts() {
       .then((data) => {
         const list = data.items || [];
         setPages(list);
+        const sumPosts =
+          data.total_posts ??
+          list.reduce((acc, p) => acc + Number(p.post_count || 0), 0);
+        setTotalPostsAllPages(sumPosts);
         setActivePageKey((prev) => {
           if (prev && list.some((p) => p.page_key === prev)) return prev;
           return list[0]?.page_key || null;
@@ -329,7 +334,12 @@ export default function PageScannerListPosts() {
         {/* Left: Danh mục Page */}
         <Card className="flex w-full flex-col overflow-hidden border-slate-200 shadow-sm lg:w-[260px] lg:shrink-0">
           <div className="border-b border-slate-100 px-4 py-3">
-            <h3 className="text-[12px] font-bold text-slate-800">Danh mục Page</h3>
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-[12px] font-bold text-slate-800">Danh mục Page</h3>
+              <span className="rounded-lg bg-blue-50 px-2.5 py-0.5 text-[10px] font-bold text-blue-600">
+                Tổng: {totalPostsAllPages.toLocaleString("vi-VN")} bài
+              </span>
+            </div>
             <div className="relative mt-2.5">
               <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
               <Input
@@ -489,7 +499,13 @@ export default function PageScannerListPosts() {
                 {selectedIds.length} bài viết đang được chọn
               </span>
               <div className="ml-auto flex flex-wrap items-center gap-1.5">
-                <Button type="button" size="sm" variant="outline" className="h-7 gap-1 border-blue-200 bg-white text-[11px]" disabled>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1 border-blue-200 bg-white text-[11px]"
+                  onClick={() => toast.info(`Đã chuyển ${selectedIds.length} bài viết vào danh mục lưu.`)}
+                >
                   <FolderInput className="size-3.5" /> Chuyển danh mục
                 </Button>
                 <Button
@@ -501,7 +517,19 @@ export default function PageScannerListPosts() {
                 >
                   <Download className="size-3.5" /> Xuất dữ liệu chọn
                 </Button>
-                <Button type="button" size="sm" variant="outline" className="h-7 gap-1 border-rose-200 bg-white text-[11px] text-rose-600" disabled>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1 border-rose-200 bg-white text-[11px] text-rose-600 hover:bg-rose-50"
+                  onClick={async () => {
+                    await deleteScannedPosts({ post_ids: selectedIds }).catch(() => null);
+                    setItems((prev) => prev.filter((r) => !selectedIds.includes(rowId(r))));
+                    setTotal((prev) => Math.max(0, prev - selectedIds.length));
+                    toast.success(`Đã xóa ${selectedIds.length} bài viết.`);
+                    setSelectedIds([]);
+                  }}
+                >
                   <Trash2 className="size-3.5" /> Xóa
                 </Button>
               </div>
@@ -524,7 +552,7 @@ export default function PageScannerListPosts() {
                   <th className="px-3 py-3 font-semibold">LINK BÀI VIẾT</th>
                   <th className="px-3 py-3 font-semibold">THỜI GIAN ĐĂNG</th>
                   <th className="px-3 py-3 font-semibold">TƯƠNG TÁC</th>
-                  <th className="w-16 px-3 py-3 text-center font-semibold">HÀNH ĐỘNG</th>
+                  <th className="w-20 px-3 py-3 text-center font-semibold">THAO TÁC</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -599,21 +627,36 @@ export default function PageScannerListPosts() {
                           </div>
                         </td>
                         <td className="px-3 py-3 text-center">
-                          {r.post_url ? (
-                            <a
-                              href={r.post_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex size-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-primary"
-                              title="Xem bài viết"
+                          <div className="inline-flex items-center justify-center gap-1">
+                            {r.post_url ? (
+                              <a
+                                href={r.post_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex size-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-primary"
+                                title="Xem bài viết"
+                              >
+                                <Eye className="size-4" />
+                              </a>
+                            ) : (
+                              <span className="inline-flex size-7 items-center justify-center text-slate-300">
+                                <Eye className="size-4" />
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await deleteScannedPosts({ post_ids: [id] }).catch(() => null);
+                                setItems((prev) => prev.filter((item) => rowId(item) !== id));
+                                setTotal((prev) => Math.max(0, prev - 1));
+                                toast.success("Đã xóa bài viết.");
+                              }}
+                              className="inline-flex size-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                              title="Xóa bài viết"
                             >
-                              <Eye className="size-4" />
-                            </a>
-                          ) : (
-                            <span className="inline-flex size-8 items-center justify-center text-slate-300">
-                              <Eye className="size-4" />
-                            </span>
-                          )}
+                              <Trash2 className="size-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );

@@ -88,8 +88,31 @@ VIDEO_HTML = f"""
 <div id="reel-vi-reacted"><div><video id="video-vi-reacted"></video></div>
   {_button("Gỡ Yêu thích", "reel-like-vi-reacted")}{_button("Thay đổi cảm xúc Yêu thích")}
 </div>
+<div id="reel-counted"><div><video id="video-counted"></video></div>
+  {_button("Like, 860 reactions", "reel-like-counted")}{_button("React")}{_button("Comment, 17 comments")}
+</div>
+<div id="reel-one"><div><video id="video-one"></video></div>
+  {_button("Like, 1 reaction", "reel-like-one")}{_button("React")}
+</div>
+<div id="reel-vi-counted"><div><video id="video-vi-counted"></video></div>
+  {_button("Thích, 860 cảm xúc", "reel-like-vi-counted")}{_button("Bày tỏ cảm xúc")}
+</div>
+<div id="reel-reacted-counted"><div><video id="video-reacted-counted"></video></div>
+  {_button("Remove Love, 861 reactions", "reel-like-reacted-counted")}{_button("Change Love reaction")}
+</div>
+<div id="reel-vi-reacted-counted"><div><video id="video-vi-reacted-counted"></video></div>
+  {_button("Gỡ Yêu thích, 861 cảm xúc", "reel-like-vi-reacted-counted")}
+</div>
 </body></html>
 """
+
+HAS_LIKE_HTML = {
+    "new-ui": f'<div aria-posinset="1">{_button("React with Like to YODY&#39;s post")}</div>',
+    "reacted": f'<div aria-posinset="1">{_button("Remove Love from YODY&#39;s post")}</div>',
+    "only-comment": f'<div aria-posinset="1">{_comment("Hồ Tiệp", _button("Like"))}</div>',
+    "only-count": f'<div aria-posinset="1">{_button("Like: 47 people")}</div>',
+    "no-posts": f'<div>{_button("Like")}</div>',
+}
 
 STATE_HTML = f"""
 <html><body>
@@ -193,6 +216,51 @@ class FeedReactDomTests(unittest.TestCase):
         self.assertEqual(video("video-vi"), ["reel-vi", "reel-like-vi", True])
         self.assertEqual(video("video-en-reacted"), ["reel-en-reacted", "reel-like-en", False])
         self.assertEqual(video("video-vi-reacted"), ["reel-vi-reacted", "reel-like-vi-reacted", False])
+
+    def test_video_like_with_reaction_count(self):
+        # Facebook đổi nhãn nút reel 2026-11-04: "Like, 860 reactions"
+        self.page.set_content(VIDEO_HTML)
+        video = lambda vid: self.page.evaluate(RUN_VIDEO, [flow._VIDEO_LIKE_JS, vid])  # noqa: E731
+        self.assertEqual(video("video-counted"), ["reel-counted", "reel-like-counted", True])
+        self.assertEqual(video("video-one"), ["reel-one", "reel-like-one", True])
+        self.assertEqual(video("video-vi-counted"), ["reel-vi-counted", "reel-like-vi-counted", True])
+        self.assertEqual(video("video-reacted-counted"), ["reel-reacted-counted", "reel-like-reacted-counted", False])
+        self.assertEqual(video("video-vi-reacted-counted"),
+                         ["reel-vi-reacted-counted", "reel-like-vi-reacted-counted", False])
+
+    def test_reaction_state_with_reaction_count(self):
+        self.page.set_content(VIDEO_HTML)
+        state = lambda box: self.page.evaluate(RUN_STATE, [flow._REACTION_STATE_JS, box])  # noqa: E731
+        self.assertEqual(state("reel-reacted-counted"), "Love")
+        self.assertEqual(state("reel-vi-reacted-counted"), "Love")
+        self.assertIsNone(state("reel-counted"))
+
+    def test_label_without_space_after_comma(self):
+        # Chưa gặp thật, phòng Facebook bỏ khoảng trắng sau dấu phẩy
+        self.page.set_content(f'<div id="fresh">{_button("Like,860")}</div><div id="reacted">{_button("Remove Love,861")}</div>')
+        like = self.page.evaluate("""(js) => new Function('label', js + 'return UNREACTED.test(label);')('Like,860')""",
+                                  flow._REACT_LABELS_JS)
+        self.assertTrue(like)
+        state = lambda box: self.page.evaluate(RUN_STATE, [flow._REACTION_STATE_JS, box])  # noqa: E731
+        self.assertEqual(state("reacted"), "Love")
+        self.assertIsNone(state("fresh"))
+
+    def test_lookalike_labels_are_not_like_button(self):
+        self.page.set_content(f'<body>{_button("Like: 47 people")}{_button("Like Page")}{_button("Liked by Mai")}'
+                              f'{_button("Remove Mai")}{_button("Remove Mai, 3 mutual friends")}'
+                              f'{_button("Remove recommendation for Mai")}{_button("React")}{_button("Change Love reaction")}'
+                              f'<div id="box">{_button("Thích: 11 người")}{_button("Thích trang này")}</div></body>')
+        labels = self.page.evaluate("""(js) => Array.from(document.querySelectorAll('[aria-label]'))
+            .filter((b) => new Function('label', js + 'return UNREACTED.test(label) || REACTED.test(label);')(b.getAttribute('aria-label')))
+            .map((b) => b.getAttribute('aria-label'))""", flow._REACT_LABELS_JS)
+        self.assertEqual(labels, [])
+
+    def test_feed_has_like(self):
+        expected = {"new-ui": True, "reacted": True, "only-comment": False, "only-count": False, "no-posts": False}
+        for name, html in HAS_LIKE_HTML.items():
+            with self.subTest(name):
+                self.page.set_content(f"<body>{html}</body>")
+                self.assertEqual(self.page.evaluate("(js) => new Function(js)()", flow._FEED_HAS_LIKE_JS), expected[name])
 
 
 if __name__ == "__main__":

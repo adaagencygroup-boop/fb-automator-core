@@ -179,6 +179,30 @@ export async function getPagesWithPosts() {
   return api.get("/api/page-scanner/posts/pages");
 }
 
+/** Sidebar DS followers: page có followers + follower_uid_count. */
+export async function getPagesWithFollowers() {
+  return api.get("/api/page-scanner/followers/pages");
+}
+
+export async function deleteScannedPages(payload) {
+  return api.delete("/api/page-scanner/pages", { data: payload });
+}
+
+export async function deleteScannedPosts(payload) {
+  return api.delete("/api/page-scanner/posts", { data: payload });
+}
+
+export async function deletePageFollowers(payload) {
+  return api.delete("/api/page-scanner/followers", { data: payload });
+}
+
+export function deleteSavedPageList(id) {
+  const lists = loadSavedPageLists().filter((l) => l.id !== id);
+  localStorage.setItem(SAVED_LISTS_KEY, JSON.stringify(lists));
+  window.dispatchEvent(new Event(SAVED_LISTS_EVENT));
+  return lists;
+}
+
 // ── LƯU DANH SÁCH (local, chờ API danh sách page) ──
 export function loadSavedPageLists() {
   try {

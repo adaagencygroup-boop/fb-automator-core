@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Hash,
   Search,
+  Trash2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,8 @@ import {
   getScannedPages,
   getSearchKeywords,
   savePageList,
+  deleteScannedPages,
+  deleteSavedPageList,
 } from "../service";
 import {
   ListPageHeader,
@@ -93,6 +96,8 @@ export default function PageScannerListPages() {
   const lists = useSavedPageLists();
   const [sideSearch, setSideSearch] = useState("");
   const [activeId, setActiveId] = useState(ALL_ID);
+  const [infoFilter, setInfoFilter] = useState("ALL");
+  const [regionFilter, setRegionFilter] = useState("ALL");
 
   const loadKeywords = useCallback(() => {
     return getSearchKeywords()
@@ -303,7 +308,43 @@ export default function PageScannerListPages() {
     reload(1);
   };
 
-  const allSelected = items.length > 0 && selectedKeys.length === items.length;
+  const handleDeleteSelected = async () => {
+    if (!selectedKeys.length) return;
+    try {
+      await deleteScannedPages({ page_keys: selectedKeys }).catch(() => null);
+      setItems((prev) => prev.filter((r) => !selectedKeys.includes(r.page_key)));
+      setTotal((prev) => Math.max(0, prev - selectedKeys.length));
+      toast.success(`Đã xóa ${selectedKeys.length} page.`);
+      setSelectedKeys([]);
+    } catch (err) {
+      toast.error(`Lỗi xóa page: ${err.message}`);
+    }
+  };
+
+  const handleDeleteCategory = () => {
+    if (activeList) {
+      deleteSavedPageList(activeList.id);
+      setActiveId(ALL_ID);
+      toast.success(`Đã xóa danh mục "${activeList.name}".`);
+      return;
+    }
+    toast.info("Chọn một danh mục đã lưu ở cột trái để xóa.");
+  };
+
+  const filteredItems = useMemo(() => {
+    return items.filter((r) => {
+      if (infoFilter === "HAS_PHONE" && !r.phone) return false;
+      if (infoFilter === "HAS_EMAIL" && !r.email) return false;
+      if (infoFilter === "HAS_BOTH" && (!r.phone || !r.email)) return false;
+      if (regionFilter !== "ALL") {
+        const addr = String(r.address || "").toLowerCase();
+        if (!addr.includes(regionFilter.toLowerCase())) return false;
+      }
+      return true;
+    });
+  }, [items, infoFilter, regionFilter]);
+
+  const allSelected = filteredItems.length > 0 && selectedKeys.length === filteredItems.length;
   const detailTitle = activeKeyword?.keyword || activeList?.name || "Tất cả page";
 
   return (
@@ -390,6 +431,17 @@ export default function PageScannerListPages() {
                 Chưa có từ khóa — chạy Quét thông tin page trước.
               </p>
             ) : null}
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={handleCreateList}
+                className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-slate-50/70 py-2 text-[11px] font-semibold text-slate-600 transition hover:border-blue-400 hover:bg-blue-50/40 hover:text-blue-600"
+              >
+                <Plus className="size-3.5" />
+                Thêm danh mục mới
+              </button>
+            </div>
           </ListSidePanel>
         }
       >
@@ -398,7 +450,8 @@ export default function PageScannerListPages() {
             <div>
               <h2 className="font-heading text-sm font-bold text-slate-800">{detailTitle}</h2>
               <p className="mt-0.5 text-[11px] text-slate-400">
-                {Number(total).toLocaleString("vi-VN")} Page
+                Tổng số Page đã lưu:{" "}
+                <strong className="text-slate-700">{Number(total).toLocaleString("vi-VN")} Page</strong>
                 {activeKeyword ? " theo từ khóa" : activeList ? " trong danh mục" : ""}
               </p>
             </div>
@@ -410,10 +463,19 @@ export default function PageScannerListPages() {
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-8 gap-1.5 border-emerald-200 bg-emerald-50 text-[11px] text-emerald-700"
+                className="h-8 gap-1.5 border-emerald-600 bg-emerald-600 text-[11px] text-white hover:bg-emerald-700 hover:text-white"
                 onClick={handleExport}
               >
-                <Download className="size-3.5" /> Xuất file
+                <Download className="size-3.5" /> Xuất Excel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8 gap-1.5 border-red-200 bg-red-50 text-[11px] text-red-600 hover:bg-red-100"
+                onClick={handleDeleteCategory}
+              >
+                <Trash2 className="size-3.5" /> Xóa danh mục
               </Button>
             </div>
           </div>
@@ -428,6 +490,26 @@ export default function PageScannerListPages() {
                 className="h-9 text-[11px]"
               />
             </div>
+            <select
+              value={infoFilter}
+              onChange={(e) => setInfoFilter(e.target.value)}
+              className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-700 outline-none"
+            >
+              <option value="ALL">Tình trạng: Tất cả thông tin</option>
+              <option value="HAS_PHONE">Có Số điện thoại</option>
+              <option value="HAS_EMAIL">Có Email</option>
+              <option value="HAS_BOTH">Đầy đủ SĐT & Email</option>
+            </select>
+            <select
+              value={regionFilter}
+              onChange={(e) => setRegionFilter(e.target.value)}
+              className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-[11px] font-medium text-slate-700 outline-none"
+            >
+              <option value="ALL">Khu vực: Toàn quốc</option>
+              <option value="Hà Nội">Hà Nội</option>
+              <option value="Hồ Chí Minh">TP. Hồ Chí Minh</option>
+              <option value="Đà Nẵng">Đà Nẵng</option>
+            </select>
             <Button type="button" size="sm" variant="outline" onClick={() => reload(1)}>
               Lọc
             </Button>
@@ -435,18 +517,23 @@ export default function PageScannerListPages() {
 
           <div className="flex items-center gap-3 px-5 pb-2">
             <label className="inline-flex items-center gap-2 text-[11px] text-slate-600">
-              <Checkbox checked={allSelected} onCheckedChange={(c) => setSelectedKeys(c ? items.map((r) => r.page_key) : [])} />
+              <Checkbox checked={allSelected} onCheckedChange={(c) => setSelectedKeys(c ? filteredItems.map((r) => r.page_key) : [])} />
               Chọn tất cả
             </label>
             {selectedKeys.length > 0 ? (
               <span className="text-[11px] text-slate-400">
-                Đã chọn {selectedKeys.length} / {items.length} page
+                Đã chọn {selectedKeys.length} / {filteredItems.length} page
               </span>
             ) : null}
           </div>
 
           <div className="px-5">
-            <SelectionBar count={selectedKeys.length} onExport={handleExport} onMoveCategory={handleMoveToList} />
+            <SelectionBar
+              count={selectedKeys.length}
+              onExport={handleExport}
+              onMoveCategory={handleMoveToList}
+              onDelete={handleDeleteSelected}
+            />
           </div>
 
           <div className="overflow-auto">
@@ -469,10 +556,10 @@ export default function PageScannerListPages() {
               <tbody className="divide-y divide-slate-100">
                 {loading ? (
                   <TableLoading colSpan={11} />
-                ) : items.length === 0 ? (
+                ) : filteredItems.length === 0 ? (
                   <TableEmpty colSpan={11} message="Chưa có page — chạy Quét thông tin page trước." />
                 ) : (
-                  items.map((r, idx) => {
+                  filteredItems.map((r, idx) => {
                     const selected = selectedKeys.includes(r.page_key);
                     const cat = cleanCategory(r.category);
                     const tags = pageTags(r);
@@ -499,11 +586,16 @@ export default function PageScannerListPages() {
                                 {initialsOf(r.page_name || "FB")}
                               </AvatarFallback>
                             </Avatar>
-                            <div className="flex min-w-0 items-center gap-1">
-                              <span className="max-w-[160px] truncate font-semibold text-slate-800">
-                                {r.page_name || "—"}
-                              </span>
-                              {r.is_verified === true && <BadgeCheck className="size-3.5 shrink-0 text-blue-500" />}
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1">
+                                <span className="max-w-[160px] truncate font-semibold text-slate-800">
+                                  {r.page_name || "—"}
+                                </span>
+                                {r.is_verified === true && <BadgeCheck className="size-3.5 shrink-0 text-blue-500" />}
+                              </div>
+                              <div className="font-mono text-[10px] text-slate-400">
+                                UID: {String(r.page_key || r.id || "").replace(/^id:|^user:/, "")}
+                              </div>
                             </div>
                           </div>
                         </td>

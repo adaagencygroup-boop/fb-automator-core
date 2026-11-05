@@ -550,7 +550,7 @@ def list_admins(status_filter: str = ""):
     return rows
 
 
-def create_user_admin(username, password, contact_info, days, status, role, request: Request):
+def create_user_admin(username, password, contact_info, days, status, role, request: Request, hwid: Optional[str] = None):
     admin, ip_address, ua = _actor(request)
     username = validate_username(username)
     validate_password(password)
@@ -560,9 +560,9 @@ def create_user_admin(username, password, contact_info, days, status, role, requ
     status = status if status in ("pending", "approved", "rejected", "banned") else "approved"
     expired_at = utcnow() + timedelta(days=days) if days and status == "approved" else None
     db.execute(
-        """INSERT INTO users (username, password_hash, contact_info, role, status, expired_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (username, hash_password(password), contact_info or "", role, status, expired_at, utcnow()),
+        """INSERT INTO users (username, password_hash, contact_info, role, status, hwid, expired_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (username, hash_password(password), contact_info or "", role, status, (hwid or "").strip() or None, expired_at, utcnow()),
     )
     user = _row(username)
     log_activity(admin["username"], admin.get("role"), "create_user", username, user["id"], role, status, ip_address, ua)
@@ -596,13 +596,23 @@ def edit_user_admin(user_id: int, payload: dict, request: Request):
         validate_password(payload["password"])
         password_sql = ", password_hash = ?"
         params.append(hash_password(payload["password"]))
+    hwid_changed = False
+    if "hwid" in payload:
+        new_hwid = (payload.get("hwid") or "").strip() or None
+        if new_hwid != (user.get("hwid") or None):
+            hwid_changed = True
+            password_sql += ", hwid = ?"
+            params.append(new_hwid)
+            if new_hwid is None:
+                password_sql += ", last_hwid_reset_at = ?"
+                params.append(utcnow())
     params.append(user_id)
     db.execute(
         f"""UPDATE users SET username = ?, contact_info = ?, role = ?, status = ?, expired_at = ?{password_sql}
             WHERE id = ?""",
         tuple(params),
     )
-    if payload.get("password") or username != user["username"] or status in LOCKED_STATUSES:
+    if payload.get("password") or username != user["username"] or status in LOCKED_STATUSES or hwid_changed:
         revoke_active_sessions(user_id)
     log_activity(admin["username"], admin.get("role"), "edit_user", username, user_id, role, f"status={status}", ip_address, ua)
     return public_user(_row_by_id(user_id))
