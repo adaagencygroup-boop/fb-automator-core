@@ -1,4 +1,4 @@
-import time
+﻿import time
 import os
 import requests
 import asyncio
@@ -39,8 +39,12 @@ class FacebookChatService:
             "messaging_type": "RESPONSE"
         }
 
+        resolved_mid = reply_to_message_id
         if reply_to_message_id:
-            payload["reply_to"] = {"mid": reply_to_message_id}
+            ref_msg = self.message_repo.get_by_id_or_fb_id(str(reply_to_message_id))
+            if ref_msg and ref_msg.facebook_message_id:
+                resolved_mid = ref_msg.facebook_message_id
+            payload["reply_to"] = {"mid": resolved_mid}
 
         params = {"access_token": page.page_access_token}
 
@@ -53,7 +57,7 @@ class FacebookChatService:
             if "error" in response_json:
                 if "reply_to" in payload:
                     del payload["reply_to"]
-                    payload["message"]["reply_to"] = {"mid": reply_to_message_id}
+                    payload["message"]["reply_to"] = {"mid": resolved_mid}
                     response = await asyncio.to_thread(
                         requests.post, url, params=params, json=payload, timeout=15
                     )
@@ -142,8 +146,12 @@ class FacebookChatService:
             "messaging_type": "RESPONSE"
         }
 
+        resolved_mid = reply_to_message_id
         if reply_to_message_id:
-            payload["reply_to"] = {"mid": reply_to_message_id}
+            ref_msg = self.message_repo.get_by_id_or_fb_id(str(reply_to_message_id))
+            if ref_msg and ref_msg.facebook_message_id:
+                resolved_mid = ref_msg.facebook_message_id
+            payload["reply_to"] = {"mid": resolved_mid}
 
         params = {"access_token": page.page_access_token}
 

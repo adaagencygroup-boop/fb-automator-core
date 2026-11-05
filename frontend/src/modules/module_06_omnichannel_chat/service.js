@@ -1,4 +1,4 @@
-import api from "@/services/api";
+﻿import api from "@/services/api";
 import { API_BASE } from "@/config/constants";
 
 /**
@@ -300,6 +300,7 @@ export async function getMessages(conversationId) {
 
       return {
         id: String(m.id || m.facebook_message_id),
+        facebookMessageId: m.facebook_message_id || null,
         direction: m.direction === "outbound" ? "out" : "in",
         text,
         attachment,
