@@ -3,6 +3,7 @@
 File: modules/module_05_page_manager/routes_reels.py
 FastAPI router cho tính năng Đăng Video Reels (Module 05).
 """
+import os
 import json
 import asyncio
 import queue
@@ -47,6 +48,10 @@ def require_owner():
 
 def current_runner():
     return ReelsTaskRunner(require_owner())
+
+
+class SelectFolderRequest(BaseModel):
+    initial_dir: Optional[str] = None
 
 
 class ScanFoldersRequest(BaseModel):
@@ -152,12 +157,40 @@ def get_accounts_and_pages(request: Request):
     return {"success": True, "accounts": accounts_list}
 
 
+@router.post("/select-folder")
+def select_reels_folder(req: Optional[SelectFolderRequest] = None):
+    """
+    Mở hộp thoại Windows native FolderBrowserDialog để chọn thư mục video Reels.
+    Nhận chính xác 100% đường dẫn tuyệt đối từ bất kỳ ổ đĩa nào, không fix cứng mặc định.
+    """
+    init_dir = (req.initial_dir if req else None) or ""
+    clean_init = init_dir.strip().strip('"').strip("'") if init_dir else ""
+    dialog_init = clean_init if (clean_init and os.path.exists(clean_init) and os.path.isdir(clean_init)) else None
+    selected = ""
+    try:
+        import subprocess
+        helper_path = os.path.join(os.path.dirname(__file__), "picker_helper.py")
+        venv_python = sys.executable
+        cmd = [venv_python, helper_path]
+        if dialog_init:
+            cmd.append(dialog_init)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        selected = res.stdout.strip()
+    except Exception:
+        selected = ""
+
+    if selected:
+        selected = os.path.normpath(selected)
+    return {"folder": selected or "", "success": bool(selected)}
+
+
 @router.post("/scan-folders")
 def scan_folders(req: ScanFoldersRequest):
     """
     Quét thư mục gốc và trả về danh sách thư mục con kèm gợi ý khớp tên Fanpage.
     """
-    scan_res = scan_root_directory(req.root_dir.strip())
+    clean_dir = os.path.normpath(req.root_dir.strip().strip('"').strip("'")) if req.root_dir else ""
+    scan_res = scan_root_directory(clean_dir)
     if not scan_res.get("success"):
         return scan_res
 

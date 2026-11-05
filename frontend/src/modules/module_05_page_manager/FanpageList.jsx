@@ -283,26 +283,48 @@ function OwnedFanpageList({ owner }) {
   const [accStatusFilter, setAccStatusFilter] = useState("all");
   const [accLoginFilter, setAccLoginFilter] = useState("all");
 
-  const load = async () => {
+  const load = useCallback(async (options = {}) => {
+    const isManual = typeof options === "boolean" ? options : Boolean(options?.isManual);
+    const silent = Boolean(options?.silent);
     const request = ++pagesRevision.current;
-    try {
-      const data = await getManagedPages();
-      if (alive.current && pagesRevision.current === request) setPages(Array.isArray(data?.pages) ? data.pages : []);
-    } catch (error) {
-      if (alive.current && pagesRevision.current === request) toast.error(error.message || "Không tải được danh sách fanpage.");
-    } finally {
-      if (alive.current && pagesRevision.current === request) setLoading(false);
+    if (isManual) {
+      setLoading(true);
     }
-  };
+    try {
+      const [data] = await Promise.all([
+        getManagedPages(),
+        typeof loadAccounts === "function" ? loadAccounts(true) : Promise.resolve(),
+      ]);
+      if (alive.current && pagesRevision.current === request) {
+        const pageList = Array.isArray(data?.pages) ? data.pages : [];
+        setPages(pageList);
+        try {
+          if (typeof window !== "undefined") {
+            localStorage.setItem("fb_pages_cache", JSON.stringify(pageList));
+          }
+        } catch {}
+        if (isManual && !silent) {
+          toast.success(`Đã làm mới danh sách Fanpage (${pageList.length} Page)!`, "LÀM MỚI");
+        }
+      }
+    } catch (error) {
+      if (alive.current && pagesRevision.current === request) {
+        toast.error(error?.message || "Không tải được danh sách fanpage.", "LỖI LÀM MỚI");
+      }
+    } finally {
+      if (alive.current && pagesRevision.current === request) {
+        setLoading(false);
+      }
+    }
+  }, [loadAccounts]);
 
   useEffect(() => {
-    const request = ++pagesRevision.current;
-    getManagedPages().then((data) => {
-      if (alive.current && pagesRevision.current === request) setPages(Array.isArray(data?.pages) ? data.pages : []);
-    }).catch((failure) => {
-      if (alive.current && pagesRevision.current === request) toast.error(failure.message || "Không tải được danh sách fanpage.");
-    }).finally(() => { if (alive.current && pagesRevision.current === request) setLoading(false); });
-  }, []);
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled) void load();
+    });
+    return () => { cancelled = true; };
+  }, [load]);
 
   // Kiểm tra trạng thái sống/chết thực tế của Token qua Meta Graph API (hỗ trợ Cache TTL 15 phút)
   const handleVerifyTokens = useCallback(async (targetUids = null, force = false, silent = false) => {
@@ -689,12 +711,13 @@ function OwnedFanpageList({ owner }) {
           </button>
           <button
             type="button"
-            onClick={load}
+            onClick={() => load({ isManual: true })}
             disabled={loading}
-            className="inline-flex h-[34px] items-center justify-center rounded-lg border border-[#0284C7] bg-white px-[15px] text-[#0284C7] hover:bg-sky-50 disabled:opacity-60"
-            title="Làm mới"
+            className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-[#0284C7] bg-white text-[#0284C7] hover:bg-sky-50 disabled:opacity-60 transition-colors shadow-xs shrink-0"
+            title="Làm mới danh sách Fanpage"
+            aria-label="Làm mới"
           >
-            <RefreshCw className={`h-[11px] w-[11px] ${loading ? "animate-spin" : ""}`} strokeWidth={2.6} />
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
           </button>
         </div>
       </div>
