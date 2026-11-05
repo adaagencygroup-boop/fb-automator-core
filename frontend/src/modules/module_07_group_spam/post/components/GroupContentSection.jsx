@@ -320,7 +320,9 @@ export default function GroupContentSection({
         <div className="grid gap-4 md:grid-cols-[1fr_320px]">
           <Field
             label={`Nội dung gốc ${itemLabel}`}
-            hint={`Nhập nội dung để ${isComment ? "bình luận trực tiếp vào bài đầu tiên của nhóm" : "đăng bài trực tiếp"} hoặc làm gợi ý cho AI.`}
+            hint={isComment
+              ? "Nhập bình luận mẫu để đăng trực tiếp hoặc để AI tạo các biến thể dựa trên nội dung mẫu."
+              : "Nhập nội dung để đăng bài trực tiếp hoặc làm gợi ý cho AI."}
           >
             <div className="relative">
               <Textarea

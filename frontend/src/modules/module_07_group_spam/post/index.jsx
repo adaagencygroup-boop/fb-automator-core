@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 
 import { toast } from "@/lib/toast";
+import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import {
   generateGroupPosts,
@@ -53,6 +54,8 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const contentLabel = isComment ? "bình luận" : "bài viết";
   const editorRef = useRef(null);
   const completionToastJobRef = useRef(null);
+  const draftWriteInitializedRef = useRef(false);
+  const { setUnsavedChanges } = useUnsavedChanges();
 
   // Bước 1: Chiến dịch
   const [campaignId, setCampaignId] = useState(null);
@@ -79,7 +82,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const [confirmedApi, setConfirmedApi] = useState("");
   const apiSignature = JSON.stringify(apiSource.selected);
   const settingsConfirmed = isSettingsLocked && confirmedApi === apiSignature;
-  const [threads, setThreads] = useState("2");
+  const [threads, setThreads] = useState("1");
   const [restMinutes, setRestMinutes] = useState("10");
   const [maxPosts, setMaxPosts] = useState("10");
 
@@ -247,6 +250,10 @@ export default function GroupPostModule({ actionType = "POST" }) {
 
   useEffect(() => {
     if (!draftReady || isRerun) return;
+    if (!draftWriteInitializedRef.current) {
+      draftWriteInitializedRef.current = true;
+      return;
+    }
     writeGroupPostDraft({
       campaignId,
       campaignName,
@@ -285,6 +292,10 @@ export default function GroupPostModule({ actionType = "POST" }) {
       scheduleTime,
       isPostingSettingsLocked,
     }, draftScope);
+    setUnsavedChanges(true, async () => {
+      await clearGroupPostDraft(draftScope);
+      await writeGroupPostDraftMedia([], draftScope);
+    });
   }, [
     draftReady, isRerun, campaignId, campaignName, campaignDescription, campaignLocked, draftScope,
     selectedAccountKeys, isAccountLocked, apiSource.selectedId, threads, restMinutes, maxPosts, isSettingsLocked,
@@ -292,7 +303,10 @@ export default function GroupPostModule({ actionType = "POST" }) {
     selectedGroupKeys, isGroupSourceLocked, savedMedia, minMedia, maxMedia, isMediaLocked,
     prompt, aiCount, posts, activePost, hasGeneratedContent, isContentLocked, delayMin,
     delayMax, delayUnit, scheduleEnabled, scheduleDate, scheduleTime, isPostingSettingsLocked,
+    setUnsavedChanges,
   ]);
+
+  useEffect(() => () => setUnsavedChanges(false), [setUnsavedChanges]);
 
   useEffect(() => {
     if (!draftReady || isRerun) return;
@@ -455,6 +469,17 @@ export default function GroupPostModule({ actionType = "POST" }) {
   }, [groupSource, groupFile, customGroups]);
 
   const selectedAccounts = accounts.filter((account) => selectedAccountKeys.includes(account.key));
+  const selectedAccountCount = selectedAccounts.length;
+
+  useEffect(() => {
+    const maxThreads = Math.max(1, selectedAccountCount);
+    setThreads((current) => {
+      const value = Number(current);
+      if (!Number.isInteger(value) || value < 1) return "1";
+      return String(Math.min(value, maxThreads));
+    });
+  }, [selectedAccountCount]);
+
   const selectedGroups = currentGroupPool.filter((group) => selectedGroupKeys.includes(group.key));
   const activeGroupsCount = groupSource === "file" ? (groupFile?.validGroupsCount || selectedGroups.length) : selectedGroups.length;
   const generatedCount = posts.filter((post) => post.trim()).length;
@@ -797,6 +822,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
           apiSource={apiSource}
           threads={threads}
           setThreads={setThreads}
+          selectedAccountCount={selectedAccountCount}
           settingsLoading={settingsLoading}
           settingsFeedback={settingsFeedback}
         />
