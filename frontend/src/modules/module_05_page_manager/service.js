@@ -44,6 +44,18 @@ export async function deletePage(pageId) {
     return { success: false };
   }
 }
+export async function selectReelsFolder(initialDir) {
+  try {
+    const res = await api.post("/api/pages/reels/select-folder", { initial_dir: initialDir || "" });
+    return {
+      folder: res?.folder || res?.path || "",
+      success: Boolean(res?.folder || res?.path)
+    };
+  } catch (err) {
+    console.warn("Lỗi gọi selectReelsFolder:", err);
+    return { folder: "", success: false };
+  }
+}
 export async function getReelsAccountsPages() {
   return api.get("/api/pages/reels/accounts-pages");
 }

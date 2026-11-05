@@ -214,7 +214,7 @@ def _open_live_browser_worker(uid: str, target_url: str | None = None):
                 driver.get(target_url)
             broadcast("success", f"✅ Đăng nhập thành công: Nick {uid}{display_name} đã sẵn sàng!", uid=uid)
         else:
-            login_status = "failed" if attempted_login or is_checkpoint_url(driver.current_url or "") else "not_logged_in"
+            login_status = "failed" if is_checkpoint_url(driver.current_url or "") else "not_logged_in"
             AccountRepo.update_login_status(db, uid, login_status)
             operations.publish(uid, "failed" if is_checkpoint_url(driver.current_url or "") else "waiting", db)
             broadcast("warning", f"⚠️ Trình duyệt nick {uid} đã mở. Bạn có thể tự đăng nhập trực tiếp trên Chrome, hệ thống sẽ tự động bắt cookie.")

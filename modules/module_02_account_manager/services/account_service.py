@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 """Account CRUD, import and profile deletion orchestration."""
 from datetime import timezone
 from fastapi import HTTPException
@@ -146,6 +148,8 @@ def delete_preview(db, uids):
 
 def delete_account(db, uid, delete_pages=False):
     from ..automation.browser_manager import get_profile_lock, _active_drivers, _active_drivers_lock
+    from core.browser import safe_close_driver, force_kill_driver, unregister_active_driver, close_driver_for_uid
+
     lock = get_profile_lock(uid)
     if not lock.acquire(blocking=False):
         raise HTTPException(409, "Không thể xóa: Tài khoản đang trong tiến trình chạy")
@@ -154,12 +158,21 @@ def delete_account(db, uid, delete_pages=False):
             drivers = [d for d, info in _active_drivers.items() if info.get("uid") == uid and info.get("owner") == owner_context.get()]
         for driver in drivers:
             try:
-                if driver.window_handles:
-                    raise HTTPException(409, "Không thể xóa: Tài khoản đang trong tiến trình chạy. Hãy đóng Chrome rồi thử lại")
-            except HTTPException:
-                raise
+                safe_close_driver(driver)
+            except Exception:
+                try:
+                    force_kill_driver(driver)
+                except Exception:
+                    pass
+            try:
+                unregister_active_driver(driver)
             except Exception:
                 pass
+        try:
+            close_driver_for_uid(uid)
+        except Exception:
+            pass
+
         exists = Repo.get_by_uid(db, uid) is not None
         page_ids = Pages.related_ids(db, uid, owner_context.get())
         try:

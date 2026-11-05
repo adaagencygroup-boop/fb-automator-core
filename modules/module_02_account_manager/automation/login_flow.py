@@ -33,10 +33,10 @@ def is_checkpoint_url(url: str) -> bool:
     return path == "/checkpoint" or path.startswith("/checkpoint/")
 
 
-def _handle_saved_account_screen(driver: webdriver.Chrome, sleep_before_click: float = 10.0) -> bool:
+def _handle_saved_account_screen(driver: webdriver.Chrome, sleep_before_click: float = 1.0) -> bool:
     """
     Nếu vào phải trang lưu tài khoản (có nút 'Dùng trang cá nhân khác' / 'Đăng nhập bằng tài khoản khác'):
-    Chờ khoảng 10s rồi click nút đó để Facebook quay về form đăng nhập chuẩn.
+    Chờ ngắn 1s rồi click nút đó để Facebook quay về form đăng nhập chuẩn (Email/UID + Password).
     """
     locators = LOGIN.get("saved_account_switch", [])
     for loc in locators:
@@ -44,13 +44,24 @@ def _handle_saved_account_screen(driver: webdriver.Chrome, sleep_before_click: f
             elements = driver.find_elements(By.XPATH, loc)
             for el in elements:
                 if el.is_displayed():
-                    logger.info(f"Phát hiện màn hình lưu nick; chờ {sleep_before_click}s rồi bấm nút chuyển tài khoản...")
-                    time.sleep(sleep_before_click)
+                    logger.info("Phát hiện màn hình lưu nick; bấm nút chuyển về form đăng nhập chuẩn...")
+                    if sleep_before_click > 0:
+                        time.sleep(sleep_before_click)
                     try:
                         el.click()
                     except Exception:
                         driver.execute_script("arguments[0].click();", el)
-                    time.sleep(2.0)
+                    
+                    # Chờ form login Email/UID hiển thị
+                    for _ in range(8):
+                        time.sleep(0.5)
+                        for email_loc in LOGIN.get("email_input", []):
+                            try:
+                                inps = driver.find_elements(By.XPATH, email_loc)
+                                if any(inp.is_displayed() for inp in inps):
+                                    return True
+                            except Exception:
+                                pass
                     return True
         except Exception:
             pass
