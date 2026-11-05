@@ -933,3 +933,4 @@ def verify_chrome_egress_ip(driver, direct_ip: Optional[str] = None, timeout: in
         )
 
     return chrome_ip
+

@@ -79,3 +79,4 @@ def get_profile_lock(uid, owner: Optional[str] = None) -> threading.Lock:
         if key not in _profile_locks:
             _profile_locks[key] = threading.Lock()
         return _profile_locks[key]
+

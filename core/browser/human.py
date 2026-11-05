@@ -286,3 +286,4 @@ def human_click(driver, element, hover: Optional[Tuple[float, float]] = None, rn
         except WebDriverException:
             time.sleep(rng.uniform(0.3, 0.6))
     return False
+

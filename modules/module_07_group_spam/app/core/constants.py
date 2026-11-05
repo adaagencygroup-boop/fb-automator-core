@@ -123,7 +123,7 @@ class StepStatus(str, Enum):
 # =============================================================================
 FB_BASE_URL = "https://www.facebook.com"
 FB_GROUPS_BASE_URL = "https://www.facebook.com/groups/"
-FB_GROUP_SEARCH_URL = "https://www.facebook.com/groups/search/groups/?q={search_term}"
+FB_GROUP_SEARCH_URL = "https://www.facebook.com/search/groups/?q={search_term}"
 
 # Các thẻ HTML dạng khối khi trích xuất text thuần từ bộ soạn thảo nội dung
 BLOCK_TAGS: Set[str] = {"p", "div", "h1", "h2", "h3", "blockquote", "li", "br", "hr"}

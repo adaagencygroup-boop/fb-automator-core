@@ -106,3 +106,4 @@ Chưa kiểm thử trực tiếp cửa sổ desktop và các thao tác Facebook 
 Frontend build có cảnh báo hiện có về import `@tauri-apps/api/dialog` tại
 `frontend/src/modules/module_05_page_manager/ReelsPoster.jsx`; luồng chọn thư mục
 ở module này cần được kiểm tra riêng.
+

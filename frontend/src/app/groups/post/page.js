@@ -7,3 +7,4 @@ export const metadata = pageMetadata("groups.post");
 export default function Page() {
   return <GroupPostModule />;
 }
+
