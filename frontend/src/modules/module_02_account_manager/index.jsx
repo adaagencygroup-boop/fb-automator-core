@@ -245,11 +245,14 @@ export default function AccountManagerModule() {
     setIsSingleModalOpen(true);
   };
 
-  const handleImportBulk = async (accountsToImport, skippedCount = 0, skipExisting = false) => {
+  const handleImportBulk = async (accountsToImport, skippedCount = 0, skipExisting = false, checkStatus = false) => {
     try {
-      const res = await importAccounts(accountsToImport, false, skipExisting);
+      const res = await importAccounts(accountsToImport, checkStatus, skipExisting);
       const outcome = importOutcome(res, skippedCount);
       toast[outcome.level](outcome.message, outcome.complete ? "NHẬP THÀNH CÔNG" : "KẾT QUẢ IMPORT");
+      if (res?.checking > 0) {
+        toast.info(`Đang kiểm tra Live/Die trong nền cho ${res.checking} tài khoản...`, "KIỂM TRA LIVE/DIE");
+      }
       if (outcome.added > 0 || (outcome.updated > 0 && accountsToImport.some(account => Object.hasOwn(account, "category_id")))) {
         categoryData.refresh();
       }

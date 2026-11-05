@@ -247,8 +247,11 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, categori
         return;
       }
       if (!uidRegex.test(rowUid)) {
+        const hint = (/[a-zA-ZÀ-ỹ]/.test(rowUid))
+          ? ` Cột UID đang chứa tên hoặc chữ ("${rowUid.slice(0, 15)}..."). Vui lòng kiểm tra lại cấu hình Field Mapping để chọn đúng cột UID số.`
+          : "";
         toast.error(
-          `Dòng ${rowNumber}: UID "${rowUid}" không hợp lệ. UID chỉ được chứa chữ số (0-9) và không bắt đầu bằng số 0.`,
+          `Dòng ${rowNumber}: UID "${rowUid.slice(0, 20)}" không hợp lệ. UID Facebook bắt buộc là dãy 4-20 chữ số (0-9) và không bắt đầu bằng số 0.${hint}`,
           "UID KHÔNG HỢP LỆ"
         );
         return;
@@ -283,7 +286,7 @@ export default function DynamicImportModal({ isOpen, onClose, onImport, categori
     setIsImporting(true);
     try {
       const payload = withImportCategory(parsedAccounts, assignCategory, categoryId, categories);
-      const result = await onImport(payload, 0, skipDuplicates);
+      const result = await onImport(payload, 0, skipDuplicates, checkAfterImport);
       if (result === true || result?.success === true) {
         resetForm();
         handleClose();
