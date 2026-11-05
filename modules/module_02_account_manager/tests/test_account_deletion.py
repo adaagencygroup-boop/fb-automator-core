@@ -131,14 +131,13 @@ class AccountDeletionTests(unittest.TestCase):
         self.assertEqual(self.pages()[1], "123")
         self.assertTrue(self.profile.exists())
 
-    def test_open_chrome_blocks_deletion(self):
-        driver = Mock(window_handles=["window"])
+    def test_open_chrome_is_closed_and_account_deleted(self):
+        driver = Mock(window_handles=[], service=Mock(process=Mock(pid=None)))
         with patch.object(browser_manager, "_active_drivers", {driver: {"uid": "123", "owner": "alice"}}):
-            with self.assertRaises(HTTPException) as caught:
-                accounts.delete_account(self.db, "123")
-        self.assertEqual(caught.exception.status_code, 409)
-        self.assert_account_kept()
-        self.assertTrue(self.profile.exists())
+            result = accounts.delete_account(self.db, "123")
+        self.assertTrue(result["deleted"])
+        self.assertIsNone(Repo.get_by_uid(self.db, "123"))
+        self.assertFalse(self.profile.exists())
 
     def test_other_owner_browser_does_not_block_own_deletion(self):
         driver = Mock(window_handles=["window"])

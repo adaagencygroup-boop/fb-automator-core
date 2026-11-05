@@ -10,8 +10,10 @@ LOGIN = {
     "saved_account_switch": [
         '//button[contains(., "Dùng trang cá nhân khác") or contains(., "Đăng nhập bằng tài khoản khác") or contains(., "Dùng tài khoản khác") or contains(., "Use another profile") or contains(., "Log into another account")]',
         '//div[@role="button" and (contains(., "Dùng trang cá nhân khác") or contains(., "Đăng nhập bằng tài khoản khác") or contains(., "Dùng tài khoản khác") or contains(., "Use another profile") or contains(., "Log into another account"))]',
+        '//div[@tabindex="0" and (contains(., "Dùng trang cá nhân khác") or contains(., "Đăng nhập bằng tài khoản khác") or contains(., "Dùng tài khoản khác") or contains(., "Use another profile") or contains(., "Log into another account"))]',
         '//a[contains(., "Dùng trang cá nhân khác") or contains(., "Đăng nhập bằng tài khoản khác") or contains(., "Dùng tài khoản khác") or contains(., "Use another profile") or contains(., "Log into another account")]',
-        '//span[contains(text(), "Dùng trang cá nhân khác") or contains(text(), "Đăng nhập bằng tài khoản khác") or contains(text(), "Log into another account")]/ancestor::*[@role="button" or self::button or self::a][1]',
+        '//span[contains(text(), "Dùng trang cá nhân khác") or contains(text(), "Đăng nhập bằng tài khoản khác") or contains(text(), "Log into another account") or contains(text(), "Use another profile")]/ancestor::*[@role="button" or self::button or self::a or @tabindex="0"][1]',
+        '//*[contains(text(), "Dùng trang cá nhân khác") or contains(text(), "Đăng nhập bằng tài khoản khác") or contains(text(), "Log into another account") or contains(text(), "Use another profile")]',
     ],
     "email_input": [
         '//input[@id="email"]',
