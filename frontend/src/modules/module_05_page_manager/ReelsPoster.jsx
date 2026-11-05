@@ -209,7 +209,7 @@ export default function ReelsPoster() {
     e.target.value = "";
   };
 
-  const loadAccountsAndPages = useCallback(async () => {
+  const loadAccountsAndPages = useCallback(async (isManual = false) => {
     setLoadingData(true);
     try {
       if (savedSelectedPageIdsRef.current === null && typeof window !== "undefined") {
@@ -248,9 +248,16 @@ export default function ReelsPoster() {
         if (data.accounts.length > 0) {
           setExpandedAccounts(new Set([(data.accounts[0]?.group_key || data.accounts[0]?.account_uid)]));
         }
+
+        if (isManual) {
+          toast.success(`Đã làm mới danh sách: ${data.accounts.length} tài khoản (${allPageIds.size} Fanpage)!`, "LÀM MỚI");
+        }
       }
     } catch (err) {
       console.warn("Lỗi tải danh sách tài khoản:", err);
+      if (isManual) {
+        toast.error("Không thể làm mới danh sách: " + (err.message || String(err)), "LỖI LÀM MỚI");
+      }
     } finally {
       setLoadingData(false);
     }
@@ -1307,9 +1314,10 @@ export default function ReelsPoster() {
             </div>
             <button
               type="button"
-              onClick={loadAccountsAndPages}
+              onClick={() => loadAccountsAndPages(true)}
               disabled={loadingData}
               className="px-3 py-1.5 border border-[#BFDBFE] text-[#1877F2] text-[12px] font-medium rounded-lg hover:bg-blue-50 flex items-center gap-1.5 transition-colors"
+              title="Làm mới danh sách Fanpage và tài khoản"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loadingData ? "animate-spin" : ""}`} />
               Đồng bộ
