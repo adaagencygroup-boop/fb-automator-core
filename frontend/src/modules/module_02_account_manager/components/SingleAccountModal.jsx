@@ -114,7 +114,11 @@ export default function SingleAccountModal({
 
     const uidRegex = /^[1-9][0-9]{3,19}$/;
     if (!uidRegex.test(trimmedUid)) {
-      setError("UID không hợp lệ: Chỉ chứa 4-20 chữ số và không bắt đầu bằng số 0.");
+      if (/[a-zA-ZÀ-ỹ]/.test(trimmedUid)) {
+        setError(`UID không hợp lệ: "${trimmedUid}" là chữ/tên tài khoản. UID Facebook bắt buộc là dãy 4-20 chữ số (ví dụ: 10008892182).`);
+      } else {
+        setError("UID không hợp lệ: Chỉ chứa 4-20 chữ số và không bắt đầu bằng số 0.");
+      }
       setErrorField("uid");
       return;
     }

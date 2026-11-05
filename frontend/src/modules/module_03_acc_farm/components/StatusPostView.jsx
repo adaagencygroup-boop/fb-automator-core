@@ -25,7 +25,6 @@ import {
   Database,
   BookOpen,
   RotateCcw,
-  Filter,
   Sparkles,
   Save,
   Smile,
@@ -49,7 +48,11 @@ import { Badge } from "@/components/ui/badge";
 import Image from "next/image";
 import { EmergencyStopModal } from "./EmergencyStopModal";
 import { PastScheduleModal } from "./PastScheduleModal";
-import { useUnsavedChanges } from "@/lib/useUnsavedChanges";
+import { PostProgressPreview } from "./PostProgressPreview";
+import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
+
+const STATUS_LEAVE_MESSAGE =
+  "Bạn đang có Prompt AI hoặc bài viết trên màn Đăng Status. Nếu rời đi, bài đã lưu sẽ chuyển về chưa lưu và cần Lưu lại lần sau.";
 
 const DEFAULT_GEMINI_MODELS = [
   { value: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Khuyên dùng - Nhanh & Mới nhất)" },
@@ -220,13 +223,36 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
   });
 
   const [threadRows, setThreadRows] = useState([]);
+  const [previewPostId, setPreviewPostId] = useState(null);
   const [logs, setLogs] = useState([]);
   const [isPaused, setIsPaused] = useState(false);
   const [isStopped, setIsStopped] = useState(false);
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
+
+  /** Gộp danh sách tiến trình theo bài — không để response ngắn (theo số luồng) cắt mất bài đã có. */
+  const mergeProgressRows = (prev, incoming) => {
+    if (!Array.isArray(incoming) || incoming.length === 0) return prev || [];
+    if (!Array.isArray(prev) || prev.length === 0) return incoming;
+    if (incoming.length >= prev.length) return incoming;
+    const used = new Set();
+    const updated = prev.map((row) => {
+      const byId = incoming.find((t) => String(t.id) === String(row.id));
+      if (byId) {
+        used.add(String(byId.id));
+        return { ...row, ...byId };
+      }
+      return row;
+    });
+    for (const t of incoming) {
+      const tid = String(t.id || t.threadId || "");
+      if (tid && !used.has(tid) && !updated.some((r) => String(r.id) === tid)) {
+        updated.push(t);
+      }
+    }
+    return updated;
+  };
   const [showPastScheduleModal, setShowPastScheduleModal] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
-  const [statusFilter, setStatusFilter] = useState("all");
   const [showConfigErrors, setShowConfigErrors] = useState(false);
 
   const pollingRef = useRef(null);
@@ -236,6 +262,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
     keyFileName: k,
     selectedModel: m,
     prompt: p,
+    pixabayKey: pk,
     scheduleEnabled: se,
     scheduleTime: st,
     minDelay: mind,
@@ -246,6 +273,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
       keyFileName: k || "",
       selectedModel: m || "",
       prompt: p || "",
+      pixabayKey: pk || "",
       scheduleEnabled: !!se,
       scheduleTime: st || "",
       minDelay: Number(mind) || 0,
@@ -276,51 +304,56 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
     return () => onHasPostsChange?.(false);
   }, [needsLeaveConfirm, onHasPostsChange]);
 
+  const { setUnsavedChanges } = useUnsavedChanges();
+
   // Option A: bấm "Rời đi" → bỏ trạng thái Đã lưu, lần sau phải Lưu lại
-  const handleLeaveConfirmCleanup = async () => {
-    const savedDrafts = drafts.filter(
-      (d) =>
-        d.isSaved &&
-        (((d.content || "").trim().length > 0) ||
-          (d.imageCount || 0) > 0 ||
-          (d.imagePaths || []).length > 0),
-    );
-
-    // FE: đánh dấu chưa lưu ngay
-    if (savedDrafts.length > 0) {
-      setDrafts((prev) =>
-        prev.map((d) => (d.isSaved ? { ...d, isSaved: false } : d)),
-      );
+  useEffect(() => {
+    if (!needsLeaveConfirm) {
+      setUnsavedChanges(false);
+      return;
     }
+    setUnsavedChanges(
+      true,
+      async () => {
+        const savedDrafts = drafts.filter(
+          (d) =>
+            d.isSaved &&
+            (((d.content || "").trim().length > 0) ||
+              (d.imageCount || 0) > 0 ||
+              (d.imagePaths || []).length > 0),
+        );
 
-    // BE: READY → DRAFT (giữ nội dung/ảnh)
-    await Promise.all(
-      savedDrafts.map(async (d) => {
-        try {
-          const imgs = normalizeImagePaths(d);
-          await api.post("/api/post/drafts", {
-            id: d.id,
-            account_uid: String(d.accountUid),
-            account_name: d.authorName || "",
-            post_type: "status",
-            content: d.content || "",
-            image_path: imgs[0] || null,
-            image_paths: imgs,
-            status: "DRAFT",
-          });
-        } catch (err) {
-          console.warn("Không thể chuyển draft về DRAFT khi rời trang:", err);
+        if (savedDrafts.length > 0) {
+          setDrafts((prev) =>
+            prev.map((d) => (d.isSaved ? { ...d, isSaved: false } : d)),
+          );
         }
-      }),
-    );
-  };
 
-  useUnsavedChanges(
-    needsLeaveConfirm,
-    "Bạn đang có Prompt AI hoặc bài viết trên màn Đăng Status. Nếu rời đi, bài đã lưu sẽ chuyển về chưa lưu và cần Lưu lại lần sau.",
-    "status-post",
-    handleLeaveConfirmCleanup,
-  );
+        await Promise.all(
+          savedDrafts.map(async (d) => {
+            try {
+              const imgs = normalizeImagePaths(d);
+              await api.post("/api/post/drafts", {
+                id: d.id,
+                account_uid: String(d.accountUid),
+                account_name: d.authorName || "",
+                post_type: "status",
+                content: d.content || "",
+                image_path: imgs[0] || null,
+                image_paths: imgs,
+                status: "DRAFT",
+              });
+            } catch (err) {
+              console.warn("Không thể chuyển draft về DRAFT khi rời trang:", err);
+            }
+          }),
+        );
+      },
+      STATUS_LEAVE_MESSAGE,
+    );
+  }, [needsLeaveConfirm, drafts, setUnsavedChanges]);
+
+  useEffect(() => () => setUnsavedChanges(false), [setUnsavedChanges]);
 
   // Load Settings from /api/post/settings
   const loadSettingsFromDb = async () => {
@@ -349,6 +382,13 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
         if (s.gemini_model) setSelectedModel(nextModel);
         // Mỗi lần vào/quay lại trang: luôn xóa prompt cũ, hiện placeholder
         setPrompt("");
+        const nextPixabay =
+          s.pixabay_api_key != null
+            ? String(s.pixabay_api_key)
+            : s.pixabay_key != null
+              ? String(s.pixabay_key)
+              : "";
+        if (nextPixabay) setPixabayKey(nextPixabay);
         if (s.schedule_enabled !== undefined) setScheduleEnabled(s.schedule_enabled);
         if (s.schedule_time) setScheduleTime(s.schedule_time.slice(0, 5));
         if (s.min_delay) setMinDelay(s.min_delay);
@@ -359,6 +399,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
           keyFileName: nextKey || keyFileName,
           selectedModel: nextModel,
           prompt: "",
+          pixabayKey: nextPixabay || pixabayKey,
           scheduleEnabled: nextScheduleEnabled,
           scheduleTime: nextScheduleTime,
           minDelay: nextMin,
@@ -370,6 +411,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
           keyFileName,
           selectedModel,
           prompt,
+          pixabayKey,
           scheduleEnabled,
           scheduleTime,
           minDelay,
@@ -383,6 +425,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
         keyFileName,
         selectedModel,
         prompt,
+        pixabayKey,
         scheduleEnabled,
         scheduleTime,
         minDelay,
@@ -399,6 +442,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
         api_key_file_path: keyFileName,
         gemini_model: selectedModel,
         prompt_template: prompt,
+        pixabay_api_key: pixabayKey || "",
         schedule_enabled: scheduleEnabled,
         schedule_time: scheduleTime,
         min_delay: minDelay,
@@ -409,6 +453,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
         keyFileName,
         selectedModel,
         prompt,
+        pixabayKey,
         scheduleEnabled,
         scheduleTime,
         minDelay,
@@ -494,7 +539,16 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
           selected: false,
         };
       });
-      setAccounts(formatted);
+      // Bỏ chọn sẵn các nick không đủ Live + Đã đăng nhập
+      setAccounts(
+        formatted.map((a) => ({
+          ...a,
+          selected:
+            a.selected &&
+            a.accountStatusCode === "live" &&
+            a.connectionStatusCode === "logged_in",
+        }))
+      );
       await checkActiveSessionOnMount(formatted);
     } catch (err) {
       console.error("Lỗi khi tải tài khoản:", err);
@@ -529,9 +583,15 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                 contentPreview: t.contentPreview || "Đang xử lý...",
                 currentActivity: t.currentActivity || "",
                 elapsedTime: t.elapsedTime || "0:00",
+                content: t.content || "",
+                imagePaths: Array.isArray(t.imagePaths) ? t.imagePaths : [],
+                mediaPath: t.mediaPath || "",
+                mediaName: t.mediaName || "",
+                postType: t.postType || "status",
+                checkpoint: t.checkpoint || "",
               }))
             );
-          }
+          } // mount: lấy full list từ API (đã theo bài, không theo luồng)
           if (Array.isArray(d.session_accounts) && d.session_accounts.length > 0) {
             const runningUidSet = new Set(d.session_accounts.map(String));
             setAccounts((prev) => {
@@ -558,18 +618,25 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
         const d = res?.data ?? res;
         if (d) {
           if (d.metrics) setMetrics(d.metrics);
-          if (Array.isArray(d.threads) && d.threads.length > 0) setThreadRows(d.threads);
+          if (Array.isArray(d.threads) && d.threads.length > 0) {
+            setThreadRows((prev) => mergeProgressRows(prev, d.threads));
+          }
           if (Array.isArray(d.recent_logs) && d.recent_logs.length > 0) setLogs(d.recent_logs);
           if (d.is_paused !== undefined) setIsPaused(d.is_paused);
           if (d.session_finished) {
             setIsStopped(false);
-            setThreadRows((prev) =>
-              prev.map((row) =>
-                row.status === "Đang chạy" || row.status === "Chờ thực thi"
-                  ? { ...row, status: "Hoàn thành", currentActivity: "Đăng status hoàn tất." }
+            // Giữ đủ dòng bài từ API; chỉ đổi nhãn đang chạy → hoàn thành nếu còn sót
+            setThreadRows((prev) => {
+              const base =
+                Array.isArray(d.threads) && d.threads.length > 0
+                  ? mergeProgressRows(prev, d.threads)
+                  : prev;
+              return base.map((row) =>
+                row.status === "Đang chạy" || row.status === "Chờ thực thi" || row.status === "Đang chờ"
+                  ? { ...row, status: "Hoàn thành", currentActivity: row.currentActivity || "Đăng status hoàn tất." }
                   : row
-              )
-            );
+              );
+            });
             if (pollingRef.current) clearInterval(pollingRef.current);
           }
           if (d.is_stopped) {
@@ -632,7 +699,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
 
   const filteredAccounts = useMemo(() => {
     return accounts
-      .filter((a) => (viewState === "running" ? a.selected : true))
+      // Bug 1: danh sách chọn chỉ hiện Live + Đã đăng nhập (khi đang chạy: hiện các nick đã chọn)
+      .filter((a) => (viewState === "running" ? a.selected : isAccountEligible(a)))
       .filter((a) => {
         if (accountFilter !== "all" && a.accountStatusCode !== accountFilter) return false;
         if (loginFilter !== "all") {
@@ -1005,6 +1073,10 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
     );
     // Đã lưu rồi thì bỏ qua — tránh spam toast / gọi API lại
     if (currentDraft?.isSaved) return;
+    if (!(content || "").trim()) {
+      if (showAlert) toast.warning("Vui lòng nhập nội dung bài đăng trước khi lưu!", "THIẾU NỘI DUNG");
+      return;
+    }
 
     try {
       const targetAcc = accounts.find((a) => String(a.uid) === uidStr);
@@ -1233,31 +1305,46 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
     setIsPaused(false);
     setIsStopped(false);
 
-    const initialRows = selectedAccs.slice(0, Math.max(1, threadCount)).map((acc, idx) => {
+    // Bug 14: 1 dòng / 1 bài (tài khoản), KHÔNG cắt theo số luồng
+    const tc = Math.max(1, parseInt(threadCount, 10) || 1);
+    const initialRows = selectedAccs.map((acc, idx) => {
       const accUid = String(acc.uid || acc.id);
       const matchedDraft = drafts.find((d) => String(d.accountUid) === accUid);
+      const draftContent = (matchedDraft?.content || "").trim();
+      const draftImages = normalizeImagePaths(matchedDraft);
+      const isActiveSlot = idx < tc;
       return {
         id: acc.id,
-        threadId: `T-${String(idx + 1).padStart(2, "0")}`,
+        threadId: isActiveSlot ? `T-${String(idx + 1).padStart(2, "0")}` : "—",
         accountName: acc.name,
         accountUid: acc.uid,
-        status: isScheduled ? "Chờ thực thi" : "Đang chạy",
+        status: isScheduled || !isActiveSlot ? "Chờ thực thi" : "Đang chạy",
         contentPreview: isScheduled
           ? `Hẹn giờ đăng: ${scheduleTime}`
-          : matchedDraft?.content
-          ? matchedDraft.content.slice(0, 30) + "..."
+          : draftContent
+          ? draftContent.slice(0, 30) + "..."
           : "Đang chuẩn bị nội dung...",
         currentActivity: isScheduled
           ? `Đang chờ đến khung giờ ${scheduleTime} để kích nổ...`
-          : "Đang khởi tạo Chrome Profile & kết nối Facebook...",
-        elapsedTime: "0:01",
+          : isActiveSlot
+          ? "Đang khởi tạo Chrome Profile & kết nối Facebook..."
+          : "Đang chờ trong hàng đợi...",
+        elapsedTime: "0:00",
+        content: draftContent,
+        imagePaths: draftImages,
+        mediaPath: "",
+        mediaName: "",
+        postType: "status",
       };
     });
+    setPreviewPostId(initialRows[0] ? String(initialRows[0].id) : null);
 
     setMetrics({
-      running: isScheduled ? 0 : initialRows.length,
+      running: isScheduled ? 0 : Math.min(tc, selectedAccs.length),
       paused: 0,
-      waiting: isScheduled ? selectedAccs.length : Math.max(0, selectedAccs.length - initialRows.length),
+      waiting: isScheduled
+        ? selectedAccs.length
+        : Math.max(0, selectedAccs.length - Math.min(tc, selectedAccs.length)),
       completed: 0,
       systemError: 0,
       deadAccount: 0,
@@ -1372,40 +1459,45 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
     setIsPaused(false);
     if (pollingRef.current) clearInterval(pollingRef.current);
 
-    try {
-      await api.post("/api/post/stop");
-      await api.post("/api/post/reset");
-    } catch { }
-    finally {
-      setIsStopping(false);
-      setShowEmergencyModal(false);
-      setViewState("config");
-      setIsStopped(false);
-      setIsPaused(false);
-    }
-
-    setMetrics({
-      running: 0,
-      paused: 0,
-      waiting: 0,
-      completed: 0,
-      systemError: 0,
-      deadAccount: 0,
-      stopped: 1,
-    });
+    // Giữ màn giám sát giống khi chạy xong — không nhảy về config
     setThreadRows((prev) =>
-      prev.map((r) => ({ ...r, status: "Đã dừng", currentActivity: "Đã dừng theo yêu cầu" }))
+      prev.map((r) =>
+        r.status === "Hoàn thành" || r.status === "Lỗi hệ thống" || r.status === "Acc chết"
+          ? r
+          : { ...r, status: "Đã dừng", currentActivity: "Đã dừng theo yêu cầu (khẩn cấp)" }
+      )
     );
+    setMetrics((prev) => {
+      const stoppedNow = Math.max(
+        1,
+        (prev.running || 0) + (prev.paused || 0) + (prev.waiting || 0) + (prev.stopped || 0)
+      );
+      return {
+        ...prev,
+        running: 0,
+        paused: 0,
+        waiting: 0,
+        stopped: stoppedNow,
+      };
+    });
     setLogs((prev) => [
       ...prev,
       {
         id: Date.now().toString(),
         timestamp: new Date().toLocaleTimeString(),
-        thread: "Thread-01",
+        thread: "System",
         type: "error",
         message: "Đã nhận lệnh Dừng khẩn cấp: đóng toàn bộ Chrome profiles.",
       },
     ]);
+
+    try {
+      await api.post("/api/post/stop");
+    } catch { }
+    finally {
+      setIsStopping(false);
+      setShowEmergencyModal(false);
+    }
   };
 
   const handleResetToConfig = async () => {
@@ -1571,6 +1663,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                   data-1p-ignore="true"
                   value={pixabayKey}
                   onChange={(e) => setPixabayKey(e.target.value)}
+                  onBlur={() => handleSaveSettingsToDb()}
                   placeholder="Nhập Pixabay API Key..."
                   className="w-full h-11 pl-4 pr-11 bg-white border border-[#E2E8F0] rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] focus:outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-all font-mono"
                 />
@@ -1673,7 +1766,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                 </span>
                 <span className="text-xs font-semibold text-[#2563EB] mt-0.5">
                   {viewState === "config"
-                    ? `Đã chọn ${selectedCount} / ${accounts.length} tài khoản`
+                    ? `Đã chọn ${selectedCount} / ${totalEligibleCount} tài khoản (Live & Đã đăng nhập)`
                     : `Đã chọn ${selectedCount} tài khoản`}
                 </span>
               </div>
@@ -1772,11 +1865,17 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                           <Search className="w-4 h-4" />
                         </div>
                         <p className="text-[#0F172A] font-semibold text-xs sm:text-sm">
-                          {accounts.length === 0 ? "Chưa có tài khoản Facebook nào" : "Không tìm thấy tài khoản phù hợp"}
+                          {accounts.length === 0
+                            ? "Chưa có tài khoản Facebook nào"
+                            : totalEligibleCount === 0
+                            ? "Không có tài khoản Live & Đã đăng nhập"
+                            : "Không tìm thấy tài khoản phù hợp"}
                         </p>
                         <p className="text-[11px] text-[#64748B] leading-relaxed">
                           {accounts.length === 0
                             ? "Vui lòng thêm nick ở Module 02 Quản lý tài khoản."
+                            : totalEligibleCount === 0
+                            ? "Chỉ hiển thị nick có trạng thái Live và Đã đăng nhập. Kiểm tra lại Module 02."
                             : "Vui lòng thử tìm kiếm bằng từ khóa khác."}
                         </p>
                       </div>
@@ -2106,19 +2205,27 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                             <span className="truncate">Xóa</span>
                           </button>
 
-                          {/* [Lưu] / [Đã lưu] — đã lưu thì khóa, sửa nội dung/ảnh mới mở lại */}
+                          {/* [Lưu] / [Đã lưu] — trống nội dung / đã lưu thì khóa; sửa nội dung/ảnh mới mở lại */}
                           <button
                             type="button"
                             onClick={() => {
-                              if (card.isSaved) return;
+                              if (card.isSaved || !(card.content || "").trim()) return;
                               handleSaveDraftItem(card.account.uid, card.draftId, card.content);
                             }}
-                            disabled={card.isSaved}
-                            title={card.isSaved ? "Đã lưu — sửa nội dung hoặc ảnh để lưu lại" : "Lưu bài viết"}
+                            disabled={card.isSaved || !(card.content || "").trim()}
+                            title={
+                              card.isSaved
+                                ? "Đã lưu — sửa nội dung hoặc ảnh để lưu lại"
+                                : !(card.content || "").trim()
+                                  ? "Nhập nội dung bài đăng trước khi lưu"
+                                  : "Lưu bài viết"
+                            }
                             className={`flex h-[30px] min-w-0 items-center justify-center gap-1 rounded-lg px-1.5 text-[11px] font-bold shadow-xs transition-all ${
                               card.isSaved
                                 ? "cursor-default bg-[#059669] text-white opacity-90"
-                                : "cursor-pointer bg-[#2563EB] text-white hover:bg-blue-700 active:scale-[0.98]"
+                                : !(card.content || "").trim()
+                                  ? "cursor-not-allowed bg-[#2563EB] text-white opacity-50"
+                                  : "cursor-pointer bg-[#2563EB] text-white hover:bg-blue-700 active:scale-[0.98]"
                             }`}
                           >
                             {card.isSaved ? (
@@ -2374,7 +2481,12 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
       {viewState === "running" && (
         <div className="space-y-5 animate-in fade-in duration-200">
           <div className="flex items-center gap-3">
-            {!(metrics.running === 0 && metrics.waiting === 0 && (metrics.completed + metrics.systemError + metrics.deadAccount + metrics.stopped > 0)) ? (
+            {!(
+              isStopped ||
+              (metrics.running === 0 &&
+                metrics.waiting === 0 &&
+                metrics.completed + metrics.systemError + metrics.deadAccount + metrics.stopped > 0)
+            ) ? (
               <>
                 <button
                   type="button"
@@ -2426,146 +2538,76 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
-                <Activity size={16} className="text-blue-600" />
-                <span className="text-sm font-bold text-slate-900">Giám sát tiến trình đăng bài</span>
-              </div>
-              {statusFilter !== "all" && (
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter("all")}
-                  className="text-xs text-blue-600 hover:underline font-semibold cursor-pointer"
-                >
-                  Bỏ lọc (Xem tất cả)
-                </button>
-              )}
+            <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
+              <Activity size={16} className="text-blue-600" />
+              <span className="text-sm font-bold text-slate-900">Giám sát tiến trình đăng bài</span>
             </div>
 
-            {/* 7 Stat Badges (Figma Exact 1:1) */}
+            {/* 7 Stat Badges — chỉ hiển thị tổng quan, không lọc */}
             <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2.5">
-              <button
-                type="button"
-                onClick={() => setStatusFilter(statusFilter === "running" ? "all" : "running")}
-                className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${statusFilter === "running"
-                  ? "border-blue-500 ring-2 ring-blue-500/20 shadow-sm bg-blue-50/20"
-                  : "border-slate-200/80 hover:border-blue-300 hover:shadow-xs"
-                  }`}
-              >
-                <div className="flex items-center justify-between w-full">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">ĐANG CHẠY</span>
-                  <span className="w-2 h-2 rounded-full bg-blue-600" />
+              <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+                <div className="flex w-full items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ĐANG CHẠY</span>
+                  <span className="h-2 w-2 rounded-full bg-blue-600" />
                 </div>
-                <span className="text-2xl font-black text-blue-600 mt-1">{metrics.running}</span>
-              </button>
+                <span className="mt-1 text-2xl font-black text-blue-600">{metrics.running}</span>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => setStatusFilter(statusFilter === "paused" ? "all" : "paused")}
-                className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${statusFilter === "paused"
-                  ? "border-amber-500 ring-2 ring-amber-500/20 shadow-sm bg-amber-50/20"
-                  : "border-slate-200/80 hover:border-amber-300 hover:shadow-xs"
-                  }`}
-              >
-                <div className="flex items-center justify-between w-full">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">TẠM DỪNG</span>
-                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+              <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+                <div className="flex w-full items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">TẠM DỪNG</span>
+                  <span className="h-2 w-2 rounded-full bg-amber-500" />
                 </div>
-                <span className="text-2xl font-black text-amber-500 mt-1">{metrics.paused}</span>
-              </button>
+                <span className="mt-1 text-2xl font-black text-amber-500">{metrics.paused}</span>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => setStatusFilter(statusFilter === "waiting" ? "all" : "waiting")}
-                className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${statusFilter === "waiting"
-                  ? "border-slate-500 ring-2 ring-slate-500/20 shadow-sm bg-slate-50"
-                  : "border-slate-200/80 hover:border-slate-300 hover:shadow-xs"
-                  }`}
-              >
-                <div className="flex items-center justify-between w-full">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">CHỜ THỰC THI</span>
-                  <span className="w-2 h-2 rounded-full bg-slate-400" />
+              <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+                <div className="flex w-full items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">CHỜ THỰC THI</span>
+                  <span className="h-2 w-2 rounded-full bg-slate-400" />
                 </div>
-                <span className="text-2xl font-black text-slate-600 mt-1">{metrics.waiting}</span>
-              </button>
+                <span className="mt-1 text-2xl font-black text-slate-600">{metrics.waiting}</span>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => setStatusFilter(statusFilter === "completed" ? "all" : "completed")}
-                className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${statusFilter === "completed"
-                  ? "border-emerald-500 ring-2 ring-emerald-500/20 shadow-sm bg-emerald-50/20"
-                  : "border-slate-200/80 hover:border-emerald-300 hover:shadow-xs"
-                  }`}
-              >
-                <div className="flex items-center justify-between w-full">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">HOÀN THÀNH</span>
-                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+                <div className="flex w-full items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">HOÀN THÀNH</span>
+                  <span className="h-2 w-2 rounded-full bg-emerald-500" />
                 </div>
-                <span className="text-2xl font-black text-emerald-500 mt-1">{metrics.completed}</span>
-              </button>
+                <span className="mt-1 text-2xl font-black text-emerald-500">{metrics.completed}</span>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => setStatusFilter(statusFilter === "system_error" ? "all" : "system_error")}
-                className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${statusFilter === "system_error"
-                  ? "border-rose-500 ring-2 ring-rose-500/20 shadow-sm bg-rose-50/20"
-                  : "border-slate-200/80 hover:border-rose-300 hover:shadow-xs"
-                  }`}
-              >
-                <div className="flex items-center justify-between w-full">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">LỖI HỆ THỐNG</span>
-                  <span className="w-2 h-2 rounded-full bg-rose-500" />
+              <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+                <div className="flex w-full items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">LỖI HỆ THỐNG</span>
+                  <span className="h-2 w-2 rounded-full bg-rose-500" />
                 </div>
-                <span className="text-2xl font-black text-rose-500 mt-1">{metrics.systemError}</span>
-              </button>
+                <span className="mt-1 text-2xl font-black text-rose-500">{metrics.systemError}</span>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => setStatusFilter(statusFilter === "dead_acc" ? "all" : "dead_acc")}
-                className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${statusFilter === "dead_acc"
-                  ? "border-red-700 ring-2 ring-red-700/20 shadow-sm bg-red-50/20"
-                  : "border-slate-200/80 hover:border-red-400 hover:shadow-xs"
-                  }`}
-              >
-                <div className="flex items-center justify-between w-full">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">ACC CHẾT</span>
-                  <span className="w-2 h-2 rounded-full bg-red-700" />
+              <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+                <div className="flex w-full items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ACC CHẾT</span>
+                  <span className="h-2 w-2 rounded-full bg-red-700" />
                 </div>
-                <span className="text-2xl font-black text-red-700 mt-1">{metrics.deadAccount}</span>
-              </button>
+                <span className="mt-1 text-2xl font-black text-red-700">{metrics.deadAccount}</span>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => setStatusFilter(statusFilter === "stopped" ? "all" : "stopped")}
-                className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${statusFilter === "stopped"
-                  ? "border-slate-800 ring-2 ring-slate-800/20 shadow-sm bg-slate-100"
-                  : "border-slate-200/80 hover:border-slate-400 hover:shadow-xs"
-                  }`}
-              >
-                <div className="flex items-center justify-between w-full">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">ĐÃ DỪNG</span>
-                  <span className="w-2 h-2 rounded-full bg-slate-800" />
+              <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+                <div className="flex w-full items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ĐÃ DỪNG</span>
+                  <span className="h-2 w-2 rounded-full bg-slate-800" />
                 </div>
-                <span className="text-2xl font-black text-slate-800 mt-1">{metrics.stopped}</span>
-              </button>
+                <span className="mt-1 text-2xl font-black text-slate-800">{metrics.stopped}</span>
+              </div>
             </div>
 
-            {/* Filter Indicator */}
-            {statusFilter !== "all" && (
-              <div className="p-2.5 bg-blue-50/60 border border-blue-200/60 rounded-xl flex items-center justify-between text-xs text-blue-700">
-                <span className="flex items-center gap-1.5 font-medium">
-                  <Filter size={13} className="text-blue-600" />
-                  Đang lọc trạng thái: <strong className="uppercase">{statusFilter}</strong>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter("all")}
-                  className="font-bold underline hover:text-blue-900 cursor-pointer"
-                >
-                  Hiển thị tất cả luồng
-                </button>
-              </div>
-            )}
+            <PostProgressPreview
+              rows={threadRows}
+              postType="status"
+              selectedId={previewPostId}
+              onSelectId={setPreviewPostId}
+            />
 
             {/* Progress Monitoring Table */}
             <div className="overflow-x-auto pt-2">
@@ -2582,7 +2624,13 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {threadRows.map((row) => (
-                    <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
+                    <tr
+                      key={row.id}
+                      className={`hover:bg-slate-50/70 transition-colors cursor-pointer ${
+                        String(previewPostId) === String(row.id) ? "bg-blue-50/50" : ""
+                      }`}
+                      onClick={() => setPreviewPostId(String(row.id))}
+                    >
                       <td className="py-2.5 px-4 font-mono font-bold text-blue-600">
                         {row.threadId}
                       </td>
@@ -2616,7 +2664,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                           {row.status}
                         </span>
                       </td>
-                      <td className="py-2.5 px-4 max-w-[200px] truncate text-slate-700 font-mono text-[11px]">
+                      <td className="py-2.5 px-4 max-w-[200px] truncate text-slate-700 font-mono text-[11px]" title={row.content || row.contentPreview}>
                         {row.contentPreview}
                       </td>
                       <td className="py-2.5 px-4">

@@ -7,3 +7,4 @@ export const metadata = pageMetadata("groups.history");
 export default function Page() {
   return <GroupHistoryModule />;
 }
+

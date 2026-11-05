@@ -30,14 +30,114 @@ from modules.module_03_acc_farm.post_flow import (
 logger = logging.getLogger(__name__)
 
 
+def humanize_post_error(exc_or_msg: Any) -> str:
+    """
+    Việt hóa thông báo lỗi đăng bài cho UI / error_message.
+    Bỏ stacktrace Selenium, map lỗi kỹ thuật → câu tiếng Việt ngắn.
+    """
+    if isinstance(exc_or_msg, BaseException):
+        raw = f"{type(exc_or_msg).__name__}: {exc_or_msg}"
+        exc_name = type(exc_or_msg).__name__
+    else:
+        raw = str(exc_or_msg or "").strip()
+        exc_name = ""
+        if ":" in raw:
+            exc_name = raw.split(":", 1)[0].strip()
+
+    # Cắt stacktrace / heap địa chỉ Chrome
+    text = raw
+    for sep in ("Stacktrace:", "Stack trace:", "(Session info:", "Backtrace:"):
+        if sep in text:
+            text = text.split(sep, 1)[0].strip()
+    # Bỏ dòng địa chỉ "(No symbol)" dài
+    lines = [ln for ln in text.splitlines() if ln.strip() and "No symbol" not in ln]
+    text = " ".join(lines).strip() or raw
+    low = text.lower()
+
+    if isinstance(exc_or_msg, PostAccountDead) or "postaccountdead" in low:
+        return str(exc_or_msg) if isinstance(exc_or_msg, PostAccountDead) else (
+            text.split(":", 1)[-1].strip() or "Tài khoản Facebook đã chết / checkpoint."
+        )
+    if isinstance(exc_or_msg, PostFeatureBlocked) or "postfeatureblocked" in low:
+        return str(exc_or_msg) if isinstance(exc_or_msg, PostFeatureBlocked) else (
+            text.split(":", 1)[-1].strip() or "Tài khoản bị hạn chế chức năng đăng bài."
+        )
+    if isinstance(exc_or_msg, PublishUnconfirmed) or "publishunconfirmed" in low:
+        msg = str(exc_or_msg) if isinstance(exc_or_msg, PublishUnconfirmed) else text
+        # Giữ câu tiếng Việt sẵn có, bỏ prefix class
+        if ":" in msg and msg.lower().startswith("publishunconfirmed"):
+            msg = msg.split(":", 1)[-1].strip()
+        return msg or "Không xác nhận được bài đã đăng lên Facebook (hết thời gian chờ)."
+
+    # Mất kết nối ChromeDriver / trình duyệt đã đóng
+    if any(
+        k in low
+        for k in (
+            "maxretryerror",
+            "newconnectionerror",
+            "winerror 10061",
+            "actively refused",
+            "connection refused",
+            "httpconnectionpool",
+            "failed to establish a new connection",
+            "connectionreseterror",
+            "remotedisconnected",
+            "invalid session id",
+            "chrome not reachable",
+            "disconnected: not connected to devtools",
+        )
+    ) or exc_name in ("MaxRetryError", "NewConnectionError", "WebDriverException"):
+        return (
+            "Mất kết nối với trình duyệt Chrome trong lúc đăng bài "
+            "(Chrome/ChromeDriver đã đóng hoặc không phản hồi). "
+            "Hãy chạy lại bài này; tránh đóng cửa sổ Chrome khi đang đăng."
+        )
+
+    if "staleelement" in low or exc_name == "StaleElementReferenceException":
+        return (
+            "Giao diện Facebook vừa thay đổi khi đang thao tác (phần tử DOM bị cũ). "
+            "Hệ thống không bấm được nút đúng lúc — hãy thử đăng lại bài này."
+        )
+
+    if "nosuchelement" in low or exc_name == "NoSuchElementException":
+        return (
+            "Không tìm thấy nút/ô nhập trên Facebook (giao diện đổi hoặc trang chưa tải xong). "
+            "Hãy thử đăng lại hoặc kiểm tra phiên đăng nhập."
+        )
+
+    if "timeoutexception" in low or exc_name == "TimeoutException" or "timed out" in low:
+        return (
+            "Hết thời gian chờ phần tử trên Facebook phản hồi. "
+            "Mạng chậm hoặc trang tải lâu — hãy thử đăng lại."
+        )
+
+    if "elementclickintercepted" in low or "element not interactable" in low:
+        return (
+            "Không thể bấm nút vì bị lớp giao diện khác che (popup/dialog). "
+            "Hãy thử đăng lại bài này."
+        )
+
+    if "không tìm thấy" in low or text.startswith("Không ") or "cảnh báo" in low[:20]:
+        # Đã là tiếng Việt từ RuntimeError trong post_flow
+        return text[:500]
+
+    # Rút gọn lỗi lạ: bỏ prefix ExceptionType nếu còn
+    short = text
+    if exc_name and short.startswith(exc_name):
+        short = short[len(exc_name):].lstrip(": ").strip() or short
+    if len(short) > 280:
+        short = short[:277] + "..."
+    return f"Lỗi đăng bài: {short}"
+
+
 def classify_error(exc: Exception) -> tuple[str, str]:
     if isinstance(exc, PostAccountDead):
-        return "DIE", str(exc)
+        return "DIE", humanize_post_error(exc)
     if isinstance(exc, PostFeatureBlocked):
-        return "BLOCKED", str(exc)
+        return "BLOCKED", humanize_post_error(exc)
     if isinstance(exc, PublishUnconfirmed):
-        return "FAILED", str(exc)
-    return "FAILED", f"{type(exc).__name__}: {exc}"
+        return "FAILED", humanize_post_error(exc)
+    return "FAILED", humanize_post_error(exc)
 
 
 class PostRunner:
@@ -56,7 +156,12 @@ class PostRunner:
         self._scheduled_time_str: Optional[str] = None
         self._executor: Optional[ThreadPoolExecutor] = None
         self._active_drivers: Dict[str, Any] = {} # thread_id -> driver
-        self._active_threads: Dict[str, Dict[str, Any]] = {} # thread_id -> thread progress info
+        self._active_threads: Dict[str, Dict[str, Any]] = {} # thread_id -> worker slot (nội bộ)
+        # Danh sách tiến trình theo BÀI VIẾT (không theo số luồng) — UI đọc từ đây
+        self._progress_posts: Dict[str, Dict[str, Any]] = {}  # post_id -> row
+        self._progress_order: List[str] = []
+        # Giữ session_id để get_status vẫn rehydrate đủ bài sau khi phiên DONE
+        self._ui_session_id: Optional[str] = None
         self._finished_thread_count: int = 0
         self._total_thread_count: int = 1
         self._account_credentials: Dict[str, Dict[str, Any]] = {}
@@ -71,6 +176,187 @@ class PostRunner:
         }
         self._logs: List[Dict[str, Any]] = []
         self._log_listeners: List[Callable[[Dict[str, Any]], None]] = []
+
+    @staticmethod
+    def _content_preview_from_post(post: Dict[str, Any], post_type: str = "status") -> str:
+        m_file = os.path.basename(post.get("media_path") or "")
+        c_text = (post.get("content") or "").strip().replace("\n", " ")
+        if m_file and c_text:
+            content_preview = f"[{m_file}] {c_text}"
+        elif m_file:
+            content_preview = f"[{m_file}]"
+        else:
+            content_preview = c_text or f"Đang chuẩn bị {post_type.upper()}..."
+        if len(content_preview) > 45:
+            content_preview = content_preview[:45] + "..."
+        return content_preview
+
+    @staticmethod
+    def _post_content_fields(post: Dict[str, Any], post_type: Optional[str] = None) -> Dict[str, Any]:
+        """Full content + media paths for locked progress preview (not truncated)."""
+        ptype = (post_type or post.get("post_type") or "status") or "status"
+        content = (post.get("content") or "").strip()
+        image_paths = post_repository.normalize_image_paths(
+            post.get("image_paths"),
+            post.get("image_path"),
+        )
+        media_path = (post.get("media_path") or "").strip() or None
+        return {
+            "content": content,
+            "imagePaths": image_paths,
+            "mediaPath": media_path,
+            "mediaName": os.path.basename(media_path) if media_path else "",
+            "postType": ptype,
+        }
+
+    @staticmethod
+    def _db_status_to_ui(db_status: Optional[str]) -> str:
+        s = (db_status or "").upper()
+        if s == "PUBLISHED":
+            return "Hoàn thành"
+        if s == "DIE":
+            return "Acc chết"
+        if s in ("STOPPED", "CANCELLED"):
+            return "Đã dừng"
+        if s in ("FAILED", "ERROR", "BLOCKED"):
+            return "Lỗi hệ thống"
+        if s == "RUNNING":
+            return "Đang chạy"
+        return "Chờ thực thi"
+
+    def _rehydrate_progress_from_db(self, session_id: Optional[str]) -> None:
+        """Đảm bảo list tiến trình đủ mọi bài của session (không phụ thuộc số luồng)."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return
+        try:
+            posts = post_repository.list_session_posts(sid)
+        except Exception as e:
+            logger.debug(f"rehydrate progress bỏ qua: {e}")
+            return
+        if not posts:
+            return
+        now = time.time()
+        # Merge: giữ activity in-memory nếu đã có, bổ sung bài thiếu từ DB
+        for post in posts:
+            pid = str(post.get("id") or "")
+            if not pid:
+                continue
+            detail = self._post_content_fields(post, self._post_type or post.get("post_type"))
+            ui_status = self._db_status_to_ui(post.get("status"))
+            preview = self._content_preview_from_post(post, self._post_type or "status")
+            existing = self._progress_posts.get(pid)
+            if existing:
+                # Đồng bộ status từ DB nếu bài đã kết thúc
+                if ui_status in ("Hoàn thành", "Lỗi hệ thống", "Acc chết", "Đã dừng"):
+                    existing["status"] = ui_status
+                    if post.get("error_message"):
+                        existing["currentActivity"] = post.get("error_message")
+                    elif ui_status == "Hoàn thành" and not (existing.get("currentActivity") or "").startswith("XUẤT BẢN"):
+                        existing["currentActivity"] = existing.get("currentActivity") or "Đăng bài hoàn tất."
+                for k, v in detail.items():
+                    if v and not existing.get(k):
+                        existing[k] = v
+                if preview and (
+                    not existing.get("contentPreview")
+                    or existing.get("contentPreview", "").startswith("Đang chuẩn bị")
+                ):
+                    existing["contentPreview"] = preview
+                continue
+            self._progress_order.append(pid)
+            self._progress_posts[pid] = {
+                "id": pid,
+                "threadId": "—",
+                "accountUid": str(post.get("account_uid") or "-"),
+                "accountName": post.get("account_name") or post.get("account_uid") or "Tài khoản",
+                "status": ui_status,
+                "contentPreview": preview,
+                "currentActivity": (post.get("error_message") or "").strip()
+                or (
+                    "Đăng bài hoàn tất."
+                    if ui_status == "Hoàn thành"
+                    else "Đang chờ trong hàng đợi..."
+                ),
+                "startTime": now,
+                **detail,
+            }
+
+    def _seed_progress_posts(
+        self,
+        session_id: str,
+        *,
+        initial_status: str = "Chờ thực thi",
+        initial_activity: str = "Đang chờ trong hàng đợi...",
+        content_override: Optional[str] = None,
+    ) -> None:
+        """Khởi tạo 1 dòng tiến trình cho mỗi bài PENDING/đã tạo trong session."""
+        posts = post_repository.list_session_posts(session_id)
+        self._progress_posts.clear()
+        self._progress_order.clear()
+        now = time.time()
+        for post in posts:
+            pid = str(post.get("id") or "")
+            if not pid:
+                continue
+            uid = str(post.get("account_uid") or "")
+            name = post.get("account_name") or uid or "Tài khoản"
+            detail = self._post_content_fields(post, self._post_type or post.get("post_type"))
+            self._progress_order.append(pid)
+            self._progress_posts[pid] = {
+                "id": pid,
+                "threadId": "—",
+                "accountUid": uid or "-",
+                "accountName": name,
+                "status": initial_status,
+                "contentPreview": content_override
+                or self._content_preview_from_post(post, self._post_type or "status"),
+                "currentActivity": initial_activity,
+                "startTime": now,
+                **detail,
+            }
+
+    def _update_progress_post(self, post_id: Any, **fields: Any) -> None:
+        pid = str(post_id or "")
+        if not pid:
+            return
+        row = self._progress_posts.get(pid)
+        if not row:
+            return
+        row.update(fields)
+
+    def _set_checkpoint(
+        self,
+        thread_name: str,
+        post_id: Any,
+        step: str,
+        activity: Optional[str] = None,
+    ) -> None:
+        """Ghi bước pipeline hiện tại (in-memory) để pause/resume và UI giám sát."""
+        step_name = str(step or "").strip() or "UNKNOWN"
+        pid = str(post_id or "")
+        activity_text = activity or f"Checkpoint: {step_name}"
+        with self._lock:
+            if thread_name in self._active_threads:
+                self._active_threads[thread_name]["checkpoint"] = step_name
+                self._active_threads[thread_name]["currentActivity"] = activity_text
+                if pid:
+                    self._active_threads[thread_name]["id"] = pid
+            if pid and pid in self._progress_posts:
+                self._progress_posts[pid]["checkpoint"] = step_name
+                self._progress_posts[pid]["currentActivity"] = activity_text
+                if thread_name:
+                    self._progress_posts[pid]["threadId"] = thread_name
+
+    def _mark_waiting_posts_stopped_for_uid(self, uid: str, activity: str) -> None:
+        uid_str = str(uid)
+        for row in self._progress_posts.values():
+            if (
+                str(row.get("accountUid") or "") == uid_str
+                and row.get("status") in ("Chờ thực thi", "Đang chờ")
+            ):
+                row["status"] = "Đã dừng"
+                row["currentActivity"] = activity
+                row["threadId"] = row.get("threadId") or "—"
 
     def get_account_credentials(self, uid: str) -> Dict[str, str]:
         """Lấy mật khẩu, 2FA, cookie từ cache hoặc từ Module 02 qua adapters."""
@@ -146,8 +432,37 @@ class PostRunner:
 
     def get_status(self) -> Dict[str, Any]:
         with self._lock:
+            # Đủ số bài theo session — chỉ rehydrate khi list trống/thiếu so với metrics
+            sid = self._active_session_id or self._ui_session_id
+            if sid:
+                metric_total = sum(
+                    int(self._metrics.get(k) or 0)
+                    for k in (
+                        "running",
+                        "paused",
+                        "waiting",
+                        "completed",
+                        "systemError",
+                        "deadAccount",
+                        "stopped",
+                    )
+                )
+                if (not self._progress_posts) or (
+                    metric_total > 0 and len(self._progress_posts) < metric_total
+                ):
+                    self._rehydrate_progress_from_db(sid)
+
             threads_list = []
-            for t_name, t_info in self._active_threads.items():
+            # Ưu tiên danh sách theo bài viết — KHÔNG fallback _active_threads (sẽ cắt theo số luồng)
+            if self._progress_posts:
+                source_rows = [
+                    self._progress_posts[pid]
+                    for pid in self._progress_order
+                    if pid in self._progress_posts
+                ]
+            else:
+                source_rows = []
+            for t_info in source_rows:
                 start_t = t_info.get("startTime", time.time())
                 elapsed = int(time.time() - start_t)
                 mins, secs = divmod(elapsed, 60)
@@ -156,9 +471,14 @@ class PostRunner:
                     "elapsedTime": f"{mins}:{str(secs).zfill(2)}"
                 })
             all_done = (self._finished_thread_count >= self._total_thread_count) if self._total_thread_count > 0 else False
-            is_finished = all_done or (self._active_session_id is None) or self._stop_event.is_set()
+            is_finished = all_done or (
+                self._active_session_id is None and bool(self._ui_session_id)
+            ) or self._stop_event.is_set()
+            # Idle hoàn toàn (đã reset): đừng báo session_finished=true khiến FE kẹt
+            if self._active_session_id is None and not self._ui_session_id and not self._progress_posts:
+                is_finished = False
             return {
-                "session_id": self._active_session_id,
+                "session_id": self._active_session_id or self._ui_session_id,
                 "post_type": self._post_type or "status",
                 "session_accounts": list(self._session_accounts),
                 "is_running": (self._active_session_id is not None) and (not self._stop_event.is_set()) and (not all_done),
@@ -187,11 +507,14 @@ class PostRunner:
 
             session_id = post_repository.create_post_session(post_type)
             self._active_session_id = session_id
+            self._ui_session_id = session_id
             self._post_type = post_type
             self._session_accounts = [str(a.get("uid", "")) for a in (accounts or []) if a.get("uid")]
             self._pause_event.set()
             self._stop_event.clear()
             self._active_threads.clear()
+            self._progress_posts.clear()
+            self._progress_order.clear()
             self._finished_thread_count = 0
             self._total_thread_count = max(1, thread_count)
             self._metrics = {
@@ -269,11 +592,14 @@ class PostRunner:
                 raise RuntimeError("Đang có một phiên đăng bài khác đang chạy. Hãy dừng trước khi bắt đầu mới.")
 
             self._active_session_id = session_id
+            self._ui_session_id = session_id
             self._post_type = post_type
             self._session_accounts = [str(a.get("uid", "")) for a in (accounts or []) if a.get("uid")]
             self._pause_event.set()
             self._stop_event.clear()
             self._active_threads.clear()
+            self._progress_posts.clear()
+            self._progress_order.clear()
             self._finished_thread_count = 0
             self._total_thread_count = max(1, thread_count)
             self._schedule_enabled = is_scheduled and (delay_seconds > 0)
@@ -316,7 +642,7 @@ class PostRunner:
                             "proxy": acc.get("proxy", "") or "",
                         }
 
-            # Khởi tạo trước danh sách thread để UI cập nhật ngay lập tức
+            # Worker slots nội bộ (số luồng)
             for i in range(self._total_thread_count):
                 t_name = f"Thread-{str(i+1).zfill(2)}"
                 if self._schedule_enabled and target_dt:
@@ -342,6 +668,20 @@ class PostRunner:
                         "startTime": time.time(),
                     }
 
+            # Danh sách tiến trình UI = 1 dòng / 1 bài viết (không giới hạn theo số luồng)
+            if self._schedule_enabled and target_dt:
+                self._seed_progress_posts(
+                    session_id,
+                    initial_status="Chờ thực thi",
+                    initial_activity=f"Đang chờ đến khung giờ {schedule_time} để kích nổ...",
+                )
+            else:
+                self._seed_progress_posts(
+                    session_id,
+                    initial_status="Chờ thực thi",
+                    initial_activity="Đang chờ luồng worker nhận bài...",
+                )
+
         if self._schedule_enabled and target_dt:
             self.log("System", "info", f"Đang chờ đến khung giờ {schedule_time} để kích nổ...")
             self.log("System", "info", f"Đã ghi nhận {account_count} bài viết PENDING trong CSDL sẵn sàng xuất bản khi đến giờ hẹn.")
@@ -364,6 +704,9 @@ class PostRunner:
                                     t_info["status"] = "Đang chạy"
                                     t_info["accountName"] = "Đang chuẩn bị..."
                                     t_info["currentActivity"] = "Bắt đầu khởi tạo luồng worker & kết nối Chrome..."
+                            for p_info in self._progress_posts.values():
+                                if p_info.get("status") == "Chờ thực thi":
+                                    p_info["currentActivity"] = "Đang chờ luồng worker nhận bài..."
                         self._schedule_event.set()
                         break
 
@@ -379,9 +722,13 @@ class PostRunner:
                         rem_text = f"{secs}s"
 
                     with self._lock:
+                        wait_msg = f"Đang chờ đến khung giờ {schedule_time} để kích nổ (còn {rem_text})..."
                         for t_info in self._active_threads.values():
                             if t_info.get("status") == "Chờ thực thi":
-                                t_info["currentActivity"] = f"Đang chờ đến khung giờ {schedule_time} để kích nổ (còn {rem_text})..."
+                                t_info["currentActivity"] = wait_msg
+                        for p_info in self._progress_posts.values():
+                            if p_info.get("status") == "Chờ thực thi":
+                                p_info["currentActivity"] = wait_msg
 
                     time.sleep(1)
 
@@ -408,6 +755,10 @@ class PostRunner:
                 if t_info.get("status") == "Đang chạy":
                     t_info["status"] = "Tạm dừng"
                     t_info["currentActivity"] = "Đã tạm dừng theo yêu cầu"
+            for p_info in self._progress_posts.values():
+                if p_info.get("status") == "Đang chạy":
+                    p_info["status"] = "Tạm dừng"
+                    p_info["currentActivity"] = "Đã tạm dừng theo yêu cầu"
         if self._active_session_id:
             post_repository.update_post_session(self._active_session_id, "PAUSED")
         self.log("System", "warn", "Tiến trình tạm ngưng bởi người dùng")
@@ -422,6 +773,10 @@ class PostRunner:
                 if t_info.get("status") == "Tạm dừng":
                     t_info["status"] = "Đang chạy"
                     t_info["currentActivity"] = "Tiếp tục chạy..."
+            for p_info in self._progress_posts.values():
+                if p_info.get("status") == "Tạm dừng":
+                    p_info["status"] = "Đang chạy"
+                    p_info["currentActivity"] = "Tiếp tục chạy..."
         if self._active_session_id:
             post_repository.update_post_session(self._active_session_id, "RUNNING")
         self.log("System", "info", "Tiếp tục chạy nối tiếp...")
@@ -443,6 +798,15 @@ class PostRunner:
             for t_info in self._active_threads.values():
                 t_info["status"] = "Đã dừng"
                 t_info["currentActivity"] = "Đã dừng theo yêu cầu"
+            for p_info in self._progress_posts.values():
+                if p_info.get("status") in (
+                    "Đang chạy",
+                    "Tạm dừng",
+                    "Chờ thực thi",
+                    "Đang chờ",
+                ):
+                    p_info["status"] = "Đã dừng"
+                    p_info["currentActivity"] = "Đã dừng theo yêu cầu"
 
         self.log("System", "warn", "Đã nhận lệnh DỪNG KHẨN CẤP: Đang đóng toàn bộ Chrome profiles...")
 
@@ -469,8 +833,11 @@ class PostRunner:
         """Reset phiên đăng bài về trạng thái ban đầu để người dùng soạn bài mới."""
         with self._lock:
             self._active_session_id = None
+            self._ui_session_id = None
             self._session_accounts = []
             self._active_threads.clear()
+            self._progress_posts.clear()
+            self._progress_order.clear()
             self._finished_thread_count = 0
             self._total_thread_count = 1
             self._stop_event.clear()
@@ -612,16 +979,9 @@ class PostRunner:
 
                 uid = post["account_uid"]
                 name = post.get("account_name", uid)
-                m_file = os.path.basename(post.get("media_path") or "")
-                c_text = (post.get("content") or "").strip().replace("\n", " ")
-                if m_file and c_text:
-                    content_preview = f"[{m_file}] {c_text}"
-                elif m_file:
-                    content_preview = f"[{m_file}]"
-                else:
-                    content_preview = c_text or f"Đang chuẩn bị {post_type.upper()}..."
-                if len(content_preview) > 45:
-                    content_preview = content_preview[:45] + "..."
+                content_preview = self._content_preview_from_post(post, post_type)
+                content_fields = self._post_content_fields(post, post_type)
+                current_post_id = str(post["id"])
 
                 reuse_browser = bool(driver and held_uid == uid)
                 if driver and held_uid and held_uid != uid:
@@ -634,7 +994,7 @@ class PostRunner:
                 )
                 with self._lock:
                     self._active_threads[thread_name] = {
-                        "id": str(post["id"]),
+                        "id": current_post_id,
                         "threadId": thread_name,
                         "accountUid": uid,
                         "accountName": name,
@@ -642,7 +1002,34 @@ class PostRunner:
                         "contentPreview": content_preview or f"Đang chuẩn bị {post_type.upper()}...",
                         "currentActivity": activity,
                         "startTime": time.time(),
+                        **content_fields,
                     }
+                    # Cập nhật dòng bài viết (giữ lịch sử các bài đã xong)
+                    if current_post_id not in self._progress_posts:
+                        self._progress_order.append(current_post_id)
+                        self._progress_posts[current_post_id] = {
+                            "id": current_post_id,
+                            "threadId": thread_name,
+                            "accountUid": uid,
+                            "accountName": name,
+                            "status": "Đang chạy",
+                            "contentPreview": content_preview,
+                            "currentActivity": activity,
+                            "startTime": time.time(),
+                            **content_fields,
+                        }
+                    else:
+                        self._update_progress_post(
+                            current_post_id,
+                            threadId=thread_name,
+                            accountUid=uid,
+                            accountName=name,
+                            status="Đang chạy",
+                            contentPreview=content_preview,
+                            currentActivity=activity,
+                            startTime=time.time(),
+                            **content_fields,
+                        )
                     self._metrics["running"] = len(
                         [t for t in self._active_threads.values() if t.get("status") == "Đang chạy"]
                     )
@@ -676,6 +1063,7 @@ class PostRunner:
                     with self._lock:
                         if thread_name in self._active_threads:
                             self._active_threads[thread_name]["currentActivity"] = msg
+                        self._update_progress_post(current_post_id, currentActivity=msg)
 
                 close_browser_after = False
                 same_uid_continue = False
@@ -782,7 +1170,16 @@ class PostRunner:
                     def check_pause(step_log_cb=None):
                         """Đóng băng ngay lập tức các thao tác tự động nếu người dùng nhấn Tạm dừng."""
                         if not self._pause_event.is_set():
-                            pause_msg = "Tiến trình tạm ngưng bởi người dùng"
+                            with self._lock:
+                                cp = None
+                                if thread_name in self._active_threads:
+                                    cp = self._active_threads[thread_name].get("checkpoint")
+                                if not cp and current_post_id in self._progress_posts:
+                                    cp = self._progress_posts[current_post_id].get("checkpoint")
+                            pause_msg = (
+                                f"Tiến trình tạm ngưng bởi người dùng"
+                                + (f" tại checkpoint: {cp}" if cp else "")
+                            )
                             if step_log_cb:
                                 step_log_cb(pause_msg)
                             self.log(thread_name, "warn", pause_msg)
@@ -790,11 +1187,26 @@ class PostRunner:
                                 if thread_name in self._active_threads:
                                     self._active_threads[thread_name]["status"] = "Tạm dừng"
                                     self._active_threads[thread_name]["currentActivity"] = pause_msg
+                                self._update_progress_post(
+                                    current_post_id,
+                                    status="Tạm dừng",
+                                    currentActivity=pause_msg,
+                                )
                             while not self._pause_event.is_set():
                                 if self._stop_event.is_set():
                                     return
                                 time.sleep(0.5)
-                            resume_msg = "Tiếp tục chạy nối tiếp..."
+                            with self._lock:
+                                cp = None
+                                if thread_name in self._active_threads:
+                                    cp = self._active_threads[thread_name].get("checkpoint")
+                                if not cp and current_post_id in self._progress_posts:
+                                    cp = self._progress_posts[current_post_id].get("checkpoint")
+                            resume_msg = (
+                                f"Tiếp tục từ checkpoint: {cp} (post {current_post_id})"
+                                if cp
+                                else "Tiếp tục chạy nối tiếp..."
+                            )
                             if step_log_cb:
                                 step_log_cb(resume_msg)
                             self.log(thread_name, "info", resume_msg)
@@ -802,16 +1214,35 @@ class PostRunner:
                                 if thread_name in self._active_threads:
                                     self._active_threads[thread_name]["status"] = "Đang chạy"
                                     self._active_threads[thread_name]["currentActivity"] = resume_msg
+                                self._update_progress_post(
+                                    current_post_id,
+                                    status="Đang chạy",
+                                    currentActivity=resume_msg,
+                                )
+
+                    def on_checkpoint(step: str, activity: Optional[str] = None):
+                        self._set_checkpoint(
+                            thread_name,
+                            current_post_id,
+                            step,
+                            activity=activity,
+                        )
 
                     if post_type == "status":
+                        status_content = (post.get("content") or "").strip()
+                        if not status_content:
+                            raise ValueError(
+                                "Nội dung bài Status trống — bỏ qua đăng để tránh bài chỉ còn ảnh."
+                            )
                         res_url = _post_flow_mod.publish_status_post(
                             driver,
-                            post["content"],
+                            status_content,
                             post.get("image_path"),
                             on_progress,
                             check_pause=check_pause,
                             uid=uid,
                             image_paths=post.get("image_paths"),
+                            on_checkpoint=on_checkpoint,
                         )
                     elif post_type == "reels":
                         res_url = _post_flow_mod.publish_reels_post(
@@ -821,6 +1252,7 @@ class PostRunner:
                             on_progress,
                             check_pause=check_pause,
                             uid=uid,
+                            on_checkpoint=on_checkpoint,
                         )
                     elif post_type == "story":
                         res_url = _post_flow_mod.publish_story_post(
@@ -830,6 +1262,7 @@ class PostRunner:
                             on_progress,
                             check_pause=check_pause,
                             uid=uid,
+                            on_checkpoint=on_checkpoint,
                         )
                     else:
                         res_url = None
@@ -873,6 +1306,12 @@ class PostRunner:
                         if thread_name in self._active_threads:
                             self._active_threads[thread_name]["status"] = "Hoàn thành"
                             self._active_threads[thread_name]["currentActivity"] = success_msg
+                        self._update_progress_post(
+                            current_post_id,
+                            status="Hoàn thành",
+                            currentActivity=success_msg,
+                            threadId=thread_name,
+                        )
                         self._metrics["running"] = len(
                             [
                                 t
@@ -916,6 +1355,29 @@ class PostRunner:
                     else:
                         status, err_msg = classify_error(e)
 
+                    # Mất ChromeDriver → đóng slot để bài sau mở lại profile sạch
+                    err_low = f"{type(e).__name__} {e}".lower()
+                    if any(
+                        k in err_low
+                        for k in (
+                            "maxretryerror",
+                            "newconnectionerror",
+                            "winerror 10061",
+                            "connection refused",
+                            "httpconnectionpool",
+                            "invalid session id",
+                            "chrome not reachable",
+                            "remotedisconnected",
+                        )
+                    ):
+                        try:
+                            _close_held_driver("mất kết nối ChromeDriver")
+                        except Exception:
+                            driver = None
+                            held_uid = None
+                            held_owner = None
+                            self._active_drivers.pop(thread_name, None)
+
                     post_logs.append(
                         {
                             "timestamp": time.strftime("%H:%M:%S"),
@@ -946,6 +1408,11 @@ class PostRunner:
                             logger.error(
                                 f"Failed to persist dead status for UID {uid}: {e_status}"
                             )
+                    ui_status = (
+                        "Acc chết"
+                        if status == "DIE"
+                        else ("Đã dừng" if status == "STOPPED" else "Lỗi hệ thống")
+                    )
                     with self._lock:
                         if status == "DIE":
                             self._metrics["deadAccount"] += 1
@@ -954,12 +1421,19 @@ class PostRunner:
                         else:
                             self._metrics["systemError"] += 1
                         if thread_name in self._active_threads:
-                            self._active_threads[thread_name]["status"] = (
-                                "Acc chết"
-                                if status == "DIE"
-                                else ("Đã dừng" if status == "STOPPED" else "Lỗi hệ thống")
-                            )
+                            self._active_threads[thread_name]["status"] = ui_status
                             self._active_threads[thread_name]["currentActivity"] = err_msg
+                        self._update_progress_post(
+                            current_post_id,
+                            status=ui_status,
+                            currentActivity=err_msg,
+                            threadId=thread_name,
+                        )
+                        if status in ("DIE", "BLOCKED"):
+                            self._mark_waiting_posts_stopped_for_uid(
+                                uid,
+                                "Đã dừng vì acc chết/bị chặn trên cùng tài khoản.",
+                            )
                         self._metrics["running"] = len(
                             [
                                 t

@@ -19,29 +19,68 @@ import {
   Loader2,
   X,
   AlertCircle,
-  Terminal
+  Terminal,
+  Image as ImageIcon,
 } from "lucide-react";
 import { api } from "@/services/api";
 import CustomSelect from "@/components/ui/custom-select";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/lib/toast";
+import { mediaFileUrl, normalizeImagePaths } from "./PostImageModal";
+
+function HistoryStatusImageCard({ path }) {
+  const [broken, setBroken] = useState(false);
+  const fileName = String(path || "").replace(/\\/g, "/").split("/").pop() || path;
+  const src = mediaFileUrl(path);
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/80 overflow-hidden flex flex-col min-w-0">
+      <div className="aspect-square bg-slate-100 relative flex items-center justify-center overflow-hidden">
+        {!broken && src ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={src}
+            alt={fileName}
+            className="h-full w-full object-cover"
+            onError={() => setBroken(true)}
+          />
+        ) : (
+          <div className="px-2 text-center space-y-1">
+            <ImageIcon size={18} className="mx-auto text-slate-400" />
+            <p className="text-[10px] text-slate-500 leading-snug">
+              Không tải được ảnh / file không còn trên máy
+            </p>
+          </div>
+        )}
+      </div>
+      <div className="p-2 space-y-1.5 border-t border-slate-200/80">
+        <p className="text-[10px] font-medium text-slate-700 truncate" title={fileName}>
+          {fileName}
+        </p>
+        <p className="text-[9px] font-mono text-slate-400 break-all line-clamp-2" title={path}>
+          {path}
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            navigator.clipboard.writeText(path);
+            toast.success("Đã sao chép đường dẫn ảnh");
+          }}
+          className="text-[10px] text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1 cursor-pointer"
+        >
+          <Copy size={10} />
+          <span>Sao chép đường dẫn</span>
+        </button>
+      </div>
+    </div>
+  );
+}
 
 const FORMAT_OPTIONS = [
   { value: "all", label: "Tất cả hình thức" },
   { value: "status", label: "Status" },
   { value: "reels", label: "Reels" },
   { value: "story", label: "Story" },
-];
-
-const TIME_SLOT_OPTIONS = [
-  { value: "all", label: "Tất cả khung giờ" },
-  { value: "08:00", label: "08:00" },
-  { value: "10:00", label: "10:00" },
-  { value: "12:00", label: "12:00" },
-  { value: "14:00", label: "14:00" },
-  { value: "16:00", label: "16:00" },
-  { value: "18:00", label: "18:00" },
-  { value: "20:00", label: "20:00" },
 ];
 
 const STATUS_OPTIONS = [
@@ -52,6 +91,58 @@ const STATUS_OPTIONS = [
   { value: "DIE", label: "Tài khoản chết" },
   { value: "BLOCKED", label: "Bị chặn" },
 ];
+
+/** Việt hóa thông báo lỗi đăng bài (kể cả bản ghi cũ còn stacktrace Selenium). */
+export function humanizePostError(raw) {
+  let text = String(raw || "").trim();
+  if (!text) return "";
+  for (const sep of ["Stacktrace:", "Stack trace:", "(Session info:", "Backtrace:"]) {
+    const i = text.indexOf(sep);
+    if (i >= 0) text = text.slice(0, i).trim();
+  }
+  text = text
+    .split("\n")
+    .filter((ln) => ln.trim() && !ln.includes("No symbol"))
+    .join(" ")
+    .trim() || String(raw || "").trim();
+  const low = text.toLowerCase();
+
+  if (low.includes("publishunconfirmed")) {
+    const after = text.includes(":") ? text.split(":").slice(1).join(":").trim() : "";
+    return after || "Không xác nhận được bài đã đăng lên Facebook (hết thời gian chờ).";
+  }
+  if (
+    low.includes("maxretryerror") ||
+    low.includes("newconnectionerror") ||
+    low.includes("winerror 10061") ||
+    low.includes("actively refused") ||
+    low.includes("connection refused") ||
+    low.includes("httpconnectionpool") ||
+    low.includes("failed to establish a new connection") ||
+    low.includes("invalid session id") ||
+    low.includes("chrome not reachable")
+  ) {
+    return "Mất kết nối với trình duyệt Chrome trong lúc đăng bài (Chrome/ChromeDriver đã đóng hoặc không phản hồi). Hãy chạy lại bài này; tránh đóng cửa sổ Chrome khi đang đăng.";
+  }
+  if (low.includes("staleelement")) {
+    return "Giao diện Facebook vừa thay đổi khi đang thao tác (phần tử DOM bị cũ). Hệ thống không bấm được nút đúng lúc — hãy thử đăng lại bài này.";
+  }
+  if (low.includes("nosuchelement")) {
+    return "Không tìm thấy nút/ô nhập trên Facebook (giao diện đổi hoặc trang chưa tải xong). Hãy thử đăng lại hoặc kiểm tra phiên đăng nhập.";
+  }
+  if (low.includes("timeoutexception") || low.includes("timed out")) {
+    return "Hết thời gian chờ phần tử trên Facebook phản hồi. Mạng chậm hoặc trang tải lâu — hãy thử đăng lại.";
+  }
+  if (low.includes("elementclickintercepted") || low.includes("element not interactable")) {
+    return "Không thể bấm nút vì bị lớp giao diện khác che (popup/dialog). Hãy thử đăng lại bài này.";
+  }
+  if (/^[A-Za-z][A-Za-z0-9_]*Error:/.test(text) || /^[A-Za-z][A-Za-z0-9_]*Exception:/.test(text)) {
+    const after = text.split(":").slice(1).join(":").trim();
+    const short = (after || text).slice(0, 280);
+    return `Lỗi đăng bài: ${short}${after.length > 280 ? "..." : ""}`;
+  }
+  return text.length > 400 ? `${text.slice(0, 397)}...` : text;
+}
 
 const CLEANUP_OPTIONS = [
   { value: 7, label: "Cũ hơn 7 ngày" },
@@ -66,7 +157,6 @@ export function HistoryView() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedAccountUid, setSelectedAccountUid] = useState("all");
   const [selectedFormat, setSelectedFormat] = useState("all");
-  const [selectedTimeSlot, setSelectedTimeSlot] = useState("all");
   const [selectedStatus, setSelectedStatus] = useState("all");
   const [selectedDate, setSelectedDate] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -174,7 +264,6 @@ export function HistoryView() {
           params.account_uid = selectedAccountUid;
         }
         if (selectedFormat !== "all") params.post_type = selectedFormat;
-        if (selectedTimeSlot !== "all") params.time_slot = selectedTimeSlot;
         if (selectedStatus !== "all") params.status = selectedStatus;
         if (selectedDate) params.date = selectedDate;
 
@@ -201,7 +290,6 @@ export function HistoryView() {
     searchTerm,
     selectedAccountUid,
     selectedFormat,
-    selectedTimeSlot,
     selectedStatus,
     selectedDate,
     reloadCounter,
@@ -416,18 +504,6 @@ export function HistoryView() {
           }}
           options={FORMAT_OPTIONS}
           className="min-w-[155px]"
-          buttonClassName="h-10 rounded-lg border-border text-xs text-slate-700 font-medium"
-        />
-
-        {/* Dropdown: Khung giờ */}
-        <CustomSelect
-          value={selectedTimeSlot}
-          onChange={(val) => {
-            setSelectedTimeSlot(val);
-            setCurrentPage(1);
-          }}
-          options={TIME_SLOT_OPTIONS}
-          className="min-w-[145px]"
           buttonClassName="h-10 rounded-lg border-border text-xs text-slate-700 font-medium"
         />
 
@@ -743,6 +819,7 @@ export function HistoryView() {
 
         const isPublished = selectedDetailPost.status === "PUBLISHED";
         const isError = !isPublished;
+        const statusImagePaths = normalizeImagePaths(selectedDetailPost);
         const postUrl = selectedDetailPost.facebook_post_url;
         const profileUrl = selectedDetailPost.account_uid ? `https://www.facebook.com/${selectedDetailPost.account_uid}` : null;
 
@@ -774,6 +851,15 @@ export function HistoryView() {
               type: "info",
               message: `Tệp đính kèm: ${fileName}`
             });
+          } else if (statusImagePaths.length > 0) {
+            logsList.push({
+              timestamp: timeStr,
+              thread: "Thread-01",
+              type: "info",
+              message: `Ảnh Status đính kèm (${statusImagePaths.length}): ${statusImagePaths
+                .map((p) => String(p).replace(/\\/g, "/").split("/").pop())
+                .join(", ")}`,
+            });
           }
           if (isPublished) {
             logsList.push({
@@ -794,7 +880,7 @@ export function HistoryView() {
               timestamp: formatDateTime(selectedDetailPost.updated_at).time,
               thread: "Thread-01",
               type: "error",
-              message: `[${selectedDetailPost.status || 'FAILED'}] ${selectedDetailPost.error_message}`
+              message: `[${selectedDetailPost.status || 'FAILED'}] ${humanizePostError(selectedDetailPost.error_message)}`
             });
           }
         }
@@ -964,7 +1050,35 @@ export function HistoryView() {
                   </div>
                 </div>
 
-                {/* 🔹 Phần 2b: Đường dẫn Media nguồn (Nếu có) */}
+                {/* 🔹 Phần 2b: Hình ảnh Status đã đăng (image_path / image_paths) */}
+                {statusImagePaths.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-600 font-bold text-xs flex items-center gap-1.5">
+                        <ImageIcon size={13} className="text-slate-500" />
+                        <span>Hình ảnh đã đăng</span>
+                        <span className="text-[10px] font-normal text-slate-400 font-mono">
+                          ({statusImagePaths.length}/3)
+                        </span>
+                      </span>
+                    </div>
+                    <div
+                      className={`grid gap-2 ${
+                        statusImagePaths.length === 1
+                          ? "grid-cols-1 max-w-[180px]"
+                          : statusImagePaths.length === 2
+                            ? "grid-cols-2"
+                            : "grid-cols-3"
+                      }`}
+                    >
+                      {statusImagePaths.map((path) => (
+                        <HistoryStatusImageCard key={path} path={path} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 🔹 Phần 2c: Đường dẫn Media nguồn Reels/Story (Nếu có) */}
                 {selectedDetailPost.media_path && (
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
@@ -998,7 +1112,9 @@ export function HistoryView() {
                     <AlertCircle size={16} className="text-rose-500 shrink-0 mt-0.5" />
                     <div className="space-y-0.5">
                       <span className="font-bold text-rose-800 block text-xs">Thông báo lỗi:</span>
-                      <p className="text-rose-700 text-[11px] leading-relaxed break-words">{selectedDetailPost.error_message}</p>
+                      <p className="text-rose-700 text-[11px] leading-relaxed break-words">
+                        {humanizePostError(selectedDetailPost.error_message)}
+                      </p>
                     </div>
                   </div>
                 )}
@@ -1024,7 +1140,16 @@ export function HistoryView() {
 
                   {(isError || showSuccessLogs) && (
                     <div className="bg-[#0f172a] rounded-xl p-3.5 border border-slate-800 font-mono text-[11px] max-h-48 overflow-y-auto space-y-1.5 shadow-inner">
-                      {logsList.map((log, idx) => (
+                      {logsList.map((log, idx) => {
+                        const rawMsg = String(log.message || "");
+                        const isErrLine =
+                          log.type === "error" || /\[(FAILED|DIE|BLOCKED|ERROR)\]/i.test(rawMsg);
+                        const prefix = (rawMsg.match(/^\[[^\]]+\]/) || [""])[0];
+                        const body = rawMsg.replace(/^\[[^\]]+\]\s*/, "");
+                        const displayMsg = isErrLine
+                          ? `${prefix} ${humanizePostError(body || rawMsg)}`.trim()
+                          : rawMsg;
+                        return (
                         <div key={idx} className="flex items-start gap-2 leading-relaxed font-mono">
                           <span className="text-slate-500 shrink-0 select-none">[{log.timestamp || "--:--:--"}]</span>
                           {log.thread && <span className="text-cyan-400 shrink-0 font-semibold">[{log.thread}]</span>}
@@ -1037,10 +1162,11 @@ export function HistoryView() {
                               ? "text-emerald-400 font-semibold"
                               : "text-slate-200"
                           }>
-                            {log.message}
+                            {displayMsg}
                           </span>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>

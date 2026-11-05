@@ -7,3 +7,4 @@ export const metadata = pageMetadata("groups.campaigns");
 export default function Page() {
   return <GroupCampaignsModule />;
 }
+

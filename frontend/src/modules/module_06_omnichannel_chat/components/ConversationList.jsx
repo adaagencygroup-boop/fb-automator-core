@@ -19,10 +19,9 @@ const formatTime = (iso) =>
 const shortCustomer = (id) => (String(id).length > 8 ? `${String(id).slice(0, 8)}...` : id);
 
 function Tabs({ tab, onTabChange, notificationCount, onBack }) {
-  // Con số đã là số chưa đọc, nên không cần chấm báo kèm theo nữa
   const tabs = [
     { id: "conversations", label: "Hội thoại" },
-    { id: "notifications", label: `Thông báo (${notificationCount})` },
+    { id: "notifications", label: `Thông báo (${notificationCount ?? 0})` },
   ];
   return (
     <div role="tablist" aria-label="Hội thoại và thông báo" className="flex border-b border-slate-200 shrink-0">
@@ -183,7 +182,9 @@ export default function ConversationList({
   onSortChange,
   conversations,
   notifications,
+  totalNotifications,
   notificationCounts,
+  notificationTypeCounts,
   notificationsLoading,
   onLoadMoreNotifications,
   hasMoreNotifications,
@@ -205,6 +206,10 @@ export default function ConversationList({
   // Mọi con số hiển thị đều là SỐ CHƯA ĐỌC — badge trên Page, tab Thông báo và
   // hai sub-tab cùng một đơn vị, không lệch nhau nữa.
   const unreadNotifications = Object.values(notificationCounts || {}).reduce((a, b) => a + b, 0);
+  const typeTotalNotifications = Object.values(notificationTypeCounts || {}).reduce((a, b) => a + b, 0);
+  const displayNotificationCount = typeTotalNotifications > 0
+    ? typeTotalNotifications
+    : (totalNotifications !== undefined ? totalNotifications : unreadNotifications);
 
   return (
     <section
@@ -217,7 +222,7 @@ export default function ConversationList({
       <Tabs
         tab={tab}
         onTabChange={onTabChange}
-        notificationCount={unreadNotifications}
+        notificationCount={displayNotificationCount}
         onBack={onBack}
       />
 
@@ -268,7 +273,7 @@ export default function ConversationList({
         <NotificationList
           loading={notificationsLoading ?? loading}
           notifications={notifications}
-          counts={notificationCounts}
+          counts={notificationTypeCounts || notificationCounts}
           onLoadMore={onLoadMoreNotifications}
           hasMore={hasMoreNotifications}
           loadingMore={loadingMoreNotifications}

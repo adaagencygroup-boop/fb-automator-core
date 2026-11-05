@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 from pathlib import Path
 import random
@@ -1172,22 +1173,38 @@ class CampaignManager:
             self._sync_run(job)
             action_type = str(payload.get("action_type") or "POST").upper()
             action_label = "bình luận" if action_type == "COMMENT" else "đăng bài"
-            job.log(
-                "INFO",
-                f"Bắt đầu {job.total} lượt tuần tự theo tài khoản: tham gia từng nhóm rồi {action_label} ngay",
-            )
-            for uid, items in per_account.items():
+            requested_threads = max(1, int(settings.get("threads") or 1))
+            worker_count = min(requested_threads, len(per_account))
+
+            def run_account(uid: str, items: list[dict[str, Any]]) -> None:
                 if job.cancel.is_set():
-                    break
+                    return
                 job.log("INFO", f"[{uid}] Bắt đầu xử lý {len(items)} nhóm")
                 try:
                     self._run_account(job, accounts[uid], items)
                 except InterruptedError:
-                    break
+                    return
                 except Exception as exc:
-                    job.log("ERROR", _friendly_automation_error(exc)["message"])
-                if not job.cancel.is_set():
-                    job.log("SUCCESS", f"[{uid}] Đã xử lý xong, chuẩn bị chuyển tài khoản tiếp theo")
+                    job.log("ERROR", f"[{uid}] {_friendly_automation_error(exc)['message']}")
+                finally:
+                    if not job.cancel.is_set():
+                        job.log("SUCCESS", f"[{uid}] Đã xử lý xong")
+
+            job.log(
+                "INFO",
+                f"Bắt đầu {job.total} lượt với {worker_count} luồng Chrome song song; "
+                f"mỗi tài khoản xử lý tuần tự các nhóm của mình rồi đăng bài ngay",
+            )
+            with ThreadPoolExecutor(
+                max_workers=worker_count,
+                thread_name_prefix=f"group-chrome-{job.id[:8]}",
+            ) as executor:
+                futures = [
+                    executor.submit(run_account, uid, items)
+                    for uid, items in per_account.items()
+                ]
+                for future in as_completed(futures):
+                    future.result()
 
             if job.cancel.is_set():
                 job.status = "STOPPED"

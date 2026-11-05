@@ -13,7 +13,7 @@ import { findNavItem, findNavItemByPath, pathOf } from "@/config/navigation";
 import { usePersistentBoolean } from "@/lib/usePersistentBoolean";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { MiniProgress } from "@/components/MiniProgress";
-import UnsavedChangesGuard from "@/components/UnsavedChangesGuard";
+import { UnsavedChangesProvider, useUnsavedChanges } from "@/components/UnsavedChangesContext";
 
 // Khung "Nhật ký hệ thống realtime" ở cuối màn hình — đang ẩn. Đổi thành true để hiện lại.
 const SHOW_SYSTEM_LOG = false;
@@ -28,12 +28,17 @@ const SIDEBAR_OVERLAY_QUERY = "(max-width: 1279px)";
 export default function AppShell({ children }) {
   const pathname = usePathname();
   if (pathname.replace(/\/$/, "") === "/oauth/meta/callback") return children;
-  return <AuthGate>{(session) => <Workspace session={session}>{children}</Workspace>}</AuthGate>;
+  return (
+    <UnsavedChangesProvider>
+      <AuthGate>{(session) => <Workspace session={session}>{children}</Workspace>}</AuthGate>
+    </UnsavedChangesProvider>
+  );
 }
 
 function Workspace({ session, children }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { requestNavigation } = useUnsavedChanges();
   const activeTab = findNavItemByPath(pathname)?.id ?? null;
 
   const [engineOnline, setEngineOnline] = useState(false);
@@ -82,7 +87,7 @@ function Workspace({ session, children }) {
     return () => ws?.close();
   }, []);
 
-  const goTo = (navId) => router.push(pathOf(findNavItem(navId).item));
+  const goTo = (navId) => requestNavigation(() => router.push(pathOf(findNavItem(navId).item)));
   const { user } = session;
 
   return (
@@ -103,12 +108,16 @@ function Workspace({ session, children }) {
                 if (e.target instanceof Element && e.target.closest("a")) setDrawerOpen(false);
               }}
             >
-              <Sidebar activeTab={activeTab} open />
+            <Sidebar activeTab={activeTab} open onNavigate={(event, path) => {
+              if (!requestNavigation(() => router.push(path))) event.preventDefault();
+            }} />
             </div>
           </>
         )
       ) : (
-        <Sidebar activeTab={activeTab} open={sidebarOpen} />
+        <Sidebar activeTab={activeTab} open={sidebarOpen} onNavigate={(event, path) => {
+          if (!requestNavigation(() => router.push(path))) event.preventDefault();
+        }} />
       )}
 
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
@@ -144,7 +153,6 @@ function Workspace({ session, children }) {
 
         {/* Global floating mini progress widget */}
         <MiniProgress />
-        <UnsavedChangesGuard />
       </div>
     </div>
   );

@@ -207,6 +207,7 @@ _PUBLIC_API = {
     "/api/facebook/config",
     "/api/post/dialog/file",
     "/api/post/dialog/folder",
+    "/api/pages/reels/select-folder",
     "/api/groups/source/template",
     "/api/page-scanner/source/template",
     "/oauth/meta/callback",
@@ -415,6 +416,8 @@ app.include_router(seeding_router, prefix="/api")
 from modules.module_04_page_creator.routes import router as creator_router
 
 app.include_router(creator_router)
+
+
 
 
 # ==================== MODULE 5: PAGE MANAGER & POSTING ====================

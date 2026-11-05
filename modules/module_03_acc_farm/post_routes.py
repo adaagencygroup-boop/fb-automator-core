@@ -47,6 +47,8 @@ class SettingsPayload(BaseModel):
     api_key_file_path: Optional[str] = None
     gemini_model: Optional[str] = "gemini-3.8-flash"
     prompt_template: Optional[str] = None
+    pixabay_api_key: Optional[str] = None
+    pixabay_key: Optional[str] = None  # alias FE
     master_folder_path: Optional[str] = None
     check_duplicate: Optional[bool] = True
     schedule_enabled: Optional[bool] = False
@@ -111,7 +113,10 @@ def get_settings(post_type: str = Query("status", pattern="^(status|reels|story)
 
 @router.post("/settings")
 def save_settings(payload: SettingsPayload):
-    saved = post_repository.upsert_post_settings(payload.post_type, payload.dict())
+    # exclude_unset: Reels/Story không gửi pixabay → không xóa key đã lưu
+    saved = post_repository.upsert_post_settings(
+        payload.post_type, payload.dict(exclude_unset=True)
+    )
     return {"success": True, "data": saved}
 
 
@@ -399,7 +404,10 @@ def crawl_image_for_draft(payload: CrawlImagePayload):
       1) Bắt buộc có Pixabay API Key
       2) Gemini tối ưu từ khóa (tiếng Anh ngắn) rồi mới search Pixabay
     """
+    settings = post_repository.get_post_settings("status")
     pixabay_key = (payload.pixabay_key or "").strip()
+    if not pixabay_key and settings:
+        pixabay_key = (settings.get("pixabay_api_key") or "").strip()
     if not pixabay_key:
         raise HTTPException(
             status_code=400,
@@ -410,7 +418,6 @@ def crawl_image_for_draft(payload: CrawlImagePayload):
     if payload.api_key_source:
         gemini_keys = load_gemini_keys(payload.api_key_source)
     if not gemini_keys:
-        settings = post_repository.get_post_settings("status")
         if settings and settings.get("api_key_file_path"):
             gemini_keys = load_gemini_keys(settings["api_key_file_path"])
     if not gemini_keys:
@@ -598,6 +605,9 @@ def start_posting(payload: StartPostPayload):
                     )
                     draft_content = gen_res[0] if isinstance(gen_res, tuple) else gen_res
                 except Exception:
+                    draft_content = "Chúc mọi người một ngày làm việc thật nhiều năng lượng và may mắn! ✨"
+                # AI có thể trả chuỗi rỗng (chỉ IMAGE_KEYWORD) — dùng fallback thay vì PENDING rỗng
+                if not (draft_content or "").strip():
                     draft_content = "Chúc mọi người một ngày làm việc thật nhiều năng lượng và may mắn! ✨"
 
             post_repository.create_post(

@@ -11,3 +11,4 @@ export default async function Page({ params }) {
   const resolvedParams = params && typeof params.then === "function" ? await params : params;
   return <CampaignDetailModule campaignId={resolvedParams?.id} />;
 }
+

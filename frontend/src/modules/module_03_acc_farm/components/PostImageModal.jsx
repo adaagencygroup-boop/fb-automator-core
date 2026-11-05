@@ -48,7 +48,7 @@ export function normalizeImagePaths(cardOrPaths) {
   return out;
 }
 
-function mediaFileUrl(path, version) {
+export function mediaFileUrl(path, version = 0) {
   if (!path) return null;
   return `${API_BASE}/api/post/media/file?path=${encodeURIComponent(path)}&t=${version}`;
 }

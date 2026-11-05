@@ -9,8 +9,7 @@ import { PostModeTabs } from "./components/PostModeTabs";
 import { StatusPostView } from "./components/StatusPostView";
 import { ReelsPostView } from "./components/ReelsPostView";
 import { api } from "@/services/api";
-import { requestLeaveUnsaved } from "@/components/UnsavedChangesGuard";
-import { hasUnsavedChanges } from "@/lib/unsavedChanges";
+import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
 
 /**
  * Module 03: Đăng bài và tương tác tài khoản.
@@ -21,6 +20,7 @@ import { hasUnsavedChanges } from "@/lib/unsavedChanges";
 export default function AccFarmModule({ subPage = "interact.post" }) {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { requestNavigation } = useUnsavedChanges();
 
   const [postMode, setPostMode] = useState(() => {
     if (typeof window !== "undefined") {
@@ -39,7 +39,7 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
     const urlTab = searchParams?.get("tab");
     if (urlTab && ["status", "reels", "story"].includes(urlTab) && urlTab !== postMode) {
       // Không tự chuyển nếu đang có bài Status / unsaved
-      if (hasUnsavedChanges() || (postMode === "status" && statusNeedsLeaveConfirm)) return;
+      if (statusNeedsLeaveConfirm) return;
       setPostMode(urlTab);
       if (typeof window !== "undefined") {
         localStorage.setItem("module_03_post_mode", urlTab);
@@ -60,7 +60,7 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
           if (
             d.post_type &&
             ["status", "reels", "story"].includes(d.post_type) &&
-            !hasUnsavedChanges()
+            !statusNeedsLeaveConfirm
           ) {
             setPostMode(d.post_type);
             if (typeof window !== "undefined") {
@@ -73,7 +73,7 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
       }
     };
     checkActiveSession();
-  }, [searchParams]);
+  }, [searchParams, statusNeedsLeaveConfirm]);
 
   const applyModeChange = (mode) => {
     setPostMode(mode);
@@ -85,16 +85,8 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
 
   const handleModeChange = (mode) => {
     if (mode === postMode) return;
-    // Đang ở Status và có Prompt/bài viết → bắt buộc hiện popup xác nhận
-    if (postMode === "status" && statusNeedsLeaveConfirm) {
-      requestLeaveUnsaved(() => applyModeChange(mode), { force: true });
-      return;
-    }
-    if (hasUnsavedChanges()) {
-      requestLeaveUnsaved(() => applyModeChange(mode));
-      return;
-    }
-    applyModeChange(mode);
+    // Dirty (Prompt/bài Status) → popup Context; không dirty → đổi tab ngay
+    requestNavigation(() => applyModeChange(mode));
   };
 
   // 1. Phân hệ Tương tác tài khoản / Nuôi nick (/interact/engage) - Chuẩn từ main

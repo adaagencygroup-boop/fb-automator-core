@@ -17,7 +17,7 @@ import hmac
 import hashlib
 import struct
 from urllib.parse import urlparse, parse_qs, urlencode
-from typing import Optional, Any, List
+from typing import Optional, Any, List, Callable
 import json
 
 from selenium.webdriver.common.by import By
@@ -559,24 +559,117 @@ def human_type(driver, element, text: str, min_delay: float = 0.02, max_delay: f
     human.human_type(element, text)
 
 
-def wait_dialog_closed(driver, timeout: int = 45) -> None:
+def wait_until(
+    driver,
+    predicate: Callable[[Any], bool],
+    timeout: float = 45,
+    check_pause: Optional[Any] = None,
+    log_cb: Optional[Any] = None,
+    poll: float = 0.5,
+) -> bool:
+    """
+    Poll predicate đến khi True hoặc hết timeout.
+    Nếu check_pause block khi tạm dừng, thời gian pause KHÔNG trừ vào timeout.
+    """
+    remaining = float(timeout)
+    poll = max(0.2, float(poll))
+    while remaining > 0:
+        if check_pause and callable(check_pause):
+            # Block đến khi resume; không trừ thời gian pause khỏi remaining
+            check_pause(log_cb)
+        try:
+            if predicate(driver):
+                return True
+        except Exception:
+            pass
+        time.sleep(poll)
+        remaining -= poll
+    return False
+
+
+def _status_publish_success_signal(driver) -> bool:
+    """True nếu có tín hiệu bài Status đã submit (toast / hết composer soạn)."""
+    try:
+        js = """
+            const toastRe = /(đang đăng|đã chia sẻ|đăng thành công|post shared|is being shared|your post)/i;
+            const lives = Array.from(document.querySelectorAll(
+                "[role='alert'], [aria-live='polite'], [aria-live='assertive']"
+            ));
+            for (const n of lives) {
+                const t = (n.innerText || n.textContent || '').trim();
+                if (t && toastRe.test(t)) return true;
+            }
+            const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
+            for (const d of dialogs) {
+                const hasComposer = !!d.querySelector("div[role='textbox']");
+                const hasPostBtn = !!d.querySelector(
+                    "[aria-label='Đăng'], [aria-label='Post'], [aria-label='Publish']"
+                );
+                if (!hasComposer && !hasPostBtn) continue;
+                const rect = d.getBoundingClientRect();
+                if (rect.width > 200 && rect.height > 120 && d.offsetParent !== null) {
+                    return false; // composer vẫn mở
+                }
+            }
+            return true;
+        """
+        return bool(driver.execute_script(js))
+    except Exception:
+        return False
+
+
+def wait_dialog_closed(
+    driver,
+    timeout: int = 45,
+    check_pause: Optional[Any] = None,
+    log_cb: Optional[Any] = None,
+) -> None:
     """Chờ hộp thoại đăng bài đóng hẳn sau khi click Đăng, xác nhận bài đã submit thành công."""
     def composer_closed(d):
-        composer_dialogs = d.find_elements(
-            By.XPATH,
-            "//div[@role='dialog' and (.//div[@role='textbox'] or .//div[@aria-label='Đăng' or @aria-label='Post'])]"
-        )
-        return not any(e.is_displayed() for e in composer_dialogs)
+        try:
+            if _status_publish_success_signal(d):
+                return True
+        except Exception:
+            pass
+        try:
+            composer_dialogs = d.find_elements(
+                By.XPATH,
+                "//div[@role='dialog' and (.//div[@role='textbox'] or .//div[@aria-label='Đăng' or @aria-label='Post'])]"
+            )
+            return not any(e.is_displayed() for e in composer_dialogs)
+        except StaleElementReferenceException:
+            return False
+        except Exception:
+            # Mất kết nối driver → coi như chưa xác nhận được
+            return False
+
+    ok = wait_until(
+        driver,
+        composer_closed,
+        timeout=timeout,
+        check_pause=check_pause,
+        log_cb=log_cb,
+        poll=0.5,
+    )
+    if ok:
+        try:
+            check_account_health(driver)
+        except Exception:
+            pass
+        return
 
     try:
-        WebDriverWait(driver, timeout).until(composer_closed)
-    except TimeoutException:
         check_account_health(driver)
+    except Exception:
+        pass
+    try:
         textboxes = driver.find_elements(By.XPATH, "//div[@role='dialog']//div[@role='textbox']")
         if not any(t.is_displayed() for t in textboxes):
             return
-        raise PublishUnconfirmed("Hộp thoại đăng chưa đóng sau thời gian chờ, không xác nhận được bài đã lên.")
-    check_account_health(driver)
+    except Exception:
+        # Driver chết giữa chừng — báo mất kết nối rõ ràng hơn PublishUnconfirmed
+        raise
+    raise PublishUnconfirmed("Hộp thoại đăng chưa đóng sau thời gian chờ, không xác nhận được bài đã lên.")
 
 
 def is_audience_dialog_open(driver) -> bool:
@@ -3061,6 +3154,201 @@ def _normalize_status_image_paths(
     return existing
 
 
+_STATUS_COMPOSER_TEXTBOX_XPATHS = (
+    "//div[@role='dialog']//div[@role='textbox' and @contenteditable='true']",
+    "//div[@role='dialog']//div[@role='textbox']",
+    "//div[@role='dialog']//div[@data-lexical-editor='true']",
+    "//div[@role='dialog']//div[@contenteditable='true']",
+    "//div[@role='dialog']//div[contains(@aria-label, 'Bạn đang nghĩ gì') or contains(@aria-label, \"What's on your mind\")]",
+)
+
+
+def _status_composer_plain_text(driver) -> str:
+    """Đọc nội dung composer Status bằng innerText (Lexical), scoped trong dialog."""
+    try:
+        text = driver.execute_script(
+            """
+            function getComposerDialog() {
+                const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
+                return dialogs.find(d => {
+                    const rect = d.getBoundingClientRect();
+                    return rect.width > 250 && rect.height > 150;
+                }) || dialogs[dialogs.length - 1] || null;
+            }
+            const dialog = getComposerDialog();
+            if (!dialog) return '';
+            const candidates = Array.from(dialog.querySelectorAll(
+                'div[role="textbox"][contenteditable="true"], div[data-lexical-editor="true"], div[contenteditable="true"]'
+            ));
+            for (const el of candidates) {
+                const rect = el.getBoundingClientRect();
+                if (rect.width < 40 || rect.height < 20) continue;
+                const t = (el.innerText || el.textContent || '').replace(/\\u200b/g, '').trim();
+                if (t) return t;
+            }
+            return '';
+            """
+        )
+        return (text or "").strip()
+    except Exception:
+        return ""
+
+
+def _find_status_composer_textbox(driver):
+    """Tìm textbox soạn Status chỉ trong dialog (không dùng selector global)."""
+    for sel in _STATUS_COMPOSER_TEXTBOX_XPATHS:
+        try:
+            for el in driver.find_elements(By.XPATH, sel):
+                try:
+                    if el.is_displayed():
+                        return el
+                except StaleElementReferenceException:
+                    continue
+        except Exception:
+            continue
+    return None
+
+
+def _wait_status_composer_settle(driver, log_cb: Optional[Any] = None, timeout: float = 8.0) -> bool:
+    """
+    Poll đến khi dialog composer còn mở và textbox displayed,
+    rồi settle thêm 1.0–1.5s cho Lexical/network ổn định.
+    """
+    def _log(msg: str):
+        if log_cb:
+            log_cb(msg)
+
+    deadline = time.time() + max(2.0, float(timeout))
+    found = False
+    while time.time() < deadline:
+        try:
+            if is_composer_dialog_open(driver) and _find_status_composer_textbox(driver) is not None:
+                found = True
+                break
+        except Exception:
+            pass
+        time.sleep(random.uniform(0.4, 0.6))
+
+    if found:
+        settle = random.uniform(1.0, 1.5)
+        time.sleep(settle)
+        return True
+
+    _log("Cảnh báo: composer Status chưa settle đủ trong timeout — vẫn thử tiếp.")
+    time.sleep(random.uniform(0.6, 1.0))
+    return False
+
+
+def _ensure_status_composer_content(
+    driver,
+    human: HumanInteraction,
+    content: str,
+    log_cb: Optional[Any] = None,
+    check_pause: Optional[Any] = None,
+    max_attempts: int = 3,
+) -> None:
+    """
+    Đảm bảo ô soạn Status còn đủ nội dung (đặc biệt sau khi đính kèm ảnh).
+    Nếu content rỗng hoặc không khôi phục được → raise (không bấm Đăng).
+    """
+    def log(msg: str):
+        if log_cb:
+            log_cb(msg)
+        logger.info(msg)
+
+    def _chk():
+        if check_pause and callable(check_pause):
+            check_pause(log_cb)
+
+    plain = (content or "").strip()
+    if not plain:
+        raise RuntimeError("Nội dung bài Status trống — hủy đăng để tránh bài chỉ còn ảnh.")
+
+    threshold = max(10, int(len(plain) * 0.7))
+    _wait_status_composer_settle(driver, log_cb=log_cb, timeout=8)
+
+    last_len = 0
+    for attempt in range(1, max_attempts + 1):
+        _chk()
+        current = _status_composer_plain_text(driver)
+        last_len = len(current)
+        if last_len >= threshold:
+            log(f"✓ Composer Status còn đủ nội dung ({last_len} ký tự).")
+            return
+
+        log(
+            f"Nội dung composer thiếu/mất sau thao tác UI "
+            f"(đọc được {last_len}/{len(plain)} ký tự) — khôi phục lần {attempt}/{max_attempts}..."
+        )
+        input_box = _find_status_composer_textbox(driver)
+        if not input_box:
+            _wait_status_composer_settle(driver, log_cb=log_cb, timeout=5)
+            input_box = _find_status_composer_textbox(driver)
+        if not input_box:
+            time.sleep(random.uniform(0.8, 1.2))
+            continue
+
+        try:
+            try:
+                human.click(input_box)
+            except Exception:
+                driver.execute_script("arguments[0].focus();", input_box)
+            time.sleep(0.35)
+            try:
+                input_box.send_keys(Keys.CONTROL, "a")
+                time.sleep(0.12)
+            except Exception:
+                pass
+
+            inserted = False
+            try:
+                driver.execute_cdp_cmd("Input.insertText", {"text": plain})
+                inserted = True
+            except Exception as e_cdp:
+                logger.debug(f"CDP insertText Status thất bại: {e_cdp}")
+
+            if not inserted:
+                try:
+                    driver.execute_script(
+                        """
+                        const el = arguments[0];
+                        const text = arguments[1];
+                        if (!el) return false;
+                        el.focus();
+                        try { document.execCommand('selectAll', false, null); } catch (e) {}
+                        return document.execCommand('insertText', false, text);
+                        """,
+                        input_box,
+                        plain,
+                    )
+                    inserted = True
+                except Exception as e_js:
+                    logger.debug(f"execCommand insertText Status thất bại: {e_js}")
+
+            if not inserted:
+                try:
+                    human.human_type(input_box, plain, mistake_rate=0.0)
+                except Exception as e_type:
+                    logger.debug(f"human_type Status fallback thất bại: {e_type}")
+        except StaleElementReferenceException:
+            time.sleep(random.uniform(0.6, 1.0))
+            continue
+        except Exception as e:
+            logger.debug(f"Lỗi khôi phục nội dung Status lần {attempt}: {e}")
+
+        time.sleep(random.uniform(0.8, 1.2))
+        current = _status_composer_plain_text(driver)
+        last_len = len(current)
+        if last_len >= threshold:
+            log(f"✓ Đã khôi phục nội dung composer Status ({last_len} ký tự).")
+            return
+
+    raise RuntimeError(
+        f"Composer text missing before publish "
+        f"(đọc được {last_len}/{len(plain)} ký tự sau {max_attempts} lần thử)."
+    )
+
+
 def publish_status_post(
     driver,
     content: str,
@@ -3069,6 +3357,7 @@ def publish_status_post(
     check_pause: Optional[Any] = None,
     uid: Optional[str] = None,
     image_paths: Optional[Any] = None,
+    on_checkpoint: Optional[Callable[..., None]] = None,
 ) -> Optional[str]:
     """
     Đăng bài viết trạng thái lên Facebook Newsfeed / Page bằng HumanInteraction.
@@ -3084,10 +3373,23 @@ def publish_status_post(
         if check_pause and callable(check_pause):
             check_pause(log_cb)
 
+    def _mark(step: str, activity: Optional[str] = None):
+        if on_checkpoint and callable(on_checkpoint):
+            try:
+                on_checkpoint(step, activity)
+            except TypeError:
+                on_checkpoint(step)
+        _chk()
+
     human = HumanInteraction(driver)
     status_images = _normalize_status_image_paths(image_paths, image_path)
+    content_text = (content or "").strip()
+    if status_images and not content_text:
+        raise RuntimeError(
+            "Bài Status có ảnh nhưng nội dung trống — hủy đăng để tránh bài chỉ còn ảnh."
+        )
 
-    _chk()
+    _mark("NAVIGATE_HOME", "Điều hướng tới trang chủ Facebook...")
     log("Điều hướng tới trang chủ Facebook...")
     driver.get("https://www.facebook.com/")
     try:
@@ -3107,6 +3409,7 @@ def publish_status_post(
         pass
 
     # 1. Tìm ô "Bạn đang nghĩ gì thế?"
+    _mark("OPEN_COMPOSER", "Tìm / mở khung soạn thảo bài viết...")
     log("Tìm khung soạn thảo bài viết...")
     status_box = None
     selectors = [
@@ -3240,28 +3543,32 @@ def publish_status_post(
         raise RuntimeError("Không tìm thấy ô nhập văn bản trong hộp thoại đăng bài.")
 
     # 2.1 Tự động kiểm tra và chuyển đối tượng người xem sang 'Công khai' (Mọi người) ngay khi hộp thoại mở xong
+    _mark("SET_AUDIENCE", "Kiểm tra / chuyển đối tượng người xem sang Công khai...")
     try:
         ensure_post_audience_public(driver, human, log_cb=log)
     except Exception as e:
         logger.warning(f"Lỗi khi kiểm tra đối tượng bài viết lúc mở hộp thoại: {e}")
 
-    _chk()
+    _mark("TYPE_CONTENT", "Nhập nội dung bài viết...")
     log("Nhập nội dung bài viết theo tốc độ gõ người thật...")
     # Tắt gõ nhầm (mistake_rate=0.0) để tránh phím Backspace làm vỡ cấu trúc draft editor của Facebook
-    human.human_type(input_box, content, mistake_rate=0.0)
+    human.human_type(input_box, content_text or content, mistake_rate=0.0)
     time.sleep(random.uniform(0.8, 1.4))
+    # Settle ngắn để Lexical nhận text trước bước audience/ảnh
+    time.sleep(random.uniform(0.8, 1.2))
 
-    # Kiểm tra an toàn: Đảm bảo ô soạn thảo đã nhận đủ nội dung bài viết
+    # Kiểm tra an toàn: Đảm bảo ô soạn thảo đã nhận đủ nội dung bài viết (dùng innerText, không dùng .text)
     try:
-        current_text = (input_box.text or "").strip()
-        if len(current_text) < max(10, int(len(content.strip()) * 0.7)):
+        current_text = _status_composer_plain_text(driver) or (input_box.text or "").strip()
+        need = content_text or (content or "")
+        if need and len(current_text) < max(10, int(len(need) * 0.7)):
             log("Phát hiện văn bản chưa đủ trong ô soạn thảo, đang đồng bộ toàn bộ nội dung...")
             human.click(input_box)
             time.sleep(0.3)
             input_box.send_keys(Keys.CONTROL, "a")
             time.sleep(0.1)
-            driver.execute_cdp_cmd("Input.insertText", {"text": content})
-            time.sleep(0.5)
+            driver.execute_cdp_cmd("Input.insertText", {"text": need})
+            time.sleep(random.uniform(0.8, 1.2))
     except Exception as e:
         logger.debug(f"Bỏ qua kiểm tra độ dài ô soạn thảo: {e}")
 
@@ -3279,6 +3586,7 @@ def publish_status_post(
 
     # 4. Tải ảnh lên nếu có (1–3 ảnh): bấm icon ảnh trong 'Add to your post'
     if status_images:
+        _mark("ATTACH_IMAGES", "Đính kèm ảnh vào bài Status...")
         _chk()
         names = ", ".join(os.path.basename(p) for p in status_images)
         log(f"Đính kèm {len(status_images)} ảnh: {names}...")
@@ -3451,8 +3759,20 @@ def publish_status_post(
             check_account_health(driver)
             raise RuntimeError(f"Lỗi tải ảnh đính kèm lên bài viết: {e}")
 
+        # FB thường rebuild Lexical composer sau attach ảnh → chờ rồi khôi phục text
+        _mark("ENSURE_CONTENT", "Khôi phục / xác minh nội dung sau đính kèm ảnh...")
+        log("Chờ composer ổn định sau đính kèm ảnh rồi kiểm tra lại nội dung...")
+        time.sleep(random.uniform(1.5, 2.5))
+        _ensure_status_composer_content(
+            driver,
+            human,
+            content_text or content,
+            log_cb=log,
+            check_pause=check_pause,
+        )
+
     # 5. FB mới: có thể phải Next → Post settings rồi mới Post/Đăng
-    _chk()
+    _mark("CLICK_POST", "Tìm và chuẩn bị bấm nút Đăng...")
     log("Tìm nút 'Đăng' / bước 'Next' trong hộp thoại...")
     post_btn = None
     start_wait = time.time()
@@ -3550,18 +3870,114 @@ def publish_status_post(
         check_account_health(driver)
         raise RuntimeError("Không tìm thấy nút 'Đăng' hợp lệ trong hộp thoại.")
 
-    # 5. Bấm Đăng và chờ hộp thoại đóng hoàn toàn
-    log("Di chuột quỹ đạo Bézier tự nhiên và nhấn nút 'Đăng'...")
-    try:
-        human.click(post_btn)
-    except Exception:
+    # Gate cuối: xác minh nội dung còn trong composer trước khi Đăng
+    if content_text or (content or "").strip():
+        _mark("ENSURE_CONTENT", "Xác minh nội dung trước khi bấm Đăng...")
+        log("Kiểm tra lại nội dung trong composer trước khi bấm Đăng...")
+        _wait_status_composer_settle(driver, log_cb=log, timeout=6)
+        _ensure_status_composer_content(
+            driver,
+            human,
+            content_text or content,
+            log_cb=log,
+            check_pause=check_pause,
+        )
+        time.sleep(random.uniform(0.5, 1.0))
+        # Nút Đăng có thể stale sau khi rebuild composer — tìm lại
         try:
-            driver.execute_script("arguments[0].click();", post_btn)
-        except Exception:
-            post_btn.click()
+            if not post_btn.is_displayed():
+                post_btn = None
+        except StaleElementReferenceException:
+            post_btn = None
+        if post_btn is None:
+            for sel in [
+                "//div[@role='dialog']//div[@role='button' and (@aria-label='Đăng' or @aria-label='Post')]",
+                "//div[@role='dialog']//span[normalize-space()='Đăng' or normalize-space()='Post']/ancestor::div[@role='button'][1]",
+            ]:
+                try:
+                    for el in driver.find_elements(By.XPATH, sel):
+                        if el.is_displayed() and (el.get_attribute("aria-disabled") or "").lower() != "true":
+                            post_btn = el
+                            break
+                    if post_btn:
+                        break
+                except Exception:
+                    pass
+            if not post_btn:
+                check_account_health(driver)
+                raise RuntimeError("Không tìm thấy nút 'Đăng' sau khi khôi phục nội dung.")
 
+    # 5. Bấm Đăng và chờ hộp thoại đóng hoàn toàn (retry khi stale)
+    def _refind_post_button():
+        for sel in [
+            "//div[@role='dialog']//div[@role='button' and (@aria-label='Đăng' or @aria-label='Post')]",
+            "//div[@role='dialog']//span[normalize-space()='Đăng' or normalize-space()='Post']/ancestor::div[@role='button'][1]",
+        ]:
+            try:
+                for el in driver.find_elements(By.XPATH, sel):
+                    if el.is_displayed() and (el.get_attribute("aria-disabled") or "").lower() != "true":
+                        return el
+            except Exception:
+                continue
+        return None
+
+    _mark("CLICK_POST", "Đã sẵn sàng — nhấn nút Đăng (post_clicked)...")
+    log("Di chuột quỹ đạo Bézier tự nhiên và nhấn nút 'Đăng'...")
+    clicked = False
+    for attempt in range(4):
+        btn = post_btn if attempt == 0 else _refind_post_button()
+        if btn is None:
+            btn = _refind_post_button()
+        if btn is None:
+            time.sleep(0.4)
+            continue
+        try:
+            human.click(btn)
+            clicked = True
+            break
+        except StaleElementReferenceException:
+            log(f"Phần tử nút Đăng bị stale (lần {attempt + 1}) — tìm lại...")
+            post_btn = None
+            time.sleep(0.35)
+            continue
+        except Exception:
+            try:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'}); arguments[0].click();",
+                    btn,
+                )
+                clicked = True
+                break
+            except StaleElementReferenceException:
+                post_btn = None
+                time.sleep(0.35)
+                continue
+            except Exception:
+                time.sleep(0.35)
+                continue
+    if not clicked:
+        check_account_health(driver)
+        raise RuntimeError("Không thể bấm nút 'Đăng' (giao diện Facebook thay đổi liên tục).")
+
+    _mark("WAIT_CONFIRM", "Chờ Facebook xác nhận bài đăng (không bấm Đăng lại khi resume)...")
     log("Chờ máy chủ Facebook xác nhận bài đăng xuất bản...")
-    wait_dialog_closed(driver, timeout=90)
+    try:
+        wait_dialog_closed(driver, timeout=90, check_pause=check_pause, log_cb=log)
+    except PublishUnconfirmed:
+        # Soft-recover: đôi khi dialog chưa kịp đóng nhưng bài đã lên
+        log("Chưa thấy dialog đóng — đang kiểm tra xem bài đã lên chưa...")
+        soft_url = None
+        try:
+            soft_url = extract_status_post_url(driver, uid=uid, log_cb=log)
+        except Exception:
+            soft_url = None
+        if soft_url and any(
+            k in (soft_url or "")
+            for k in ("/posts/", "permalink.php", "story_fbid=", "pfbid", "/photo")
+        ):
+            log(f"Xác nhận bài đã lên qua URL: {soft_url}")
+            return soft_url
+        raise
     log("Bài viết đã xuất bản thành công (hộp thoại đã đóng)!")
 
     # Trích xuất URL trực tiếp của bài viết vừa đăng
@@ -3579,7 +3995,8 @@ def publish_reels_post(
     caption: str = "",
     log_cb: Optional[Any] = None,
     check_pause: Optional[Any] = None,
-    uid: Optional[str] = None
+    uid: Optional[str] = None,
+    on_checkpoint: Optional[Callable[..., None]] = None,
 ) -> Optional[str]:
     """
     Upload video lên Reels Facebook (facebook.com/reel/create) bằng HumanInteraction.
@@ -3593,6 +4010,14 @@ def publish_reels_post(
         if check_pause and callable(check_pause):
             check_pause(log_cb)
 
+    def _mark(step: str, activity: Optional[str] = None):
+        if on_checkpoint and callable(on_checkpoint):
+            try:
+                on_checkpoint(step, activity)
+            except TypeError:
+                on_checkpoint(step)
+        _chk()
+
     human = HumanInteraction(driver)
 
     if not os.path.isfile(video_path):
@@ -3601,6 +4026,7 @@ def publish_reels_post(
     # Snapshot ID Reels đã có TRƯỚC khi vào create — tránh gán nhầm ID video cũ
     known_reel_ids = []
     try:
+        _mark("REELS_SNAPSHOT", "Snapshot ID Reels cũ trên profile...")
         snap_url = (
             f"https://www.facebook.com/{uid}/reels"
             if uid
@@ -3614,7 +4040,7 @@ def publish_reels_post(
     except Exception as e:
         logger.debug(f"Snapshot reel IDs bỏ qua: {e}")
 
-    _chk()
+    _mark("REELS_OPEN_CREATE", "Mở trang tạo Reels...")
     log("Điều hướng tới trang tạo Reels (facebook.com/reels/create/)...")
     driver.get("https://www.facebook.com/reels/create/")
     time.sleep(3)
@@ -3680,7 +4106,7 @@ def publish_reels_post(
                 log(f"Cảnh báo: Không thể mở Reels từ Menu: {e}")
 
     # 1. Nạp video
-    _chk()
+    _mark("REELS_UPLOAD", "Nạp / upload video Reels...")
     log(f"Nạp video vào trình upload Reels: {os.path.basename(video_path)}...")
     # Bộc lộ input type=file ẩn
     try:
@@ -3755,7 +4181,7 @@ def publish_reels_post(
         pass
 
     # 2. Thiết lập quyền riêng tư Reels sang 'Công khai' (Public)
-    _chk()
+    _mark("REELS_PRIVACY", "Thiết lập quyền riêng tư Reels sang Công khai...")
     try:
         ensure_reels_privacy_public(driver, human, log_cb=log)
     except Exception as e:
@@ -3763,7 +4189,7 @@ def publish_reels_post(
 
     # 3. Điền Caption mô tả Reels
     if caption:
-        _chk()
+        _mark("REELS_CAPTION", "Nhập mô tả / caption Reels...")
         caption_preview = caption.replace('\n', ' ')[:45] + ('...' if len(caption) > 45 else '')
         log(f"Nhập mô tả Reels: \"{caption_preview}\"...")
         typed_caption = False
@@ -3819,7 +4245,7 @@ def publish_reels_post(
                 log(f"Cảnh báo: Không thể nhập caption Reels: {e}")
 
     # 3. Chờ nút Đăng Reels ở trạng thái sẵn sàng (aria-disabled != 'true')
-    _chk()
+    _mark("REELS_CLICK_POST", "Chờ render video và bấm Post / Đăng Reels...")
     log("Chờ Facebook xử lý/render video và nút 'Post / Đăng' Reels sẵn sàng (kiên nhẫn đợi đến khi render xong, tối đa 15 phút)...")
     publish_btn_xpath = (
         "//*[self::button or @role='button']"
@@ -3864,7 +4290,7 @@ def publish_reels_post(
                         continue
                     if btn.get_attribute("aria-disabled") == "true" or btn.get_attribute("disabled") is not None:
                         continue
-                    _chk()
+                    _mark("REELS_CLICK_POST", "Đã sẵn sàng — nhấn Post / Đăng Reels (post_clicked)...")
                     elapsed_done = int(time.time() - start_wait_reels)
                     log(f"Video đã render xong hoàn tất (sau {elapsed_done}s)! Di chuột Bézier và bấm nút 'Post / Đăng' Reels...")
                     try:
@@ -3904,16 +4330,21 @@ def publish_reels_post(
             pass
         return False
 
+    _mark("REELS_WAIT_CONFIRM", "Chờ Facebook xác nhận Reels (không bấm Đăng lại khi resume)...")
     log("Chờ Facebook hoàn tất tải lên Reels...")
-    try:
-        WebDriverWait(driver, 120).until(
-            lambda d: (not _is_reels_uploading_or_creating(d))
-            or bool(_reel_id_from_url(getattr(d, "current_url", "") or ""))
-        )
-        log("Reels đã được đăng lên thành công!")
-    except TimeoutException:
+    reels_ok = wait_until(
+        driver,
+        lambda d: (not _is_reels_uploading_or_creating(d))
+        or bool(_reel_id_from_url(getattr(d, "current_url", "") or "")),
+        timeout=120,
+        check_pause=check_pause,
+        log_cb=log,
+        poll=0.5,
+    )
+    if not reels_ok:
         check_account_health(driver)
         raise PublishUnconfirmed("Quá thời gian chờ đăng Reels, không thể xác nhận bài đã lên.")
+    log("Reels đã được đăng lên thành công!")
 
     check_account_health(driver)
     res_url = extract_reels_post_url(
@@ -3937,7 +4368,8 @@ def publish_story_post(
     text: Optional[str] = None,
     log_cb: Optional[Any] = None,
     check_pause: Optional[Any] = None,
-    uid: Optional[str] = None
+    uid: Optional[str] = None,
+    on_checkpoint: Optional[Callable[..., None]] = None,
 ) -> Optional[str]:
     """
     Tải lên Tin 24h Story (facebook.com/stories/create) bằng HumanInteraction.
@@ -3951,12 +4383,20 @@ def publish_story_post(
         if check_pause and callable(check_pause):
             check_pause(log_cb)
 
+    def _mark(step: str, activity: Optional[str] = None):
+        if on_checkpoint and callable(on_checkpoint):
+            try:
+                on_checkpoint(step, activity)
+            except TypeError:
+                on_checkpoint(step)
+        _chk()
+
     human = HumanInteraction(driver)
 
     if not os.path.isfile(media_path):
         raise FileNotFoundError(f"File media Story không tồn tại: {media_path}")
 
-    _chk()
+    _mark("STORY_OPEN_CREATE", "Mở trang tạo Story...")
     log("Điều hướng tới trang tạo Story (facebook.com/stories/create)...")
     driver.get("https://www.facebook.com/stories/create")
     time.sleep(3)
@@ -3965,7 +4405,7 @@ def publish_story_post(
 
     # Nạp file Story trực tiếp qua thẻ input[type='file'] ẩn
     # TUYỆT ĐỐI KHÔNG click vào card 'Tạo tin ảnh'/'Tạo tin video' vì sẽ kích hoạt Windows Open Dialog
-    _chk()
+    _mark("STORY_UPLOAD", "Nạp media Story...")
     log(f"Nạp file Story: {os.path.basename(media_path)} (Bypass Windows Dialog qua hidden input)...")
     try:
         # Đảm bảo thẻ input[type='file'] không bị ẩn style cản trở Selenium send_keys
@@ -4001,7 +4441,7 @@ def publish_story_post(
 
     # Story ảnh: chọn nhạc đề xuất đầu tiên (For you)
     if is_story_image:
-        _chk()
+        _mark("STORY_MUSIC", "Thêm nhạc đề xuất vào Story ảnh...")
         try:
             add_first_recommended_story_music(driver, human, log_cb=log)
         except StaleElementReferenceException:
@@ -4016,7 +4456,7 @@ def publish_story_post(
 
     # Nhập text nếu có
     if text:
-        _chk()
+        _mark("STORY_TEXT", "Thêm văn bản overlay vào Story...")
         log("Thêm văn bản vào Story...")
         try:
             text_tool = WebDriverWait(driver, 5).until(
@@ -4046,7 +4486,7 @@ def publish_story_post(
             log("Bỏ qua thêm text Story do không tìm thấy công cụ.")
 
     # Chờ nút Share sáng — không giữ WebElement qua wait (tránh stale)
-    _chk()
+    _mark("STORY_CLICK_SHARE", "Chờ media sẵn sàng và bấm Share to story...")
     log("Chờ Facebook render media và nút 'Share to story' sáng...")
     share_btn_xpath = (
         "//div[@role='button'][.//span[contains(text(), 'Chia sẻ lên tin') or contains(text(), 'Share to story')]]"
@@ -4133,7 +4573,7 @@ def publish_story_post(
             "Nút 'Share to story' không sáng sau 15 phút (treo transcoding hoặc media lỗi)."
         )
 
-    _chk()
+    _mark("STORY_CLICK_SHARE", "Đã sẵn sàng — nhấn Share to story (post_clicked)...")
     elapsed_total = int(time.time() - start_wait)
     log(f"Media sẵn sàng (sau {elapsed_total}s). Bấm 'Share to story'...")
 
@@ -4202,15 +4642,20 @@ def publish_story_post(
             "Đã bấm 'Share to story' nhưng giao diện không chuyển trang, không xác nhận Story đã lên."
         )
 
-    # Chờ điều hướng khỏi trang tạo story
-    try:
-        WebDriverWait(driver, 90).until(
-            lambda d: "/stories/create" not in d.current_url.lower()
-        )
-        log("Story đã được chia sẻ thành công!")
-    except TimeoutException:
+    # Chờ điều hướng khỏi trang tạo story (pause-aware: không trừ thời gian tạm dừng)
+    _mark("STORY_WAIT_CONFIRM", "Chờ Facebook xác nhận Story (không bấm Share lại khi resume)...")
+    story_ok = wait_until(
+        driver,
+        lambda d: "/stories/create" not in (getattr(d, "current_url", "") or "").lower(),
+        timeout=90,
+        check_pause=check_pause,
+        log_cb=log,
+        poll=0.5,
+    )
+    if not story_ok:
         check_account_health(driver)
         raise PublishUnconfirmed("Quá thời gian chờ chia sẻ Story, không thể xác nhận tin đã lên.")
+    log("Story đã được chia sẻ thành công!")
 
     check_account_health(driver)
     # Trích xuất URL xem Tin (Story) trực tiếp

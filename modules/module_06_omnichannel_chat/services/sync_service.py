@@ -1,3 +1,4 @@
+import threading
 import os
 import requests
 from typing import List, Dict, Any, Tuple, Optional
@@ -18,6 +19,8 @@ from modules.module_06_omnichannel_chat.services.facebook_comments import Facebo
 from modules.module_06_omnichannel_chat.services.web_push import WebPushService
 
 sync_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="sync_historical")
+_active_sync_tasks = 0
+_sync_lock = threading.Lock()
 
 class FacebookSyncService:
     def __init__(self, db: Session):
@@ -427,8 +430,20 @@ class FacebookSyncService:
     def sync_by_token(self, access_token: str, system_user_id: Optional[int] = 1) -> Tuple[str, int, List[Any]]:
         long_lived_token = self.exchange_token(access_token)
         user_id, pages = self.auth_service.fetch_user_pages(long_lived_token, system_user_id=system_user_id)
+        global _active_sync_tasks
+        def _tracked_sync(pid, uid):
+            global _active_sync_tasks
+            try:
+                self.sync_historical_data(pid, uid)
+            finally:
+                with _sync_lock:
+                    _active_sync_tasks = max(0, _active_sync_tasks - 1)
+
+        with _sync_lock:
+            _active_sync_tasks += len(pages)
+
         for p in pages:
-            sync_executor.submit(self.sync_historical_data, p.page_id, user_id)
+            sync_executor.submit(_tracked_sync, p.page_id, user_id)
         return user_id, len(pages), pages
 
     async def send_message_reply(self, page_id: str, recipient_id: str, text: str, reply_to_message_id: Optional[str] = None):

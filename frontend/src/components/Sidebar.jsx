@@ -109,7 +109,7 @@ function useResizableWidth() {
 }
 
 // Figma: Aside - LeftSidebar (1016:5); kiểu mục cấp 1 theo 1020:13823 / 1020:13770
-export default function Sidebar({ activeTab, open = true }) {
+export default function Sidebar({ activeTab, open = true, onNavigate }) {
   const { asideRef, handleProps, dragging } = useResizableWidth();
 
   // Accordion: mỗi lúc chỉ mở 1 nhóm submenu.
@@ -168,12 +168,14 @@ export default function Sidebar({ activeTab, open = true }) {
               activeTab={activeTab}
               open={isGroupOpen(item)}
               onToggle={() => toggleGroup(item)}
+              onNavigate={onNavigate}
             />
           ) : (
-            <NavLink
+              <NavLink
               key={item.id}
               item={item}
               active={activeTab === item.id}
+                onNavigate={onNavigate}
             />
           ),
         )}
@@ -221,10 +223,11 @@ const FOCUS_RING =
   "outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-500";
 
 /** Mục cấp 1 không có submenu (Tổng quan, Quản lý tài khoản Facebook, ...) — là link tới trang riêng */
-function NavLink({ item, active }) {
+function NavLink({ item, active, onNavigate }) {
   return (
     <Link
       href={pathOf(item)}
+      onClick={(event) => onNavigate?.(event, pathOf(item))}
       aria-current={active ? "page" : undefined}
       className={cn(
         TOP_ITEM,
@@ -244,7 +247,7 @@ function NavLink({ item, active }) {
 }
 
 /** Nhóm có submenu (Đăng bài & tương tác, Tạo fanpage, Quản lý Fanpage, Spam Group, Seeding) */
-function NavGroup({ item, activeTab, open, onToggle }) {
+function NavGroup({ item, activeTab, open, onToggle, onNavigate }) {
   const sectionActive = item.children.some((c) => c.id === activeTab);
   const submenuId = `submenu-${item.id}`;
 
@@ -296,6 +299,7 @@ function NavGroup({ item, activeTab, open, onToggle }) {
                 <Link
                   key={child.id}
                   href={pathOf(child)}
+                  onClick={(event) => onNavigate?.(event, pathOf(child))}
                   aria-current={active ? "page" : undefined}
                   className={cn(
                     "w-full flex items-center px-3 rounded-md text-left transition-colors",

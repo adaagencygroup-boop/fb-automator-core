@@ -67,29 +67,104 @@ def primary_image_path(paths: List[str]) -> Optional[str]:
 # 1. POST SETTINGS
 # ==============================================================================
 
+def _encrypt_pixabay_key(plain: Optional[str]) -> Optional[bytes]:
+    """Mã hóa Pixabay API key trước khi ghi BYTEA (cùng AES với credential Module 02)."""
+    text = (plain or "").strip()
+    if not text:
+        return None
+    try:
+        from modules.module_02_account_manager.security.encryption import encrypt_data
+
+        cipher = encrypt_data(text)
+        return cipher.encode("utf-8") if cipher else None
+    except Exception as e:
+        logger.error("Không mã hóa được Pixabay API key: %s", e)
+        # Fallback: lưu UTF-8 thô (vẫn tốt hơn mất key); lần save sau sẽ mã hóa lại
+        return text.encode("utf-8")
+
+
+def _decrypt_pixabay_key(raw: Any) -> str:
+    if raw is None:
+        return ""
+    try:
+        if isinstance(raw, memoryview):
+            raw = raw.tobytes()
+        if isinstance(raw, bytes):
+            cipher = raw.decode("utf-8", errors="ignore")
+        else:
+            cipher = str(raw)
+        cipher = cipher.strip()
+        if not cipher:
+            return ""
+        from modules.module_02_account_manager.security.encryption import decrypt_data
+
+        try:
+            return decrypt_data(cipher) or ""
+        except Exception:
+            # Dữ liệu cũ / fallback plaintext
+            return cipher
+    except Exception as e:
+        logger.warning("Không giải mã được Pixabay API key: %s", e)
+        return ""
+
+
+def _normalize_settings_row(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Trả settings cho API: gắn pixabay_api_key plaintext, ẩn bản mã hóa."""
+    if not row:
+        return row
+    out = dict(row)
+    enc = out.pop("pixabay_api_key_enc", None)
+    out["pixabay_api_key"] = _decrypt_pixabay_key(enc)
+    return out
+
+
 def get_post_settings(post_type: str) -> Optional[Dict[str, Any]]:
     sql = """
         SELECT post_type, api_key_file_path, gemini_model, prompt_template,
+               pixabay_api_key_enc,
                master_folder_path, check_duplicate, schedule_enabled,
                schedule_time, min_delay, max_delay, thread_count, updated_at
         FROM post_settings
         WHERE post_type = %s
     """
-    return db.fetch_one(sql, (post_type,))
+    return _normalize_settings_row(db.fetch_one(sql, (post_type,)))
 
 
 def upsert_post_settings(post_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
-    sql = """
+    sched_enabled = bool(data.get('schedule_enabled', False))
+    sched_time = data.get('schedule_time')
+    if not sched_time or not str(sched_time).strip() or not sched_enabled:
+        sched_time = None
+    elif isinstance(sched_time, str):
+        sched_time = sched_time.strip()
+
+    # Chỉ ghi Pixabay khi payload chủ động gửi (tránh Reels/Story xóa key Status)
+    touch_pixabay = ("pixabay_api_key" in data) or ("pixabay_key" in data)
+    if touch_pixabay:
+        pixabay_plain = data.get("pixabay_api_key")
+        if pixabay_plain is None:
+            pixabay_plain = data.get("pixabay_key")
+        pixabay_enc = _encrypt_pixabay_key(pixabay_plain)
+        pixabay_sql = "%s"
+        pixabay_conflict = "pixabay_api_key_enc = EXCLUDED.pixabay_api_key_enc,"
+    else:
+        pixabay_enc = None
+        pixabay_sql = "NULL"
+        pixabay_conflict = "pixabay_api_key_enc = post_settings.pixabay_api_key_enc,"
+
+    sql = f"""
         INSERT INTO post_settings (
             post_type, api_key_file_path, gemini_model, prompt_template,
+            pixabay_api_key_enc,
             master_folder_path, check_duplicate, schedule_enabled,
             schedule_time, min_delay, max_delay, thread_count, updated_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        VALUES (%s, %s, %s, %s, {pixabay_sql}, %s, %s, %s, %s, %s, %s, %s, NOW())
         ON CONFLICT (post_type) DO UPDATE SET
             api_key_file_path = EXCLUDED.api_key_file_path,
             gemini_model = EXCLUDED.gemini_model,
             prompt_template = EXCLUDED.prompt_template,
+            {pixabay_conflict}
             master_folder_path = EXCLUDED.master_folder_path,
             check_duplicate = EXCLUDED.check_duplicate,
             schedule_enabled = EXCLUDED.schedule_enabled,
@@ -100,28 +175,38 @@ def upsert_post_settings(post_type: str, data: Dict[str, Any]) -> Dict[str, Any]
             updated_at = NOW()
         RETURNING *;
     """
-    sched_enabled = bool(data.get('schedule_enabled', False))
-    sched_time = data.get('schedule_time')
-    if not sched_time or not str(sched_time).strip() or not sched_enabled:
-        sched_time = None
-    elif isinstance(sched_time, str):
-        sched_time = sched_time.strip()
 
-    params = (
-        post_type,
-        data.get('api_key_file_path'),
-        data.get('gemini_model', 'gemini-3.8-flash'),
-        data.get('prompt_template'),
-        data.get('master_folder_path'),
-        data.get('check_duplicate', True),
-        sched_enabled,
-        sched_time,
-        data.get('min_delay', 600),
-        data.get('max_delay', 900),
-        data.get('thread_count', 1),
-    )
+    if touch_pixabay:
+        params = (
+            post_type,
+            data.get('api_key_file_path'),
+            data.get('gemini_model', 'gemini-3.8-flash'),
+            data.get('prompt_template'),
+            pixabay_enc,
+            data.get('master_folder_path'),
+            data.get('check_duplicate', True),
+            sched_enabled,
+            sched_time,
+            data.get('min_delay', 600),
+            data.get('max_delay', 900),
+            data.get('thread_count', 1),
+        )
+    else:
+        params = (
+            post_type,
+            data.get('api_key_file_path'),
+            data.get('gemini_model', 'gemini-3.8-flash'),
+            data.get('prompt_template'),
+            data.get('master_folder_path'),
+            data.get('check_duplicate', True),
+            sched_enabled,
+            sched_time,
+            data.get('min_delay', 600),
+            data.get('max_delay', 900),
+            data.get('thread_count', 1),
+        )
     res = db.fetch_one(sql, params)
-    return res or {}
+    return _normalize_settings_row(res) or {}
 
 
 # ==============================================================================
@@ -452,6 +537,19 @@ def count_pending_posts(session_id: str, account_uid: Optional[str] = None) -> i
         cursor.execute(db._normalize_query(sql), params)
         row = cursor.fetchone()
         return row['cnt'] if row else 0
+
+
+def list_session_posts(session_id: str) -> List[Dict[str, Any]]:
+    """Lấy toàn bộ bài viết của session theo thứ tự tạo (phục vụ danh sách tiến trình)."""
+    sql = """
+        SELECT * FROM posts
+        WHERE session_id = %s
+        ORDER BY created_at ASC, id ASC;
+    """
+    with db.session() as cursor:
+        cursor.execute(db._normalize_query(sql), (session_id,))
+        rows = cursor.fetchall() or []
+        return [dict(r) for r in rows]
 
 
 def finish_post(

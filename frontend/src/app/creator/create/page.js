@@ -7,3 +7,4 @@ export const metadata = pageMetadata("creator.create");
 export default function Page() {
   return <PageCreatorModule subPage="creator.create" />;
 }
+
