@@ -21,6 +21,7 @@ export default function ProfileTargetSection({
   onRemoveTarget,
   onClearTargets,
   successMessage,
+  isRunning = false,
 }) {
   const [textInput, setTextInput] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
@@ -234,6 +235,7 @@ export default function ProfileTargetSection({
 
   // Confirm delete single profile
   const handleConfirmDelete = async () => {
+    if (isRunning) return;
     if (deleteTarget.index < 0) return;
     setIsDeleting(true);
     try {
@@ -252,6 +254,7 @@ export default function ProfileTargetSection({
 
   // Confirm clear all profiles
   const handleConfirmClearAll = async () => {
+    if (isRunning) return;
     setIsClearing(true);
     try {
       await onClearTargets();
@@ -416,8 +419,17 @@ export default function ProfileTargetSection({
             </span>
             <button
               type="button"
-              onClick={() => setClearAllOpen(true)}
-              className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-semibold px-2 py-1 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
+              onClick={() => {
+                if (isRunning) return;
+                setClearAllOpen(true);
+              }}
+              disabled={isRunning}
+              title={isRunning ? "Đang chạy seeding, không thể xóa mục tiêu" : undefined}
+              className={`flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-md transition-colors ${
+                isRunning
+                  ? "text-gray-400 opacity-50 cursor-not-allowed"
+                  : "text-rose-600 hover:text-rose-700 hover:bg-rose-50 cursor-pointer"
+              }`}
             >
               <Trash2 className="w-3.5 h-3.5" />
               Xóa toàn bộ
@@ -458,9 +470,17 @@ export default function ProfileTargetSection({
                       <td className="py-2.5 px-4 text-center whitespace-nowrap">
                         <button
                           type="button"
-                          onClick={() => setDeleteTarget({ isOpen: true, item, index: idx })}
-                          className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-50 hover:text-rose-600 transition-colors cursor-pointer inline-flex items-center justify-center"
-                          title="Xóa Trang cá nhân này"
+                          onClick={() => {
+                            if (isRunning) return;
+                            setDeleteTarget({ isOpen: true, item, index: idx });
+                          }}
+                          disabled={isRunning}
+                          title={isRunning ? "Đang chạy seeding, không thể xóa mục tiêu" : "Xóa Trang cá nhân này"}
+                          className={`p-1.5 rounded-lg transition-colors inline-flex items-center justify-center ${
+                            isRunning
+                              ? "text-gray-300 opacity-50 cursor-not-allowed"
+                              : "text-rose-500 hover:bg-rose-50 hover:text-rose-600 cursor-pointer"
+                          }`}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
