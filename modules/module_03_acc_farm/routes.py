@@ -1751,6 +1751,25 @@ async def farm_history_detail(history_id: int):
     }
 
 
+RUN_TARGET_LISTS = {"JOIN_GROUP": "groups_joined", "LEAVE_GROUP": "groups_left", "ADD_FRIEND": "friends_sent"}
+
+
+@router.get("/runs/{run_id}/targets")
+async def farm_run_targets(run_id: int):
+    """Danh sách nhóm đã vào / đã rời + người đã gửi lời mời của 1 lượt (không gồm link bị bỏ qua)."""
+    try:
+        rows = await asyncio.to_thread(repository.get_run_targets, adapters.get_machine_id(), run_id)
+    except Exception as e:
+        logger.warning(f"Không đọc được danh sách của lượt {run_id}: {e}")
+        raise HTTPException(status_code=503, detail="Không đọc được danh sách từ CSDL.")
+    lists = {key: [] for key in RUN_TARGET_LISTS.values()}
+    for row in rows:
+        lists[RUN_TARGET_LISTS[row["action_type"]]].extend(
+            t for t in _json_list(row["targets"])
+            if isinstance(t, dict) and not str(t.get("result") or "").startswith("skipped_"))
+    return lists
+
+
 def _json_list(value) -> List:
     """Cột JSON dạng danh sách; rỗng / hỏng thì trả []."""
     try:

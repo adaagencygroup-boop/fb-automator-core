@@ -155,7 +155,7 @@ function facebookUrl(url) {
   }
 }
 
-function TargetList({ action, targets }) {
+export function TargetList({ action, targets }) {
   const [expanded, setExpanded] = useState(false);
   const Icon = action === "JOIN_GROUP" || action === "LEAVE_GROUP" ? Users : User;
   const shown = expanded ? targets : targets.slice(0, TARGET_PREVIEW);

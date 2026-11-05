@@ -592,6 +592,15 @@ def get_history_detail(machine_id: str, history_id: int) -> Optional[Dict[str, A
     return {"history": row, "logs": logs}
 
 
+def get_run_targets(machine_id: str, run_id: int) -> List[Dict[str, Any]]:
+    """Nhóm / người đã tương tác của 1 lượt trên máy này, theo từng hành động."""
+    return db.fetch_all(
+        "SELECT action_type, targets FROM farm_interaction_logs "
+        "WHERE run_id = ? AND machine_id = ? AND action_type IN ('JOIN_GROUP', 'LEAVE_GROUP', 'ADD_FRIEND') ORDER BY id",
+        (run_id, machine_id),
+    )
+
+
 def cleanup_history(machine_id: str, keep_days: int) -> Dict[str, int]:
     """
     Xóa dữ liệu của máy này cũ hơn keep_days ngày (tính cả hôm nay, giờ VN; keep_days >= 1 nên luôn giữ hôm nay:
