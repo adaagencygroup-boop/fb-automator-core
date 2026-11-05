@@ -1339,6 +1339,102 @@ def _count_account_result(db: Session, campaign_id: int, success: bool):
     db.commit()
 
 
+def _safe_close_seeding_driver(driver, uid: str | None = None, owner: str | None = None):
+    """Đóng trình duyệt Seeding êm ái, hoàn toàn không bật cửa sổ CMD/Terminal.
+
+    1. Thu thập PID trước khi đóng để sẵn sàng dọn dẹp nếu Chrome bị treo.
+    2. Hủy đăng ký driver khỏi core registry.
+    3. Đóng các tab và gọi driver.quit() chuẩn của Selenium.
+    4. Dọn dẹp tiến trình con còn sót lại bằng psutil (dùng Win32 C API TerminateProcess, không gọi taskkill.exe).
+    5. Đóng proxy bridge & dọn lockfile profile.
+    """
+    if not driver:
+        return
+
+    pids: list[int] = []
+    try:
+        service_proc = getattr(getattr(driver, "service", None), "process", None)
+        pid = getattr(service_proc, "pid", None)
+        if isinstance(pid, int) and pid > 0:
+            pids.append(pid)
+            try:
+                import psutil
+                for child in psutil.Process(pid).children(recursive=True):
+                    if isinstance(child.pid, int) and child.pid > 0:
+                        pids.append(child.pid)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Hủy đăng ký khỏi registry chung
+    try:
+        from core.browser.driver import unregister_active_driver
+        unregister_active_driver(driver)
+    except Exception:
+        pass
+
+    # Quit driver chuẩn Selenium
+    try:
+        try:
+            for handle in list(getattr(driver, "window_handles", []) or []):
+                driver.switch_to.window(handle)
+                driver.close()
+        except Exception:
+            pass
+        driver.quit()
+    except Exception as e:
+        logger.debug(f"[Seeding] driver.quit() error: {e}")
+
+    # Dọn dẹp tiến trình treo còn sót lại bằng psutil (hoàn toàn không tạo cửa sổ console CMD)
+    if pids:
+        try:
+            import psutil
+            for p in pids:
+                try:
+                    proc = psutil.Process(p)
+                    proc.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
+                    pass
+        except Exception:
+            pass
+
+    # Đóng bridge và xóa lockfile profile nếu có UID
+    if uid:
+        try:
+            from core.browser.driver import (
+                close_bridge_for_uid as _c_bridge,
+                get_profile_path as _g_path,
+                _cleanup_profile_lockfiles as _c_lock,
+            )
+            _c_bridge(str(uid), owner)
+            p_path = _g_path(str(uid), owner)
+            _c_lock(p_path)
+        except Exception:
+            pass
+
+
+def _close_scoped_seeding_drivers():
+    """Đóng khẩn cấp toàn bộ trình duyệt thuộc scope seeding một cách êm ái, không nháy CMD."""
+    try:
+        from core.browser.driver import _active_drivers, _active_drivers_lock
+        with _active_drivers_lock:
+            to_close = [
+                (d, info)
+                for d, info in list(_active_drivers.items())
+                if info.get("scope") == "seeding"
+            ]
+            for d, _info in to_close:
+                _active_drivers.pop(d, None)
+
+        for d, info in to_close:
+            _safe_close_seeding_driver(
+                d, uid=info.get("uid"), owner=info.get("owner")
+            )
+    except Exception as e:
+        logger.warning(f"[Seeding] Lỗi đóng scoped drivers: {e}")
+
+
 def _process_account_tasks(
     campaign_id: int,
     uid: str,
@@ -1614,10 +1710,9 @@ def _process_account_tasks(
     finally:
         if driver:
             try:
-                safe_close_driver(driver)
+                _safe_close_seeding_driver(driver, uid=uid, owner=owner)
             except Exception:
                 pass
-            close_driver_for_uid(uid)
         if token:
             try:
                 owner_context.reset(token)
@@ -2015,8 +2110,8 @@ def stop_seeding_campaign(
         )
     db.commit()
 
-    # Đóng ngay lập tức các trình duyệt đang thuộc scope seeding
-    close_scoped_active_drivers(scope="seeding", force=True)
+    # Đóng ngay lập tức các trình duyệt đang thuộc scope seeding êm ái
+    _close_scoped_seeding_drivers()
 
     camp_owner = str(campaign.created_by) if campaign.created_by is not None else None
     broadcast(
@@ -2091,7 +2186,7 @@ def stop_all_seeding(
 
     # Đóng các trình duyệt thuộc scope seeding nếu có chiến dịch bị dừng
     if stopped_ids:
-        close_scoped_active_drivers(scope="seeding", force=True)
+        _close_scoped_seeding_drivers()
 
     camp_owner = str(allowed_user_id) if allowed_user_id is not None else None
     broadcast(
