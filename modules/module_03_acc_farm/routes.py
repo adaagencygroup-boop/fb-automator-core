@@ -1509,6 +1509,22 @@ async def on_shutdown():
 
 # ─────────────────────── ENDPOINTS: CHẠY ────────────────────────────
 
+class _StepTimer:
+    """Thời gian từng bước của Kích hoạt, ghi vào log để biết bước nào chậm khi CSDL ở xa."""
+
+    def __init__(self):
+        self.started = self.last = time.perf_counter()
+        self.steps: List[str] = []
+
+    def mark(self, name: str):
+        now = time.perf_counter()
+        self.steps.append(f"{name} {now - self.last:.1f}s")
+        self.last = now
+
+    def summary(self) -> str:
+        return f"tổng {time.perf_counter() - self.started:.1f}s (" + ", ".join(self.steps) + ")"
+
+
 @router.post("/start")
 async def start_farm_interactions(req: FarmStartRequest, request: Request):
     global _control, _active_task, _own_uids
@@ -1537,10 +1553,13 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
         if error:
             raise HTTPException(status_code=400, detail=error)
 
+    timer = _StepTimer()
     # Chỉ nick Live + Đã đăng nhập mới được chạy (VR-M03-ACC-01)
     eligible, rejected = [], []
+    found = await asyncio.to_thread(adapters.get_accounts, uids, owner)
+    timer.mark(f"đọc {len(uids)} nick")
     for uid in uids:
-        acc = await asyncio.to_thread(adapters.get_account, uid, owner)
+        acc = found.get(uid)
         if acc and acc["status"] == "live" and acc["login_status"] == "logged_in":
             eligible.append({"uid": acc["uid"], "name": acc["profile_name"]})
         else:
@@ -1551,6 +1570,7 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
     # Mỗi lần kích hoạt tạo lượt mới, giữ nguyên lịch sử lượt cũ (BR-STS-01)
     session_id = uuid.uuid4().hex
     machine_id = await asyncio.to_thread(adapters.get_machine_id)
+    timer.mark("mã máy")
     scope = _owner_scope(owner, machine_id)
     # Nick trong dàn (Module 02): trả nhóm / người của nick đã die / đã xóa trước khi chia, kết bạn bỏ qua nick nhà
     try:
@@ -1559,27 +1579,31 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
         logger.exception(f"Không đọc được danh sách nick trong dàn: {e}")
         dan_accounts = None
     release_notes = await asyncio.to_thread(_release_gone_owners, scope, dan_accounts)
+    timer.mark("dàn nick")
     try:
         assignments, split_notes = await asyncio.to_thread(_assign_targets, cfg, [a["uid"] for a in eligible], scope)
     except Exception as e:
         logger.exception(f"Không chia được link / từ khóa cho các nick: {e}")
         raise HTTPException(status_code=503, detail="Không đọc được nhóm / người đã có nick nhận trong dàn (lỗi CSDL). "
                                                     "Kiểm tra kết nối CSDL rồi thử lại, hoặc bỏ tick chia cho các nick.")
+    timer.mark("chia link / từ khóa")
     own_uids: Optional[frozenset] = frozenset()
     if cfg.enabled_add_friends:
         own_uids = frozenset(dan_accounts) if dan_accounts is not None else None
     try:
-        run_ids = {}
-        for acc in eligible:
-            run_ids[acc["uid"]] = await asyncio.to_thread(
-                repository.create_run, machine_id, acc["uid"], acc["name"], session_id, owner
-            )
+        run_ids = await asyncio.to_thread(repository.create_runs, machine_id, eligible, session_id, owner)
+        missing = [acc["uid"] for acc in eligible if acc["uid"] not in run_ids]
+        if missing:
+            raise RuntimeError(f"thiếu lượt chạy của {len(missing)} nick")
     except Exception as e:
         logger.exception(f"Không tạo được lượt chạy: {e}")
         raise HTTPException(status_code=503, detail="Không ghi được lượt chạy vào CSDL. Kiểm tra kết nối CSDL rồi thử lại.")
 
     threads = max(1, min(int(req.threads or 1), HARD_MAX_THREADS, len(eligible)))
+    timer.mark("tạo lượt chạy")
     history_alerts = await asyncio.to_thread(_history_checkpoint_alerts, machine_id)
+    timer.mark("cảnh báo checkpoint")
+    logger.info("Kích hoạt %s nick: %s", len(eligible), timer.summary())
     _control = FarmControl()
     with _state_lock:
         _history_data.clear()
@@ -1863,6 +1887,29 @@ async def farm_history(
         raise HTTPException(status_code=503, detail="Không đọc được lịch sử từ CSDL.")
     data["items"] = [_serialize_history(r) for r in data["items"]]
     return data
+
+
+@router.get("/history/accounts")
+async def farm_history_accounts(request: Request):
+    """
+    Nick có lịch sử trên máy này cho bộ lọc theo tài khoản: [{uid, name}]. Chỉ trả uid + tên (không cần cả danh sách
+    tài khoản Module 02 kèm mật khẩu / cookie). Tên lấy theo Module 02 hiện tại, nick đã xóa thì lấy tên trong lịch sử.
+    """
+    owner = await asyncio.to_thread(adapters.owner_from_request, request)
+    try:
+        rows = await asyncio.to_thread(repository.history_accounts, adapters.get_machine_id())
+    except Exception as e:
+        logger.warning(f"Không đọc được danh sách nick trong lịch sử: {e}")
+        raise HTTPException(status_code=503, detail="Không đọc được danh sách tài khoản trong lịch sử từ CSDL.")
+    uids = [str(r["fb_uid"]) for r in rows if r.get("fb_uid")]
+    try:
+        names = await asyncio.to_thread(adapters.get_profile_names, uids, owner)
+    except Exception as e:
+        logger.warning(f"Không đọc được tên nick ở Module 02, dùng tên trong lịch sử: {e}")
+        names = {}
+    items = [{"uid": str(r["fb_uid"]), "name": names.get(str(r["fb_uid"])) or (r.get("fb_name") or "").strip()}
+             for r in rows if r.get("fb_uid")]
+    return sorted(items, key=lambda a: ((a["name"] or a["uid"]).lower(), a["uid"]))
 
 
 _CSV_COLUMNS = [

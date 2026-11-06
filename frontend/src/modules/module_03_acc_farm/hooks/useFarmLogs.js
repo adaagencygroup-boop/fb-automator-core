@@ -36,14 +36,18 @@ function emit() {
   listeners.forEach((fn) => fn());
 }
 
-function push(entry) {
-  logs = [...load(), entry].slice(-MAX_LOGS);
+function save(next) {
+  logs = next.slice(-MAX_LOGS);
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(logs));
   } catch {
     /* bỏ qua */
   }
   emit();
+}
+
+function push(entry) {
+  save([...load(), entry]);
 }
 
 function timeOf(timestamp) {
@@ -95,13 +99,17 @@ function connect() {
 }
 
 export function clearFarmLogs() {
-  logs = [];
-  try {
-    sessionStorage.setItem(STORAGE_KEY, "[]");
-  } catch {
-    /* bỏ qua */
-  }
-  emit();
+  save([]);
+}
+
+/**
+ * Bấm Kích hoạt: xóa log (và danh sách luồng) của phiên trước ngay trước khi gửi lệnh, vì BE ghi log "Bắt đầu..."
+ * trong lúc xử lý lệnh. Trả về hàm trả lại log cũ khi Kích hoạt bị từ chối (BE chỉ ghi log sau khi qua hết kiểm tra).
+ */
+export function startNewFarmLogs() {
+  const previous = load();
+  clearFarmLogs();
+  return () => save([...previous, ...(logs || [])]);
 }
 
 function subscribe(listener) {

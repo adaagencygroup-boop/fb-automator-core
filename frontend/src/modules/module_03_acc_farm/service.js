@@ -9,7 +9,10 @@ export const getFarmAccountsPage = (filters = {}, cursor) =>
 
 // ── Chạy tương tác ──
 
-export const startFarm = (uids, threads, config) => api.post("/api/farm/start", { uids, threads, config });
+// Kích hoạt phải đọc nick, chia link, tạo lượt chạy trên CSDL (Supabase ở xa có lúc rất chậm): chờ lâu hơn 60s mặc định
+const START_TIMEOUT_MS = 180000;
+export const startFarm = (uids, threads, config) =>
+  api.post("/api/farm/start", { uids, threads, config }, { timeout: START_TIMEOUT_MS });
 export const pauseFarm = () => api.post("/api/farm/pause");
 export const resumeFarm = () => api.post("/api/farm/resume");
 export const stopFarm = () => api.post("/api/farm/stop");
@@ -33,6 +36,9 @@ function historyParams(filters) {
 export const getFarmHistory = (filters, page, pageSize) =>
   api.get("/api/farm/history", { params: { ...historyParams(filters), page, page_size: pageSize } });
 
+// Nick có lịch sử trên máy này cho bộ lọc theo tài khoản: [{ uid, name }]
+export const getFarmHistoryAccounts = () => api.get("/api/farm/history/accounts");
+
 export const getFarmHistoryDetail = (id) => api.get(`/api/farm/history/${encodeURIComponent(id)}`);
 
 export const getFarmRunTargets = (runId) => api.get(`/api/farm/runs/${encodeURIComponent(runId)}/targets`);
@@ -49,12 +55,14 @@ export async function downloadFarmHistoryCsv(filters) {
   const blob = await fetchHistoryCsv(filters);
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
+  const fileName = exportFileName("csv");
   link.href = url;
-  link.download = exportFileName("csv");
+  link.download = fileName;
   document.body.appendChild(link);
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+  return { fileName };
 }
 
 /** Tách CSV do BE sinh (csv.writer của Python: dấu phẩy, ngoặc kép, CRLF); không dùng XLSX.read để đọc */
@@ -123,5 +131,7 @@ export async function downloadFarmHistoryXlsx(filters) {
   }));
   const book = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(book, sheet, "Lich su tuong tac");
-  XLSX.writeFile(book, exportFileName("xlsx"));
+  const fileName = exportFileName("xlsx");
+  XLSX.writeFile(book, fileName);
+  return { fileName, rows: body.length };
 }

@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from config.constants import LOGS_DIR
 
@@ -92,20 +92,64 @@ def get_account(uid: str, owner=_UNSET) -> Optional[Dict[str, Any]]:
                 acc = db.query(Account).filter(Account.uid == str(uid).strip()).first()
         except ValueError:  # UID sai định dạng
             return None
-        if not acc:
-            return None
-        return {
-            "uid": acc.uid,
-            "profile_name": acc.profile_name or "",
-            "proxy": acc.proxy,
-            "cookie": acc.cookie,
-            "status": (acc.status or "").lower() or None,
-            "login_status": _LOGIN_STATUS_FROM_M02.get(acc.login_status, (acc.login_status or "").lower()),
-            "has_password": bool(acc.password),
-            "has_2fa": bool(acc.two_fa),
-            "user_id": str(acc.user_id) if acc.user_id is not None else None,
-            "profile_path": acc.profile_path,
-        }
+        return _account_info(acc) if acc else None
+
+
+def get_accounts(uids: List[str], owner=_UNSET) -> Dict[str, Dict[str, Any]]:
+    """
+    Như get_account cho nhiều nick: {uid gửi lên: thông tin}, nick không tìm thấy / UID sai định dạng thì không có.
+    Đọc 1 lần cho nick của owner (+ 1 lần cho nick còn thiếu) thay vì 1-2 lần mỗi nick: CSDL Supabase ở xa,
+    mỗi lần gọi là 1 lượt đi về qua mạng (bấm Kích hoạt nhiều nick từng chậm quá 60s, tester gặp 2026-11-06).
+    """
+    from modules.module_02_account_manager.database.models import Account
+    from modules.module_02_account_manager.database.repository import validate_uid
+    wanted: Dict[str, str] = {}  # uid đã chuẩn hóa -> uid gửi lên
+    for uid in uids:
+        try:
+            wanted.setdefault(validate_uid(uid), uid)
+        except ValueError:
+            continue
+    if not wanted:
+        return {}
+    SessionLocal, Repo = _m02()
+    found: Dict[str, Any] = {}
+    with SessionLocal() as db:
+        for acc in Repo.query(db, _owner(owner)).filter(Account.uid.in_(list(wanted))).order_by(Account.id).all():
+            found.setdefault(acc.uid, acc)
+        # Giống get_account: nick không thuộc owner thì lấy theo UID (nick local cũ)
+        missing = [uid for uid in wanted if uid not in found]
+        if missing:
+            for acc in db.query(Account).filter(Account.uid.in_(missing)).order_by(Account.id).all():
+                found.setdefault(acc.uid, acc)
+        return {wanted[uid]: _account_info(acc) for uid, acc in found.items() if uid in wanted}
+
+
+def get_profile_names(uids: List[str], owner=_UNSET) -> Dict[str, str]:
+    """Tên nick ở Module 02 hiện tại của owner (chỉ đọc uid + tên), nick chưa có tên thì không có."""
+    uids = [str(u).strip() for u in uids if str(u).strip()]
+    if not uids:
+        return {}
+    SessionLocal, Repo = _m02()
+    from modules.module_02_account_manager.database.models import Account
+    with SessionLocal() as db:
+        rows = (Repo.query(db, _owner(owner)).filter(Account.uid.in_(uids))
+                .with_entities(Account.uid, Account.profile_name).all())
+    return {str(row.uid).strip(): row.profile_name.strip() for row in rows if row.profile_name and row.profile_name.strip()}
+
+
+def _account_info(acc) -> Dict[str, Any]:
+    return {
+        "uid": acc.uid,
+        "profile_name": acc.profile_name or "",
+        "proxy": acc.proxy,
+        "cookie": acc.cookie,
+        "status": (acc.status or "").lower() or None,
+        "login_status": _LOGIN_STATUS_FROM_M02.get(acc.login_status, (acc.login_status or "").lower()),
+        "has_password": bool(acc.password),
+        "has_2fa": bool(acc.two_fa),
+        "user_id": str(acc.user_id) if acc.user_id is not None else None,
+        "profile_path": acc.profile_path,
+    }
 
 
 def list_owner_accounts(owner=_UNSET) -> Dict[str, str]:
