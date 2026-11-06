@@ -33,7 +33,7 @@ function scenarioLines(h) {
   const reacted = (n) => (n ? `, thả ${n} cảm xúc` : "");
   if (has("NEWSFEED")) lines.push(`Lướt Newsfeed ${formatDuration(h.newsfeed_seconds)}, ${h.newsfeed_scrolls} lần cuộn${reacted(h.newsfeed_reactions)}`);
   if (has("WATCH")) lines.push(`Xem ${h.watch_videos} video trong ${formatDuration(h.watch_seconds)}${reacted(h.watch_reactions)}`);
-  if (has("STORY")) lines.push(`Xem ${h.story_frames || 0} khung story trong ${formatDuration(h.story_seconds)}${reacted(h.story_reactions)}`);
+  if (has("STORY")) lines.push(`Xem ${h.story_frames || 0} story trong ${formatDuration(h.story_seconds)}${reacted(h.story_reactions)}`);
   if (has("ADD_FRIEND")) {
     lines.push(`Gửi ${h.friends_sent} lời mời kết bạn${h.friends_source ? ` (${FRIEND_SOURCE_LABELS[h.friends_source] || h.friends_source})` : ""}`);
   }
