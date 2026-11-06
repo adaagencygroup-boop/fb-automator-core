@@ -9,6 +9,7 @@ import { PostModeTabs } from "./components/PostModeTabs";
 import { StatusPostView } from "./components/StatusPostView";
 import { ReelsPostView } from "./components/ReelsPostView";
 import { api } from "@/services/api";
+import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
 
 /**
  * Module 03: Đăng bài và tương tác tài khoản.
@@ -19,6 +20,7 @@ import { api } from "@/services/api";
 export default function AccFarmModule({ subPage = "interact.post" }) {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { requestNavigation } = useUnsavedChanges();
 
   const [postMode, setPostMode] = useState(() => {
     if (typeof window !== "undefined") {
@@ -29,17 +31,21 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
     }
     return "status";
   });
+  /** Status có Prompt AI hoặc bài viết → cần confirm trước khi đổi tab */
+  const [statusNeedsLeaveConfirm, setStatusNeedsLeaveConfirm] = useState(false);
 
   // Đồng bộ tab từ URL ?tab=status|reels|story
   useEffect(() => {
     const urlTab = searchParams?.get("tab");
-    if (urlTab && ["status", "reels", "story"].includes(urlTab)) {
+    if (urlTab && ["status", "reels", "story"].includes(urlTab) && urlTab !== postMode) {
+      // Không tự chuyển nếu đang có bài Status / unsaved
+      if (statusNeedsLeaveConfirm) return;
       setPostMode(urlTab);
       if (typeof window !== "undefined") {
         localStorage.setItem("module_03_post_mode", urlTab);
       }
     }
-  }, [searchParams]);
+  }, [searchParams, postMode, statusNeedsLeaveConfirm]);
 
   useEffect(() => {
     // Kiểm tra server xem có phiên đăng bài đang chạy không để tự chuyển đúng tab (nếu URL chưa chỉ định tab)
@@ -51,7 +57,11 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
         const res = await api.get("/api/post/status");
         const d = res?.data ?? res;
         if (d && (d.is_running || d.is_paused || (d.session_id && !d.session_finished))) {
-          if (d.post_type && ["status", "reels", "story"].includes(d.post_type)) {
+          if (
+            d.post_type &&
+            ["status", "reels", "story"].includes(d.post_type) &&
+            !statusNeedsLeaveConfirm
+          ) {
             setPostMode(d.post_type);
             if (typeof window !== "undefined") {
               localStorage.setItem("module_03_post_mode", d.post_type);
@@ -63,14 +73,20 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
       }
     };
     checkActiveSession();
-  }, [searchParams]);
+  }, [searchParams, statusNeedsLeaveConfirm]);
 
-  const handleModeChange = (mode) => {
+  const applyModeChange = (mode) => {
     setPostMode(mode);
     if (typeof window !== "undefined") {
       localStorage.setItem("module_03_post_mode", mode);
     }
     router.replace(`/interact/post?tab=${mode}`);
+  };
+
+  const handleModeChange = (mode) => {
+    if (mode === postMode) return;
+    // Dirty (Prompt/bài Status) → popup Context; không dirty → đổi tab ngay
+    requestNavigation(() => applyModeChange(mode));
   };
 
   // 1. Phân hệ Tương tác tài khoản / Nuôi nick (/interact/engage) - Chuẩn từ main
@@ -99,13 +115,12 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
           />
         </div>
 
-        {/* Dynamic Post Mode View */}
+        {/* Dynamic Post Mode View — giữ Status mounted (ẩn) để không mất bài + vẫn chặn rời trang */}
         <div>
-          {postMode === "status" ? (
-            <StatusPostView />
-          ) : (
-            <ReelsPostView mode={postMode} />
-          )}
+          <div className={postMode === "status" ? "block" : "hidden"}>
+            <StatusPostView onHasPostsChange={setStatusNeedsLeaveConfirm} />
+          </div>
+          {postMode !== "status" && <ReelsPostView mode={postMode} />}
         </div>
       </div>
     );

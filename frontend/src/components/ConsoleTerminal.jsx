@@ -6,9 +6,11 @@ export default function ConsoleTerminal({ logs, engineOnline }) {
   const terminalRef = useRef(null);
 
   useEffect(() => {
-    if (terminalRef.current) {
-      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-    }
+    const el = terminalRef.current;
+    if (!el) return;
+    // Chỉ auto-scroll khi đang gần đáy — tránh nháy khi log spam/reconnect
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    if (nearBottom) el.scrollTop = el.scrollHeight;
   }, [logs]);
 
   return (

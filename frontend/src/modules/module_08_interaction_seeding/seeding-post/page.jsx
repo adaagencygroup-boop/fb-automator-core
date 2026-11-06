@@ -114,7 +114,7 @@ export default function SeedingPostPage() {
         })
         .catch(() => {});
     checkActive();
-    const timer = setInterval(checkActive, 3000);
+    const timer = setInterval(checkActive, 5000);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -155,7 +155,7 @@ export default function SeedingPostPage() {
       } catch (err) {
         // Ignore polling error
       }
-    }, 3000);
+    }, 4000);
 
     return () => clearInterval(interval);
   }, [isRunning, currentCampaignId]);
@@ -212,6 +212,10 @@ export default function SeedingPostPage() {
   };
 
   const handleRemoveTarget = async (index) => {
+    if (isRunning) {
+      toast.warning("Không thể xóa bài viết khi đang chạy seeding!");
+      return;
+    }
     const targetToRemove = targets[index];
     if (targetToRemove) {
       try {
@@ -235,6 +239,10 @@ export default function SeedingPostPage() {
   };
 
   const handleClearTargets = async () => {
+    if (isRunning) {
+      toast.warning("Không thể xóa danh sách bài viết khi đang chạy seeding!");
+      return;
+    }
     try {
       await seedingApi.clearSeedingTargets("POST");
     } catch (err) {
@@ -276,6 +284,10 @@ export default function SeedingPostPage() {
   };
 
   const handleRemoveComment = async (index) => {
+    if (isRunning) {
+      toast.warning("Không thể xóa bình luận khi đang chạy seeding!");
+      return;
+    }
     const cmtToRemove = comments[index];
     if (cmtToRemove) {
       try {
@@ -288,6 +300,10 @@ export default function SeedingPostPage() {
   };
 
   const handleClearAllComments = async () => {
+    if (isRunning) {
+      toast.warning("Không thể xóa danh sách bình luận khi đang chạy seeding!");
+      return;
+    }
     try {
       await seedingApi.clearSeedingComments();
     } catch (e) {
@@ -449,6 +465,7 @@ export default function SeedingPostPage() {
         onRemoveTarget={handleRemoveTarget}
         onClearTargets={handleClearTargets}
         successMessage={successMessage}
+        isRunning={isRunning}
       />
 
       {/* Step 2: Reactions & Interactions */}
@@ -471,6 +488,7 @@ export default function SeedingPostPage() {
           onAddBulkComments={handleAddBulkComments}
           onRemoveComment={handleRemoveComment}
           onClearAllComments={handleClearAllComments}
+          isRunning={isRunning}
         />
       )}
 

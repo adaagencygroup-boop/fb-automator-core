@@ -1727,7 +1727,8 @@ async def save_farm_setting(item: SettingItem):
 # ─────────────────────── ENDPOINTS: LỊCH SỬ ────────────────────────────
 
 def _history_filters(search: Optional[str], action: Optional[str], status: Optional[str],
-                     proxy: Optional[str], date_from: Optional[str], date_to: Optional[str]) -> Dict:
+                     proxy: Optional[str], date_from: Optional[str], date_to: Optional[str],
+                     fb_uid: Optional[str] = None) -> Dict:
     if action and action not in ACTION_LABELS:
         raise HTTPException(status_code=400, detail="Kịch bản không hợp lệ.")
     if status and status not in FINAL_STATUSES:
@@ -1742,8 +1743,15 @@ def _history_filters(search: Optional[str], action: Optional[str], status: Optio
                 datetime.strptime(value, "%Y-%m-%d")
             except ValueError:
                 raise HTTPException(status_code=400, detail="Ngày không hợp lệ.")
-    return {"search": (search or "").strip()[:100], "action": action, "status": status,
-            "proxy": proxy, "date_from": date_from, "date_to": date_to}
+    return {
+        "search": (search or "").strip()[:100],
+        "action": action,
+        "status": status,
+        "proxy": proxy,
+        "date_from": date_from,
+        "date_to": date_to,
+        "fb_uid": (fb_uid or "").strip()[:64],
+    }
 
 
 def _iso(value) -> Optional[str]:
@@ -1774,10 +1782,11 @@ async def farm_history(
     proxy: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    fb_uid: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=HISTORY_PAGE_SIZE_MAX),
 ):
-    filters = _history_filters(search, action, status, proxy, date_from, date_to)
+    filters = _history_filters(search, action, status, proxy, date_from, date_to, fb_uid)
     try:
         data = await asyncio.to_thread(repository.list_history, adapters.get_machine_id(), filters, page, page_size)
     except Exception as e:
@@ -1828,8 +1837,9 @@ async def export_farm_history(
     proxy: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    fb_uid: Optional[str] = None,
 ):
-    filters = _history_filters(search, action, status, proxy, date_from, date_to)
+    filters = _history_filters(search, action, status, proxy, date_from, date_to, fb_uid)
     try:
         rows = await asyncio.to_thread(repository.iter_history_for_export, adapters.get_machine_id(),
                                        filters, EXPORT_MAX_ROWS)
