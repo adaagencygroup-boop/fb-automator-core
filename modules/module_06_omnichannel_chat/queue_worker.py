@@ -74,8 +74,12 @@ async def process_webhook_event(event: Dict[str, Any]):
                         "wow": "😮",
                         "sad": "😢",
                         "angry": "😡",
+                        "❤": "❤️",
+                        "heart": "❤️",
                     }
                     final_emoji = emoji_map.get(raw_emoji, raw_emoji)
+                    if final_emoji == "❤":
+                        final_emoji = "❤️"
                     reaction_val = final_emoji if action == "react" else None
 
                     if mid:
@@ -90,11 +94,15 @@ async def process_webhook_event(event: Dict[str, Any]):
                                 "type": "reaction",
                                 "page_id": str(page_id),
                                 "data": {
+                                    "id": msg.id,
                                     "facebook_message_id": mid,
                                     "reactions": reaction_val,
+                                    "reaction": reaction_val,
+                                    "sender_id": msg.sender_id,
                                 },
                             }
                             await manager.send_personal_message(ws_payload, fb_user_id)
+                            await manager.broadcast(ws_payload)
 
                 # 1.2 Handle read receipts (seen status) from customer
                 read_event = messaging.get("read")
@@ -432,7 +440,7 @@ async def process_webhook_event(event: Dict[str, Any]):
                             page_record = db.query(Page).filter(Page.page_id == page_id).first()
                             from modules.module_06_omnichannel_chat.services import FacebookSyncService
                             sync_service = FacebookSyncService(db)
-                            profile_info = await sync_service.get_customer_profile(sender_id, page_id) if (sender_id and page_id) else {}
+                            profile_info = (await sync_service.get_customer_profile(sender_id, page_id)) or {} if (sender_id and page_id) else {}
                             avatar_url = profile_info.get("avatar_url", "")
                             if profile_info.get("name") and (not sender_name or sender_name == "Khách hàng"):
                                 sender_name = profile_info.get("name")

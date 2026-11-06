@@ -170,7 +170,7 @@ class PushSubscriptionInput(BaseModel):
 class ReactInput(BaseModel):
     page_id: str
     recipient_id: str
-    reaction: str
+    reaction: Optional[str] = None
 
 class SendAttachmentUrlInput(BaseModel):
     page_id: str

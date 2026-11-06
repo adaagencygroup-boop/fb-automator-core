@@ -300,6 +300,7 @@ export async function getMessages(conversationId) {
 
       return {
         id: String(m.id || m.facebook_message_id),
+        facebookMessageId: m.facebook_message_id || null,
         direction: m.direction === "outbound" ? "out" : "in",
         text,
         attachment,
@@ -564,6 +565,16 @@ export async function replyToComment(objectId, pageId, text, attachmentUrl) {
     text,
     attachment_url: attachmentUrl || null,
   });
+}
+
+/** Tải tệp/ảnh lên server lấy URL công khai */
+export async function uploadMedia(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await api.post("/api/facebook/upload-media", form, {
+    headers: { "Content-Type": undefined },
+  });
+  return res?.url;
 }
 
 /** Trả lời riêng (vào hộp thư) cho người bình luận */
