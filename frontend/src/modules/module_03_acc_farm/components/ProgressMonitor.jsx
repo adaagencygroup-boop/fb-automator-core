@@ -6,6 +6,8 @@ import { ACTION_FULL_LABELS, MONITOR_STATUSES, RUN_STATUS } from "../constants";
 import { ActionChip, RunStatusBadge, formatDuration } from "./parts";
 import RunTargetsModal, { hasRunTargets } from "./RunTargetsModal";
 
+// Nick đã kết thúc (kể cả dừng / lỗi giữa chừng) thì xem được danh sách nhóm / người đã làm được
+const FINISHED_STATUSES = ["COMPLETED", "STOPPED", "FAILED", "BLOCKED", "DIE"];
 const ACTION_ORDER = ["CHECK_NOTIF", "NEWSFEED", "WATCH", "STORY", "ADD_FRIEND", "LEAVE_GROUP", "JOIN_GROUP"];
 const COUNT_COLORS = {
   RUNNING: "text-blue-600",
@@ -105,7 +107,7 @@ export default function ProgressMonitor({ status }) {
                   </td>
                   <td className="px-4 py-3">
                     <RunStatusBadge status={acc.status} />
-                    {acc.status === "COMPLETED" && acc.run_id && hasRunTargets(acc) && (
+                    {FINISHED_STATUSES.includes(acc.status) && acc.run_id && hasRunTargets(acc) && (
                       <button
                         type="button"
                         onClick={() => setTargetsOf(acc)}
