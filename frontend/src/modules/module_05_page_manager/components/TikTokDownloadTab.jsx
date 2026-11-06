@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { Settings, FolderOpen, Search, Trash2, HelpCircle, Play, Square, Terminal, Video, Flag, LogIn, LogOut, CheckCircle2, Loader2, AlertTriangle, AlertCircle, Edit3, ExternalLink, Maximize2, Lock } from "lucide-react";
-import { startTikTokDownloadJob, getJobStatus, stopJob, selectFolder, clearPageVideos, clearAllVideos, updatePageKeywords, getTikTokAuthStatus, openTikTokLogin, disconnectTikTok, getTikTokConfig, saveTikTokConfig, checkFolderData } from "../service";
+import { startTikTokDownloadJob, getJobStatus, stopJob, selectFolder, clearPageVideos, clearAllVideos, updatePageKeywords, getTikTokAuthStatus, openTikTokLogin, disconnectTikTok, getTikTokConfig, saveTikTokConfig, checkFolderData, setSharedVideoFolder, getSharedVideoFolder } from "../service";
 import Pagination from "@/components/ui/pagination";
 import PageVideosModal from "./PageVideosModal";
 import EditSourceModal from "./EditSourceModal";
@@ -39,7 +39,10 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     try {
       const saved = localStorage.getItem("fb_tiktok_config");
       const parsed = saved ? JSON.parse(saved).downloadFolder : "";
-      return (parsed && parsed.trim() && parsed !== "downloads/tiktok") ? parsed : "";
+      if (parsed && parsed.trim() && parsed !== "downloads/tiktok") return parsed;
+      const shared = localStorage.getItem("fb_shared_video_folder");
+      if (shared && shared.trim()) return shared.trim();
+      return "";
     } catch {
       return "";
     }
@@ -65,6 +68,9 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     }
   });
   const [isRunning, setIsRunning] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isPickingFolder, setIsPickingFolder] = useState(false);
+  const isActionLockedRef = useRef(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [pageSize, setPageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
@@ -196,18 +202,16 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     } catch {}
   }, [downloadFolder, delaySec, maxVideos, concurrency]);
   const handleSelectFolder = async () => {
-    if (downloadFolder && downloadFolder.trim()) {
-      const check = await checkFolderData(downloadFolder);
-      if (check && check.has_data) {
-        setHasDownloadedData(true);
-        try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch {}
+    if (isPickingFolder || isActionLockedRef.current) return;
+    isActionLockedRef.current = true;
+    setIsPickingFolder(true);
+    try {
+      if (hasDownloadedData) {
         alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!");
         return;
       }
-    }
-    setHasDownloadedData(false);
-    try { localStorage.removeItem("fb_tiktok_has_data"); } catch {}
-    try {
+      setHasDownloadedData(false);
+      try { localStorage.removeItem("fb_tiktok_has_data"); } catch {}
       const res = await selectFolder(downloadFolder);
       if (res && res.error) {
         setHasDownloadedData(true);
@@ -225,12 +229,16 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
           try { localStorage.removeItem("fb_tiktok_has_data"); } catch {}
         }
         setDownloadFolder(res.folder);
+        setSharedVideoFolder(res.folder);
         setFolderError(false);
+        saveTikTokConfig({ download_folder: res.folder, max_videos: maxVideos });
         return;
       }
-    } catch {}
-    if (folderInputRef.current) {
-      folderInputRef.current.click();
+    } catch (err) {
+      console.warn("Lỗi chọn thư mục:", err);
+    } finally {
+      setIsPickingFolder(false);
+      isActionLockedRef.current = false;
     }
   };
   const handleFolderFileChange = async (e) => {
@@ -401,6 +409,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     }
   };
   const handleStartItem = async (it) => {
+    if (isRunning || isStarting || isActionLockedRef.current) return;
     if (isConfigLoading) {
       alert("Hệ Thống Đang Nạp Cấu Hình. Vui Lòng Đợi Trong Giây Lát!");
       return;
@@ -431,6 +440,8 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
       savePageItemData(it.page_id, targetItem.keyword || "", targetItem.link || "");
     }
     setFolderError(false);
+    isActionLockedRef.current = true;
+    setIsStarting(true);
     setIsRunning(true);
     const displayName = targetItem.link && targetItem.keyword ? `${targetItem.link} ["${targetItem.keyword}"]` : (targetItem.link || (targetItem.keyword ? `Từ Khóa: "${targetItem.keyword}"` : (targetItem.page_name || "Fanpage")));
     addLog(`[${getUtc7Time()}] Thư Mục Lưu: ${downloadFolder} | Giới Hạn: ${maxVideos} Video/Page`);
@@ -495,6 +506,8 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
       setItems((prev) => prev.map((item) => (item.id === it.id ? { ...item, status: "FAILED", message: "Lỗi Khởi Chạy" } : item)));
       addLog(`[${getUtc7Time()}] Lỗi Khởi Chạy Tác Vụ Tải Cho Fanpage "${it.page_name}"!`);
     }
+    setIsStarting(false);
+    isActionLockedRef.current = false;
   };
   const handleStopItem = async (it) => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
@@ -504,6 +517,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     addLog(`[${getUtc7Time()}] Đã Gửi Lệnh Dừng Tải Cho Fanpage "${it.page_name}".`);
   };
   const handleStart = async () => {
+    if (isRunning || isStarting || isActionLockedRef.current) return;
     if (isConfigLoading) {
       alert("Hệ Thống Đang Nạp Cấu Hình. Vui Lòng Đợi Trong Giây Lát!");
       return;
@@ -526,6 +540,8 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
       alert("Không Có Fanpage Nào Để Thực Hiện Tải! Vui Lòng Kết Nối Fanpage Trước.");
       return;
     }
+    isActionLockedRef.current = true;
+    setIsStarting(true);
     Object.keys(saveTimerMapRef.current).forEach((pid) => {
       clearTimeout(saveTimerMapRef.current[pid]);
       delete saveTimerMapRef.current[pid];
@@ -613,6 +629,8 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
       setIsRunning(false);
       addLog(`[${getUtc7Time()}] Lỗi Khởi Chạy Tác Vụ Tải TikTok!`);
     }
+    setIsStarting(false);
+    isActionLockedRef.current = false;
   };
   const handleStop = async () => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
@@ -752,8 +770,23 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                 <div className="flex gap-2">
                   <input ref={folderInputRef} type="file" webkitdirectory="" directory="" className="hidden" onChange={handleFolderFileChange} />
                   <Input value={downloadFolder} readOnly={hasDownloadedData} onClick={() => { if (hasDownloadedData) alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!"); }} onChange={(e) => { if (hasDownloadedData) { alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!"); return; } setDownloadFolder(e.target.value); if (e.target.value.trim()) setFolderError(false); }} placeholder="Chưa Chọn Thư Mục Lưu Video (Bắt Buộc)..." className={`h-8 text-xs font-normal font-mono ${hasDownloadedData ? "cursor-not-allowed" : ""} ${folderError || !downloadFolder.trim() ? "border-amber-400 focus-visible:border-amber-500" : ""}`} />
-                  <Button variant="outline" size="sm" type="button" onClick={handleSelectFolder} className="h-8 shrink-0 text-xs font-normal gap-1">
-                    <FolderOpen className="w-3.5 h-3.5 text-blue-600" /> Chọn Thư Mục
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    disabled={isPickingFolder || isRunning || isStarting}
+                    onClick={handleSelectFolder}
+                    className="h-8 shrink-0 text-xs font-normal gap-1 disabled:opacity-50"
+                  >
+                    {isPickingFolder ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" /> Đang Mở...
+                      </>
+                    ) : (
+                      <>
+                        <FolderOpen className="w-3.5 h-3.5 text-blue-600" /> Chọn Thư Mục
+                      </>
+                    )}
                   </Button>
                 </div>
               </div>
@@ -962,7 +995,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                                   <Square className="w-3 h-3 fill-current" /> Dừng
                                 </Button>
                               ) : (
-                                <Button size="sm" variant="outline" onClick={() => handleStartItem(it)} disabled={isRunning || !isReadyToStart} className="h-7 px-2 text-[11px] font-normal text-blue-600 border-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/40 gap-1 shadow-none disabled:opacity-40" title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (isAuthChecking || openingLogin) ? "Đang Chờ Đăng Nhập Tài Khoản TikTok..." : !authStatus.connected ? "Vui Lòng Đăng Nhập Tài Khoản TikTok Trước Khi Kích Hoạt Tải Video!" : (!downloadFolder || !downloadFolder.trim()) ? "Vui Lòng Cài Đặt Thư Mục Lưu Video Trước Khi Kích Hoạt!" : "Kích Hoạt Tải Riêng Fanpage Này"}>
+                                <Button size="sm" variant="outline" onClick={() => handleStartItem(it)} disabled={isRunning || isStarting || !isReadyToStart} className="h-7 px-2 text-[11px] font-normal text-blue-600 border-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/40 gap-1 shadow-none disabled:opacity-40" title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (isAuthChecking || openingLogin) ? "Đang Chờ Đăng Nhập Tài Khoản TikTok..." : !authStatus.connected ? "Vui Lòng Đăng Nhập Tài Khoản TikTok Trước Khi Kích Hoạt Tải Video!" : (!downloadFolder || !downloadFolder.trim()) ? "Vui Lòng Cài Đặt Thư Mục Lưu Video Trước Khi Kích Hoạt!" : "Kích Hoạt Tải Riêng Fanpage Này"}>
                                   <Play className="w-3 h-3 fill-current" /> Kích Hoạt
                                 </Button>
                               )}
@@ -1010,8 +1043,22 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                   </div>
                 )}
                 <div className="flex items-center gap-3">
-                  <Button variant="outline" className="flex-1 font-normal text-xs h-9 text-blue-600 border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-900/60 dark:text-blue-400 dark:hover:bg-blue-950/40 gap-2 shadow-none disabled:opacity-40" disabled={isRunning || items.length === 0 || !isReadyToStart} onClick={handleStart} title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (isAuthChecking || openingLogin) ? "Đang Chờ Đăng Nhập Tài Khoản TikTok..." : !authStatus.connected ? "Vui Lòng Đăng Nhập Tài Khoản TikTok Trước Khi Kích Hoạt Tải Video!" : (!downloadFolder || !downloadFolder.trim()) ? "Vui Lòng Cài Đặt Thư Mục Lưu Video Trước Khi Kích Hoạt!" : items.length === 0 ? "Chưa Có Fanpage Nào Để Kích Hoạt" : "Kích Hoạt Tải Hàng Loạt Cho Tất Cả Fanpage"}>
-                    <Play className="w-3.5 h-3.5 fill-current" /> Kích Hoạt Tất Cả
+                  <Button
+                    variant="outline"
+                    className="flex-1 font-normal text-xs h-9 text-blue-600 border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-900/60 dark:text-blue-400 dark:hover:bg-blue-950/40 gap-2 shadow-none disabled:opacity-40"
+                    disabled={isRunning || isStarting || items.length === 0 || !isReadyToStart}
+                    onClick={handleStart}
+                    title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (isAuthChecking || openingLogin) ? "Đang Chờ Đăng Nhập Tài Khoản TikTok..." : !authStatus.connected ? "Vui Lòng Đăng Nhập Tài Khoản TikTok Trước Khi Kích Hoạt Tải Video!" : (!downloadFolder || !downloadFolder.trim()) ? "Vui Lòng Cài Đặt Thư Mục Lưu Video Trước Khi Kích Hoạt!" : items.length === 0 ? "Chưa Có Fanpage Nào Để Kích Hoạt" : "Kích Hoạt Tải Hàng Loạt Cho Tất Cả Fanpage"}
+                  >
+                    {isStarting ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" /> Đang Khởi Động...
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-3.5 h-3.5 fill-current" /> Kích Hoạt Tất Cả
+                      </>
+                    )}
                   </Button>
                   <Button variant="outline" className="flex-1 font-normal text-xs h-9 text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700 dark:border-rose-900/60 dark:text-rose-400 dark:hover:bg-rose-950/40 gap-2 shadow-none disabled:opacity-40" disabled={!isRunning} onClick={handleStop}>
                     <Square className="w-3.5 h-3.5 fill-current" /> Dừng Tất Cả
