@@ -10,6 +10,7 @@ import ConfirmDialog from "@/components/ui/confirm-dialog";
  */
 export default function PageActionBar({
   isRunning,
+  isStopping = false,
   onStart,
   onStop,
   disabled = false,
@@ -19,8 +20,9 @@ export default function PageActionBar({
   const [confirmStopOther, setConfirmStopOther] = useState(false);
   const [stoppingOther, setStoppingOther] = useState(false);
   const blockedByOther = !isRunning && !!otherRunning;
-  const startDisabled = isRunning || disabled || blockedByOther;
-  const stopEnabled = isRunning || blockedByOther;
+  const isStopBusy = isStopping || stoppingOther;
+  const startDisabled = isRunning || disabled || blockedByOther || isStopBusy;
+  const stopEnabled = (isRunning || blockedByOther) && !isStopBusy;
 
   const handleConfirmStopOther = async () => {
     setStoppingOther(true);
@@ -59,7 +61,7 @@ export default function PageActionBar({
 
       <button
         type="button"
-        onClick={blockedByOther ? () => setConfirmStopOther(true) : onStop}
+        onClick={isStopBusy ? undefined : (blockedByOther ? () => setConfirmStopOther(true) : onStop)}
         disabled={!stopEnabled}
         className={`w-full py-3.5 px-6 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-md ${
           !stopEnabled
@@ -67,8 +69,17 @@ export default function PageActionBar({
             : "bg-[#DC2626] hover:bg-[#B91C1C] text-white shadow-rose-700/20 active:scale-[0.99]"
         }`}
       >
-        <Square className="w-4 h-4 fill-current" />
-        {blockedByOther ? `DỪNG SEEDING ${otherRunning.label}` : "DỪNG SEEDING"}
+        {isStopBusy ? (
+          <>
+            <Loader2 className="w-4 h-4 animate-spin" />
+            {stoppingOther ? `ĐANG DỪNG ${otherRunning?.label || "SEEDING"}...` : "ĐANG DỪNG SEEDING..."}
+          </>
+        ) : (
+          <>
+            <Square className="w-4 h-4 fill-current" />
+            {blockedByOther ? `DỪNG SEEDING ${otherRunning.label}` : "DỪNG SEEDING"}
+          </>
+        )}
       </button>
 
       <ConfirmDialog

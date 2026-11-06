@@ -19,6 +19,7 @@ export default function SeedingPageMain() {
   const [delayMin, setDelayMin] = useState(30);
   const [delayMax, setDelayMax] = useState(60);
   const [isRunning, setIsRunning] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [currentCampaignId, setCurrentCampaignId] = useState(null);
 
   // Accounts counter from database
@@ -301,6 +302,8 @@ export default function SeedingPageMain() {
   };
 
   const handleStop = async () => {
+    if (isStopping) return;
+    setIsStopping(true);
     try {
       addLog(
         "Đang gửi yêu cầu dừng chiến dịch và đóng toàn bộ trình duyệt Chrome...",
@@ -318,6 +321,7 @@ export default function SeedingPageMain() {
       addLog(`Lỗi khi dừng: ${e.message}`, "error");
       toast.error(e.message || "Lỗi khi gửi yêu cầu dừng chiến dịch!", "LỖI");
     } finally {
+      setIsStopping(false);
       setIsRunning(false);
     }
   };
@@ -378,6 +382,7 @@ export default function SeedingPageMain() {
       {/* Bottom Action Bar */}
       <PageActionBar
         isRunning={isRunning}
+        isStopping={isStopping}
         onStart={handleStart}
         onStop={handleStop}
         disabled={targets.length === 0}
