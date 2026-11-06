@@ -6,17 +6,11 @@ Trả về JSON thuần túy gồm: category, bio, post_content, avatar_prompt, 
 import json
 import logging
 import re
-import time
 from typing import Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
-
-# Không để job tạo page treo 4–5 phút vì Gemini 503/timeout + cascade nhiều model.
-REQUEST_TIMEOUT_SECS = 20
-TOTAL_BUDGET_SECS = 45
-MAX_MODELS_TO_TRY = 2
 
 SYSTEM_PROMPT = """Bạn là chuyên gia marketing và xây dựng thương hiệu số chuyên nghiệp.
 Nhiệm vụ của bạn là tạo nội dung hoàn chỉnh cho Fanpage Facebook dựa trên tên thương hiệu được cung cấp.
@@ -94,7 +88,7 @@ class GeminiClient:
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": config,
             },
-            timeout=REQUEST_TIMEOUT_SECS,
+            timeout=90,
         )
         response.raise_for_status()
         parts = response.json()["candidates"][0]["content"]["parts"]
@@ -111,7 +105,6 @@ class GeminiClient:
         """
         tag = page_name.replace(" ", "").replace("-", "")
         prompt = USER_PROMPT_TEMPLATE.format(page_name=page_name, tag=tag)
-        started = time.monotonic()
 
         # Danh sách các model chính thức từ cao đến thấp (xịn -> nhẹ chống 429)
         official_defaults = [
@@ -142,16 +135,8 @@ class GeminiClient:
                 if m not in candidate_models:
                     candidate_models.append(m)
 
-        # Chỉ thử vài model — hết ngân sách thời gian thì để routes dùng text mặc định
-        candidate_models = candidate_models[:MAX_MODELS_TO_TRY]
-
         last_error = None
         for model_name in candidate_models:
-            elapsed = time.monotonic() - started
-            if elapsed >= TOTAL_BUDGET_SECS:
-                raise TimeoutError(
-                    f"Gemini quá {TOTAL_BUDGET_SECS}s (đã {elapsed:.0f}s) — bỏ qua AI, dùng nội dung mặc định"
-                )
             try:
                 logger.info(f"Calling Gemini model '{model_name}' for page: '{page_name}'")
                 
@@ -160,10 +145,6 @@ class GeminiClient:
                     raw_text = self._call_model(model_name, prompt, json_mode=True)
                 except Exception as config_err:
                     logger.warning(f"Failed JSON mode for '{model_name}': {config_err}. Retrying standard config...")
-                    if time.monotonic() - started >= TOTAL_BUDGET_SECS:
-                        raise TimeoutError(
-                            f"Gemini quá {TOTAL_BUDGET_SECS}s sau lỗi JSON mode — dùng nội dung mặc định"
-                        ) from config_err
                     raw_text = self._call_model(model_name, prompt, json_mode=False)
 
                 if not raw_text:
@@ -189,8 +170,6 @@ class GeminiClient:
                     result["_fallback_reason"] = str(last_error) if last_error else "Model ban đầu không phản hồi"
                 return result
 
-            except TimeoutError:
-                raise
             except Exception as e:
                 logger.warning(f"Gemini model '{model_name}' failed: {e}")
                 last_error = e
