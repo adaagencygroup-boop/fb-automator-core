@@ -1,4 +1,4 @@
-﻿import api from "@/services/api";
+import api from "@/services/api";
 import { API_BASE } from "@/config/constants";
 
 /**
@@ -565,6 +565,16 @@ export async function replyToComment(objectId, pageId, text, attachmentUrl) {
     text,
     attachment_url: attachmentUrl || null,
   });
+}
+
+/** Tải tệp/ảnh lên server lấy URL công khai */
+export async function uploadMedia(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await api.post("/api/facebook/upload-media", form, {
+    headers: { "Content-Type": undefined },
+  });
+  return res?.url;
 }
 
 /** Trả lời riêng (vào hộp thư) cho người bình luận */
