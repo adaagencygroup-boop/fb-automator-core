@@ -28,6 +28,9 @@ _jobs_lock = threading.Lock()
 def is_job_running(job_type: str) -> bool:
   with _jobs_lock:
     return job_type in _active_jobs and _active_jobs[job_type].get("running", False)
+def mark_job_running(job_type: str, job_id: int):
+  with _jobs_lock:
+    _active_jobs[job_type] = {"running": True, "job_id": job_id}
 def stop_job(job_type: str):
   with _jobs_lock:
     if job_type in _active_jobs:
