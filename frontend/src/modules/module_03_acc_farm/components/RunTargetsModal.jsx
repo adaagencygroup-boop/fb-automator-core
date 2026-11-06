@@ -16,7 +16,10 @@ const LISTS = [
 const LOAD_TRIES = 3;
 const RETRY_MS = 1500;
 
-export const hasRunTargets = (account) => LISTS.some((list) => account.actions?.[list.action]);
+// Hành động đã chạy tới (kể cả dừng / lỗi giữa chừng); còn "PENDING" là chưa tới lượt thì không có gì để xem
+const ran = (account, action) => Boolean(account.actions?.[action]) && account.actions[action] !== "PENDING";
+
+export const hasRunTargets = (account) => LISTS.some((list) => ran(account, list.action));
 
 export default function RunTargetsModal({ account, onClose }) {
   const [data, setData] = useState(null);
@@ -79,7 +82,7 @@ export default function RunTargetsModal({ account, onClose }) {
           )}
           {error && <div className="py-6 text-sm text-rose-600">{error}</div>}
           {data &&
-            LISTS.filter((list) => account.actions?.[list.action]).map(({ key, action, title, icon: Icon }) => (
+            LISTS.filter((list) => ran(account, list.action)).map(({ key, action, title, icon: Icon }) => (
               <section key={key}>
                 <h3 className="flex items-center gap-2 text-sm font-bold text-slate-800">
                   <Icon className="h-4 w-4 text-primary" />

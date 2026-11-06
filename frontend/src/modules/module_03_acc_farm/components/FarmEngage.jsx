@@ -68,7 +68,9 @@ export default function FarmEngage() {
 
   const running = Boolean(status?.running);
 
-  // Lượt vừa xong: BE tính sẵn phần link / từ khóa còn lại (null = giữ nguyên ô đó), thay vào ô nhập và lưu lại
+  // Lượt đã xong: BE tính sẵn phần link / từ khóa còn lại (null = giữ nguyên ô đó), thay vào ô nhập và lưu lại.
+  // Chỉ thay khi về màn cấu hình (bấm "Quay về cấu hình ban đầu" hoặc mở lại trang sau khi lượt đã xong) để lúc còn
+  // xem tiến trình vẫn đối chiếu được với link đã dán.
   const applyLeftover = useCallback((next) => {
     const leftover = next?.leftover;
     if (next?.running || !leftover || !next.started_at || readSaved(LEFTOVER_KEY) === next.started_at) return;
@@ -87,20 +89,20 @@ export default function FarmEngage() {
       const next = await getFarmStatus();
       setStatus(next);
       if (next?.running) setViewState("running");
-      applyLeftover(next);
+      return next;
     } catch (err) {
       toast.error({ key: "farm-status", title: "KHÔNG ĐỌC ĐƯỢC TRẠNG THÁI", message: err.message });
+      return null;
     }
-  }, [applyLeftover]);
+  }, []);
 
   // Lần đầu mở màn: tài khoản, trạng thái phiên (khôi phục nếu đang chạy), cấu hình đã lưu
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const savedThreads = readSaved(THREADS_KEY);
-      const [settings] = await Promise.allSettled([getFarmSettings(), loadStatus()]);
+      const [settings, current] = await Promise.allSettled([getFarmSettings(), loadStatus()]);
       if (cancelled) return;
-      // Đọc sau khi có trạng thái: lượt vừa xong có thể đã thay ô link / từ khóa trong lúc chờ
       const saved = readSaved(CONFIG_KEY);
       setConfig({
         ...DEFAULT_CONFIG,
@@ -108,11 +110,13 @@ export default function FarmEngage() {
         ...(settings.status === "fulfilled" ? settingsToConfig(settings.value) : {}),
       });
       if (savedThreads) setThreads(String(savedThreads));
+      // Lượt đã xong khi mở trang: màn vào thẳng cấu hình nên thay ô link / từ khóa luôn
+      if (current.status === "fulfilled") applyLeftover(current.value);
     })();
     return () => {
       cancelled = true;
     };
-  }, [loadStatus]);
+  }, [loadStatus, applyLeftover]);
 
   // Đang chạy thì hỏi trạng thái định kỳ; vừa chạy xong thì tải lại tài khoản (trạng thái nick có thể đã đổi)
   useEffect(() => {
@@ -235,6 +239,7 @@ export default function FarmEngage() {
   const handleBackToConfig = () => {
     setSelected(new Set());
     setViewState("config");
+    applyLeftover(status);
   };
 
   return (

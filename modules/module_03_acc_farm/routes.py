@@ -924,6 +924,19 @@ PARTIAL_DONE_TEXTS = {
 PARTIAL_NAMES_SHOWN = 5
 
 
+def _names_text(targets, unit: Optional[str]) -> str:
+    """ ": Nhóm A, Nhóm B và N nhóm khác" từ danh sách đối tượng đã tương tác (bỏ link bị bỏ qua); không có thì "". """
+    names = [t.get("name") or t.get("url") for t in targets or []
+             if isinstance(t, dict) and (t.get("name") or t.get("url"))
+             and not str(t.get("result") or "").startswith("skipped_")]
+    if not names:
+        return ""
+    text = ": " + ", ".join(names[:PARTIAL_NAMES_SHOWN])
+    if len(names) > PARTIAL_NAMES_SHOWN:
+        text += f" và {len(names) - PARTIAL_NAMES_SHOWN} {unit} khác"
+    return text
+
+
 def _partial_done(action: str, quantity: int, partial: dict) -> str:
     """Câu "đã làm được gì" của hành động bị dừng / lỗi giữa chừng, cho log và lịch sử; "" = không có gì để nói."""
     if action == "NEWSFEED":
@@ -935,19 +948,65 @@ def _partial_done(action: str, quantity: int, partial: dict) -> str:
         done_text, none_text, unit = PARTIAL_DONE_TEXTS[action]
         if not quantity:
             return none_text
-        text = done_text.format(n=quantity)
-        names = [t.get("name") or t.get("url") for t in partial.get("targets") or []
-                 if isinstance(t, dict) and (t.get("name") or t.get("url"))
-                 and not str(t.get("result") or "").startswith("skipped_")]
-        if names:
-            text += ": " + ", ".join(names[:PARTIAL_NAMES_SHOWN])
-            if len(names) > PARTIAL_NAMES_SHOWN:
-                text += f" và {len(names) - PARTIAL_NAMES_SHOWN} {unit} khác"
+        text = done_text.format(n=quantity) + _names_text(partial.get("targets"), unit)
     else:
         return ""
     if partial.get("reactions"):
         text += f", thả {partial['reactions']} cảm xúc"
     return text
+
+
+# Dòng tóm tắt cuối lượt: (tên kịch bản, số lượng của 1 nick, phần trong dòng tổng của phiên)
+DONE_SUMMARY_TEXTS = {
+    "JOIN_GROUP": ("Tham gia nhóm", "{n} nhóm", "tham gia {n} nhóm"),
+    "ADD_FRIEND": ("Kết bạn", "{n} lời mời", "gửi {n} lời mời"),
+    "LEAVE_GROUP": ("Rời nhóm", "{n} nhóm", "rời {n} nhóm"),
+    "WATCH": ("Xem Watch", "{n} video", "xem {n} video"),
+    "STORY": ("Xem Story", "{n} story", "xem {n} story"),
+}
+DONE_MARKS = {"FAILED": " (lỗi giữa chừng)", "BLOCKED": " (bị chặn)"}
+
+
+def _done_amount(result: dict) -> float:
+    """Lượng việc đã làm của 1 hành động: phút với Newsfeed, số lượng với các kịch bản khác."""
+    if result.get("action") == "NEWSFEED":
+        return (result.get("seconds") or 0) / 60
+    if result.get("action") == "CHECK_NOTIF":
+        return 1 if result.get("status") == "SUCCESS" else 0
+    return result.get("quantity") or 0
+
+
+def _done_summary(results: List[Dict]) -> str:
+    """ "Tham gia nhóm 3 nhóm, Xem Watch 4 video (dừng giữa chừng)" từ các hành động đã ghi của 1 nick; "" = chưa làm được gì."""
+    parts = []
+    for result in results:
+        action, amount = result.get("action"), _done_amount(result)
+        if not amount:
+            continue
+        if action == "NEWSFEED":
+            text = f"Lướt Newsfeed {amount:.1f} phút"
+        elif action == "CHECK_NOTIF":
+            text = "Check thông báo"
+        elif action in DONE_SUMMARY_TEXTS:
+            label, unit, _ = DONE_SUMMARY_TEXTS[action]
+            text = f"{label} {unit.format(n=amount)}"
+        else:
+            continue
+        stopped = result.get("status") == "SKIPPED" and str(result.get("details") or "").startswith("Dừng giữa chừng")
+        parts.append(text + (" (dừng giữa chừng)" if stopped else DONE_MARKS.get(result.get("status"), "")))
+    return ", ".join(parts)
+
+
+def _done_totals(results_by_uid: Dict[str, List[Dict]]) -> str:
+    """Tổng việc đã làm của cả phiên (mọi nick): "tham gia 3 nhóm, gửi 5 lời mời, xem 4 video"; "" = không có."""
+    totals: Dict[str, float] = {}
+    for results in results_by_uid.values():
+        for result in results:
+            totals[result.get("action")] = totals.get(result.get("action"), 0) + _done_amount(result)
+    parts = [DONE_SUMMARY_TEXTS[a][2].format(n=int(totals[a])) for a in DONE_SUMMARY_TEXTS if totals.get(a)]
+    if totals.get("NEWSFEED"):
+        parts.append(f"lướt Newsfeed {totals['NEWSFEED']:.1f} phút")
+    return ", ".join(parts)
 
 
 def _action_source(action: str, params: dict) -> Optional[str]:
@@ -1192,8 +1251,6 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
     browser_hung = False
     # Bị chặn kết bạn / tham gia nhóm vẫn tính Hoàn thành: chỉ ghi ở ô hành động và log
     blocked_labels = []
-    # Phần đã làm của hành động đang chạy dở lúc bấm Dừng, ghi thêm vào cột Hoạt động hiện tại
-    stopped_note = ""
 
     try:
         account = adapters.get_account(uid)
@@ -1295,8 +1352,8 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
                     result.setdefault("source", source)
             except FarmStopped as e:
                 quantity, partial = partial_of(e)
-                stopped_note = _partial_done(action, quantity, partial)
-                details = f"Dừng giữa chừng, {stopped_note}" if stopped_note else "Dừng giữa chừng"
+                done_note = _partial_done(action, quantity, partial)
+                details = f"Dừng giữa chừng, {done_note}" if done_note else "Dừng giữa chừng"
                 _record_action(uid, action, {"status": "SKIPPED", "quantity": quantity, "details": details, **partial},
                                owner)
                 actions[action] = "SKIPPED"
@@ -1344,7 +1401,11 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
             for notice in pop_notices():
                 _emit("warning", notice, uid, slot)
             level = {"SUCCESS": "success", "BLOCKED": "warning", "SKIPPED": "warning"}.get(result["status"], "error")
-            _emit(level, f"{label}: {result.get('details', '')}", uid, slot)
+            line = result.get("details", "")
+            # Chế độ danh sách link / Rời nhóm đã có 1 dòng log cho mỗi đích; từ khóa / gợi ý thì kèm tên ở dòng kết quả
+            if action in ("JOIN_GROUP", "ADD_FRIEND") and "links" not in params:
+                line += _names_text(result.get("targets"), PARTIAL_DONE_TEXTS[action][2])
+            _emit(level, f"{label}: {line}", uid, slot)
             if result["status"] == "BLOCKED":
                 blocked_labels.append(label)
 
@@ -1404,12 +1465,19 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
     summary = {
         "COMPLETED": ("success", f"Hoàn thành toàn bộ kịch bản{blocked_note}, "
                       + ("đã lưu cookie mới và đóng trình duyệt" if cookie_saved else "đóng trình duyệt (không có cookie mới để lưu)")),
-        "STOPPED": ("warning", f"Đã dừng theo yêu cầu, {stopped_note}" if stopped_note else "Đã dừng theo yêu cầu"),
+        "STOPPED": ("warning", "Đã dừng theo yêu cầu"),
         "DIE": ("error", f"Tài khoản cần xác minh / mất phiên: {error_msg}"),
         "FAILED": ("error", error_msg),
     }[final_status]
-    _emit(summary[0], summary[1], uid, slot)
-    _set_account(uid, status=final_status, activity=summary[1], error=error_msg, finished_at=time.time())
+    # Tóm tắt mọi việc nick đã làm trong lượt (kể cả kịch bản đang chạy dở khi dừng / lỗi)
+    with _state_lock:
+        results = list((_history_data.get(uid) or {}).get("actions") or [])
+    done = _done_summary(results)
+    line = f"{summary[1]}. Đã làm: {done}" if done else (
+        f"{summary[1]}. Chưa làm xong việc nào" if final_status == "STOPPED" else summary[1])
+    _emit(summary[0], line, uid, slot)
+    _set_account(uid, status=final_status, activity=line if final_status == "STOPPED" else summary[1], error=error_msg,
+                 finished_at=time.time())
 
 
 # ─────────────────────── VÒNG ĐỜI ENGINE ────────────────────────────
@@ -1601,7 +1669,8 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
                 for acc in _state["accounts"].values():
                     counts[acc["status"]] = counts.get(acc["status"], 0) + 1
             summary = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
-            _emit("success", f"Kết thúc phiên Tương tác tài khoản ({summary})")
+            totals = _done_totals(actions)
+            _emit("success", f"Kết thúc phiên Tương tác tài khoản ({summary})" + (f". Tổng đã làm: {totals}" if totals else ""))
 
     _active_task = asyncio.create_task(run_all())
     return {"started": True, "accepted": [a["uid"] for a in eligible], "rejected": rejected, "threads": threads}
