@@ -391,6 +391,29 @@ export default function OmnichannelChatModule() {
                 });
                 return { ...all, [matchedKey]: next };
               });
+            } else if (payload.type === "reaction" && payload.data) {
+              const { facebook_message_id, reactions, reaction, id } = payload.data;
+              const emojiVal = reaction || reactions || null;
+              setMessagesByConversation((all) => {
+                let updated = false;
+                const nextAll = { ...all };
+                for (const [convId, list] of Object.entries(all)) {
+                  if (!Array.isArray(list)) continue;
+                  const idx = list.findIndex(
+                    (m) =>
+                      (facebook_message_id && (m.facebookMessageId === facebook_message_id || String(m.id) === String(facebook_message_id))) ||
+                      (id && String(m.id) === String(id))
+                  );
+                  if (idx !== -1) {
+                    const nextList = [...list];
+                    nextList[idx] = { ...nextList[idx], reaction: emojiVal };
+                    nextAll[convId] = nextList;
+                    updated = true;
+                    break;
+                  }
+                }
+                return updated ? nextAll : all;
+              });
             } else if (payload.type === "notification" && payload.data) {
               const incomingNotif = mapNotification(payload.data);
 
@@ -811,10 +834,24 @@ export default function OmnichannelChatModule() {
       onSend={(payload) => handleSend(activeConversation.id, payload)}
       onRetry={(message) => deliver(activeConversation.id, message)}
       onReact={(messageId, emoji) => {
+        let targetMsg = null;
+        let nextEmoji = null;
         setThread(activeConversation.id, (list) =>
-          list.map((m) => (m.id === messageId ? { ...m, reaction: m.reaction === emoji ? null : emoji } : m)),
+          list.map((m) => {
+            if (m.id === messageId) {
+              targetMsg = m;
+              nextEmoji = m.reaction === emoji ? null : emoji;
+              return { ...m, reaction: nextEmoji };
+            }
+            return m;
+          }),
         );
-        if (!isMock) reactToMessage(activeConversation.id, messageId, emoji).catch(() => {});
+        if (!isMock) {
+          const apiMsgId = targetMsg?.facebookMessageId || messageId;
+          reactToMessage(activeConversation.id, apiMsgId, nextEmoji).catch((err) => {
+            console.error("[reactToMessage Error]", err);
+          });
+        }
       }}
       onToggleStar={() => handleToggleStar(activeConversation)}
       onToggleTag={(tagId) => handleToggleTag(activeConversation, tagId)}
