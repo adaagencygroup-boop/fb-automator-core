@@ -101,7 +101,7 @@ export default function SeedingProfilePage() {
         })
         .catch(() => {});
     checkActive();
-    const timer = setInterval(checkActive, 3000);
+    const timer = setInterval(checkActive, 5000);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -142,7 +142,7 @@ export default function SeedingProfilePage() {
       } catch (err) {
         // Ignore polling error
       }
-    }, 3000);
+    }, 4000);
 
     return () => clearInterval(interval);
   }, [isRunning, currentCampaignId]);
@@ -180,6 +180,10 @@ export default function SeedingProfilePage() {
   };
 
   const handleRemoveTarget = async (index) => {
+    if (isRunning) {
+      toast.warning("Không thể xóa Trang cá nhân khi đang chạy seeding!");
+      return;
+    }
     const targetToRemove = targets[index];
     if (targetToRemove) {
       try {
@@ -203,6 +207,10 @@ export default function SeedingProfilePage() {
   };
 
   const handleClearTargets = async () => {
+    if (isRunning) {
+      toast.warning("Không thể xóa danh sách Trang cá nhân khi đang chạy seeding!");
+      return;
+    }
     try {
       await seedingApi.clearSeedingTargets("PROFILE");
     } catch (err) {
@@ -343,6 +351,7 @@ export default function SeedingProfilePage() {
         onRemoveTarget={handleRemoveTarget}
         onClearTargets={handleClearTargets}
         successMessage={successMessage}
+        isRunning={isRunning}
       />
 
       {/* Steps 2 & 3: Account Config & Delay */}

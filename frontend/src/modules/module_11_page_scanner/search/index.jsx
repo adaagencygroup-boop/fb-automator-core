@@ -75,11 +75,11 @@ function SectionCard({ number, title, children }) {
       <div className="mb-4 flex items-center gap-2.5">
         {number ? (
           <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[#1877F2] text-[11px] font-bold text-white">
-            {number}
-          </span>
+              {number}
+            </span>
         ) : null}
         <h2 className="font-heading text-sm font-bold text-[#0B1C30]">{title}</h2>
-      </div>
+          </div>
       {children}
     </section>
   );
@@ -1074,7 +1074,7 @@ export default function PageScannerSearch() {
             <span className="inline-flex items-center gap-2 rounded-full border border-[#A7F3D0] bg-[#ECFDF5] px-3.5 py-1.5 text-xs font-semibold text-[#059669]">
               <span className="size-2 rounded-full bg-[#10B981]" />
               Đã chọn: <strong>{selCount} tài khoản</strong>
-            </span>
+              </span>
           </div>
 
           {/* PHƯƠNG THỨC QUÉT — tab solid blue khi active */}
@@ -1086,20 +1086,20 @@ export default function PageScannerSearch() {
               {SOURCE_MODES.map(({ id, label, Icon }) => {
                 const active = sourceMode === id;
                 return (
-                  <button
-                    key={id}
-                    type="button"
+              <button
+                key={id}
+                type="button"
                     disabled={isBusy}
-                    onClick={() => setSourceMode(id)}
+                onClick={() => setSourceMode(id)}
                     className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs transition disabled:opacity-60 ${
                       active
                         ? "bg-[#1877F2] font-bold text-white shadow-sm"
                         : "font-medium text-[#475569] hover:text-[#0F172A]"
                     }`}
-                  >
-                    <Icon className="size-3.5" />
-                    {label}
-                  </button>
+              >
+                <Icon className="size-3.5" />
+                {label}
+              </button>
                 );
               })}
             </div>
@@ -1482,8 +1482,8 @@ export default function PageScannerSearch() {
                   >
                     Áp dụng
                   </button>
-                </div>
               </div>
+            </div>
               {derivedHashtags.length === 0 ? (
                 <p className="text-xs text-[#94A3B8]">Thêm hashtag ở cột trái để đặt hạn mức.</p>
               ) : (
@@ -1503,10 +1503,20 @@ export default function PageScannerSearch() {
                         disabled={isBusy}
                       />
                       <span className="text-[11px] text-[#94A3B8]">page</span>
-                    </div>
-                  </div>
+              </div>
+            </div>
                 ))
               )}
+            </div>
+          )}
+
+          {sourceMode === "keyword" && (
+            <div className="mb-4 flex items-start gap-2.5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-3 py-2.5">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
+              <p className="min-w-0 flex-1 text-[11px] leading-5 text-[#92400E]">
+                Kết quả đứng top thường có tương tác tốt hơn. Đặt hạn mức vừa phải theo từng hashtag để ưu
+                tiên page chất lượng.
+              </p>
             </div>
           )}
 
@@ -1602,16 +1612,16 @@ export default function PageScannerSearch() {
                 <span className="text-[#64748B]">Followers</span>
               </div>
             </label>
-          </div>
+                </div>
         </SectionCard>
-      </div>
+              </div>
 
       {/* Controls: idle = Start; đang chạy = Pause + Emergency */}
       <div className="space-y-3">
         {!isBusy && (
           <button
-            type="button"
-            onClick={handleStart}
+          type="button"
+          onClick={handleStart}
             className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#2563EB] text-sm font-bold tracking-wide text-white hover:bg-blue-600"
           >
             <Play className="size-4 fill-current" />
@@ -1621,7 +1631,7 @@ export default function PageScannerSearch() {
         {isBusy && (
           <div className="grid gap-3 sm:grid-cols-2">
             <button
-              type="button"
+            type="button"
               onClick={handlePauseResume}
               className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#FECACA] bg-white text-sm font-bold tracking-wide text-[#DC2626]"
             >
@@ -1690,17 +1700,17 @@ export default function PageScannerSearch() {
               <Download className="size-3.5" />
               Xuất toàn bộ file
             </button>
-            <button
-              type="button"
+              <button
+                type="button"
               disabled={!pages.length && !totalCount}
               onClick={handleSaveList}
               className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#2563EB] px-3 text-xs font-bold text-white disabled:opacity-40"
             >
               <Save className="size-3.5" />
               Lưu danh sách
-            </button>
+              </button>
           </div>
-        </div>
+          </div>
 
         <div className="flex flex-wrap items-center gap-2 border-b border-[#F1F5F9] px-5 py-3">
           <div className="relative min-w-[220px] flex-1">
@@ -1795,9 +1805,9 @@ export default function PageScannerSearch() {
                           </Avatar>
                           <div className="flex min-w-0 items-center gap-1">
                             <span className="max-w-[180px] truncate font-semibold text-[#0F172A]">
-                              {page.page_name || "—"}
-                            </span>
-                            {page.is_verified === true && (
+                                {page.page_name || "—"}
+                              </span>
+                              {page.is_verified === true && (
                               <BadgeCheck className="size-3.5 shrink-0 text-[#2563EB]" />
                             )}
                           </div>
@@ -1807,13 +1817,13 @@ export default function PageScannerSearch() {
                         {page.page_url ? (
                           <a
                             href={page.page_url}
-                            target="_blank"
-                            rel="noreferrer"
+                                target="_blank"
+                                rel="noreferrer"
                             className="inline-flex max-w-[180px] items-center gap-1 truncate text-[#2563EB] hover:underline"
-                          >
+                              >
                             {page.page_url.replace(/^https?:\/\/(m\.|www\.)?facebook\.com\//, "fb.com/")}
                             <ExternalLink className="size-3 shrink-0" />
-                          </a>
+                              </a>
                         ) : (
                           <span className="text-[#CBD5E1]">—</span>
                         )}
@@ -1860,8 +1870,8 @@ export default function PageScannerSearch() {
           <span className="text-[11px] text-[#94A3B8]">
             Hiển thị {totalCount === 0 ? 0 : (currentPage - 1) * pageSize + 1} -{" "}
             {Math.min(currentPage * pageSize, totalCount)} của {totalCount.toLocaleString("vi-VN")} Page
-          </span>
-          <div className="flex items-center gap-1">
+            </span>
+            <div className="flex items-center gap-1">
             <button
               type="button"
               disabled={currentPage <= 1 || !sessionId}
@@ -1870,12 +1880,12 @@ export default function PageScannerSearch() {
                 loadResults(sessionId, currentPage - 1);
               }}
               className="flex size-7 items-center justify-center rounded-md border border-[#E2E8F0] text-[#64748B] disabled:opacity-40"
-            >
-              <ChevronLeft className="size-3.5" />
+              >
+                <ChevronLeft className="size-3.5" />
             </button>
             {Array.from({ length: Math.min(5, totalPages) }, (_, i) => i + 1).map((p) => (
-              <button
-                key={p}
+                  <button
+                    key={p}
                 type="button"
                 disabled={!sessionId}
                 onClick={() => {
@@ -1883,13 +1893,13 @@ export default function PageScannerSearch() {
                   loadResults(sessionId, p);
                 }}
                 className={`flex size-7 items-center justify-center rounded-md text-[11px] font-semibold ${
-                  p === currentPage
+                      p === currentPage
                     ? "bg-[#2563EB] text-white"
                     : "text-[#64748B] hover:bg-slate-100"
-                }`}
-              >
-                {p}
-              </button>
+                    }`}
+                  >
+                    {p}
+                  </button>
             ))}
             {totalPages > 5 && <span className="px-1 text-[11px] text-[#94A3B8]">… {totalPages}</span>}
             <button
@@ -1900,11 +1910,11 @@ export default function PageScannerSearch() {
                 loadResults(sessionId, currentPage + 1);
               }}
               className="flex size-7 items-center justify-center rounded-md border border-[#E2E8F0] text-[#64748B] disabled:opacity-40"
-            >
-              <ChevronRight className="size-3.5" />
+              >
+                <ChevronRight className="size-3.5" />
             </button>
+            </div>
           </div>
-        </div>
       </section>
 
       {/* Live log — khung trắng ngoài như Figma/scan-info */}

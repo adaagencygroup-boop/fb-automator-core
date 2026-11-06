@@ -112,6 +112,8 @@ class SeedingTestCase(unittest.TestCase):
             "safe_close_driver": lambda d: None,
             "close_driver_for_uid": lambda uid: None,
             "close_scoped_active_drivers": lambda **k: None,
+            "_safe_close_seeding_driver": lambda *a, **k: None,
+            "_close_scoped_seeding_drivers": lambda *a, **k: None,
         }
         for name, value in fakes.items():
             p = patch.object(R, name, value)

@@ -35,6 +35,8 @@ export const getFarmHistory = (filters, page, pageSize) =>
 
 export const getFarmHistoryDetail = (id) => api.get(`/api/farm/history/${encodeURIComponent(id)}`);
 
+export const getFarmRunTargets = (runId) => api.get(`/api/farm/runs/${encodeURIComponent(runId)}/targets`);
+
 export const cleanupFarmHistory = (keepDays) => api.post("/api/farm/history/cleanup", { keep_days: keepDays });
 
 // CSV và Excel cùng lấy từ endpoint export của BE (cùng bộ lọc, cột, giới hạn số dòng)

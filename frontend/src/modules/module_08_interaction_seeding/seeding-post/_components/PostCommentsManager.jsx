@@ -12,6 +12,7 @@ export default function PostCommentsManager({
   onAddBulkComments,
   onRemoveComment,
   onClearAllComments,
+  isRunning = false,
 }) {
   const [bulkText, setBulkText] = useState("");
   const [isAddingBulk, setIsAddingBulk] = useState(false);
@@ -78,6 +79,7 @@ export default function PostCommentsManager({
 
   // Confirm delete single comment
   const handleConfirmDeleteComment = async () => {
+    if (isRunning) return;
     if (deleteComment.index < 0) return;
     setIsDeleting(true);
     try {
@@ -93,6 +95,7 @@ export default function PostCommentsManager({
 
   // Confirm clear all comments
   const handleConfirmClearAllComments = async () => {
+    if (isRunning) return;
     setIsClearing(true);
     try {
       await onClearAllComments();
@@ -188,8 +191,17 @@ export default function PostCommentsManager({
             {comments.length > 0 && (
               <button
                 type="button"
-                onClick={() => setClearAllOpen(true)}
-                className="flex items-center gap-1 text-xs text-rose-600 hover:text-rose-700 font-semibold px-2 py-1 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
+                onClick={() => {
+                  if (isRunning) return;
+                  setClearAllOpen(true);
+                }}
+                disabled={isRunning}
+                title={isRunning ? "Đang chạy seeding, không thể xóa bình luận" : undefined}
+                className={`flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-md transition-colors ${
+                  isRunning
+                    ? "text-gray-400 opacity-50 cursor-not-allowed"
+                    : "text-rose-600 hover:text-rose-700 hover:bg-rose-50 cursor-pointer"
+                }`}
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 Xóa toàn bộ
@@ -222,9 +234,17 @@ export default function PostCommentsManager({
                       <td className="py-2.5 px-3 text-center whitespace-nowrap">
                         <button
                           type="button"
-                          onClick={() => setDeleteComment({ isOpen: true, text: cmt, index: idx })}
-                          className="p-1 rounded-md text-rose-500 hover:bg-rose-50 hover:text-rose-600 transition-colors cursor-pointer inline-flex items-center justify-center"
-                          title="Xóa bình luận này"
+                          onClick={() => {
+                            if (isRunning) return;
+                            setDeleteComment({ isOpen: true, text: cmt, index: idx });
+                          }}
+                          disabled={isRunning}
+                          title={isRunning ? "Đang chạy seeding, không thể xóa" : "Xóa bình luận này"}
+                          className={`p-1 rounded-md transition-colors inline-flex items-center justify-center ${
+                            isRunning
+                              ? "text-gray-300 opacity-50 cursor-not-allowed"
+                              : "text-rose-500 hover:bg-rose-50 hover:text-rose-600 cursor-pointer"
+                          }`}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>

@@ -400,8 +400,238 @@ def search_wikimedia_images_direct(keyword: str) -> list[str]:
         return []
 
 
+# Map offline VN → EN cho các từ khóa ảnh phổ biến (khi Gemini lỗi / chưa có key)
+_VN_PIXABAY_GLOSSARY = {
+    "mưa": "rain weather",
+    "mua": "rain weather",
+    "nắng": "sunny sunshine",
+    "nang": "sunny sunshine",
+    "biển": "ocean beach sea",
+    "bien": "ocean beach sea",
+    "núi": "mountain landscape",
+    "nui": "mountain landscape",
+    "rừng": "forest trees nature",
+    "rung": "forest trees nature",
+    "hoa": "flowers blossom",
+    "cà phê": "coffee cafe",
+    "ca phe": "coffee cafe",
+    "cafe": "coffee cafe",
+    "du lịch": "travel vacation",
+    "du lich": "travel vacation",
+    "việt nam": "vietnam travel",
+    "viet nam": "vietnam travel",
+    "đà lạt": "dalat vietnam",
+    "da lat": "dalat vietnam",
+    "sài gòn": "saigon city",
+    "sai gon": "saigon city",
+    "hà nội": "hanoi vietnam",
+    "ha noi": "hanoi vietnam",
+    "thức ăn": "food delicious",
+    "thuc an": "food delicious",
+    "ăn uống": "food restaurant",
+    "an uong": "food restaurant",
+    "gia đình": "family happy",
+    "gia dinh": "family happy",
+    "bạn bè": "friends together",
+    "ban be": "friends together",
+    "công việc": "office work",
+    "cong viec": "office work",
+    "deadline": "office stress work",
+    "tình yêu": "love couple romantic",
+    "tinh yeu": "love couple romantic",
+    "xe": "car vehicle",
+    "mèo": "cat cute",
+    "meo": "cat cute",
+    "chó": "dog cute",
+    "cho": "dog cute",
+    "trời mưa": "rainy weather storm",
+    "troi mua": "rainy weather storm",
+    "ban đêm": "night city lights",
+    "ban dem": "night city lights",
+}
+
+
+def _is_ascii_english_query(text: str) -> bool:
+    import re
+    return bool(re.fullmatch(r"[A-Za-z0-9 ,\-_/]+", text or ""))
+
+
+def _normalize_ascii_keywords(text: str, max_words: int = 5) -> str:
+    import re
+    out = (text or "").strip().strip("\"'`").replace("\n", " ")
+    out = re.sub(r"[#\[\]\(\)\{\}]", " ", out)
+    out = re.sub(r"[^A-Za-z0-9 \-]", " ", out)
+    out = re.sub(r"\s+", " ", out).strip()
+    words = [w for w in out.split() if len(w) > 1][:max_words]
+    return " ".join(words)
+
+
+def _offline_vn_to_pixabay_keywords(raw: str) -> str:
+    """Dịch offline VN→EN bằng glossary; không khớp thì trả rỗng."""
+    import re
+    import unicodedata
+
+    def fold(s: str) -> str:
+        s = (s or "").lower().strip()
+        s = "".join(
+            c for c in unicodedata.normalize("NFD", s)
+            if unicodedata.category(c) != "Mn"
+        )
+        return re.sub(r"\s+", " ", s).strip()
+
+    cleaned = re.sub(r"\s+", " ", (raw or "").replace("\n", " ")).strip().lower()
+    if not cleaned:
+        return ""
+
+    # Khớp cụm dài trước
+    folded_full = fold(cleaned)
+    for vn, en in sorted(_VN_PIXABAY_GLOSSARY.items(), key=lambda x: -len(x[0])):
+        if fold(vn) == folded_full or vn in cleaned or fold(vn) in folded_full:
+            return en
+
+    # Ghép từng token đã biết
+    tokens = re.findall(r"[\w]+", folded_full, flags=re.UNICODE)
+    mapped = []
+    for tok in tokens:
+        hit = _VN_PIXABAY_GLOSSARY.get(tok)
+        if not hit:
+            # thử không dấu đã fold sẵn
+            for vn, en in _VN_PIXABAY_GLOSSARY.items():
+                if fold(vn) == tok:
+                    hit = en
+                    break
+        if hit:
+            mapped.extend(hit.split())
+    if mapped:
+        # unique giữ thứ tự
+        seen = set()
+        words = []
+        for w in mapped:
+            if w not in seen:
+                seen.add(w)
+                words.append(w)
+        return " ".join(words[:5])
+    return ""
+
+
+def optimize_pixabay_keyword(
+    raw_query: str,
+    api_keys: Optional[List[str]] = None,
+    model: str = "gemini-2.0-flash",
+) -> str:
+    """
+    Đưa raw_query về 2–5 từ khóa tiếng Anh tối ưu Pixabay.
+    Ưu tiên Gemini; nếu lỗi/không key → glossary VN offline; tuyệt đối không trả tiếng Việt.
+    """
+    import re
+
+    cleaned = (raw_query or "").replace("\n", " ").strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    if not cleaned:
+        return ""
+
+    # Đã là English ngắn → dùng luôn
+    if len(cleaned) <= 48 and _is_ascii_english_query(cleaned):
+        return _normalize_ascii_keywords(cleaned) or cleaned[:80]
+
+    keys = [k.strip() for k in (api_keys or []) if k and str(k).strip()]
+    if not keys:
+        keys = load_gemini_keys()
+
+    instruction = (
+        "Translate and convert the user text into a Pixabay stock-photo search query.\n"
+        "CRITICAL RULES:\n"
+        "- Output MUST be English only (ASCII letters).\n"
+        "- Output ONLY 2 to 5 short English keywords, space-separated.\n"
+        "- Translate Vietnamese if needed (e.g. 'mưa' -> 'rain weather').\n"
+        "- No quotes, punctuation, hashtags, or explanation.\n"
+        "- Focus on visual subjects suitable for photos.\n"
+        f"User text:\n{cleaned}"
+    )
+
+    candidate_models = [
+        (model or "gemini-2.0-flash").strip().lower().replace(" ", "-"),
+        "gemini-2.0-flash",
+        "gemini-2.5-flash",
+        "gemini-flash-latest",
+        "gemini-1.5-flash",
+        "gemini-3.8-flash",
+    ]
+    seen = set()
+    models = []
+    for m in candidate_models:
+        if m.startswith("models/"):
+            m = m.replace("models/", "")
+        if m and m not in seen:
+            seen.add(m)
+            models.append(m)
+
+    for key in keys:
+        for endpoint_model in models:
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{endpoint_model}:generateContent?key={key}"
+            )
+            configs = [
+                {"temperature": 0.1, "maxOutputTokens": 48, "thinkingConfig": {"thinkingBudget": 0}},
+                {"temperature": 0.1, "maxOutputTokens": 48},
+            ]
+            for gen_config in configs:
+                payload = {
+                    "contents": [{"parts": [{"text": instruction}]}],
+                    "generationConfig": gen_config,
+                }
+                try:
+                    req = urllib.request.Request(
+                        url,
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=25) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                    parts = (
+                        (data.get("candidates") or [{}])[0]
+                        .get("content", {})
+                        .get("parts")
+                        or []
+                    )
+                    if not parts or "text" not in parts[0]:
+                        continue
+                    optimized = _normalize_ascii_keywords(parts[0]["text"])
+                    if optimized and _is_ascii_english_query(optimized):
+                        logger.info(
+                            f"Gemini tối ưu từ khóa Pixabay: '{cleaned[:60]}' → '{optimized}'"
+                        )
+                        return optimized
+                except urllib.error.HTTPError as e:
+                    # Model không hỗ trợ thinkingConfig → thử config tiếp
+                    if e.code == 400 and "thinkingConfig" in gen_config:
+                        continue
+                    logger.warning(f"Tối ưu từ khóa Gemini ({endpoint_model}) HTTP {e.code}")
+                    break
+                except Exception as e:
+                    logger.warning(f"Tối ưu từ khóa Gemini ({endpoint_model}) lỗi: {e}")
+                    continue
+
+    # Fallback offline VN → EN
+    offline = _offline_vn_to_pixabay_keywords(cleaned)
+    if offline:
+        logger.info(f"Offline glossary Pixabay: '{cleaned[:60]}' → '{offline}'")
+        return offline
+
+    # Còn lại: chỉ giữ token ASCII nếu có; không trả tiếng Việt cho Pixabay
+    ascii_only = _normalize_ascii_keywords(cleaned)
+    if ascii_only:
+        return ascii_only
+
+    logger.warning(
+        f"Không tối ưu được từ khóa tiếng Anh từ '{cleaned[:60]}', dùng fallback 'nature landscape'"
+    )
+    return "nature landscape"
+
+
 def search_and_download_pixabay_image(query: str, pixabay_key: str, save_dir: str) -> Optional[str]:
-    """Tìm ảnh trên Pixabay theo từ khóa và tải về thư mục máy."""
+    """Tìm ảnh trên Pixabay theo từ khóa và tải đúng 1 ảnh về thư mục máy."""
     if not pixabay_key or pixabay_key == "ĐIỀN_KEY_PIXABAY_VÀO_ĐÂY":
         return None
     try:
@@ -409,11 +639,15 @@ def search_and_download_pixabay_image(query: str, pixabay_key: str, save_dir: st
         import requests
         import urllib.parse
         encoded_q = urllib.parse.quote_plus(query)
-        url = f"https://pixabay.com/api/?key={pixabay_key}&q={encoded_q}&image_type=photo&per_page=5&safesearch=true"
+        # Lấy vài hit rồi tải đúng 1 ảnh thành công đầu tiên
+        url = (
+            f"https://pixabay.com/api/?key={pixabay_key}"
+            f"&q={encoded_q}&image_type=photo&per_page=10&safesearch=true&lang=en"
+        )
         resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=12)
         if resp.status_code == 200:
             data = resp.json()
-            hits = data.get('hits', [])
+            hits = data.get('hits', []) or []
             if hits:
                 random.shuffle(hits)
                 for chosen in hits:
@@ -423,71 +657,196 @@ def search_and_download_pixabay_image(query: str, pixabay_key: str, save_dir: st
                         if img_resp.status_code == 200:
                             saved = save_optimized_image(img_resp.content, save_dir)
                             if saved:
+                                logger.info(f"Pixabay: đã tải 1 ảnh cho '{query}' → {saved}")
                                 return saved
+        logger.info(f"Pixabay: không tìm thấy ảnh cho '{query}'")
         return None
     except Exception as e:
         logger.error(f"Lỗi tải ảnh Pixabay: {e}")
         return None
 
 
-def crawl_or_fetch_image(
+def generate_and_save_gemini_image(
     query: str,
-    pixabay_key: Optional[str] = None,
-    save_dir: Optional[str] = None
+    api_keys: Optional[List[str]] = None,
+    save_dir: Optional[str] = None,
 ) -> Optional[str]:
     """
-    Cào hoặc tải ảnh từ Internet theo từ khóa (Pixabay -> Wikimedia -> DuckDuckGo).
-    Lưu về save_dir (mặc định uploads/posts) và trả về đường dẫn tuyệt đối.
-    Đảm bảo 100% file tải về là ảnh hợp lệ (không phải PDF hay file hỏng).
+    Nhờ Gemini/Imagen tạo đúng 1 ảnh theo từ khóa, lưu về máy.
+    Thử lần lượt: Imagen predict → Gemini native image (responseModalities).
     """
-    clean_query = (query or "").replace("[", "").replace("]", "").replace('"', '').replace("'", "").strip()
-    if not clean_query:
-        return None
+    import base64
 
-    import requests
+    keys = [k.strip() for k in (api_keys or []) if k and str(k).strip()]
+    if not keys:
+        keys = load_gemini_keys()
+    if not keys:
+        logger.warning("Gemini image: không có API key.")
+        return None
 
     if not save_dir:
         save_dir = str(UPLOADS_DIR / "posts")
     os.makedirs(save_dir, exist_ok=True)
 
-    # 1. Thử Pixabay nếu có key
-    if pixabay_key:
-        img_path = search_and_download_pixabay_image(clean_query, pixabay_key, save_dir)
+    clean_query = (query or "").strip()
+    if not clean_query:
+        return None
+
+    image_prompt = (
+        f"Create one high-quality photorealistic photo for a Facebook status post about: {clean_query}. "
+        "Single image only, natural lighting, no text overlay, no watermark, no logo, no collage."
+    )
+
+    def _save_b64(b64_data: str) -> Optional[str]:
+        try:
+            raw = base64.b64decode(b64_data)
+            return save_optimized_image(raw, save_dir)
+        except Exception as e:
+            logger.warning(f"Gemini image: không decode/lưu được base64: {e}")
+            return None
+
+    # ── A) Imagen :predict (sampleCount=1) ──
+    imagen_models = [
+        "imagen-3.0-generate-002",
+        "imagen-3.0-generate-001",
+        "imagen-4.0-generate-001",
+    ]
+    for key in keys:
+        for model_id in imagen_models:
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model_id}:predict?key={key}"
+            )
+            payload = {
+                "instances": [{"prompt": image_prompt}],
+                "parameters": {"sampleCount": 1},
+            }
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=90) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                preds = data.get("predictions") or []
+                for pred in preds:
+                    b64 = (
+                        pred.get("bytesBase64Encoded")
+                        or pred.get("image", {}).get("bytesBase64Encoded")
+                    )
+                    if b64:
+                        saved = _save_b64(b64)
+                        if saved:
+                            logger.info(f"Gemini Imagen ({model_id}): đã tạo 1 ảnh → {saved}")
+                            return saved
+            except urllib.error.HTTPError as e:
+                logger.warning(f"Imagen {model_id} key ...{key[-4:]} HTTP {e.code}")
+                if e.code in (401, 403):
+                    break
+                continue
+            except Exception as e:
+                logger.warning(f"Imagen {model_id} lỗi: {e}")
+                continue
+
+    # ── B) Gemini native image (responseModalities IMAGE) ──
+    flash_models = [
+        "gemini-2.0-flash-preview-image-generation",
+        "gemini-2.0-flash-exp-image-generation",
+        "gemini-2.5-flash-image-preview",
+    ]
+    for key in keys:
+        for model_id in flash_models:
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{model_id}:generateContent?key={key}"
+            )
+            payload = {
+                "contents": [{"parts": [{"text": image_prompt}]}],
+                "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+            }
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=90) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                for cand in data.get("candidates") or []:
+                    for part in (cand.get("content") or {}).get("parts") or []:
+                        inline = part.get("inlineData") or part.get("inline_data") or {}
+                        b64 = inline.get("data")
+                        mime = (inline.get("mimeType") or inline.get("mime_type") or "").lower()
+                        if b64 and (not mime or mime.startswith("image/")):
+                            saved = _save_b64(b64)
+                            if saved:
+                                logger.info(f"Gemini flash-image ({model_id}): đã tạo 1 ảnh → {saved}")
+                                return saved
+            except urllib.error.HTTPError as e:
+                logger.warning(f"Gemini image {model_id} key ...{key[-4:]} HTTP {e.code}")
+                if e.code in (401, 403):
+                    break
+                continue
+            except Exception as e:
+                logger.warning(f"Gemini image {model_id} lỗi: {e}")
+                continue
+
+    logger.warning(f"Gemini: không tạo được ảnh cho '{clean_query}'")
+    return None
+
+
+def crawl_or_fetch_image(
+    query: str,
+    pixabay_key: Optional[str] = None,
+    save_dir: Optional[str] = None,
+    gemini_keys: Optional[List[str]] = None,
+) -> Optional[str]:
+    """
+    Lấy đúng 1 ảnh minh họa theo từ khóa:
+      1) Gemini/glossary tối ưu từ khóa → tiếng Anh
+      2) Có Pixabay key → tìm Pixabay (thử vài biến thể)
+      3) Không có key / Pixabay không ra ảnh → nhờ Gemini tạo 1 ảnh
+    """
+    clean_query = (query or "").replace("[", "").replace("]", "").replace('"', '').replace("'", "").strip()
+    if not clean_query:
+        return None
+
+    if not save_dir:
+        save_dir = str(UPLOADS_DIR / "posts")
+    os.makedirs(save_dir, exist_ok=True)
+
+    keys = [k for k in (gemini_keys or []) if k]
+    if not keys:
+        keys = load_gemini_keys()
+
+    optimized = optimize_pixabay_keyword(clean_query, api_keys=keys)
+    candidates = []
+    for q in (optimized, clean_query if _is_ascii_english_query(clean_query) else ""):
+        q = (q or "").strip()
+        if q and q not in candidates:
+            candidates.append(q)
+    # Thêm từ đầu tiên của bản tối ưu (broaden search)
+    if optimized:
+        first = optimized.split()[0]
+        if first and first not in candidates:
+            candidates.append(first)
+
+    # 1. Ưu tiên Pixabay nếu có key
+    if pixabay_key and str(pixabay_key).strip():
+        pk = str(pixabay_key).strip()
+        for q in candidates:
+            img_path = search_and_download_pixabay_image(q, pk, save_dir)
+            if img_path and os.path.isfile(img_path):
+                return img_path
+        logger.info("Pixabay không có ảnh (hoặc lỗi) → fallback Gemini.")
+
+    # 2. Fallback Gemini — đúng 1 ảnh (dùng từ khóa đã tối ưu)
+    if keys:
+        prompt_for_image = optimized or clean_query
+        img_path = generate_and_save_gemini_image(prompt_for_image, api_keys=keys, save_dir=save_dir)
         if img_path and os.path.isfile(img_path):
             return img_path
-
-    # 2. Thử Wikimedia Commons (kho ảnh mở phong phú, không rate limit)
-    wikimedia_urls = search_wikimedia_images_direct(clean_query)
-    for w_url in wikimedia_urls:
-        try:
-            headers = {"User-Agent": "FBAutoPostApp/1.0 (dev@fbautomation.local)"}
-            r = requests.get(w_url, headers=headers, timeout=15)
-            if r.status_code == 200:
-                img_path = save_optimized_image(r.content, save_dir)
-                if img_path:
-                    return img_path
-        except Exception as e:
-            logger.warning(f"Lỗi lưu ảnh từ Wikimedia: {e}")
-
-    # 3. Thử DuckDuckGo nếu có
-    try:
-        from duckduckgo_search import DDGS
-        with DDGS() as ddgs:
-            results = list(ddgs.images(keywords=clean_query, max_results=8))
-            if results:
-                for res in results:
-                    img_url = res.get('image') or res.get('url')
-                    if img_url and img_url.startswith('http') and not img_url.endswith('.webp'):
-                        try:
-                            r = requests.get(img_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
-                            if r.status_code == 200:
-                                img_path = save_optimized_image(r.content, save_dir)
-                                if img_path:
-                                    return img_path
-                        except Exception:
-                            continue
-    except Exception:
-        pass
 
     return None
 

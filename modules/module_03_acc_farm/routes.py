@@ -1610,7 +1610,8 @@ async def save_farm_setting(item: SettingItem):
 # ─────────────────────── ENDPOINTS: LỊCH SỬ ────────────────────────────
 
 def _history_filters(search: Optional[str], action: Optional[str], status: Optional[str],
-                     proxy: Optional[str], date_from: Optional[str], date_to: Optional[str]) -> Dict:
+                     proxy: Optional[str], date_from: Optional[str], date_to: Optional[str],
+                     fb_uid: Optional[str] = None) -> Dict:
     if action and action not in ACTION_LABELS:
         raise HTTPException(status_code=400, detail="Kịch bản không hợp lệ.")
     if status and status not in FINAL_STATUSES:
@@ -1625,8 +1626,15 @@ def _history_filters(search: Optional[str], action: Optional[str], status: Optio
                 datetime.strptime(value, "%Y-%m-%d")
             except ValueError:
                 raise HTTPException(status_code=400, detail="Ngày không hợp lệ.")
-    return {"search": (search or "").strip()[:100], "action": action, "status": status,
-            "proxy": proxy, "date_from": date_from, "date_to": date_to}
+    return {
+        "search": (search or "").strip()[:100],
+        "action": action,
+        "status": status,
+        "proxy": proxy,
+        "date_from": date_from,
+        "date_to": date_to,
+        "fb_uid": (fb_uid or "").strip()[:64],
+    }
 
 
 def _iso(value) -> Optional[str]:
@@ -1657,10 +1665,11 @@ async def farm_history(
     proxy: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    fb_uid: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=HISTORY_PAGE_SIZE_MAX),
 ):
-    filters = _history_filters(search, action, status, proxy, date_from, date_to)
+    filters = _history_filters(search, action, status, proxy, date_from, date_to, fb_uid)
     try:
         data = await asyncio.to_thread(repository.list_history, adapters.get_machine_id(), filters, page, page_size)
     except Exception as e:
@@ -1711,8 +1720,9 @@ async def export_farm_history(
     proxy: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    fb_uid: Optional[str] = None,
 ):
-    filters = _history_filters(search, action, status, proxy, date_from, date_to)
+    filters = _history_filters(search, action, status, proxy, date_from, date_to, fb_uid)
     try:
         rows = await asyncio.to_thread(repository.iter_history_for_export, adapters.get_machine_id(),
                                        filters, EXPORT_MAX_ROWS)
@@ -1749,6 +1759,25 @@ async def farm_history_detail(history_id: int):
         "logs": [{**log, "created_at": _iso(log.get("created_at")), "targets": _json_list(log.get("targets"))}
                  for log in data["logs"]],
     }
+
+
+RUN_TARGET_LISTS = {"JOIN_GROUP": "groups_joined", "LEAVE_GROUP": "groups_left", "ADD_FRIEND": "friends_sent"}
+
+
+@router.get("/runs/{run_id}/targets")
+async def farm_run_targets(run_id: int):
+    """Danh sách nhóm đã vào / đã rời + người đã gửi lời mời của 1 lượt (không gồm link bị bỏ qua)."""
+    try:
+        rows = await asyncio.to_thread(repository.get_run_targets, adapters.get_machine_id(), run_id)
+    except Exception as e:
+        logger.warning(f"Không đọc được danh sách của lượt {run_id}: {e}")
+        raise HTTPException(status_code=503, detail="Không đọc được danh sách từ CSDL.")
+    lists = {key: [] for key in RUN_TARGET_LISTS.values()}
+    for row in rows:
+        lists[RUN_TARGET_LISTS[row["action_type"]]].extend(
+            t for t in _json_list(row["targets"])
+            if isinstance(t, dict) and not str(t.get("result") or "").startswith("skipped_"))
+    return lists
 
 
 def _json_list(value) -> List:

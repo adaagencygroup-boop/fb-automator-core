@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, PauseCircle } from "lucide-react";
+import { Activity, ListChecks, PauseCircle } from "lucide-react";
 import { ACTION_FULL_LABELS, MONITOR_STATUSES, RUN_STATUS } from "../constants";
 import { ActionChip, RunStatusBadge, formatDuration } from "./parts";
+import RunTargetsModal, { hasRunTargets } from "./RunTargetsModal";
 
 const ACTION_ORDER = ["CHECK_NOTIF", "NEWSFEED", "WATCH", "STORY", "ADD_FRIEND", "LEAVE_GROUP", "JOIN_GROUP"];
 const COUNT_COLORS = {
@@ -36,6 +37,7 @@ export default function ProgressMonitor({ status }) {
   const accounts = status?.accounts || [];
   const now = useNow(Boolean(status?.running));
   const counts = accounts.reduce((acc, a) => ({ ...acc, [a.status]: (acc[a.status] || 0) + 1 }), {});
+  const [targetsOf, setTargetsOf] = useState(null);
 
   return (
     <section className="space-y-4">
@@ -103,6 +105,16 @@ export default function ProgressMonitor({ status }) {
                   </td>
                   <td className="px-4 py-3">
                     <RunStatusBadge status={acc.status} />
+                    {acc.status === "COMPLETED" && acc.run_id && hasRunTargets(acc) && (
+                      <button
+                        type="button"
+                        onClick={() => setTargetsOf(acc)}
+                        className="mt-1.5 flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline"
+                      >
+                        <ListChecks className="h-3.5 w-3.5" />
+                        Xem danh sách
+                      </button>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex max-w-[280px] flex-wrap gap-1">
@@ -145,6 +157,8 @@ export default function ProgressMonitor({ status }) {
         Kịch bản: {Object.values(ACTION_FULL_LABELS).join(" · ")}. Màu chip: xanh lá thành công, xanh dương đang chạy, cam bị chặn,
         vàng bỏ qua, đỏ lỗi.
       </p>
+
+      {targetsOf && <RunTargetsModal account={targetsOf} onClose={() => setTargetsOf(null)} />}
     </section>
   );
 }

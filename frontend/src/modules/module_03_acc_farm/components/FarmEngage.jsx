@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { OctagonX, PauseCircle, Play, PlayCircle } from "lucide-react";
+import { OctagonX, PauseCircle, Play, PlayCircle, RotateCcw } from "lucide-react";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
 import { HARD_MAX_THREADS } from "../constants";
@@ -59,13 +59,17 @@ export default function FarmEngage() {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState("");
   const [confirmStop, setConfirmStop] = useState(false);
+  // Giống Tab 2: "config" chưa hiện tiến trình, "running" hiện giám sát + log và khóa cấu hình tới khi bấm quay về
+  const [viewState, setViewState] = useState("config");
   const wasRunning = useRef(false);
 
   const running = Boolean(status?.running);
 
   const loadStatus = useCallback(async () => {
     try {
-      setStatus(await getFarmStatus());
+      const next = await getFarmStatus();
+      setStatus(next);
+      if (next?.running) setViewState("running");
     } catch (err) {
       toast.error({ key: "farm-status", title: "KHÔNG ĐỌC ĐƯỢC TRẠNG THÁI", message: err.message });
     }
@@ -116,9 +120,9 @@ export default function FarmEngage() {
   };
 
   const sessionAccounts = useMemo(() => {
-    if (!running) return [];
+    if (viewState !== "running") return [];
     return (status?.accounts || []).map((a) => knownAccounts[a.uid] || { uid: a.uid, profile_name: a.name });
-  }, [running, status, knownAccounts]);
+  }, [viewState, status, knownAccounts]);
 
   const validate = () => {
     const uids = Object.values(knownAccounts).filter((a) => selected.has(a.uid) && isEligible(a)).map((a) => a.uid);
@@ -158,6 +162,7 @@ export default function FarmEngage() {
         "ĐÃ KÍCH HOẠT"
       );
       await loadStatus();
+      setViewState("running");
     } catch (err) {
       toast.error(err.message, "KÍCH HOẠT THẤT BẠI");
     } finally {
@@ -192,6 +197,11 @@ export default function FarmEngage() {
     }
   };
 
+  const handleBackToConfig = () => {
+    setSelected(new Set());
+    setViewState("config");
+  };
+
   return (
     <div className="mx-auto max-w-[1400px] space-y-6">
       <PageTitle
@@ -200,7 +210,7 @@ export default function FarmEngage() {
       />
 
       <AccountPicker
-        accounts={running ? sessionAccounts : accountPages.accounts}
+        accounts={viewState === "running" ? sessionAccounts : accountPages.accounts}
         knownAccounts={knownAccounts}
         total={accountPages.total}
         search={accountPages.search}
@@ -216,23 +226,31 @@ export default function FarmEngage() {
         selected={selected}
         onSelectedChange={setSelected}
         onRefresh={loadAccounts}
-        readOnly={running}
+        readOnly={viewState === "running"}
       />
 
-      <ScenarioConfig config={config} onChange={updateConfig} disabled={running} />
+      <ScenarioConfig config={config} onChange={updateConfig} disabled={viewState === "running"} />
 
       <div className="flex items-center gap-4">
         <span className="text-sm font-bold uppercase tracking-wide text-slate-700">Nhập số luồng chạy</span>
         <div className="flex items-center gap-2 rounded-lg border border-border bg-white px-3 py-1.5 shadow-subtle">
-          <NumberInput value={threads} onChange={updateThreads} min={1} max={HARD_MAX_THREADS} disabled={running} className="w-16 border-0 shadow-none" />
+          <NumberInput value={threads} onChange={updateThreads} min={1} max={HARD_MAX_THREADS} disabled={viewState === "running"} className="w-16 border-0 shadow-none" />
           <span className="text-sm text-slate-400">Luồng</span>
         </div>
         <span className="text-[11px] text-slate-400">Tối đa {HARD_MAX_THREADS} luồng; không vượt quá số nick đã chọn</span>
       </div>
 
-      {status?.accounts?.length > 0 && <ProgressMonitor status={status} />}
-
-      {running ? (
+      {viewState === "config" ? (
+        <button
+          type="button"
+          onClick={handleStart}
+          disabled={busy === "start"}
+          className="flex h-12 w-full items-center justify-center gap-3 rounded-xl bg-primary text-sm font-bold uppercase tracking-wide text-white shadow-sm transition hover:bg-primary-hover disabled:opacity-60"
+        >
+          <Play className="h-5 w-5" />
+          {busy === "start" ? "Đang kích hoạt..." : "Kích hoạt"}
+        </button>
+      ) : running ? (
         <div className="flex flex-col gap-3 sm:flex-row">
           <button
             type="button"
@@ -256,16 +274,20 @@ export default function FarmEngage() {
       ) : (
         <button
           type="button"
-          onClick={handleStart}
-          disabled={busy === "start"}
-          className="flex h-12 w-full items-center justify-center gap-3 rounded-xl bg-primary text-sm font-bold uppercase tracking-wide text-white shadow-sm transition hover:bg-primary-hover disabled:opacity-60"
+          onClick={handleBackToConfig}
+          className="flex h-12 w-full items-center justify-center gap-3 rounded-xl bg-primary text-sm font-bold uppercase tracking-wide text-white shadow-sm transition hover:bg-primary-hover"
         >
-          <Play className="h-5 w-5" />
-          {busy === "start" ? "Đang kích hoạt..." : "Kích hoạt"}
+          <RotateCcw className="h-5 w-5" />
+          Quay về cấu hình ban đầu
         </button>
       )}
 
-      <LogConsole running={running} />
+      {viewState === "running" && status?.accounts?.length > 0 && <ProgressMonitor status={status} />}
+
+      {/* Chỉ ẩn, không gỡ: hook log kết nối WebSocket khi có người nghe, gỡ ra sẽ mất log đầu lượt */}
+      <div className={viewState === "running" ? undefined : "hidden"}>
+        <LogConsole running={running} />
+      </div>
 
       <ConfirmDialog
         isOpen={confirmStop}
