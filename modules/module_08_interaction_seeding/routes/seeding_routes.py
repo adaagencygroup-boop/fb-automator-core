@@ -536,13 +536,14 @@ async def list_seeding_targets(
             select(SeedingCampaignTarget.target_id)
             .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
             .where(
+                SeedingCampaignTarget.target_id.is_not(None),
                 or_(
                     SeedingCampaign.status == "COMPLETED",
                     and_(
                         SeedingCampaignTarget.success_count > 0,
                         SeedingCampaignTarget.failed_count == 0,
                     ),
-                )
+                ),
             )
         )
         query = query.filter(~SeedingTarget.id.in_(completed_stmt))
@@ -657,13 +658,14 @@ async def validate_targets(
         select(SeedingCampaignTarget.target_id)
         .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
         .where(
+            SeedingCampaignTarget.target_id.is_not(None),
             or_(
                 SeedingCampaign.status == "COMPLETED",
                 and_(
                     SeedingCampaignTarget.success_count > 0,
                     SeedingCampaignTarget.failed_count == 0,
                 ),
-            )
+            ),
         )
     )
     all_current_q = all_current_q.filter(~SeedingTarget.id.in_(completed_stmt))
@@ -747,13 +749,14 @@ async def clear_seeding_targets(
         select(SeedingCampaignTarget.target_id)
         .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
         .where(
+            SeedingCampaignTarget.target_id.is_not(None),
             or_(
                 SeedingCampaign.status == "COMPLETED",
                 and_(
                     SeedingCampaignTarget.success_count > 0,
                     SeedingCampaignTarget.failed_count == 0,
                 ),
-            )
+            ),
         )
     )
     targets_to_clear = query.filter(~SeedingTarget.id.in_(completed_stmt)).all()
@@ -1356,6 +1359,8 @@ def _process_account_tasks(
             return
 
         proxy = account_record.proxy if account_record else None
+        # Trả kết nối DB về pool trước khi mở Chrome và kiểm tra phiên đăng nhập
+        db.close()
 
         broadcast("info", f"[{uid}] 🚀 Khởi động trình duyệt Chrome Profile...")
         driver = create_driver(uid=uid, headless=False, proxy=proxy, scope="seeding")
@@ -1405,6 +1410,7 @@ def _process_account_tasks(
         task_objs.sort(key=lambda t: action_priority.get(t.action, 99))
         sorted_task_ids = [t.id for t in task_objs]
         task_by_id = {t.id: t for t in task_objs}
+        db.close()
 
         account_has_failure = False
         for idx, tid in enumerate(sorted_task_ids):
@@ -1428,43 +1434,26 @@ def _process_account_tasks(
                         )
                         rem_task.finished_at = vn_now()
                 db.commit()
+                db.close()
                 break
 
             ut = db.query(SeedingTask).filter(SeedingTask.id == tid).first()
             if not ut or ut.status != "PENDING":
+                db.close()
                 continue
 
             target = (
                 db.query(SeedingTarget).filter(SeedingTarget.id == ut.target_id).first()
             )
             if not target:
+                db.close()
                 continue
 
             ut.status = "RUNNING"
             ut.started_at = vn_now()
-            db.commit()
 
-            success = False
-            msg = ""
             comment_text = None
-
-            if ut.action in ("FOLLOW", "LIKE_PAGE"):
-                acc_label = (
-                    account_record.profile_name or uid if account_record else uid
-                )
-                success, msg = bot.execute_follow(
-                    target.url,
-                    target_type=target.target_type or "PAGE",
-                    account_name=acc_label,
-                    callback=lambda m: broadcast("info", f"[{uid}] {m}"),
-                )
-            elif ut.action == "REACT":
-                success, msg = bot.execute_react(
-                    target.url,
-                    reaction_type=ut.reaction or "LIKE",
-                    callback=lambda m: broadcast("info", f"[{uid}] {m}"),
-                )
-            elif ut.action == "COMMENT":
+            if ut.action == "COMMENT":
                 comment_text = "Tuyệt vời!"
                 if ut.comment_id:
                     cmt_obj = (
@@ -1484,6 +1473,30 @@ def _process_account_tasks(
                         chosen = random.choice(any_cmts)
                         comment_text = chosen.content
 
+            db.commit()
+            # Trả kết nối DB về pool trong lúc chờ Selenium tương tác Facebook
+            db.close()
+
+            success = False
+            msg = ""
+
+            if ut.action in ("FOLLOW", "LIKE_PAGE"):
+                acc_label = (
+                    account_record.profile_name or uid if account_record else uid
+                )
+                success, msg = bot.execute_follow(
+                    target.url,
+                    target_type=target.target_type or "PAGE",
+                    account_name=acc_label,
+                    callback=lambda m: broadcast("info", f"[{uid}] {m}"),
+                )
+            elif ut.action == "REACT":
+                success, msg = bot.execute_react(
+                    target.url,
+                    reaction_type=ut.reaction or "LIKE",
+                    callback=lambda m: broadcast("info", f"[{uid}] {m}"),
+                )
+            elif ut.action == "COMMENT":
                 success, msg = bot.execute_comment(
                     target.url,
                     content=comment_text,
@@ -1507,17 +1520,20 @@ def _process_account_tasks(
                 if not kept:
                     success, msg = False, why
 
-            ut.finished_at = vn_now()
-            ut.error_message = msg
+            ut_done = db.query(SeedingTask).filter(SeedingTask.id == tid).first()
+            if ut_done:
+                ut_done.finished_at = vn_now()
+                ut_done.error_message = msg
+                ut_done.status = "SUCCESS" if success else "FAILED"
+                db.commit()
+            # Trả kết nối DB về pool trước khi nghỉ time.sleep(delay_s)
+            db.close()
+
             if success:
-                ut.status = "SUCCESS"
                 broadcast("success", f"[{uid}] ✓ {msg}")
             else:
-                ut.status = "FAILED"
                 account_has_failure = True
                 broadcast("error", f"[{uid}] ❌ {msg}")
-
-            db.commit()
 
             # Còn tác vụ tiếp theo: nghỉ ngẫu nhiên delay_min..delay_max giây theo cấu hình "Thời gian nghỉ giữa
             # 2 lần tương tác", kể cả giữa các thao tác trên cùng 1 bài viết (Like -> Bình luận -> Chia sẻ).
