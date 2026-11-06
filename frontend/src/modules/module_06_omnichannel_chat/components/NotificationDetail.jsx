@@ -144,14 +144,17 @@ function ReactionStack({ post, breakdown, total: totalProp, onOpen, size = 20 })
 }
 
 /** Một ô số liệu trong thanh: biểu tượng viền + con số gọn */
-function StatItem({ icon: Icon, value, label, onClick, title }) {
+function StatItem({ icon: Icon, value, label, onClick, title, actionLabel }) {
   const inner = (
     <>
       <Icon className="size-[18px]" strokeWidth={1.8} />
-      <span className="text-sm">{compactCount(value)}</span>
+      <span className="text-sm">{actionLabel || compactCount(value)}</span>
     </>
   );
-  const cls = "inline-flex items-center gap-1.5 text-slate-500";
+  const cls = cn(
+    "inline-flex items-center gap-1.5 transition-colors",
+    actionLabel ? "text-emerald-600 font-medium" : "text-slate-500"
+  );
   if (!onClick) {
     return (
       <span className={cls} title={title} aria-label={label}>
@@ -161,7 +164,7 @@ function StatItem({ icon: Icon, value, label, onClick, title }) {
   }
   return (
     <button type="button" onClick={onClick} title={title} aria-label={label}
-      className={cn(cls, "rounded transition-colors hover:text-slate-800", FOCUS)}>
+      className={cn(cls, "rounded hover:text-slate-800", FOCUS)}>
       {inner}
     </button>
   );
@@ -636,13 +639,30 @@ function LikeStat({ post, postId, pageId, liked, total, onToggled }) {
 }
 
 /** Biến thể bài viết Fanpage đầy đủ — Figma 1593:2826 */
-function InternalPostView({ post, page, pageName, postId, onReload, sort, onSortChange, refreshing, threadKey }) {
+function InternalPostView({ post, page, pageName, postId, onReload, sort, onSortChange, refreshing, threadKey, postLink }) {
   const videoSrc = post?.source || null;
   const imgSrc = post?.full_picture || null;
+  const [copiedShare, setCopiedShare] = useState(false);
 
   const [reactionsOpen, setReactionsOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const postPageId = page?.id || post?.page_id;
+
+  const handleShareClick = () => {
+    const rawLink = post?.permalink_url || postLink || `https://facebook.com/${postId}`;
+    // Nếu postId có dạng pageId_realPostId thì có thể tách ra link facebook.com/{pageId}/posts/{realPostId}
+    const cleanLink = rawLink.startsWith("http") ? rawLink : `https://facebook.com/${rawLink}`;
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(cleanLink).then(() => {
+        setCopiedShare(true);
+        setTimeout(() => setCopiedShare(false), 2000);
+      }).catch(() => {
+        window.open(cleanLink, "_blank", "noopener,noreferrer");
+      });
+    } else {
+      window.open(cleanLink, "_blank", "noopener,noreferrer");
+    }
+  };
 
   /**
    * Trạng thái Thích để ở đây chứ không trong LikeStat, vì cả thanh thống kê lẫn
@@ -741,7 +761,9 @@ function InternalPostView({ post, page, pageName, postId, onReload, sort, onSort
               icon={Share2}
               value={countOf(post?.shares)}
               label="lượt chia sẻ"
-              title="Lượt chia sẻ"
+              title={copiedShare ? "Đã sao chép liên kết bài viết!" : "Bấm để sao chép liên kết chia sẻ bài viết"}
+              onClick={handleShareClick}
+              actionLabel={copiedShare ? "Đã sao chép" : undefined}
             />
             {/* Chỉ hiện khi Graph thực sự trả về — thiếu quyền read_insights thì
                 `insights` không có, hiện "0 lượt xem" là nói dối */}
@@ -908,6 +930,7 @@ export default function NotificationDetail({ notification, page, pageName, onBac
           onSortChange={setSort}
           refreshing={refreshing}
           threadKey={fetched.forKey}
+          postLink={notification?.link}
         />
       )}
 
