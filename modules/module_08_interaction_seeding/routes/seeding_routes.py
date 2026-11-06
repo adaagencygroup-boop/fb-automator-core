@@ -551,14 +551,13 @@ def list_seeding_targets(
             select(SeedingCampaignTarget.target_id)
             .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
             .where(
-                SeedingCampaignTarget.target_id.is_not(None),
                 or_(
                     SeedingCampaign.status == "COMPLETED",
                     and_(
                         SeedingCampaignTarget.success_count > 0,
                         SeedingCampaignTarget.failed_count == 0,
                     ),
-                ),
+                )
             )
         )
         query = query.filter(~SeedingTarget.id.in_(completed_stmt))
@@ -673,14 +672,13 @@ def validate_targets(
         select(SeedingCampaignTarget.target_id)
         .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
         .where(
-            SeedingCampaignTarget.target_id.is_not(None),
             or_(
                 SeedingCampaign.status == "COMPLETED",
                 and_(
                     SeedingCampaignTarget.success_count > 0,
                     SeedingCampaignTarget.failed_count == 0,
                 ),
-            ),
+            )
         )
     )
     all_current_q = all_current_q.filter(~SeedingTarget.id.in_(completed_stmt))
@@ -764,14 +762,13 @@ def clear_seeding_targets(
         select(SeedingCampaignTarget.target_id)
         .join(SeedingCampaign, SeedingCampaignTarget.campaign_id == SeedingCampaign.id)
         .where(
-            SeedingCampaignTarget.target_id.is_not(None),
             or_(
                 SeedingCampaign.status == "COMPLETED",
                 and_(
                     SeedingCampaignTarget.success_count > 0,
                     SeedingCampaignTarget.failed_count == 0,
                 ),
-            ),
+            )
         )
     )
     targets_to_clear = query.filter(~SeedingTarget.id.in_(completed_stmt)).all()
@@ -1595,6 +1592,8 @@ def _process_account_tasks(
                 ut.status = "RUNNING"
                 ut.started_at = vn_now()
 
+            success = False
+            msg = ""
             comment_text = None
 
             if info["action"] in ("FOLLOW", "LIKE_PAGE"):
@@ -1617,30 +1616,6 @@ def _process_account_tasks(
                 elif fallback_comments:
                     comment_text = random.choice(fallback_comments)
 
-            db.commit()
-            # Trả kết nối DB về pool trong lúc chờ Selenium tương tác Facebook
-            db.close()
-
-            success = False
-            msg = ""
-
-            if ut.action in ("FOLLOW", "LIKE_PAGE"):
-                acc_label = (
-                    account_record.profile_name or uid if account_record else uid
-                )
-                success, msg = bot.execute_follow(
-                    target.url,
-                    target_type=target.target_type or "PAGE",
-                    account_name=acc_label,
-                    callback=lambda m: broadcast("info", f"[{uid}] {m}"),
-                )
-            elif ut.action == "REACT":
-                success, msg = bot.execute_react(
-                    target.url,
-                    reaction_type=ut.reaction or "LIKE",
-                    callback=lambda m: broadcast("info", f"[{uid}] {m}"),
-                )
-            elif ut.action == "COMMENT":
                 success, msg = bot.execute_comment(
                     target_info["url"],
                     content=comment_text,
