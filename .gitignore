@@ -43,6 +43,9 @@ data/*.db-wal
 data/*.db-shm
 data/*.sqlite
 data/*.sqlite3
+data/*.ini
+data/tiktok_config.json
+data/youtube_config.json
 data/keys.txt
 data/proxies.txt
 data/accounts.txt

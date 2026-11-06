@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import json
 import threading
@@ -10,10 +11,13 @@ from pydantic import BaseModel
 from core.database.connection import db
 from .runner import (
   is_job_running,
+  mark_job_running,
   stop_job,
   run_tiktok_download_task,
   run_youtube_download_task,
 )
+
+_picker_lock = threading.Lock()
 router = APIRouter(prefix="/pages", tags=["Module 05: Media & Downloads"])
 class TikTokDownloadRequest(BaseModel):
   download_folder: str = ""
@@ -715,6 +719,7 @@ def start_tiktok_download(req: TikTokDownloadRequest):
       VALUES (%s, %s, 'PENDING')""",
       (job_id, pid)
     )
+  mark_job_running("TIKTOK", job_id)
   thread = threading.Thread(target=run_tiktok_download_task, args=(job_id, req.dict()), daemon=True)
   thread.start()
   return {"success": True, "job_id": job_id, "message": "Đã Khởi Chạy Tác Vụ Tải TikTok"}
@@ -752,6 +757,7 @@ def start_youtube_download(req: YouTubeDownloadRequest):
       VALUES (%s, %s, 'PENDING')""",
       (job_id, pid)
     )
+  mark_job_running("YOUTUBE", job_id)
   thread = threading.Thread(target=run_youtube_download_task, args=(job_id, req.dict()), daemon=True)
   thread.start()
   return {"success": True, "job_id": job_id, "message": "Đã Khởi Chạy Tác Vụ Tải YouTube"}
@@ -772,25 +778,38 @@ def select_folder_endpoint(req: Optional[SelectFolderRequest] = None):
   if init_dir and init_dir.strip():
     has_vids, _ = check_folder_has_page_videos(init_dir.strip())
     if has_vids:
-      return {"folder": "", "error": "Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!"}
-  dialog_init = init_dir if (init_dir and os.path.exists(init_dir)) else "C:/"
+      return {"folder": "", "error": "Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!", "success": False}
+  clean_init = init_dir.strip().strip('"').strip("'") if init_dir else ""
+  dialog_init = clean_init if (clean_init and os.path.exists(clean_init) and os.path.isdir(clean_init)) else None
+
+  if not _picker_lock.acquire(blocking=False):
+    return {"folder": "", "error": "Cửa sổ chọn thư mục đang mở, vui lòng thao tác trên cửa sổ đó!", "success": False}
+
   selected = ""
+  error_msg = ""
   try:
-    import tkinter as tk
-    from tkinter import filedialog
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-    selected = filedialog.askdirectory(initialdir=dialog_init, title="Chọn thư mục lưu video")
-    root.destroy()
-  except Exception:
     import subprocess
-    cmd = "powershell -NoProfile -Command \"[void][System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms'); $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.ShowNewFolderButton = $true; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }\""
-    res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    helper_path = os.path.join(os.path.dirname(__file__), "picker_helper.py")
+    venv_python = sys.executable
+    cmd = [venv_python, helper_path]
+    if dialog_init:
+      cmd.append(dialog_init)
+    else:
+      cmd.append("")
+    cmd.append("Chọn thư mục lưu video")
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     selected = res.stdout.strip()
+    if res.returncode != 0:
+      error_msg = f"picker_helper code {res.returncode}: {res.stderr.strip()}"
+  except Exception as e:
+    error_msg = f"subprocess error: {str(e)}"
+    selected = ""
+  finally:
+    _picker_lock.release()
+
   if selected:
-    selected = selected.replace("\\", "/")
-  return {"folder": selected or ""}
+    selected = os.path.normpath(selected)
+  return {"folder": selected or "", "success": bool(selected), "error": error_msg}
 @router.get("/tiktok/auth-status")
 def get_tiktok_auth_status_endpoint():
   from core.media.tiktok_browser import get_tiktok_auth_status
