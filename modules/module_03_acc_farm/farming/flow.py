@@ -1121,7 +1121,7 @@ def run_story(driver, ctl: FarmControl, target: int, delay_min: float, delay_max
     react: mỗi khung mới có REACT_RATE khả năng được thả 1 cảm xúc.
     """
     if target <= 0:
-        return _result("SKIPPED", "Số khung story = 0")
+        return _result("SKIPPED", "Số lượng story = 0")
     # Đang ở Trang chủ nhưng đã lướt xa (vd vừa chạy Newsfeed): Facebook gỡ khay story ở đầu trang khỏi DOM, tìm
     # không thấy thẻ nào (đã gặp 2026-10-23, báo nhầm "không có story"). Mở lại Trang chủ như bấm logo về đầu trang.
     scrolled = _same_page(driver.current_url, FB_HOME) and (_script(driver, "return window.scrollY") or 0) > \
@@ -1163,7 +1163,7 @@ def run_story(driver, ctl: FarmControl, target: int, delay_min: float, delay_max
                 frames += 1
                 stuck = 0
                 last_sig = sig
-                report(f"Xem Story: {frames}/{target} khung" + (f", {sum(reactions.values())} cảm xúc" if reactions else ""))
+                report(f"Xem Story: {frames}/{target} story" + (f", {sum(reactions.values())} cảm xúc" if reactions else ""))
             else:
                 stuck += 1
                 if stuck >= STORY_MAX_STUCK:
@@ -1179,10 +1179,10 @@ def run_story(driver, ctl: FarmControl, target: int, delay_min: float, delay_max
 
     extra = {"seconds": int(timer.elapsed()), **_reaction_result(reactions)}
     if frames == 0:
-        return {**_result("SKIPPED", "Không xem được khung story nào"), **extra}
+        return {**_result("SKIPPED", "Không xem được story nào"), **extra}
     react_note = f", thả {sum(reactions.values())} cảm xúc ({_reaction_text(reactions)})" if reactions else ""
     tail = "" if frames >= target else " (hết story)"
-    return {**_result("SUCCESS", f"Đã xem {frames}/{target} khung story trong {timer.elapsed() / 60:.1f} phút"
+    return {**_result("SUCCESS", f"Đã xem {frames}/{target} story trong {timer.elapsed() / 60:.1f} phút"
                                  f"{react_note}{tail}", frames), **extra}
 
 
