@@ -131,7 +131,7 @@ class StartListValidationTests(unittest.TestCase):
     def start(self, **config):
         req = farm_routes.FarmStartRequest(uids=["1"], threads=1, config=farm_routes.FarmScenarioConfig(**config))
         with patch.object(farm_routes.adapters, "owner_from_request", return_value=None), \
-                patch.object(farm_routes.adapters, "get_account", return_value=None):
+                patch.object(farm_routes.adapters, "get_accounts", return_value={}):
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(farm_routes.start_farm_interactions(req, Mock()))
         return ctx.exception

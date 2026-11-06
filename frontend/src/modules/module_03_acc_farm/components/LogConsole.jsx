@@ -21,7 +21,9 @@ export default function LogConsole({ running }) {
     () => [...new Set(logs.map((l) => l.thread).filter((t) => t != null))].sort((a, b) => a - b),
     [logs]
   );
-  const shown = thread === "" ? logs : logs.filter((l) => String(l.thread) === thread);
+  // Luồng đang chọn không còn trong log (đã làm mới log cho phiên mới) thì về "Tất cả luồng"
+  const current = threads.some((t) => String(t) === thread) ? thread : "";
+  const shown = current === "" ? logs : logs.filter((l) => String(l.thread) === current);
 
   useEffect(() => {
     if (boxRef.current) boxRef.current.scrollTop = boxRef.current.scrollHeight;
@@ -43,7 +45,7 @@ export default function LogConsole({ running }) {
           </span>
           <span className="text-xs font-semibold text-slate-200">Live Automation Log Console</span>
           <select
-            value={thread}
+            value={current}
             onChange={(e) => setThread(e.target.value)}
             className="h-7 rounded-md border border-slate-600 bg-slate-800 px-2 text-[11px] text-slate-200 focus:outline-none"
           >

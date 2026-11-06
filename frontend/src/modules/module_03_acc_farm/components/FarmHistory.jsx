@@ -6,18 +6,44 @@ import CustomSelect from "@/components/ui/custom-select";
 import Pagination from "@/components/ui/pagination";
 import { toast } from "@/lib/toast";
 import { formatVietnamDateTime } from "@/lib/date-utils";
-import { api } from "@/services/api";
 import { ACTION_FULL_LABELS, FINAL_STATUSES, FRIEND_SOURCE_LABELS, GROUP_SOURCE_LABELS, PROXY_MODE_LABELS, RUN_STATUS } from "../constants";
-import { cleanupFarmHistory, downloadFarmHistoryCsv, downloadFarmHistoryXlsx, getFarmHistory } from "../service";
+import {
+  cleanupFarmHistory,
+  downloadFarmHistoryCsv,
+  downloadFarmHistoryXlsx,
+  getFarmHistory,
+  getFarmHistoryAccounts,
+} from "../service";
 import HistoryDetail from "./HistoryDetail";
 import { HistoryView } from "./HistoryView";
 import { ActionChip, NumberInput, PageTitle, RunStatusBadge, UidCopy, formatDuration } from "./parts";
 
 const PAGE_SIZE = 10;
+const ALL_ACCOUNTS = { value: "", label: "Tất cả tài khoản" };
+
+// [{ uid, name }] -> lựa chọn của bộ lọc: hiện tên nick, chưa có tên thì UID, trùng tên thì thêm UID để phân biệt
+export function accountFilterOptions(accounts) {
+  const list = (Array.isArray(accounts) ? accounts : []).filter((a) => a?.uid);
+  const counts = {};
+  list.forEach((a) => {
+    if (a.name) counts[a.name] = (counts[a.name] || 0) + 1;
+  });
+  return [
+    ALL_ACCOUNTS,
+    ...list.map((a) => ({
+      value: a.uid,
+      label: !a.name ? a.uid : counts[a.name] > 1 ? `${a.name} (${a.uid})` : a.name,
+    })),
+  ];
+}
 const EMPTY_FILTERS = { search: "", fb_uid: "", action: "", status: "", proxy: "", date_from: "", date_to: "" };
 
 const ACTION_OPTIONS = [{ value: "", label: "Tất cả hành động" }, ...Object.entries(ACTION_FULL_LABELS).map(([value, label]) => ({ value, label }))];
-const STATUS_OPTIONS = [{ value: "", label: "Tất cả trạng thái" }, ...FINAL_STATUSES.map((value) => ({ value, label: RUN_STATUS[value].label }))];
+// Không có "Acc chết": BE lọc "Lỗi hệ thống" ra cả lượt nick chết / mất phiên (repository.HISTORY_STATUS_FILTER)
+const STATUS_OPTIONS = [
+  { value: "", label: "Tất cả trạng thái" },
+  ...FINAL_STATUSES.filter((value) => value !== "DIE").map((value) => ({ value, label: RUN_STATUS[value].label })),
+];
 const PROXY_OPTIONS = [
   { value: "", label: "Tất cả" },
   { value: "with", label: "Có proxy" },
@@ -157,38 +183,22 @@ function InteractionHistory() {
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
-  const [accountOptions, setAccountOptions] = useState([{ value: "", label: "Tất cả tài khoản" }]);
+  const [accountOptions, setAccountOptions] = useState([ALL_ACCOUNTS]);
 
-  // Tải danh sách tài khoản cho bộ lọc theo từng acc
+  // Bộ lọc theo tài khoản: nick đã có lịch sử trên máy này (tải lại sau khi dọn lịch sử)
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const res = await api.get("/api/accounts");
-        if (cancelled) return;
-        let raw = [];
-        if (Array.isArray(res)) raw = res;
-        else if (Array.isArray(res?.accounts)) raw = res.accounts;
-        else if (Array.isArray(res?.data)) raw = res.data;
-
-        const opts = [{ value: "", label: "Tất cả tài khoản" }];
-        const seen = new Set();
-        raw.forEach((acc) => {
-          const uid = String(acc.uid || acc.fb_uid || acc.account_uid || "").trim();
-          if (!uid || seen.has(uid)) return;
-          seen.add(uid);
-          const name = acc.name || acc.fb_name || acc.account_name || uid;
-          opts.push({ value: uid, label: `${name} (${uid})` });
-        });
-        setAccountOptions(opts);
-      } catch (err) {
-        console.error("Lỗi tải tài khoản cho bộ lọc lịch sử tương tác:", err);
-      }
-    })();
+    getFarmHistoryAccounts()
+      .then((accounts) => {
+        if (!cancelled) setAccountOptions(accountFilterOptions(accounts));
+      })
+      .catch((err) => {
+        if (!cancelled) toast.error({ key: "farm-history-accounts", title: "KHÔNG TẢI ĐƯỢC DANH SÁCH TÀI KHOẢN", message: err.message });
+      });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadKey]);
 
   // Gõ tìm kiếm: chờ 400ms mới gọi API
   useEffect(() => {
@@ -226,7 +236,11 @@ function InteractionHistory() {
   const exportFile = useCallback(async ({ download }) => {
     setExporting(true);
     try {
-      await download(filters);
+      const { fileName, rows } = (await download(filters)) || {};
+      toast.success(
+        rows != null ? `Đã xuất ${rows} lượt ra file ${fileName}` : `Đã xuất file ${fileName || ""}`.trim(),
+        "XUẤT FILE THÀNH CÔNG"
+      );
     } catch (err) {
       toast.error(err.message, "KHÔNG XUẤT ĐƯỢC FILE");
     } finally {

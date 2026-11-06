@@ -22,6 +22,8 @@ VN_TZ = timezone(timedelta(hours=7))
 RETRY_SECONDS = 30
 FINAL_STATUSES = ("COMPLETED", "STOPPED", "FAILED", "BLOCKED", "DIE")
 OPEN_STATUSES = ("PENDING", "RUNNING", "PAUSED")
+# Bộ lọc trạng thái ở Lịch sử không có "Acc chết": lọc "Lỗi hệ thống" ra cả lượt nick chết / mất phiên (tester 2026-11-06)
+HISTORY_STATUS_FILTER = {"FAILED": ("FAILED", "DIE")}
 STALE_ERROR = "Engine dừng đột ngột"
 
 RUN_COLUMNS = {"status", "current_activity", "error", "finished_at", "fb_name"}
@@ -121,14 +123,22 @@ writer = _WriteQueue()
 
 # ─────────────────────────── LƯỢT CHẠY ────────────────────────────
 
-def create_run(machine_id: str, uid: str, fb_name: str, session_id: str,
-               owner_username: Optional[str] = None) -> int:
-    row = db.fetch_one(
-        """INSERT INTO farm_runs (machine_id, owner_username, fb_uid, fb_name, session_id, status, started_at)
-           VALUES (?, ?, ?, ?, ?, 'PENDING', ?) RETURNING id""",
-        (machine_id, owner_username or None, str(uid), (fb_name or None), session_id, utc_now()),
+def create_runs(machine_id: str, accounts: List[Dict[str, Any]], session_id: str,
+                owner_username: Optional[str] = None) -> Dict[str, int]:
+    """Tạo lượt chạy PENDING cho mọi nick trong 1 lệnh INSERT; accounts = [{uid, name}] không trùng uid. Trả {uid: run_id}."""
+    if not accounts:
+        return {}
+    now = utc_now()
+    params: List[Any] = []
+    for acc in accounts:
+        params += [machine_id, owner_username or None, str(acc["uid"]), acc.get("name") or None, session_id, now]
+    values = ", ".join("(?, ?, ?, ?, ?, 'PENDING', ?)" for _ in accounts)
+    rows = db.fetch_all(
+        f"INSERT INTO farm_runs (machine_id, owner_username, fb_uid, fb_name, session_id, status, started_at) "
+        f"VALUES {values} RETURNING id, fb_uid",
+        tuple(params),
     )
-    return int(row["id"])
+    return {str(row["fb_uid"]): int(row["id"]) for row in rows}
 
 
 def update_run(run_id: int, **fields):
@@ -548,8 +558,9 @@ def _history_where(machine_id: str, filters: Dict[str, Any]) -> Tuple[str, list]
         where.append("EXISTS (SELECT 1 FROM farm_interaction_logs l WHERE l.run_id = h.run_id AND l.action_type = ?)")
         params.append(filters["action"])
     if filters.get("status"):
-        where.append("h.final_status = ?")
-        params.append(filters["status"])
+        statuses = HISTORY_STATUS_FILTER.get(filters["status"], (filters["status"],))
+        where.append(f"h.final_status IN ({', '.join('?' for _ in statuses)})")
+        params.extend(statuses)
     if filters.get("proxy") == "with":
         where.append("h.proxy_mode IN ('full', 'facebook_only')")
     elif filters.get("proxy") == "without":
@@ -594,6 +605,15 @@ def get_history_detail(machine_id: str, history_id: int) -> Optional[Dict[str, A
             (row["run_id"],),
         )
     return {"history": row, "logs": logs}
+
+
+def history_accounts(machine_id: str) -> List[Dict[str, Any]]:
+    """Nick đã có lịch sử trên máy này (cho bộ lọc theo tài khoản): uid + tên của lượt gần nhất có tên."""
+    return db.fetch_all(
+        "SELECT DISTINCT ON (fb_uid) fb_uid, fb_name FROM farm_run_history WHERE machine_id = ? "
+        "ORDER BY fb_uid, (COALESCE(fb_name, '') = ''), finished_at DESC, id DESC",
+        (machine_id,),
+    )
 
 
 def get_run_targets(machine_id: str, run_id: int) -> List[Dict[str, Any]]:
