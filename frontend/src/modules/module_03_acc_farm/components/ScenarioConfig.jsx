@@ -535,7 +535,7 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
                 onChange={set("groups_split_enabled")}
                 disabled={disabled}
                 label="Bỏ qua nhóm đã tham gia"
-                hint={`Không tham gia lại nhóm mà nick này hoặc nick khác trong dàn đã tham gia trước đó. Chạy nhiều nick thì ${groupList ? "link" : "từ khóa"} được chia cho từng nick. Bỏ tick nếu muốn nhiều nick vào chung nhóm.`}
+                hint="Hệ thống không tham gia lại các nhóm mà tài khoản này hoặc tài khoản khác đã tham gia trước đó."
               />
             </div>
           )}
@@ -572,7 +572,7 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
                 onChange={set("friends_split_enabled")}
                 disabled={disabled}
                 label="Bỏ qua người đã gửi lời mời"
-                hint="Không gửi lại lời mời cho người mà nick này hoặc nick khác trong dàn đã gửi trước đó. Chạy nhiều nick thì link được chia cho từng nick. Bỏ tick nếu muốn nhiều nick cùng gửi cho 1 người."
+                hint="Hệ thống không gửi lại lời mời cho những người mà tài khoản này hoặc tài khoản khác đã gửi trước đó."
               />
             </div>
           ) : (

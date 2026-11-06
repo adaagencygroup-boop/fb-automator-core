@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { ChevronDown, Download, Eraser, Info, Search } from "lucide-react";
+import { ChevronDown, Download, Eraser, FilterX, Info, Search } from "lucide-react";
 import CustomSelect from "@/components/ui/custom-select";
 import Pagination from "@/components/ui/pagination";
 import { toast } from "@/lib/toast";
@@ -233,6 +233,14 @@ function InteractionHistory() {
     setPage(1);
   };
 
+  // Nút "Xóa lọc" chỉ hiện khi đang lọc (kể cả ô tìm kiếm đang gõ dở)
+  const filtering = Boolean(search) || Object.keys(EMPTY_FILTERS).some((key) => filters[key] !== EMPTY_FILTERS[key]);
+  const clearFilters = () => {
+    setSearch("");
+    setFilters(EMPTY_FILTERS);
+    setPage(1);
+  };
+
   const exportFile = useCallback(async ({ download }) => {
     setExporting(true);
     try {
@@ -297,6 +305,16 @@ function InteractionHistory() {
           <span>→</span>
           <input type="date" value={filters.date_to} min={filters.date_from || undefined} onChange={(e) => setFilter("date_to")(e.target.value)} className="h-9 rounded-lg border border-border px-2 text-xs text-slate-700" title="Đến ngày" />
         </div>
+        {filtering && (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-100"
+          >
+            <FilterX className="h-3.5 w-3.5" />
+            Xóa lọc
+          </button>
+        )}
       </div>
 
       <div className="overflow-auto rounded-2xl border border-border bg-white shadow-subtle">
