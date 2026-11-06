@@ -412,13 +412,22 @@ export default function OmnichannelChatModule() {
               }
 
               // Badge thì nhích bất kể đang xem tab nào, miễn là đúng Page đang lọc
-              if (incomingNotif.unread && matchPage) {
+              if (incomingNotif.unread) {
+                const pid = String(incomingNotif.pageId || "");
                 setNotifMeta((m) => ({
                   ...m,
-                  unreadCounts: {
-                    ...m.unreadCounts,
-                    [incomingNotif.type]: (m.unreadCounts[incomingNotif.type] || 0) + 1,
-                  },
+                  unreadCounts: matchPage
+                    ? {
+                        ...m.unreadCounts,
+                        [incomingNotif.type]: (m.unreadCounts[incomingNotif.type] || 0) + 1,
+                      }
+                    : m.unreadCounts,
+                  pageUnread: pid
+                    ? {
+                        ...m.pageUnread,
+                        [pid]: (m.pageUnread[pid] || 0) + 1,
+                      }
+                    : m.pageUnread,
                 }));
               }
             }
