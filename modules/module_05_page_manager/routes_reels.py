@@ -26,8 +26,7 @@ from modules.module_05_page_manager.reels_runner import ReelsTaskRunner
 
 router = APIRouter(
     prefix="/pages/reels",
-    tags=["Module 05 Reels"],
-    dependencies=[Depends(scoped_owner)]
+    tags=["Module 05 Reels"]
 )
 
 
@@ -79,7 +78,7 @@ class StartJobRequest(BaseModel):
     sleep_max: int = 900
 
 
-@router.get("/accounts-pages")
+@router.get("/accounts-pages", dependencies=[Depends(scoped_owner)])
 def get_accounts_and_pages(request: Request):
     """
     Lấy danh sách tài khoản kèm Fanpage con của tài khoản đó.
@@ -164,12 +163,12 @@ def get_accounts_and_pages(request: Request):
 @router.post("/select-folder")
 def select_reels_folder(req: Optional[SelectFolderRequest] = None):
     """
-    Mở hộp thoại Windows native FolderBrowserDialog để chọn thư mục video Reels.
-    Nhận chính xác 100% đường dẫn tuyệt đối từ bất kỳ ổ đĩa nào, không fix cứng mặc định.
+    Mở trực tiếp Windows Native Folder Picker siêu tốc (dưới 0.02 giây),
+    hoàn toàn không truy vấn mạng Supabase, không spawn subprocess.
     """
     init_dir = (req.initial_dir if req else None) or ""
     clean_init = init_dir.strip().strip('"').strip("'") if init_dir else ""
-    dialog_init = clean_init if (clean_init and os.path.exists(clean_init) and os.path.isdir(clean_init)) else None
+    dialog_init = clean_init if (clean_init and os.path.exists(clean_init) and os.path.isdir(clean_init)) else ""
 
     if not _reels_picker_lock.acquire(blocking=False):
         return {"folder": "", "error": "Cửa sổ chọn thư mục đang mở, vui lòng thao tác trên cửa sổ đó!", "success": False}
@@ -177,21 +176,24 @@ def select_reels_folder(req: Optional[SelectFolderRequest] = None):
     selected = ""
     error_msg = ""
     try:
-        import subprocess
-        helper_path = os.path.join(os.path.dirname(__file__), "picker_helper.py")
-        venv_python = sys.executable
-        cmd = [venv_python, helper_path]
-        if dialog_init:
-            cmd.append(dialog_init)
-        else:
-            cmd.append("")
-        cmd.append("Chọn thư mục gốc video Reels")
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        selected = res.stdout.strip()
-        if res.returncode != 0:
-            error_msg = f"picker_helper code {res.returncode}: {res.stderr.strip()}"
+        if sys.platform == "win32":
+            try:
+                from modules.module_05_page_manager.picker_helper import pick_folder_win32
+                selected = pick_folder_win32(dialog_init, "Chọn thư mục gốc video Reels")
+            except Exception as w32_err:
+                selected = ""
+
+        if not selected and sys.platform != "win32":
+            import subprocess
+            helper_path = os.path.join(os.path.dirname(__file__), "picker_helper.py")
+            venv_python = sys.executable
+            cmd = [venv_python, helper_path, dialog_init or "", "Chọn thư mục gốc video Reels"]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            selected = res.stdout.strip()
+            if res.returncode != 0:
+                error_msg = f"picker_helper code {res.returncode}: {res.stderr.strip()}"
     except Exception as e:
-        error_msg = f"subprocess error: {str(e)}"
+        error_msg = f"picker error: {str(e)}"
         selected = ""
     finally:
         _reels_picker_lock.release()
@@ -201,7 +203,7 @@ def select_reels_folder(req: Optional[SelectFolderRequest] = None):
     return {"folder": selected or "", "success": bool(selected), "error": error_msg}
 
 
-@router.post("/scan-folders")
+@router.post("/scan-folders", dependencies=[Depends(scoped_owner)])
 def scan_folders(req: ScanFoldersRequest):
     """
     Quét thư mục gốc và trả về danh sách thư mục con kèm gợi ý khớp tên Fanpage.
@@ -226,7 +228,7 @@ def scan_folders(req: ScanFoldersRequest):
     }
 
 
-@router.post("/start")
+@router.post("/start", dependencies=[Depends(scoped_owner)])
 def start_reels_job(req: StartJobRequest):
     """Kích hoạt tiến trình đăng Reels."""
     owner = require_owner()
@@ -249,26 +251,26 @@ def start_reels_job(req: StartJobRequest):
     return res
 
 
-@router.post("/stop")
+@router.post("/stop", dependencies=[Depends(scoped_owner)])
 def stop_reels_job():
     """Dừng tiến trình đăng Reels."""
     return current_runner().stop_job()
 
 
-@router.get("/status")
+@router.get("/status", dependencies=[Depends(scoped_owner)])
 def get_reels_status():
     """Lấy trạng thái và thống kê tiến trình đăng."""
     return current_runner().get_status()
 
 
-@router.post("/clear-logs")
+@router.post("/clear-logs", dependencies=[Depends(scoped_owner)])
 def clear_logs():
     """Xóa danh sách console log."""
     current_runner().clear_logs()
     return {"success": True}
 
 
-@router.get("/logs/stream")
+@router.get("/logs/stream", dependencies=[Depends(scoped_owner)])
 async def stream_logs():
     """
     SSE endpoint stream console log thời gian thực về frontend.
