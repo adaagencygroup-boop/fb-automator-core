@@ -37,6 +37,13 @@ export function SectionCard({ icon: Icon, title, subtitle, action, className, ch
 }
 
 /** Ô số nguyên; giữ chuỗi khi đang gõ, chuẩn hóa khi rời ô. */
+export function clampNumber(raw, min = 0, max) {
+  let n = parseInt(raw, 10);
+  if (Number.isNaN(n)) n = min;
+  if (max != null) n = Math.min(n, max);
+  return Math.max(min, n);
+}
+
 export function NumberInput({ value, onChange, min = 0, max, disabled, className }) {
   return (
     <input
@@ -47,12 +54,7 @@ export function NumberInput({ value, onChange, min = 0, max, disabled, className
       disabled={disabled}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      onBlur={(e) => {
-        let n = parseInt(e.target.value, 10);
-        if (Number.isNaN(n)) n = min;
-        if (max != null) n = Math.min(n, max);
-        onChange(String(Math.max(min, n)));
-      }}
+      onBlur={(e) => onChange(String(clampNumber(e.target.value, min, max)))}
       className={cn(
         "h-8 w-14 rounded-md border border-border bg-white px-2 text-center text-xs font-semibold text-slate-800 shadow-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-slate-50 disabled:text-slate-400",
         className
@@ -61,9 +63,15 @@ export function NumberInput({ value, onChange, min = 0, max, disabled, className
   );
 }
 
-export function RangeInput({ label, unit, low, high, onLow, onHigh, min = 0, max, disabled }) {
+/** onRange(min, max): rời khỏi cặp ô (không tính chuyển từ ô Min sang ô Max) mà Min > Max thì đổi chỗ 2 giá trị */
+export function RangeInput({ label, unit, low, high, onLow, onHigh, onRange, min = 0, max, disabled }) {
+  const swapOnLeave = (e) => {
+    if (!onRange || e.currentTarget.contains(e.relatedTarget)) return;
+    const [a, b] = Array.from(e.currentTarget.querySelectorAll("input"), (input) => clampNumber(input.value, min, max));
+    if (a > b) onRange(String(b), String(a));
+  };
   return (
-    <div className="flex items-center gap-2 text-xs text-slate-500">
+    <div onBlur={swapOnLeave} className="flex items-center gap-2 text-xs text-slate-500">
       {label && <span className="whitespace-nowrap">{label}</span>}
       <NumberInput value={low} onChange={onLow} min={min} max={max} disabled={disabled} />
       <span>-</span>
