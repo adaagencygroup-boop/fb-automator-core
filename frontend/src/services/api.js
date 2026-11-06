@@ -41,6 +41,23 @@ api.interceptors.request.use((config) => {
     config.headers["X-Registration-Token"] = registrationToken;
   }
 
+  // FormData: bỏ Content-Type mặc định (application/json) / multipart thiếu boundary
+  // để browser tự gắn multipart/form-data; boundary=...
+  if (typeof FormData !== "undefined" && config.data instanceof FormData && config.headers) {
+    const h = config.headers;
+    if (typeof h.set === "function") {
+      // AxiosHeaders: false = unset (undefined có thể thành chuỗi "undefined")
+      h.set("Content-Type", false);
+      h.set("content-type", false);
+    } else if (typeof h.delete === "function") {
+      h.delete("Content-Type");
+      h.delete("content-type");
+    } else {
+      delete h["Content-Type"];
+      delete h["content-type"];
+    }
+  }
+
   return config;
 });
 

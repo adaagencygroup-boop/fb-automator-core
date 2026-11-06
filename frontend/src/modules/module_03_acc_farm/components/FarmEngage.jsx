@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { OctagonX, PauseCircle, Play, PlayCircle } from "lucide-react";
+import { OctagonX, PauseCircle, Play, PlayCircle, RotateCcw } from "lucide-react";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { toast } from "@/lib/toast";
 import { HARD_MAX_THREADS } from "../constants";
@@ -17,12 +17,15 @@ import {
 import AccountPicker, { isEligible } from "./AccountPicker";
 import LogConsole from "./LogConsole";
 import ProgressMonitor from "./ProgressMonitor";
-import ScenarioConfig, { DEFAULT_CONFIG, GROUP_KEYWORD_MAX_LEN, linkListError, toPayload } from "./ScenarioConfig";
+import ScenarioConfig, { DEFAULT_CONFIG, GROUP_KEYWORD_MAX_LEN, linkListError, rangeError, toPayload } from "./ScenarioConfig";
 import { NumberInput, PageTitle } from "./parts";
 import { useFarmAccounts } from "../hooks/useFarmAccounts";
 
 const CONFIG_KEY = "m03.farm.config";
 const THREADS_KEY = "m03.farm.threads";
+// Lượt đã thay ô link / từ khóa (started_at của lượt): mỗi lượt chỉ thay 1 lần, kể cả khi mở lại màn
+const LEFTOVER_KEY = "m03.farm.leftover_applied";
+const LEFTOVER_FIELDS = ["group_links", "group_keyword", "friend_links"];
 const POLL_MS = 2000;
 
 function readSaved(key) {
@@ -59,15 +62,37 @@ export default function FarmEngage() {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState("");
   const [confirmStop, setConfirmStop] = useState(false);
+  // Giống Tab 2: "config" chưa hiện tiến trình, "running" hiện giám sát + log và khóa cấu hình tới khi bấm quay về
+  const [viewState, setViewState] = useState("config");
   const wasRunning = useRef(false);
 
   const running = Boolean(status?.running);
 
+  // Lượt đã xong: BE tính sẵn phần link / từ khóa còn lại (null = giữ nguyên ô đó), thay vào ô nhập và lưu lại.
+  // Chỉ thay khi về màn cấu hình (bấm "Quay về cấu hình ban đầu" hoặc mở lại trang sau khi lượt đã xong) để lúc còn
+  // xem tiến trình vẫn đối chiếu được với link đã dán.
+  const applyLeftover = useCallback((next) => {
+    const leftover = next?.leftover;
+    if (next?.running || !leftover || !next.started_at || readSaved(LEFTOVER_KEY) === next.started_at) return;
+    writeSaved(LEFTOVER_KEY, next.started_at);
+    const base = { ...DEFAULT_CONFIG, ...(readSaved(CONFIG_KEY) || {}) };
+    const changed = LEFTOVER_FIELDS.filter((key) => leftover[key] != null && leftover[key] !== base[key]);
+    if (!changed.length) return;
+    const updated = { ...base, ...Object.fromEntries(changed.map((key) => [key, leftover[key]])) };
+    writeSaved(CONFIG_KEY, updated);
+    setConfig((current) => ({ ...current, ...Object.fromEntries(changed.map((key) => [key, leftover[key]])) }));
+    toast.info("Đã bỏ link / từ khóa đã chạy xong khỏi ô nhập, phần chưa xong được giữ lại để chạy lại.", "CẬP NHẬT CẤU HÌNH");
+  }, []);
+
   const loadStatus = useCallback(async () => {
     try {
-      setStatus(await getFarmStatus());
+      const next = await getFarmStatus();
+      setStatus(next);
+      if (next?.running) setViewState("running");
+      return next;
     } catch (err) {
       toast.error({ key: "farm-status", title: "KHÔNG ĐỌC ĐƯỢC TRẠNG THÁI", message: err.message });
+      return null;
     }
   }, []);
 
@@ -75,21 +100,23 @@ export default function FarmEngage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const saved = readSaved(CONFIG_KEY);
       const savedThreads = readSaved(THREADS_KEY);
-      const [settings] = await Promise.allSettled([getFarmSettings(), loadStatus()]);
+      const [settings, current] = await Promise.allSettled([getFarmSettings(), loadStatus()]);
       if (cancelled) return;
+      const saved = readSaved(CONFIG_KEY);
       setConfig({
         ...DEFAULT_CONFIG,
         ...(saved && typeof saved === "object" ? saved : {}),
         ...(settings.status === "fulfilled" ? settingsToConfig(settings.value) : {}),
       });
       if (savedThreads) setThreads(String(savedThreads));
+      // Lượt đã xong khi mở trang: màn vào thẳng cấu hình nên thay ô link / từ khóa luôn
+      if (current.status === "fulfilled") applyLeftover(current.value);
     })();
     return () => {
       cancelled = true;
     };
-  }, [loadStatus]);
+  }, [loadStatus, applyLeftover]);
 
   // Đang chạy thì hỏi trạng thái định kỳ; vừa chạy xong thì tải lại tài khoản (trạng thái nick có thể đã đổi)
   useEffect(() => {
@@ -115,16 +142,32 @@ export default function FarmEngage() {
     writeSaved(THREADS_KEY, value);
   };
 
+  const countEligible = useCallback(
+    (uids) => Object.values(knownAccounts).filter((a) => uids.has(a.uid) && isEligible(a)).length,
+    [knownAccounts]
+  );
+  const selectedCount = useMemo(() => countEligible(selected), [countEligible, selected]);
+  // Số luồng không vượt quá số nick đã chọn (chưa chọn nick nào thì theo trần chung)
+  const maxThreads = selectedCount ? Math.min(HARD_MAX_THREADS, selectedCount) : HARD_MAX_THREADS;
+
+  const changeSelected = (next) => {
+    setSelected(next);
+    const limit = countEligible(next);
+    if (limit && (parseInt(threads, 10) || 1) > limit) updateThreads(String(Math.min(HARD_MAX_THREADS, limit)));
+  };
+
   const sessionAccounts = useMemo(() => {
-    if (!running) return [];
+    if (viewState !== "running") return [];
     return (status?.accounts || []).map((a) => knownAccounts[a.uid] || { uid: a.uid, profile_name: a.name });
-  }, [running, status, knownAccounts]);
+  }, [viewState, status, knownAccounts]);
 
   const validate = () => {
     const uids = Object.values(knownAccounts).filter((a) => selected.has(a.uid) && isEligible(a)).map((a) => a.uid);
     if (!uids.length) return "Vui lòng chọn ít nhất 1 tài khoản Live + Đã đăng nhập.";
     const enabled = ["enabled_newsfeed", "enabled_watch", "enabled_story", "enabled_add_friends", "enabled_join_groups", "enabled_leave_groups", "enabled_check_notif"];
     if (!enabled.some((k) => config[k])) return "Kịch bản tương tác đang trống. Vui lòng chọn ít nhất 1 hành động.";
+    const zeroRange = rangeError(config);
+    if (zeroRange) return zeroRange;
     const groupList = config.group_source === "list";
     if (config.enabled_join_groups && !groupList && config.group_keyword.trim().length > GROUP_KEYWORD_MAX_LEN) {
       return `Từ khóa tham gia nhóm không được quá ${GROUP_KEYWORD_MAX_LEN} ký tự.`;
@@ -142,7 +185,7 @@ export default function FarmEngage() {
       return;
     }
     const payload = toPayload(config);
-    const threadCount = Math.min(HARD_MAX_THREADS, Math.max(1, parseInt(threads, 10) || 1));
+    const threadCount = Math.min(HARD_MAX_THREADS, check.uids.length, Math.max(1, parseInt(threads, 10) || 1));
     setBusy("start");
     try {
       // Giới hạn mỗi ngày là cấu hình theo máy: lưu lại để lần sau / máy khác mở ra thấy đúng
@@ -158,6 +201,7 @@ export default function FarmEngage() {
         "ĐÃ KÍCH HOẠT"
       );
       await loadStatus();
+      setViewState("running");
     } catch (err) {
       toast.error(err.message, "KÍCH HOẠT THẤT BẠI");
     } finally {
@@ -192,6 +236,12 @@ export default function FarmEngage() {
     }
   };
 
+  const handleBackToConfig = () => {
+    setSelected(new Set());
+    setViewState("config");
+    applyLeftover(status);
+  };
+
   return (
     <div className="mx-auto max-w-[1400px] space-y-6">
       <PageTitle
@@ -200,7 +250,7 @@ export default function FarmEngage() {
       />
 
       <AccountPicker
-        accounts={running ? sessionAccounts : accountPages.accounts}
+        accounts={viewState === "running" ? sessionAccounts : accountPages.accounts}
         knownAccounts={knownAccounts}
         total={accountPages.total}
         search={accountPages.search}
@@ -214,25 +264,37 @@ export default function FarmEngage() {
         hasMore={accountPages.hasMore}
         onLoadMore={accountPages.loadMore}
         selected={selected}
-        onSelectedChange={setSelected}
+        onSelectedChange={changeSelected}
         onRefresh={loadAccounts}
-        readOnly={running}
+        readOnly={viewState === "running"}
       />
 
-      <ScenarioConfig config={config} onChange={updateConfig} disabled={running} />
+      <ScenarioConfig config={config} onChange={updateConfig} disabled={viewState === "running"} />
 
       <div className="flex items-center gap-4">
         <span className="text-sm font-bold uppercase tracking-wide text-slate-700">Nhập số luồng chạy</span>
         <div className="flex items-center gap-2 rounded-lg border border-border bg-white px-3 py-1.5 shadow-subtle">
-          <NumberInput value={threads} onChange={updateThreads} min={1} max={HARD_MAX_THREADS} disabled={running} className="w-16 border-0 shadow-none" />
+          <NumberInput value={threads} onChange={updateThreads} min={1} max={maxThreads} disabled={viewState === "running"} className="w-16 border-0 shadow-none" />
           <span className="text-sm text-slate-400">Luồng</span>
         </div>
-        <span className="text-[11px] text-slate-400">Tối đa {HARD_MAX_THREADS} luồng; không vượt quá số nick đã chọn</span>
+        <span className="text-[11px] text-slate-400">
+          {selectedCount
+            ? `Tối đa ${maxThreads} luồng (đã chọn ${selectedCount} nick)`
+            : `Tối đa ${HARD_MAX_THREADS} luồng; không vượt quá số nick đã chọn`}
+        </span>
       </div>
 
-      {status?.accounts?.length > 0 && <ProgressMonitor status={status} />}
-
-      {running ? (
+      {viewState === "config" ? (
+        <button
+          type="button"
+          onClick={handleStart}
+          disabled={busy === "start"}
+          className="flex h-12 w-full items-center justify-center gap-3 rounded-xl bg-primary text-sm font-bold uppercase tracking-wide text-white shadow-sm transition hover:bg-primary-hover disabled:opacity-60"
+        >
+          <Play className="h-5 w-5" />
+          {busy === "start" ? "Đang kích hoạt..." : "Kích hoạt"}
+        </button>
+      ) : running ? (
         <div className="flex flex-col gap-3 sm:flex-row">
           <button
             type="button"
@@ -256,16 +318,20 @@ export default function FarmEngage() {
       ) : (
         <button
           type="button"
-          onClick={handleStart}
-          disabled={busy === "start"}
-          className="flex h-12 w-full items-center justify-center gap-3 rounded-xl bg-primary text-sm font-bold uppercase tracking-wide text-white shadow-sm transition hover:bg-primary-hover disabled:opacity-60"
+          onClick={handleBackToConfig}
+          className="flex h-12 w-full items-center justify-center gap-3 rounded-xl bg-primary text-sm font-bold uppercase tracking-wide text-white shadow-sm transition hover:bg-primary-hover"
         >
-          <Play className="h-5 w-5" />
-          {busy === "start" ? "Đang kích hoạt..." : "Kích hoạt"}
+          <RotateCcw className="h-5 w-5" />
+          Quay về cấu hình ban đầu
         </button>
       )}
 
-      <LogConsole running={running} />
+      {viewState === "running" && status?.accounts?.length > 0 && <ProgressMonitor status={status} />}
+
+      {/* Chỉ ẩn, không gỡ: hook log kết nối WebSocket khi có người nghe, gỡ ra sẽ mất log đầu lượt */}
+      <div className={viewState === "running" ? undefined : "hidden"}>
+        <LogConsole running={running} />
+      </div>
 
       <ConfirmDialog
         isOpen={confirmStop}

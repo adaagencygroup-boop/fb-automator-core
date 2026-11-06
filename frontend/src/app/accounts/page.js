@@ -7,3 +7,4 @@ export const metadata = pageMetadata("accounts");
 export default function Page() {
   return <AccountManagerModule subPage="accounts" />;
 }
+

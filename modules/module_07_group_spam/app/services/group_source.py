@@ -8,7 +8,7 @@ Kế thừa & chuẩn hóa nghiệp vụ từ FaceBook_Post_Group.py:
    - Lọc bỏ link hỏng/rác
    - Kiểm tra nhóm đã đăng trong lịch sử cloud (cloud_group_logs)
 2. Tìm kiếm nhóm theo từ khóa (Keyword Group Search)
-   - Tương thích cơ chế quét URL: https://www.facebook.com/groups/search/groups/?q={search_term}
+   - Tương thích cơ chế quét URL: https://www.facebook.com/search/groups/?q={search_term}
 3. Cung cấp file mẫu link nhóm (Template)
 =============================================================================
 """
@@ -646,7 +646,7 @@ def search_facebook_via_browser(
     Quét trực tiếp nhóm Facebook bằng tài khoản thật qua Chrome.
     - Tìm tài khoản chỉ định hoặc tài khoản đầu tiên trong CSDL.
     - Tận dụng Chrome đang mở nếu có; nếu chưa mở thì tự khởi động Chrome với cookie & profile của nick.
-    - Điều hướng tới https://www.facebook.com/groups/search/groups/?q=...
+    - Điều hướng tới https://www.facebook.com/search/groups/?q=...
     - Tự động cuộn trang và bóc tách thông tin nhóm thật: Tên, Link, UID, Quyền riêng tư, Số thành viên, Tần suất bài viết.
     """
     clean_keyword = keyword.strip()
@@ -702,7 +702,7 @@ def search_facebook_via_browser(
 
         # Điều hướng tìm kiếm nhóm trên Facebook
         search_term = urllib.parse.quote(clean_keyword)
-        search_url = f"https://www.facebook.com/groups/search/groups/?q={search_term}"
+        search_url = f"https://www.facebook.com/search/groups/?q={search_term}"
         logger.info(f"[{target_uid}] Truy cập: {search_url}")
         driver.get(search_url)
         time.sleep(4)

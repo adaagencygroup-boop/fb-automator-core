@@ -35,6 +35,8 @@ event_queue = asyncio.Queue()
 
 async def process_webhook_event(event: Dict[str, Any]):
     """Processes a single queued webhook payload from Facebook."""
+    if not isinstance(event, dict):
+        return
     db = SessionLocal()
     try:
         obj_type = event.get("object")
@@ -42,7 +44,11 @@ async def process_webhook_event(event: Dict[str, Any]):
             return
 
         entries = event.get("entry", [])
+        if not isinstance(entries, list):
+            return
         for entry in entries:
+            if not isinstance(entry, dict):
+                continue
             page_id = entry.get("id")
 
             # 1. Parse real-time messages

@@ -10,11 +10,13 @@ export default function GroupSettingsSection({
   apiSource,
   threads,
   setThreads,
+  selectedAccountCount = 0,
   settingsLoading,
   settingsFeedback,
   stepNumber = "3",
 }) {
   const busy = settingsLoading;
+  const maxThreads = Math.max(1, selectedAccountCount);
 
   return (
     <SectionCard
@@ -53,15 +55,23 @@ export default function GroupSettingsSection({
             </div>
 
             <div className="space-y-3">
-              <Field label="Số luồng (1 - 10)">
+              <Field label={`Số luồng (1 - ${maxThreads})`}>
                 <Input
                   type="number"
                   min="1"
-                  max="10"
+                  max={maxThreads}
                   value={threads}
-                  onChange={(event) => setThreads(event.target.value)}
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    if (nextValue === "") {
+                      setThreads("");
+                      return;
+                    }
+                    const nextThreads = Number(nextValue);
+                    setThreads(String(Math.min(Math.max(1, nextThreads), maxThreads)));
+                  }}
                   disabled={busy}
-                  placeholder="1 - 10"
+                  placeholder={`1 - ${maxThreads}`}
                   className="h-9 bg-white text-xs font-medium"
                 />
               </Field>

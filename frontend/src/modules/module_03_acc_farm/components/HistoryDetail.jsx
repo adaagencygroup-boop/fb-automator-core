@@ -90,7 +90,7 @@ function scenarioValue(action, h) {
     case "WATCH":
       return [`${h.watch_videos} video`, `${formatDuration(h.watch_seconds)}${reactionNote(h.watch_reactions)}`];
     case "STORY":
-      return [`${h.story_frames || 0} khung`, `${formatDuration(h.story_seconds)}${reactionNote(h.story_reactions)}`];
+      return [`${h.story_frames || 0} story`, `${formatDuration(h.story_seconds)}${reactionNote(h.story_reactions)}`];
     case "ADD_FRIEND":
       return [`${h.friends_sent} lời mời`, h.friends_source ? `nguồn: ${FRIEND_SOURCE_LABELS[h.friends_source] || h.friends_source}` : ""];
     case "JOIN_GROUP":
@@ -110,7 +110,7 @@ function configChips(c) {
   const chips = [];
   if (c.enabled_newsfeed) chips.push(["NEWSFEED", `Newsfeed ${c.newsfeed_time_min}-${c.newsfeed_time_max} phút · delay ${c.newsfeed_delay_min}-${c.newsfeed_delay_max}s${reactionChip(c.newsfeed_react_enabled, c.newsfeed_react_types)}`]);
   if (c.enabled_watch) chips.push(["WATCH", `Watch ${c.watch_time_min}-${c.watch_time_max} phút · ${c.watch_delay_min}-${c.watch_delay_max}s/video${reactionChip(c.watch_react_enabled, c.watch_react_types)}`]);
-  if (c.enabled_story) chips.push(["STORY", `Story ${c.story_min}-${c.story_max} khung · ${c.story_delay_min}-${c.story_delay_max}s/khung${reactionChip(c.story_react_enabled, c.story_react_types)}`]);
+  if (c.enabled_story) chips.push(["STORY", `Story ${c.story_min}-${c.story_max} · ${c.story_delay_min}-${c.story_delay_max}s/story${reactionChip(c.story_react_enabled, c.story_react_types)}`]);
   if (c.enabled_add_friends && c.friend_source === "list") {
     chips.push(["ADD_FRIEND", `Kết bạn theo danh sách ${parseLinkList(c.friend_links, "friend").count} link · tối đa ${c.friend_list_limit} lời mời/nick · nghỉ ${c.friends_delay_min}-${c.friends_delay_max}s`]);
   } else if (c.enabled_add_friends) {
@@ -155,7 +155,7 @@ function facebookUrl(url) {
   }
 }
 
-function TargetList({ action, targets }) {
+export function TargetList({ action, targets }) {
   const [expanded, setExpanded] = useState(false);
   const Icon = action === "JOIN_GROUP" || action === "LEAVE_GROUP" ? Users : User;
   const shown = expanded ? targets : targets.slice(0, TARGET_PREVIEW);

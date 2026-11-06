@@ -147,17 +147,20 @@ def close_all_active_bridges():
 
 # ── Đóng Chrome ──
 
+def _windows_no_window_flags() -> int:
+    """Ẩn cửa sổ CMD khi spawn taskkill — tránh nháy terminal đen trên Windows."""
+    if os.name != "nt":
+        return 0
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))
+
+
 def force_kill_driver(driver):
     """Cưỡng chế kill tiến trình ChromeDriver và toàn bộ tiến trình con Chrome."""
     killed = False
     try:
         pid = driver.service.process.pid
         if pid:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=5)
-            else:
-                import signal
-                os.killpg(os.getpgid(pid), signal.SIGKILL)
+            _kill_pids([pid])
             killed = True
             logger.info(f"Force killed ChromeDriver process tree PID={pid}")
     except Exception as e:
@@ -189,12 +192,37 @@ def _driver_pids(driver):
 
 
 def _kill_pids(pids):
+    """Kill PID im lặng: ưu tiên psutil (không conhost); fallback taskkill + CREATE_NO_WINDOW."""
+    try:
+        import psutil
+    except ImportError:
+        psutil = None
+    flags = _windows_no_window_flags()
     for pid in pids:
         if not isinstance(pid, int) or pid <= 0:
             continue
+        if psutil is not None:
+            try:
+                proc = psutil.Process(pid)
+                # Kill cả cây con trước rồi process gốc — không spawn CMD
+                children = proc.children(recursive=True)
+                for child in children:
+                    try:
+                        child.kill()
+                    except Exception:
+                        pass
+                proc.kill()
+                continue
+            except Exception:
+                pass
         try:
             if os.name == "nt":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, timeout=5)
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True,
+                    timeout=5,
+                    creationflags=flags,
+                )
             else:
                 os.kill(pid, 9)
         except Exception:
@@ -668,3 +696,4 @@ def wait_and_find(driver, locators: list, timeout: int = 15):
                 pass
         time.sleep(0.4)
     raise TimeoutException(f"None of {len(locators)} locators matched after {timeout}s")
+

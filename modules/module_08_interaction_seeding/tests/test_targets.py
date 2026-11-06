@@ -62,3 +62,11 @@ class TargetListTests(SeedingTestCase):
         self.assertEqual([t.url for t in self.db.query(SeedingTarget).all()], [POST_A])
         self.assertEqual(len(self.campaign(cid).tasks), 1)
         self.assertEqual(self.db.query(SeedingCampaign).count(), 1)
+
+    def test_new_link_remains_visible_when_completed_campaign_has_null_target_id(self):
+        self.validate("POST", [POST_A])
+        self._run_post(POST_A, "COMPLETED")
+        self.api("DELETE", "/targets/by-url", params={"url": POST_A, "target_type": "POST"})
+        res = self.validate("POST", [POST_B])
+        self.assertEqual([t["url"] for t in res["targets"]], [POST_B])
+        self.assertEqual([t["url"] for t in self.list_targets("POST")], [POST_B])

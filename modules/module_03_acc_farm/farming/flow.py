@@ -1121,7 +1121,7 @@ def run_story(driver, ctl: FarmControl, target: int, delay_min: float, delay_max
     react: mỗi khung mới có REACT_RATE khả năng được thả 1 cảm xúc.
     """
     if target <= 0:
-        return _result("SKIPPED", "Số khung story = 0")
+        return _result("SKIPPED", "Số lượng story = 0")
     # Đang ở Trang chủ nhưng đã lướt xa (vd vừa chạy Newsfeed): Facebook gỡ khay story ở đầu trang khỏi DOM, tìm
     # không thấy thẻ nào (đã gặp 2026-10-23, báo nhầm "không có story"). Mở lại Trang chủ như bấm logo về đầu trang.
     scrolled = _same_page(driver.current_url, FB_HOME) and (_script(driver, "return window.scrollY") or 0) > \
@@ -1163,7 +1163,7 @@ def run_story(driver, ctl: FarmControl, target: int, delay_min: float, delay_max
                 frames += 1
                 stuck = 0
                 last_sig = sig
-                report(f"Xem Story: {frames}/{target} khung" + (f", {sum(reactions.values())} cảm xúc" if reactions else ""))
+                report(f"Xem Story: {frames}/{target} story" + (f", {sum(reactions.values())} cảm xúc" if reactions else ""))
             else:
                 stuck += 1
                 if stuck >= STORY_MAX_STUCK:
@@ -1179,10 +1179,10 @@ def run_story(driver, ctl: FarmControl, target: int, delay_min: float, delay_max
 
     extra = {"seconds": int(timer.elapsed()), **_reaction_result(reactions)}
     if frames == 0:
-        return {**_result("SKIPPED", "Không xem được khung story nào"), **extra}
+        return {**_result("SKIPPED", "Không xem được story nào"), **extra}
     react_note = f", thả {sum(reactions.values())} cảm xúc ({_reaction_text(reactions)})" if reactions else ""
     tail = "" if frames >= target else " (hết story)"
-    return {**_result("SUCCESS", f"Đã xem {frames}/{target} khung story trong {timer.elapsed() / 60:.1f} phút"
+    return {**_result("SUCCESS", f"Đã xem {frames}/{target} story trong {timer.elapsed() / 60:.1f} phút"
                                  f"{react_note}{tail}", frames), **extra}
 
 
@@ -1784,6 +1784,35 @@ _PROFILE_SKIP_REASONS = {
 }
 
 
+# Câu "không xem được" (FARM_COMMON["unavailable_page"]) chỉ tính khi nằm ngoài bài đăng / bình luận: bài chia sẻ có
+# bài gốc đã bị xóa cũng hiện đúng câu này ngay trên tường của trang vẫn xem bình thường (tester gặp 2026-11-06).
+_OUTSIDE_POSTS_JS = r"""
+return (arguments[0] || []).filter((el) => !el.closest('[role="article"], [aria-posinset], [role="feed"]'));
+"""
+
+
+def _unavailable_text(driver, page_ok: bool) -> Optional[str]:
+    """
+    Câu báo trang không tồn tại / không xem được đang hiện ngoài bài đăng; None = trang xem được.
+    page_ok: đã thấy nút của chủ trang / nhóm (Thêm bạn bè, Đã gửi, Tham gia nhóm...) thì trang chắc chắn mở được.
+    """
+    if page_ok:
+        return None
+    hits = _find_visible(driver, FARM_COMMON["unavailable_page"])
+    if not hits:
+        return None
+    outside = _script(driver, _OUTSIDE_POSTS_JS, hits)
+    if outside is None:  # Không chạy được script: giữ cách cũ, coi như không xem được
+        outside = hits
+    if not outside:
+        logger.info("Câu báo không xem được chỉ nằm trong bài đăng / bình luận, coi như trang mở được")
+        return None
+    try:
+        return (outside[0].text or "").strip()[:120] or "?"
+    except Exception:
+        return "?"
+
+
 def _clean_page_url(current: str, fallback: str) -> str:
     """Link trang đang mở (sau khi Facebook chuyển hướng link chia sẻ), bỏ query trừ id của profile.php."""
     parsed = urlparse(current or "")
@@ -1862,16 +1891,19 @@ def run_join_groups_from_links(driver, ctl: FarmControl, links: list, target: in
                 continue
             _wait_for_any(driver, ctl, FARM_GROUP["page_loaded"] + FARM_COMMON["unavailable_page"])
             page_url = _clean_page_url(driver.current_url, link["url"])
-            if _find_visible(driver, FARM_COMMON["unavailable_page"]) or "/groups/" not in page_url:
+            # Xét trạng thái trước: trang nhóm đã vào đôi khi vẫn có 1 nút "Join group" lạc (đã gặp 2026-10-22 ở
+            # nhóm govap.phongtro.club, có thể là thẻ nhóm trong bài viết), không được bấm
+            state = _script(driver, _GROUP_PAGE_STATE_JS)
+            buttons = [] if state else _find_visible(driver, FARM_GROUP["page_join_button"])
+            unavailable = _unavailable_text(driver, bool(state or buttons))
+            if unavailable or "/groups/" not in page_url:
+                if unavailable:
+                    logger.info("Tham gia nhóm theo link: bỏ qua %s, trang hiện '%s'", page_url, unavailable)
                 skip(link, SKIP_UNAVAILABLE, "nhóm không tồn tại hoặc không xem được", url=page_url)
                 ctl.sleep(random.uniform(*LINK_SKIP_PAUSE))
                 continue
             name = _script(driver, _PAGE_NAME_JS)
             name = str(name).strip()[:150] if name else None
-            # Xét trạng thái trước: trang nhóm đã vào đôi khi vẫn có 1 nút "Join group" lạc (đã gặp 2026-10-22 ở
-            # nhóm govap.phongtro.club, có thể là thẻ nhóm trong bài viết), không được bấm
-            state = _script(driver, _GROUP_PAGE_STATE_JS)
-            buttons = [] if state else _find_visible(driver, FARM_GROUP["page_join_button"])
             keys = owners.keys(link["source"], page_url, *_group_alias_urls(driver, page_url)) if owners else []
             if not buttons:
                 reason = {"joined": "nick đã là thành viên nhóm", "pending": "đã gửi yêu cầu tham gia, đang chờ duyệt"}
@@ -1963,7 +1995,10 @@ def run_add_friends_from_links(driver, ctl: FarmControl, links: list, target: in
                 continue
             _wait_for_any(driver, ctl, FARM_FRIEND["profile_loaded"] + FARM_COMMON["unavailable_page"])
             page_url = _clean_page_url(driver.current_url, link["url"])
-            if _find_visible(driver, FARM_COMMON["unavailable_page"]):
+            info = _script(driver, _PROFILE_STATE_JS) or {}
+            unavailable = _unavailable_text(driver, info.get("state") in ("add", "pending", "friends"))
+            if unavailable:
+                logger.info("Kết bạn theo link: bỏ qua %s, trang hiện '%s'", page_url, unavailable)
                 skip(link, SKIP_UNAVAILABLE, "trang cá nhân không tồn tại hoặc không xem được", url=page_url)
                 ctl.sleep(random.uniform(*LINK_SKIP_PAUSE))
                 continue
@@ -1971,7 +2006,6 @@ def run_add_friends_from_links(driver, ctl: FarmControl, links: list, target: in
                 skip(link, SKIP_OWN_NICK, "là nick trong dàn, không tự kết bạn với nhau", url=page_url)
                 ctl.sleep(random.uniform(*LINK_SKIP_PAUSE))
                 continue
-            info = _script(driver, _PROFILE_STATE_JS) or {}
             if info.get("state") in (None, "none", "unknown"):
                 # Nút "Search <Tên>'s profile" có thể hiện trước các nút kết bạn: chờ thêm rồi đọc lại 1 lần
                 ctl.sleep(random.uniform(2.0, 3.0))

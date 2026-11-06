@@ -6,3 +6,4 @@ export const metadata = pageMetadata("creator.history");
 export default function Page() {
   return <PageCreatorModule subPage="creator.history" />;
 }
+

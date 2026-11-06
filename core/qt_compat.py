@@ -47,3 +47,4 @@ except ImportError:
 
         def wait(self, *_args, **_kwargs):
             return True
+

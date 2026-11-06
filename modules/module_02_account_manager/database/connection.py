@@ -22,9 +22,14 @@ def initialize(database_url=None):
     if url.startswith("sqlite"):
         kwargs = {"pool_pre_ping": True, "connect_args": {"check_same_thread": False, "timeout": 30}}
     else:
-        # Core/auth has a separate pool. SQLAlchemy's default 5 + 10 overflow
-        # can consume all 15 Supabase session-pool connections by itself.
-        kwargs = {"pool_pre_ping": True, "pool_size": 3, "max_overflow": 2, "pool_timeout": 10}
+        # Tăng pool_size và timeout để tránh TimeoutError khi chạy đồng thời nhiều module và tác vụ nền
+        kwargs = {
+            "pool_pre_ping": True,
+            "pool_size": 10,
+            "max_overflow": 10,
+            "pool_timeout": 30,
+            "pool_recycle": 1800,
+        }
 
     candidate = create_engine(url, **kwargs)
     try:

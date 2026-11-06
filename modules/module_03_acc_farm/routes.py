@@ -39,6 +39,7 @@ from modules.module_03_acc_farm import adapters, repository
 from modules.module_03_acc_farm.browser.errors import BROWSER_CLOSED, BROWSER_HUNG, friendly_error
 from modules.module_03_acc_farm.browser.login_flow import CHECKPOINT_HEAVY, HEAVY_CHECKPOINT_PREFIX
 from modules.module_03_acc_farm.farming.flow import (
+    SKIP_DONE,
     FarmAccountDead,
     FarmControl,
     FarmStopped,
@@ -636,6 +637,63 @@ def _assign_targets(cfg: "FarmScenarioConfig", uids: List[str], scope: str) -> t
     return assigned, notes
 
 
+# Kết quả 1 link coi như đã xong (xóa khỏi ô dán): đã vào / chờ duyệt / đã gửi lời mời / đã có sẵn từ trước
+LIST_DONE_RESULTS = {"joined", "pending", "sent", SKIP_DONE}
+# (hành động, ô link, ô từ khóa) để tính phần còn lại; kết bạn theo gợi ý không có ô nhập
+LEFTOVER_FIELDS = (("JOIN_GROUP", "group_links", "group_keyword"), ("ADD_FRIEND", "friend_links", None))
+
+
+def leftover_inputs(cfg: "FarmScenarioConfig", uids: List[str], assigned: Dict[str, Dict],
+                    actions: Dict[str, List[Dict]]) -> Dict[str, Optional[str]]:
+    """
+    Ô link / từ khóa còn lại sau 1 lượt để giao diện thay vào ô nhập; None = giữ nguyên ô đó.
+    Mọi nick chạy kịch bản thành công: xóa trống. Có nick không thành công: bật chia thì chỉ giữ link chưa xong
+    + từ khóa đã chia cho nick đó, tắt chia thì giữ nguyên. actions: uid -> kết quả từng hành động của nick.
+    """
+    out = {"group_links": None, "group_keyword": None, "friend_links": None}
+    for action, links_field, keyword_field in LEFTOVER_FIELDS:
+        enabled, split, source = {
+            "JOIN_GROUP": (cfg.enabled_join_groups, cfg.groups_split_enabled, cfg.group_source),
+            "ADD_FRIEND": (cfg.enabled_add_friends, cfg.friends_split_enabled, cfg.friend_source),
+        }[action]
+        listed = source == "list"
+        field = links_field if listed else keyword_field
+        raw = getattr(cfg, field) if enabled and field else ""
+        if not raw.strip():
+            continue
+        assigned_key = field if listed else "group_keywords"
+        results = {uid: next((r for r in reversed(actions.get(uid) or []) if r.get("action") == action), None)
+                   for uid in uids}
+
+        def ok(uid):
+            result = results[uid]
+            if result is None:
+                return False
+            # Bật chia mà nick không được chia link / từ khóa nào: không có gì để chạy, không tính là lỗi
+            return result.get("status") == "SUCCESS" or (
+                result.get("status") == "SKIPPED" and split and not (assigned.get(uid) or {}).get(assigned_key))
+
+        failed = [uid for uid in uids if not ok(uid)]
+        if not failed:
+            out[field] = ""
+        elif not split:
+            continue
+        elif listed:
+            done = set()
+            for result in results.values():
+                for target in (result or {}).get("targets") or []:
+                    link = parse_fb_link(target.get("source_url") or "") if isinstance(target, dict) \
+                        and target.get("result") in LIST_DONE_RESULTS else None
+                    if link:
+                        done.add(link["key"])
+            out[field] = "\n".join(line.strip() for line in raw.splitlines()
+                                   if line.strip() and (parse_fb_link(line.strip()) or {}).get("key") not in done)
+        else:
+            keep = {w for uid in failed for w in (assigned.get(uid) or {}).get("group_keywords") or []}
+            out[field] = ", ".join(w for w in split_group_keywords(raw) if w in keep)
+    return out
+
+
 def _owner_backfill_entries(rows: List[Dict]) -> List[Dict]:
     """Chủ suy ra từ log cũ (bảng farm_target_owners mới tạo), theo đúng quy tắc khi chạy."""
     entries = []
@@ -853,6 +911,102 @@ def _action_label(action: str, params: dict) -> str:
     if "links" in params:
         return {"ADD_FRIEND": "Kết bạn theo danh sách", "JOIN_GROUP": "Tham gia nhóm theo danh sách"}[action]
     return ACTION_LABELS[action]
+
+
+# Phần đã làm của hành động bị dừng / lỗi giữa chừng: (câu khi có, câu khi chưa làm được gì, đơn vị cho "và N ... khác")
+PARTIAL_DONE_TEXTS = {
+    "JOIN_GROUP": ("đã tham gia {n} nhóm", "chưa tham gia được nhóm nào", "nhóm"),
+    "ADD_FRIEND": ("đã gửi {n} lời mời", "chưa gửi được lời mời nào", "người"),
+    "LEAVE_GROUP": ("đã rời {n} nhóm", "chưa rời được nhóm nào", "nhóm"),
+    "WATCH": ("đã xem {n} video", "chưa xem xong video nào", None),
+    "STORY": ("đã xem {n} story", "chưa xem được story nào", None),
+}
+PARTIAL_NAMES_SHOWN = 5
+
+
+def _names_text(targets, unit: Optional[str]) -> str:
+    """ ": Nhóm A, Nhóm B và N nhóm khác" từ danh sách đối tượng đã tương tác (bỏ link bị bỏ qua); không có thì "". """
+    names = [t.get("name") or t.get("url") for t in targets or []
+             if isinstance(t, dict) and (t.get("name") or t.get("url"))
+             and not str(t.get("result") or "").startswith("skipped_")]
+    if not names:
+        return ""
+    text = ": " + ", ".join(names[:PARTIAL_NAMES_SHOWN])
+    if len(names) > PARTIAL_NAMES_SHOWN:
+        text += f" và {len(names) - PARTIAL_NAMES_SHOWN} {unit} khác"
+    return text
+
+
+def _partial_done(action: str, quantity: int, partial: dict) -> str:
+    """Câu "đã làm được gì" của hành động bị dừng / lỗi giữa chừng, cho log và lịch sử; "" = không có gì để nói."""
+    if action == "NEWSFEED":
+        seconds = partial.get("seconds") or 0
+        if not seconds:
+            return "chưa lướt được"
+        text = f"đã lướt {seconds / 60:.1f} phút, cuộn {partial.get('scrolls') or 0} lần"
+    elif action in PARTIAL_DONE_TEXTS:
+        done_text, none_text, unit = PARTIAL_DONE_TEXTS[action]
+        if not quantity:
+            return none_text
+        text = done_text.format(n=quantity) + _names_text(partial.get("targets"), unit)
+    else:
+        return ""
+    if partial.get("reactions"):
+        text += f", thả {partial['reactions']} cảm xúc"
+    return text
+
+
+# Dòng tóm tắt cuối lượt: (tên kịch bản, số lượng của 1 nick, phần trong dòng tổng của phiên)
+DONE_SUMMARY_TEXTS = {
+    "JOIN_GROUP": ("Tham gia nhóm", "{n} nhóm", "tham gia {n} nhóm"),
+    "ADD_FRIEND": ("Kết bạn", "{n} lời mời", "gửi {n} lời mời"),
+    "LEAVE_GROUP": ("Rời nhóm", "{n} nhóm", "rời {n} nhóm"),
+    "WATCH": ("Xem Watch", "{n} video", "xem {n} video"),
+    "STORY": ("Xem Story", "{n} story", "xem {n} story"),
+}
+DONE_MARKS = {"FAILED": " (lỗi giữa chừng)", "BLOCKED": " (bị chặn)"}
+
+
+def _done_amount(result: dict) -> float:
+    """Lượng việc đã làm của 1 hành động: phút với Newsfeed, số lượng với các kịch bản khác."""
+    if result.get("action") == "NEWSFEED":
+        return (result.get("seconds") or 0) / 60
+    if result.get("action") == "CHECK_NOTIF":
+        return 1 if result.get("status") == "SUCCESS" else 0
+    return result.get("quantity") or 0
+
+
+def _done_summary(results: List[Dict]) -> str:
+    """ "Tham gia nhóm 3 nhóm, Xem Watch 4 video (dừng giữa chừng)" từ các hành động đã ghi của 1 nick; "" = chưa làm được gì."""
+    parts = []
+    for result in results:
+        action, amount = result.get("action"), _done_amount(result)
+        if not amount:
+            continue
+        if action == "NEWSFEED":
+            text = f"Lướt Newsfeed {amount:.1f} phút"
+        elif action == "CHECK_NOTIF":
+            text = "Check thông báo"
+        elif action in DONE_SUMMARY_TEXTS:
+            label, unit, _ = DONE_SUMMARY_TEXTS[action]
+            text = f"{label} {unit.format(n=amount)}"
+        else:
+            continue
+        stopped = result.get("status") == "SKIPPED" and str(result.get("details") or "").startswith("Dừng giữa chừng")
+        parts.append(text + (" (dừng giữa chừng)" if stopped else DONE_MARKS.get(result.get("status"), "")))
+    return ", ".join(parts)
+
+
+def _done_totals(results_by_uid: Dict[str, List[Dict]]) -> str:
+    """Tổng việc đã làm của cả phiên (mọi nick): "tham gia 3 nhóm, gửi 5 lời mời, xem 4 video"; "" = không có."""
+    totals: Dict[str, float] = {}
+    for results in results_by_uid.values():
+        for result in results:
+            totals[result.get("action")] = totals.get(result.get("action"), 0) + _done_amount(result)
+    parts = [DONE_SUMMARY_TEXTS[a][2].format(n=int(totals[a])) for a in DONE_SUMMARY_TEXTS if totals.get(a)]
+    if totals.get("NEWSFEED"):
+        parts.append(f"lướt Newsfeed {totals['NEWSFEED']:.1f} phút")
+    return ", ".join(parts)
 
 
 def _action_source(action: str, params: dict) -> Optional[str]:
@@ -1198,36 +1352,45 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
                     result.setdefault("source", source)
             except FarmStopped as e:
                 quantity, partial = partial_of(e)
-                _record_action(uid, action, {
-                    "status": "SKIPPED", "quantity": quantity,
-                    "details": f"Dừng giữa chừng, đã làm {quantity}" if quantity else "Dừng giữa chừng",
-                    **partial,
-                }, owner)
+                done_note = _partial_done(action, quantity, partial)
+                details = f"Dừng giữa chừng, {done_note}" if done_note else "Dừng giữa chừng"
+                _record_action(uid, action, {"status": "SKIPPED", "quantity": quantity, "details": details, **partial},
+                               owner)
                 actions[action] = "SKIPPED"
                 _set_account(uid, actions=actions)
+                # Kịch bản chạy hết thì có dòng kết quả ở cuối vòng; dừng giữa chừng cũng phải báo phần đã làm được
+                _emit("warning", f"{label}: {details}", uid, slot)
                 raise
             except FarmAccountDead as e:
                 quantity, partial = partial_of(e)
                 browser_hung = not e.checkpoint and not _browser_responds(driver)
                 details = "Trình duyệt bị đóng hoặc không phản hồi giữa chừng" if browser_hung \
                     else f"Tài khoản chết giữa chừng: {e}"[:300]
+                done_note = _partial_done(action, quantity, partial)
+                if done_note:
+                    details = f"{details} (trước đó {done_note})"
                 _record_action(uid, action, {"status": "FAILED", "quantity": quantity, "details": details, **partial}, owner)
                 actions[action] = "FAILED"
                 _set_account(uid, actions=actions)
+                _emit("error", f"{label}: {details}", uid, slot)
                 raise
             except Exception as e:
                 # Lỗi 1 hoạt động: ghi nhận rồi chạy tiếp (BR-STS-02); trình duyệt chết thì để vòng ngoài xử lý
                 quantity, partial = partial_of(e)
+                done_note = _partial_done(action, quantity, partial) if quantity or partial.get("seconds") else ""
+                tail = f" (trước đó {done_note})" if done_note else ""
                 if not _browser_responds(driver):
                     browser_hung = True
-                    _record_action(uid, action, {"status": "FAILED", "quantity": quantity,
-                                                 "details": "Trình duyệt bị đóng hoặc không phản hồi giữa chừng",
-                                                 **partial}, owner)
+                    details = f"Trình duyệt bị đóng hoặc không phản hồi giữa chừng{tail}"
+                    _record_action(uid, action, {"status": "FAILED", "quantity": quantity, "details": details, **partial},
+                                   owner)
                     actions[action] = "FAILED"
                     _set_account(uid, actions=actions)
+                    _emit("error", f"{label}: {details}", uid, slot)
                     raise
                 logger.exception(f"[{uid}] Lỗi kịch bản {action}: {e}")
-                result = {"status": "FAILED", "quantity": quantity, "details": friendly_error(e, still_open=True), **partial}
+                result = {"status": "FAILED", "quantity": quantity, "details": friendly_error(e, still_open=True) + tail,
+                          **partial}
 
             _record_action(uid, action, result, owner)
 
@@ -1238,7 +1401,11 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
             for notice in pop_notices():
                 _emit("warning", notice, uid, slot)
             level = {"SUCCESS": "success", "BLOCKED": "warning", "SKIPPED": "warning"}.get(result["status"], "error")
-            _emit(level, f"{label}: {result.get('details', '')}", uid, slot)
+            line = result.get("details", "")
+            # Chế độ danh sách link / Rời nhóm đã có 1 dòng log cho mỗi đích; từ khóa / gợi ý thì kèm tên ở dòng kết quả
+            if action in ("JOIN_GROUP", "ADD_FRIEND") and "links" not in params:
+                line += _names_text(result.get("targets"), PARTIAL_DONE_TEXTS[action][2])
+            _emit(level, f"{label}: {line}", uid, slot)
             if result["status"] == "BLOCKED":
                 blocked_labels.append(label)
 
@@ -1302,8 +1469,15 @@ def _run_farm_worker(uid: str, slot: int, cfg: FarmScenarioConfig, owner: Option
         "DIE": ("error", f"Tài khoản cần xác minh / mất phiên: {error_msg}"),
         "FAILED": ("error", error_msg),
     }[final_status]
-    _emit(summary[0], summary[1], uid, slot)
-    _set_account(uid, status=final_status, activity=summary[1], error=error_msg, finished_at=time.time())
+    # Tóm tắt mọi việc nick đã làm trong lượt (kể cả kịch bản đang chạy dở khi dừng / lỗi)
+    with _state_lock:
+        results = list((_history_data.get(uid) or {}).get("actions") or [])
+    done = _done_summary(results)
+    line = f"{summary[1]}. Đã làm: {done}" if done else (
+        f"{summary[1]}. Chưa làm xong việc nào" if final_status == "STOPPED" else summary[1])
+    _emit(summary[0], line, uid, slot)
+    _set_account(uid, status=final_status, activity=line if final_status == "STOPPED" else summary[1], error=error_msg,
+                 finished_at=time.time())
 
 
 # ─────────────────────── VÒNG ĐỜI ENGINE ────────────────────────────
@@ -1421,6 +1595,7 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
             "threads": threads,
             "started_at": time.time(),
             "finished_at": 0,
+            "leftover": None,
             "accounts": {
                 acc["uid"]: {
                     "uid": acc["uid"],
@@ -1478,13 +1653,24 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
             await asyncio.gather(*(run_one(acc["uid"]) for acc in eligible))
         finally:
             with _state_lock:
+                actions = {uid: list((_history_data.get(uid) or {}).get("actions") or []) for uid in _state["accounts"]}
+                assigned = dict(_assignments)
+            # Dừng khẩn cấp thì giữ nguyên ô nhập; lỗi khi tính cũng giữ nguyên (không được xóa nhầm link của người dùng)
+            try:
+                leftover = None if _control.stopped else leftover_inputs(cfg, list(actions), assigned, actions)
+            except Exception as e:
+                logger.exception(f"Không tính được link / từ khóa còn lại: {e}")
+                leftover = None
+            with _state_lock:
+                _state["leftover"] = leftover
                 _state["running"] = False
                 _state["finished_at"] = time.time()
                 counts = {}
                 for acc in _state["accounts"].values():
                     counts[acc["status"]] = counts.get(acc["status"], 0) + 1
             summary = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
-            _emit("success", f"Kết thúc phiên Tương tác tài khoản ({summary})")
+            totals = _done_totals(actions)
+            _emit("success", f"Kết thúc phiên Tương tác tài khoản ({summary})" + (f". Tổng đã làm: {totals}" if totals else ""))
 
     _active_task = asyncio.create_task(run_all())
     return {"started": True, "accepted": [a["uid"] for a in eligible], "rejected": rejected, "threads": threads}
@@ -1610,7 +1796,8 @@ async def save_farm_setting(item: SettingItem):
 # ─────────────────────── ENDPOINTS: LỊCH SỬ ────────────────────────────
 
 def _history_filters(search: Optional[str], action: Optional[str], status: Optional[str],
-                     proxy: Optional[str], date_from: Optional[str], date_to: Optional[str]) -> Dict:
+                     proxy: Optional[str], date_from: Optional[str], date_to: Optional[str],
+                     fb_uid: Optional[str] = None) -> Dict:
     if action and action not in ACTION_LABELS:
         raise HTTPException(status_code=400, detail="Kịch bản không hợp lệ.")
     if status and status not in FINAL_STATUSES:
@@ -1625,8 +1812,15 @@ def _history_filters(search: Optional[str], action: Optional[str], status: Optio
                 datetime.strptime(value, "%Y-%m-%d")
             except ValueError:
                 raise HTTPException(status_code=400, detail="Ngày không hợp lệ.")
-    return {"search": (search or "").strip()[:100], "action": action, "status": status,
-            "proxy": proxy, "date_from": date_from, "date_to": date_to}
+    return {
+        "search": (search or "").strip()[:100],
+        "action": action,
+        "status": status,
+        "proxy": proxy,
+        "date_from": date_from,
+        "date_to": date_to,
+        "fb_uid": (fb_uid or "").strip()[:64],
+    }
 
 
 def _iso(value) -> Optional[str]:
@@ -1657,10 +1851,11 @@ async def farm_history(
     proxy: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    fb_uid: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=HISTORY_PAGE_SIZE_MAX),
 ):
-    filters = _history_filters(search, action, status, proxy, date_from, date_to)
+    filters = _history_filters(search, action, status, proxy, date_from, date_to, fb_uid)
     try:
         data = await asyncio.to_thread(repository.list_history, adapters.get_machine_id(), filters, page, page_size)
     except Exception as e:
@@ -1711,8 +1906,9 @@ async def export_farm_history(
     proxy: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    fb_uid: Optional[str] = None,
 ):
-    filters = _history_filters(search, action, status, proxy, date_from, date_to)
+    filters = _history_filters(search, action, status, proxy, date_from, date_to, fb_uid)
     try:
         rows = await asyncio.to_thread(repository.iter_history_for_export, adapters.get_machine_id(),
                                        filters, EXPORT_MAX_ROWS)
@@ -1749,6 +1945,25 @@ async def farm_history_detail(history_id: int):
         "logs": [{**log, "created_at": _iso(log.get("created_at")), "targets": _json_list(log.get("targets"))}
                  for log in data["logs"]],
     }
+
+
+RUN_TARGET_LISTS = {"JOIN_GROUP": "groups_joined", "LEAVE_GROUP": "groups_left", "ADD_FRIEND": "friends_sent"}
+
+
+@router.get("/runs/{run_id}/targets")
+async def farm_run_targets(run_id: int):
+    """Danh sách nhóm đã vào / đã rời + người đã gửi lời mời của 1 lượt (không gồm link bị bỏ qua)."""
+    try:
+        rows = await asyncio.to_thread(repository.get_run_targets, adapters.get_machine_id(), run_id)
+    except Exception as e:
+        logger.warning(f"Không đọc được danh sách của lượt {run_id}: {e}")
+        raise HTTPException(status_code=503, detail="Không đọc được danh sách từ CSDL.")
+    lists = {key: [] for key in RUN_TARGET_LISTS.values()}
+    for row in rows:
+        lists[RUN_TARGET_LISTS[row["action_type"]]].extend(
+            t for t in _json_list(row["targets"])
+            if isinstance(t, dict) and not str(t.get("result") or "").startswith("skipped_"))
+    return lists
 
 
 def _json_list(value) -> List:

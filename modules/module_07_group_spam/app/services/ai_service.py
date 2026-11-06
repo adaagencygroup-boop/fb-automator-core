@@ -206,9 +206,12 @@ def generate_posts(model: str, api_key: str, topic: str, count: int, *, comment:
     )
     if comment:
         prompt = (
-            f"Viết đúng {count} bình luận Facebook bằng tiếng Việt dựa trên nội dung bên dưới. "
+            f"Bạn hãy tạo đúng {count} bình luận Facebook mới bằng tiếng Việt dựa trên NỘI DUNG BÌNH LUẬN MẪU bên dưới. "
+            "Hãy giữ lại ý chính, thông điệp và giọng điệu của bình luận mẫu nhưng diễn đạt thành các biến thể tự nhiên, phù hợp để đăng độc lập. "
+            "Không trả lời bình luận mẫu, không đối thoại với người viết mẫu, không đặt câu hỏi phản hồi và không mô tả quá trình tạo. "
             "Mỗi bình luận ngắn gọn, tự nhiên, không bịa thông tin, không hashtag. "
-            f"Chỉ trả về các bình luận, phân cách bằng một dòng `{marker}`.\n\n{topic.strip()}"
+            f"Chỉ trả về các bình luận, phân cách bằng một dòng `{marker}`.\n\n"
+            f"NỘI DUNG BÌNH LUẬN MẪU:\n{topic.strip()}"
         )
     raw = call_model(model, api_key, prompt)
     cleaned = raw.strip()

@@ -7,3 +7,4 @@ export const metadata = pageMetadata("chat");
 export default function Page() {
   return <OmnichannelChatModule subPage="chat" />;
 }
+

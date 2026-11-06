@@ -19,6 +19,7 @@ export default function SeedingProfilePage() {
   const [delayMin, setDelayMin] = useState(30);
   const [delayMax, setDelayMax] = useState(60);
   const [isRunning, setIsRunning] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [currentCampaignId, setCurrentCampaignId] = useState(null);
 
   // Real accounts count from backend database
@@ -101,7 +102,7 @@ export default function SeedingProfilePage() {
         })
         .catch(() => {});
     checkActive();
-    const timer = setInterval(checkActive, 3000);
+    const timer = setInterval(checkActive, 5000);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -142,7 +143,7 @@ export default function SeedingProfilePage() {
       } catch (err) {
         // Ignore polling error
       }
-    }, 3000);
+    }, 4000);
 
     return () => clearInterval(interval);
   }, [isRunning, currentCampaignId]);
@@ -180,6 +181,10 @@ export default function SeedingProfilePage() {
   };
 
   const handleRemoveTarget = async (index) => {
+    if (isRunning) {
+      toast.warning("Không thể xóa Trang cá nhân khi đang chạy seeding!");
+      return;
+    }
     const targetToRemove = targets[index];
     if (targetToRemove) {
       try {
@@ -203,6 +208,10 @@ export default function SeedingProfilePage() {
   };
 
   const handleClearTargets = async () => {
+    if (isRunning) {
+      toast.warning("Không thể xóa danh sách Trang cá nhân khi đang chạy seeding!");
+      return;
+    }
     try {
       await seedingApi.clearSeedingTargets("PROFILE");
     } catch (err) {
@@ -296,6 +305,8 @@ export default function SeedingProfilePage() {
   };
 
   const handleStop = async () => {
+    if (isStopping) return;
+    setIsStopping(true);
     try {
       addLog(
         "Đang gửi yêu cầu dừng chiến dịch và đóng toàn bộ trình duyệt Chrome...",
@@ -313,6 +324,7 @@ export default function SeedingProfilePage() {
       addLog(`Lỗi khi dừng: ${e.message}`, "error");
       toast.error(e.message || "Lỗi khi gửi yêu cầu dừng chiến dịch!", "LỖI");
     } finally {
+      setIsStopping(false);
       setIsRunning(false);
     }
   };
@@ -343,6 +355,7 @@ export default function SeedingProfilePage() {
         onRemoveTarget={handleRemoveTarget}
         onClearTargets={handleClearTargets}
         successMessage={successMessage}
+        isRunning={isRunning}
       />
 
       {/* Steps 2 & 3: Account Config & Delay */}
@@ -372,6 +385,7 @@ export default function SeedingProfilePage() {
       {/* Bottom Action Bar */}
       <ProfileActionBar
         isRunning={isRunning}
+        isStopping={isStopping}
         onStart={handleStart}
         onStop={handleStop}
         disabled={targets.length === 0}

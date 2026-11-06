@@ -6,7 +6,7 @@ import asyncio
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -165,36 +165,48 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
         input_address = item.get("address", "")
         broadcast("info", f"📋 [{uid}] Dữ liệu bóc tách: Page='{page_name}' | SĐT='{input_phone}' | Mail='{input_email}' | Địa chỉ='{input_address}' | Mã QG='{country_code}'", uid=uid)
 
-        # ── Bước AI: Gọi Gemini ──
+        # ── Bước AI: Gọi Gemini (cứng timeout → fallback text, không treo job) ──
         gemini_key = SettingRepo.get(db, "gemini_api_key")
         gemini_model = SettingRepo.get(db, "gemini_model") or "gemini-3.8-flash"
         ai_data = {}
+        GEMINI_HARD_TIMEOUT_SECS = 50
         if gemini_key and not stop_task_requested:
             try:
                 broadcast("info", f"🧠 [{uid}] Đang gọi Gemini AI (Model: {gemini_model}) cho Page '{page_name}'...", uid=uid, extra={"action": "step", "page_name": page_name, "step": "Bước 2/5: Gemini AI đang sinh nội dung Bio & Prompt", "subStage": "Sinh nội dung AI", "percent": 35})
                 client = GeminiClient(gemini_key)
-                ai_data = client.generate_page_content(page_name, preferred_model=gemini_model)
-                used_model = ai_data.get("_used_model", gemini_model)
-                if ai_data.get("_fallback_from"):
-                    fb_from = ai_data.get("_fallback_from")
-                    fb_reason = str(ai_data.get("_fallback_reason", "Quá tải hoặc không phản hồi"))
-                    if "429" in fb_reason or "ResourceExhausted" in fb_reason:
-                        short_reason = "Đạt giới hạn Quota / Rate limit (429)"
-                    elif "404" in fb_reason or "NotFound" in fb_reason:
-                        short_reason = "Model không tồn tại hoặc đã ngừng phục vụ (404)"
-                    else:
-                        short_reason = fb_reason[:70]
-                    broadcast("warning", f"⚠️ [{uid}] Model '{fb_from}' gặp sự cố ({short_reason}). Đã tự động chuyển sang '{used_model}' thành công!", uid=uid)
-                broadcast("success", f"✨ [{uid}] Gemini AI ({used_model}) đã sinh thành công các trường:", uid=uid)
-                broadcast("info", f"   ├── 📌 Hạng mục (Category): {ai_data.get('category')}", uid=uid)
-                broadcast("info", f"   ├── 📝 Tiểu sử (Bio): {ai_data.get('bio')}", uid=uid)
-                broadcast("info", f"   ├── 📰 Nội dung bài viết: {ai_data.get('post_content')[:90]}...", uid=uid)
-                broadcast("info", f"   ├── 🖼️ Avatar Prompt: {ai_data.get('avatar_prompt')}", uid=uid)
-                broadcast("info", f"   ├── 🏙️ Cover Prompt: {ai_data.get('cover_prompt')}", uid=uid)
-                broadcast("info", f"   └── 🖼️ Post Image Prompt: {ai_data.get('post_image_prompt')}", uid=uid)
+                fut = executor.submit(client.generate_page_content, page_name, gemini_model)
+                try:
+                    ai_data = fut.result(timeout=GEMINI_HARD_TIMEOUT_SECS)
+                except FuturesTimeout:
+                    broadcast(
+                        "warning",
+                        f"⚠️ [{uid}] Gemini quá {GEMINI_HARD_TIMEOUT_SECS}s không trả lời — dùng nội dung mặc định tạm, tiếp tục tạo page.",
+                        uid=uid,
+                    )
+                    ai_data = {}
+                else:
+                    used_model = ai_data.get("_used_model", gemini_model)
+                    if ai_data.get("_fallback_from"):
+                        fb_from = ai_data.get("_fallback_from")
+                        fb_reason = str(ai_data.get("_fallback_reason", "Quá tải hoặc không phản hồi"))
+                        if "429" in fb_reason or "ResourceExhausted" in fb_reason:
+                            short_reason = "Đạt giới hạn Quota / Rate limit (429)"
+                        elif "404" in fb_reason or "NotFound" in fb_reason:
+                            short_reason = "Model không tồn tại hoặc đã ngừng phục vụ (404)"
+                        else:
+                            short_reason = fb_reason[:70]
+                        broadcast("warning", f"⚠️ [{uid}] Model '{fb_from}' gặp sự cố ({short_reason}). Đã tự động chuyển sang '{used_model}' thành công!", uid=uid)
+                    broadcast("success", f"✨ [{uid}] Gemini AI ({used_model}) đã sinh thành công các trường:", uid=uid)
+                    broadcast("info", f"   ├── 📌 Hạng mục (Category): {ai_data.get('category')}", uid=uid)
+                    broadcast("info", f"   ├── 📝 Tiểu sử (Bio): {ai_data.get('bio')}", uid=uid)
+                    broadcast("info", f"   ├── 📰 Nội dung bài viết: {ai_data.get('post_content')[:90]}...", uid=uid)
+                    broadcast("info", f"   ├── 🖼️ Avatar Prompt: {ai_data.get('avatar_prompt')}", uid=uid)
+                    broadcast("info", f"   ├── 🏙️ Cover Prompt: {ai_data.get('cover_prompt')}", uid=uid)
+                    broadcast("info", f"   └── 🖼️ Post Image Prompt: {ai_data.get('post_image_prompt')}", uid=uid)
             except Exception as e:
                 logger.warning(f"[{uid}] Gemini AI error: {e}")
                 broadcast("warning", f"⚠️ [{uid}] Gọi Gemini AI thất bại ({e}). Chuyển sang dữ liệu mặc định.", uid=uid)
+                ai_data = {}
         else:
             broadcast("info", f"ℹ️ [{uid}] Chưa cấu hình Gemini API Key. Sử dụng nội dung mặc định.", uid=uid)
 
@@ -202,10 +214,27 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
             broadcast("warning", f"⏹️ [{uid}] Đã nhận lệnh dừng khẩn cấp trước khi mở trình duyệt.", uid=uid)
             return
 
-        category = ai_data.get("category", "Dịch vụ kinh doanh")
-        bio = ai_data.get("bio", f"Chào mừng bạn đến với {page_name}!")
-        post_content = ai_data.get("post_content", f"Chào mừng đến với {page_name}! 🎉")
-        post_image_prompt = ai_data.get("post_image_prompt", f"High quality promotional poster illustration for {page_name} matching {category} concept")
+        category = ai_data.get("category") or "Dịch vụ kinh doanh"
+        bio = ai_data.get("bio") or (
+            f"{page_name} — sản phẩm chất lượng, phục vụ tận tâm. Liên hệ để được tư vấn nhanh chóng!"
+        )
+        post_content = ai_data.get("post_content") or (
+            f"Chào mừng bạn đến với {page_name}! 🎉\n\n"
+            f"Chúng tôi vừa ra mắt trang chính thức trên Facebook. "
+            f"Theo dõi page để nhận ưu đãi, cập nhật sản phẩm mới và hỗ trợ nhanh.\n\n"
+            f"#{page_name.replace(' ', '')} #FanpageMoi #ChaoMung"
+        )
+        post_image_prompt = ai_data.get("post_image_prompt") or (
+            f"High quality promotional poster illustration for {page_name} matching {category} concept"
+        )
+        if not ai_data.get("avatar_prompt"):
+            ai_data["avatar_prompt"] = (
+                f"Professional circular emblem logo for {page_name}, vibrant brand colors, clean badge style"
+            )
+        if not ai_data.get("cover_prompt"):
+            ai_data["cover_prompt"] = (
+                f"Facebook cover banner 16:9 for {page_name}, modern advertising graphic, bold title typography"
+            )
 
         # ── Sinh/Tải ảnh AI chuyên nghiệp chuẩn tỉ lệ FB (Avatar 800x800, Cover Banner 1640x624, Post Banner 1080x1080) ──
         broadcast("info", f"🎨 [{uid}] Đang khởi tạo bộ nhận diện thương hiệu AI (Avatar Emblem Logo 800x800, Cover Banner 1640x624 & Post Image 1080x1080)...", uid=uid, extra={"action": "step", "page_name": page_name, "step": "Bước 3/5: Tải & Tối ưu Avatar, Cover Banner Spintax AI", "subStage": "Media Branding AI", "percent": 55})

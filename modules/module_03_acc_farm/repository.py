@@ -540,6 +540,10 @@ def _history_where(machine_id: str, filters: Dict[str, Any]) -> Tuple[str, list]
         where.append("(LOWER(h.fb_uid) LIKE ? OR LOWER(COALESCE(h.fb_name, '')) LIKE ?)")
         pattern = f"%{search.lower()}%"
         params += [pattern, pattern]
+    fb_uid = (filters.get("fb_uid") or "").strip()
+    if fb_uid and fb_uid.lower() != "all":
+        where.append("h.fb_uid = ?")
+        params.append(fb_uid)
     if filters.get("action"):
         where.append("EXISTS (SELECT 1 FROM farm_interaction_logs l WHERE l.run_id = h.run_id AND l.action_type = ?)")
         params.append(filters["action"])
@@ -590,6 +594,15 @@ def get_history_detail(machine_id: str, history_id: int) -> Optional[Dict[str, A
             (row["run_id"],),
         )
     return {"history": row, "logs": logs}
+
+
+def get_run_targets(machine_id: str, run_id: int) -> List[Dict[str, Any]]:
+    """Nhóm / người đã tương tác của 1 lượt trên máy này, theo từng hành động."""
+    return db.fetch_all(
+        "SELECT action_type, targets FROM farm_interaction_logs "
+        "WHERE run_id = ? AND machine_id = ? AND action_type IN ('JOIN_GROUP', 'LEAVE_GROUP', 'ADD_FRIEND') ORDER BY id",
+        (run_id, machine_id),
+    )
 
 
 def cleanup_history(machine_id: str, keep_days: int) -> Dict[str, int]:

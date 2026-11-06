@@ -15,7 +15,7 @@ const ADMIN_URL = process.env.NEXT_PUBLIC_ADMIN_URL || "http://127.0.0.1:3010";
 /** Proactive refresh trước khi access hết hạn (12h) — desktop không có cookie. */
 const REFRESH_EVERY_MS = 30 * 60 * 1000;
 /** Timeout ngắn cho bước khôi phục phiên — tránh treo trắng 60s khi engine restart/chậm. */
-const AUTH_BOOT_TIMEOUT_MS = 12000;
+const AUTH_BOOT_TIMEOUT_MS = 30000;
 /** Chỉ đá phiên sau vài lần 401 liên tiếp — tránh dừng automation vì lỗi tạm. */
 const AUTH_KICK_AFTER_FAILURES = 3;
 
