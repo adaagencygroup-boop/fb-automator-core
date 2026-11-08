@@ -374,9 +374,12 @@ export default function SeedingPageMain() {
         maxDelay={delayMax}
         onMinDelayChange={setDelayMin}
         onMaxDelayChange={setDelayMax}
-        onOpenAccountModal={() => setIsAccountModalOpen(true)}
+        onOpenAccountModal={() => {
+          if (isRunning || isStopping) return;
+          setIsAccountModalOpen(true);
+        }}
         selectedUids={selectedUids}
-        isRunning={isRunning}
+        isRunning={isRunning || isStopping}
       />
 
       {/* Summary Cards */}
@@ -410,7 +413,7 @@ export default function SeedingPageMain() {
           setSelectedUids(uids);
           setAccountCount(uids.length);
         }}
-        isRunning={isRunning}
+        isRunning={isRunning || isStopping}
       />
     </div>
   );

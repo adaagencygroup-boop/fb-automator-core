@@ -142,6 +142,13 @@ export default function AccountSelectModal({
     }
   }, [isOpen, onClose]);
 
+  // Tự động đóng popup nếu chiến dịch bắt đầu chạy
+  useEffect(() => {
+    if (isOpen && isRunning && onClose) {
+      onClose();
+    }
+  }, [isOpen, isRunning, onClose]);
+
   const loadData = async () => {
     setLoading(true);
     try {
@@ -888,8 +895,13 @@ export default function AccountSelectModal({
             <button
               type="button"
               onClick={handleConfirm}
-              disabled={draftSelected.size === 0}
-              className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-md shadow-blue-500/20 active:scale-[0.98] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={draftSelected.size === 0 || isRunning}
+              title={isRunning ? "Đang chạy seeding, không thể xác nhận thay đổi" : undefined}
+              className={`px-5 py-2 rounded-xl text-xs font-bold transition-all shadow-md ${
+                draftSelected.size === 0 || isRunning
+                  ? "bg-slate-200 text-slate-400 border border-slate-300/80 cursor-not-allowed shadow-none"
+                  : "bg-blue-600 hover:bg-blue-700 text-white shadow-blue-500/20 active:scale-[0.98] cursor-pointer"
+              }`}
             >
               Xác nhận ({draftSelected.size} tài khoản)
             </button>

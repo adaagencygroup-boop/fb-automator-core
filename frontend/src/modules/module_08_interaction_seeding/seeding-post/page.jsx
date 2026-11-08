@@ -519,9 +519,12 @@ export default function SeedingPostPage() {
         doLike={doLike}
         doComment={doComment}
         doShare={doShare}
-        onOpenAccountModal={() => setIsAccountModalOpen(true)}
+        onOpenAccountModal={() => {
+          if (isRunning || isStopping) return;
+          setIsAccountModalOpen(true);
+        }}
         selectedUids={selectedUids}
-        isRunning={isRunning}
+        isRunning={isRunning || isStopping}
       />
 
       {/* Summary Cards */}
@@ -559,7 +562,7 @@ export default function SeedingPostPage() {
           setSelectedUids(uids);
           setAccountCount(uids.length);
         }}
-        isRunning={isRunning}
+        isRunning={isRunning || isStopping}
       />
     </div>
   );

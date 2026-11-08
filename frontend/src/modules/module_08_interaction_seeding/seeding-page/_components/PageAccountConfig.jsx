@@ -42,11 +42,25 @@ export default function PageAccountConfig({
 
             <button
               type="button"
-              onClick={onOpenAccountModal}
+              onClick={() => {
+                if (isRunning || availableAccounts === 0) return;
+                onOpenAccountModal?.();
+              }}
               disabled={isRunning || availableAccounts === 0}
-              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-sm shadow-blue-500/20 active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              title={
+                isRunning
+                  ? "Đang chạy seeding, không thể thay đổi tài khoản"
+                  : availableAccounts === 0
+                  ? "Không có tài khoản khả dụng"
+                  : "Bấm để chọn danh sách tài khoản tham gia seeding"
+              }
+              className={`inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm ${
+                isRunning || availableAccounts === 0
+                  ? "bg-slate-200 text-slate-400 border border-slate-300/80 cursor-not-allowed shadow-none select-none"
+                  : "bg-blue-600 hover:bg-blue-700 text-white shadow-blue-500/20 active:scale-[0.98] cursor-pointer"
+              }`}
             >
-              <UserCheck className="w-4 h-4" />
+              <UserCheck className={`w-4 h-4 ${isRunning || availableAccounts === 0 ? "text-slate-400" : "text-white"}`} />
               Chọn tài khoản ({accountCount})
             </button>
           </div>
