@@ -1,5 +1,5 @@
 import React from "react";
-import { Users, Info, Clock } from "lucide-react";
+import { Users, Info, Clock, UserCheck } from "lucide-react";
 
 export default function ProfileAccountConfig({
   accountCount,
@@ -11,6 +11,9 @@ export default function ProfileAccountConfig({
   maxDelay,
   onMinDelayChange,
   onMaxDelayChange,
+  onOpenAccountModal,
+  selectedUids = [],
+  isRunning = false,
 }) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
@@ -28,58 +31,34 @@ export default function ProfileAccountConfig({
 
         {/* Content */}
         <div className="space-y-3.5 flex-1 flex flex-col justify-center">
-          <div className="flex items-center justify-between gap-3 bg-gray-50/70 p-3 rounded-xl border border-gray-100">
+          <div className="flex items-center justify-between gap-3 bg-gray-50/70 p-3.5 rounded-xl border border-gray-100">
             <div className="flex items-center gap-2 text-xs font-semibold text-gray-700">
               <Users className="w-4 h-4 text-blue-600" />
-              <span>Số lượng tài khoản</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={availableAccounts > 0 ? 1 : 0}
-                max={Math.max(1, availableAccounts)}
-                value={availableAccounts === 0 ? 0 : accountCount}
-                onChange={(e) =>
-                  onAccountCountChange(
-                    Math.max(1, Math.min(Number(e.target.value) || 1, availableAccounts || 1))
-                  )
-                }
-                disabled={availableAccounts === 0}
-                className="w-20 text-center text-sm font-bold py-1.5 px-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-gray-800 bg-white disabled:bg-gray-100 disabled:text-gray-400"
-              />
-              <span className="text-xs text-gray-500 font-medium">
-                / {availableAccounts} khả dụng
+              <span>Số tài khoản chạy:</span>
+              <span className="px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold text-xs">
+                {accountCount} tài khoản
               </span>
             </div>
-          </div>
 
-          {/* Total Account Pills */}
-          <div className="flex items-center gap-2 text-xs">
-            <span
-              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-medium border w-full justify-start ${
-                liveAccounts > 0
-                  ? "bg-emerald-50 text-emerald-700 border-emerald-200/60"
-                  : "bg-amber-50 text-amber-700 border-amber-200/60"
-              }`}
+            <button
+              type="button"
+              onClick={onOpenAccountModal}
+              disabled={isRunning || availableAccounts === 0}
+              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-sm shadow-blue-500/20 active:scale-[0.98] transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  liveAccounts > 0 ? "bg-emerald-500 animate-pulse" : "bg-amber-500"
-                }`}
-              />
-              Tổng tài khoản hiện có: <strong className="font-bold">{totalAccounts}</strong> ({" "}
-              <strong className={liveAccounts > 0 ? "text-emerald-800" : "text-amber-800"}>
-                {liveAccounts} Live & Đã đăng nhập
-              </strong>{" "}
-              )
-            </span>
+              <UserCheck className="w-4 h-4" />
+              Chọn tài khoản ({accountCount})
+            </button>
           </div>
 
           {availableAccounts > 0 && accountCount > 0 && (
-            <p className="text-[11px] text-gray-500 px-1">
-              {accountCount < availableAccounts
-                ? `Mỗi lần chạy, hệ thống chọn ngẫu nhiên ${accountCount} trong ${availableAccounts} tài khoản khả dụng (thứ tự chạy cũng ngẫu nhiên).`
-                : `Dùng cả ${availableAccounts} tài khoản khả dụng, thứ tự chạy ngẫu nhiên.`}
+            <p className="text-[11px] text-gray-500 px-1 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+              <span>
+                {selectedUids && selectedUids.length > 0
+                  ? `Đã tích chọn chính xác ${selectedUids.length} tài khoản để tham gia chiến dịch seeding.`
+                  : `Chạy ${accountCount} tài khoản khả dụng đã chọn.`}
+              </span>
             </p>
           )}
         </div>

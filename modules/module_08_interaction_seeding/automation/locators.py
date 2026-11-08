@@ -32,6 +32,43 @@ class LoginLocators:
     TWOFA_CODE_INPUT_XPATH = "//input[@type='text' and (@name='approvals_code' or contains(@placeholder, 'code') or contains(@aria-label, 'code'))]"
     TWOFA_SUBMIT_BUTTON_XPATH = "//button[@type='submit' or contains(., 'Tiếp tục') or contains(., 'Continue') or contains(., 'Submit')]"
 
+    SAVED_ACCOUNT_SWITCH_XPATHS = [
+        '//button[contains(., "Dùng trang cá nhân khác") or contains(., "Đăng nhập bằng tài khoản khác") or contains(., "Dùng tài khoản khác") or contains(., "Use another profile") or contains(., "Log into another account")]',
+        '//div[@role="button" and (contains(., "Dùng trang cá nhân khác") or contains(., "Đăng nhập bằng tài khoản khác") or contains(., "Dùng tài khoản khác") or contains(., "Use another profile") or contains(., "Log into another account"))]',
+        '//div[@tabindex="0" and (contains(., "Dùng trang cá nhân khác") or contains(., "Đăng nhập bằng tài khoản khác") or contains(., "Dùng tài khoản khác") or contains(., "Use another profile") or contains(., "Log into another account"))]',
+        '//a[contains(., "Dùng trang cá nhân khác") or contains(., "Đăng nhập bằng tài khoản khác") or contains(., "Dùng tài khoản khác") or contains(., "Use another profile") or contains(., "Log into another account")]',
+        '//span[contains(text(), "Dùng trang cá nhân khác") or contains(text(), "Đăng nhập bằng tài khoản khác") or contains(text(), "Log into another account") or contains(text(), "Use another profile")]/ancestor::*[@role="button" or self::button or self::a or @tabindex="0"][1]',
+        '//*[contains(text(), "Dùng trang cá nhân khác") or contains(text(), "Đăng nhập bằng tài khoản khác") or contains(text(), "Log into another account") or contains(text(), "Use another profile")]',
+        '//span[normalize-space(text())="Dùng trang cá nhân khác" or normalize-space(text())="Use another profile" or normalize-space(text())="Log into another account"]',
+    ]
+
+    EMAIL_INPUT_SELECTORS = [
+        (By.ID, "email"),
+        (By.NAME, "email"),
+        (By.XPATH, '//input[@data-testid="royal_email"]'),
+        (By.XPATH, '//input[@type="text" and @name="email"]'),
+        (By.XPATH, '//input[contains(@aria-label, "Email") or contains(@aria-label, "email") or contains(@aria-label, "Phone") or contains(@aria-label, "Số điện thoại")]'),
+        (By.XPATH, '//input[@type="text"]'),
+    ]
+
+    PASSWORD_INPUT_SELECTORS = [
+        (By.ID, "pass"),
+        (By.NAME, "pass"),
+        (By.XPATH, '//input[@data-testid="royal_pass"]'),
+        (By.XPATH, '//input[@type="password" and @name="pass"]'),
+        (By.XPATH, '//input[@type="password"]'),
+    ]
+
+    LOGIN_BUTTON_SELECTORS = [
+        (By.NAME, "login"),
+        (By.XPATH, '//button[@name="login"]'),
+        (By.XPATH, '//button[@type="submit"]'),
+        (By.XPATH, '//div[@aria-label="Log in" or @aria-label="Log In" or @aria-label="Đăng nhập" or @aria-label="Đăng Nhập" and @role="button"]'),
+        (By.XPATH, '//button[contains(@id, "u_0_") or contains(@id, "loginbutton")]'),
+        (By.XPATH, '//input[@type="submit" and (@value="Log In" or @value="Đăng nhập")]'),
+        (By.XPATH, '//button[contains(text(), "Log In") or contains(text(), "Log in") or contains(text(), "Đăng nhập") or contains(text(), "Đăng Nhập")]'),
+    ]
+
 
 # =====================================================================
 # 1.1. CẢNH BÁO / CHẶN CỦA FACEBOOK (dùng chung cho mọi thao tác seeding)

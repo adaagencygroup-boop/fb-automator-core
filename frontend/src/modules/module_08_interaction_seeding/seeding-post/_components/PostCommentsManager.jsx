@@ -219,7 +219,7 @@ export default function PostCommentsManager({
               <table className="w-full text-left border-collapse text-xs">
                 <thead className="bg-gray-50/80 sticky top-0 z-10 text-gray-500 font-semibold border-b border-gray-100">
                   <tr>
-                    <th className="py-2.5 px-3 w-10 text-center whitespace-nowrap">#</th>
+                    <th className="py-2.5 px-3 w-10 text-center whitespace-nowrap">STT</th>
                     <th className="py-2.5 px-3">Nội dung bình luận</th>
                     <th className="py-2.5 px-3 w-24 min-w-[75px] text-center whitespace-nowrap">Hành động</th>
                   </tr>

@@ -13,6 +13,7 @@ import PostProgressTerminal from "./_components/PostProgressTerminal";
 import PostReactionSelector from "./_components/PostReactionSelector";
 import PostSummaryCards from "./_components/PostSummaryCards";
 import PostTargetSection from "./_components/PostTargetSection";
+import AccountSelectModal from "../_components/AccountSelectModal";
 
 export default function SeedingPostPage() {
   const [targets, setTargets] = useState([]);
@@ -29,6 +30,8 @@ export default function SeedingPostPage() {
 
   // Account config
   const [accountCount, setAccountCount] = useState(2);
+  const [selectedUids, setSelectedUids] = useState([]);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [delayMin, setDelayMin] = useState(30);
   const [delayMax, setDelayMax] = useState(60);
 
@@ -54,7 +57,9 @@ export default function SeedingPostPage() {
           );
           const validCount = validLiveLoggedIn.length;
           setLiveAccountsCount(validCount);
-          setAccountCount(validCount > 0 ? Math.min(validCount, 10) : 0);
+          const initialUids = validLiveLoggedIn.map((a) => a.uid);
+          setSelectedUids(initialUids);
+          setAccountCount(initialUids.length);
         }
       })
       .catch(() => {});
@@ -353,10 +358,10 @@ export default function SeedingPostPage() {
       return;
     }
 
-    if (accountCount <= 0 || accountCount > liveAccountsCount) {
+    if (selectedUids.length === 0 && accountCount <= 0) {
       toast.warning(
-        `Số lượng tài khoản muốn chạy (${accountCount}) không hợp lệ hoặc vượt quá số tài khoản khả dụng (${liveAccountsCount})!`,
-        "SỐ LƯỢNG KHÔNG HỢP LỆ"
+        "Vui lòng chọn ít nhất 1 tài khoản để chạy seeding!",
+        "CHƯA CHỌN TÀI KHOẢN"
       );
       return;
     }
@@ -381,7 +386,8 @@ export default function SeedingPostPage() {
           url: t.url,
           display_name: t.display_name,
         })),
-        account_count: accountCount,
+        uids: selectedUids.length > 0 ? selectedUids : undefined,
+        account_count: selectedUids.length > 0 ? selectedUids.length : accountCount,
         threads: 1,
         delay_seconds_min: delayMin,
         delay_seconds_max: delayMax,
@@ -499,7 +505,9 @@ export default function SeedingPostPage() {
       {/* Step 4 & 5: Accounts Count & Delay */}
       <PostAccountConfig
         accountCount={accountCount}
-        onAccountCountChange={setAccountCount}
+        onAccountCountChange={(val) => {
+          setAccountCount(val);
+        }}
         availableAccounts={liveAccountsCount}
         liveAccounts={liveAccountsCount}
         totalAccounts={totalAccountsCount}
@@ -511,6 +519,9 @@ export default function SeedingPostPage() {
         doLike={doLike}
         doComment={doComment}
         doShare={doShare}
+        onOpenAccountModal={() => setIsAccountModalOpen(true)}
+        selectedUids={selectedUids}
+        isRunning={isRunning}
       />
 
       {/* Summary Cards */}
@@ -537,6 +548,18 @@ export default function SeedingPostPage() {
         disabled={targets.length === 0}
         otherRunning={otherRunning}
         onStopOther={handleStopOther}
+      />
+
+      {/* Popup chọn tài khoản */}
+      <AccountSelectModal
+        isOpen={isAccountModalOpen}
+        onClose={() => setIsAccountModalOpen(false)}
+        selectedUids={selectedUids}
+        onConfirm={(uids) => {
+          setSelectedUids(uids);
+          setAccountCount(uids.length);
+        }}
+        isRunning={isRunning}
       />
     </div>
   );

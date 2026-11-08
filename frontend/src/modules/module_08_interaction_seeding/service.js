@@ -13,6 +13,15 @@ export const seedingApi = {
     }
   },
 
+  getCategories: async () => {
+    try {
+      const res = await api.get("/api/accounts/categories");
+      return Array.isArray(res) ? res : res?.categories || res?.data || [];
+    } catch {
+      return [];
+    }
+  },
+
   validateSeedingTargets: async (targetType, urls) => {
     return await api.post("/api/seeding/targets/validate", { target_type: targetType, urls });
   },
