@@ -33,12 +33,14 @@ fn force_kill_engine_processes() {
     {
         // NSIS không ghi đè được .pyd khi local_engine còn giữ file lock.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let _ = Command::new("taskkill")
-            .args(["/F", "/IM", "local_engine.exe", "/T"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        for image in ["local_engine.exe", "chromedriver.exe"] {
+            let _ = Command::new("taskkill")
+                .args(["/F", "/IM", image, "/T"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
     }
     #[cfg(not(windows))]
     {
