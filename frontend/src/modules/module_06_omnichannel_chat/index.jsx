@@ -648,7 +648,8 @@ export default function OmnichannelChatModule() {
     if (!activeConversationId) return;
     const interval = setInterval(() => {
       if (wsOpenRef.current) return; // WS đang khoẻ -> tin mới đã về qua realtime, bỏ qua
-      getMessages(activeConversationId).then((res) => {
+      // fresh: đây là đường duy nhất để tin về khi WS chết, không được ăn cache
+      getMessages(activeConversationId, { fresh: true }).then((res) => {
         if (res?.messages && res.messages.length > 0) {
           setMessagesByConversation((all) => {
             const current = all[activeConversationId] || [];
@@ -686,7 +687,8 @@ export default function OmnichannelChatModule() {
       // Khi WebSocket đang kết nối bình thường, tin nhắn đã về realtime -> bỏ qua polling định kỳ
       if (wsOpenRef.current) return;
 
-      getConversations().then((res) => {
+      // fresh: cùng lý do như vòng hỏi lại tin nhắn ở trên
+      getConversations({}, { fresh: true }).then((res) => {
         if (res?.conversations && res.conversations.length > 0) {
           setConversations((prev) => {
             const newMap = new Map(res.conversations.map((c) => [c.id, c]));
