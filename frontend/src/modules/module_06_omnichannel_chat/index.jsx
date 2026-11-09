@@ -414,6 +414,9 @@ export default function OmnichannelChatModule() {
                 }
                 return updated ? nextAll : all;
               });
+            } else if (payload.type === "comment_reaction" && payload.data) {
+              // Bắn CustomEvent lên window để NotificationDetail / CommentThread bắt được realtime
+              window.dispatchEvent(new CustomEvent("fb_comment_reaction", { detail: payload.data }));
             } else if (payload.type === "notification" && payload.data) {
               const incomingNotif = mapNotification(payload.data);
 

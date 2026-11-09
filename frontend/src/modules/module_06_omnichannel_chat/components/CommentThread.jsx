@@ -208,8 +208,25 @@ function CommentCard({
   const [loadingReplies, setLoadingReplies] = useState(false);
   const [repliesError, setRepliesError] = useState("");
 
-  const name = comment?.from?.name || "Người dùng";
-  if (removed) return null;
+  // Lắng nghe sự kiện cảm xúc bình luận realtime từ WebSocket
+  useEffect(() => {
+    const handleCommentReaction = (e) => {
+      const data = e.detail;
+      if (!data || !data.comment_id) return;
+      // Khớp comment_id trực tiếp hoặc đuôi ID
+      const targetCid = String(data.comment_id);
+      const myCid = String(comment.id || "");
+      if (myCid === targetCid || myCid.endsWith(targetCid) || targetCid.endsWith(myCid)) {
+        const delta = data.verb === "remove" ? -1 : 1;
+        setLikeDelta((d) => d + delta);
+      }
+    };
+
+    window.addEventListener("fb_comment_reaction", handleCommentReaction);
+    return () => {
+      window.removeEventListener("fb_comment_reaction", handleCommentReaction);
+    };
+  }, [comment.id]);
 
   const hasText = Boolean(comment?.message);
   const reactions = Math.max(0, reactionCountOf(comment) + likeDelta);
