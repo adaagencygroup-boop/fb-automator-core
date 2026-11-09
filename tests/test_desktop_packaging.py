@@ -30,6 +30,7 @@ class BundleDataTests(unittest.TestCase):
             self.assertFalse(Path(source).is_relative_to(ROOT / "data"), source)
             self.assertNotIn("browser_profiles", Path(destination).parts)
         self.assertTrue(any("migrations" in Path(destination).parts for _, destination in bundled))
+        self.assertIn("simplejson", analysis.call_args.kwargs["excludes"])
 
 
 class SidecarBuildTests(unittest.TestCase):

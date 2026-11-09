@@ -146,6 +146,9 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        # requests ưu tiên simplejson nếu có; bản freeze thường dở →
+        # ImportError: cannot import name 'JSONDecodeError' from 'simplejson'
+        "simplejson",
         "tkinter",
         "matplotlib",
         "scipy",
