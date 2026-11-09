@@ -41,6 +41,9 @@ export const getFarmHistoryAccounts = () => api.get("/api/farm/history/accounts"
 
 export const getFarmHistoryDetail = (id) => api.get(`/api/farm/history/${encodeURIComponent(id)}`);
 
+// Mở nhóm / trang cá nhân bằng Chrome của nick: { mode: "tab" } (Chrome của nick đang mở) | { mode: "opening" }
+export const openFarmLink = (uid, url) => api.post("/api/farm/open-link", { uid, url });
+
 export const getFarmRunTargets = (runId) => api.get(`/api/farm/runs/${encodeURIComponent(runId)}/targets`);
 
 export const cleanupFarmHistory = (keepDays) => api.post("/api/farm/history/cleanup", { keep_days: keepDays });
