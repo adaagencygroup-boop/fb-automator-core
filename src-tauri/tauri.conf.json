@@ -30,10 +30,20 @@
       "desktop": {
         "schemes": ["fbautomator"]
       }
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY0OUQ5RDJGNUNEQ0RCRTYKUldUbTI5eGNMNTJkOUtORzZJU3VRbFJ6bEtJUlBLbC9oQXRQU0RtRW03ZEhQZEE3cDAzQUV6OHgK",
+      "endpoints": [
+        "https://github.com/adaagencygroup-boop/fb-automator-core/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": [
       "nsis"
     ],
