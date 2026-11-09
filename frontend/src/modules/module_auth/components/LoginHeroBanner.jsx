@@ -37,7 +37,7 @@ export function LoginHeroBanner() {
       </div>
       <div className="mt-10 flex items-center justify-between gap-2 text-[10px]">
         <div className="flex items-center gap-1.5 font-medium text-sky-700"><span className="h-2 w-1 rounded-full bg-sky-600" />Hệ thống trực tuyến</div>
-        <span className="text-slate-500">Phiên bản 2.0.1</span>
+        <span className="text-slate-500">Phiên bản 2.0.2</span>
       </div>
     </section>
   );

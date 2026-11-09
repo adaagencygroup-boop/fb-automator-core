@@ -28,6 +28,7 @@
     },
     "shell:allow-kill",
     "updater:default",
-    "process:default"
+    "process:default",
+    "allow-prepare-for-update"
   ]
 }

@@ -43,6 +43,18 @@ export default function DesktopUpdater() {
     let downloaded = 0;
     let total = 0;
     try {
+      // local_engine giữ lock file .pyd → NSIS không ghi đè được nếu còn chạy
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("prepare_for_update");
+      } catch (prepErr) {
+        console.warn("[updater] prepare_for_update:", prepErr?.message || prepErr);
+        try {
+          await fetch("http://127.0.0.1:28129/api/shutdown", { method: "POST" });
+        } catch {
+          /* engine có thể đã tắt */
+        }
+      }
       await update.downloadAndInstall((event) => {
         if (event.event === "Started") {
           total = event.data?.contentLength || 0;
