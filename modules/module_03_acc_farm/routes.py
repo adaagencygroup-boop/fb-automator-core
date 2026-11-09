@@ -2013,6 +2013,87 @@ async def farm_run_targets(run_id: int):
     return lists
 
 
+# ─────────────── MỞ LINK NHÓM / TRANG CÁ NHÂN BẰNG CHROME CỦA NICK ───────────────
+
+OPEN_LINK_HOSTS = {"facebook.com", "www.facebook.com", "web.facebook.com", "m.facebook.com"}
+
+
+class OpenLinkRequest(BaseModel):
+    uid: str
+    url: str
+
+
+def _open_link_url(url: str) -> Optional[str]:
+    """Chỉ mở link https Facebook (danh sách nhóm / người trong lịch sử của tool)."""
+    try:
+        parsed = urlparse((url or "").strip())
+    except ValueError:
+        return None
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() not in OPEN_LINK_HOSTS:
+        return None
+    return parsed.geturl()
+
+
+def _open_in_live_browser(uid: str, owner: Optional[str], url: str) -> bool:
+    """
+    Chrome "Mở trình duyệt" (Module 02, scope "live") của nick còn mở: mở link ở tab mới của cửa sổ đó, không tắt / mở
+    lại Chrome như khi gọi Module 02 (mỗi lần mở lại mất 5-15 giây và mất tab đang xem). False = không có cửa sổ nào.
+    Nick đang chạy tương tác / Module 02 đang mở trình duyệt thì profile đang bị khóa: báo bận, không đụng vào.
+    """
+    from core.browser import bring_chrome_to_front, get_active_drivers, get_profile_lock
+
+    lock = get_profile_lock(uid, owner)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Nick đang chạy tương tác hoặc đang mở trình duyệt, thử lại sau.")
+    try:
+        for driver in get_active_drivers(uid, owner, scope="live"):
+            try:
+                before = set(driver.window_handles)
+                driver.execute_script("window.open(arguments[0], '_blank');", url)
+                opened = [h for h in driver.window_handles if h not in before]
+                if opened:
+                    driver.switch_to.window(opened[-1])
+                bring_chrome_to_front(driver)
+                return True
+            except Exception as e:  # Cửa sổ đã bị đóng tay: thử cửa sổ khác / mở Chrome mới
+                logger.info(f"[{uid}] Chrome đang mở của nick không dùng được ({type(e).__name__}), mở Chrome mới")
+        return False
+    finally:
+        lock.release()
+
+
+@router.post("/open-link")
+async def open_link_in_nick_browser(item: OpenLinkRequest, request: Request):
+    """
+    Mở nhóm / trang cá nhân bằng Chrome đã đăng nhập của nick để thấy đúng trạng thái của nick đó (đã vào nhóm, đã gửi
+    lời mời). Chrome của nick đang mở thì mở tab mới; không thì nhờ Module 02 mở Chrome (tự đăng nhập lại nếu cần).
+    """
+    url = _open_link_url(item.url)
+    if not url:
+        raise HTTPException(status_code=400, detail="Chỉ mở được link Facebook (https).")
+    uid = str(item.uid or "").strip()
+    owner = await asyncio.to_thread(adapters.owner_from_request, request)
+    try:
+        owned = await asyncio.to_thread(adapters.list_owner_accounts, owner)
+    except Exception as e:
+        logger.warning(f"Không đọc được danh sách nick để mở link: {e}")
+        raise HTTPException(status_code=503, detail="Không đọc được danh sách tài khoản từ CSDL.")
+    if uid not in owned:
+        raise HTTPException(status_code=404, detail="Nick không còn trong Quản lý tài khoản.")
+    if await asyncio.to_thread(_open_in_live_browser, uid, owner, url):
+        return {"mode": "tab"}
+    from modules.module_02_account_manager.context import owner_scope as account_owner_scope
+    from modules.module_02_account_manager.services.browser_service import queue_open_browser
+
+    try:
+        with account_owner_scope(owner):  # worker của Module 02 chép context: đọc đúng nick của người đang đăng nhập
+            result = queue_open_browser(uid, target_url=url)
+    except RuntimeError as e:
+        logger.warning(f"[{uid}] Module 02 không mở được trình duyệt: {e}")
+        raise HTTPException(status_code=503, detail="Chưa mở được trình duyệt, thử lại sau.")
+    return {"mode": "opening", **(result or {})}
+
+
 def _json_list(value) -> List:
     """Cột JSON dạng danh sách; rỗng / hỏng thì trả []."""
     try:
