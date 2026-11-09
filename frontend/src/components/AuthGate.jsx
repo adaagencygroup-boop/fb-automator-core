@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import api from "@/services/api";
 import { clearSessionUserId } from "@/services/sessionIdentity.mjs";
 import { clearAuthTokens, clearRegistrationToken, getRefreshToken } from "@/services/authTokens.mjs";
+import { clearApiCache } from "@/services/api-cache.mjs";
 import LoginScreen from "@/modules/module_auth/LoginScreen";
 import RegisterScreen from "@/modules/module_auth/RegisterScreen";
 import PendingScreen from "@/modules/module_auth/PendingScreen";
@@ -30,6 +31,7 @@ export default function AuthGate({ children }) {
   const loadMe = useCallback(async () => {
     // Called after an explicit successful login: permit the newly selected user.
     clearSessionUserId();
+    clearApiCache(); // người vừa đăng nhập không được thấy dữ liệu đã cache của người trước
     const me = await api.get("/api/v1/auth/me", { timeout: AUTH_BOOT_TIMEOUT_MS });
     localStorage.removeItem("pending_username");
     localStorage.removeItem("locked_username");
@@ -156,6 +158,7 @@ export default function AuthGate({ children }) {
       localStorage.removeItem("pending_username");
       localStorage.removeItem("locked_username");
       clearAuthTokens();
+      clearApiCache();
       setUser(null);
       if (["ACCOUNT_BANNED", "ACCOUNT_LOCKED"].includes(message)) {
         if (sessionUsername) localStorage.setItem("locked_username", sessionUsername);
@@ -228,6 +231,7 @@ export default function AuthGate({ children }) {
     clearAuthTokens();
     clearRegistrationToken();
     clearSessionUserId();
+    clearApiCache();
     setUser(null);
     localStorage.removeItem("pending_username");
     localStorage.removeItem("locked_username");

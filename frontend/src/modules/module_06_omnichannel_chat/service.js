@@ -169,10 +169,12 @@ export async function getChatStatus() {
 
 /**
  * Lấy danh sách các cuộc hội thoại (/api/facebook/conversations)
+ *
+ * `fresh` bỏ qua cache ở tầng axios — xem ghi chú ở getMessages.
  */
-export async function getConversations(params = {}) {
+export async function getConversations(params = {}, { fresh = false } = {}) {
   try {
-    const res = await api.get("/api/facebook/conversations", { params });
+    const res = await api.get("/api/facebook/conversations", { params, fresh });
     const raw = Array.isArray(res) ? res : res?.conversations || [];
     const conversations = raw.map((c) => {
       const tagsArr = Array.isArray(c.tags)
@@ -283,8 +285,12 @@ export async function getNotifications({
 /**
  * Lấy lịch sử tin nhắn của một cuộc hội thoại (/api/facebook/messages)
  * conversationId định dạng: `${page_id}_${sender_id}`
+ *
+ * `fresh: true` bỏ qua cache ở tầng axios. Dùng cho vòng hỏi lại định kỳ khi
+ * WebSocket chết: lúc đó đây là đường duy nhất để tin của khách về, nên không
+ * được phép ăn cache.
  */
-export async function getMessages(conversationId) {
+export async function getMessages(conversationId, { fresh = false } = {}) {
   try {
     const parts = String(conversationId || "").split("_");
     const page_id = parts[0] || "";
@@ -292,6 +298,7 @@ export async function getMessages(conversationId) {
 
     const res = await api.get("/api/facebook/messages", {
       params: { page_id, sender_id },
+      fresh,
     });
 
     const raw = Array.isArray(res) ? res : res?.messages || [];
