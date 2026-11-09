@@ -6,6 +6,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   build-desktop:
     name: Build ${{ matrix.platform }} Application
@@ -66,6 +69,9 @@ jobs:
       - name: Build Python Sidecar Binary
         run: |
           python scripts/build_sidecar.py
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
 
       - name: Build Tauri Desktop Package
         run: |
@@ -74,6 +80,10 @@ jobs:
           CI: false
           NEXT_TELEMETRY_DISABLED: 1
           APPIMAGE_EXTRACT_AND_RUN: 1
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload Installer Artifacts
         uses: actions/upload-artifact@v4
@@ -82,7 +92,63 @@ jobs:
           if-no-files-found: error
           path: |
             src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/msi/*.sig
+            src-tauri/target/release/bundle/msi/*.zip
             src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.sig
+            src-tauri/target/release/bundle/nsis/*.zip
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/appimage/*.sig
+            src-tauri/target/release/bundle/appimage/*.tar.gz
 
+  publish-release:
+    name: Publish GitHub Release + latest.json
+    needs: build-desktop
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download All Installer Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: FB-Automator-*-Installer
+          merge-multiple: true
+
+      - name: Build latest.json
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python scripts/build_latest_json.py \
+            --version "$VERSION" \
+            --tag "$GITHUB_REF_NAME" \
+            --repo "${{ github.repository }}" \
+            --notes "Desktop release $GITHUB_REF_NAME" \
+            --artifact-dir release-artifacts \
+            --out latest.json
+          echo "---- latest.json ----"
+          cat latest.json
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: FB Page Automator ${{ github.ref_name }}
+          body: |
+            Desktop build from tag `${{ github.ref_name }}`.
+
+            - Installer assets attached below
+            - `latest.json` is consumed by the in-app Tauri updater
+          files: |
+            latest.json
+            release-artifacts/**
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

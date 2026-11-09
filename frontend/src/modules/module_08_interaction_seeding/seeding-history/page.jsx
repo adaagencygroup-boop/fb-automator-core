@@ -96,6 +96,24 @@ export default function SeedingHistoryPage() {
 
   // Chỉ khi bấm nút LỌC mới cập nhật appliedFilters
   const handleApplyFilter = () => {
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+    if (draftFromDate && draftFromDate > todayStr) {
+      toast.warning("Từ ngày không thể chọn ngày trong tương lai!", "KHOẢNG THỜI GIAN KHÔNG HỢP LỆ");
+      return;
+    }
+
+    if (draftToDate && draftToDate > todayStr) {
+      toast.warning("Đến ngày không thể chọn ngày trong tương lai!", "KHOẢNG THỜI GIAN KHÔNG HỢP LỆ");
+      return;
+    }
+
+    if (draftFromDate && draftToDate && draftFromDate > draftToDate) {
+      toast.warning("Từ ngày không được lớn hơn Đến ngày!", "KHOẢNG THỜI GIAN KHÔNG HỢP LỆ");
+      return;
+    }
+
     setAppliedFilters({
       search: draftSearch.trim(),
       type: draftType,

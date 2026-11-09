@@ -39,6 +39,7 @@ function resolveWsBase() {
 
 export const API_BASE = resolveApiBase();
 export const WS_BASE = resolveWsBase();
+export const isTauriShell = isDesktopShell;
 
 // Người dùng hiển thị trên Header (tạm thời — thay bằng dữ liệu đăng nhập thật khi có)
 export const CURRENT_USER = {

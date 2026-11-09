@@ -89,7 +89,7 @@ export default function RunTargetsModal({ account, onClose }) {
                   {title} ({data[key]?.length || 0})
                 </h3>
                 {data[key]?.length ? (
-                  <TargetList action={action} targets={data[key]} />
+                  <TargetList action={action} targets={data[key]} nick={{ uid: account.uid, name: account.name }} />
                 ) : (
                   <p className="mt-1.5 text-xs text-slate-400">Không có</p>
                 )}

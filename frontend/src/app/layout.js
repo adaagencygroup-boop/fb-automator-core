@@ -1,6 +1,7 @@
 import { Inter, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import AppShell from "@/components/AppShell";
+import DesktopUpdater from "@/components/DesktopUpdater";
 import Toaster from "@/components/Toaster";
 
 const fontSans = Inter({
@@ -37,6 +38,7 @@ export default function RootLayout({ children }) {
     >
       <body className="flex min-h-full flex-col bg-background text-foreground">
         <AppShell>{children}</AppShell>
+        <DesktopUpdater />
         <Toaster />
       </body>
     </html>

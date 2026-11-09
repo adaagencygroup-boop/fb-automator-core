@@ -297,10 +297,19 @@ export default function ProfileTargetSection({
 
         <button
           type="button"
-          onClick={() => setIsExcelModalOpen(true)}
-          className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-50 hover:bg-emerald-100/80 text-emerald-700 border border-emerald-200/70 transition-all shadow-sm active:scale-95 cursor-pointer shrink-0"
+          onClick={() => {
+            if (isRunning) return;
+            setIsExcelModalOpen(true);
+          }}
+          disabled={isRunning}
+          title={isRunning ? "Đang chạy seeding, không thể import từ file" : "Import danh sách link từ tệp Excel"}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all shadow-sm shrink-0 ${
+            isRunning
+              ? "bg-gray-100 text-gray-400 border-gray-200 opacity-60 cursor-not-allowed select-none"
+              : "bg-emerald-50 hover:bg-emerald-100/80 text-emerald-700 border-emerald-200/70 active:scale-95 cursor-pointer"
+          }`}
         >
-          <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+          <FileSpreadsheet className={`w-3.5 h-3.5 ${isRunning ? "text-gray-400" : "text-emerald-600"}`} />
           Import từ file (Excel)
         </button>
       </div>
@@ -310,13 +319,16 @@ export default function ProfileTargetSection({
         <textarea
           rows={4}
           value={textInput}
+          disabled={isRunning}
           onChange={handleChangeTextarea}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           onBlur={handleBlurTextarea}
           placeholder={`https://www.facebook.com/leminhanh\nhttps://www.facebook.com/tranquocbao\nhttps://www.facebook.com/thaovynguyen`}
           className={`w-full text-xs font-mono p-3.5 rounded-xl border transition-all resize-y ${
-            hasIssues
+            isRunning
+              ? "border-gray-200 bg-gray-100/70 text-gray-400 cursor-not-allowed select-none"
+              : hasIssues
               ? "border-rose-400 bg-rose-50/20 text-rose-900 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
               : "border-gray-200 bg-gray-50/50 text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
           }`}
@@ -340,7 +352,12 @@ export default function ProfileTargetSection({
             <button
               type="button"
               onClick={handleAutoCleanIssues}
-              className="px-2.5 py-1 rounded-lg bg-white border border-rose-300 hover:bg-rose-100 text-rose-700 text-[11px] font-semibold transition-all shrink-0 cursor-pointer shadow-sm active:scale-95"
+              disabled={isRunning}
+              className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-all shrink-0 shadow-sm ${
+                isRunning
+                  ? "bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed"
+                  : "bg-white border-rose-300 hover:bg-rose-100 text-rose-700 active:scale-95 cursor-pointer"
+              }`}
             >
               {issues.length === 1 && hasAccents
                 ? "Tự động xóa dấu"
@@ -385,7 +402,8 @@ export default function ProfileTargetSection({
             <button
               type="button"
               onClick={handleResetInput}
-              disabled={!textInput.trim()}
+              disabled={!textInput.trim() || isRunning}
+              title={isRunning ? "Đang chạy seeding, không thể làm mới" : undefined}
               className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-100/70 text-xs font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
             >
               <RotateCcw className="w-3.5 h-3.5" />
@@ -394,12 +412,18 @@ export default function ProfileTargetSection({
             <button
               type="button"
               onClick={handleValidateAndAddClick}
-              disabled={hasAccents || stats.validCount === 0 || isValidating}
-              title={hasAccents ? "Vui lòng xóa dấu tiếng Việt trước khi xác thực" : undefined}
+              disabled={hasAccents || stats.validCount === 0 || isValidating || isRunning}
+              title={
+                isRunning
+                  ? "Đang chạy seeding, không thể thêm mục tiêu mới"
+                  : hasAccents
+                  ? "Vui lòng xóa dấu tiếng Việt trước khi xác thực"
+                  : undefined
+              }
               className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                !hasAccents && stats.validCount > 0 && !isValidating
+                !hasAccents && stats.validCount > 0 && !isValidating && !isRunning
                   ? "bg-[#2563EB] text-white hover:bg-blue-700 shadow-sm shadow-blue-500/30 cursor-pointer"
-                  : "bg-gray-200 text-gray-400 cursor-not-allowed"
+                  : "bg-gray-200 text-gray-400 cursor-not-allowed select-none"
               }`}
             >
               <CheckCircle2 className="w-3.5 h-3.5" />
