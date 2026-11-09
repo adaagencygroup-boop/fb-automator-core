@@ -32,6 +32,12 @@ import { Switch } from "@/components/ui/switch";
 import { EmergencyStopModal } from "./EmergencyStopModal";
 import { PastScheduleModal } from "./PastScheduleModal";
 import { PostProgressPreview } from "./PostProgressPreview";
+import {
+  mapProgressThreads,
+  shouldRestoreProgressView,
+} from "@/modules/module_03_acc_farm/postSessionUi";
+import { ProgressActivityCell } from "./ProgressPostLink";
+
 export function ReelsPostView({ mode, initialState = "config" }) {
   const router = useRouter();
   const isReels = mode === "reels";
@@ -263,7 +269,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
             a.connectionStatusCode === "logged_in",
         }))
       );
-      await checkActiveSessionOnMount(formatted);
+      await applySessionAccountSelection(formatted);
     } catch (err) {
       console.error("Lỗi khi tải tài khoản:", err);
     } finally {
@@ -272,6 +278,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
   };
 
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+  const sessionAccountsRef = useRef([]);
 
   const handleCheckLiveDie = async () => {
     if (accounts.length === 0) return;
@@ -304,56 +311,53 @@ export function ReelsPostView({ mode, initialState = "config" }) {
     }
   };
 
-  const checkActiveSessionOnMount = async (currentAccounts = []) => {
+  const applySessionAccountSelection = async (currentAccounts = []) => {
+    const uids = sessionAccountsRef.current;
+    if (!Array.isArray(uids) || uids.length === 0) return;
+    const runningUidSet = new Set(uids.map(String));
+    setAccounts((prev) => {
+      const baseList = prev.length > 0 ? prev : currentAccounts;
+      if (!baseList.length) return prev;
+      return baseList.map((a) => ({
+        ...a,
+        selected: runningUidSet.has(String(a.uid || a.id)),
+      }));
+    });
+  };
+
+  const checkActiveSessionOnMount = async () => {
     try {
       const res = await api.get("/api/post/status");
       const d = res?.data ?? res;
-      if (d && (d.is_running || d.is_paused || (d.session_id && !d.session_finished))) {
-        if (d.post_type === mode) {
-          setViewState("running");
-          setIsPaused(!!d.is_paused);
-          setIsStopped(!!d.is_stopped);
-          if (d.metrics) setMetrics(d.metrics);
-          if (Array.isArray(d.recent_logs) && d.recent_logs.length > 0) {
-            setLogs(d.recent_logs);
-          }
-          if (Array.isArray(d.threads) && d.threads.length > 0) {
-            setThreadRows(
-              d.threads.map((t) => ({
-                id: t.id || t.threadId,
-                threadId: t.threadId,
-                accountName: t.accountName || "Tài khoản",
-                accountUid: t.accountUid || "-",
-                status: t.status || "Đang chạy",
-                contentPreview: t.contentPreview || "Đang xử lý...",
-                currentActivity: t.currentActivity || "",
-                elapsedTime: t.elapsedTime || "0:00",
-                content: t.content || "",
-                imagePaths: Array.isArray(t.imagePaths) ? t.imagePaths : [],
-                mediaPath: t.mediaPath || "",
-                mediaName: t.mediaName || "",
-                postType: t.postType || mode,
-                checkpoint: t.checkpoint || "",
-              }))
-            );
-          }
-          if (Array.isArray(d.session_accounts) && d.session_accounts.length > 0) {
-            const runningUidSet = new Set(d.session_accounts.map(String));
-            setAccounts((prev) => {
-              const baseList = prev.length > 0 ? prev : currentAccounts;
-              return baseList.map((a) => ({
-                ...a,
-                selected: runningUidSet.has(String(a.uid || a.id)),
-              }));
-            });
-          }
-          startStatusPolling();
-        }
+      if (!shouldRestoreProgressView(d)) return;
+      if (d.post_type !== mode) return;
+
+      setViewState("running");
+      setIsPaused(!!d.is_paused);
+      setIsStopped(!!d.is_stopped);
+      if (d.metrics) setMetrics(d.metrics);
+      if (Array.isArray(d.recent_logs) && d.recent_logs.length > 0) {
+        setLogs(d.recent_logs);
+      }
+      if (Array.isArray(d.threads) && d.threads.length > 0) {
+        setThreadRows(mapProgressThreads(d.threads, mode));
+      }
+      if (Array.isArray(d.session_accounts) && d.session_accounts.length > 0) {
+        sessionAccountsRef.current = d.session_accounts;
+        await applySessionAccountSelection();
+      }
+      if (d.is_running || d.is_paused || !d.session_finished) {
+        startStatusPolling();
       }
     } catch {
       // quiet error
     }
   };
+
+  // Restore màn tiến trình ngay khi mount / đổi mode (không chờ load accounts)
+  useEffect(() => {
+    checkActiveSessionOnMount();
+  }, [mode]);
 
   useEffect(() => {
     loadAccountsFromDb();
@@ -943,7 +947,8 @@ export function ReelsPostView({ mode, initialState = "config" }) {
 
   return (
     <div className="space-y-6 pb-20">
-      {/* ── BƯỚC 1: THIẾT LẬP CẤU HÌNH THƯ MỤC NGUỒN (FIGMA 1338:7 / 1357:4440) ── */}
+      {/* ── BƯỚC 1: cấu hình nguồn — ẩn khi đang giám sát; hiện lại khi quay về cấu hình ── */}
+      {viewState === "config" && (
       <div className="space-y-3">
         <div className="flex items-center gap-2.5">
           <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
@@ -1014,6 +1019,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
           </div>
         </div>
       </div>
+      )}
 
       {/* ── BƯỚC 2: CHỌN DANH SÁCH THỰC THI ── */}
       <div className="space-y-3">
@@ -1650,8 +1656,8 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                       <td className="py-2.5 px-4 max-w-[200px] truncate text-slate-700 font-mono text-[11px]" title={row.content || row.contentPreview}>
                         {row.contentPreview}
                       </td>
-                      <td className="py-2.5 px-4 text-slate-700 text-xs font-medium">
-                        {row.currentActivity}
+                      <td className="py-2.5 px-4">
+                        <ProgressActivityCell row={row} />
                       </td>
                       <td className="py-2.5 px-4 font-mono text-slate-600 text-xs">
                         {row.elapsedTime}

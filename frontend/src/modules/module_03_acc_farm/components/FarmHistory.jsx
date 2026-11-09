@@ -241,13 +241,16 @@ function InteractionHistory() {
     setPage(1);
   };
 
-  const exportFile = useCallback(async ({ download }) => {
+  const exportFile = useCallback(async ({ download, format }) => {
     setExporting(true);
     try {
       const { fileName, rows } = (await download(filters)) || {};
+      const kind = format === "csv" ? "CSV" : "Excel";
       toast.success(
-        rows != null ? `Đã xuất ${rows} lượt ra file ${fileName}` : `Đã xuất file ${fileName || ""}`.trim(),
-        "XUẤT FILE THÀNH CÔNG"
+        rows != null
+          ? `Xuất thành công ${rows} lượt ra file ${fileName || kind}!`
+          : `Xuất thành công lịch sử tương tác ra file ${fileName || kind}!`,
+        "XUẤT THÀNH CÔNG",
       );
     } catch (err) {
       toast.error(err.message, "KHÔNG XUẤT ĐƯỢC FILE");
