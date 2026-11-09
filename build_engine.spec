@@ -144,11 +144,18 @@ a = Analysis(
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[
+        os.path.join(PROJECT_DIR, "scripts", "pyi_rth_simplejson.py"),
+    ],
     excludes=[
         # requests ưu tiên simplejson nếu có; bản freeze thường dở →
         # ImportError: cannot import name 'JSONDecodeError' from 'simplejson'
         "simplejson",
+        "simplejson.errors",
+        "simplejson.decoder",
+        "simplejson.encoder",
+        "simplejson.scanner",
+
         "tkinter",
         "matplotlib",
         "scipy",

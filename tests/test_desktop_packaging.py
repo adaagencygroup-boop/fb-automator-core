@@ -31,6 +31,8 @@ class BundleDataTests(unittest.TestCase):
             self.assertNotIn("browser_profiles", Path(destination).parts)
         self.assertTrue(any("migrations" in Path(destination).parts for _, destination in bundled))
         self.assertIn("simplejson", analysis.call_args.kwargs["excludes"])
+        runtime_hooks = analysis.call_args.kwargs["runtime_hooks"]
+        self.assertTrue(any(str(h).endswith("pyi_rth_simplejson.py") for h in runtime_hooks))
 
 
 class SidecarBuildTests(unittest.TestCase):
