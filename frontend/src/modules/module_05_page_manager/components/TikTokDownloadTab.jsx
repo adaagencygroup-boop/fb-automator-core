@@ -197,8 +197,9 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     if (!isConfigLoadedRef.current) return;
     if (!downloadFolder || !downloadFolder.trim()) return;
     try {
-      localStorage.setItem("fb_tiktok_config", JSON.stringify({ downloadFolder, delaySec, maxVideos, concurrency }));
-      saveTikTokConfig({ download_folder: downloadFolder, max_videos: maxVideos });
+      const numVideos = Math.max(1, parseInt(maxVideos, 10) || 1);
+      localStorage.setItem("fb_tiktok_config", JSON.stringify({ downloadFolder, delaySec, maxVideos: numVideos, concurrency }));
+      saveTikTokConfig({ download_folder: downloadFolder, max_videos: numVideos });
     } catch {}
   }, [downloadFolder, delaySec, maxVideos, concurrency]);
   const handleSelectFolder = async () => {
@@ -231,7 +232,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
         setDownloadFolder(res.folder);
         setSharedVideoFolder(res.folder);
         setFolderError(false);
-        saveTikTokConfig({ download_folder: res.folder, max_videos: maxVideos });
+        saveTikTokConfig({ download_folder: res.folder, max_videos: Math.max(1, parseInt(maxVideos, 10) || 1) });
         return;
       }
     } catch (err) {
@@ -444,13 +445,13 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     setIsStarting(true);
     setIsRunning(true);
     const displayName = targetItem.link && targetItem.keyword ? `${targetItem.link} ["${targetItem.keyword}"]` : (targetItem.link || (targetItem.keyword ? `Từ Khóa: "${targetItem.keyword}"` : (targetItem.page_name || "Fanpage")));
-    addLog(`[${getUtc7Time()}] Thư Mục Lưu: ${downloadFolder} | Giới Hạn: ${maxVideos} Video/Page`);
+    addLog(`[${getUtc7Time()}] Thư Mục Lưu: ${downloadFolder} | Giới Hạn: ${Number(maxVideos) || 1} Video/Page`);
     addLog(`[${getUtc7Time()}] Bắt Đầu Tải Cho Fanpage "${targetItem.page_name}" (${displayName})...`);
     setItems((prev) => prev.map((item) => (item.id === it.id ? { ...item, status: "RUNNING", message: "Đang Tải Video..." } : item)));
     const res = await startTikTokDownloadJob({
       download_folder: downloadFolder,
       delay_sec: delaySec,
-      max_videos: maxVideos,
+      max_videos: Number(maxVideos) || 1,
       concurrency: concurrency,
       items: [targetItem]
     });
@@ -549,13 +550,13 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
       if (cur) savePageItemData(pid, cur.keyword || "", cur.link || "");
     });
     setIsRunning(true);
-    addLog(`[${getUtc7Time()}] Thư Mục Lưu: ${downloadFolder} | Giới Hạn: ${maxVideos} Video/Page`);
+    addLog(`[${getUtc7Time()}] Thư Mục Lưu: ${downloadFolder} | Giới Hạn: ${Number(maxVideos) || 1} Video/Page`);
     addLog(`[${getUtc7Time()}] Bắt Đầu Tác Vụ Tải Hàng Loạt TikTok (${items.length} Fanpage)...`);
     loggedStatusesRef.current = {};
     const res = await startTikTokDownloadJob({
       download_folder: downloadFolder,
       delay_sec: delaySec,
-      max_videos: maxVideos,
+      max_videos: Number(maxVideos) || 1,
       concurrency: concurrency,
       items: items
     });
@@ -796,7 +797,21 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                   <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" title="Số Lượng Video Mới Cần Tải Cho Mỗi Fanpage Trong Đợt Kích Hoạt Này." />
                 </div>
                 <div className="flex items-center gap-2">
-                  <Input type="number" min={1} value={maxVideos} onChange={(e) => setMaxVideos(Number(e.target.value))} className="h-8 text-xs font-normal font-mono w-20 shrink-0" />
+                  <Input
+                    type="text"
+                    value={maxVideos}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, "").replace(/^0+/, "");
+                      setMaxVideos(val);
+                    }}
+                    onBlur={() => {
+                      if (!maxVideos || Number(maxVideos) < 1) {
+                        setMaxVideos("1");
+                      }
+                    }}
+                    className="h-8 text-xs font-normal font-mono w-20 shrink-0"
+                    placeholder="1"
+                  />
                   <Button
                     variant="outline"
                     size="sm"
