@@ -9,6 +9,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+# GitHub Actions Windows mặc định cp1252 → print tiếng Việt sẽ UnicodeEncodeError
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 TAURI_DIR = BASE_DIR / "src-tauri"
 ENGINE_RUNTIME = TAURI_DIR / "engine-runtime"

@@ -69,6 +69,9 @@ jobs:
       - name: Build Python Sidecar Binary
         run: |
           python scripts/build_sidecar.py
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
 
       - name: Build Tauri Desktop Package
         run: |
@@ -77,6 +80,8 @@ jobs:
           CI: false
           NEXT_TELEMETRY_DISABLED: 1
           APPIMAGE_EXTRACT_AND_RUN: 1
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
