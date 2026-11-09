@@ -257,6 +257,22 @@ export default function SeedingProfilePage() {
       return;
     }
 
+    if (!delayMin || !delayMax || Number(delayMax) <= Number(delayMin)) {
+      toast.warning(
+        `Thời gian tối đa (${delayMax || 0}s) phải lớn hơn thời gian tối thiểu (${delayMin || 0}s)!`,
+        "CẤU HÌNH THỜI GIAN KHÔNG HỢP LỆ"
+      );
+      return;
+    }
+
+    if (Number(delayMax) > 3600) {
+      toast.warning(
+        "Thời gian tối đa chỉ được nhập tối đa đến 3600 giây!",
+        "CẤU HÌNH THỜI GIAN KHÔNG HỢP LỆ"
+      );
+      return;
+    }
+
     try {
       setIsRunning(true);
       toast.info("Đang khởi tạo chiến dịch Seeding Trang cá nhân...", "BẮT ĐẦU");
@@ -402,7 +418,13 @@ export default function SeedingProfilePage() {
         isStopping={isStopping}
         onStart={handleStart}
         onStop={handleStop}
-        disabled={targets.length === 0}
+        disabled={
+          targets.length === 0 ||
+          !delayMin ||
+          !delayMax ||
+          Number(delayMax) <= Number(delayMin) ||
+          Number(delayMax) > 3600
+        }
         otherRunning={otherRunning}
         onStopOther={handleStopOther}
       />
