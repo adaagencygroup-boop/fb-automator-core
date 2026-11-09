@@ -110,11 +110,24 @@ class LoginRequest(UidsRequest):
 
 class OpenBrowserRequest(OwnerRequest):
     uid: str
+    target_url: Optional[str] = Field(None, max_length=2048)
 
     @field_validator("uid")
     @classmethod
     def valid_uid(cls, value):
         return validate_uid(value)
+
+    @field_validator("target_url")
+    @classmethod
+    def valid_target_url(cls, value):
+        if value is None:
+            return None
+        value = str(value).strip()
+        if not value:
+            return None
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("target_url must be an http(s) URL")
+        return value
 
 class TestProxyRequest(BaseModel):
     proxy: str = Field(min_length=1)

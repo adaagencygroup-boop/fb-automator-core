@@ -779,7 +779,8 @@ def get_post_history(
         if status.upper() in ("PUBLISHED", "SUCCESS", "ĐÃ XUẤT BẢN"):
             conditions.append("status = 'PUBLISHED'")
         elif status.upper() in ("FAILED", "LỖI", "LOI"):
-            conditions.append("status IN ('FAILED', 'STOPPED', 'BLOCKED', 'DIE')")
+            # Chỉ FAILED — không gom STOPPED/BLOCKED/DIE (các filter riêng trên UI)
+            conditions.append("status = 'FAILED'")
         else:
             conditions.append("status = %s")
             params.append(status.upper())

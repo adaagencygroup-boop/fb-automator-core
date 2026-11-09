@@ -478,6 +478,13 @@ def open_browser(
     options.add_argument(f"--force-webrtc-ip-handling-policy={WEBRTC_IP_POLICY}")
     options.add_experimental_option("prefs", {
         "profile.default_content_setting_values.notifications": 2,
+        # Clipboard: 1=Allow — tránh popup 'Chia sẻ bảng nhớ tạm?' khi Copy link (FB)
+        "profile.default_content_setting_values.clipboard": 1,
+        "profile.content_settings.exceptions.clipboard": {
+            "https://www.facebook.com,*": {"setting": 1},
+            "https://web.facebook.com,*": {"setting": 1},
+            "[*.]facebook.com,*": {"setting": 1},
+        },
         "credentials_enable_service": False,
         "profile.password_manager_enabled": False,
         "profile.exit_type": "Normal",

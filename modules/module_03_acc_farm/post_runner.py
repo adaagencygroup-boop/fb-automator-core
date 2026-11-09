@@ -8,13 +8,14 @@ Hỗ trợ:
   - Bắn log theo định dạng chuẩn ra giao diện UI
 """
 import os
+import re
 import time
 import random
 import logging
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Tuple
 
 from modules.module_03_acc_farm import post_repository
 from modules.module_03_acc_farm.post_flow import (
@@ -201,13 +202,61 @@ class PostRunner:
             post.get("image_path"),
         )
         media_path = (post.get("media_path") or "").strip() or None
+        post_url = (post.get("facebook_post_url") or post.get("postUrl") or "").strip() or None
         return {
             "content": content,
             "imagePaths": image_paths,
             "mediaPath": media_path,
             "mediaName": os.path.basename(media_path) if media_path else "",
             "postType": ptype,
+            "postUrl": post_url,
         }
+
+    @staticmethod
+    def _coerce_publish_url(result: Any) -> Tuple[Optional[str], bool]:
+        """Chuẩn hóa StatusUrlResult | (url, is_permalink) | str → (url_cleaned, is_permalink)."""
+        from modules.module_03_acc_farm.post_flow import (
+            _clean_facebook_url,
+            is_status_permalink,
+        )
+
+        def _norm(url: Optional[str], is_perm: bool) -> Tuple[Optional[str], bool]:
+            if not url:
+                return None, False
+            cleaned = _clean_facebook_url(str(url).strip())
+            if not cleaned:
+                return None, False
+            # Profile / không có mã bài → không được đánh dấu permalink
+            if not is_status_permalink(cleaned):
+                return cleaned, False
+            return cleaned, bool(is_perm)
+
+        if result is None:
+            return None, False
+        if hasattr(result, "is_permalink") and hasattr(result, "url"):
+            url_attr = getattr(result, "url", None)
+            return _norm(
+                (str(url_attr).strip() or None) if url_attr is not None else None,
+                bool(getattr(result, "is_permalink", False)),
+            )
+        if isinstance(result, tuple) and len(result) >= 1:
+            url = result[0]
+            if hasattr(url, "url") and hasattr(url, "is_permalink"):
+                return _norm(
+                    (str(url.url).strip() or None) if url.url is not None else None,
+                    bool(url.is_permalink),
+                )
+            is_perm = bool(result[1]) if len(result) > 1 else True
+            if isinstance(url, str) and url.strip():
+                return _norm(url.strip(), is_perm)
+            return None, False
+        if isinstance(result, str) and result.strip():
+            if result.startswith("StatusUrlResult("):
+                m = re.search(r"url=['\"]([^'\"]+)['\"]", result)
+                is_perm = "is_permalink=True" in result
+                return _norm(m.group(1) if m else None, is_perm)
+            return _norm(result.strip(), True)
+        return None, False
 
     @staticmethod
     def _db_status_to_ui(db_status: Optional[str]) -> str:
@@ -257,12 +306,32 @@ class PostRunner:
                 for k, v in detail.items():
                     if v and not existing.get(k):
                         existing[k] = v
+                if detail.get("postUrl") and not existing.get("postUrl"):
+                    existing["postUrl"] = detail["postUrl"]
+                    existing["isPermalink"] = existing.get("isPermalink")
+                    if existing.get("isPermalink") is None and detail["postUrl"]:
+                        u = detail["postUrl"]
+                        existing["isPermalink"] = (
+                            "/posts/" in u
+                            or "permalink.php" in u
+                            or "story_fbid=" in u
+                            or "pfbid" in u
+                        )
                 if preview and (
                     not existing.get("contentPreview")
                     or existing.get("contentPreview", "").startswith("Đang chuẩn bị")
                 ):
                     existing["contentPreview"] = preview
                 continue
+            post_url = detail.get("postUrl")
+            is_perm = None
+            if post_url:
+                is_perm = (
+                    "/posts/" in post_url
+                    or "permalink.php" in post_url
+                    or "story_fbid=" in post_url
+                    or "pfbid" in post_url
+                )
             self._progress_order.append(pid)
             self._progress_posts[pid] = {
                 "id": pid,
@@ -273,11 +342,12 @@ class PostRunner:
                 "contentPreview": preview,
                 "currentActivity": (post.get("error_message") or "").strip()
                 or (
-                    "Đăng bài hoàn tất."
+                    "XUẤT BẢN THÀNH CÔNG!"
                     if ui_status == "Hoàn thành"
                     else "Đang chờ trong hàng đợi..."
                 ),
                 "startTime": now,
+                "isPermalink": is_perm,
                 **detail,
             }
 
@@ -1228,13 +1298,14 @@ class PostRunner:
                             activity=activity,
                         )
 
+                    is_permalink = True
                     if post_type == "status":
                         status_content = (post.get("content") or "").strip()
                         if not status_content:
                             raise ValueError(
                                 "Nội dung bài Status trống — bỏ qua đăng để tránh bài chỉ còn ảnh."
                             )
-                        res_url = _post_flow_mod.publish_status_post(
+                        status_result = _post_flow_mod.publish_status_post(
                             driver,
                             status_content,
                             post.get("image_path"),
@@ -1244,6 +1315,7 @@ class PostRunner:
                             image_paths=post.get("image_paths"),
                             on_checkpoint=on_checkpoint,
                         )
+                        res_url, is_permalink = self._coerce_publish_url(status_result)
                     elif post_type == "reels":
                         res_url = _post_flow_mod.publish_reels_post(
                             driver,
@@ -1254,6 +1326,9 @@ class PostRunner:
                             uid=uid,
                             on_checkpoint=on_checkpoint,
                         )
+                        res_url, is_permalink = self._coerce_publish_url(res_url)
+                        if res_url:
+                            is_permalink = True
                     elif post_type == "story":
                         res_url = _post_flow_mod.publish_story_post(
                             driver,
@@ -1264,24 +1339,40 @@ class PostRunner:
                             uid=uid,
                             on_checkpoint=on_checkpoint,
                         )
+                        res_url, is_permalink = self._coerce_publish_url(res_url)
+                        if res_url:
+                            is_permalink = True
                     else:
                         res_url = None
 
                     if not res_url and uid:
                         if post_type == "reels":
                             res_url = f"https://www.facebook.com/{uid}/reels"
+                            is_permalink = False
                         elif post_type == "story":
                             res_url = f"https://www.facebook.com/stories/{uid}"
+                            is_permalink = False
                         else:
-                            res_url = f"https://www.facebook.com/{uid}"
+                            res_url = (
+                                f"https://www.facebook.com/profile.php?id={uid}"
+                                if str(uid).isdigit()
+                                else f"https://www.facebook.com/{uid}"
+                            )
+                            is_permalink = False
 
-                    success_msg = f"XUẤT BẢN THÀNH CÔNG {post_type.upper()}! Link: {res_url or 'N/A'}"
+                    # Activity ngắn — URL tách field postUrl để FE hiện nút "Xem bài viết"
+                    if post_type == "status" and res_url and not is_permalink:
+                        success_msg = "XUẤT BẢN THÀNH CÔNG STATUS! (chưa lấy được permalink)"
+                        log_link_msg = f"Chưa lấy được permalink — link trang cá nhân: {res_url}"
+                    else:
+                        success_msg = f"XUẤT BẢN THÀNH CÔNG {post_type.upper()}!"
+                        log_link_msg = f"Link bài: {res_url or 'N/A'}"
                     post_logs.append(
                         {
                             "timestamp": time.strftime("%H:%M:%S"),
                             "thread": thread_name,
                             "type": "success",
-                            "message": success_msg,
+                            "message": f"{success_msg} {log_link_msg}",
                         }
                     )
                     post_repository.finish_post(
@@ -1306,11 +1397,16 @@ class PostRunner:
                         if thread_name in self._active_threads:
                             self._active_threads[thread_name]["status"] = "Hoàn thành"
                             self._active_threads[thread_name]["currentActivity"] = success_msg
+                            if res_url:
+                                self._active_threads[thread_name]["postUrl"] = res_url
+                                self._active_threads[thread_name]["isPermalink"] = is_permalink
                         self._update_progress_post(
                             current_post_id,
                             status="Hoàn thành",
                             currentActivity=success_msg,
                             threadId=thread_name,
+                            postUrl=res_url,
+                            isPermalink=is_permalink,
                         )
                         self._metrics["running"] = len(
                             [
@@ -1322,7 +1418,7 @@ class PostRunner:
                     self.log(
                         thread_name,
                         "info",
-                        f"XUẤT BẢN THÀNH CÔNG {post_type.upper()} cho UID {uid}. Link: {res_url or 'N/A'}",
+                        f"XUẤT BẢN THÀNH CÔNG {post_type.upper()} cho UID {uid}. {log_link_msg}",
                     )
                     self.log(
                         thread_name,

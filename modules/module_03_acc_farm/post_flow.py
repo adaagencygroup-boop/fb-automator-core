@@ -17,7 +17,7 @@ import hmac
 import hashlib
 import struct
 from urllib.parse import urlparse, parse_qs, urlencode
-from typing import Optional, Any, List, Callable
+from typing import Optional, Any, List, Callable, NamedTuple
 import json
 
 from selenium.webdriver.common.by import By
@@ -742,66 +742,48 @@ def is_composer_dialog_open(driver) -> bool:
 
 def close_audience_dialog(driver, human: HumanInteraction, log_cb: Optional[Any] = None) -> bool:
     """
-    Đóng hộp thoại Post audience bằng mọi cách có thể:
-    1. Click nút Done / Xong / Save / Lưu (bằng JS event + Selenium click)
-    2. Click nút Back (<-) ở góc trên bên trái modal
-    3. Gửi phím ESCAPE
+    Đóng hộp thoại Post audience CHỈ bằng nút Done / Xong trong bảng đó.
+    Không bấm nút quay lại, X, nền, ESC — tránh đóng luôn hộp thoại đăng / kích hoạt Lưu nháp.
     """
     def log(msg: str):
         if log_cb:
             log_cb(msg)
         logger.info(msg)
 
-    # 1. Thử click nút Done / Xong qua JavaScript (kích hoạt đầy đủ chuỗi sự kiện MouseEvent)
     js_click_done = """
         function triggerRealClick(el) {
             if (!el) return false;
             try {
                 ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
                     el.dispatchEvent(new MouseEvent(evt, {
-                        bubbles: true,
-                        cancelable: true,
-                        view: window
+                        bubbles: true, cancelable: true, view: window
                     }));
                 });
                 if (typeof el.click === 'function') el.click();
                 return true;
-            } catch (e) {
-                return false;
-            }
+            } catch (e) { return false; }
         }
-
-        // Tìm nút Done / Xong / Save / Lưu trên toàn DOM
-        const allButtons = Array.from(document.querySelectorAll('div[role="button"], button'));
-        for (const btn of allButtons) {
+        // Chỉ trong dialog audience (không đụng dialog composer)
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
+        const audience = dialogs.find(d => {
+            const t = ((d.innerText || '') + ' ' + (d.getAttribute('aria-label') || '')).toLowerCase();
+            return t.includes('đối tượng') || t.includes('audience') || t.includes('ai có thể xem');
+        }) || null;
+        const root = audience || document;
+        const buttons = Array.from(root.querySelectorAll('div[role="button"], button'));
+        for (const btn of buttons) {
             const text = (btn.innerText || btn.textContent || '').trim().toLowerCase();
             const aria = (btn.getAttribute('aria-label') || '').trim().toLowerCase();
-            if (text === 'done' || text === 'xong' || text === 'save' || text === 'lưu' ||
-                aria === 'done' || aria === 'xong' || aria === 'save' || aria === 'lưu') {
+            // Chỉ Done/Xong — KHÔNG Save/Lưu (tránh Lưu nháp), KHÔNG Back
+            if (text === 'done' || text === 'xong' || aria === 'done' || aria === 'xong') {
                 triggerRealClick(btn);
                 return true;
             }
         }
-
-        // Tìm span chứa text Done
-        const allSpans = Array.from(document.querySelectorAll('span'));
-        for (const span of allSpans) {
+        for (const span of Array.from(root.querySelectorAll('span'))) {
             const text = (span.innerText || span.textContent || '').trim().toLowerCase();
-            if (text === 'done' || text === 'xong' || text === 'save' || text === 'lưu') {
-                const btn = span.closest('div[role="button"]') || span.closest('button') || span.parentElement;
-                if (btn) {
-                    triggerRealClick(btn);
-                    return true;
-                }
-                triggerRealClick(span);
-                return true;
-            }
-        }
-
-        // Tìm nút Back (<-) ở góc trên bên trái của dialog Post audience
-        for (const btn of allButtons) {
-            const aria = (btn.getAttribute('aria-label') || '').trim().toLowerCase();
-            if (aria === 'back' || aria === 'quay lại' || aria === 'trở lại') {
+            if (text === 'done' || text === 'xong') {
+                const btn = span.closest('div[role="button"]') || span.closest('button') || span;
                 triggerRealClick(btn);
                 return true;
             }
@@ -812,52 +794,31 @@ def close_audience_dialog(driver, human: HumanInteraction, log_cb: Optional[Any]
     for attempt in range(3):
         if not is_audience_dialog_open(driver):
             return True
-
-        # Thử bằng JS trước
         try:
             clicked = driver.execute_script(js_click_done)
             if clicked:
                 time.sleep(0.8)
                 if not is_audience_dialog_open(driver):
-                    log("✓ Đã bấm 'Done/Back' qua JS và đóng bảng chọn đối tượng.")
+                    log("✓ Đã bấm 'Done/Xong' và đóng bảng chọn đối tượng.")
                     return True
         except Exception:
             pass
 
-        # Thử bằng Selenium XPath tìm nút Done / Xong
         done_selectors = [
-            "//div[@role='dialog']//div[@role='button' and (translate(@aria-label, 'DONE', 'done')='done' or translate(@aria-label, 'XONG', 'xong')='xong' or translate(@aria-label, 'SAVE', 'save')='save' or translate(@aria-label, 'LƯU', 'lưu')='lưu')]",
-            "//div[@role='dialog']//div[@role='button']//span[translate(normalize-space(), 'DONE', 'done')='done' or translate(normalize-space(), 'XONG', 'xong')='xong' or translate(normalize-space(), 'SAVE', 'save')='save' or translate(normalize-space(), 'LƯU', 'lưu')='lưu']",
-            "//div[@role='dialog']//span[normalize-space()='Done' or normalize-space()='Xong' or normalize-space()='Save' or normalize-space()='Lưu']",
+            "//div[@role='dialog']//div[@role='button' and (translate(@aria-label,'DONE','done')='done' or translate(@aria-label,'XONG','xong')='xong')]",
+            "//div[@role='dialog']//span[normalize-space()='Done' or normalize-space()='Xong']/ancestor::div[@role='button'][1]",
+            "//div[@role='dialog']//span[normalize-space()='Done' or normalize-space()='Xong']",
         ]
         for sel in done_selectors:
             try:
-                elems = driver.find_elements(By.XPATH, sel)
-                for el in reversed(elems):
-                    if el.is_displayed():
-                        human.click(el)
-                        time.sleep(0.8)
-                        if not is_audience_dialog_open(driver):
-                            log("✓ Đã bấm 'Done' qua Selenium và đóng bảng chọn đối tượng.")
-                            return True
-            except Exception:
-                continue
-
-        # Thử bằng nút Back (<-) ở góc trên bên trái
-        back_selectors = [
-            "//div[@role='dialog']//div[@role='button' and (translate(@aria-label, 'BACK', 'back')='back' or translate(@aria-label, 'QUAY LẠI', 'quay lại')='quay lại' or translate(@aria-label, 'TRỞ LẠI', 'trở lại')='trở lại')]",
-            "//div[@role='dialog']//div[@role='button' and @aria-label][1]",
-        ]
-        for sel in back_selectors:
-            try:
-                elems = driver.find_elements(By.XPATH, sel)
-                for el in elems:
-                    if el.is_displayed():
-                        human.click(el)
-                        time.sleep(0.8)
-                        if not is_audience_dialog_open(driver):
-                            log("✓ Đã bấm nút 'Back' (<-) và đóng bảng chọn đối tượng.")
-                            return True
+                for el in reversed(driver.find_elements(By.XPATH, sel)):
+                    if not el.is_displayed():
+                        continue
+                    human.click(el)
+                    time.sleep(0.8)
+                    if not is_audience_dialog_open(driver):
+                        log("✓ Đã bấm 'Done/Xong' qua Selenium và đóng bảng chọn đối tượng.")
+                        return True
             except Exception:
                 continue
 
@@ -2719,216 +2680,1386 @@ def ensure_reels_privacy_public(driver, human: HumanInteraction, log_cb: Optiona
 # URL EXTRACTION HELPERS (LẤY LINK CHÍNH XÁC CỦA BÀI VIẾT / REELS / STORY)
 # ==============================================================================
 
-def _clean_facebook_url(url: str) -> str:
+class StatusUrlResult(NamedTuple):
+    """Kết quả lấy link sau đăng Status — phân biệt permalink bài vs fallback profile."""
+    url: Optional[str]
+    is_permalink: bool
+
+
+def _normalize_fb_host(url: str) -> str:
+    """Đổi host về www.facebook.com cho thống nhất."""
     if not url:
         return ""
     try:
         parsed = urlparse(url)
-        clean_path = parsed.path.rstrip("/")
-        # 1. Nếu là reels: bắt buộc phải có ID số
+        path = parsed.path or ""
+        query = f"?{parsed.query}" if parsed.query else ""
+        fragment = f"#{parsed.fragment}" if parsed.fragment else ""
+        return f"https://www.facebook.com{path}{query}{fragment}"
+    except Exception:
+        return url.replace("://web.facebook.com", "://www.facebook.com").replace(
+            "://m.facebook.com", "://www.facebook.com"
+        )
+
+
+# Tracking / redirect params Facebook hay gắn — luôn bỏ khi clean.
+_FB_STRIP_QUERY_KEYS = frozenset({
+    "_rdc", "_rdr", "__cft__", "__tn__", "fbclid", "ref", "refid", "refsrc",
+    "paipv", "eav", "_ft_", "mibextid", "rdc", "rdr", "rdid",
+})
+
+
+def _clean_facebook_url(url: str) -> str:
+    """
+    Chuẩn hóa URL Facebook: giữ tham số cần (story_fbid, id, fbid), bỏ tracking.
+    Luôn bỏ fragment (#) và _rdc/_rdr/__cft__/__tn__/fbclid.
+    Không cắt query mù bằng split('?')[0] — tránh mất id trên profile.php / permalink.
+    """
+    if not url:
+        return ""
+    try:
+        # Bỏ fragment (#...) trước
+        url = str(url).split("#", 1)[0].strip()
+        parsed = urlparse(url)
+        clean_path = (parsed.path or "").rstrip("/")
+        qs = parse_qs(parsed.query)
+
+        # 1. Reels: bắt buộc ID số
         m_reel = re.search(r"/(?:reel|reels)/(\d{6,})", url)
         if m_reel:
             return f"https://www.facebook.com/reel/{m_reel.group(1)}"
 
-        # 2. Nếu là stories
+        # 2. Stories
         if "/stories/" in clean_path:
             return f"https://www.facebook.com{clean_path}"
 
-        # 3. Nếu là posts thông thường (/posts/ID hoặc /posts/pfbid...)
+        # 3. Posts path (/posts/ID hoặc /posts/pfbid...) — giữ path, bỏ toàn bộ query tracking
         if "/posts/" in clean_path:
             return f"https://www.facebook.com{clean_path}"
 
-        # 4. Permalink PHP hoặc Story PHP
+        # 4. Permalink / story.php — chỉ giữ story_fbid + id (+ fbid)
         if "permalink.php" in clean_path or "story.php" in clean_path:
-            qs = parse_qs(parsed.query)
             clean_params = {}
             for k in ("story_fbid", "id", "fbid"):
                 if k in qs and qs[k]:
                     clean_params[k] = qs[k][0]
+            script_name = "permalink.php" if "permalink.php" in clean_path else "story.php"
             if clean_params:
-                new_query = urlencode(clean_params)
-                script_name = "permalink.php" if "permalink.php" in clean_path else "story.php"
-                return f"https://www.facebook.com/{script_name}?{new_query}"
+                return f"https://www.facebook.com/{script_name}?{urlencode(clean_params)}"
+            return f"https://www.facebook.com/{script_name}"
 
-        # 5. Photo posts (/photo.php hoặc /photo/ hoặc /photos/)
+        # 5. Photo
         if "photo" in clean_path:
-            qs = parse_qs(parsed.query)
             if "fbid" in qs and qs["fbid"]:
                 return f"https://www.facebook.com/photo/?fbid={qs['fbid'][0]}"
             m_photo = re.search(r"\d{6,}", clean_path)
             if m_photo:
                 return f"https://www.facebook.com/photo/?fbid={m_photo.group(0)}"
 
-        # 6. Video posts (/videos/ID)
+        # 6. Video
         m_vid = re.search(r"/videos/(\d{6,})", url)
         if m_vid:
             return f"https://www.facebook.com/watch/?v={m_vid.group(1)}"
 
-        # 7. Nhận diện chuỗi pfbid ở bất cứ đâu trong link
+        # 7. pfbid ở bất kỳ đâu
         m_pfbid = re.search(r"(pfbid[a-zA-Z0-9]+)", url)
         if m_pfbid:
             return f"https://www.facebook.com/{m_pfbid.group(1)}"
 
-        return url.split("?")[0]
+        # 8. profile.php — chỉ giữ id (bỏ _rdc/_rdr/#)
+        if clean_path.endswith("profile.php") or clean_path == "/profile.php":
+            if "id" in qs and qs["id"]:
+                return f"https://www.facebook.com/profile.php?id={qs['id'][0]}"
+            return "https://www.facebook.com/profile.php"
+
+        # 9. Còn lại: host www, bỏ tracking query + fragment
+        kept = {
+            k: v[0]
+            for k, v in qs.items()
+            if v and k not in _FB_STRIP_QUERY_KEYS and not k.startswith("__")
+        }
+        base = f"https://www.facebook.com{clean_path or ''}"
+        if kept:
+            return f"{base}?{urlencode(kept)}"
+        return base or _normalize_fb_host(url).split("#", 1)[0]
     except Exception:
-        return url
+        return str(url).split("#", 1)[0]
 
 
-def extract_status_post_url(driver, uid: Optional[str] = None, log_cb: Optional[Any] = None) -> Optional[str]:
+def is_status_permalink(url: Optional[str]) -> bool:
     """
-    Trích xuất link trực tiếp của bài viết vừa đăng trên Facebook Newsfeed / Profile.
-    1. Kiểm tra URL hiện tại nếu đang là permalink của post
-    2. Tìm trong Toast / Alert notification ngay sau khi xuất bản
-    3. Quét thẻ bài viết mới nhất trên feed hiện tại (Newsfeed)
-    4. Điều hướng tới https://www.facebook.com/me để lấy chính xác permalink bài viết đầu tiên trên Timeline
-    5. Fallback link trang cá nhân (https://www.facebook.com/{uid} hoặc URL profile) để đảm bảo KHÔNG BAO GIỜ bị rỗng.
+    Chỉ nhận URL bài Status có mã bài:
+      - /posts/… hoặc /{uid}/posts/{id|pfbid}
+      - permalink.php?story_fbid=…&id=… (story_fbid có thể là pfbid…)
+      - pfbid trong path/query
+    Reject: profile.php, /me, /home, /friends, /share/, l.php, và mọi URL không có mã bài.
     """
-    def _log(m):
-        if log_cb:
-            log_cb(m)
-        logger.info(m)
-
+    if not url or not isinstance(url, str):
+        return False
     try:
-        # Tier 1: Kiểm tra URL hiện tại nếu đang là permalink của post
+        parsed = urlparse(url)
+        host = (parsed.netloc or "").lower()
+        if "facebook.com" not in host:
+            return False
+        path = (parsed.path or "").rstrip("/")
+        qs = parse_qs(parsed.query)
+        low = url.lower()
+
+        # Reject rõ ràng — kể cả /share/p/ (chỉ dùng để resolve, không lưu làm permalink)
+        if path in ("", "/") or path.endswith("/me") or "/home" in path:
+            return False
+        if path.endswith("profile.php") or path == "/profile.php":
+            return False
+        if any(x in low for x in ("/friends", "/comment/", "/likes/", "l.php", "/share/")):
+            return False
+
+        # permalink.php / story.php có story_fbid (pfbid…) hoặc fbid
+        if "permalink.php" in path or "story.php" in path:
+            return bool(qs.get("story_fbid") or qs.get("fbid"))
+
+        # /posts/… hoặc /{uid}/posts/{id|pfbid}
+        if "/posts/" in path:
+            tail = path.split("/posts/", 1)[-1]
+            return bool(tail and not tail.startswith("?"))
+
+        # pfbid ở path/query (không phải profile)
+        if re.search(r"pfbid[a-zA-Z0-9]+", url):
+            return True
+
+        if qs.get("story_fbid"):
+            return True
+
+        return False
+    except Exception:
+        return False
+
+
+def _is_share_p_url(url: Optional[str]) -> bool:
+    if not url:
+        return False
+    return bool(re.search(r"facebook\.com/share/p/", str(url), re.I))
+
+
+def _profile_url_from_uid(uid: Optional[str]) -> Optional[str]:
+    """Link profile chuẩn từ uid nick — KHÔNG lấy current_url. Luôn qua _clean."""
+    if not uid:
+        return None
+    uid_s = str(uid).strip()
+    if not uid_s:
+        return None
+    if uid_s.isdigit():
+        raw = f"https://www.facebook.com/profile.php?id={uid_s}"
+    else:
+        uid_s = uid_s.lstrip("/")
+        if uid_s.lower() in ("me", "home", "profile.php"):
+            return None
+        raw = f"https://www.facebook.com/{uid_s}"
+    return _clean_facebook_url(raw)
+
+
+def _uid_from_c_user(driver) -> Optional[str]:
+    try:
+        cookie = driver.get_cookie("c_user")
+        if cookie and cookie.get("value"):
+            val = str(cookie["value"]).strip()
+            if val.isdigit():
+                return val
+    except Exception:
+        pass
+    return None
+
+
+def _content_snippet_for_match(content: Optional[str], max_len: int = 28) -> str:
+    """20–30 ký tự đầu status (chuẩn hóa khoảng trắng) để khớp article."""
+    text = re.sub(r"\s+", " ", (content or "").strip())
+    if not text:
+        return ""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len]
+
+
+def _accept_permalink(raw: Optional[str], log_fn=None) -> Optional[str]:
+    """Chỉ nhận URL bài thật (/posts|permalink.php?story_fbid|pfbid). Profile/share → None."""
+    if not raw:
+        return None
+    clean = _clean_facebook_url(raw)
+    if is_status_permalink(clean):
+        return clean
+    if log_fn and clean:
+        log_fn(f"Bỏ URL không phải permalink bài: {clean}")
+    return None
+
+
+def _finalize_permalink(raw: Optional[str], log_fn=None) -> Optional[StatusUrlResult]:
+    accepted = _accept_permalink(raw, log_fn)
+    if not accepted:
+        return None
+    return StatusUrlResult(accepted, True)
+
+
+def _is_profile_or_me_url(url: Optional[str]) -> bool:
+    """True nếu URL là trang cá nhân /me /home — không phải link bài."""
+    if not url:
+        return True
+    try:
+        parsed = urlparse(str(url).split("#", 1)[0])
+        path = (parsed.path or "").rstrip("/").lower()
+        if path.endswith("/me") or path == "/me" or "/home" in path:
+            return True
+        if path.endswith("profile.php") or path == "/profile.php":
+            return True
+        parts = [p for p in path.split("/") if p]
+        if len(parts) == 1 and parts[0] not in ("permalink.php", "story.php", "photo.php", "watch"):
+            if "posts" not in path and "permalink" not in path and "pfbid" not in (url or "").lower():
+                return True
+        return False
+    except Exception:
+        return False
+
+
+# JS: multi-selector article + đọc text (innerText→textContent) → timestamp permalink>/posts>/share/p
+_FIND_TIMESTAMP_LINK_JS = r"""
+    const hint = (arguments[0] || "").toLowerCase();
+    const doClick = arguments[1] !== false;
+
+    const readText = (el) => {
+        if (!el) return "";
+        let t = ((el.innerText || "") + "").replace(/\s+/g, " ").trim();
+        if (!t) t = ((el.textContent || "") + "").replace(/\s+/g, " ").trim();
+        return t;
+    };
+
+    // Gom đa selector, đếm từng loại, khử trùng theo phần tử.
+    // Bỏ wrapper pagelet nếu đã có role=article/article con bên trong.
+    const collectPostNodes = () => {
+        const counts = {
+            article: 0,
+            roleArticle: 0,
+            postContainers: 0,
+            pagelets: 0,
+        };
+        const seen = new Set();
+        const out = [];
+
+        const pushUnique = (nodes) => {
+            for (const el of nodes) {
+                if (!el || seen.has(el)) continue;
+                seen.add(el);
+                out.push(el);
+            }
+        };
+
+        const tagArts = Array.from(document.querySelectorAll("article"));
+        counts.article = tagArts.length;
+        pushUnique(tagArts);
+
+        const roleArts = Array.from(
+            document.querySelectorAll("div[role='article'], [role='article']")
+        );
+        counts.roleArticle = roleArts.length;
+        pushUnique(roleArts);
+
+        const postNodes = Array.from(document.querySelectorAll([
+            "[data-testid='fbfeed_story']",
+            "[data-testid='story-subtitle']",
+            "[data-testid*='feed']",
+            "[data-testid*='Feed']",
+            "[data-testid*='post']",
+            "[data-testid*='Post']",
+            "div[data-ad-preview='message']",
+            "div[data-ad-comet-preview='message']",
+        ].join(",")));
+        // story-subtitle là con — lấy closest container nếu có
+        const postContainers = [];
+        for (const el of postNodes) {
+            const tid = (el.getAttribute("data-testid") || "").toLowerCase();
+            if (tid === "story-subtitle" || tid.includes("subtitle")) {
+                const wrap = el.closest("[role='article'], article, [data-testid='fbfeed_story'], div[data-pagelet]");
+                postContainers.push(wrap || el);
+            } else {
+                postContainers.push(el);
+            }
+        }
+        counts.postContainers = postContainers.length;
+        pushUnique(postContainers);
+
+        const pageletNodes = Array.from(document.querySelectorAll([
+            "div[data-pagelet*='FeedUnit']",
+            "div[data-pagelet*='TimelineFeedUnit']",
+            "div[data-pagelet*='ProfileTimeline']",
+            "div[data-pagelet*='Timeline']",
+            "div[data-pagelet*='Feed']",
+        ].join(","))).filter((el) => {
+            const pl = (el.getAttribute("data-pagelet") || "").toLowerCase();
+            if (pl.includes("composer") || pl.includes("navigation") || pl.includes("chat")) return false;
+            return true;
+        });
+        counts.pagelets = pageletNodes.length;
+        for (const el of pageletNodes) {
+            if (seen.has(el)) continue;
+            let hasChildCollected = false;
+            for (const s of seen) {
+                if (el !== s && el.contains(s)) { hasChildCollected = true; break; }
+            }
+            if (hasChildCollected) continue;
+            seen.add(el);
+            out.push(el);
+        }
+
+        // Đếm link bài trên toàn trang (chẩn đoán: chưa load vs selector sai)
+        let pagePermalinkLinks = 0;
+        let pagePostsLinks = 0;
+        let pageShareLinks = 0;
+        for (const a of Array.from(document.querySelectorAll("a[href]"))) {
+            const h = (a.href || "").toLowerCase();
+            if (!h) continue;
+            if (h.includes("permalink.php") && h.includes("story_fbid=")) pagePermalinkLinks += 1;
+            if (h.includes("/posts/")) pagePostsLinks += 1;
+            if (h.includes("/share/p/")) pageShareLinks += 1;
+        }
+
+        return {
+            articles: out,
+            counts,
+            unique: out.length,
+            pagePermalinkLinks,
+            pagePostsLinks,
+            pageShareLinks,
+        };
+    };
+
+    const collected = collectPostNodes();
+    const articles = collected.articles;
+
+    const isTime = (txt, aria) => {
+        const t = (txt || "").trim().toLowerCase();
+        const a = (aria || "").trim().toLowerCase();
+        return /^(vừa xong|just now|\d+\s*(s|m|h|d|giây|phút|giờ|ngày)|hôm nay|today)$/i.test(t)
+            || /^(vừa xong|just now|\d+\s*(giây|phút|giờ|ngày|seconds?|minutes?|hours?|days?)(\s+trước)?)$/i.test(t)
+            || /(vừa xong|just now|\d+\s*(phút|giây|giờ|minute|second|hour)|hôm nay|today)/i.test(a);
+    };
+    const rankHref = (h) => {
+        if (!h) return 0;
+        const low = String(h).toLowerCase();
+        if (low.includes('/comment/') || low.includes('/likes/') || low.includes('/friends') || low.includes('l.php')) return 0;
+        if (low.includes('permalink.php') && low.includes('story_fbid=')) return 100;
+        if (low.includes('story.php') && (low.includes('story_fbid=') || low.includes('fbid='))) return 95;
+        if (low.includes('/posts/')) return 80;
+        if (low.includes('pfbid') && !low.includes('profile.php')) return 70;
+        if (low.includes('/share/p/')) return 40;
+        return 0;
+    };
+
+    let timestampLinks = 0;
+    let permalinkCandidates = 0;
+    let shareCandidates = 0;
+    let matchedArticles = 0;
+
+    // firstArt: ưu tiên node có text không rỗng
+    let firstBody = "";
+    let firstArtLen = 0;
+    let firstOuter = "";
+    for (const art of articles) {
+        const t = readText(art);
+        if (t) {
+            firstBody = t.slice(0, 120);
+            firstArtLen = t.length;
+            firstOuter = ((art.outerHTML || "") + "").replace(/\s+/g, " ").trim().slice(0, 280);
+            break;
+        }
+    }
+    if (!firstBody && articles.length) {
+        firstArtLen = 0;
+        firstOuter = ((articles[0].outerHTML || "") + "").replace(/\s+/g, " ").trim().slice(0, 280);
+    }
+
+    const candidates = [];
+
+    const scanArticle = (art, matchBoost, viaSuffix) => {
+        const bodyRaw = readText(art);
+        const body = bodyRaw.toLowerCase();
+        const matched = !!(hint && hint.length >= 12 && body.includes(hint));
+        if (matched) matchedArticles += 1;
+        if (hint && hint.length >= 12 && !matched) return;
+
+        const allA = Array.from(art.querySelectorAll("a[href]"));
+        for (const a of allA) {
+            const txt = (a.innerText || a.textContent || "").trim();
+            const aria = (a.getAttribute("aria-label") || "").trim();
+            const h = a.href || "";
+            const timed = isTime(txt, aria);
+            if (timed) timestampLinks += 1;
+            const r = rankHref(h);
+            if (r <= 0) continue;
+            if (r >= 70) permalinkCandidates += 1;
+            if (r === 40) shareCandidates += 1;
+            if (timed || matched || r >= 70) {
+                candidates.push({
+                    el: a,
+                    href: h,
+                    rank: r + (timed ? 5 : 0) + (matched ? 10 : 0) + (matchBoost || 0),
+                    via: (timed ? "timestamp" : "post_href") + (viaSuffix || ""),
+                    matched: !!matched,
+                });
+            }
+        }
+    };
+
+    for (const art of articles) {
+        scanArticle(art, 0, "");
+    }
+
+    // Hint ngắn 20 ký tự nếu full hint chưa khớp
+    if (hint && hint.length >= 12 && matchedArticles === 0) {
+        const shortHint = hint.slice(0, 20);
+        for (const art of articles) {
+            const body = readText(art).toLowerCase();
+            if (!body.includes(shortHint)) continue;
+            matchedArticles += 1;
+            const allA = Array.from(art.querySelectorAll("a[href]"));
+            for (const a of allA) {
+                const txt = (a.innerText || a.textContent || "").trim();
+                const aria = (a.getAttribute("aria-label") || "").trim();
+                const h = a.href || "";
+                const timed = isTime(txt, aria);
+                if (timed) timestampLinks += 1;
+                const r = rankHref(h);
+                if (r <= 0) continue;
+                if (r >= 70) permalinkCandidates += 1;
+                if (r === 40) shareCandidates += 1;
+                if (timed || r >= 40) {
+                    candidates.push({
+                        el: a,
+                        href: h,
+                        rank: r + (timed ? 5 : 0) + 8,
+                        via: (timed ? "timestamp" : "post_href") + "+short_hint",
+                        matched: true,
+                    });
+                }
+            }
+        }
+    }
+
+    candidates.sort((a, b) => b.rank - a.rank);
+    const stats = {
+        articles: collected.unique,
+        article: collected.counts.article,
+        roleArticle: collected.counts.roleArticle,
+        postContainers: collected.counts.postContainers,
+        pagelets: collected.counts.pagelets,
+        unique: collected.unique,
+        matchedArticles,
+        timestampLinks,
+        permalinkCandidates,
+        shareCandidates,
+        candidateCount: candidates.length,
+        firstArticlePreview: firstBody,
+        firstArtLen,
+        firstOuterHtml: (matchedArticles === 0) ? firstOuter : "",
+        pagePermalinkLinks: collected.pagePermalinkLinks,
+        pagePostsLinks: collected.pagePostsLinks,
+        pageShareLinks: collected.pageShareLinks,
+        hintPreview: hint.slice(0, 40),
+        hintLen: hint.length,
+    };
+
+    if (!candidates.length) {
+        return { clicked: false, href: null, via: null, kind: null, stats };
+    }
+    const best = candidates[0];
+    const low = String(best.href || "").toLowerCase();
+    let kind = "other";
+    if (low.includes("permalink.php") || low.includes("story_fbid=")) kind = "permalink";
+    else if (low.includes("/posts/")) kind = "posts";
+    else if (low.includes("/share/p/")) kind = "share";
+
+    if (doClick) {
+        try { best.el.click(); } catch (e) {}
+    }
+    return {
+        clicked: !!doClick,
+        href: best.href,
+        via: best.via,
+        kind,
+        rank: best.rank,
+        stats,
+    };
+"""
+
+
+# JS: chờ timeline / tab Bài viết sau khi mở /me
+_WAIT_PROFILE_TIMELINE_JS = r"""
+    const tryClickPostsTab = () => {
+        const tabs = Array.from(document.querySelectorAll(
+            "a[role='tab'], div[role='tab'], span[role='tab']"
+        ));
+        const re = /^(bài viết|posts)$/i;
+        for (const t of tabs) {
+            const label = ((t.innerText || t.textContent || "") + " " + (t.getAttribute("aria-label") || "")).replace(/\s+/g, " ").trim();
+            if (!re.test(label)) continue;
+            const selected = t.getAttribute("aria-selected");
+            if (selected === "true") return { clicked: false, label };
+            try { t.click(); return { clicked: true, label }; } catch (e) {}
+        }
+        // fallback: link chứa /posts hoặc sk=nf
+        for (const a of Array.from(document.querySelectorAll("a[href]"))) {
+            const h = (a.href || "").toLowerCase();
+            const label = ((a.innerText || a.textContent || "") + "").replace(/\s+/g, " ").trim();
+            if (re.test(label) || h.includes("sk=nf") || /\/posts\/?$/.test(h.split("?")[0])) {
+                try { a.click(); return { clicked: true, label: label || h.slice(0, 60) }; } catch (e) {}
+            }
+        }
+        return { clicked: false, label: null };
+    };
+
+    const hasFeed = !!(
+        document.querySelector("div[role='article'], [role='article'], article")
+        || document.querySelector("div[data-pagelet*='FeedUnit'], div[data-pagelet*='TimelineFeedUnit'], div[data-pagelet*='ProfileTimeline'], div[data-pagelet*='Timeline']")
+        || document.querySelector("a[href*='permalink.php'], a[href*='/posts/'], [data-testid='fbfeed_story']")
+    );
+    let tab = null;
+    if (!hasFeed) {
+        tab = tryClickPostsTab();
+    }
+    return {
+        readyState: document.readyState,
+        url: location.href,
+        hasFeed,
+        tab,
+        roleArticle: document.querySelectorAll("div[role='article'], [role='article']").length,
+        article: document.querySelectorAll("article").length,
+        pagelets: document.querySelectorAll("div[data-pagelet*='FeedUnit'], div[data-pagelet*='Timeline'], div[data-pagelet*='ProfileTimeline']").length,
+    };
+"""
+
+
+def _wait_permalink_after_navigation(
+    driver,
+    log_fn,
+    timeout: float = 10.0,
+    interval: float = 0.4,
+) -> Optional[str]:
+    """Chờ current_url thành permalink bài (không nhận profile / share)."""
+    deadline = time.time() + max(2.0, float(timeout))
+    last_cur = ""
+    while time.time() < deadline:
         try:
             cur = driver.current_url or ""
-            if any(k in cur for k in ("/posts/", "permalink.php", "story_fbid=", "pfbid", "/photo")):
-                clean_url = _clean_facebook_url(cur)
-                if clean_url and "facebook.com" in clean_url:
-                    _log(f"Lấy được URL bài viết từ chuyển hướng trình duyệt: {clean_url}")
-                    return clean_url
+            last_cur = cur
+            if _is_profile_or_me_url(cur) or _is_share_p_url(cur):
+                time.sleep(interval)
+                continue
+            accepted = _accept_permalink(cur, log_fn)
+            if accepted:
+                return accepted
+        except Exception:
+            pass
+        time.sleep(interval)
+    if log_fn and last_cur:
+        cleaned = _clean_facebook_url(last_cur)
+        log_fn(
+            f"Hết chờ permalink — current_url vẫn không phải link bài "
+            f"(cleaned={cleaned!r}, is_profile={_is_profile_or_me_url(last_cur)}, "
+            f"is_share={_is_share_p_url(last_cur)})"
+        )
+    return None
+
+
+def _resolve_href_to_permalink(
+    driver,
+    href: Optional[str],
+    log_fn,
+    source: str,
+) -> Optional[str]:
+    """
+    Nhận href từ timestamp:
+      - đã là permalink/posts → clean + return
+      - /share/p/ → mở bằng driver đã login, chờ redirect sang permalink.php
+      - khác → click đã thực hiện sẵn, chờ URL đổi
+    """
+    if not href:
+        return None
+    # Đã là permalink hợp lệ trên href
+    accepted = _accept_permalink(href, log_fn)
+    if accepted:
+        return accepted
+
+    # Resolve share/p/
+    if _is_share_p_url(href):
+        if log_fn:
+            log_fn(f"{source}: mở /share/p/ để resolve → permalink...")
+        try:
+            driver.get(href)
+        except Exception as e:
+            if log_fn:
+                log_fn(f"{source}: lỗi mở share/p: {e}")
+            return None
+        return _wait_permalink_after_navigation(driver, log_fn, timeout=12.0)
+
+    # Đã click timestamp nhưng href chưa phải permalink — chờ URL đổi
+    return _wait_permalink_after_navigation(driver, log_fn, timeout=10.0)
+
+
+def extract_status_post_url(
+    driver,
+    uid: Optional[str] = None,
+    log_cb: Optional[Any] = None,
+    content_hint: Optional[str] = None,
+    status_text: Optional[str] = None,
+    poll_seconds: float = 15.0,
+    poll_interval: float = 0.5,
+) -> StatusUrlResult:
+    """
+    Best-effort lấy permalink sau đăng Status qua Share → /share/p/ → redirect.
+    Không dùng timestamp, không Embed, không /me. Không raise, không fail bài đăng.
+    """
+    def _log(m):
+        try:
+            if log_cb:
+                log_cb(m)
+            logger.info(m)
         except Exception:
             pass
 
-        # Tier 2: Tìm trong Toast / Alert notification
-        time.sleep(1.5)
+    def _clean_permalink_only(url: Optional[str]) -> str:
+        if not url:
+            return ""
         try:
-            toast_link = driver.execute_script("""
-                const anchors = Array.from(document.querySelectorAll(
-                    "div[role='alert'] a, div[data-visualcompletion='ignore-dynamic-snippet'] a, div[aria-live='polite'] a"
-                ));
-                for (const a of anchors) {
-                    const h = a.href || "";
-                    if ((h.includes('/posts/') || h.includes('permalink.php') || h.includes('story_fbid=') || h.includes('/photo') || h.includes('pfbid')) && !h.includes('/comment/') && !h.includes('/share/')) {
-                        return h;
-                    }
+            raw = str(url).split("#", 1)[0].strip()
+            parsed = urlparse(raw)
+            path = (parsed.path or "").rstrip("/")
+            qs = parse_qs(parsed.query)
+            if "permalink.php" in path or "story.php" in path:
+                params = {}
+                for k in ("story_fbid", "id"):
+                    if k in qs and qs[k]:
+                        params[k] = qs[k][0]
+                name = "permalink.php" if "permalink.php" in path else "story.php"
+                if params.get("story_fbid"):
+                    return f"https://www.facebook.com/{name}?{urlencode(params)}"
+                return ""
+            if "/posts/" in path:
+                return f"https://www.facebook.com{path}"
+            return ""
+        except Exception:
+            return ""
+
+    def _accept_permalink(raw: Optional[str]) -> Optional[str]:
+        clean = _clean_permalink_only(raw)
+        if not clean:
+            return None
+        low = clean.lower()
+        if "profile.php" in low or "/share/" in low:
+            return None
+        if "permalink.php" in low and "story_fbid=" in low:
+            return clean
+        if "/posts/" in low:
+            return clean
+        return None
+
+    def _normalize_share_p(url: Optional[str]) -> Optional[str]:
+        if not url:
+            return None
+        text = str(url).replace("\x00", " ").strip()
+        # Cho phép URL nằm giữa text/HTML clipboard
+        m = re.search(
+            r"https?://(?:www\.|web\.|m\.)?facebook\.com/share/p/[A-Za-z0-9_-]+/?",
+            text,
+            re.I,
+        )
+        if not m:
+            m = re.search(r"(?:www\.|web\.|m\.)?facebook\.com/share/p/[A-Za-z0-9_-]+/?", text, re.I)
+            if not m:
+                return None
+            return "https://www." + m.group(0).lstrip("/").replace("www.www.", "www.")
+        return (
+            m.group(0)
+            .replace("://web.facebook.com", "://www.facebook.com")
+            .replace("://m.facebook.com", "://www.facebook.com")
+        )
+
+    def _extract_any_post_link(text: Optional[str]) -> Optional[str]:
+        """Từ clipboard: ưu tiên /share/p/, nhận luôn permalink nếu FB copy thẳng permalink."""
+        if not text:
+            return None
+        share = _normalize_share_p(text)
+        if share:
+            return share
+        accepted = _accept_permalink(text)
+        if accepted:
+            return accepted
+        # permalink còn bẩn trong HTML clipboard
+        m = re.search(
+            r"https?://(?:www\.|web\.)?facebook\.com/permalink\.php\?[^\s\"'<>]+",
+            str(text),
+            re.I,
+        )
+        if m:
+            return _accept_permalink(m.group(0))
+        m = re.search(
+            r"https?://(?:www\.|web\.)?facebook\.com/[^/\s\"'<>]+/posts/[A-Za-z0-9_-]+",
+            str(text),
+            re.I,
+        )
+        if m:
+            return _accept_permalink(m.group(0))
+        return None
+
+    def _fallback_profile() -> StatusUrlResult:
+        try:
+            cur = driver.current_url or ""
+            if cur:
+                _log(
+                    f"Tier5: bỏ qua current_url (không dùng làm link bài): "
+                    f"{_clean_facebook_url(cur)!r}"
+                )
+        except Exception:
+            pass
+        profile = _profile_url_from_uid(uid)
+        if not profile:
+            profile = _profile_url_from_uid(_uid_from_c_user(driver))
+        if profile:
+            profile = _clean_facebook_url(profile)
+            _log(f"Chưa lấy được permalink — fallback link trang cá nhân sạch: {profile}")
+            return StatusUrlResult(profile, False)
+        _log("Chưa lấy được permalink và không xác định được uid profile.")
+        return StatusUrlResult(None, False)
+
+    raw_text = status_text if status_text is not None else content_hint
+    snippet = re.sub(r"\s+", " ", (raw_text or "").strip())
+    if len(snippet) > 80:
+        snippet = snippet[:72]
+    elif len(snippet) > 72:
+        snippet = snippet[:72]
+    if snippet:
+        _log(f"Extract(share): content hint ({len(snippet)} chars)={snippet!r}")
+
+    # Đánh dấu card khớp + nút Share (không click timestamp)
+    find_card_js = r"""
+        const hint = (arguments[0] || "").toLowerCase();
+        const maxCards = 3;
+        try { if ((window.scrollY || 0) > 0) window.scrollTo(0, 0); } catch (e) {}
+        document.querySelectorAll("[data-ada-share-card],[data-ada-share-btn]").forEach(el => {
+            el.removeAttribute("data-ada-share-card");
+            el.removeAttribute("data-ada-share-btn");
+        });
+
+        const readText = (el) => {
+            if (!el) return "";
+            let t = ((el.innerText || "") + "").replace(/\s+/g, " ").trim();
+            if (!t) t = ((el.textContent || "") + "").replace(/\s+/g, " ").trim();
+            return t;
+        };
+        const findCard = (start) => {
+            let cur = start;
+            for (let i = 0; i < 8 && cur; i++) {
+                const hasP = !!cur.querySelector("[data-ad-rendering-role='profile_name']");
+                const hasM = !!cur.querySelector("[data-ad-rendering-role='story_message']");
+                if (hasP && hasM) return cur;
+                if (cur.hasAttribute && cur.hasAttribute("aria-posinset")) return cur;
+                if ((cur.getAttribute && cur.getAttribute("role")) === "article") return cur;
+                if (cur.tagName && String(cur.tagName).toLowerCase() === "article") return cur;
+                cur = cur.parentElement;
+            }
+            return start;
+        };
+
+        const seen = new Set();
+        const raw = [];
+        const push = (el) => {
+            if (!el || seen.has(el)) return;
+            const card = findCard(el) || el;
+            if (seen.has(card)) return;
+            seen.add(card); seen.add(el);
+            raw.push(card);
+        };
+        Array.from(document.querySelectorAll("div[role='article'], [role='article'], article")).forEach(push);
+        Array.from(document.querySelectorAll(
+            "[data-testid='fbfeed_story'], div[data-pagelet*='FeedUnit'], [data-ad-rendering-role='story_message']"
+        )).forEach(push);
+
+        const cards = raw.slice(0, maxCards);
+        let matched = null;
+        let matchVia = "";
+        for (const card of cards) {
+            const msg = card.querySelector("[data-ad-rendering-role='story_message']");
+            const body = readText(card).toLowerCase();
+            const msgText = msg ? readText(msg).toLowerCase() : "";
+            if (hint && hint.length >= 12) {
+                if (body.includes(hint) || msgText.includes(hint)
+                    || body.includes(hint.slice(0, Math.min(40, hint.length)))
+                    || msgText.includes(hint.slice(0, Math.min(40, hint.length)))) {
+                    matched = card; matchVia = "content_hint"; break;
                 }
-                return null;
-            """)
-            if toast_link:
-                clean_url = _clean_facebook_url(toast_link)
-                if clean_url:
-                    _log(f"Tìm thấy URL bài viết từ thông báo Facebook: {clean_url}")
-                    return clean_url
-        except Exception:
-            pass
+            }
+        }
+        if (!matched && cards.length && (!hint || hint.length < 12)) {
+            matched = cards[0];
+            matchVia = "first_card";
+        }
+        if (!matched) {
+            return { matched: 0, scrollY: window.scrollY || 0, cards: cards.length, matchVia: "" };
+        }
 
-        # Tier 3: Quét thẻ bài viết mới nhất trên Feed hiện tại
-        try:
-            post_url = driver.execute_script("""
-                const articles = document.querySelectorAll("div[role='article'], div[data-pagelet*='ProfileTimeline'], div[data-pagelet*='Feed']");
-                for (const art of articles) {
-                    const allA = Array.from(art.querySelectorAll("a[href]"));
-                    // Ưu tiên thẻ timestamp
-                    for (const a of allA) {
-                        const txt = (a.innerText || "").trim().toLowerCase();
-                        const aria = (a.getAttribute("aria-label") || "").trim().toLowerCase();
-                        const isTime = /^(vừa xong|just now|\d+\s*(s|m|h|d|giây|phút|giờ|ngày)|hôm nay|today)/i.test(txt) ||
-                                       /(vừa xong|just now|phút|minute|giây|second|giờ|hour|hôm nay|today)/i.test(aria);
-                        if (isTime && a.href) {
-                            const h = a.href;
-                            if (!h.includes('/friends') && !h.includes('/comment') && !h.includes('/likes/')) {
-                                return h;
-                            }
-                        }
-                    }
-                    // Quét các link bài viết khả dụng
-                    for (const a of allA) {
-                        const h = a.href || "";
-                        if (!h || h.includes('#') || h.startsWith('javascript:')) continue;
-                        if (h.includes('/comment/') || h.includes('/share/') || h.includes('/likes/')) continue;
-                        if (h.includes('/posts/') || h.includes('permalink.php') || h.includes('story_fbid=') || h.includes('/photo') || h.includes('pfbid')) {
-                            return h;
-                        }
-                    }
+        matched.setAttribute("data-ada-share-card", "1");
+
+        // Nút Share ở footer: sau Like/Comment — aria/text Share/Chia sẻ, không phải menu ...
+        const isBad = (b) => {
+            const aria = (b.getAttribute("aria-label") || "").toLowerCase();
+            const t = readText(b).toLowerCase();
+            const blob = aria + " " + t;
+            if (/(thích|like|bình luận|comment|theo dõi|follow|xem thêm|see more)/i.test(blob)) return true;
+            if (b.closest("[data-ad-rendering-role='profile_name']")) return true;
+            return false;
+        };
+        const isShare = (b) => {
+            const aria = (b.getAttribute("aria-label") || "").toLowerCase();
+            const t = readText(b).toLowerCase();
+            if (isBad(b)) return false;
+            if (/^(chia sẻ|share)$/i.test(t) || /^(chia sẻ|share)$/i.test(aria)) return true;
+            if (aria.includes("share") || aria.includes("chia sẻ")) return true;
+            if (t === "chia sẻ" || t === "share") return true;
+            return false;
+        };
+
+        let shareBtn = null;
+        const candidates = Array.from(matched.querySelectorAll(
+            "div[role='button'], [role='button'], span[role='button']"
+        ));
+        // Ưu tiên vùng action cuối card
+        for (const b of candidates) {
+            if (isShare(b)) { shareBtn = b; break; }
+        }
+        if (shareBtn) {
+            shareBtn.setAttribute("data-ada-share-btn", "1");
+        }
+
+        return {
+            matched: 1,
+            matchVia,
+            scrollY: window.scrollY || 0,
+            cards: cards.length,
+            hasShareBtn: !!shareBtn,
+            preview: readText(matched).slice(0, 100),
+        };
+    """
+
+    read_share_sheet_js = r"""
+        // Đọc link /share/p/ từ bảng Share đang mở + liệt kê nút
+        const roots = Array.from(document.querySelectorAll(
+            'div[role="dialog"], div[role="menu"], div[data-pagelet*="Share"], [aria-label*="Share"], [aria-label*="Chia sẻ"]'
+        ));
+        // fallback: mọi dialog/menu gần đây
+        const allRoots = roots.length ? roots : Array.from(document.querySelectorAll('div[role="dialog"], div[role="menu"]'));
+        const buttons = [];
+        let shareHref = null;
+        let hasCopy = false;
+        for (const root of allRoots) {
+            for (const a of Array.from(root.querySelectorAll('a[href]'))) {
+                const h = a.href || "";
+                if (/facebook\.com\/share\/p\//i.test(h)) {
+                    shareHref = h;
                 }
-                return null;
-            """)
-            if post_url:
-                clean_url = _clean_facebook_url(post_url)
-                if clean_url:
-                    _log(f"Đã trích xuất thành công URL bài viết từ Feed: {clean_url}")
-                    return clean_url
-        except Exception:
-            pass
+            }
+            const blob = (root.innerText || root.textContent || "");
+            const m = blob.match(/https?:\/\/(?:www\.|web\.)?facebook\.com\/share\/p\/[A-Za-z0-9_-]+\/?/i);
+            if (m && !shareHref) shareHref = m[0];
 
-        # Tier 4: Điều hướng tới https://www.facebook.com/me để lấy bài viết trên Timeline chính chủ
-        try:
-            _log("Mở trang cá nhân tài khoản (/me) để xác nhận liên kết bài viết...")
-            driver.get("https://www.facebook.com/me")
-            time.sleep(3.5)
+            for (const b of Array.from(root.querySelectorAll('div[role="button"], button, span[role="button"], a[role="link"]'))) {
+                const text = ((b.innerText || b.textContent || "") + "").replace(/\s+/g, " ").trim();
+                const aria = (b.getAttribute("aria-label") || "").trim();
+                const href = b.href || "";
+                buttons.push({ text: text.slice(0, 80), aria: aria.slice(0, 80), href: (href || "").slice(0, 160) });
+                const blob2 = (text + " " + aria).toLowerCase();
+                if (blob2.includes("copy link") || blob2.includes("sao chép liên kết") || blob2.includes("copy")) {
+                    if (!blob2.includes("copy text") && !blob2.includes("embed")) hasCopy = true;
+                }
+                if (/facebook\.com\/share\/p\//i.test(href) && !shareHref) shareHref = href;
+            }
+        }
+        return { shareHref, hasCopy, buttons: buttons.slice(0, 40), rootCount: allRoots.length };
+    """
+
+    click_copy_link_js = r"""
+        function trigger(el) {
+            if (!el) return false;
+            try {
+                ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
+                    el.dispatchEvent(new MouseEvent(evt, {bubbles:true, cancelable:true, view:window}));
+                });
+                if (typeof el.click === 'function') el.click();
+                return true;
+            } catch (e) { return false; }
+        }
+        const roots = Array.from(document.querySelectorAll('div[role="dialog"], div[role="menu"]'));
+        const re = /(sao chép liên kết|copy link|copy)/i;
+        const bad = /(share now|chia sẻ ngay|đăng|post|embed|nhúng|like|thích|comment|bình luận)/i;
+        for (const root of roots) {
+            for (const b of Array.from(root.querySelectorAll('div[role="button"], button, span[role="button"], a'))) {
+                const text = ((b.innerText || b.textContent || "") + " " + (b.getAttribute("aria-label") || "")).replace(/\s+/g, " ").trim();
+                if (!re.test(text)) continue;
+                if (bad.test(text) && !/copy link|sao chép liên kết/i.test(text)) continue;
+                // tránh Share Now
+                if (/share now|chia sẻ ngay/i.test(text)) continue;
+                trigger(b);
+                return { clicked: true, label: text.slice(0, 80) };
+            }
+        }
+        return { clicked: false };
+    """
+
+    close_share_sheet_js = r"""
+        function trigger(el) {
+            if (!el) return false;
+            try {
+                ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
+                    el.dispatchEvent(new MouseEvent(evt, {bubbles:true, cancelable:true, view:window}));
+                });
+                if (typeof el.click === 'function') el.click();
+                return true;
+            } catch (e) { return false; }
+        }
+        // Đóng bằng nút Close/X hoặc Escape — không bấm Share Now
+        const roots = Array.from(document.querySelectorAll('div[role="dialog"], div[role="menu"]'));
+        for (const root of roots) {
+            for (const b of Array.from(root.querySelectorAll('div[role="button"], button'))) {
+                const aria = (b.getAttribute("aria-label") || "").toLowerCase();
+                const text = ((b.innerText || "") + "").trim().toLowerCase();
+                if (aria === "close" || aria === "đóng" || text === "close" || text === "đóng") {
+                    trigger(b); return true;
+                }
+            }
+        }
+        try { document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', keyCode:27, bubbles:true})); } catch (e) {}
+        return false;
+    """
+
+    def _grant_clipboard_permission() -> None:
+        """
+        Cấp quyền clipboard cho facebook.com qua CDP — tránh popup
+        'Xem văn bản... bảng nhớ tạm' (thường chỉ hiện lần đầu / mỗi profile).
+        """
+        for origin in (
+            "https://www.facebook.com",
+            "https://web.facebook.com",
+            "https://m.facebook.com",
+        ):
             try:
-                driver.execute_script("window.scrollBy(0, 350);")
-                time.sleep(1.5)
+                driver.execute_cdp_cmd(
+                    "Browser.grantPermissions",
+                    {
+                        "origin": origin,
+                        "permissions": [
+                            "clipboardReadWrite",
+                            "clipboardSanitizedWrite",
+                        ],
+                    },
+                )
             except Exception:
                 pass
 
-            profile_post_url = driver.execute_script("""
-                const articles = document.querySelectorAll("div[role='article']");
-                for (const art of articles) {
-                    const allA = Array.from(art.querySelectorAll("a[href]"));
-                    for (const a of allA) {
-                        const txt = (a.innerText || "").trim().toLowerCase();
-                        const aria = (a.getAttribute("aria-label") || "").trim().toLowerCase();
-                        const isTime = /^(vừa xong|just now|\d+\s*(s|m|h|d|giây|phút|giờ|ngày)|hôm nay|today)/i.test(txt) ||
-                                       /(vừa xong|just now|phút|minute|giây|second|giờ|hour|hôm nay|today)/i.test(aria);
-                        if (isTime && a.href) {
-                            const h = a.href;
-                            if (!h.includes('/friends') && !h.includes('/comment') && !h.includes('/likes/')) {
-                                return h;
-                            }
-                        }
-                    }
-                    for (const a of allA) {
-                        const h = a.href || "";
-                        if (!h || h.includes('#') || h.startsWith('javascript:')) continue;
-                        if (h.includes('/comment/') || h.includes('/share/') || h.includes('/likes/')) continue;
-                        if (h.includes('/posts/') || h.includes('permalink.php') || h.includes('story_fbid=') || h.includes('/photo') || h.includes('pfbid')) {
-                            return h;
-                        }
-                    }
-                }
-                return null;
-            """)
-            if profile_post_url:
-                clean_url = _clean_facebook_url(profile_post_url)
-                if clean_url:
-                    _log(f"Lấy được URL bài viết từ trang cá nhân: {clean_url}")
-                    return clean_url
-        except Exception as e:
-            logger.debug(f"Không thể đọc link từ /me: {e}")
-
-        # Tier 5: Fallback liên kết trang cá nhân (Đảm bảo không bao giờ bị link rỗng)
-        profile_url = None
+    def _dismiss_clipboard_permission_bubble() -> None:
+        """
+        Popup quyền clipboard là UI Chrome (không nằm trong DOM Facebook).
+        Thử Escape để đóng nếu đang che; không click Cho phép bằng Selenium.
+        """
         try:
-            cur = driver.current_url or ""
-            if "facebook.com" in cur and "/me" not in cur and "/home" not in cur:
-                profile_url = cur.split("?")[0]
+            driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+            time.sleep(0.25)
+        except Exception:
+            pass
+        try:
+            driver.execute_script(
+                "try { document.dispatchEvent(new KeyboardEvent('keydown',"
+                "{key:'Escape',keyCode:27,bubbles:true})); } catch(e) {}"
+            )
         except Exception:
             pass
 
-        if not profile_url and uid:
-            profile_url = f"https://www.facebook.com/{uid}"
+    def _read_clipboard_os() -> Optional[str]:
+        """
+        Đọc clipboard Windows (text + HTML) — KHÔNG gọi navigator.clipboard
+        (tránh popup Chrome). Retry vì OpenClipboard hay bị lock ngắn.
+        """
+        chunks: List[str] = []
 
-        if profile_url:
-            _log(f"Sử dụng liên kết trang cá nhân bài đăng: {profile_url}")
-            return profile_url
+        # --- win32clipboard ---
+        for _ in range(8):
+            try:
+                import win32clipboard  # type: ignore
+
+                win32clipboard.OpenClipboard()
+                try:
+                    if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT):
+                        data = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+                        if isinstance(data, str) and data.strip():
+                            chunks.append(data.strip())
+                    try:
+                        cf_html = win32clipboard.RegisterClipboardFormat("HTML Format")
+                        if win32clipboard.IsClipboardFormatAvailable(cf_html):
+                            raw = win32clipboard.GetClipboardData(cf_html)
+                            if isinstance(raw, bytes):
+                                raw = raw.decode("utf-8", errors="ignore")
+                            if isinstance(raw, str) and raw.strip():
+                                chunks.append(raw.strip())
+                    except Exception:
+                        pass
+                finally:
+                    win32clipboard.CloseClipboard()
+                if chunks:
+                    break
+            except Exception:
+                time.sleep(0.15)
+
+        # --- ctypes fallback (không cần pywin32) ---
+        if not chunks:
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                user32 = ctypes.windll.user32
+                kernel32 = ctypes.windll.kernel32
+                CF_UNICODETEXT = 13
+                for _ in range(8):
+                    if not user32.OpenClipboard(0):
+                        time.sleep(0.15)
+                        continue
+                    try:
+                        handle = user32.GetClipboardData(CF_UNICODETEXT)
+                        if handle:
+                            ptr = kernel32.GlobalLock(handle)
+                            if ptr:
+                                try:
+                                    data = ctypes.wstring_at(ptr)
+                                    if data and data.strip():
+                                        chunks.append(data.strip())
+                                finally:
+                                    kernel32.GlobalUnlock(handle)
+                    finally:
+                        user32.CloseClipboard()
+                    if chunks:
+                        break
+                    time.sleep(0.15)
+            except Exception:
+                pass
+
+        if not chunks:
+            return None
+        # Gộp text+html để regex bắt URL trong HTML Format
+        return "\n".join(chunks)
+
+    def _wait_clipboard_after_copy(before: Optional[str], timeout: float = 4.0) -> Optional[str]:
+        """
+        Poll clipboard đến khi đổi khác nội dung trước Copy, hoặc có /share/p|permalink.
+        Không Escape trong lúc chờ — Escape làm mất sheet và dễ đọc nhầm clipboard cũ.
+        """
+        deadline = time.time() + max(1.5, float(timeout))
+        last_raw = None
+        while time.time() < deadline:
+            raw = _read_clipboard_os()
+            last_raw = raw
+            if raw and raw != (before or ""):
+                hit = _extract_any_post_link(raw)
+                if hit:
+                    return raw
+                # Đã đổi clipboard nhưng chưa phải link FB — vẫn trả raw để log
+                if "facebook.com" in raw.lower():
+                    return raw
+            elif raw:
+                hit = _extract_any_post_link(raw)
+                if hit and raw != (before or ""):
+                    return raw
+            time.sleep(0.25)
+        return last_raw
+
+    def _close_share_sheet():
+        try:
+            driver.execute_script(close_share_sheet_js)
+            time.sleep(0.4)
+        except Exception:
+            try:
+                from selenium.webdriver.common.keys import Keys as _K
+                driver.find_element(By.TAG_NAME, "body").send_keys(_K.ESCAPE)
+            except Exception:
+                pass
+
+    try:
+        try:
+            feed_handle = driver.current_window_handle
+        except Exception:
+            feed_handle = None
+        try:
+            feed_url = driver.current_url or ""
+        except Exception:
+            feed_url = ""
+
+        # Cấp quyền clipboard sớm (profile mới thường hỏi 1 lần; CDP nhớ theo origin)
+        try:
+            _grant_clipboard_permission()
+            _log("Extract(share): đã Browser.grantPermissions clipboard cho facebook.com")
+        except Exception:
+            pass
+
+        # ── 1. Tìm card khớp (≤10s, scrollY=0) ──
+        _log("Extract(share): tìm card khớp trên feed hiện tại (scrollY=0, không /me)...")
+        matched_info = None
+        deadline = time.time() + 10.0
+        poll_n = 0
+        while time.time() < deadline:
+            poll_n += 1
+            try:
+                driver.execute_script("if ((window.scrollY||0)>0) window.scrollTo(0,0);")
+                info = driver.execute_script(find_card_js, snippet)
+            except Exception as e:
+                _log(f"Extract(share): scan card lỗi: {e}")
+                info = None
+            if isinstance(info, dict):
+                _log(
+                    f"Extract(share) poll{poll_n}: scrollY={info.get('scrollY')} "
+                    f"cards={info.get('cards')} matched={info.get('matched')} "
+                    f"via={info.get('matchVia')} hasShareBtn={info.get('hasShareBtn')} "
+                    f"preview={info.get('preview')!r}"
+                )
+                if int(info.get("matched") or 0) == 1:
+                    matched_info = info
+                    break
+            time.sleep(max(0.5, float(poll_interval)))
+
+        if not matched_info:
+            _log("Extract(share): không khớp card — Tier5, không thử timestamp/Embed/me.")
+            return _fallback_profile()
+
+        # ── 2. Bấm Share trên card ──
+        share_clicked = False
+        try:
+            btn = driver.find_element(By.CSS_SELECTOR, "[data-ada-share-btn='1']")
+            try:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'nearest', inline:'nearest'});", btn
+                )
+            except Exception:
+                pass
+            try:
+                btn.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", btn)
+            share_clicked = True
+            _log("Extract(share): đã bấm nút Share trên card khớp.")
+        except Exception as e:
+            _log(f"Extract(share): không bấm được nút Share — {e}")
+            return _fallback_profile()
+
+        # Chờ bảng Share ≤5s
+        share_url = None
+        link_source = None
+        sheet_deadline = time.time() + 5.0
+        sheet_seen = False
+        while time.time() < sheet_deadline:
+            try:
+                sheet = driver.execute_script(read_share_sheet_js)
+            except Exception as e:
+                _log(f"Extract(share): đọc bảng Share lỗi: {e}")
+                sheet = None
+            if isinstance(sheet, dict):
+                if int(sheet.get("rootCount") or 0) > 0 or sheet.get("buttons"):
+                    sheet_seen = True
+                href = _normalize_share_p(sheet.get("shareHref"))
+                if href:
+                    share_url = href
+                    link_source = "dom"
+                    _log(f"Extract(share): lấy /share/p/ từ DOM bảng Share: {share_url}")
+                    break
+                if sheet.get("hasCopy"):
+                    _grant_clipboard_permission()
+                    # Snapshot clipboard TRƯỚC Copy để biết khi nào FB ghi xong
+                    before_clip = _read_clipboard_os()
+                    _log(
+                        f"Extract(share): clipboard trước Copy "
+                        f"(len={len(before_clip or '')})={((before_clip or '')[:120])!r}"
+                    )
+                    try:
+                        clicked = driver.execute_script(click_copy_link_js)
+                        _log(f"Extract(share): bấm Copy link → {clicked}")
+                    except Exception as e:
+                        _log(f"Extract(share): lỗi bấm Copy link: {e}")
+                        clicked = None
+
+                    # Chờ clipboard đổi — KHÔNG Escape ngay (Escape dễ đọc nhầm clipboard cũ)
+                    clip = _wait_clipboard_after_copy(before_clip, timeout=4.0)
+                    _log(
+                        f"Extract(share): clipboard sau Copy "
+                        f"(len={len(clip or '')})={((clip or '')[:180])!r}"
+                    )
+                    href2 = _extract_any_post_link(clip)
+                    if href2 and _normalize_share_p(href2):
+                        share_url = _normalize_share_p(href2)
+                        link_source = "clipboard_os"
+                        _log(f"Extract(share): lấy /share/p/ từ clipboard OS: {share_url}")
+                        break
+                    if href2 and _accept_permalink(href2):
+                        # FB đôi khi copy thẳng permalink — nhận luôn, khỏi mở /share/p/
+                        accepted = _accept_permalink(href2)
+                        _close_share_sheet()
+                        _log(f"Permalink OK (source=clipboard_permalink): {accepted}")
+                        return StatusUrlResult(accepted, True)
+
+                    # Chỉ khi clipboard trống mới thử Escape bubble rồi đọc lại
+                    if not clip or clip == (before_clip or ""):
+                        _log("Extract(share): clipboard chưa đổi — thử Escape bubble quyền rồi đọc lại...")
+                        _dismiss_clipboard_permission_bubble()
+                        clip2 = _wait_clipboard_after_copy(before_clip, timeout=2.0)
+                        _log(
+                            f"Extract(share): clipboard sau Escape "
+                            f"(len={len(clip2 or '')})={((clip2 or '')[:180])!r}"
+                        )
+                        href2b = _extract_any_post_link(clip2)
+                        if href2b and _normalize_share_p(href2b):
+                            share_url = _normalize_share_p(href2b)
+                            link_source = "clipboard_os_retry"
+                            _log(f"Extract(share): lấy /share/p/ từ clipboard (retry): {share_url}")
+                            break
+                        if href2b and _accept_permalink(href2b):
+                            accepted = _accept_permalink(href2b)
+                            _close_share_sheet()
+                            _log(f"Permalink OK (source=clipboard_permalink_retry): {accepted}")
+                            return StatusUrlResult(accepted, True)
+
+                    _log(
+                        "Extract(share): Copy xong nhưng clipboard không chứa /share/p/ "
+                        "hay permalink — thử DOM lại."
+                    )
+                    try:
+                        sheet2 = driver.execute_script(read_share_sheet_js)
+                        href3 = _normalize_share_p((sheet2 or {}).get("shareHref")) if isinstance(sheet2, dict) else None
+                        if href3:
+                            share_url = href3
+                            link_source = "dom_after_copy"
+                            _log(f"Extract(share): lấy /share/p/ từ DOM sau Copy: {share_url}")
+                            break
+                    except Exception:
+                        pass
+                    # Đã Copy 1 lần — thoát vòng chờ sheet (menu thường đã đóng)
+                    break
+            time.sleep(0.5)
+
+        if not share_url:
+            # Log nút trong bảng rồi đóng → Tier5
+            try:
+                sheet = driver.execute_script(read_share_sheet_js)
+                if isinstance(sheet, dict):
+                    _log(
+                        f"Extract(share): không có /share/p/ — sheet_seen={sheet_seen} "
+                        f"hasCopy={sheet.get('hasCopy')} buttons={sheet.get('buttons')!r}"
+                    )
+            except Exception:
+                _log("Extract(share): không có /share/p/ và không đọc được nút bảng Share.")
+            _close_share_sheet()
+            _log("Extract(share): Share fail → Tier5 (không timestamp / Embed /me).")
+            return _fallback_profile()
+
+        _close_share_sheet()
+        time.sleep(0.4)
+        # Kiểm tra card còn trên feed
+        try:
+            still = driver.execute_script(
+                "return !!document.querySelector(\"[data-ada-share-card='1']\");"
+            )
+            _log(f"Extract(share): sau đóng Share, card còn trên feed={bool(still)}")
+        except Exception:
+            pass
+
+        # ── 3. Mở /share/p/ tab mới → chờ permalink ──
+        _log(f"Extract(share): mở tab mới resolve {share_url} (source={link_source})...")
+        handles_before = list(driver.window_handles)
+        try:
+            driver.execute_script("window.open(arguments[0], '_blank');", share_url)
+        except Exception as e:
+            _log(f"Extract(share): window.open lỗi — thử driver.get: {e}")
+            try:
+                driver.get(share_url)
+            except Exception as e2:
+                _log(f"Extract(share): không mở được share link: {e2}")
+                return _fallback_profile()
+
+        time.sleep(0.8)
+        try:
+            handles_now = list(driver.window_handles)
+            new_handles = [h for h in handles_now if h not in handles_before]
+            if new_handles:
+                driver.switch_to.window(new_handles[0])
+            # nếu get trên cùng tab thì không có new handle
+        except Exception as e:
+            _log(f"Extract(share): switch tab lỗi: {e}")
+
+        permalink = None
+        resolve_deadline = time.time() + 10.0
+        last_url = ""
+        while time.time() < resolve_deadline:
+            try:
+                cur = driver.current_url or ""
+                last_url = cur
+                accepted = _accept_permalink(cur)
+                if accepted:
+                    permalink = accepted
+                    _log(f"Extract(share): URL sau Share → permalink {permalink}")
+                    break
+                if _is_profile_or_me_url(cur):
+                    _log(f"Extract(share): URL về profile — bỏ: {_clean_facebook_url(cur)!r}")
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+        if not permalink:
+            _log(
+                f"Extract(share): sau 10s chưa ra permalink "
+                f"(last={_clean_facebook_url(last_url)!r}) → Tier5."
+            )
+
+        # Đóng tab share, về feed
+        try:
+            handles_now = list(driver.window_handles)
+            if feed_handle and len(handles_now) > 1 and driver.current_window_handle != feed_handle:
+                driver.close()
+                driver.switch_to.window(feed_handle)
+            elif feed_handle:
+                try:
+                    driver.switch_to.window(feed_handle)
+                except Exception:
+                    pass
+                # nếu đã navigate trên cùng tab → back về feed
+                try:
+                    cur = driver.current_url or ""
+                    if _accept_permalink(cur) or _is_share_p_url(cur) or _is_profile_or_me_url(cur):
+                        if feed_url:
+                            driver.get(feed_url)
+                except Exception:
+                    pass
+        except Exception as e:
+            _log(f"Extract(share): đóng tab/về feed lỗi: {e}")
+
+        if permalink:
+            _log(f"Permalink OK (source=share/{link_source}): {permalink}")
+            return StatusUrlResult(permalink, True)
+
+        return _fallback_profile()
 
     except Exception as e:
-        logger.debug(f"Lỗi extract_status_post_url: {e}")
-
-    return f"https://www.facebook.com/{uid}" if uid else None
-
+        try:
+            _log(f"Extract(share) exception (không fail bài đăng): {e}")
+        except Exception:
+            pass
+        try:
+            # cố gắng về tab gốc
+            if driver.window_handles:
+                driver.switch_to.window(driver.window_handles[0])
+        except Exception:
+            pass
+        try:
+            return _fallback_profile()
+        except Exception:
+            return StatusUrlResult(None, False)
 
 def _reel_id_from_url(url: Optional[str]) -> Optional[str]:
     if not url:
@@ -3349,6 +4480,151 @@ def _ensure_status_composer_content(
     )
 
 
+def _is_save_draft_dialog_open(driver) -> bool:
+    """True nếu đang hiện bảng Lưu nháp / Save draft."""
+    try:
+        return bool(driver.execute_script("""
+            const re = /(lưu nháp|save draft|lưu bài viết nháp|save as draft)/i;
+            const continueRe = /(tiếp tục chỉnh sửa|continue editing)/i;
+            const discardRe = /(hủy bỏ|discard)/i;
+            for (const d of Array.from(document.querySelectorAll('div[role="dialog"], div[role="alertdialog"]'))) {
+                const t = (d.innerText || d.textContent || '').replace(/\\s+/g, ' ').trim();
+                if (!t) continue;
+                if (re.test(t)) return true;
+                if (discardRe.test(t) && continueRe.test(t)) return true;
+            }
+            return false;
+        """))
+    except Exception:
+        return False
+
+
+def _continue_editing_from_save_draft(driver, human: HumanInteraction, log_cb=None) -> bool:
+    """
+    Bấm 'Tiếp tục chỉnh sửa / Continue editing'. Không bấm Lưu nháp / Hủy bỏ.
+    """
+    def log(msg: str):
+        if log_cb:
+            log_cb(msg)
+        logger.info(msg)
+
+    js = """
+        function triggerRealClick(el) {
+            if (!el) return false;
+            try {
+                ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
+                    el.dispatchEvent(new MouseEvent(evt, {bubbles:true, cancelable:true, view:window}));
+                });
+                if (typeof el.click === 'function') el.click();
+                return true;
+            } catch (e) { return false; }
+        }
+        const continueRe = /^(tiếp tục chỉnh sửa|continue editing)$/i;
+        const badRe = /^(lưu nháp|save draft|hủy bỏ|discard|lưu bài viết nháp)$/i;
+        const roots = Array.from(document.querySelectorAll('div[role="dialog"], div[role="alertdialog"]'));
+        for (const root of roots) {
+            const buttons = Array.from(root.querySelectorAll('div[role="button"], button, span[role="button"]'));
+            for (const b of buttons) {
+                const text = (b.innerText || b.textContent || '').replace(/\\s+/g, ' ').trim();
+                const aria = (b.getAttribute('aria-label') || '').trim();
+                const blob = (text || aria);
+                if (!blob || badRe.test(blob)) continue;
+                if (continueRe.test(blob) || /tiếp tục chỉnh sửa|continue editing/i.test(blob)) {
+                    triggerRealClick(b);
+                    return true;
+                }
+            }
+        }
+        return false;
+    """
+    try:
+        if driver.execute_script(js):
+            log("save_draft_dialog_found → đã bấm 'Tiếp tục chỉnh sửa' (không lưu nháp / không hủy).")
+            time.sleep(1.2)
+            return True
+    except Exception:
+        pass
+    # Selenium fallback
+    for sel in [
+        "//div[@role='dialog' or @role='alertdialog']//span[contains(., 'Tiếp tục chỉnh sửa') or contains(., 'Continue editing')]/ancestor::*[@role='button' or self::button][1]",
+        "//div[@role='dialog' or @role='alertdialog']//*[@role='button' and (contains(@aria-label,'Tiếp tục') or contains(@aria-label,'Continue editing'))]",
+    ]:
+        try:
+            for el in driver.find_elements(By.XPATH, sel):
+                if el.is_displayed():
+                    human.click(el)
+                    log("save_draft_dialog_found → Selenium click 'Tiếp tục chỉnh sửa'.")
+                    time.sleep(1.2)
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def _log_open_dialogs_snapshot(driver, log_cb=None) -> str:
+    """Log số dialog + tên/text/nút — trả reason gợi ý: save_draft_dialog | composer_closed | post_button_not_found."""
+    def log(msg: str):
+        if log_cb:
+            log_cb(msg)
+        logger.info(msg)
+
+    try:
+        info = driver.execute_script("""
+            const dialogs = Array.from(document.querySelectorAll('div[role="dialog"], div[role="alertdialog"]'));
+            return dialogs.map((d, i) => {
+                const label = (d.getAttribute('aria-label') || '').trim();
+                const text = ((d.innerText || d.textContent || '') + '').replace(/\\s+/g, ' ').trim().slice(0, 240);
+                const buttons = Array.from(d.querySelectorAll('div[role="button"], button')).slice(0, 25).map(b => ({
+                    text: ((b.innerText || b.textContent || '') + '').replace(/\\s+/g, ' ').trim().slice(0, 60),
+                    aria: (b.getAttribute('aria-label') || '').trim().slice(0, 60),
+                    disabled: (b.getAttribute('aria-disabled') || '') === 'true' || !!b.disabled,
+                    displayed: !!(b.offsetParent !== null || b.getClientRects().length),
+                }));
+                return { i, label, text, buttons };
+            });
+        """)
+    except Exception as e:
+        log(f"dialog_snapshot lỗi: {e}")
+        return "post_button_not_found"
+
+    if not isinstance(info, list) or not info:
+        log("dialog_snapshot: không còn role=dialog nào → composer_closed")
+        return "composer_closed"
+
+    log(f"dialog_snapshot: {len(info)} hộp thoại role=dialog/alertdialog đang mở")
+    reason = "post_button_not_found"
+    for d in info:
+        log(f"  dialog[{d.get('i')}] aria-label={d.get('label')!r} text={d.get('text')!r}")
+        for b in (d.get("buttons") or []):
+            log(
+                f"    btn text={b.get('text')!r} aria={b.get('aria')!r} "
+                f"disabled={b.get('disabled')} displayed={b.get('displayed')}"
+            )
+        blob = f"{d.get('label') or ''} {d.get('text') or ''}".lower()
+        if any(x in blob for x in ("lưu nháp", "save draft", "hủy bỏ", "discard")):
+            reason = "save_draft_dialog"
+    if reason == "post_button_not_found" and not is_composer_dialog_open(driver):
+        reason = "composer_closed"
+    return reason
+
+
+def _save_status_fail_screenshot(driver, tag: str, log_cb=None) -> Optional[str]:
+    def log(msg: str):
+        if log_cb:
+            log_cb(msg)
+        logger.info(msg)
+    try:
+        folder = os.path.join(os.getcwd(), "logs", "screenshots")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"status_{tag}_{int(time.time())}.png")
+        driver.save_screenshot(path)
+        log(f"Đã lưu screenshot lúc fail: {path}")
+        return path
+    except Exception as e:
+        log(f"Không lưu được screenshot: {e}")
+        return None
+
+
 def publish_status_post(
     driver,
     content: str,
@@ -3358,11 +4634,12 @@ def publish_status_post(
     uid: Optional[str] = None,
     image_paths: Optional[Any] = None,
     on_checkpoint: Optional[Callable[..., None]] = None,
-) -> Optional[str]:
+) -> StatusUrlResult:
     """
     Đăng bài viết trạng thái lên Facebook Newsfeed / Page bằng HumanInteraction.
     Hỗ trợ tối đa 3 ảnh (image_paths); image_path vẫn dùng làm fallback 1 ảnh.
-    Trả về URL bài viết chính xác vừa đăng.
+    Trả về StatusUrlResult(url, is_permalink) — is_permalink=False khi chỉ có link profile.
+    Extract chỉ chạy khi post_clicked=True và đã xác nhận đăng thành công.
     """
     def log(msg: str):
         if log_cb:
@@ -3382,6 +4659,7 @@ def publish_status_post(
         _chk()
 
     human = HumanInteraction(driver)
+    post_clicked = False
     status_images = _normalize_status_image_paths(image_paths, image_path)
     content_text = (content or "").strip()
     if status_images and not content_text:
@@ -3542,22 +4820,45 @@ def publish_status_post(
         check_account_health(driver)
         raise RuntimeError("Không tìm thấy ô nhập văn bản trong hộp thoại đăng bài.")
 
-    # 2.1 Tự động kiểm tra và chuyển đối tượng người xem sang 'Công khai' (Mọi người) ngay khi hộp thoại mở xong
-    _mark("SET_AUDIENCE", "Kiểm tra / chuyển đối tượng người xem sang Công khai...")
+    # 2.1 Audience Công khai MỘT LẦN trước khi gõ — sau gõ không mở lại
+    _mark("SET_AUDIENCE", "Chọn đối tượng Công khai một lần (trước khi gõ)...")
     try:
         ensure_post_audience_public(driver, human, log_cb=log)
     except Exception as e:
         logger.warning(f"Lỗi khi kiểm tra đối tượng bài viết lúc mở hộp thoại: {e}")
+
+    # Nếu audience còn mở → chỉ Done/Xong (close_audience_dialog đã siết)
+    if is_audience_dialog_open(driver):
+        log("Bảng audience còn mở — chỉ bấm Done/Xong để đóng...")
+        close_audience_dialog(driver, human, log_cb=log)
+        time.sleep(0.8)
+
+    # Sau đóng audience: composer phải còn mở; không đi tìm Đăng nếu đã mất
+    if not is_composer_dialog_open(driver):
+        if _is_save_draft_dialog_open(driver):
+            log("composer_closed nhưng thấy Lưu nháp ngay sau audience — thử Tiếp tục chỉnh sửa...")
+            _continue_editing_from_save_draft(driver, human, log_cb=log)
+        if not is_composer_dialog_open(driver):
+            reason = _log_open_dialogs_snapshot(driver, log_cb=log)
+            _save_status_fail_screenshot(driver, "composer_closed_after_audience", log_cb=log)
+            check_account_health(driver)
+            raise RuntimeError(
+                f"composer_closed: hộp thoại đăng đã mất sau khi đóng audience "
+                f"(reason={reason}). Chưa bấm Đăng — không chạy extract."
+            )
+    try:
+        plain_now = _status_composer_plain_text(driver)
+        log(f"Sau audience: composer còn mở, nội dung hiện có {len(plain_now)} ký tự.")
+    except Exception:
+        pass
 
     _mark("TYPE_CONTENT", "Nhập nội dung bài viết...")
     log("Nhập nội dung bài viết theo tốc độ gõ người thật...")
     # Tắt gõ nhầm (mistake_rate=0.0) để tránh phím Backspace làm vỡ cấu trúc draft editor của Facebook
     human.human_type(input_box, content_text or content, mistake_rate=0.0)
     time.sleep(random.uniform(0.8, 1.4))
-    # Settle ngắn để Lexical nhận text trước bước audience/ảnh
-    time.sleep(random.uniform(0.8, 1.2))
 
-    # Kiểm tra an toàn: Đảm bảo ô soạn thảo đã nhận đủ nội dung bài viết (dùng innerText, không dùng .text)
+    # Kiểm tra an toàn độ dài — chỉ đồng bộ text, KHÔNG đụng audience lại
     try:
         current_text = _status_composer_plain_text(driver) or (input_box.text or "").strip()
         need = content_text or (content or "")
@@ -3572,17 +4873,8 @@ def publish_status_post(
     except Exception as e:
         logger.debug(f"Bỏ qua kiểm tra độ dài ô soạn thảo: {e}")
 
-    # 3. Kiểm tra lại đối tượng người xem (đảm bảo vẫn là Công khai)
-    try:
-        ensure_post_audience_public(driver, human, log_cb=log)
-    except Exception as e:
-        logger.warning(f"Lỗi khi kiểm tra đối tượng bài viết: {e}")
-
-    # Bảo hiểm an toàn: Nếu hộp thoại Post audience vẫn còn mở, cưỡng chế đóng nó ngay
-    if is_audience_dialog_open(driver):
-        log("Hộp thoại đối tượng vẫn chưa đóng, đang thực hiện đóng để hiện khung soạn thảo...")
-        close_audience_dialog(driver, human, log_cb=log)
-        time.sleep(1)
+    # KHÔNG gọi lại ensure_post_audience_public / close_audience sau khi gõ
+    # (log 14:25 chứng minh mở lại audience → đóng nhầm → Lưu nháp / mất nút Đăng)
 
     # 4. Tải ảnh lên nếu có (1–3 ảnh): bấm icon ảnh trong 'Add to your post'
     if status_images:
@@ -3758,47 +5050,67 @@ def publish_status_post(
         except Exception as e:
             check_account_health(driver)
             raise RuntimeError(f"Lỗi tải ảnh đính kèm lên bài viết: {e}")
+        # Không ENSURE_CONTENT / settle / khôi phục text sau ảnh — tránh đóng composer → Lưu nháp
 
-        # FB thường rebuild Lexical composer sau attach ảnh → chờ rồi khôi phục text
-        _mark("ENSURE_CONTENT", "Khôi phục / xác minh nội dung sau đính kèm ảnh...")
-        log("Chờ composer ổn định sau đính kèm ảnh rồi kiểm tra lại nội dung...")
-        time.sleep(random.uniform(1.5, 2.5))
-        _ensure_status_composer_content(
-            driver,
-            human,
-            content_text or content,
-            log_cb=log,
-            check_pause=check_pause,
-        )
-
-    # 5. FB mới: có thể phải Next → Post settings rồi mới Post/Đăng
+    # 5. Tìm nút Đăng (≤30s). Xử lý Lưu nháp tối đa 1 lần. Không khôi phục nội dung.
     _mark("CLICK_POST", "Tìm và chuẩn bị bấm nút Đăng...")
     log("Tìm nút 'Đăng' / bước 'Next' trong hộp thoại...")
-    post_btn = None
-    start_wait = time.time()
-    while time.time() - start_wait < 60:
-        _chk()
-        btn_selectors = [
+    save_draft_handled = False
+
+    def _refind_post_button():
+        for sel in [
             "//div[@role='dialog']//div[@role='button' and (@aria-label='Đăng' or @aria-label='Post')]",
             "//div[@role='dialog']//span[normalize-space()='Đăng' or normalize-space()='Post']/ancestor::div[@role='button'][1]",
             "//div[@role='dialog']//div[@role='button']//span[normalize-space()='Đăng' or normalize-space()='Post']",
             "//div[@role='dialog']//*[@role='button' and (contains(@aria-label, 'Đăng') or contains(@aria-label, 'Post'))]",
-            "//div[@role='dialog']//div[@role='button']//span[contains(text(), 'Đăng') or contains(text(), 'Post')]",
-        ]
-        for sel in btn_selectors:
+        ]:
             try:
-                elems = driver.find_elements(By.XPATH, sel)
-                for el in elems:
-                    if el.is_displayed():
-                        aria_dis = (el.get_attribute("aria-disabled") or "").lower()
-                        if aria_dis != "true":
-                            post_btn = el
-                            break
-                if post_btn:
-                    break
+                for el in driver.find_elements(By.XPATH, sel):
+                    if el.is_displayed() and (el.get_attribute("aria-disabled") or "").lower() != "true":
+                        return el
             except Exception:
                 continue
+        return None
 
+    def _handle_save_draft_once() -> bool:
+        nonlocal save_draft_handled
+        if save_draft_handled:
+            return False
+        if not _is_save_draft_dialog_open(driver):
+            return False
+        log("save_draft_dialog_found — sẽ bấm 'Tiếp tục chỉnh sửa' (tối đa 1 lần).")
+        ok = _continue_editing_from_save_draft(driver, human, log_cb=log)
+        save_draft_handled = True
+        if ok and is_composer_dialog_open(driver):
+            try:
+                n = len(_status_composer_plain_text(driver))
+                log(f"Đã quay lại composer sau Lưu nháp — nội dung còn {n} ký tự.")
+            except Exception:
+                pass
+            return True
+        return False
+
+    post_btn = None
+    start_wait = time.time()
+    while time.time() - start_wait < 30:
+        _chk()
+        if _is_save_draft_dialog_open(driver):
+            _handle_save_draft_once()
+            time.sleep(0.6)
+            continue
+
+        if not is_composer_dialog_open(driver):
+            if _is_save_draft_dialog_open(driver) and _handle_save_draft_once():
+                continue
+            reason = _log_open_dialogs_snapshot(driver, log_cb=log)
+            _save_status_fail_screenshot(driver, reason or "composer_closed", log_cb=log)
+            check_account_health(driver)
+            raise RuntimeError(
+                f"composer_closed: hộp thoại đăng đã mất trước khi bấm Đăng "
+                f"(reason={reason}). Không chạy extract."
+            )
+
+        post_btn = _refind_post_button()
         if post_btn:
             break
 
@@ -3807,8 +5119,9 @@ def publish_status_post(
                 const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
                 return dialogs.find(d => {
                     const rect = d.getBoundingClientRect();
-                    return rect.width > 250 && rect.height > 150;
-                }) || dialogs[dialogs.length - 1];
+                    return rect.width > 250 && rect.height > 150
+                        && !!d.querySelector("div[role='textbox'], [contenteditable='true']");
+                }) || null;
             }
             const dialog = getComposerDialog();
             if (!dialog) return null;
@@ -3817,12 +5130,9 @@ def publish_status_post(
                 const text = (b.innerText || b.textContent || '').trim().toLowerCase();
                 const aria = (b.getAttribute('aria-label') || '').trim().toLowerCase();
                 if (text === 'đăng' || text === 'post' || aria === 'đăng' || aria === 'post') {
-                    if (b.getAttribute('aria-disabled') !== 'true' && !b.disabled) {
-                        return b;
-                    }
+                    if (b.getAttribute('aria-disabled') !== 'true' && !b.disabled) return b;
                 }
             }
-            // Composer còn bước Next trước Post settings
             for (const b of buttons) {
                 const text = (b.innerText || b.textContent || '').trim().toLowerCase();
                 const aria = (b.getAttribute('aria-label') || '').trim().toLowerCase();
@@ -3846,85 +5156,32 @@ def publish_status_post(
                 break
         except Exception:
             pass
-
         time.sleep(1)
 
     if not post_btn:
-        for sel in [
-            "//div[@role='dialog']//div[@role='button' and (@aria-label='Đăng' or @aria-label='Post')]",
-            "//div[@role='dialog']//span[normalize-space()='Đăng' or normalize-space()='Post']/ancestor::div[@role='button'][1]",
-            "//div[@role='dialog']//div[@role='button']//span[contains(text(), 'Đăng') or contains(text(), 'Post')]",
-        ]:
-            try:
-                elems = driver.find_elements(By.XPATH, sel)
-                for el in elems:
-                    if el.is_displayed():
-                        post_btn = el
-                        break
-                if post_btn:
-                    break
-            except Exception:
-                pass
-
-    if not post_btn:
+        if _is_save_draft_dialog_open(driver):
+            reason = "save_draft_dialog"
+        elif not is_composer_dialog_open(driver):
+            reason = "composer_closed"
+        else:
+            reason = "post_button_not_found"
+        snap = _log_open_dialogs_snapshot(driver, log_cb=log)
+        if snap in ("save_draft_dialog", "composer_closed"):
+            reason = snap
+        _save_status_fail_screenshot(driver, reason, log_cb=log)
         check_account_health(driver)
-        raise RuntimeError("Không tìm thấy nút 'Đăng' hợp lệ trong hộp thoại.")
-
-    # Gate cuối: xác minh nội dung còn trong composer trước khi Đăng
-    if content_text or (content or "").strip():
-        _mark("ENSURE_CONTENT", "Xác minh nội dung trước khi bấm Đăng...")
-        log("Kiểm tra lại nội dung trong composer trước khi bấm Đăng...")
-        _wait_status_composer_settle(driver, log_cb=log, timeout=6)
-        _ensure_status_composer_content(
-            driver,
-            human,
-            content_text or content,
-            log_cb=log,
-            check_pause=check_pause,
+        raise RuntimeError(
+            f"{reason}: không tìm thấy nút 'Đăng' trong 30s. "
+            f"Chưa bấm Đăng — không chạy extract."
         )
-        time.sleep(random.uniform(0.5, 1.0))
-        # Nút Đăng có thể stale sau khi rebuild composer — tìm lại
-        try:
-            if not post_btn.is_displayed():
-                post_btn = None
-        except StaleElementReferenceException:
-            post_btn = None
-        if post_btn is None:
-            for sel in [
-                "//div[@role='dialog']//div[@role='button' and (@aria-label='Đăng' or @aria-label='Post')]",
-                "//div[@role='dialog']//span[normalize-space()='Đăng' or normalize-space()='Post']/ancestor::div[@role='button'][1]",
-            ]:
-                try:
-                    for el in driver.find_elements(By.XPATH, sel):
-                        if el.is_displayed() and (el.get_attribute("aria-disabled") or "").lower() != "true":
-                            post_btn = el
-                            break
-                    if post_btn:
-                        break
-                except Exception:
-                    pass
-            if not post_btn:
-                check_account_health(driver)
-                raise RuntimeError("Không tìm thấy nút 'Đăng' sau khi khôi phục nội dung.")
 
-    # 5. Bấm Đăng và chờ hộp thoại đóng hoàn toàn (retry khi stale)
-    def _refind_post_button():
-        for sel in [
-            "//div[@role='dialog']//div[@role='button' and (@aria-label='Đăng' or @aria-label='Post')]",
-            "//div[@role='dialog']//span[normalize-space()='Đăng' or normalize-space()='Post']/ancestor::div[@role='button'][1]",
-        ]:
-            try:
-                for el in driver.find_elements(By.XPATH, sel):
-                    if el.is_displayed() and (el.get_attribute("aria-disabled") or "").lower() != "true":
-                        return el
-            except Exception:
-                continue
-        return None
-
+    # Bấm Đăng — không ENSURE_CONTENT / settle trước đó
     _mark("CLICK_POST", "Đã sẵn sàng — nhấn nút Đăng (post_clicked)...")
     log("Di chuột quỹ đạo Bézier tự nhiên và nhấn nút 'Đăng'...")
     clicked = False
     for attempt in range(4):
+        if _is_save_draft_dialog_open(driver):
+            _handle_save_draft_once()
         btn = post_btn if attempt == 0 else _refind_post_button()
         if btn is None:
             btn = _refind_post_button()
@@ -3956,33 +5213,65 @@ def publish_status_post(
                 time.sleep(0.35)
                 continue
     if not clicked:
+        reason = _log_open_dialogs_snapshot(driver, log_cb=log)
+        _save_status_fail_screenshot(driver, "post_click_failed", log_cb=log)
         check_account_health(driver)
-        raise RuntimeError("Không thể bấm nút 'Đăng' (giao diện Facebook thay đổi liên tục).")
+        raise RuntimeError(
+            f"post_button_not_found: không thể bấm nút 'Đăng' (snapshot={reason}). "
+            f"Chưa bấm Đăng — không chạy extract."
+        )
+
+    post_clicked = True
+    log("post_clicked=True — đã bấm Đăng thành công.")
 
     _mark("WAIT_CONFIRM", "Chờ Facebook xác nhận bài đăng (không bấm Đăng lại khi resume)...")
     log("Chờ máy chủ Facebook xác nhận bài đăng xuất bản...")
+    dialog_closed = False
+    publish_confirmed = False
     try:
         wait_dialog_closed(driver, timeout=90, check_pause=check_pause, log_cb=log)
+        dialog_closed = True
+        publish_confirmed = True
     except PublishUnconfirmed:
-        # Soft-recover: đôi khi dialog chưa kịp đóng nhưng bài đã lên
-        log("Chưa thấy dialog đóng — đang kiểm tra xem bài đã lên chưa...")
-        soft_url = None
-        try:
-            soft_url = extract_status_post_url(driver, uid=uid, log_cb=log)
-        except Exception:
-            soft_url = None
-        if soft_url and any(
-            k in (soft_url or "")
-            for k in ("/posts/", "permalink.php", "story_fbid=", "pfbid", "/photo")
-        ):
-            log(f"Xác nhận bài đã lên qua URL: {soft_url}")
-            return soft_url
-        raise
-    log("Bài viết đã xuất bản thành công (hộp thoại đã đóng)!")
+        log("Chưa thấy dialog đóng — kiểm tra tín hiệu đăng thành công (không extract nếu chưa xác nhận)...")
+        if _status_publish_success_signal(driver):
+            publish_confirmed = True
+            dialog_closed = not is_composer_dialog_open(driver)
+            log("Có tín hiệu toast/đăng thành công — coi như đã xác nhận.")
+        else:
+            raise PublishUnconfirmed(
+                "Hộp thoại đăng chưa đóng và không có tín hiệu đăng thành công — không chạy extract."
+            )
 
-    # Trích xuất URL trực tiếp của bài viết vừa đăng
-    res_url = extract_status_post_url(driver, uid=uid, log_cb=log)
-    return res_url
+    if not (post_clicked and publish_confirmed):
+        raise RuntimeError(
+            "Chưa đủ điều kiện extract (cần post_clicked + xác nhận đã đăng). Không chạy extract."
+        )
+
+    log("Bài viết đã xuất bản thành công!")
+
+    # Extract chỉ khi đã bấm Đăng + đã xác nhận — best-effort, không fail bài
+    if post_clicked and publish_confirmed and (dialog_closed or _status_publish_success_signal(driver)):
+        try:
+            return extract_status_post_url(
+                driver,
+                uid=uid,
+                log_cb=log,
+                content_hint=content_text,
+                status_text=content_text,
+            )
+        except Exception as e:
+            log(f"Extract lỗi (bài vẫn SUCCESS): {e}")
+            profile = _profile_url_from_uid(uid) or _profile_url_from_uid(_uid_from_c_user(driver))
+            if profile:
+                return StatusUrlResult(_clean_facebook_url(profile), False)
+            return StatusUrlResult(None, False)
+
+    log("Bỏ qua extract — thiếu điều kiện post_clicked/dialog/xác nhận.")
+    profile = _profile_url_from_uid(uid) or _profile_url_from_uid(_uid_from_c_user(driver))
+    if profile:
+        return StatusUrlResult(_clean_facebook_url(profile), False)
+    return StatusUrlResult(None, False)
 
 
 # ==============================================================================

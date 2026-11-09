@@ -149,9 +149,11 @@ export async function loginAccounts(uids, threads = 3) {
   }
 }
 
-export async function openLiveBrowser(uid) {
+export async function openLiveBrowser(uid, targetUrl) {
   try {
-    return await api.post("/api/accounts/open-browser", { uid });
+    const body = { uid };
+    if (targetUrl) body.target_url = targetUrl;
+    return await api.post("/api/accounts/open-browser", body);
   } catch (error) {
     throw new Error(formatApiError(error));
   }
