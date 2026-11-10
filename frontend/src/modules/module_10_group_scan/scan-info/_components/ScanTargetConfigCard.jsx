@@ -205,7 +205,7 @@ export default function ScanTargetConfigCard({
                 value={rotateAfter}
                 onChange={(event) => onRotateAfterChange(Math.max(1, Number(event.target.value) || 1))}
                 className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                title="Chỉ giao diện — chưa đổi nick tự động"
+                title="Tự động xoay vòng tài khoản trong Bot Pool khi đạt hạn ngạch"
               />
               <button
                 type="button"

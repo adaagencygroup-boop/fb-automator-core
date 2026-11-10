@@ -57,6 +57,450 @@ RESULTS_ROOT_LOCATORS = [
     '//*[@role="main" and (contains(@aria-label,"Kết quả tìm kiếm") or contains(@aria-label,"kết quả"))]',
 ]
 
+CLICK_JOIN_BUTTON_JS = """
+return ((targetUrl, targetName) => {
+  const cleanUrl = (targetUrl || '').split('?')[0].replace(/\/+$/, '').toLowerCase();
+  const root =
+    document.querySelector('[aria-label="Search results"][role="main"]') ||
+    document.querySelector('[aria-label="Search results"]') ||
+    document.querySelector('[role="main"]') ||
+    document.body;
+
+  const isAlreadyJoined = (text) => {
+    return /^(đã tham gia|joined|đang chờ|requested|hủy yêu cầu|hủy lời mời|chờ phê duyệt|đang chờ duyệt)$/i.test((text || '').trim());
+  };
+
+  const isJoinText = (text) => {
+    return /^(tham gia|tham gia nhóm|join|join group)$/i.test((text || '').trim());
+  };
+
+  const clickElement = (el) => {
+    if (!el) return false;
+    const btn = el.closest('div[role="button"], button') || el;
+    try {
+      btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+    } catch (e) {}
+    try {
+      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    } catch (e) {}
+    btn.click();
+    return true;
+  };
+
+  // 1. Thử tìm trên thẻ card tương ứng với targetUrl trong Search results
+  if (cleanUrl) {
+    const anchors = root.querySelectorAll('a[href*="/groups/"]');
+    for (const a of anchors) {
+      const href = (a.getAttribute('href') || a.href || '').split('?')[0].replace(/\/+$/, '').toLowerCase();
+      let matched = (href === cleanUrl);
+      if (!matched && cleanUrl.includes('/groups/')) {
+        const slug = cleanUrl.split('/groups/')[1].split('/')[0];
+        if (slug && href.includes('/groups/' + slug)) matched = true;
+      }
+      if (!matched && targetName) {
+        const aText = (a.textContent || '').trim().toLowerCase();
+        if (aText && aText === targetName.toLowerCase()) matched = true;
+      }
+
+      if (matched) {
+        let card = a;
+        for (let i = 0; i < 10 && card && card !== root; i++) {
+          card = card.parentElement;
+          if (!card) break;
+
+          // Kiểm tra xem trên card đã ở trạng thái đã tham gia chưa
+          const spans = card.querySelectorAll('span');
+          for (const sp of spans) {
+            const spText = (sp.textContent || '').trim();
+            if (isAlreadyJoined(spText)) {
+              return { status: 'already_joined', label: spText };
+            }
+          }
+
+          // Ưu tiên tìm đúng element: <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft">Tham gia</span>
+          for (const sp of spans) {
+            const spText = (sp.textContent || '').trim();
+            if (isJoinText(spText)) {
+              clickElement(sp);
+              return { status: 'clicked_join', label: spText };
+            }
+          }
+
+          // Fallback tìm button trên card
+          const btns = card.querySelectorAll('div[role="button"], button');
+          for (const btn of btns) {
+            const text = (btn.innerText || btn.getAttribute('aria-label') || '').trim();
+            if (isAlreadyJoined(text)) {
+              return { status: 'already_joined', label: text };
+            }
+            if (isJoinText(text)) {
+              clickElement(btn);
+              return { status: 'clicked_join', label: text };
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Nếu ở trang nhóm trực tiếp (Group page) hoặc fallback trên toàn trang
+  // Ưu tiên tìm span có class x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft
+  const allSpans = document.querySelectorAll('span.x1lliihq, span');
+  for (const sp of allSpans) {
+    const spText = (sp.textContent || '').trim();
+    if (isAlreadyJoined(spText)) {
+      return { status: 'already_joined', label: spText };
+    }
+    if (isJoinText(spText)) {
+      clickElement(sp);
+      return { status: 'clicked_join', label: spText };
+    }
+  }
+
+  return { status: 'not_found' };
+})(arguments[0], arguments[1]);
+"""
+
+CHECK_GROUP_QUESTIONS_DIALOG_JS = """
+return (() => {
+  const d = document.querySelector('div[role="dialog"]') || document.querySelector('[aria-modal="true"]');
+  if (!d) return { hasDialog: false };
+  const text = (d.innerText || d.textContent || '').toLowerCase();
+  const isQuestionDialog = /câu hỏi|câu trả lời|quy tắc|rules|question|yêu cầu tham gia|membership|trả lời|đồng ý|gửi|submit/i.test(text);
+  return {
+    hasDialog: isQuestionDialog || !!d,
+    title: (d.querySelector('h1, h2, h3, [role="heading"]')?.textContent || '').trim(),
+  };
+})();
+"""
+
+ANSWER_GROUP_QUESTIONS_JS = """
+return (() => {
+  const dialogEl = document.querySelector('div[role="dialog"]') || document.querySelector('[aria-modal="true"]');
+  const targetRoot = dialogEl || document.body;
+
+  const result = {
+    found: !!dialogEl,
+    answeredCount: 0,
+    radiosSelected: 0,
+    checkboxesChecked: 0,
+    rulesAgreed: false,
+    hasSubmitBtn: false,
+  };
+
+  const setNativeValue = (element, value) => {
+    try {
+      element.focus();
+      const valSetter = Object.getOwnPropertyDescriptor(element, 'value')?.set;
+      const proto = Object.getPrototypeOf(element);
+      const protoSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (protoSetter && valSetter !== protoSetter) {
+        protoSetter.call(element, value);
+      } else if (valSetter) {
+        valSetter.call(element, value);
+      } else {
+        element.value = value;
+      }
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      element.dispatchEvent(new Event('blur', { bubbles: true }));
+    } catch (e) {
+      try {
+        element.value = value;
+      } catch (err) {}
+    }
+  };
+
+  // 1. TEXT INPUTS & TEXTAREAS (Các câu hỏi tự luận - Nhập text)
+  const textInputs = targetRoot.querySelectorAll('textarea, input[type="text"], div[role="textbox"], div[contenteditable="true"]');
+  textInputs.forEach((el) => {
+    if (el.getAttribute('aria-label')?.includes('Search') || el.getAttribute('placeholder')?.includes('Tìm kiếm')) {
+      return;
+    }
+    try {
+      el.scrollIntoView({ behavior: 'instant', block: 'center' });
+    } catch (e) {}
+
+    let questionText = '';
+    let curr = el.parentElement;
+    for (let depth = 0; depth < 6 && curr && curr !== targetRoot; depth++) {
+      const txt = (curr.innerText || '').trim();
+      if (txt.length > 5 && txt.length < 500) {
+        questionText = txt;
+        break;
+      }
+      curr = curr.parentElement;
+    }
+    const qLower = questionText.toLowerCase();
+
+    let ans = 'Tôi đồng ý và cam kết tuân thủ đầy đủ mọi quy tắc và văn hóa nhóm, tích cực chia sẻ kiến thức hữu ích.';
+    if (/số điện thoại|sđt|phone|mobile/i.test(qLower)) {
+      ans = '0988668899';
+    } else if (/email|mail/i.test(qLower)) {
+      ans = 'thanhvien.fb@gmail.com';
+    } else if (/biết qua đâu|nguồn|ai giới thiệu|how did you find|từ đâu/i.test(qLower)) {
+      ans = 'Tìm kiếm trên Facebook';
+    } else if (/tuổi|năm sinh|age|năm bao nhiêu/i.test(qLower)) {
+      ans = '1995';
+    } else if (/ở đâu|thành phố|quê quán|tỉnh|nơi sống|where do you live/i.test(qLower)) {
+      ans = 'Hà Nội';
+    }
+
+    if (el.tagName.toLowerCase() === 'textarea' || el.tagName.toLowerCase() === 'input') {
+      setNativeValue(el, ans);
+    } else {
+      el.focus();
+      el.textContent = ans;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur', { bubbles: true }));
+    }
+    result.answeredCount++;
+  });
+
+  // 2. RADIO BUTTONS (Trắc nghiệm 1 đáp án - Tích radio)
+  const allRadios = targetRoot.querySelectorAll('div[role="radio"], input[type="radio"]');
+  const radioGroups = new Map();
+  allRadios.forEach((r, idx) => {
+    const groupName = r.getAttribute('name') || r.closest('[role="radiogroup"]') || r.parentElement?.parentElement || ('group_' + idx);
+    if (!radioGroups.has(groupName)) radioGroups.set(groupName, []);
+    radioGroups.get(groupName).push(r);
+  });
+
+  radioGroups.forEach((radios) => {
+    let chosen = null;
+    for (const r of radios) {
+      const text = (r.innerText || r.getAttribute('aria-label') || r.parentElement?.innerText || '').toLowerCase();
+      if (/đồng ý|có|yes|tuân thủ|chấp nhận|agree|đã đọc|tôi đồng ý/i.test(text)) {
+        chosen = r;
+        break;
+      }
+    }
+    if (!chosen && radios.length > 0) {
+      chosen = radios[0];
+    }
+    if (chosen) {
+      try {
+        chosen.scrollIntoView({ behavior: 'instant', block: 'center' });
+        chosen.click();
+        chosen.setAttribute('aria-checked', 'true');
+        chosen.dispatchEvent(new Event('change', { bubbles: true }));
+        result.radiosSelected++;
+      } catch (e) {}
+    }
+  });
+
+  // 3. CHECKBOXES (Hộp kiểm chọn chủ đề / quy tắc - Tích checkbox)
+  const checkboxes = targetRoot.querySelectorAll('div[role="checkbox"], input[type="checkbox"]');
+  checkboxes.forEach((cb) => {
+    const isChecked = cb.getAttribute('aria-checked') === 'true' || cb.checked === true;
+    const cbText = (cb.innerText || cb.getAttribute('aria-label') || cb.parentElement?.innerText || '').toLowerCase();
+
+    if (!isChecked) {
+      try {
+        cb.scrollIntoView({ behavior: 'instant', block: 'center' });
+        cb.click();
+        cb.setAttribute('aria-checked', 'true');
+        cb.dispatchEvent(new Event('change', { bubbles: true }));
+        result.checkboxesChecked++;
+        if (/quy tắc|rules|điều khoản|đồng ý|agree/i.test(cbText)) {
+          result.rulesAgreed = true;
+        }
+      } catch (e) {}
+    } else {
+      if (/quy tắc|rules|điều khoản|đồng ý|agree/i.test(cbText)) {
+        result.rulesAgreed = true;
+      }
+    }
+  });
+
+  return result;
+})();
+"""
+
+SUBMIT_GROUP_QUESTIONS_JS = """
+return (() => {
+  const dialog =
+    document.querySelector('div[role="dialog"]') ||
+    document.querySelector('[aria-modal="true"]') ||
+    document.body;
+
+  const isSubmitText = (text) => {
+    return /^(gửi|submit|gửi câu trả lời|hoàn tất|xong|done|gửi cho quản trị viên|submit answers)$/i.test((text || '').trim());
+  };
+
+  const clickSubmit = (el) => {
+    const btn = el.closest('div[role="button"], button') || el;
+    if (btn.getAttribute('aria-disabled') === 'true' || btn.disabled) {
+      btn.removeAttribute('disabled');
+      btn.setAttribute('aria-disabled', 'false');
+    }
+    try {
+      btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+    } catch (e) {}
+    btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    btn.click();
+    return true;
+  };
+
+  // 1. Ưu tiên tìm đúng element: <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft">Gửi</span>
+  const spans = dialog.querySelectorAll('span.x1lliihq, span');
+  for (const sp of spans) {
+    const text = (sp.textContent || '').trim();
+    if (isSubmitText(text)) {
+      clickSubmit(sp);
+      return { clicked: true, text: text, method: 'span' };
+    }
+  }
+
+  // 2. Tìm button hoặc div[role="button"] có text hoặc aria-label là Gửi
+  const allButtons = dialog.querySelectorAll('div[role="button"], button');
+  for (const btn of allButtons) {
+    const btnText = (btn.innerText || btn.getAttribute('aria-label') || '').trim();
+    if (isSubmitText(btnText)) {
+      clickSubmit(btn);
+      return { clicked: true, text: btnText, method: 'button' };
+    }
+  }
+
+  // 3. Fallback nút tiếp tục / xác nhận nếu có phân trang câu hỏi
+  for (const btn of allButtons) {
+    const btnText = (btn.innerText || btn.getAttribute('aria-label') || '').trim();
+    if (/^(tiếp|tiếp tục|next|xác nhận|confirm)$/i.test(btnText)) {
+      clickSubmit(btn);
+      return { clicked: true, text: btnText, method: 'next' };
+    }
+  }
+
+  return { clicked: false };
+})();
+"""
+
+
+def _auto_join_group(driver, item: dict[str, Any], job_id: Optional[str] = None) -> str:
+    """
+    Tự động nhấp tham gia nhóm với element <span ...>Tham gia</span>
+    - Nhóm riêng tư: Đợi 1 lúc xem nhóm đó có bắt trả lời câu hỏi không
+      + Nếu không bắt trả lời: tiếp tục quét
+      + Nếu có popup câu hỏi: xem popup có những gì:
+        * nhập text nếu có câu hỏi tự luận
+        * tích radio nếu có trắc nghiệm
+        * tích checkbox nếu có quy tắc / điều khoản
+        * bấm nút <span ...>Gửi</span>
+    - Trả về trạng thái ghi chú: 'joined' | 'pending' | 'not_joined'
+    """
+    if not driver:
+        return item.get("note") or "—"
+
+    name = item.get("name") or "Nhóm"
+    url = item.get("href") or item.get("url") or ""
+    privacy = (item.get("type") or "").lower()
+
+    try:
+        from modules.module_02_account_manager.automation import human_sleep
+
+        # 1. Bấm nút Tham gia
+        res = driver.execute_script(CLICK_JOIN_BUTTON_JS, url, name) or {}
+        st = res.get("status")
+
+        if st == "already_joined":
+            label = res.get("label", "Đã tham gia")
+            _append_log(job_id, f"ℹ️ «{name}»: Tài khoản đã ở trạng thái [{label}].", "info")
+            if "chờ" in label.lower() or "request" in label.lower():
+                return "pending"
+            return "joined"
+
+        if st != "clicked_join":
+            _append_log(job_id, f"ℹ️ «{name}»: Không tìm thấy nút [Tham gia] khả dụng.", "info")
+            return item.get("note") or "—"
+
+        _append_log(job_id, f"👉 «{name}»: Đã bấm nút [{res.get('label', 'Tham gia')}]...", "info")
+
+        # 2. Đợi 1 lúc xem nhóm đó có bắt trả lời câu hỏi không (đặc biệt là nhóm riêng tư)
+        has_dialog = False
+        for _ in range(5):
+            human_sleep(0.5, 0.6)
+            try:
+                check_res = driver.execute_script(CHECK_GROUP_QUESTIONS_DIALOG_JS) or {}
+                if check_res.get("hasDialog"):
+                    has_dialog = True
+                    break
+            except Exception:
+                pass
+
+        if not has_dialog:
+            # Nhóm không bắt trả lời câu hỏi -> tiếp tục quét
+            _append_log(job_id, f"ℹ️ «{name}»: Không có popup câu hỏi xét duyệt, tiếp tục quét...", "info")
+            if privacy == "private":
+                _append_log(job_id, f"⏳ «{name}» (Riêng tư): Đang chờ quản trị viên duyệt.", "info")
+                return "pending"
+            _append_log(job_id, f"✅ «{name}» (Công khai): Đã tham gia thành công!", "success")
+            return "joined"
+
+        # 3. Có popup câu hỏi: Phân tích xem có những gì: text, radio, checkbox
+        _append_log(
+            job_id,
+            f"📝 Phát hiện popup câu hỏi nhóm «{name}». Đang tự động kiểm tra và trả lời...",
+            "info",
+        )
+        human_sleep(0.8, 1.2)
+
+        answer_res = driver.execute_script(ANSWER_GROUP_QUESTIONS_JS) or {}
+        ans_count = answer_res.get("answeredCount", 0)
+        rad_count = answer_res.get("radiosSelected", 0)
+        chk_count = answer_res.get("checkboxesChecked", 0)
+        rules_ok = answer_res.get("rulesAgreed", False)
+
+        detail_parts = []
+        if ans_count:
+            detail_parts.append(f"{ans_count} câu tự luận (nhập text)")
+        if rad_count:
+            detail_parts.append(f"{rad_count} câu trắc nghiệm (tích radio)")
+        if chk_count:
+            detail_parts.append(f"{chk_count} hộp kiểm (tích checkbox)")
+        if rules_ok:
+            detail_parts.append("đồng ý quy tắc nhóm")
+        details_str = ", ".join(detail_parts) if detail_parts else "đã điền thông tin xét duyệt"
+
+        _append_log(job_id, f"✍️ «{name}»: Đã điền xong ({details_str}). Đang bấm nút [Gửi]...", "info")
+        human_sleep(0.8, 1.2)
+
+        # 4. Bấm nút Gửi (<span class="... xuxw1ft">Gửi</span>)
+        sub_res = driver.execute_script(SUBMIT_GROUP_QUESTIONS_JS) or {}
+        human_sleep(1.5, 2.0)
+
+        # Xử lý trường hợp có bước thứ 2 (xác nhận tiếp quy tắc nhóm)
+        try:
+            check_again = driver.execute_script(CHECK_GROUP_QUESTIONS_DIALOG_JS) or {}
+            if check_again.get("hasDialog"):
+                driver.execute_script(ANSWER_GROUP_QUESTIONS_JS)
+                human_sleep(0.8, 1.0)
+                driver.execute_script(SUBMIT_GROUP_QUESTIONS_JS)
+                human_sleep(1.5, 2.0)
+        except Exception:
+            pass
+
+        btn_label = sub_res.get("text", "Gửi")
+        if sub_res.get("clicked"):
+            _append_log(
+                job_id,
+                f"✅ Đã bấm nút [{btn_label}] ({details_str}) thành công cho nhóm «{name}»!",
+                "success",
+            )
+        else:
+            _append_log(
+                job_id,
+                f"✅ Đã hoàn tất xử lý câu hỏi nhóm «{name}» ({details_str}).",
+                "success",
+            )
+        return "pending"
+
+    except Exception as exc:
+        _append_log(job_id, f"⚠️ Xử lý tham gia nhóm «{name}» gặp sự cố: {exc}", "warn")
+        return item.get("note") or "—"
+
 
 def _pending_key(owner: Optional[str], uid: str) -> str:
     return f"{owner or ''}::{uid}"
@@ -153,11 +597,7 @@ def _append_log(job_id: str, text: str, tone: str = "info") -> None:
         broadcast(level, text, uid=_jobs.get(job_id, {}).get("uid"))
     except Exception:
         pass
-    try:
-        from modules.module_10_group_scan.models import add_session_log
-        add_session_log(job_id, tone, text)
-    except Exception:
-        pass
+
 
 
 def _set_job(job_id: str, **fields) -> None:
@@ -268,7 +708,16 @@ def start_keyword_check(
     private_only: bool = False,
     min_members: Optional[int] = None,
     force: bool = True,
+    auto_join: bool = True,
+    uids: Optional[list[str]] = None,
+    rotate_after: int = 50,
 ) -> dict:
+    valid_uids = [str(u).strip() for u in (uids or []) if str(u).strip()]
+    if not valid_uids and uid:
+        valid_uids = [str(uid).strip()]
+    elif valid_uids and not uid:
+        uid = valid_uids[0]
+
     uid = str(uid or "").strip()
     items = _normalize_keywords(keywords)
     if not uid:
@@ -338,6 +787,8 @@ def start_keyword_check(
     with _jobs_lock:
         _jobs[job_id] = {
             "uid": uid,
+            "uids": valid_uids,
+            "rotate_after": rotate_after,
             "keyword": items[0]["keyword"],
             "keywords": [item["keyword"] for item in items],
             "keyword_stats": keyword_stats,
@@ -351,16 +802,19 @@ def start_keyword_check(
             "public_only": public_only,
             "private_only": private_only,
             "min_members": min_members,
+            "auto_join": auto_join,
             "control": "run",
             "started_at": time.time(),
         }
 
     # Đảm bảo mỗi từ khóa tạo thành 1 DANH MỤC trong bảng scanned_group_categories ngay khi bắt đầu
+    # CHỈ tạo danh mục cho TỪ KHÓA thực sự, KHÔNG tạo danh mục khi là link URL (Nhập link / Tải tệp)
     try:
         from modules.module_10_group_scan.models import create_scan_category
         for item in items:
             kw = str(item.get("keyword") or "").strip()
-            if kw:
+            is_url = kw.startswith("http") or "/groups/" in kw or "facebook.com" in kw or "fb.com" in kw
+            if kw and not is_url:
                 create_scan_category(owner, kw, f"Danh mục từ khóa: {kw}")
     except Exception as exc:
         logger.debug(f"auto create_scan_category in check error: {exc}")
@@ -392,7 +846,7 @@ def start_keyword_check(
 
     thread = threading.Thread(
         target=_run_check,
-        args=(owner, uid, items, dmin, dmax, public_only, private_only, min_members, key, job_id),
+        args=(owner, uid, items, dmin, dmax, public_only, private_only, min_members, key, job_id, auto_join, valid_uids, rotate_after),
         daemon=True,
         name=f"group-scan-check-{uid}",
     )
@@ -410,6 +864,7 @@ def start_keyword_check(
         "public_only": public_only,
         "private_only": private_only,
         "min_members": min_members,
+        "auto_join": auto_join,
         "max_groups": items[0]["limit"],
     }
 
@@ -425,6 +880,9 @@ def _run_check(
     min_members: Optional[int],
     key: str,
     job_id: str,
+    auto_join: bool = True,
+    uids: Optional[list[str]] = None,
+    rotate_after: int = 50,
 ) -> None:
     from modules.module_02_account_manager.context import owner_scope
 
@@ -432,9 +890,13 @@ def _run_check(
         with owner_scope(owner):
             _check_keywords_on_account(
                 uid, items, delay_min, delay_max, job_id,
+                owner=owner,
                 public_only=public_only,
                 private_only=private_only,
                 min_members=min_members,
+                auto_join=auto_join,
+                uids=uids,
+                rotate_after=rotate_after,
             )
     except Exception as exc:
         msg = str(exc)
@@ -681,6 +1143,124 @@ def _click_groups_tab(driver, wait_and_find, human_sleep) -> bool:
     return False
 
 
+def _scrape_group_direct(
+    driver,
+    target_url: str,
+    job_id: str,
+    human_sleep,
+    *,
+    public_only: bool = False,
+    private_only: bool = False,
+    min_members: Optional[int] = None,
+    owner: Optional[str] = None,
+    source_uid: Optional[str] = None,
+    known_group_ids: Optional[set[str]] = None,
+    auto_join: bool = True,
+) -> Optional[dict[str, Any]]:
+    """Quét trực tiếp thông tin nhóm khi người dùng cung cấp link / file link."""
+    from modules.module_10_group_scan.models import (
+        normalize_group_id,
+        upsert_scanned_group,
+    )
+
+    clean_url = _normalize_group_url(target_url)
+    if not clean_url:
+        clean_url = target_url
+    gid = normalize_group_id(clean_url)
+    if known_group_ids and gid and gid in known_group_ids:
+        _append_log(job_id, f"⏭️ Bỏ trùng DB: {clean_url}", "info")
+        return None
+
+    try:
+        driver.get(clean_url)
+        human_sleep(2.5, 4.0)
+    except Exception as exc:
+        _append_log(job_id, f"⚠️ Không tải được link {clean_url}: {exc}", "warn")
+        return None
+
+    js = """
+    const res = {
+        title: document.title || '',
+        h1: document.querySelector('h1')?.innerText || '',
+        subTitle: '',
+    };
+    const h1 = document.querySelector('h1');
+    if (h1) {
+        let parent = h1.parentElement;
+        for (let i = 0; i < 5 && parent; i++) {
+            const text = (parent.innerText || '').replace(/\\s+/g, ' ');
+            const m = text.match(/(Public group|Private group|Nhóm công khai|Nhóm riêng tư|Bí mật)[^\\n·•]*[·•\\s]*([\\d.,]+[KkMmBb]?\\s*(members|thành viên))/i);
+            if (m) {
+                res.subTitle = m[0];
+                break;
+            }
+            parent = parent.parentElement;
+        }
+    }
+    if (!res.subTitle) {
+        const bodyText = (document.body.innerText || '').replace(/\\s+/g, ' ');
+        const m = bodyText.match(/(Public group|Private group|Nhóm công khai|Nhóm riêng tư|Bí mật)[·•\\s]*([\\d.,]+[KkMmBb]?\\s*(members|thành viên))/i);
+        if (m) res.subTitle = m[0];
+    }
+    return res;
+    """
+    try:
+        data = driver.execute_script(js) or {}
+    except Exception as exc:
+        _append_log(job_id, f"⚠️ Lỗi đọc DOM trang nhóm: {exc}", "warn")
+        data = {}
+
+    raw_title = data.get("title") or ""
+    cleaned_name = re.sub(r"^\(\d+\)\s*", "", raw_title)
+    cleaned_name = re.sub(r"\s*\|\s*Facebook$", "", cleaned_name).strip()
+    if not cleaned_name:
+        cleaned_name = data.get("h1") or "Nhóm Facebook"
+    if cleaned_name.lower() in {"notifications", "facebook", "search"}:
+        cleaned_name = clean_url.split("/groups/")[-1].replace("/", "")
+
+    sub_title = data.get("subTitle") or ""
+    meta_info = _parse_group_meta(sub_title)
+    ok, reason = _passes_filters(
+        meta_info,
+        public_only=public_only,
+        private_only=private_only,
+        min_members=min_members,
+    )
+    if not ok:
+        _append_log(job_id, f"⏭️ {cleaned_name}: {reason} ({sub_title})", "info")
+        return None
+
+    members_label = _format_members_label(meta_info)
+    privacy = meta_info.get("type") or "unknown"
+    note = "not_joined" if privacy == "private" else "—"
+    item = {
+        "id": clean_url,
+        "keyword": clean_url,
+        "name": cleaned_name,
+        "url": clean_url.replace("https://www.", "").replace("https://", ""),
+        "href": clean_url,
+        "type": privacy,
+        "members": members_label,
+        "members_count": meta_info.get("members_count"),
+        "note": note,
+    }
+
+    if auto_join:
+        join_note = _auto_join_group(driver, item, job_id=job_id)
+        if join_note:
+            item["note"] = join_note
+
+    try:
+        upsert_scanned_group(owner=owner, keyword="DirectLink", group=item, source_uid=source_uid)
+        if gid and known_group_ids is not None:
+            known_group_ids.add(gid)
+    except Exception as exc:
+        _append_log(job_id, f"⚠️ Lỗi lưu nhóm vào DB: {exc}", "warn")
+
+    _append_log(job_id, f"✅ Đã quét: {cleaned_name} ({privacy.upper()} · {members_label})", "success")
+    return item
+
+
 def _scrape_groups_from_results(
     driver,
     keyword: str,
@@ -695,6 +1275,7 @@ def _scrape_groups_from_results(
     owner: Optional[str] = None,
     source_uid: Optional[str] = None,
     known_group_ids: Optional[set[str]] = None,
+    auto_join: bool = True,
 ) -> list[dict[str, Any]]:
     from selenium.webdriver.common.by import By
 
@@ -756,6 +1337,7 @@ def _scrape_groups_from_results(
     for (const a of anchors) {
       let href = a.getAttribute('href') || a.href || '';
       if (!href.includes('/groups/')) continue;
+      if (href.includes('notif_id') || href.includes('/search/') || href.includes('ref=notif')) continue;
       try {
         const u = new URL(href, location.origin);
         href = u.origin + u.pathname.replace(/\\/+$/, '');
@@ -839,6 +1421,12 @@ def _scrape_groups_from_results(
                 "members_count": meta_info.get("members_count"),
                 "note": note,
             }
+
+            # Tự động tham gia nhóm và trả lời câu hỏi nếu được kích hoạt
+            if auto_join:
+                join_note = _auto_join_group(driver, item, job_id=job_id)
+                if join_note:
+                    item["note"] = join_note
 
             # Lưu Supabase ngay — tránh mất khi tắt browser
             try:
@@ -1018,10 +1606,17 @@ def _check_keywords_on_account(
     delay_max: float,
     job_id: str,
     *,
+    owner: Optional[str] = None,
     public_only: bool = False,
     private_only: bool = False,
     min_members: Optional[int] = None,
+    auto_join: bool = True,
+    uids: Optional[list[str]] = None,
+    rotate_after: int = 50,
 ) -> None:
+    if not owner:
+        with _jobs_lock:
+            owner = (_jobs.get(job_id) or {}).get("owner")
     from modules.module_02_account_manager.automation import (
         create_driver,
         ensure_logged_in,
@@ -1034,17 +1629,31 @@ def _check_keywords_on_account(
     from modules.module_02_account_manager.database.repository import AccountRepository as Repo
     from modules.module_02_account_manager.security.encryption import decrypt_data
 
-    profile_lock = get_profile_lock(uid)
-    if not profile_lock.acquire(timeout=8):
-        _append_log(job_id, f"⚠️ [{uid}] Profile đang bận — không mở được Chrome.", "warn")
-        _set_job(job_id, status="error", error="Profile đang bận")
+    pool_uids = [str(u).strip() for u in (uids or []) if str(u).strip()]
+    if not pool_uids:
+        pool_uids = [uid]
+    account_idx = pool_uids.index(uid) if uid in pool_uids else 0
+    last_switched_count = 0
+
+    try:
+        profile_lock = get_profile_lock(uid)
+        if not profile_lock.acquire(timeout=8):
+            _append_log(job_id, f"⚠️ [{uid}] Profile đang bận — không mở được Chrome.", "warn")
+            _set_job(job_id, status="error", error="Profile đang bận")
+            return
+    except Exception as exc:
+        _append_log(job_id, f"❌ [{uid}] Lỗi khóa profile: {exc}", "error")
+        _set_job(job_id, status="error", error=str(exc))
         return
 
     all_groups: list[dict[str, Any]] = []
     try:
         db = SessionLocal()
         try:
-            account = Repo.get_by_uid(db, uid)
+            account = Repo.get_by_uid(db, uid, owner_username=owner)
+            if not account:
+                from modules.module_02_account_manager.database.models import Account
+                account = db.query(Account).filter(Account.uid == uid).first()
             if not account:
                 _append_log(job_id, f"❌ [{uid}] Không tìm thấy tài khoản Module 2.", "error")
                 _set_job(job_id, status="error", error="Không tìm thấy tài khoản")
@@ -1081,9 +1690,6 @@ def _check_keywords_on_account(
 
         from modules.module_10_group_scan.models import list_known_group_ids
 
-        owner = None
-        with _jobs_lock:
-            owner = (_jobs.get(job_id) or {}).get("owner")
         known_ids = list_known_group_ids(owner)
         _append_log(
             job_id,
@@ -1130,35 +1736,59 @@ def _check_keywords_on_account(
                 "info",
             )
 
+            is_direct_url = (
+                keyword.startswith("http")
+                or "/groups/" in keyword
+                or "fb.com/" in keyword
+                or "facebook.com/" in keyword
+            )
+
             try:
-                # Từ khóa 2+ → về home rồi vào lại ô Search (không kẹt trang kết quả cũ)
-                _search_and_open_groups(
-                    driver,
-                    keyword,
-                    job_id,
-                    wait_and_find,
-                    human_sleep,
-                    human_type,
-                    reset_home=(idx > 0),
-                )
-                if _get_control(job_id) == "abort":
-                    _append_log(job_id, "🛑 Dừng khẩn cấp trước khi scrape.", "warn")
-                    _set_job(job_id, groups=list(all_groups), status="aborted", error="Dừng khẩn cấp")
-                    return
-                groups = _scrape_groups_from_results(
-                    driver,
-                    keyword,
-                    job_id,
-                    human_sleep,
-                    max_groups=limit,
-                    already=all_groups,
-                    public_only=public_only,
-                    private_only=private_only,
-                    min_members=min_members,
-                    owner=owner,
-                    source_uid=uid,
-                    known_group_ids=known_ids,
-                )
+                if is_direct_url:
+                    group_item = _scrape_group_direct(
+                        driver,
+                        keyword,
+                        job_id,
+                        human_sleep,
+                        public_only=public_only,
+                        private_only=private_only,
+                        min_members=min_members,
+                        owner=owner,
+                        source_uid=uid,
+                        known_group_ids=known_ids,
+                        auto_join=auto_join,
+                    )
+                    groups = [group_item] if group_item else []
+                else:
+                    # Từ khóa 2+ → về home rồi vào lại ô Search (không kẹt trang kết quả cũ)
+                    _search_and_open_groups(
+                        driver,
+                        keyword,
+                        job_id,
+                        wait_and_find,
+                        human_sleep,
+                        human_type,
+                        reset_home=(idx > 0),
+                    )
+                    if _get_control(job_id) == "abort":
+                        _append_log(job_id, "🛑 Dừng khẩn cấp trước khi scrape.", "warn")
+                        _set_job(job_id, groups=list(all_groups), status="aborted", error="Dừng khẩn cấp")
+                        return
+                    groups = _scrape_groups_from_results(
+                        driver,
+                        keyword,
+                        job_id,
+                        human_sleep,
+                        max_groups=limit,
+                        already=all_groups,
+                        public_only=public_only,
+                        private_only=private_only,
+                        min_members=min_members,
+                        owner=owner,
+                        source_uid=uid,
+                        known_group_ids=known_ids,
+                        auto_join=auto_join,
+                    )
                 from modules.module_10_group_scan.models import normalize_group_id as _ngid
 
                 for g in groups:
@@ -1199,6 +1829,52 @@ def _check_keywords_on_account(
                 )
                 _set_job(job_id, groups=list(all_groups), status="paused", control="pause_after")
                 return
+
+            # Xoay vòng tài khoản nếu đạt ngưỡng rotate_after (BR-GIS-01.3 & BR-GIS-05)
+            if len(pool_uids) > 1 and (len(all_groups) - last_switched_count) >= rotate_after and idx < len(items) - 1:
+                next_idx = (account_idx + 1) % len(pool_uids)
+                next_uid = pool_uids[next_idx]
+                if next_uid != uid:
+                    _append_log(
+                        job_id,
+                        f"🔄 Đã bóc tách {len(all_groups) - last_switched_count} nhóm (đạt hạn ngạch {rotate_after}). "
+                        f"Tiến hành luân chuyển Bot Pool sang nick: UID {next_uid}...",
+                        "info",
+                    )
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+                    try:
+                        profile_lock.release()
+                    except Exception:
+                        pass
+                    account_idx = next_idx
+                    uid = next_uid
+                    _set_job(job_id, uid=uid)
+                    profile_lock = get_profile_lock(uid)
+                    if not profile_lock.acquire(timeout=8):
+                        _append_log(job_id, f"⚠️ [{uid}] Profile tài khoản mới đang bận.", "warn")
+                    else:
+                        db_acc = SessionLocal()
+                        try:
+                            acc_obj = Repo.get_by_uid(db_acc, uid, owner_username=owner)
+                            if not acc_obj:
+                                from modules.module_02_account_manager.database.models import Account
+                                acc_obj = db_acc.query(Account).filter(Account.uid == uid).first()
+                            if acc_obj:
+                                acc_cookie = acc_obj.cookie or ""
+                                acc_proxy = acc_obj.proxy
+                                acc_password = decrypt_data(acc_obj.password or "")
+                                acc_two_fa = decrypt_data(acc_obj.two_fa or "")
+                                _append_log(job_id, f"🌐 [{uid}] Mở Chrome cho tài khoản mới trong Bot Pool...", "info")
+                                driver = create_driver(uid, headless=False, detach=True, proxy=acc_proxy, scope="group-scan", verify_egress=False)
+                                login_res = ensure_logged_in(driver, uid=uid, password=acc_password, two_fa=acc_two_fa, cookie=acc_cookie)
+                                if login_res.get("success"):
+                                    _append_log(job_id, f"✅ [{uid}] Đăng nhập thành công, tiếp tục thực thi các mục tiêu tiếp theo.", "success")
+                                    last_switched_count = len(all_groups)
+                        finally:
+                            db_acc.close()
 
             if idx < len(items) - 1:
                 next_kw = items[idx + 1]["keyword"]
