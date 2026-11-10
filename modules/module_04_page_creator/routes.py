@@ -18,6 +18,7 @@ from modules.module_02_account_manager.context import owner_context, owner_scope
 from modules.module_02_account_manager.database.connection import get_db
 from modules.module_02_account_manager.security.hwid_collector import get_hwid
 from modules.module_02_account_manager.services.events import broadcast
+from modules.module_02_account_manager.services.events import broadcast as _broadcast_global
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -134,6 +135,25 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
     owner = owner_username or item.get("owner_username")
     uid = item["uid"]
     page_name = item["page_name"]
+
+    # Gom lại mọi dòng log của lần chạy này để lưu vào CreatedPage.run_log.
+    # Hàm cục bộ này CỐ Ý trùng tên với broadcast toàn cục để che nó trong phạm vi
+    # worker: ~30 chỗ gọi bên dưới không phải sửa một dòng, mà vẫn vừa lên SSE vừa
+    # được lưu. Thiếu nó thì popup "Chi tiết lần tạo page" trống trơn sau mọi lần
+    # tạo thành công, vì log_detail chỉ được ghi khi có lỗi.
+    run_log_lines = []
+
+    def broadcast(level, message, uid=None, extra=None):
+        from datetime import datetime, timedelta, timezone
+
+        stamp = datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M:%S")
+        run_log_lines.append(f"[{stamp}] {message}")
+        return _broadcast_global(level, message, uid=uid, extra=extra)
+
+    def run_log_text():
+        """Chuỗi log để lưu; None khi rỗng để không ghi chuỗi trắng vào DB."""
+        return "\n".join(run_log_lines) or None
+
     broadcast("info", f"🤖 [{uid}] Bắt đầu xử lý page: '{page_name}' (Mã QG: {country_code})", uid=uid, extra={"action": "step", "page_name": page_name, "step": "Bước 1/5: Bắt đầu xử lý & kết nối nick", "subStage": "Khởi tạo môi trường", "percent": 15})
 
     # Tự động đóng trình duyệt Live cũ của nick (nếu có) để nhường quyền ưu tiên cho tiến trình Tạo Page
@@ -266,6 +286,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
                 "page_name": page_name,
                 "status": "FAILED",
                 "log_detail": f"Lỗi đăng nhập: {login_check['error']}",
+                "run_log": run_log_text(),
             }, owner_username=owner)
             return {"success": False, "reason": "login_failed", "error": login_check["error"]}
 
@@ -316,6 +337,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
                 "page_name": page_name,
                 "status": "FAILED",
                 "log_detail": page_result["error"],
+                "run_log": run_log_text(),
             }, owner_username=owner)
             return {"success": False, "reason": "page_create_failed", "error": page_result["error"]}
 
@@ -351,6 +373,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
                 "page_url": final_url_so_far,
                 "status": "PARTIAL",
                 "log_detail": "Đã dừng trước khi cấp quyền admin.",
+                "run_log": run_log_text(),
             }, owner_username=owner)
             broadcast("warning", f"⏹️ [{uid}] Đã nhận lệnh dừng trước khi cấp quyền admin.", uid=uid, extra={"action": "completed", "page_name": page_name, "page_url": final_url_so_far, "percent": 100})
             return
@@ -418,6 +441,14 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
             status = "SUCCESS"
             log = None
 
+        # Phát dòng tổng kết TRƯỚC khi lưu, để bản run_log lưu xuống DB có cả dòng
+        # cuối — không thì popup chi tiết luôn thiếu đúng dòng người ta tìm đầu tiên.
+        url_msg = f" ({final_url_so_far})" if final_url_so_far else ""
+        if status == "SUCCESS":
+            broadcast("success", f"🎉 [{uid}] Hoàn tất! Page '{page_name}'{url_msg} - Status: {status}", uid=uid, extra={"action": "completed", "page_name": page_name, "page_url": final_url_so_far, "percent": 100})
+        else:
+            broadcast("error", f"❌ [{uid}] {log}{url_msg}", uid=uid, extra={"action": "failed", "page_name": page_name, "page_url": final_url_so_far, "percent": 100, "error": log})
+
         # ── Lưu kết quả vào DB ──
         PageRepo.create(db, {
             "owner_username": owner,
@@ -429,15 +460,12 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
             "page_url": final_url_so_far,
             "status": status,
             "log_detail": log,
+            "run_log": run_log_text(),
         }, owner_username=owner)
 
-        url_msg = f" ({final_url_so_far})" if final_url_so_far else ""
         if status == "SUCCESS":
-            broadcast("success", f"🎉 [{uid}] Hoàn tất! Page '{page_name}'{url_msg} - Status: {status}", uid=uid, extra={"action": "completed", "page_name": page_name, "page_url": final_url_so_far, "percent": 100})
             return {"success": True, "page_url": final_url_so_far, "status": status}
-        else:
-            broadcast("error", f"❌ [{uid}] {log}{url_msg}", uid=uid, extra={"action": "failed", "page_name": page_name, "page_url": final_url_so_far, "percent": 100, "error": log})
-            return {"success": False, "page_url": final_url_so_far, "status": status, "reason": log}
+        return {"success": False, "page_url": final_url_so_far, "status": status, "reason": log}
 
     except Exception as e:
         if stop_task_requested:
@@ -454,6 +482,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
                     "page_name": page_name,
                     "status": "FAILED",
                     "log_detail": str(e),
+                    "run_log": run_log_text(),
                 }, owner_username=owner)
             except Exception:
                 pass
@@ -787,17 +816,23 @@ async def page_history(request: Request = None, owner_username: Optional[str] = 
     from modules.module_04_page_creator.database import PageRepo, to_vn_iso
     owner = get_owner_username(request, owner_username)
     pages = PageRepo.get_all(db, owner_username=owner)
+    # Tên nick đã tạo page, để bảng lịch sử hiện cột "Tài khoản tạo" chứ không chỉ UID.
+    creator_names = _manager_names(db, {(p.creator_fb_uid or "").strip() for p in pages}, owner)
     return [
         {
             "id": p.id,
             "owner_username": p.owner_username,
             "creator_fb_uid": p.creator_fb_uid,
+            "creator_name": creator_names.get((p.creator_fb_uid or "").strip(), ""),
             "shared_admin_uid": p.shared_admin_uid,
+            "shared_admin_name": p.shared_admin_name or "",
             "page_name": p.page_name,
             "page_category": p.page_category,
             "page_url": clean_facebook_page_url(p.page_url) if p.page_url else None,
             "status": p.status,
             "log_detail": p.log_detail,
+            # Toàn bộ log của lần chạy; log_detail chỉ là lý do lỗi ngắn hiện trên bảng.
+            "run_log": p.run_log,
             "created_at": to_vn_iso(p.created_at),
         }
         for p in pages
