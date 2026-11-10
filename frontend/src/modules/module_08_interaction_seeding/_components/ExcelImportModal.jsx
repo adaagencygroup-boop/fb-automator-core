@@ -23,6 +23,7 @@ import {
   Database,
 } from "lucide-react";
 import * as XLSX from "xlsx";
+import { toast } from "@/components/ui/toast";
 import { seedingApi } from "../service";
 import {
   normalizeTargetUrl,
@@ -226,9 +227,10 @@ export default function ExcelImportModal({
 
       const fileName = targetType === "COMMENT" ? "file_mau_binh_luan.xlsx" : "file_mau_seeding.xlsx";
       XLSX.writeFile(wb, fileName);
+      toast.success(`Đã tải file mẫu "${fileName}" thành công!`, "TẢI FILE THÀNH CÔNG");
     } catch (err) {
       console.error("Lỗi tạo file mẫu:", err);
-      alert("Không thể tải file mẫu. Vui lòng thử lại!");
+      toast.error("Không thể tải file mẫu. Vui lòng thử lại!", "LỖI TẢI FILE");
     }
   };
 

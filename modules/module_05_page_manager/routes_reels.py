@@ -4,9 +4,13 @@ File: modules/module_05_page_manager/routes_reels.py
 FastAPI router cho tính năng Đăng Video Reels (Module 05).
 """
 import os
+import sys
 import json
 import asyncio
 import queue
+import threading
+
+_reels_picker_lock = threading.Lock()
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Query, Request, Depends
@@ -166,7 +170,12 @@ def select_reels_folder(req: Optional[SelectFolderRequest] = None):
     init_dir = (req.initial_dir if req else None) or ""
     clean_init = init_dir.strip().strip('"').strip("'") if init_dir else ""
     dialog_init = clean_init if (clean_init and os.path.exists(clean_init) and os.path.isdir(clean_init)) else None
+
+    if not _reels_picker_lock.acquire(blocking=False):
+        return {"folder": "", "error": "Cửa sổ chọn thư mục đang mở, vui lòng thao tác trên cửa sổ đó!", "success": False}
+
     selected = ""
+    error_msg = ""
     try:
         import subprocess
         helper_path = os.path.join(os.path.dirname(__file__), "picker_helper.py")
@@ -174,14 +183,22 @@ def select_reels_folder(req: Optional[SelectFolderRequest] = None):
         cmd = [venv_python, helper_path]
         if dialog_init:
             cmd.append(dialog_init)
+        else:
+            cmd.append("")
+        cmd.append("Chọn thư mục gốc video Reels")
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         selected = res.stdout.strip()
-    except Exception:
+        if res.returncode != 0:
+            error_msg = f"picker_helper code {res.returncode}: {res.stderr.strip()}"
+    except Exception as e:
+        error_msg = f"subprocess error: {str(e)}"
         selected = ""
+    finally:
+        _reels_picker_lock.release()
 
     if selected:
         selected = os.path.normpath(selected)
-    return {"folder": selected or "", "success": bool(selected)}
+    return {"folder": selected or "", "success": bool(selected), "error": error_msg}
 
 
 @router.post("/scan-folders")

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import api from "@/services/api";
 import { clearSessionUserId } from "@/services/sessionIdentity.mjs";
 import { clearAuthTokens, clearRegistrationToken, getRefreshToken } from "@/services/authTokens.mjs";
+import { clearApiCache } from "@/services/api-cache.mjs";
 import LoginScreen from "@/modules/module_auth/LoginScreen";
 import RegisterScreen from "@/modules/module_auth/RegisterScreen";
 import PendingScreen from "@/modules/module_auth/PendingScreen";
@@ -15,7 +16,7 @@ const ADMIN_URL = process.env.NEXT_PUBLIC_ADMIN_URL || "http://127.0.0.1:3010";
 /** Proactive refresh trước khi access hết hạn (12h) — desktop không có cookie. */
 const REFRESH_EVERY_MS = 30 * 60 * 1000;
 /** Timeout ngắn cho bước khôi phục phiên — tránh treo trắng 60s khi engine restart/chậm. */
-const AUTH_BOOT_TIMEOUT_MS = 12000;
+const AUTH_BOOT_TIMEOUT_MS = 30000;
 /** Chỉ đá phiên sau vài lần 401 liên tiếp — tránh dừng automation vì lỗi tạm. */
 const AUTH_KICK_AFTER_FAILURES = 3;
 
@@ -30,6 +31,7 @@ export default function AuthGate({ children }) {
   const loadMe = useCallback(async () => {
     // Called after an explicit successful login: permit the newly selected user.
     clearSessionUserId();
+    clearApiCache(); // người vừa đăng nhập không được thấy dữ liệu đã cache của người trước
     const me = await api.get("/api/v1/auth/me", { timeout: AUTH_BOOT_TIMEOUT_MS });
     localStorage.removeItem("pending_username");
     localStorage.removeItem("locked_username");
@@ -156,6 +158,7 @@ export default function AuthGate({ children }) {
       localStorage.removeItem("pending_username");
       localStorage.removeItem("locked_username");
       clearAuthTokens();
+      clearApiCache();
       setUser(null);
       if (["ACCOUNT_BANNED", "ACCOUNT_LOCKED"].includes(message)) {
         if (sessionUsername) localStorage.setItem("locked_username", sessionUsername);
@@ -228,6 +231,7 @@ export default function AuthGate({ children }) {
     clearAuthTokens();
     clearRegistrationToken();
     clearSessionUserId();
+    clearApiCache();
     setUser(null);
     localStorage.removeItem("pending_username");
     localStorage.removeItem("locked_username");

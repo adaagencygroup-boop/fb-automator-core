@@ -54,7 +54,7 @@ class ReactConfigTests(unittest.TestCase):
         req = farm_routes.FarmStartRequest(uids=["1"], threads=1,
                                            config=farm_routes.FarmScenarioConfig(enabled_story=True))
         with patch.object(farm_routes.adapters, "owner_from_request", return_value=None), \
-                patch.object(farm_routes.adapters, "get_account", return_value=None):
+                patch.object(farm_routes.adapters, "get_accounts", return_value={}):
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(farm_routes.start_farm_interactions(req, Mock()))
         self.assertIn("đủ điều kiện", ctx.exception.detail)

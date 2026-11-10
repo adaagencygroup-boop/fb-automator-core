@@ -17,6 +17,60 @@ use std::os::windows::process::CommandExt;
 
 struct SidecarState {
     child: Arc<Mutex<Option<Child>>>,
+    shutting_down: Arc<AtomicBool>,
+}
+
+fn request_engine_shutdown_http() {
+    let _ = Command::new("curl")
+        .args(["-X", "POST", "http://127.0.0.1:28129/api/shutdown"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+fn force_kill_engine_processes() {
+    #[cfg(windows)]
+    {
+        // NSIS không ghi đè được .pyd khi local_engine còn giữ file lock.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        for image in ["local_engine.exe", "chromedriver.exe"] {
+            let _ = Command::new("taskkill")
+                .args(["/F", "/IM", image, "/T"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("pkill")
+            .args(["-f", "local_engine"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+fn stop_local_engine(state: &SidecarState) {
+    state.shutting_down.store(true, Ordering::SeqCst);
+    log_line("🛑 Stopping local_engine before update/exit");
+    request_engine_shutdown_http();
+    if let Ok(mut lock) = state.child.lock() {
+        if let Some(mut child) = lock.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    force_kill_engine_processes();
+    // Cho Windows nhả file handle trước khi NSIS ghi đè _internal/*.pyd
+    thread::sleep(Duration::from_millis(1500));
+}
+
+#[tauri::command]
+fn prepare_for_update(state: tauri::State<'_, SidecarState>) -> Result<(), String> {
+    stop_local_engine(&state);
+    Ok(())
 }
 
 fn is_module5_deep_link(url: &Url) -> bool {
@@ -301,10 +355,10 @@ fn ureq_health() -> Result<bool, ()> {
     use std::io::{Read, Write as IoWrite};
     use std::net::TcpStream;
     let mut stream =
-        TcpStream::connect_timeout(&"127.0.0.1:28129".parse().unwrap(), Duration::from_secs(2))
+        TcpStream::connect_timeout(&"127.0.0.1:28129".parse().unwrap(), Duration::from_secs(8))
             .map_err(|_| ())?;
-    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
-    stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
+    stream.set_read_timeout(Some(Duration::from_secs(8))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(8))).ok();
     let req = "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
     stream.write_all(req.as_bytes()).map_err(|_| ())?;
     let mut buf = String::new();
@@ -386,11 +440,9 @@ fn start_engine_watchdog(child_arc: Arc<Mutex<Option<Child>>>, shutting_down: Ar
 
 fn main() {
     let sidecar_child: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
-    let child_for_setup = Arc::clone(&sidecar_child);
-    let child_for_run = Arc::clone(&sidecar_child);
-    let child_for_watch = Arc::clone(&sidecar_child);
     let shutting_down = Arc::new(AtomicBool::new(false));
-    let shutting_for_run = Arc::clone(&shutting_down);
+    let child_for_setup = Arc::clone(&sidecar_child);
+    let child_for_watch = Arc::clone(&sidecar_child);
     let shutting_for_watch = Arc::clone(&shutting_down);
 
     let app = tauri::Builder::default()
@@ -400,9 +452,13 @@ fn main() {
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(SidecarState {
-            child: sidecar_child,
+            child: Arc::clone(&sidecar_child),
+            shutting_down: Arc::clone(&shutting_down),
         })
+        .invoke_handler(tauri::generate_handler![prepare_for_update])
         .setup(move |_app| {
             // Deep links are registered by the installer in release builds.
             // Register the configured scheme for the current executable in Windows dev builds.
@@ -436,29 +492,18 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("Error while building Tauri application");
 
-    app.run(move |_app_handle, event| match event {
+    app.run(move |app_handle, event| match event {
         RunEvent::WindowEvent {
             event: WindowEvent::CloseRequested { .. },
             ..
         }
         | RunEvent::ExitRequested { .. }
         | RunEvent::Exit => {
-            if shutting_for_run.swap(true, Ordering::SeqCst) {
-                return; // đã xử lý
-            }
-            log_line("🛑 App closing — stop local_engine");
-            let _ = thread::spawn(|| {
-                let _ = Command::new("curl")
-                    .args(["-X", "POST", "http://127.0.0.1:28129/api/shutdown"])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-            });
-            if let Ok(mut lock) = child_for_run.lock() {
-                if let Some(mut child) = lock.take() {
-                    let _ = child.kill();
-                    let _ = child.wait();
+            if let Some(state) = app_handle.try_state::<SidecarState>() {
+                if state.shutting_down.swap(true, Ordering::SeqCst) {
+                    return; // đã xử lý
                 }
+                stop_local_engine(state.inner());
             }
         }
         _ => {}

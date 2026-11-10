@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
-import { Search, Filter, RotateCcw } from "lucide-react";
+import React, { useState, useMemo } from "react";
+import { Search, Filter, RotateCcw, AlertCircle } from "lucide-react";
 import CustomSelect from "@/components/ui/custom-select";
 
 const typeOptions = [
@@ -42,10 +42,16 @@ export default function HistoryFilters({
 }) {
   const [timePreset, setTimePreset] = useState("CUSTOM");
 
+  const formatDate = (d) => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
   const handlePresetChange = (val) => {
     setTimePreset(val);
     const now = new Date();
-    const formatDate = (d) => d.toISOString().split("T")[0];
 
     if (val === "TODAY") {
       const todayStr = formatDate(now);
@@ -67,6 +73,21 @@ export default function HistoryFilters({
       onToDateChange(formatDate(now));
     }
   };
+
+  const todayStr = useMemo(() => formatDate(new Date()), []);
+
+  const dateErrorMessage = useMemo(() => {
+    if (fromDate && fromDate > todayStr) {
+      return "Khoảng thời gian không hợp lệ: 'Từ ngày' không thể chọn ngày trong tương lai.";
+    }
+    if (toDate && toDate > todayStr) {
+      return "Khoảng thời gian không hợp lệ: 'Đến ngày' không thể chọn ngày trong tương lai.";
+    }
+    if (fromDate && toDate && fromDate > toDate) {
+      return "Khoảng thời gian không hợp lệ: 'Từ ngày' không được lớn hơn 'Đến ngày'.";
+    }
+    return "";
+  }, [fromDate, toDate, todayStr]);
 
   const getFilterSummary = () => {
     const parts = [];
@@ -188,11 +209,21 @@ export default function HistoryFilters({
             <input
               type="date"
               value={fromDate}
+              max={toDate && toDate < todayStr ? toDate : todayStr}
               onChange={(e) => {
                 setTimePreset("CUSTOM");
-                onFromDateChange(e.target.value);
+                let val = e.target.value;
+                if (val && val > todayStr) val = todayStr;
+                onFromDateChange(val);
+                if (toDate && val && val > toDate) {
+                  onToDateChange(val);
+                }
               }}
-              className="w-full h-10 px-3.5 text-xs rounded-xl border border-slate-200 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium cursor-pointer"
+              className={`w-full h-10 px-3.5 text-xs rounded-xl border bg-white font-medium cursor-pointer transition-all ${
+                dateErrorMessage
+                  ? "border-rose-400 bg-rose-50/20 text-rose-900 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+                  : "border-slate-200 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              }`}
             />
           </div>
         </div>
@@ -205,11 +236,22 @@ export default function HistoryFilters({
             <input
               type="date"
               value={toDate}
+              min={fromDate || undefined}
+              max={todayStr}
               onChange={(e) => {
                 setTimePreset("CUSTOM");
-                onToDateChange(e.target.value);
+                let val = e.target.value;
+                if (val && val > todayStr) val = todayStr;
+                onToDateChange(val);
+                if (fromDate && val && fromDate > val) {
+                  onFromDateChange(val);
+                }
               }}
-              className="w-full h-10 px-3.5 text-xs rounded-xl border border-slate-200 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium cursor-pointer"
+              className={`w-full h-10 px-3.5 text-xs rounded-xl border bg-white font-medium cursor-pointer transition-all ${
+                dateErrorMessage
+                  ? "border-rose-400 bg-rose-50/20 text-rose-900 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+                  : "border-slate-200 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+              }`}
             />
           </div>
         </div>
@@ -229,13 +271,26 @@ export default function HistoryFilters({
           <button
             type="button"
             onClick={onApply}
-            className="h-10 px-7 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm shadow-blue-500/20 flex-1 sm:flex-initial cursor-pointer"
+            disabled={Boolean(dateErrorMessage)}
+            className={`h-10 px-7 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm flex-1 sm:flex-initial ${
+              dateErrorMessage
+                ? "bg-slate-200 text-slate-400 border border-slate-300/80 cursor-not-allowed select-none shadow-none"
+                : "bg-blue-600 hover:bg-blue-700 text-white shadow-blue-500/20 cursor-pointer"
+            }`}
           >
-            <Filter className="w-3.5 h-3.5 text-white" />
+            <Filter className="w-3.5 h-3.5" />
             Lọc
           </button>
         </div>
       </div>
+
+      {/* Cảnh báo khoảng ngày không hợp lệ */}
+      {dateErrorMessage && (
+        <div className="flex items-center gap-2 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold animate-in fade-in slide-in-from-top-1 shadow-sm">
+          <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+          <span>{dateErrorMessage}</span>
+        </div>
+      )}
     </div>
   );
 }

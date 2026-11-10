@@ -160,6 +160,8 @@ ADDED_COLUMNS = [
     ("farm_run_history", "groups_left", "INT DEFAULT 0"),
     # Log runtime từng bài (Story/Reels/Status) khi finish_post — migrations/011_posts_logs.sql
     ("posts", "logs", "JSONB"),
+    # Nhiều ảnh Status (JSON array text), sync image_path = phần tử đầu — migrations/012_posts_image_paths.sql
+    ("posts", "image_paths", "TEXT"),
 ]
 
 
@@ -282,6 +284,7 @@ TAB2_DDL_STATEMENTS_PG = [
       content TEXT NOT NULL DEFAULT '' CHECK (char_length(content) <= 63206),
       hashtags TEXT,
       image_path TEXT,
+      image_paths TEXT,
       media_path TEXT,
       thumbnail_path TEXT,
       media_hash TEXT,
@@ -426,6 +429,7 @@ TAB2_DDL_STATEMENTS_SQLITE = [
       content TEXT NOT NULL DEFAULT '' CHECK (length(content) <= 63206),
       hashtags TEXT,
       image_path TEXT,
+      image_paths TEXT,
       media_path TEXT,
       thumbnail_path TEXT,
       media_hash TEXT,

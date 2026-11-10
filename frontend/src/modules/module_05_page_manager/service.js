@@ -44,16 +44,38 @@ export async function deletePage(pageId) {
     return { success: false };
   }
 }
+export const SHARED_VIDEO_DIR_KEY = "fb_shared_video_folder";
+
+export function getSharedVideoFolder() {
+  if (typeof window === "undefined") return "";
+  try {
+    return localStorage.getItem(SHARED_VIDEO_DIR_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function setSharedVideoFolder(dir) {
+  if (typeof window === "undefined") return;
+  const clean = (dir || "").trim();
+  if (!clean) return;
+  try {
+    localStorage.setItem(SHARED_VIDEO_DIR_KEY, clean);
+  } catch {}
+}
+
 export async function selectReelsFolder(initialDir) {
   try {
     const res = await api.post("/api/pages/reels/select-folder", { initial_dir: initialDir || "" });
+    const folder = res?.folder || res?.path || "";
     return {
-      folder: res?.folder || res?.path || "",
-      success: Boolean(res?.folder || res?.path)
+      folder,
+      success: Boolean(res?.success ?? folder),
+      error: res?.error || ""
     };
   } catch (err) {
     console.warn("Lỗi gọi selectReelsFolder:", err);
-    return { folder: "", success: false };
+    return { folder: "", success: false, error: err?.message || "" };
   }
 }
 export async function getReelsAccountsPages() {
@@ -225,10 +247,16 @@ export async function getTerminalLogs(filterType, lines = 300) {
 }
 export async function selectFolder(initialDir) {
   try {
-    const res = await api.post("/api/pages/select-folder", { initial_dir: initialDir });
-    return res;
-  } catch {
-    return { folder: "" };
+    const res = await api.post("/api/pages/select-folder", { initial_dir: initialDir || "" });
+    const folder = res?.folder || res?.path || "";
+    return {
+      folder,
+      success: Boolean(res?.success ?? folder),
+      error: res?.error || ""
+    };
+  } catch (err) {
+    console.warn("Lỗi gọi selectFolder:", err);
+    return { folder: "", success: false, error: err?.message || "" };
   }
 }
 export async function clearPageVideos(pageId, source) {

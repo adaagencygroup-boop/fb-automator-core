@@ -25,6 +25,8 @@ import {
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   selectReelsFolder,
+  setSharedVideoFolder,
+  getSharedVideoFolder,
   getReelsAccountsPages,
   scanReelsFolders,
   startReelsJob,
@@ -174,19 +176,21 @@ export default function ReelsPoster() {
 
   // Mở hộp thoại chọn thư mục Windows Native (hỗ trợ chuẩn xác mọi ổ đĩa C, D, E...)
   const handleOpenFolderPicker = async () => {
+    if (isScanningFolders) return;
     try {
       setIsScanningFolders(true);
       const res = await selectReelsFolder(rootDir);
       if (res?.success && res.folder) {
         setRootDir(res.folder);
+        setSharedVideoFolder(res.folder);
         await handleScanFolders(res.folder, true);
         return;
       }
+      if (res?.error) {
+        toast.error(`Lỗi chọn thư mục: ${res.error}`);
+      }
     } catch (err) {
       console.warn("Lỗi mở hộp thoại chọn thư mục native:", err);
-      if (folderInputRef.current) {
-        folderInputRef.current.click();
-      }
     } finally {
       setIsScanningFolders(false);
     }
@@ -203,6 +207,7 @@ export default function ReelsPoster() {
       const determinedPath = fullPath || rootFolderName || rootDir;
       if (determinedPath) {
         setRootDir(determinedPath);
+        setSharedVideoFolder(determinedPath);
         handleScanFolders(determinedPath, true);
       }
     }
@@ -398,6 +403,12 @@ export default function ReelsPoster() {
             if (parsed.rootDir) {
               setRootDir(parsed.rootDir);
               targetScanDir = parsed.rootDir;
+            } else {
+              const sharedDir = getSharedVideoFolder();
+              if (sharedDir) {
+                setRootDir(sharedDir);
+                targetScanDir = sharedDir;
+              }
             }
             if (parsed.scheduleEnabled !== undefined) {
               setScheduleEnabled(Boolean(parsed.scheduleEnabled));
@@ -421,6 +432,12 @@ export default function ReelsPoster() {
                 setSelectedPageIds((prev) => new Set([...savedSet].filter((id) => prev.has(id))));
               }
             }
+          }
+        } else {
+          const sharedDir = getSharedVideoFolder();
+          if (sharedDir) {
+            setRootDir(sharedDir);
+            targetScanDir = sharedDir;
           }
         }
       } catch (e) {
@@ -1039,10 +1056,15 @@ export default function ReelsPoster() {
                 <button
                   type="button"
                   onClick={handleOpenFolderPicker}
+                  disabled={isScanningFolders || isStarting}
                   title="Chọn thư mục từ máy tính"
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-slate-500 hover:text-[#1877F2] hover:bg-blue-50 rounded transition-colors"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 text-slate-500 hover:text-[#1877F2] hover:bg-blue-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <FolderOpen className="w-4 h-4" />
+                  {isScanningFolders ? (
+                    <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
+                  ) : (
+                    <FolderOpen className="w-4 h-4" />
+                  )}
                 </button>
               </div>
 

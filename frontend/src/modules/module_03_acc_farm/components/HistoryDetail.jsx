@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { formatVietnamDateTime } from "@/lib/date-utils";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import {
   ACTION_FULL_LABELS,
@@ -36,7 +37,7 @@ import {
   LINK_SKIP_LABELS,
   PROXY_MODE_LABELS,
 } from "../constants";
-import { getFarmHistoryDetail } from "../service";
+import { getFarmHistoryDetail, openFarmLink } from "../service";
 import { RunStatusBadge, UidCopy, formatDuration } from "./parts";
 import { parseLinkList } from "./ScenarioConfig";
 
@@ -90,7 +91,7 @@ function scenarioValue(action, h) {
     case "WATCH":
       return [`${h.watch_videos} video`, `${formatDuration(h.watch_seconds)}${reactionNote(h.watch_reactions)}`];
     case "STORY":
-      return [`${h.story_frames || 0} khung`, `${formatDuration(h.story_seconds)}${reactionNote(h.story_reactions)}`];
+      return [`${h.story_frames || 0} story`, `${formatDuration(h.story_seconds)}${reactionNote(h.story_reactions)}`];
     case "ADD_FRIEND":
       return [`${h.friends_sent} lời mời`, h.friends_source ? `nguồn: ${FRIEND_SOURCE_LABELS[h.friends_source] || h.friends_source}` : ""];
     case "JOIN_GROUP":
@@ -110,7 +111,7 @@ function configChips(c) {
   const chips = [];
   if (c.enabled_newsfeed) chips.push(["NEWSFEED", `Newsfeed ${c.newsfeed_time_min}-${c.newsfeed_time_max} phút · delay ${c.newsfeed_delay_min}-${c.newsfeed_delay_max}s${reactionChip(c.newsfeed_react_enabled, c.newsfeed_react_types)}`]);
   if (c.enabled_watch) chips.push(["WATCH", `Watch ${c.watch_time_min}-${c.watch_time_max} phút · ${c.watch_delay_min}-${c.watch_delay_max}s/video${reactionChip(c.watch_react_enabled, c.watch_react_types)}`]);
-  if (c.enabled_story) chips.push(["STORY", `Story ${c.story_min}-${c.story_max} khung · ${c.story_delay_min}-${c.story_delay_max}s/khung${reactionChip(c.story_react_enabled, c.story_react_types)}`]);
+  if (c.enabled_story) chips.push(["STORY", `Story ${c.story_min}-${c.story_max} · ${c.story_delay_min}-${c.story_delay_max}s/story${reactionChip(c.story_react_enabled, c.story_react_types)}`]);
   if (c.enabled_add_friends && c.friend_source === "list") {
     chips.push(["ADD_FRIEND", `Kết bạn theo danh sách ${parseLinkList(c.friend_links, "friend").count} link · tối đa ${c.friend_list_limit} lời mời/nick · nghỉ ${c.friends_delay_min}-${c.friends_delay_max}s`]);
   } else if (c.enabled_add_friends) {
@@ -155,9 +156,58 @@ function facebookUrl(url) {
   }
 }
 
-function TargetList({ action, targets }) {
+/**
+ * Link nhóm / trang cá nhân: có nick thì mở bằng Chrome đã đăng nhập của nick đó để thấy đúng trạng thái của nick (đã
+ * vào nhóm, đã gửi lời mời); Chrome của nick đang mở thì mở tab mới. Nick đã xóa khỏi Quản lý tài khoản hoặc không có
+ * nick thì mở trình duyệt mặc định.
+ */
+function TargetLink({ nick, href, label, isGroup }) {
+  const [opening, setOpening] = useState(false);
+  const uid = nick?.uid;
+  const who = nick?.name || uid;
+  const content = (
+    <>
+      <span className="truncate">{label}</span>
+      {opening ? <Loader2 className="h-3 w-3 shrink-0 animate-spin" /> : <ExternalLink className="h-3 w-3 shrink-0" />}
+    </>
+  );
+  if (!uid) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex min-w-0 items-center gap-1 font-medium text-primary hover:underline">
+        {content}
+      </a>
+    );
+  }
+  const title = isGroup ? "Xem nhóm" : "Xem trang cá nhân";
+  const open = async () => {
+    if (opening) return;
+    setOpening(true);
+    try {
+      const res = await openFarmLink(uid, href);
+      if (res?.mode === "tab") toast.success(`Đã mở ở tab mới trong Chrome của nick ${who}`, title);
+      else toast.info(`Đang mở Chrome của nick ${who}...`, title);
+    } catch (err) {
+      if (err.status === 404) {
+        toast.info(`Nick ${who} không còn trong Quản lý tài khoản, mở bằng trình duyệt thường`, title);
+        window.open(href, "_blank", "noopener,noreferrer");
+      } else {
+        toast.warning(err.message || "Không mở được trình duyệt của nick", title);
+      }
+    } finally {
+      setOpening(false);
+    }
+  };
+  return (
+    <button type="button" onClick={open} disabled={opening} title={`Mở bằng Chrome của nick ${who}`} className="inline-flex min-w-0 items-center gap-1 font-medium text-primary hover:underline disabled:cursor-wait">
+      {content}
+    </button>
+  );
+}
+
+export function TargetList({ action, targets, nick }) {
   const [expanded, setExpanded] = useState(false);
-  const Icon = action === "JOIN_GROUP" || action === "LEAVE_GROUP" ? Users : User;
+  const isGroup = action === "JOIN_GROUP" || action === "LEAVE_GROUP";
+  const Icon = isGroup ? Users : User;
   const shown = expanded ? targets : targets.slice(0, TARGET_PREVIEW);
   return (
     <ul className="mt-1.5 space-y-1">
@@ -169,10 +219,7 @@ function TargetList({ action, targets }) {
           <li key={i} className="flex items-center gap-1.5 text-xs">
             <Icon className="h-3.5 w-3.5 shrink-0 text-slate-400" />
             {href ? (
-              <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex min-w-0 items-center gap-1 font-medium text-primary hover:underline">
-                <span className="truncate">{name}</span>
-                <ExternalLink className="h-3 w-3 shrink-0" />
-              </a>
+              <TargetLink nick={nick} href={href} label={name} isGroup={isGroup} />
             ) : (
               <span className={cn("truncate", t?.name ? "text-slate-700" : "italic text-slate-400")}>{name}</span>
             )}
@@ -193,7 +240,7 @@ function TargetList({ action, targets }) {
 }
 
 // Chế độ danh sách link: link bị bỏ qua (không tính vào số lượng), thu gọn mặc định
-function SkippedList({ targets }) {
+function SkippedList({ targets, nick, isGroup }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="mt-1.5">
@@ -211,10 +258,7 @@ function SkippedList({ targets }) {
                   {LINK_SKIP_LABELS[t?.result] || "Bỏ qua"}
                 </span>
                 {href ? (
-                  <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex min-w-0 items-center gap-1 font-medium text-primary hover:underline">
-                    <span className="truncate">{label}</span>
-                    <ExternalLink className="h-3 w-3 shrink-0" />
-                  </a>
+                  <TargetLink nick={nick} href={href} label={label} isGroup={isGroup} />
                 ) : (
                   <span className="truncate text-slate-700">{label}</span>
                 )}
@@ -228,14 +272,14 @@ function SkippedList({ targets }) {
   );
 }
 
-function LogTargets({ action, targets }) {
+function LogTargets({ action, targets, nick }) {
   const isSkip = (t) => String(t?.result || "").startsWith("skipped_");
   const done = targets.filter((t) => !isSkip(t));
   const skipped = targets.filter(isSkip);
   return (
     <>
-      {done.length > 0 && <TargetList action={action} targets={done} />}
-      {skipped.length > 0 && <SkippedList targets={skipped} />}
+      {done.length > 0 && <TargetList action={action} targets={done} nick={nick} />}
+      {skipped.length > 0 && <SkippedList targets={skipped} nick={nick} isGroup={action === "JOIN_GROUP"} />}
     </>
   );
 }
@@ -460,7 +504,7 @@ export default function HistoryDetail({ id, onClose }) {
                               <span className={cn("rounded-md border px-1.5 py-0.5 text-[10px] font-semibold", meta.badge)}>{meta.label}</span>
                             </div>
                             {log.details && <div className="mt-0.5 text-xs text-slate-600">{log.details}</div>}
-                            {log.targets?.length > 0 && <LogTargets action={log.action_type} targets={log.targets} />}
+                            {log.targets?.length > 0 && <LogTargets action={log.action_type} targets={log.targets} nick={{ uid: h.fb_uid, name: h.fb_name }} />}
                           </li>
                         );
                       })}

@@ -9,6 +9,7 @@ import {
   getNotifications,
   mapNotification,
   resyncChatData,
+  getSyncStatus,
   friendlyFbError,
   toUtcIso,
   parseAttachmentText,
@@ -125,7 +126,9 @@ export default function OmnichannelChatModule() {
     setConversations(c.conversations || []);
     setNotifications(n.notifications || []);
     setNotifMeta({
+      total: n.total ?? 0,
       unreadCounts: n.unreadCounts || {},
+      typeCounts: n.typeCounts || {},
       pageUnread: n.pageUnread || {},
       page: n.page || 1,
       totalPages: n.totalPages || 1,
@@ -193,7 +196,9 @@ export default function OmnichannelChatModule() {
       if (cancelled) return;
       setNotifications(res.notifications || []);
       setNotifMeta({
+        total: res.total ?? 0,
         unreadCounts: res.unreadCounts || {},
+        typeCounts: res.typeCounts || {},
         pageUnread: res.pageUnread || {},
         page: res.page || 1,
         totalPages: res.totalPages || 1,
@@ -222,7 +227,9 @@ export default function OmnichannelChatModule() {
         });
         setNotifMeta((m) => ({
           ...m,
+          total: res.total ?? m.total,
           unreadCounts: res.unreadCounts || m.unreadCounts,
+          typeCounts: res.typeCounts || m.typeCounts,
           pageUnread: res.pageUnread || m.pageUnread,
           page: res.page || m.page + 1,
           totalPages: res.totalPages || m.totalPages,
@@ -384,6 +391,32 @@ export default function OmnichannelChatModule() {
                 });
                 return { ...all, [matchedKey]: next };
               });
+            } else if (payload.type === "reaction" && payload.data) {
+              const { facebook_message_id, reactions, reaction, id } = payload.data;
+              const emojiVal = reaction || reactions || null;
+              setMessagesByConversation((all) => {
+                let updated = false;
+                const nextAll = { ...all };
+                for (const [convId, list] of Object.entries(all)) {
+                  if (!Array.isArray(list)) continue;
+                  const idx = list.findIndex(
+                    (m) =>
+                      (facebook_message_id && (m.facebookMessageId === facebook_message_id || String(m.id) === String(facebook_message_id))) ||
+                      (id && String(m.id) === String(id))
+                  );
+                  if (idx !== -1) {
+                    const nextList = [...list];
+                    nextList[idx] = { ...nextList[idx], reaction: emojiVal };
+                    nextAll[convId] = nextList;
+                    updated = true;
+                    break;
+                  }
+                }
+                return updated ? nextAll : all;
+              });
+            } else if (payload.type === "comment_reaction" && payload.data) {
+              // Bắn CustomEvent lên window để NotificationDetail / CommentThread bắt được realtime
+              window.dispatchEvent(new CustomEvent("fb_comment_reaction", { detail: payload.data }));
             } else if (payload.type === "notification" && payload.data) {
               const incomingNotif = mapNotification(payload.data);
 
@@ -405,13 +438,22 @@ export default function OmnichannelChatModule() {
               }
 
               // Badge thì nhích bất kể đang xem tab nào, miễn là đúng Page đang lọc
-              if (incomingNotif.unread && matchPage) {
+              if (incomingNotif.unread) {
+                const pid = String(incomingNotif.pageId || "");
                 setNotifMeta((m) => ({
                   ...m,
-                  unreadCounts: {
-                    ...m.unreadCounts,
-                    [incomingNotif.type]: (m.unreadCounts[incomingNotif.type] || 0) + 1,
-                  },
+                  unreadCounts: matchPage
+                    ? {
+                        ...m.unreadCounts,
+                        [incomingNotif.type]: (m.unreadCounts[incomingNotif.type] || 0) + 1,
+                      }
+                    : m.unreadCounts,
+                  pageUnread: pid
+                    ? {
+                        ...m.pageUnread,
+                        [pid]: (m.pageUnread[pid] || 0) + 1,
+                      }
+                    : m.pageUnread,
                 }));
               }
             }
@@ -449,15 +491,66 @@ export default function OmnichannelChatModule() {
   const confirmReset = async () => {
     setResetConfirmOpen(false);
     setResetting(true);
+    setLoading(true); // Bật trạng thái loading skeleton y hệt như lúc mới mở Module 6
+
     await resyncChatData();
-    const data = await fetchAll(notifQuery);
-    applyData({ ...data, n: { ...data.n, forKey: notifQueryKey } });
+
+    // 1. Dọn dẹp lựa chọn hiện tại
     setActivePageId(null);
     setActiveConversationId(null);
     setOpenedNotificationId(null);
     setMessagesByConversation({});
     loadingMessages.current.clear();
-    setResetting(false);
+
+    // 2. Thăm dò ngầm cho đến khi đồng bộ hoàn tất thì mới tắt loading và hiển thị đầy đủ
+    const startTime = Date.now();
+    let pollCount = 0;
+    let consecutiveSameCount = 0;
+    let prevTotal = -1;
+    let latestData = null;
+
+    const checkInterval = setInterval(async () => {
+      pollCount++;
+      try {
+        const [status, freshData] = await Promise.all([
+          getSyncStatus(),
+          fetchAll(notifQueryRef.current || notifQuery),
+        ]);
+        latestData = freshData;
+
+        const currentTotal = (freshData.p?.pages?.length || 0) + (freshData.n?.total || 0) + (freshData.c?.conversations?.length || 0);
+        if (currentTotal === prevTotal && currentTotal > 0) {
+          consecutiveSameCount++;
+        } else {
+          consecutiveSameCount = 0;
+          prevTotal = currentTotal;
+        }
+
+        const elapsed = Date.now() - startTime;
+        // Chỉ kết thúc khi:
+        // Đã qua tối thiểu 15s VÀ backend báo đã hoàn tất sync VÀ dữ liệu đã ổn định qua 3 chu kỳ liên tiếp (hoặc chạm timeout an toàn)
+        const isDoneSyncing = !status?.syncing && consecutiveSameCount >= 3;
+        if ((pollCount >= 6 && isDoneSyncing) || elapsed >= 90000) {
+          clearInterval(checkInterval);
+          if (latestData) {
+            applyData({ ...latestData, n: { ...latestData.n, forKey: notifQueryKey } });
+          }
+          setResetting(false);
+          setLoading(false);
+        }
+      } catch (err) {
+        console.warn("[Polling Error during reset]", err);
+        const elapsed = Date.now() - startTime;
+        if (pollCount > 12 || elapsed >= 90000) {
+          clearInterval(checkInterval);
+          if (latestData) {
+            applyData({ ...latestData, n: { ...latestData.n, forKey: notifQueryKey } });
+          }
+          setResetting(false);
+          setLoading(false);
+        }
+      }
+    }, 2500);
   };
 
   /**
@@ -555,7 +648,8 @@ export default function OmnichannelChatModule() {
     if (!activeConversationId) return;
     const interval = setInterval(() => {
       if (wsOpenRef.current) return; // WS đang khoẻ -> tin mới đã về qua realtime, bỏ qua
-      getMessages(activeConversationId).then((res) => {
+      // fresh: đây là đường duy nhất để tin về khi WS chết, không được ăn cache
+      getMessages(activeConversationId, { fresh: true }).then((res) => {
         if (res?.messages && res.messages.length > 0) {
           setMessagesByConversation((all) => {
             const current = all[activeConversationId] || [];
@@ -593,7 +687,8 @@ export default function OmnichannelChatModule() {
       // Khi WebSocket đang kết nối bình thường, tin nhắn đã về realtime -> bỏ qua polling định kỳ
       if (wsOpenRef.current) return;
 
-      getConversations().then((res) => {
+      // fresh: cùng lý do như vòng hỏi lại tin nhắn ở trên
+      getConversations({}, { fresh: true }).then((res) => {
         if (res?.conversations && res.conversations.length > 0) {
           setConversations((prev) => {
             const newMap = new Map(res.conversations.map((c) => [c.id, c]));
@@ -744,10 +839,24 @@ export default function OmnichannelChatModule() {
       onSend={(payload) => handleSend(activeConversation.id, payload)}
       onRetry={(message) => deliver(activeConversation.id, message)}
       onReact={(messageId, emoji) => {
+        let targetMsg = null;
+        let nextEmoji = null;
         setThread(activeConversation.id, (list) =>
-          list.map((m) => (m.id === messageId ? { ...m, reaction: m.reaction === emoji ? null : emoji } : m)),
+          list.map((m) => {
+            if (m.id === messageId) {
+              targetMsg = m;
+              nextEmoji = m.reaction === emoji ? null : emoji;
+              return { ...m, reaction: nextEmoji };
+            }
+            return m;
+          }),
         );
-        if (!isMock) reactToMessage(activeConversation.id, messageId, emoji).catch(() => {});
+        if (!isMock) {
+          const apiMsgId = targetMsg?.facebookMessageId || messageId;
+          reactToMessage(activeConversation.id, apiMsgId, nextEmoji).catch((err) => {
+            console.error("[reactToMessage Error]", err);
+          });
+        }
       }}
       onToggleStar={() => handleToggleStar(activeConversation)}
       onToggleTag={(tagId) => handleToggleTag(activeConversation, tagId)}
@@ -810,7 +919,9 @@ export default function OmnichannelChatModule() {
       onSortChange={setSort}
       conversations={visibleConversations}
       notifications={notifications}
+      totalNotifications={notifMeta.total}
       notificationCounts={notifMeta.unreadCounts}
+      notificationTypeCounts={notifMeta.typeCounts}
       notificationsLoading={notificationsLoading}
       onLoadMoreNotifications={loadMoreNotifications}
       hasMoreNotifications={notifMeta.page < notifMeta.totalPages}

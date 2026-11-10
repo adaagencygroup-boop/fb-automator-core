@@ -13,6 +13,7 @@ import PostProgressTerminal from "./_components/PostProgressTerminal";
 import PostReactionSelector from "./_components/PostReactionSelector";
 import PostSummaryCards from "./_components/PostSummaryCards";
 import PostTargetSection from "./_components/PostTargetSection";
+import AccountSelectModal from "../_components/AccountSelectModal";
 
 export default function SeedingPostPage() {
   const [targets, setTargets] = useState([]);
@@ -29,10 +30,13 @@ export default function SeedingPostPage() {
 
   // Account config
   const [accountCount, setAccountCount] = useState(2);
+  const [selectedUids, setSelectedUids] = useState([]);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [delayMin, setDelayMin] = useState(30);
   const [delayMax, setDelayMax] = useState(60);
 
   const [isRunning, setIsRunning] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [currentCampaignId, setCurrentCampaignId] = useState(null);
 
   const [liveAccountsCount, setLiveAccountsCount] = useState(0);
@@ -53,7 +57,9 @@ export default function SeedingPostPage() {
           );
           const validCount = validLiveLoggedIn.length;
           setLiveAccountsCount(validCount);
-          setAccountCount(validCount > 0 ? Math.min(validCount, 10) : 0);
+          const initialUids = validLiveLoggedIn.map((a) => a.uid);
+          setSelectedUids(initialUids);
+          setAccountCount(initialUids.length);
         }
       })
       .catch(() => {});
@@ -114,7 +120,7 @@ export default function SeedingPostPage() {
         })
         .catch(() => {});
     checkActive();
-    const timer = setInterval(checkActive, 3000);
+    const timer = setInterval(checkActive, 5000);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -155,7 +161,7 @@ export default function SeedingPostPage() {
       } catch (err) {
         // Ignore polling error
       }
-    }, 3000);
+    }, 4000);
 
     return () => clearInterval(interval);
   }, [isRunning, currentCampaignId]);
@@ -212,6 +218,10 @@ export default function SeedingPostPage() {
   };
 
   const handleRemoveTarget = async (index) => {
+    if (isRunning) {
+      toast.warning("Không thể xóa bài viết khi đang chạy seeding!");
+      return;
+    }
     const targetToRemove = targets[index];
     if (targetToRemove) {
       try {
@@ -235,6 +245,10 @@ export default function SeedingPostPage() {
   };
 
   const handleClearTargets = async () => {
+    if (isRunning) {
+      toast.warning("Không thể xóa danh sách bài viết khi đang chạy seeding!");
+      return;
+    }
     try {
       await seedingApi.clearSeedingTargets("POST");
     } catch (err) {
@@ -276,6 +290,10 @@ export default function SeedingPostPage() {
   };
 
   const handleRemoveComment = async (index) => {
+    if (isRunning) {
+      toast.warning("Không thể xóa bình luận khi đang chạy seeding!");
+      return;
+    }
     const cmtToRemove = comments[index];
     if (cmtToRemove) {
       try {
@@ -288,6 +306,10 @@ export default function SeedingPostPage() {
   };
 
   const handleClearAllComments = async () => {
+    if (isRunning) {
+      toast.warning("Không thể xóa danh sách bình luận khi đang chạy seeding!");
+      return;
+    }
     try {
       await seedingApi.clearSeedingComments();
     } catch (e) {
@@ -336,10 +358,26 @@ export default function SeedingPostPage() {
       return;
     }
 
-    if (accountCount <= 0 || accountCount > liveAccountsCount) {
+    if (selectedUids.length === 0 && accountCount <= 0) {
       toast.warning(
-        `Số lượng tài khoản muốn chạy (${accountCount}) không hợp lệ hoặc vượt quá số tài khoản khả dụng (${liveAccountsCount})!`,
-        "SỐ LƯỢNG KHÔNG HỢP LỆ"
+        "Vui lòng chọn ít nhất 1 tài khoản để chạy seeding!",
+        "CHƯA CHỌN TÀI KHOẢN"
+      );
+      return;
+    }
+
+    if (!delayMin || !delayMax || Number(delayMax) <= Number(delayMin)) {
+      toast.warning(
+        `Thời gian tối đa (${delayMax || 0}s) phải lớn hơn thời gian tối thiểu (${delayMin || 0}s)!`,
+        "CẤU HÌNH THỜI GIAN KHÔNG HỢP LỆ"
+      );
+      return;
+    }
+
+    if (Number(delayMax) > 3600) {
+      toast.warning(
+        "Thời gian tối đa chỉ được nhập tối đa đến 3600 giây!",
+        "CẤU HÌNH THỜI GIAN KHÔNG HỢP LỆ"
       );
       return;
     }
@@ -364,7 +402,8 @@ export default function SeedingPostPage() {
           url: t.url,
           display_name: t.display_name,
         })),
-        account_count: accountCount,
+        uids: selectedUids.length > 0 ? selectedUids : undefined,
+        account_count: selectedUids.length > 0 ? selectedUids.length : accountCount,
         threads: 1,
         delay_seconds_min: delayMin,
         delay_seconds_max: delayMax,
@@ -401,6 +440,8 @@ export default function SeedingPostPage() {
   };
 
   const handleStop = async () => {
+    if (isStopping) return;
+    setIsStopping(true);
     try {
       addLog(
         "Đang gửi yêu cầu dừng chiến dịch và đóng toàn bộ trình duyệt Chrome...",
@@ -418,6 +459,7 @@ export default function SeedingPostPage() {
       addLog(`Lỗi khi dừng: ${e.message}`, "error");
       toast.error(e.message || "Lỗi khi gửi yêu cầu dừng chiến dịch!", "LỖI");
     } finally {
+      setIsStopping(false);
       setIsRunning(false);
     }
   };
@@ -449,6 +491,7 @@ export default function SeedingPostPage() {
         onRemoveTarget={handleRemoveTarget}
         onClearTargets={handleClearTargets}
         successMessage={successMessage}
+        isRunning={isRunning}
       />
 
       {/* Step 2: Reactions & Interactions */}
@@ -471,13 +514,16 @@ export default function SeedingPostPage() {
           onAddBulkComments={handleAddBulkComments}
           onRemoveComment={handleRemoveComment}
           onClearAllComments={handleClearAllComments}
+          isRunning={isRunning}
         />
       )}
 
       {/* Step 4 & 5: Accounts Count & Delay */}
       <PostAccountConfig
         accountCount={accountCount}
-        onAccountCountChange={setAccountCount}
+        onAccountCountChange={(val) => {
+          setAccountCount(val);
+        }}
         availableAccounts={liveAccountsCount}
         liveAccounts={liveAccountsCount}
         totalAccounts={totalAccountsCount}
@@ -489,6 +535,12 @@ export default function SeedingPostPage() {
         doLike={doLike}
         doComment={doComment}
         doShare={doShare}
+        onOpenAccountModal={() => {
+          if (isRunning || isStopping) return;
+          setIsAccountModalOpen(true);
+        }}
+        selectedUids={selectedUids}
+        isRunning={isRunning || isStopping}
       />
 
       {/* Summary Cards */}
@@ -509,11 +561,30 @@ export default function SeedingPostPage() {
       {/* Bottom Action Bar */}
       <PostActionBar
         isRunning={isRunning}
+        isStopping={isStopping}
         onStart={handleStart}
         onStop={handleStop}
-        disabled={targets.length === 0}
+        disabled={
+          targets.length === 0 ||
+          !delayMin ||
+          !delayMax ||
+          Number(delayMax) <= Number(delayMin) ||
+          Number(delayMax) > 3600
+        }
         otherRunning={otherRunning}
         onStopOther={handleStopOther}
+      />
+
+      {/* Popup chọn tài khoản */}
+      <AccountSelectModal
+        isOpen={isAccountModalOpen}
+        onClose={() => setIsAccountModalOpen(false)}
+        selectedUids={selectedUids}
+        onConfirm={(uids) => {
+          setSelectedUids(uids);
+          setAccountCount(uids.length);
+        }}
+        isRunning={isRunning || isStopping}
       />
     </div>
   );

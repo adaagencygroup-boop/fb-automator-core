@@ -169,10 +169,12 @@ export async function getChatStatus() {
 
 /**
  * Lấy danh sách các cuộc hội thoại (/api/facebook/conversations)
+ *
+ * `fresh` bỏ qua cache ở tầng axios — xem ghi chú ở getMessages.
  */
-export async function getConversations(params = {}) {
+export async function getConversations(params = {}, { fresh = false } = {}) {
   try {
-    const res = await api.get("/api/facebook/conversations", { params });
+    const res = await api.get("/api/facebook/conversations", { params, fresh });
     const raw = Array.isArray(res) ? res : res?.conversations || [];
     const conversations = raw.map((c) => {
       const tagsArr = Array.isArray(c.tags)
@@ -263,6 +265,7 @@ export async function getNotifications({
     return {
       notifications: raw.map(mapNotification),
       unreadCounts: res?.unread_counts || {},
+      typeCounts: res?.type_counts || {},
       pageUnread: res?.page_unread || {},
       total: Number(res?.total ?? raw.length) || 0,
       page: Number(res?.page ?? page) || 1,
@@ -272,7 +275,7 @@ export async function getNotifications({
   } catch (error) {
     console.warn("[getNotifications] Lỗi tải thông báo từ Backend:", error.message);
     return {
-      notifications: [], unreadCounts: {}, pageUnread: {},
+      notifications: [], unreadCounts: {}, typeCounts: {}, pageUnread: {},
       total: 0, page: 1, totalPages: 1,
       isMock: false, error: error.message || "Không tải được thông báo",
     };
@@ -282,8 +285,12 @@ export async function getNotifications({
 /**
  * Lấy lịch sử tin nhắn của một cuộc hội thoại (/api/facebook/messages)
  * conversationId định dạng: `${page_id}_${sender_id}`
+ *
+ * `fresh: true` bỏ qua cache ở tầng axios. Dùng cho vòng hỏi lại định kỳ khi
+ * WebSocket chết: lúc đó đây là đường duy nhất để tin của khách về, nên không
+ * được phép ăn cache.
  */
-export async function getMessages(conversationId) {
+export async function getMessages(conversationId, { fresh = false } = {}) {
   try {
     const parts = String(conversationId || "").split("_");
     const page_id = parts[0] || "";
@@ -291,6 +298,7 @@ export async function getMessages(conversationId) {
 
     const res = await api.get("/api/facebook/messages", {
       params: { page_id, sender_id },
+      fresh,
     });
 
     const raw = Array.isArray(res) ? res : res?.messages || [];
@@ -299,6 +307,7 @@ export async function getMessages(conversationId) {
 
       return {
         id: String(m.id || m.facebook_message_id),
+        facebookMessageId: m.facebook_message_id || null,
         direction: m.direction === "outbound" ? "out" : "in",
         text,
         attachment,
@@ -450,6 +459,18 @@ export async function resyncChatData() {
 }
 
 /**
+ * Kiểm tra trạng thái tiến trình đồng bộ nền (/api/facebook/sync-status)
+ */
+export async function getSyncStatus() {
+  try {
+    const res = await api.get("/api/facebook/sync-status");
+    return res || { syncing: false, queue_size: 0 };
+  } catch {
+    return { syncing: false, queue_size: 0 };
+  }
+}
+
+/**
  * Đồng bộ Fanpage từ User Token (/api/facebook/sync-by-token)
  */
 export async function syncByToken(accessToken) {
@@ -551,6 +572,16 @@ export async function replyToComment(objectId, pageId, text, attachmentUrl) {
     text,
     attachment_url: attachmentUrl || null,
   });
+}
+
+/** Tải tệp/ảnh lên server lấy URL công khai */
+export async function uploadMedia(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await api.post("/api/facebook/upload-media", form, {
+    headers: { "Content-Type": undefined },
+  });
+  return res?.url;
 }
 
 /** Trả lời riêng (vào hộp thư) cho người bình luận */

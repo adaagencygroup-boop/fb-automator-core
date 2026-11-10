@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
@@ -1044,7 +1044,7 @@ export default function ChatWindow({
   }, [conversation?.id, count]);
 
   const send = (payload) => {
-    onSend(replyTo ? { ...payload, replyTo: { id: replyTo.id, text: previewOf(replyTo) } } : payload);
+    onSend(replyTo ? { ...payload, replyTo: { id: replyTo.facebookMessageId || replyTo.id, text: previewOf(replyTo) } } : payload);
     setReplyTo(null);
   };
 

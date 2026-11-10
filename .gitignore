@@ -43,6 +43,9 @@ data/*.db-wal
 data/*.db-shm
 data/*.sqlite
 data/*.sqlite3
+data/*.ini
+data/tiktok_config.json
+data/youtube_config.json
 data/keys.txt
 data/proxies.txt
 data/accounts.txt
@@ -116,6 +119,9 @@ dist/
 
 # Cargo build cache — rất nặng, mỗi máy tự build
 src-tauri/target/
+
+# Tauri updater private signing key (chỉ public key nằm trong tauri.conf.json)
+src-tauri/keys/
 
 # Schema sinh tự động khi `tauri build` / `tauri dev`
 src-tauri/gen/

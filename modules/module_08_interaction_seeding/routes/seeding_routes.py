@@ -5,6 +5,7 @@ Tuân thủ chuẩn DBML Module 8 (fb_automator_seeding).
 Quản lý chiến dịch, sinh hàng đợi tác vụ và điều phối worker chạy nền đa luồng tự động hóa bằng Selenium thật.
 """
 
+from contextlib import contextmanager
 import hashlib
 import logging
 import random
@@ -60,6 +61,20 @@ _batch_campaign_chains: dict[
 # Lô đang được bộ chạy lô (_execute_campaign_runner) chạy thật: campaign đầu lô -> chuỗi chiến dịch.
 # Mỗi lúc mỗi user chỉ được chạy 1 lô seeding (mọi loại trang) vì các lô dùng chung nick / Chrome profile.
 _running_batches: dict[int, list[int]] = {}
+
+
+@contextmanager
+def _scoped_db():
+    """Tạo DB session ngắn hạn, tự commit khi thành công, rollback khi lỗi và luôn close giải phóng kết nối về pool."""
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 def broadcast(
@@ -505,7 +520,7 @@ class AddCommentsRequest(BaseModel):
 # 1. QUẢN LÝ MỤC TIÊU SEEDING (LƯU TRỰC TIẾP VÀO DATABASE PHÂN THEO NGƯỜI DÙNG)
 # ─────────────────────────────────────────────────────────────
 @router.get("/targets")
-async def list_seeding_targets(
+def list_seeding_targets(
     target_type: str | None = None,
     include_completed: bool = Query(False),
     request: Request = None,
@@ -567,7 +582,7 @@ async def list_seeding_targets(
 
 
 @router.post("/targets/validate")
-async def validate_targets(
+def validate_targets(
     req: ValidateTargetsRequest,
     request: Request = None,
     authorization: str | None = Header(None),
@@ -686,7 +701,7 @@ async def validate_targets(
 
 
 @router.delete("/targets/by-url")
-async def delete_target_by_url(
+def delete_target_by_url(
     url: str = Query(...),
     target_type: str | None = Query(None),
     request: Request = None,
@@ -722,7 +737,7 @@ async def delete_target_by_url(
 
 
 @router.delete("/targets/clear")
-async def clear_seeding_targets(
+def clear_seeding_targets(
     target_type: str | None = Query(None),
     request: Request = None,
     authorization: str | None = Header(None),
@@ -773,7 +788,7 @@ async def clear_seeding_targets(
 # 1.1 QUẢN LÝ BÌNH LUẬN NHÁP (KHO BÌNH LUẬN)
 # ─────────────────────────────────────────────────────────────
 @router.get("/comments")
-async def list_seeding_comments(
+def list_seeding_comments(
     request: Request = None,
     authorization: str | None = Header(None),
     db: Session = Depends(get_db),
@@ -786,7 +801,7 @@ async def list_seeding_comments(
 
 
 @router.post("/comments/add")
-async def add_seeding_comments(
+def add_seeding_comments(
     req: AddCommentsRequest,
     request: Request = None,
     authorization: str | None = Header(None),
@@ -821,7 +836,7 @@ async def add_seeding_comments(
 
 
 @router.delete("/comments/delete")
-async def delete_seeding_comment(
+def delete_seeding_comment(
     content: str = Query(...),
     request: Request = None,
     authorization: str | None = Header(None),
@@ -845,7 +860,7 @@ async def delete_seeding_comment(
 
 
 @router.delete("/comments/clear")
-async def clear_seeding_comments(
+def clear_seeding_comments(
     request: Request = None,
     authorization: str | None = Header(None),
     db: Session = Depends(get_db),
@@ -883,7 +898,7 @@ def _get_action_label(act: str, camp_type: str = "POST") -> str:
 # 2. TẠO CHIẾN DỊCH SEEDING & SINH TÁC VỤ THẬT
 # ─────────────────────────────────────────────────────────────
 @router.post("/campaigns/create")
-async def create_seeding_campaign(
+def create_seeding_campaign(
     req: CreateCampaignRequest,
     request: Request = None,
     authorization: str | None = Header(None),
@@ -960,10 +975,14 @@ async def create_seeding_campaign(
 
     if req.uids and len(req.uids) > 0:
         q = q.filter(Account.uid.in_(req.uids))
-    # Chọn NGẪU NHIÊN account_count nick trong số nick khả dụng (không lấy cố định N nick đầu danh sách),
-    # để mọi nick đều được dùng qua các lần chạy. random.sample trả về thứ tự ngẫu nhiên nên thứ tự chạy cũng ngẫu nhiên.
-    eligible_accounts = q.all()
-    available_accounts = random.sample(eligible_accounts, min(req.account_count, len(eligible_accounts)))
+        eligible_accounts = q.all()
+        # Người dùng tự tích chọn danh sách tài khoản: giữ nguyên 100% các nick đã chọn, không random
+        uid_map = {acc.uid: acc for acc in eligible_accounts}
+        available_accounts = [uid_map[u] for u in req.uids if u in uid_map]
+    else:
+        # Trường hợp không truyền uids cụ thể: chọn NGẪU NHIÊN account_count nick trong số nick khả dụng
+        eligible_accounts = q.all()
+        available_accounts = random.sample(eligible_accounts, min(req.account_count, len(eligible_accounts)))
 
     if not available_accounts:
         raise HTTPException(
@@ -972,7 +991,7 @@ async def create_seeding_campaign(
         )
 
     account_uids = [acc.uid for acc in available_accounts]
-    used_uids = account_uids[: req.account_count]
+    used_uids = account_uids if (req.uids and len(req.uids) > 0) else account_uids[: req.account_count]
     actual_account_count = len(used_uids)
 
     # ─────────────────────────────────────────────────────────────
@@ -1324,6 +1343,102 @@ def _count_account_result(db: Session, campaign_id: int, success: bool):
     db.commit()
 
 
+def _safe_close_seeding_driver(driver, uid: str | None = None, owner: str | None = None):
+    """Đóng trình duyệt Seeding êm ái, hoàn toàn không bật cửa sổ CMD/Terminal.
+
+    1. Thu thập PID trước khi đóng để sẵn sàng dọn dẹp nếu Chrome bị treo.
+    2. Hủy đăng ký driver khỏi core registry.
+    3. Đóng các tab và gọi driver.quit() chuẩn của Selenium.
+    4. Dọn dẹp tiến trình con còn sót lại bằng psutil (dùng Win32 C API TerminateProcess, không gọi taskkill.exe).
+    5. Đóng proxy bridge & dọn lockfile profile.
+    """
+    if not driver:
+        return
+
+    pids: list[int] = []
+    try:
+        service_proc = getattr(getattr(driver, "service", None), "process", None)
+        pid = getattr(service_proc, "pid", None)
+        if isinstance(pid, int) and pid > 0:
+            pids.append(pid)
+            try:
+                import psutil
+                for child in psutil.Process(pid).children(recursive=True):
+                    if isinstance(child.pid, int) and child.pid > 0:
+                        pids.append(child.pid)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Hủy đăng ký khỏi registry chung
+    try:
+        from core.browser.driver import unregister_active_driver
+        unregister_active_driver(driver)
+    except Exception:
+        pass
+
+    # Quit driver chuẩn Selenium
+    try:
+        try:
+            for handle in list(getattr(driver, "window_handles", []) or []):
+                driver.switch_to.window(handle)
+                driver.close()
+        except Exception:
+            pass
+        driver.quit()
+    except Exception as e:
+        logger.debug(f"[Seeding] driver.quit() error: {e}")
+
+    # Dọn dẹp tiến trình treo còn sót lại bằng psutil (hoàn toàn không tạo cửa sổ console CMD)
+    if pids:
+        try:
+            import psutil
+            for p in pids:
+                try:
+                    proc = psutil.Process(p)
+                    proc.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied, Exception):
+                    pass
+        except Exception:
+            pass
+
+    # Đóng bridge và xóa lockfile profile nếu có UID
+    if uid:
+        try:
+            from core.browser.driver import (
+                close_bridge_for_uid as _c_bridge,
+                get_profile_path as _g_path,
+                _cleanup_profile_lockfiles as _c_lock,
+            )
+            _c_bridge(str(uid), owner)
+            p_path = _g_path(str(uid), owner)
+            _c_lock(p_path)
+        except Exception:
+            pass
+
+
+def _close_scoped_seeding_drivers():
+    """Đóng khẩn cấp toàn bộ trình duyệt thuộc scope seeding một cách êm ái, không nháy CMD."""
+    try:
+        from core.browser.driver import _active_drivers, _active_drivers_lock
+        with _active_drivers_lock:
+            to_close = [
+                (d, info)
+                for d, info in list(_active_drivers.items())
+                if info.get("scope") == "seeding"
+            ]
+            for d, _info in to_close:
+                _active_drivers.pop(d, None)
+
+        for d, info in to_close:
+            _safe_close_seeding_driver(
+                d, uid=info.get("uid"), owner=info.get("owner")
+            )
+    except Exception as e:
+        logger.warning(f"[Seeding] Lỗi đóng scoped drivers: {e}")
+
+
 def _process_account_tasks(
     campaign_id: int,
     uid: str,
@@ -1336,26 +1451,76 @@ def _process_account_tasks(
     # Thời gian nghỉ lưu từ trước có thể bị ngược / âm: random.randint(20, 10) sẽ lỗi và làm sập luồng của nick
     delay_min, delay_max = sorted((max(0, delay_min or 0), max(0, delay_max or 0)))
     token = owner_context.set(owner) if owner else None
-    db = SessionLocal()
     driver = None
     account_counted = False   # đã cộng lượt thành công / thất bại của nick này vào chiến dịch chưa
     try:
         if _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested"):
-            for tid in task_ids:
-                rem_t = db.query(SeedingTask).filter(SeedingTask.id == tid).first()
-                if rem_t and rem_t.status in ("PENDING", "RUNNING"):
-                    rem_t.status = "FAILED"
-                    rem_t.error_message = "Người dùng yêu cầu dừng chiến dịch (Đã dừng thủ công)"
-                    rem_t.finished_at = vn_now()
-            db.commit()
+            with _scoped_db() as s:
+                for tid in task_ids:
+                    rem_t = s.query(SeedingTask).filter(SeedingTask.id == tid).first()
+                    if rem_t and rem_t.status in ("PENDING", "RUNNING"):
+                        rem_t.status = "FAILED"
+                        rem_t.error_message = "Người dùng yêu cầu dừng chiến dịch (Đã dừng thủ công)"
+                        rem_t.finished_at = vn_now()
             return
 
-        account_record = db.query(Account).filter(Account.uid == uid).first()
-        if not account_record:
-            logger.error(f"Account {uid} not found in DB")
-            return
+        with _scoped_db() as s:
+            account_record = s.query(Account).filter(Account.uid == uid).first()
+            if not account_record:
+                logger.error(f"Account {uid} not found in DB")
+                return
 
-        proxy = account_record.proxy if account_record else None
+            proxy = account_record.proxy
+            acc_label = account_record.profile_name or uid
+
+            # Thứ tự thực thi luôn đúng: 1. Like (REACT) -> 2. Comment (COMMENT) -> 3. Share (SHARE)
+            action_priority = {
+                "REACT": 1,
+                "LIKE": 1,
+                "COMMENT": 2,
+                "SHARE": 3,
+                "FOLLOW": 4,
+                "LIKE_PAGE": 4,
+            }
+            task_objs = s.query(SeedingTask).filter(SeedingTask.id.in_(task_ids)).all()
+            task_objs.sort(key=lambda t: action_priority.get(t.action, 99))
+            sorted_task_ids = [t.id for t in task_objs]
+            task_info_by_id = {
+                t.id: {
+                    "id": t.id,
+                    "action": t.action,
+                    "reaction": t.reaction or "LIKE",
+                    "target_id": t.target_id,
+                    "comment_id": t.comment_id,
+                    "status": t.status,
+                }
+                for t in task_objs
+            }
+
+            target_ids = {t.target_id for t in task_objs}
+            targets = s.query(SeedingTarget).filter(SeedingTarget.id.in_(target_ids)).all()
+            targets_by_id = {
+                tg.id: {
+                    "id": tg.id,
+                    "url": tg.url,
+                    "target_type": tg.target_type or "POST",
+                }
+                for tg in targets
+            }
+
+            comment_ids = {t.comment_id for t in task_objs if t.comment_id}
+            comments = (
+                s.query(SeedingComment).filter(SeedingComment.id.in_(comment_ids)).all()
+                if comment_ids
+                else []
+            )
+            comments_by_id = {c.id: c.content for c in comments if c.content}
+            any_cmts = (
+                s.query(SeedingComment)
+                .filter(SeedingComment.campaign_id == campaign_id)
+                .all()
+            )
+            fallback_comments = [c.content for c in any_cmts if c.content]
 
         broadcast("info", f"[{uid}] 🚀 Khởi động trình duyệt Chrome Profile...")
         driver = create_driver(uid=uid, headless=False, proxy=proxy, scope="seeding")
@@ -1376,36 +1541,22 @@ def _process_account_tasks(
                     f"[{uid}] ❌ Không thể đăng nhập Facebook. Đánh dấu thất bại các tác vụ của nick này.",
                 )
                 failed_any = False
-                for tid in task_ids:
-                    t = db.query(SeedingTask).filter(SeedingTask.id == tid).first()
-                    if t and t.status == "PENDING":
-                        t.status = "FAILED"
-                        t.error_message = "Không thể đăng nhập Facebook"
-                        t.finished_at = vn_now()
-                        failed_any = True
-                db.commit()
-                if failed_any:
-                    _count_account_result(db, campaign_id, success=False)
-                    account_counted = True
+                with _scoped_db() as s:
+                    for tid in task_ids:
+                        t = s.query(SeedingTask).filter(SeedingTask.id == tid).first()
+                        if t and t.status == "PENDING":
+                            t.status = "FAILED"
+                            t.error_message = "Không thể đăng nhập Facebook"
+                            t.finished_at = vn_now()
+                            failed_any = True
+                    if failed_any:
+                        _count_account_result(s, campaign_id, success=False)
+                        account_counted = True
                 return
         else:
             broadcast("success", f"[{uid}] ✓ Phiên đăng nhập Facebook sẵn sàng.")
 
         # 2. Thi hành các task của tài khoản này
-        # Đảm bảo thứ tự thực thi luôn đúng: 1. Like (REACT) -> 2. Comment (COMMENT) -> 3. Share (SHARE)
-        action_priority = {
-            "REACT": 1,
-            "LIKE": 1,
-            "COMMENT": 2,
-            "SHARE": 3,
-            "FOLLOW": 4,
-            "LIKE_PAGE": 4,
-        }
-        task_objs = db.query(SeedingTask).filter(SeedingTask.id.in_(task_ids)).all()
-        task_objs.sort(key=lambda t: action_priority.get(t.action, 99))
-        sorted_task_ids = [t.id for t in task_objs]
-        task_by_id = {t.id: t for t in task_objs}
-
         account_has_failure = False
         for idx, tid in enumerate(sorted_task_ids):
             if _active_seeding_campaigns.get(campaign_id, {}).get("stop_requested"):
@@ -1415,83 +1566,68 @@ def _process_account_tasks(
                     owner=owner,
                 )
                 account_has_failure = True
-                for remaining_tid in sorted_task_ids[idx:]:
-                    rem_task = (
-                        db.query(SeedingTask)
-                        .filter(SeedingTask.id == remaining_tid)
-                        .first()
-                    )
-                    if rem_task and rem_task.status in ("PENDING", "RUNNING"):
-                        rem_task.status = "FAILED"
-                        rem_task.error_message = (
-                            "Người dùng yêu cầu dừng chiến dịch (Đã dừng thủ công)"
+                with _scoped_db() as s:
+                    for remaining_tid in sorted_task_ids[idx:]:
+                        rem_task = (
+                            s.query(SeedingTask)
+                            .filter(SeedingTask.id == remaining_tid)
+                            .first()
                         )
-                        rem_task.finished_at = vn_now()
-                db.commit()
+                        if rem_task and rem_task.status in ("PENDING", "RUNNING"):
+                            rem_task.status = "FAILED"
+                            rem_task.error_message = (
+                                "Người dùng yêu cầu dừng chiến dịch (Đã dừng thủ công)"
+                            )
+                            rem_task.finished_at = vn_now()
                 break
 
-            ut = db.query(SeedingTask).filter(SeedingTask.id == tid).first()
-            if not ut or ut.status != "PENDING":
+            info = task_info_by_id.get(tid)
+            if not info:
                 continue
 
-            target = (
-                db.query(SeedingTarget).filter(SeedingTarget.id == ut.target_id).first()
-            )
-            if not target:
+            target_info = targets_by_id.get(info["target_id"])
+            if not target_info:
                 continue
 
-            ut.status = "RUNNING"
-            ut.started_at = vn_now()
-            db.commit()
+            with _scoped_db() as s:
+                ut = s.query(SeedingTask).filter(SeedingTask.id == tid).first()
+                if not ut or ut.status != "PENDING":
+                    continue
+                ut.status = "RUNNING"
+                ut.started_at = vn_now()
 
             success = False
             msg = ""
             comment_text = None
 
-            if ut.action in ("FOLLOW", "LIKE_PAGE"):
-                acc_label = (
-                    account_record.profile_name or uid if account_record else uid
-                )
+            if info["action"] in ("FOLLOW", "LIKE_PAGE"):
                 success, msg = bot.execute_follow(
-                    target.url,
-                    target_type=target.target_type or "PAGE",
+                    target_info["url"],
+                    target_type=target_info["target_type"] or "PAGE",
                     account_name=acc_label,
                     callback=lambda m: broadcast("info", f"[{uid}] {m}"),
                 )
-            elif ut.action == "REACT":
+            elif info["action"] == "REACT":
                 success, msg = bot.execute_react(
-                    target.url,
-                    reaction_type=ut.reaction or "LIKE",
+                    target_info["url"],
+                    reaction_type=info["reaction"] or "LIKE",
                     callback=lambda m: broadcast("info", f"[{uid}] {m}"),
                 )
-            elif ut.action == "COMMENT":
+            elif info["action"] == "COMMENT":
                 comment_text = "Tuyệt vời!"
-                if ut.comment_id:
-                    cmt_obj = (
-                        db.query(SeedingComment)
-                        .filter(SeedingComment.id == ut.comment_id)
-                        .first()
-                    )
-                    if cmt_obj and cmt_obj.content:
-                        comment_text = cmt_obj.content
-                else:
-                    any_cmts = (
-                        db.query(SeedingComment)
-                        .filter(SeedingComment.campaign_id == campaign_id)
-                        .all()
-                    )
-                    if any_cmts:
-                        chosen = random.choice(any_cmts)
-                        comment_text = chosen.content
+                if info["comment_id"] and info["comment_id"] in comments_by_id:
+                    comment_text = comments_by_id[info["comment_id"]]
+                elif fallback_comments:
+                    comment_text = random.choice(fallback_comments)
 
                 success, msg = bot.execute_comment(
-                    target.url,
+                    target_info["url"],
                     content=comment_text,
                     callback=lambda m: broadcast("info", f"[{uid}] {m}"),
                 )
-            elif ut.action == "SHARE":
+            elif info["action"] == "SHARE":
                 success, msg = bot.execute_share(
-                    target.url, callback=lambda m: broadcast("info", f"[{uid}] {m}")
+                    target_info["url"], callback=lambda m: broadcast("info", f"[{uid}] {m}")
                 )
 
             # Bấm xong chưa chắc Facebook đã ghi nhận: có lúc Facebook hiện cảnh báo rồi hoàn tác thao tác.
@@ -1499,32 +1635,34 @@ def _process_account_tasks(
             # Bỏ qua khi thao tác đã có từ trước (bot không bấm gì).
             if success and "từ trước" not in (msg or ""):
                 kept, why = bot.verify_action_kept(
-                    ut.action,
-                    target_type=target.target_type or "POST",
+                    info["action"],
+                    target_type=target_info["target_type"] or "POST",
                     comment_text=comment_text,
                     callback=lambda m: broadcast("info", f"[{uid}] {m}"),
                 )
                 if not kept:
                     success, msg = False, why
 
-            ut.finished_at = vn_now()
-            ut.error_message = msg
-            if success:
-                ut.status = "SUCCESS"
-                broadcast("success", f"[{uid}] ✓ {msg}")
-            else:
-                ut.status = "FAILED"
-                account_has_failure = True
-                broadcast("error", f"[{uid}] ❌ {msg}")
-
-            db.commit()
+            with _scoped_db() as s:
+                ut = s.query(SeedingTask).filter(SeedingTask.id == tid).first()
+                if ut:
+                    ut.finished_at = vn_now()
+                    ut.error_message = msg
+                    if success:
+                        ut.status = "SUCCESS"
+                        broadcast("success", f"[{uid}] ✓ {msg}")
+                    else:
+                        ut.status = "FAILED"
+                        account_has_failure = True
+                        broadcast("error", f"[{uid}] ❌ {msg}")
 
             # Còn tác vụ tiếp theo: nghỉ ngẫu nhiên delay_min..delay_max giây theo cấu hình "Thời gian nghỉ giữa
             # 2 lần tương tác", kể cả giữa các thao tác trên cùng 1 bài viết (Like -> Bình luận -> Chia sẻ).
             # Cùng bài viết thì bot vẫn ở nguyên trang đang mở, không mở lại bài (xem PostSeedingFlow._open_post).
             if idx < len(sorted_task_ids) - 1:
-                next_task = task_by_id.get(sorted_task_ids[idx + 1])
-                same_post = next_task is not None and next_task.target_id == ut.target_id
+                next_id = sorted_task_ids[idx + 1]
+                next_info = task_info_by_id.get(next_id)
+                same_post = next_info is not None and next_info["target_id"] == info["target_id"]
                 delay_s = random.randint(delay_min, delay_max)
                 broadcast(
                     "info",
@@ -1537,8 +1675,9 @@ def _process_account_tasks(
                 time.sleep(1.5)
 
         # Cập nhật kết quả số tài khoản thành công / thất bại cho chiến dịch (mỗi nick = 1 lượt)
-        _count_account_result(db, campaign_id, success=not account_has_failure)
-        account_counted = True
+        with _scoped_db() as s:
+            _count_account_result(s, campaign_id, success=not account_has_failure)
+            account_counted = True
 
     except Exception as e:
         logger.error(f"Error in _process_account_tasks for {uid}: {e}")
@@ -1555,33 +1694,29 @@ def _process_account_tasks(
             broadcast("error", f"[{uid}] Lỗi luồng: {str(e)[:80]}", owner=owner)
 
         try:
-            db.rollback()   # lỗi có thể đến từ DB: phải rollback thì session mới dùng tiếp được
             err_msg = (
                 "Người dùng yêu cầu dừng chiến dịch (Đã dừng thủ công)"
                 if is_stopped
                 else f"Lỗi luồng: {str(e)[:80]}"
             )
-            for tid in task_ids:
-                rem_t = db.query(SeedingTask).filter(SeedingTask.id == tid).first()
-                if rem_t and rem_t.status in ("PENDING", "RUNNING"):
-                    rem_t.status = "FAILED"
-                    rem_t.error_message = err_msg
-                    rem_t.finished_at = vn_now()
-            db.commit()
-            # Trước đây chỗ này không cộng lượt: nick lỗi luồng thì Lịch sử ghi 0 thất bại và "Hoàn thành"
-            if not account_counted:
-                _count_account_result(db, campaign_id, success=False)
-                account_counted = True
+            with _scoped_db() as s:
+                for tid in task_ids:
+                    rem_t = s.query(SeedingTask).filter(SeedingTask.id == tid).first()
+                    if rem_t and rem_t.status in ("PENDING", "RUNNING"):
+                        rem_t.status = "FAILED"
+                        rem_t.error_message = err_msg
+                        rem_t.finished_at = vn_now()
+                if not account_counted:
+                    _count_account_result(s, campaign_id, success=False)
+                    account_counted = True
         except Exception as cleanup_error:
             logger.error(f"Không ghi được kết quả lỗi luồng của {uid}: {cleanup_error}")
     finally:
         if driver:
             try:
-                safe_close_driver(driver)
+                _safe_close_seeding_driver(driver, uid=uid, owner=owner)
             except Exception:
                 pass
-            close_driver_for_uid(uid)
-        db.close()
         if token:
             try:
                 owner_context.reset(token)
@@ -1892,7 +2027,7 @@ def _execute_campaign_runner(initial_campaign_id: int):
 
 
 @router.post("/campaigns/{campaign_id}/start")
-async def start_seeding_campaign(
+def start_seeding_campaign(
     campaign_id: int,
     background_tasks: BackgroundTasks,
     request: Request = None,
@@ -1941,7 +2076,7 @@ async def start_seeding_campaign(
 
 
 @router.post("/campaigns/{campaign_id}/stop")
-async def stop_seeding_campaign(
+def stop_seeding_campaign(
     campaign_id: int,
     request: Request = None,
     authorization: str | None = Header(None),
@@ -1979,8 +2114,8 @@ async def stop_seeding_campaign(
         )
     db.commit()
 
-    # Đóng ngay lập tức các trình duyệt đang thuộc scope seeding
-    close_scoped_active_drivers(scope="seeding", force=True)
+    # Đóng ngay lập tức các trình duyệt đang thuộc scope seeding êm ái
+    _close_scoped_seeding_drivers()
 
     camp_owner = str(campaign.created_by) if campaign.created_by is not None else None
     broadcast(
@@ -1996,7 +2131,7 @@ async def stop_seeding_campaign(
 
 
 @router.post("/stop-all")
-async def stop_all_seeding(
+def stop_all_seeding(
     request: Request = None,
     authorization: str | None = Header(None),
     db: Session = Depends(get_db),
@@ -2055,7 +2190,7 @@ async def stop_all_seeding(
 
     # Đóng các trình duyệt thuộc scope seeding nếu có chiến dịch bị dừng
     if stopped_ids:
-        close_scoped_active_drivers(scope="seeding", force=True)
+        _close_scoped_seeding_drivers()
 
     camp_owner = str(allowed_user_id) if allowed_user_id is not None else None
     broadcast(
@@ -2074,7 +2209,7 @@ async def stop_all_seeding(
 # 4. DANH SÁCH LỊCH SỬ SEEDING (CHO TRANG LỊCH SỬ)
 # ─────────────────────────────────────────────────────────────
 @router.get("/campaigns/active")
-async def get_active_seeding_campaign(
+def get_active_seeding_campaign(
     campaign_type: str | None = Query(None, description="PAGE | PROFILE | POST, bỏ trống = mọi loại"),
     request: Request = None,
     authorization: str | None = Header(None),
@@ -2095,7 +2230,7 @@ async def get_active_seeding_campaign(
 
 
 @router.get("/campaigns")
-async def list_seeding_campaigns(
+def list_seeding_campaigns(
     campaign_type: str | None = Query(None, description="PAGE | PROFILE | POST | ALL"),
     status: str | None = Query(None, description="COMPLETED | RUNNING | FAILED | ALL"),
     search: str | None = Query(
@@ -2245,7 +2380,7 @@ async def list_seeding_campaigns(
 # 5. CHI TIẾT CHIẾN DỊCH & LINK MỤC TIÊU THẬT (CHO NÚT "Chi tiết")
 # ─────────────────────────────────────────────────────────────
 @router.get("/campaigns/{campaign_id}/detail")
-async def get_seeding_campaign_detail(
+def get_seeding_campaign_detail(
     campaign_id: int,
     request: Request = None,
     authorization: str | None = Header(None),
@@ -2505,7 +2640,7 @@ async def get_seeding_campaign_detail(
 # 6. THỐNG KÊ TỔNG QUAN (4 CARD Ở MÀN HÌNH LỊCH SỬ)
 # ─────────────────────────────────────────────────────────────
 @router.get("/stats")
-async def get_seeding_stats(
+def get_seeding_stats(
     user_id: int | None = Query(None, description="Lọc theo user id (Admin)"),
     request: Request = None,
     authorization: str | None = Header(None),

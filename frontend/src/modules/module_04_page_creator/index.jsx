@@ -26,9 +26,10 @@ import {
 import Pagination from "@/components/ui/pagination";
 import { formatVietnamDateTime, parseToVietnamDate } from "@/lib/date-utils";
 import { toast } from "@/lib/toast";
-import { getAccountsPage } from "@/modules/module_02_account_manager/service";
+import { getAccountsPage, getCategories } from "@/modules/module_02_account_manager/service";
 import { useLocalSSE } from "@/modules/module_02_account_manager/hooks/useLocalSSE";
 import { attachDragSelection } from "@/modules/module_02_account_manager/utils/drag-selection.mjs";
+import { categoryLabelStyle } from "@/modules/module_02_account_manager/components/CategorySelect";
 import {
   getCreatedPageHistory,
   getCreatorSettings,
@@ -890,6 +891,8 @@ function CreateView() {
   const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [accountsError, setAccountsError] = useState("");
+  // Danh mục Module 2: map id → { id, name, color } để hiện cột Danh mục
+  const [categoriesById, setCategoriesById] = useState({});
   // Tải tài khoản theo trang khi cuộn (API /api/accounts/page, 10 dòng/lần, tìm kiếm phía server)
   const [pageInfo, setPageInfo] = useState({ nextCursor: null, hasMore: false });
   const [loadingMore, setLoadingMore] = useState(false);
@@ -922,10 +925,15 @@ function CreateView() {
   const [testingKey, setTestingKey] = useState(false);
   const fileRef = useRef(null);
   const previewRef = useRef(null);
+  const [showPreview, setShowPreview] = useState(false);
   const { logs } = useLocalSSE(true);
 
   const pages = useMemo(() => parsePageLines(pageText, delimiter), [pageText, delimiter]);
-  const visibleAccounts = accounts;
+  // Danh sách thực thi: chỉ nick đã đăng nhập + Live (Die / lỗi DN không chọn được)
+  const visibleAccounts = useMemo(
+    () => accounts.filter((account) => account.login_status === "logged_in" && account.status === "live"),
+    [accounts],
+  );
   // Kéo chuột chọn nhiều dòng (dùng chung logic với bảng Quản lý tài khoản)
   const accountScrollRef = useRef(null);
   const visibleAccountsRef = useRef(visibleAccounts);
@@ -934,6 +942,14 @@ function CreateView() {
     visibleAccountsRef.current = visibleAccounts;
     selectedRef.current = selected;
   });
+  // Bỏ chọn UID không còn trong danh sách Live + đã đăng nhập
+  useEffect(() => {
+    const allowed = new Set(visibleAccounts.map((account) => account.uid));
+    setSelected((current) => {
+      const next = current.filter((uid) => allowed.has(uid));
+      return next.length === current.length ? current : next;
+    });
+  }, [visibleAccounts]);
   useEffect(() => {
     if (!accountScrollRef.current) return undefined;
     return attachDragSelection(accountScrollRef.current, {
@@ -980,10 +996,16 @@ function CreateView() {
       setMoreError("");
     }
     try {
-      const result = await getAccountsPage({ cursor: cursor ?? undefined, search: query });
+      const result = await getAccountsPage({
+        cursor: cursor ?? undefined,
+        search: query,
+        status: "live",
+        login_status: "logged_in",
+      });
       if (id !== accountRequestId.current) return; // đã có yêu cầu mới hơn (vd. gõ từ khóa khác)
       const rows = Array.isArray(result?.accounts) ? result.accounts : [];
-      setAccounts((current) => (first ? rows : [...current, ...rows.filter((row) => !current.some((item) => item.uid === row.uid))]));
+      const runnable = rows.filter((row) => row.login_status === "logged_in" && row.status === "live");
+      setAccounts((current) => (first ? runnable : [...current, ...runnable.filter((row) => !current.some((item) => item.uid === row.uid))]));
       setKnownAccounts((current) => ({ ...current, ...Object.fromEntries(rows.map((row) => [row.uid, row])) }));
       setPageInfo({ nextCursor: result?.next_cursor ?? null, hasMore: Boolean(result?.has_more) });
       if (first) {
@@ -1046,6 +1068,12 @@ function CreateView() {
         if (settings?.gemini_model) setGeminiModel(settings.gemini_model);
       })
       .catch(() => {});
+    getCategories()
+      .then((rows) => {
+        const list = Array.isArray(rows) ? rows : [];
+        setCategoriesById(Object.fromEntries(list.map((row) => [row.id, row])));
+      })
+      .catch(() => setCategoriesById({}));
     refreshStatus();
   }, [refreshStatus]);
 
@@ -1054,6 +1082,11 @@ function CreateView() {
     const timer = setInterval(refreshStatus, 2500);
     return () => clearInterval(timer);
   }, [running, refreshStatus]);
+
+  useEffect(() => {
+    if (!showPreview) return;
+    previewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [showPreview]);
 
   const toggleUid = (uid) => {
     setSelected((current) => (current.includes(uid) ? current.filter((item) => item !== uid) : [...current, uid]));
@@ -1256,7 +1289,7 @@ function CreateView() {
         </div>
 
         <div ref={accountScrollRef} className={`max-h-[319px] overflow-auto rounded-xl pr-1 select-none ${SCROLLBAR}`}>
-          <table aria-busy={accountsLoading} className="w-full min-w-[860px] border-collapse text-left">
+          <table aria-busy={accountsLoading} className="w-full min-w-[980px] border-collapse text-left">
             <thead className="sticky top-0 z-10 bg-[#EFF4FF]">
               <tr className="h-[52px]">
                 <th className="w-12 px-4">
@@ -1272,6 +1305,7 @@ function CreateView() {
                 <th className={`${TABLE_HEAD} w-16 px-3`}>STT</th>
                 <th className={`${TABLE_HEAD} px-4`}>UID Facebook</th>
                 <th className={`${TABLE_HEAD} px-4`}>Họ &amp; tên tài khoản</th>
+                <th className={`${TABLE_HEAD} px-4`}>Danh mục</th>
                 <th className={`${TABLE_HEAD} px-4`}>Trạng thái ĐN</th>
                 <th className={`${TABLE_HEAD} px-4`}>Trạng thái TK</th>
                 <th className={`${TABLE_HEAD} px-4`}>Proxy gắn kèm</th>
@@ -1286,6 +1320,7 @@ function CreateView() {
                     <td className="px-3"><div className="h-3 w-5 rounded bg-slate-200/70" /></td>
                     <td className="px-4"><div className="h-3.5 w-28 rounded bg-slate-200/70" /></td>
                     <td className="px-4"><div className="h-4 w-32 rounded bg-slate-200/70" /></td>
+                    <td className="px-4"><div className="h-6 w-24 rounded bg-slate-200/70" /></td>
                     <td className="px-4"><div className="h-[22px] w-[104px] rounded-md bg-slate-200/70" /></td>
                     <td className="px-4"><div className="h-[18px] w-10 rounded-full bg-slate-200/70" /></td>
                     <td className="px-4"><div className="h-3 w-28 rounded bg-slate-200/70" /></td>
@@ -1293,7 +1328,7 @@ function CreateView() {
                 ))
               ) : accountsError ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center">
+                  <td colSpan={8} className="px-4 py-10 text-center">
                     <p role="alert" className="text-sm text-[#BE123C]">Không thể tải tài khoản: {accountsError}</p>
                     <button type="button" onClick={() => loadAccounts()} className="mt-3 rounded-lg bg-[#2563EB] px-4 py-2 text-xs font-semibold text-white hover:bg-[#1D4ED8]">
                       Thử lại
@@ -1302,8 +1337,10 @@ function CreateView() {
                 </tr>
               ) : visibleAccounts.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-sm text-[#434655]">
-                    {debouncedSearch ? "Không tìm thấy nick khớp từ khóa." : "Chưa có tài khoản. Import ở mục Quản lý tài khoản."}
+                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-[#434655]">
+                    {debouncedSearch
+                      ? "Không tìm thấy nick Live + đã đăng nhập khớp từ khóa."
+                      : "Không có nick Live và đã đăng nhập. Đăng nhập / check Live ở Quản lý tài khoản rồi quay lại."}
                   </td>
                 </tr>
               ) : (
@@ -1345,6 +1382,9 @@ function CreateView() {
                       </td>
                       <td className="max-w-[220px] truncate px-4 text-base leading-6 font-semibold text-[#0B1C30]">
                         {account.profile_name || "Chưa cập nhật"}
+                      </td>
+                      <td className="px-4">
+                        <CategoryBadge category={categoriesById[account.category_id]} categoryId={account.category_id} />
                       </td>
                       <td className="px-4">
                         <LoginBadge status={account.login_status} />
@@ -1511,11 +1551,13 @@ function CreateView() {
               </button>
               <button
                 type="button"
-                onClick={() => previewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                aria-expanded={showPreview}
+                aria-controls="creator-preview-table"
+                onClick={() => setShowPreview((open) => !open)}
                 className="flex h-9 items-center gap-1 rounded-lg bg-[#DBE1FF] px-3.5 text-[11px] leading-[14px] font-semibold tracking-[0.33px] text-[#004AC6] hover:bg-[#CCD6FF]"
               >
-                <CreatorIcon name="eye" />
-                Xem chi tiết
+                {showPreview ? <EyeOff aria-hidden="true" className="size-3.5" /> : <CreatorIcon name="eye" />}
+                {showPreview ? "Ẩn chi tiết" : "Xem chi tiết"}
               </button>
             </div>
           </div>
@@ -1644,65 +1686,68 @@ function CreateView() {
         </section>
       </div>
 
-      {/* Đối soát dữ liệu trước khi chạy */}
-      <section
-        ref={previewRef}
-        aria-label="Đối soát dữ liệu trước khi chạy"
-        className="scroll-mt-6 overflow-hidden rounded-lg bg-white"
-      >
-        <div className={`max-h-[420px] overflow-auto ${SCROLLBAR}`}>
-          <table className="w-full min-w-[860px] border-collapse text-left text-xs leading-[18px] text-[#252629]">
-            <thead className="sticky top-0 z-10 bg-[#EFF4FF]">
-              <tr className="h-[52px]">
-                <th className={`${PREVIEW_HEAD} w-[31px] pl-16 text-center`}>STT</th>
-                <th className={`${PREVIEW_HEAD} w-[104px]`}>UID</th>
-                <th className={`${PREVIEW_HEAD} w-[115px]`}>Tên page</th>
-                <th className={`${PREVIEW_HEAD} w-[98px]`}>Số điện thoại</th>
-                <th className={`${PREVIEW_HEAD} w-[144px]`}>Email</th>
-                <th className={`${PREVIEW_HEAD} text-center`}>Địa chỉ</th>
-                <th className={`${PREVIEW_HEAD} pr-16 text-right`}>Trạng thái</th>
-              </tr>
-            </thead>
-            <tbody>
-              {preview.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="py-10 text-center text-sm">
-                    Chưa có dòng page hợp lệ. Dán danh sách hoặc tải tệp .CSV/.TXT.
-                  </td>
+      {/* Đối soát dữ liệu trước khi chạy — bật/tắt bằng nút Xem chi tiết */}
+      {showPreview && (
+        <section
+          id="creator-preview-table"
+          ref={previewRef}
+          aria-label="Đối soát dữ liệu trước khi chạy"
+          className="scroll-mt-6 overflow-hidden rounded-lg bg-white"
+        >
+          <div className={`max-h-[420px] overflow-auto ${SCROLLBAR}`}>
+            <table className="w-full min-w-[860px] border-collapse text-left text-xs leading-[18px] text-[#252629]">
+              <thead className="sticky top-0 z-10 bg-[#EFF4FF]">
+                <tr className="h-[52px]">
+                  <th className={`${PREVIEW_HEAD} w-[31px] pl-16 text-center`}>STT</th>
+                  <th className={`${PREVIEW_HEAD} w-[104px]`}>UID</th>
+                  <th className={`${PREVIEW_HEAD} w-[115px]`}>Tên page</th>
+                  <th className={`${PREVIEW_HEAD} w-[98px]`}>Số điện thoại</th>
+                  <th className={`${PREVIEW_HEAD} w-[144px]`}>Email</th>
+                  <th className={`${PREVIEW_HEAD} text-center`}>Địa chỉ</th>
+                  <th className={`${PREVIEW_HEAD} pr-16 text-right`}>Trạng thái</th>
                 </tr>
-              ) : (
-                preview.map((row) => (
-                  <tr key={`${row.stt}-${row.page_name}`} className="h-[92px]">
-                    <td className="py-3 pr-3 pl-16 text-center text-[#8B90A0]">{row.stt}</td>
-                    <td className="px-3 py-3 font-medium tracking-[0.3px] text-[#2563EB]">{row.uid || <span className="font-normal tracking-normal text-[#8B90A0]">Chưa gán</span>}</td>
-                    <td className="max-w-[115px] px-3 py-3 font-medium text-[#5E616B]">{row.page_name}</td>
-                    <td className="px-3 py-3">
-                      {row.phone || <ErrorChip>Thiếu SĐT</ErrorChip>}
-                    </td>
-                    <td className="max-w-[170px] truncate px-3 py-3 text-[11px]">
-                      {row.issues.includes("Sai email") ? <ErrorChip>Sai email</ErrorChip> : row.email || "—"}
-                    </td>
-                    <td className="px-3 py-3 text-center">{row.address || "—"}</td>
-                    <td className="py-3 pr-16 pl-3 text-right">
-                      {row.ok ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-[rgba(78,222,163,0.1)] px-2 py-0.5 text-[11px] text-[#0F965F]">
-                          <CreatorIcon name="valid" />
-                          Hợp lệ
-                        </span>
-                      ) : (
-                        <span title={row.issues.join(", ")} className="inline-flex items-center gap-1 rounded-full bg-[rgba(255,180,171,0.15)] px-2 py-0.5 text-[11px] text-[#B01705]">
-                          <CreatorIcon name="error" />
-                          Lỗi
-                        </span>
-                      )}
+              </thead>
+              <tbody>
+                {preview.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-10 text-center text-sm">
+                      Chưa có dòng page hợp lệ. Dán danh sách hoặc tải tệp .CSV/.TXT.
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+                ) : (
+                  preview.map((row) => (
+                    <tr key={`${row.stt}-${row.page_name}`} className="h-[92px]">
+                      <td className="py-3 pr-3 pl-16 text-center text-[#8B90A0]">{row.stt}</td>
+                      <td className="px-3 py-3 font-medium tracking-[0.3px] text-[#2563EB]">{row.uid || <span className="font-normal tracking-normal text-[#8B90A0]">Chưa gán</span>}</td>
+                      <td className="max-w-[115px] px-3 py-3 font-medium text-[#5E616B]">{row.page_name}</td>
+                      <td className="px-3 py-3">
+                        {row.phone || <ErrorChip>Thiếu SĐT</ErrorChip>}
+                      </td>
+                      <td className="max-w-[170px] truncate px-3 py-3 text-[11px]">
+                        {row.issues.includes("Sai email") ? <ErrorChip>Sai email</ErrorChip> : row.email || "—"}
+                      </td>
+                      <td className="px-3 py-3 text-center">{row.address || "—"}</td>
+                      <td className="py-3 pr-16 pl-3 text-right">
+                        {row.ok ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-[rgba(78,222,163,0.1)] px-2 py-0.5 text-[11px] text-[#0F965F]">
+                            <CreatorIcon name="valid" />
+                            Hợp lệ
+                          </span>
+                        ) : (
+                          <span title={row.issues.join(", ")} className="inline-flex items-center gap-1 rounded-full bg-[rgba(255,180,171,0.15)] px-2 py-0.5 text-[11px] text-[#B01705]">
+                            <CreatorIcon name="error" />
+                            Lỗi
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {/* Thanh tổng kết dính đáy + nút bắt đầu */}
       <div className="sticky -bottom-6 z-20 -mx-4 mt-auto flex flex-wrap items-center justify-between gap-3 bg-[#F8F9FF]/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:gap-4 sm:px-6">
@@ -1824,6 +1869,19 @@ const LOGIN_BADGE = {
   logged_in: { label: "Đã đăng nhập", box: "bg-[#ECFDF5] text-[#047857]", dot: "bg-[#10B981]" },
   failed: { label: "Đăng nhập lỗi", box: "bg-[#FFF1F2] text-[#BE123C]", dot: "bg-[#F43F5E]" },
 };
+
+function CategoryBadge({ category, categoryId }) {
+  const name = category?.name || (categoryId == null ? "Chưa gán" : `Danh mục #${categoryId}`);
+  return (
+    <span
+      title={name}
+      style={categoryLabelStyle(category)}
+      className="inline-flex h-6 max-w-[140px] items-center truncate rounded border border-slate-200 bg-slate-50 px-2 text-xs font-semibold text-slate-700"
+    >
+      {name}
+    </span>
+  );
+}
 
 function LoginBadge({ status }) {
   const meta = LOGIN_BADGE[status] || { label: "Chưa đăng nhập", box: "bg-[#F1F5F9] text-[#475569]", dot: "bg-[#94A3B8]" };

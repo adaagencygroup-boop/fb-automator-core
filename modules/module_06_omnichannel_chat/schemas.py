@@ -170,7 +170,7 @@ class PushSubscriptionInput(BaseModel):
 class ReactInput(BaseModel):
     page_id: str
     recipient_id: str
-    reaction: str
+    reaction: Optional[str] = None
 
 class SendAttachmentUrlInput(BaseModel):
     page_id: str
@@ -225,6 +225,7 @@ class PaginatedNotificationsOut(PaginatedResponse):
     notifications: Optional[List[NotificationOut]] = None
     # So chua doc theo tung tab cua FE, khong an theo tab/filter dang chon
     unread_counts: Dict[str, int] = {}
+    type_counts: Dict[str, int] = {}
     # {page_id: so thong bao chua doc} cho badge tren danh sach Page
     page_unread: Dict[str, int] = {}
 

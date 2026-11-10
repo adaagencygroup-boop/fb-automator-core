@@ -7,8 +7,6 @@ import {
   Eraser,
   ExternalLink,
   Info,
-  ChevronLeft,
-  ChevronRight,
   ChevronDown,
   Copy,
   Check,
@@ -19,12 +17,64 @@ import {
   Loader2,
   X,
   AlertCircle,
-  Terminal
+  Terminal,
+  Image as ImageIcon,
 } from "lucide-react";
 import { api } from "@/services/api";
 import CustomSelect from "@/components/ui/custom-select";
+import Pagination from "@/components/ui/pagination";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/lib/toast";
+import { openPostInAccountBrowser } from "@/modules/module_03_acc_farm/openAccountPost";
+import { mediaFileUrl, normalizeImagePaths } from "./PostImageModal";
+
+function HistoryStatusImageCard({ path }) {
+  const [broken, setBroken] = useState(false);
+  const fileName = String(path || "").replace(/\\/g, "/").split("/").pop() || path;
+  const src = mediaFileUrl(path);
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/80 overflow-hidden flex flex-col min-w-0">
+      <div className="aspect-square bg-slate-100 relative flex items-center justify-center overflow-hidden">
+        {!broken && src ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={src}
+            alt={fileName}
+            className="h-full w-full object-cover"
+            onError={() => setBroken(true)}
+          />
+        ) : (
+          <div className="px-2 text-center space-y-1">
+            <ImageIcon size={18} className="mx-auto text-slate-400" />
+            <p className="text-[10px] text-slate-500 leading-snug">
+              Không tải được ảnh / file không còn trên máy
+            </p>
+          </div>
+        )}
+      </div>
+      <div className="p-2 space-y-1.5 border-t border-slate-200/80">
+        <p className="text-[10px] font-medium text-slate-700 truncate" title={fileName}>
+          {fileName}
+        </p>
+        <p className="text-[9px] font-mono text-slate-400 break-all line-clamp-2" title={path}>
+          {path}
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            navigator.clipboard.writeText(path);
+            toast.success("Đã sao chép đường dẫn ảnh");
+          }}
+          className="text-[10px] text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1 cursor-pointer"
+        >
+          <Copy size={10} />
+          <span>Sao chép đường dẫn</span>
+        </button>
+      </div>
+    </div>
+  );
+}
 
 const FORMAT_OPTIONS = [
   { value: "all", label: "Tất cả hình thức" },
@@ -33,25 +83,64 @@ const FORMAT_OPTIONS = [
   { value: "story", label: "Story" },
 ];
 
-const TIME_SLOT_OPTIONS = [
-  { value: "all", label: "Tất cả khung giờ" },
-  { value: "08:00", label: "08:00" },
-  { value: "10:00", label: "10:00" },
-  { value: "12:00", label: "12:00" },
-  { value: "14:00", label: "14:00" },
-  { value: "16:00", label: "16:00" },
-  { value: "18:00", label: "18:00" },
-  { value: "20:00", label: "20:00" },
-];
-
 const STATUS_OPTIONS = [
   { value: "all", label: "Tất cả trạng thái" },
   { value: "PUBLISHED", label: "Đã xuất bản" },
   { value: "STOPPED", label: "Đã dừng" },
   { value: "FAILED", label: "Lỗi hệ thống" },
-  { value: "DIE", label: "Tài khoản chết" },
-  { value: "BLOCKED", label: "Bị chặn" },
 ];
+
+/** Việt hóa thông báo lỗi đăng bài (kể cả bản ghi cũ còn stacktrace Selenium). */
+export function humanizePostError(raw) {
+  let text = String(raw || "").trim();
+  if (!text) return "";
+  for (const sep of ["Stacktrace:", "Stack trace:", "(Session info:", "Backtrace:"]) {
+    const i = text.indexOf(sep);
+    if (i >= 0) text = text.slice(0, i).trim();
+  }
+  text = text
+    .split("\n")
+    .filter((ln) => ln.trim() && !ln.includes("No symbol"))
+    .join(" ")
+    .trim() || String(raw || "").trim();
+  const low = text.toLowerCase();
+
+  if (low.includes("publishunconfirmed")) {
+    const after = text.includes(":") ? text.split(":").slice(1).join(":").trim() : "";
+    return after || "Không xác nhận được bài đã đăng lên Facebook (hết thời gian chờ).";
+  }
+  if (
+    low.includes("maxretryerror") ||
+    low.includes("newconnectionerror") ||
+    low.includes("winerror 10061") ||
+    low.includes("actively refused") ||
+    low.includes("connection refused") ||
+    low.includes("httpconnectionpool") ||
+    low.includes("failed to establish a new connection") ||
+    low.includes("invalid session id") ||
+    low.includes("chrome not reachable")
+  ) {
+    return "Mất kết nối với trình duyệt Chrome trong lúc đăng bài (Chrome/ChromeDriver đã đóng hoặc không phản hồi). Hãy chạy lại bài này; tránh đóng cửa sổ Chrome khi đang đăng.";
+  }
+  if (low.includes("staleelement")) {
+    return "Giao diện Facebook vừa thay đổi khi đang thao tác (phần tử DOM bị cũ). Hệ thống không bấm được nút đúng lúc — hãy thử đăng lại bài này.";
+  }
+  if (low.includes("nosuchelement")) {
+    return "Không tìm thấy nút/ô nhập trên Facebook (giao diện đổi hoặc trang chưa tải xong). Hãy thử đăng lại hoặc kiểm tra phiên đăng nhập.";
+  }
+  if (low.includes("timeoutexception") || low.includes("timed out")) {
+    return "Hết thời gian chờ phần tử trên Facebook phản hồi. Mạng chậm hoặc trang tải lâu — hãy thử đăng lại.";
+  }
+  if (low.includes("elementclickintercepted") || low.includes("element not interactable")) {
+    return "Không thể bấm nút vì bị lớp giao diện khác che (popup/dialog). Hãy thử đăng lại bài này.";
+  }
+  if (/^[A-Za-z][A-Za-z0-9_]*Error:/.test(text) || /^[A-Za-z][A-Za-z0-9_]*Exception:/.test(text)) {
+    const after = text.split(":").slice(1).join(":").trim();
+    const short = (after || text).slice(0, 280);
+    return `Lỗi đăng bài: ${short}${after.length > 280 ? "..." : ""}`;
+  }
+  return text.length > 400 ? `${text.slice(0, 397)}...` : text;
+}
 
 const CLEANUP_OPTIONS = [
   { value: 7, label: "Cũ hơn 7 ngày" },
@@ -64,8 +153,8 @@ const CLEANUP_OPTIONS = [
 
 export function HistoryView() {
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedAccountUid, setSelectedAccountUid] = useState("all");
   const [selectedFormat, setSelectedFormat] = useState("all");
-  const [selectedTimeSlot, setSelectedTimeSlot] = useState("all");
   const [selectedStatus, setSelectedStatus] = useState("all");
   const [selectedDate, setSelectedDate] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -74,6 +163,9 @@ export function HistoryView() {
   const [isLoading, setIsLoading] = useState(false);
   const [postHistory, setPostHistory] = useState([]);
   const [totalRecords, setTotalRecords] = useState(0);
+  const [accountOptions, setAccountOptions] = useState([
+    { value: "all", label: "Tất cả tài khoản" },
+  ]);
 
   const [copiedUid, setCopiedUid] = useState(null);
   const [copiedMedia, setCopiedMedia] = useState(false);
@@ -83,6 +175,17 @@ export function HistoryView() {
   const [cleanupDays, setCleanupDays] = useState(30);
   const [isCleaning, setIsCleaning] = useState(false);
   const [reloadCounter, setReloadCounter] = useState(0);
+  const [openingLinkKey, setOpeningLinkKey] = useState(null);
+
+  const openHistoryPostLink = async (uid, url, key, title = "Mở liên kết bài viết") => {
+    if (!url || openingLinkKey) return;
+    setOpeningLinkKey(key);
+    try {
+      await openPostInAccountBrowser(uid, url, { title });
+    } finally {
+      setOpeningLinkKey(null);
+    }
+  };
 
   // Đóng modal khi bấm Escape và reset các state phụ
   useEffect(() => {
@@ -119,6 +222,44 @@ export function HistoryView() {
     }
   }, []);
 
+  // ── Tải danh sách tài khoản cho bộ lọc ──
+  useEffect(() => {
+    let ignore = false;
+    async function loadAccounts() {
+      try {
+        const res = await api.get("/api/accounts");
+        if (ignore) return;
+        let raw = [];
+        if (Array.isArray(res)) raw = res;
+        else if (Array.isArray(res?.accounts)) raw = res.accounts;
+        else if (Array.isArray(res?.data)) raw = res.data;
+
+        const opts = [{ value: "all", label: "Tất cả tài khoản" }];
+        const seen = new Set();
+        raw.forEach((acc) => {
+          const uid = String(acc.uid || acc.fb_uid || acc.account_uid || "").trim();
+          if (!uid || seen.has(uid)) return;
+          // Chỉ hiện nick còn sống (Live) — khớp yêu cầu bỏ lọc Die/Blocked
+          const status = String(acc.status || "").toLowerCase();
+          if (status && status !== "live") return;
+          seen.add(uid);
+          const name = acc.name || acc.fb_name || acc.account_name || uid;
+          opts.push({
+            value: uid,
+            label: `${name} (${uid})`,
+          });
+        });
+        setAccountOptions(opts);
+      } catch (err) {
+        console.error("Lỗi khi tải danh sách tài khoản cho bộ lọc lịch sử:", err);
+      }
+    }
+    loadAccounts();
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
   // ── Tải dữ liệu lịch sử từ API ──
   useEffect(() => {
     let ignore = false;
@@ -131,8 +272,10 @@ export function HistoryView() {
         };
 
         if (searchTerm.trim()) params.search = searchTerm.trim();
+        if (selectedAccountUid && selectedAccountUid !== "all") {
+          params.account_uid = selectedAccountUid;
+        }
         if (selectedFormat !== "all") params.post_type = selectedFormat;
-        if (selectedTimeSlot !== "all") params.time_slot = selectedTimeSlot;
         if (selectedStatus !== "all") params.status = selectedStatus;
         if (selectedDate) params.date = selectedDate;
 
@@ -154,7 +297,15 @@ export function HistoryView() {
     return () => {
       ignore = true;
     };
-  }, [currentPage, searchTerm, selectedFormat, selectedTimeSlot, selectedStatus, selectedDate, reloadCounter]);
+  }, [
+    currentPage,
+    searchTerm,
+    selectedAccountUid,
+    selectedFormat,
+    selectedStatus,
+    selectedDate,
+    reloadCounter,
+  ]);
 
   const handleCopyUid = (uid) => {
     if (!uid) return;
@@ -229,6 +380,10 @@ export function HistoryView() {
     link.download = `Lich_su_dang_bai_${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     URL.revokeObjectURL(url);
+    toast.success(
+      `Xuất thành công ${postHistory.length} bài đăng ra file CSV!`,
+      "XUẤT THÀNH CÔNG"
+    );
   }, [postHistory, formatDateTime]);
 
   // ── Xuất file Excel (.xlsx) ──
@@ -301,6 +456,10 @@ export function HistoryView() {
       const book = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(book, sheet, "Lich su dang bai");
       XLSX.writeFile(book, `Lich_su_dang_bai_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      toast.success(
+        `Xuất thành công ${postHistory.length} bài đăng ra file Excel!`,
+        "XUẤT THÀNH CÔNG"
+      );
     } catch (err) {
       toast.error("Lỗi khi xuất file Excel: " + (err.message || err), "KHÔNG XUẤT ĐƯỢC FILE");
     }
@@ -328,9 +487,21 @@ export function HistoryView() {
 
   return (
     <div className="space-y-4">
-      {/* ── Filter Bar: Kính lúp, Hình thức, Khung giờ, Trạng thái, Ngày ── */}
+      {/* ── Filter Bar: Tài khoản, tìm kiếm, Hình thức, Khung giờ, Trạng thái, Ngày ── */}
       <div className="flex items-center gap-2.5 flex-wrap">
-        <div className="relative flex-1 min-w-[280px]">
+        <CustomSelect
+          value={selectedAccountUid}
+          onChange={(val) => {
+            setSelectedAccountUid(val);
+            setCurrentPage(1);
+          }}
+          options={accountOptions}
+          className="min-w-[220px] max-w-[320px]"
+          buttonClassName="h-10 rounded-lg border-border text-xs text-slate-700 font-medium"
+          placeholder="Chọn tài khoản..."
+        />
+
+        <div className="relative flex-1 min-w-[220px]">
           <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-blue-500" />
           <input
             type="search"
@@ -339,7 +510,7 @@ export function HistoryView() {
               setSearchTerm(e.target.value);
               setCurrentPage(1);
             }}
-            placeholder="Tìm theo Fanpage, UID nick, bài viết..."
+            placeholder="Tìm theo nội dung bài viết..."
             className="h-10 w-full rounded-lg border border-blue-200 bg-white pl-9 pr-3 text-sm text-slate-800 placeholder:text-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
         </div>
@@ -353,18 +524,6 @@ export function HistoryView() {
           }}
           options={FORMAT_OPTIONS}
           className="min-w-[155px]"
-          buttonClassName="h-10 rounded-lg border-border text-xs text-slate-700 font-medium"
-        />
-
-        {/* Dropdown: Khung giờ */}
-        <CustomSelect
-          value={selectedTimeSlot}
-          onChange={(val) => {
-            setSelectedTimeSlot(val);
-            setCurrentPage(1);
-          }}
-          options={TIME_SLOT_OPTIONS}
-          className="min-w-[145px]"
           buttonClassName="h-10 rounded-lg border-border text-xs text-slate-700 font-medium"
         />
 
@@ -556,29 +715,38 @@ export function HistoryView() {
                         <div className="flex items-center justify-center gap-2">
                           {(() => {
                             const targetUrl = row.facebook_post_url || (isPublished && row.account_uid ? (row.post_type === 'reels' ? `https://www.facebook.com/${row.account_uid}/reels` : row.post_type === 'story' ? `https://www.facebook.com/stories/${row.account_uid}` : `https://www.facebook.com/${row.account_uid}`) : null);
+                            const rowKey = `row-${row.id || row.account_uid}-${targetUrl || ""}`;
+                            const isOpening = openingLinkKey === rowKey;
                             return (
                               <button
                                 type="button"
-                                disabled={!isPublished || !targetUrl}
+                                disabled={!isPublished || !targetUrl || !row.account_uid || Boolean(openingLinkKey)}
                                 onClick={() => {
-                                  if (targetUrl) {
-                                    window.open(targetUrl, "_blank", "noopener,noreferrer");
+                                  if (targetUrl && row.account_uid) {
+                                    openHistoryPostLink(
+                                      row.account_uid,
+                                      targetUrl,
+                                      rowKey,
+                                      row.facebook_post_url ? "Mở liên kết bài viết" : "Xem trang cá nhân",
+                                    );
                                   }
                                 }}
                                 className={`p-1 transition-colors ${
-                                  isPublished && targetUrl
+                                  isPublished && targetUrl && row.account_uid
                                     ? "text-slate-400 hover:text-blue-600 cursor-pointer"
                                     : "text-slate-300 cursor-not-allowed opacity-30"
                                 }`}
                                 title={
                                   !isPublished
                                     ? "Không có liên kết (bài chưa xuất bản hoặc bị lỗi)"
+                                    : !row.account_uid
+                                    ? "Thiếu UID tài khoản — không mở được Chrome profile"
                                     : row.facebook_post_url
-                                    ? "Mở bài viết trên Facebook"
-                                    : "Mở trang cá nhân trên Facebook"
+                                    ? "Mở bài viết trong Chrome profile nick"
+                                    : "Mở trang cá nhân trong Chrome profile nick"
                                 }
                               >
-                                <ExternalLink size={15} />
+                                {isOpening ? <Loader2 size={15} className="animate-spin" /> : <ExternalLink size={15} />}
                               </button>
                             );
                           })()}
@@ -607,67 +775,11 @@ export function HistoryView() {
           Hiển thị <span className="font-bold text-slate-800">{String(postHistory.length).padStart(2, "0")}</span> / {totalRecords.toLocaleString("vi-VN")} kết quả
         </div>
 
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            disabled={currentPage <= 1}
-            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-            className="w-7 h-7 rounded-lg border border-slate-200 bg-white flex items-center justify-center text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
-          >
-            <ChevronLeft size={14} />
-          </button>
-
-          {/* Trang 1 */}
-          <button
-            type="button"
-            onClick={() => setCurrentPage(1)}
-            className={`w-7 h-7 rounded-lg font-bold text-xs flex items-center justify-center transition-all cursor-pointer ${
-              currentPage === 1
-                ? "bg-blue-600 text-white shadow-xs"
-                : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-            }`}
-          >
-            1
-          </button>
-
-          {currentPage > 3 && <span className="px-1 text-slate-400">...</span>}
-
-          {currentPage > 2 && currentPage < totalPages && (
-            <button
-              type="button"
-              className="w-7 h-7 rounded-lg font-bold text-xs bg-blue-600 text-white shadow-xs flex items-center justify-center"
-            >
-              {currentPage}
-            </button>
-          )}
-
-          {totalPages > 1 && currentPage < totalPages - 2 && (
-            <span className="px-1 text-slate-400">...</span>
-          )}
-
-          {totalPages > 1 && (
-            <button
-              type="button"
-              onClick={() => setCurrentPage(totalPages)}
-              className={`w-7 h-7 rounded-lg font-bold text-xs flex items-center justify-center transition-all cursor-pointer ${
-                currentPage === totalPages
-                  ? "bg-blue-600 text-white shadow-xs"
-                  : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-            >
-              {totalPages}
-            </button>
-          )}
-
-          <button
-            type="button"
-            disabled={currentPage >= totalPages}
-            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-            className="w-7 h-7 rounded-lg border border-slate-200 bg-white flex items-center justify-center text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
-          >
-            <ChevronRight size={14} />
-          </button>
-        </div>
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          onPageChange={setCurrentPage}
+        />
       </div>
 
       {/* ── Modal Chi tiết Bài viết (Info Dialog theo UC-M03-10) ── */}
@@ -680,6 +792,7 @@ export function HistoryView() {
 
         const isPublished = selectedDetailPost.status === "PUBLISHED";
         const isError = !isPublished;
+        const statusImagePaths = normalizeImagePaths(selectedDetailPost);
         const postUrl = selectedDetailPost.facebook_post_url;
         const profileUrl = selectedDetailPost.account_uid ? `https://www.facebook.com/${selectedDetailPost.account_uid}` : null;
 
@@ -711,6 +824,15 @@ export function HistoryView() {
               type: "info",
               message: `Tệp đính kèm: ${fileName}`
             });
+          } else if (statusImagePaths.length > 0) {
+            logsList.push({
+              timestamp: timeStr,
+              thread: "Thread-01",
+              type: "info",
+              message: `Ảnh Status đính kèm (${statusImagePaths.length}): ${statusImagePaths
+                .map((p) => String(p).replace(/\\/g, "/").split("/").pop())
+                .join(", ")}`,
+            });
           }
           if (isPublished) {
             logsList.push({
@@ -731,7 +853,7 @@ export function HistoryView() {
               timestamp: formatDateTime(selectedDetailPost.updated_at).time,
               thread: "Thread-01",
               type: "error",
-              message: `[${selectedDetailPost.status || 'FAILED'}] ${selectedDetailPost.error_message}`
+              message: `[${selectedDetailPost.status || 'FAILED'}] ${humanizePostError(selectedDetailPost.error_message)}`
             });
           }
         }
@@ -901,7 +1023,35 @@ export function HistoryView() {
                   </div>
                 </div>
 
-                {/* 🔹 Phần 2b: Đường dẫn Media nguồn (Nếu có) */}
+                {/* 🔹 Phần 2b: Hình ảnh Status đã đăng (image_path / image_paths) */}
+                {statusImagePaths.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-600 font-bold text-xs flex items-center gap-1.5">
+                        <ImageIcon size={13} className="text-slate-500" />
+                        <span>Hình ảnh đã đăng</span>
+                        <span className="text-[10px] font-normal text-slate-400 font-mono">
+                          ({statusImagePaths.length}/3)
+                        </span>
+                      </span>
+                    </div>
+                    <div
+                      className={`grid gap-2 ${
+                        statusImagePaths.length === 1
+                          ? "grid-cols-1 max-w-[180px]"
+                          : statusImagePaths.length === 2
+                            ? "grid-cols-2"
+                            : "grid-cols-3"
+                      }`}
+                    >
+                      {statusImagePaths.map((path) => (
+                        <HistoryStatusImageCard key={path} path={path} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 🔹 Phần 2c: Đường dẫn Media nguồn Reels/Story (Nếu có) */}
                 {selectedDetailPost.media_path && (
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
@@ -935,7 +1085,9 @@ export function HistoryView() {
                     <AlertCircle size={16} className="text-rose-500 shrink-0 mt-0.5" />
                     <div className="space-y-0.5">
                       <span className="font-bold text-rose-800 block text-xs">Thông báo lỗi:</span>
-                      <p className="text-rose-700 text-[11px] leading-relaxed break-words">{selectedDetailPost.error_message}</p>
+                      <p className="text-rose-700 text-[11px] leading-relaxed break-words">
+                        {humanizePostError(selectedDetailPost.error_message)}
+                      </p>
                     </div>
                   </div>
                 )}
@@ -961,7 +1113,16 @@ export function HistoryView() {
 
                   {(isError || showSuccessLogs) && (
                     <div className="bg-[#0f172a] rounded-xl p-3.5 border border-slate-800 font-mono text-[11px] max-h-48 overflow-y-auto space-y-1.5 shadow-inner">
-                      {logsList.map((log, idx) => (
+                      {logsList.map((log, idx) => {
+                        const rawMsg = String(log.message || "");
+                        const isErrLine =
+                          log.type === "error" || /\[(FAILED|DIE|BLOCKED|ERROR)\]/i.test(rawMsg);
+                        const prefix = (rawMsg.match(/^\[[^\]]+\]/) || [""])[0];
+                        const body = rawMsg.replace(/^\[[^\]]+\]\s*/, "");
+                        const displayMsg = isErrLine
+                          ? `${prefix} ${humanizePostError(body || rawMsg)}`.trim()
+                          : rawMsg;
+                        return (
                         <div key={idx} className="flex items-start gap-2 leading-relaxed font-mono">
                           <span className="text-slate-500 shrink-0 select-none">[{log.timestamp || "--:--:--"}]</span>
                           {log.thread && <span className="text-cyan-400 shrink-0 font-semibold">[{log.thread}]</span>}
@@ -974,10 +1135,11 @@ export function HistoryView() {
                               ? "text-emerald-400 font-semibold"
                               : "text-slate-200"
                           }>
-                            {log.message}
+                            {displayMsg}
                           </span>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -987,25 +1149,49 @@ export function HistoryView() {
               <div className="p-3.5 px-5 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between shrink-0">
                 <div>
                   {isPublished && postUrl ? (
-                    <a
-                      href={postUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3.5 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors border border-blue-200"
+                    <button
+                      type="button"
+                      disabled={!selectedDetailPost.account_uid || Boolean(openingLinkKey)}
+                      onClick={() =>
+                        openHistoryPostLink(
+                          selectedDetailPost.account_uid,
+                          postUrl,
+                          `detail-post-${selectedDetailPost.id}`,
+                          "Mở liên kết bài viết",
+                        )
+                      }
+                      className="px-3.5 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors border border-blue-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait"
+                      title="Mở bài viết trong Chrome profile nick đã đăng nhập"
                     >
-                      <ExternalLink size={13} />
+                      {openingLinkKey === `detail-post-${selectedDetailPost.id}` ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : (
+                        <ExternalLink size={13} />
+                      )}
                       <span>Mở liên kết bài viết</span>
-                    </a>
+                    </button>
                   ) : profileUrl ? (
-                    <a
-                      href={profileUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3.5 py-2 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors border border-slate-200"
+                    <button
+                      type="button"
+                      disabled={!selectedDetailPost.account_uid || Boolean(openingLinkKey)}
+                      onClick={() =>
+                        openHistoryPostLink(
+                          selectedDetailPost.account_uid,
+                          profileUrl,
+                          `detail-profile-${selectedDetailPost.id}`,
+                          "Xem trang cá nhân",
+                        )
+                      }
+                      className="px-3.5 py-2 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors border border-slate-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait"
+                      title="Mở trang cá nhân trong Chrome profile nick đã đăng nhập"
                     >
-                      <ExternalLink size={13} />
+                      {openingLinkKey === `detail-profile-${selectedDetailPost.id}` ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : (
+                        <ExternalLink size={13} />
+                      )}
                       <span>Xem trang cá nhân Facebook</span>
-                    </a>
+                    </button>
                   ) : (
                     <span />
                   )}

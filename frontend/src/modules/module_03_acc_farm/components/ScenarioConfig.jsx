@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { Bot, ScanSearch } from "lucide-react";
+import { Bot, ListChecks, ScanSearch } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import CustomSelect from "@/components/ui/custom-select";
 import { Switch } from "@/components/ui/switch";
@@ -169,6 +169,27 @@ export function toPayload(config) {
 }
 
 export const GROUP_KEYWORD_MAX_LEN = 50;
+
+// Khoảng phải lớn hơn 0 khi kịch bản đang bật (when: chỉ xét ở chế độ đó)
+const POSITIVE_RANGES = [
+  ["enabled_newsfeed", "newsfeed_time", "Thời gian lướt Newsfeed"],
+  ["enabled_watch", "watch_time", "Thời gian xem Watch"],
+  ["enabled_story", "story_delay", "Thời gian xem mỗi Story"],
+  ["enabled_leave_groups", "leave", "Số nhóm rời"],
+  ["enabled_join_groups", "groups", "Số lượng nhóm tham gia", (c) => c.group_source !== "list"],
+  ["enabled_add_friends", "friends", "Số lượng lời mời kết bạn", (c) => c.friend_source !== "list"],
+];
+
+/** Khoảng Min - Max bằng 0 ở kịch bản đang bật (cấu hình cũ đã lưu, hoặc chưa rời ô nhập); null = hợp lệ */
+export function rangeError(config) {
+  for (const [enabled, prefix, label, when] of POSITIVE_RANGES) {
+    if (!config[enabled] || (when && !when(config))) continue;
+    const low = parseInt(config[`${prefix}_min`], 10);
+    const high = parseInt(config[`${prefix}_max`], 10);
+    if (!(low > 0) || !(high > 0)) return `${label} phải lớn hơn 0.`;
+  }
+  return null;
+}
 const LEAVE_CRITERIA_OPTIONS = Object.entries(LEAVE_CRITERIA_LABELS).map(([value, label]) => ({ value, label }));
 const LINK_ERRORS_SHOWN = 5;
 
@@ -350,6 +371,18 @@ function LinkListPanel({ kind, value, onChange, limit, onLimit, delay, disabled,
   );
 }
 
+// Nút "Chọn tất cả": 7 kịch bản chính + Giới hạn mỗi ngày (không đụng tùy chọn con như Thả cảm xúc, Giữ nhóm Admin)
+export const SCENARIO_KEYS = [
+  "enabled_newsfeed",
+  "enabled_watch",
+  "enabled_story",
+  "enabled_leave_groups",
+  "enabled_join_groups",
+  "enabled_add_friends",
+  "enabled_check_notif",
+  "daily_limit_enabled",
+];
+
 export default function ScenarioConfig({ config, onChange, disabled }) {
   const set = (key) => (value) => onChange({ ...config, [key]: value });
   const range = (prefix, max, min) => ({
@@ -357,15 +390,37 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
     high: config[`${prefix}_max`],
     onLow: set(`${prefix}_min`),
     onHigh: set(`${prefix}_max`),
+    onRange: (low, high) => onChange({ ...config, [`${prefix}_min`]: low, [`${prefix}_max`]: high }),
     max,
     min,
     disabled,
   });
   const groupList = config.group_source === "list";
   const friendList = config.friend_source === "list";
+  // Giới hạn mỗi ngày chỉ áp dụng cho Tham gia nhóm / Kết bạn: cả 2 đều tắt thì khóa (giữ lựa chọn đã lưu)
+  const limitable = config.enabled_join_groups || config.enabled_add_friends;
+  const dailyOn = Boolean(config.daily_limit_enabled && limitable);
+  const dailyDisabled = disabled || !limitable;
+  const allChecked = SCENARIO_KEYS.every((key) => config[key]);
+  const toggleAll = () => onChange({ ...config, ...Object.fromEntries(SCENARIO_KEYS.map((key) => [key, !allChecked])) });
 
   return (
-    <SectionCard icon={Bot} title="Cấu Hình Tương Tác" subtitle="Mỗi nick lấy ngẫu nhiên trong khoảng Min - Max; thứ tự kịch bản xáo ngẫu nhiên">
+    <SectionCard
+      icon={Bot}
+      title="Cấu Hình Tương Tác"
+      subtitle="Mỗi nick lấy ngẫu nhiên trong khoảng Min - Max; thứ tự kịch bản xáo ngẫu nhiên"
+      action={
+        <button
+          type="button"
+          onClick={toggleAll}
+          disabled={disabled}
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <ListChecks className="h-3.5 w-3.5 text-primary" />
+          {allChecked ? "Bỏ chọn tất cả" : "Chọn tất cả"}
+        </button>
+      }
+    >
       <div className="space-y-3">
         <Block
           checked={config.enabled_newsfeed}
@@ -374,7 +429,7 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
           title="Lướt Newsfeed tự nhiên"
           below={<ReactionPicker prefix="newsfeed" unit="bài" config={config} onChange={onChange} disabled={disabled} />}
         >
-          <RangeInput label="Thời gian:" unit="phút" {...range("newsfeed_time", MAX_TIME_VALUE)} />
+          <RangeInput label="Thời gian:" unit="phút" {...range("newsfeed_time", MAX_TIME_VALUE, 1)} />
           <RangeInput label="Delay" unit="giây" {...range("newsfeed_delay", MAX_TIME_VALUE)} />
         </Block>
 
@@ -385,7 +440,7 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
           title="Xem Video Watch Facebook"
           below={<ReactionPicker prefix="watch" unit="video" config={config} onChange={onChange} disabled={disabled} />}
         >
-          <RangeInput label="Thời gian:" unit="phút" {...range("watch_time", MAX_TIME_VALUE)} />
+          <RangeInput label="Thời gian:" unit="phút" {...range("watch_time", MAX_TIME_VALUE, 1)} />
           <RangeInput label="Xem mỗi video" unit="giây" {...range("watch_delay", MAX_TIME_VALUE)} />
         </Block>
 
@@ -394,11 +449,11 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
           onCheck={set("enabled_story")}
           disabled={disabled}
           title="Lướt & Xem Story Facebook"
-          hint="Xem từ người đầu khay story, hết khung tự sang người kế"
-          below={<ReactionPicker prefix="story" unit="khung" config={config} onChange={onChange} disabled={disabled} />}
+          hint="Xem từ người đầu khay story, hết story của 1 người thì sang người kế"
+          below={<ReactionPicker prefix="story" unit="story" config={config} onChange={onChange} disabled={disabled} />}
         >
-          <RangeInput label="Số khung" unit="khung" {...range("story", undefined, 1)} />
-          <RangeInput label="Xem mỗi khung" unit="giây" {...range("story_delay", MAX_TIME_VALUE)} />
+          <RangeInput label="Số lượng Story" unit="story" {...range("story", undefined, 1)} />
+          <RangeInput label="Xem mỗi story" unit="giây" {...range("story_delay", MAX_TIME_VALUE, 1)} />
         </Block>
 
         <Block
@@ -435,7 +490,7 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
             </div>
           )}
         >
-          <RangeInput label="Số nhóm rời" unit="nhóm" {...range("leave")} />
+          <RangeInput label="Số nhóm rời" unit="nhóm" {...range("leave", undefined, 1)} />
           <RangeInput label="Nghỉ giữa 2 nhóm" unit="giây" {...range("leave_delay", MAX_TIME_VALUE, 5)} />
         </Block>
 
@@ -471,7 +526,7 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
                       className="h-8 w-56 rounded-md border border-border bg-white px-2.5 text-xs font-semibold text-slate-800 shadow-sm placeholder:font-normal placeholder:text-slate-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-slate-50"
                     />
                   </div>
-                  <RangeInput label="Số lượng nhóm" unit="nhóm" {...range("groups")} />
+                  <RangeInput label="Số lượng nhóm" unit="nhóm" {...range("groups", undefined, 1)} />
                   <RangeInput label="Nghỉ giữa 2 nhóm" unit="giây" {...range("groups_delay", MAX_TIME_VALUE, 5)} />
                 </div>
               )}
@@ -479,10 +534,8 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
                 checked={config.groups_split_enabled}
                 onChange={set("groups_split_enabled")}
                 disabled={disabled}
-                label="Chia nhóm cho các nick, không vào trùng"
-                hint={groupList
-                  ? "Mỗi nhóm chỉ 1 nick trong dàn vào, tính cả các lượt trước. Bỏ tick khi cần các nick vào chung nhóm."
-                  : "Chia từ khóa cho các nick; nhóm đã có nick khác trong dàn vào thì bỏ qua. Bỏ tick khi cần các nick vào chung nhóm."}
+                label="Bỏ qua nhóm đã tham gia"
+                hint="Hệ thống không tham gia lại các nhóm mà tài khoản này hoặc tài khoản khác đã tham gia trước đó."
               />
             </div>
           )}
@@ -518,13 +571,13 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
                 checked={config.friends_split_enabled}
                 onChange={set("friends_split_enabled")}
                 disabled={disabled}
-                label="Chia danh sách cho các nick, không mời trùng"
-                hint="Mỗi người chỉ nhận lời mời từ 1 nick trong dàn, tính cả các lượt trước. Bỏ tick thì mọi nick dùng chung danh sách, dễ thành bạn chung giữa các nick."
+                label="Bỏ qua người đã gửi lời mời"
+                hint="Hệ thống không gửi lại lời mời cho những người mà tài khoản này hoặc tài khoản khác đã gửi trước đó."
               />
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-              <RangeInput label="Số lượng mời" unit="người" {...range("friends")} />
+              <RangeInput label="Số lượng mời" unit="người" {...range("friends", undefined, 1)} />
               <RangeInput label="Nghỉ giữa 2 lời mời" unit="giây" {...range("friends_delay", MAX_TIME_VALUE, 3)} />
               <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
                 <Checkbox
@@ -555,26 +608,30 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
         />
 
         <div
-          onClick={toggleOnBoxClick(config.daily_limit_enabled, set("daily_limit_enabled"), disabled)}
-          className={`rounded-xl border border-dashed border-slate-200 px-4 py-3 ${disabled ? "" : "cursor-pointer"}`}
+          onClick={toggleOnBoxClick(dailyOn, set("daily_limit_enabled"), dailyDisabled)}
+          className={`rounded-xl border border-dashed border-slate-200 px-4 py-3 ${dailyDisabled ? "" : "cursor-pointer"}`}
         >
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex items-center gap-2.5">
-              <Switch checked={config.daily_limit_enabled} onCheckedChange={set("daily_limit_enabled")} disabled={disabled} />
+            <div className={`flex items-center gap-2.5 ${limitable ? "" : "opacity-60"}`}>
+              <Switch checked={dailyOn} onCheckedChange={set("daily_limit_enabled")} disabled={dailyDisabled} />
               <span>
                 <span className="block text-[13px] font-bold text-slate-800">Giới hạn mỗi ngày cho mỗi nick</span>
-                <span className="block text-[11px] text-slate-400">Lưu theo máy; tính theo ngày giờ Việt Nam; áp dụng cả chế độ danh sách link</span>
+                <span className="block text-[11px] text-slate-400">
+                  {limitable
+                    ? "Lưu theo máy; tính theo ngày giờ Việt Nam; áp dụng cả chế độ danh sách link"
+                    : "Bật Tham gia nhóm hoặc Kết bạn để dùng giới hạn mỗi ngày"}
+                </span>
               </span>
             </div>
-            <Locked locked={!config.daily_limit_enabled} className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-slate-500">
-              <span className="flex items-center gap-2">
+            <Locked locked={!dailyOn} className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-slate-500">
+              <span className={`flex items-center gap-2 ${config.enabled_add_friends ? "" : "opacity-50"}`}>
                 Tối đa kết bạn
-                <NumberInput value={config.daily_friend_limit} onChange={set("daily_friend_limit")} min={1} max={100} disabled={disabled} />
+                <NumberInput value={config.daily_friend_limit} onChange={set("daily_friend_limit")} min={1} max={100} disabled={disabled || !config.enabled_add_friends} />
                 lời mời
               </span>
-              <span className="flex items-center gap-2">
+              <span className={`flex items-center gap-2 ${config.enabled_join_groups ? "" : "opacity-50"}`}>
                 Tối đa tham gia
-                <NumberInput value={config.daily_group_limit} onChange={set("daily_group_limit")} min={1} max={100} disabled={disabled} />
+                <NumberInput value={config.daily_group_limit} onChange={set("daily_group_limit")} min={1} max={100} disabled={disabled || !config.enabled_join_groups} />
                 nhóm
               </span>
             </Locked>

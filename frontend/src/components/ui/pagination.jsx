@@ -15,7 +15,8 @@ export default function Pagination({
     }
     const leftSiblingIndex = Math.max(currentPage - siblingCount, 1);
     const rightSiblingIndex = Math.min(currentPage + siblingCount, totalPages);
-    const shouldShowLeftDots = leftSiblingIndex > 2;
+    // "..." chỉ khi che từ 2 trang trở lên (giống bên phải); che đúng 1 trang thì hiện luôn số trang đó
+    const shouldShowLeftDots = leftSiblingIndex > 3;
     const shouldShowRightDots = rightSiblingIndex < totalPages - 2;
     if (!shouldShowLeftDots && shouldShowRightDots) {
       const leftRangeLength = Math.max(3, rightSiblingIndex);

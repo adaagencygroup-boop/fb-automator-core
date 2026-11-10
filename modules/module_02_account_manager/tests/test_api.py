@@ -157,6 +157,27 @@ class TestAccountAPI(unittest.TestCase):
         finally:
             _open_browser_pending.clear()
 
+    def test_open_browser_passes_target_url(self):
+        from ..services.browser_service import _open_browser_pending
+        self.save()
+        try:
+            with patch(P + ".services.browser_service.runtime.submit") as submit:
+                resp = self.client.post(
+                    "/api/accounts/open-browser",
+                    json={
+                        "uid": "123",
+                        "owner_username": "alice",
+                        "target_url": "https://www.facebook.com/123/posts/pfbid123",
+                    },
+                )
+            self.assertEqual(resp.status_code, 200)
+            submit.assert_called_once()
+            args = submit.call_args[0]
+            self.assertEqual(args[1], "123")
+            self.assertEqual(args[2], "https://www.facebook.com/123/posts/pfbid123")
+        finally:
+            _open_browser_pending.clear()
+
     def test_proxy_endpoint_uses_ported_checker(self):
         with patch(P + ".automation.proxy_bridge.test_proxy_connectivity", return_value={"egress_ip": "192.0.2.1"}):
             response = self.client.post("/api/accounts/test-proxy", json={"proxy": "127.0.0.1:8080"})

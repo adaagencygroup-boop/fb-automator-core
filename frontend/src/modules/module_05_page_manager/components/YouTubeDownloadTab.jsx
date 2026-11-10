@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { Settings, FolderOpen, Search, Trash2, HelpCircle, Play, Square, Terminal, Video, Flag, AlertTriangle, AlertCircle, Edit3, ExternalLink, Maximize2, Lock, CheckCircle2, Loader2 } from "lucide-react";
-import { startYouTubeDownloadJob, getJobStatus, stopJob, selectFolder, clearPageVideos, clearAllVideos, updatePageKeywords, getYoutubeConfig, saveYoutubeConfig, checkFolderData } from "../service";
+import { startYouTubeDownloadJob, getJobStatus, stopJob, selectFolder, clearPageVideos, clearAllVideos, updatePageKeywords, getYoutubeConfig, saveYoutubeConfig, checkFolderData, setSharedVideoFolder, getSharedVideoFolder } from "../service";
 import Pagination from "@/components/ui/pagination";
 import PageVideosModal from "./PageVideosModal";
 import EditSourceModal from "./EditSourceModal";
@@ -38,7 +38,10 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
     try {
       const saved = localStorage.getItem("fb_youtube_config");
       const parsed = saved ? JSON.parse(saved).downloadFolder : "";
-      return (parsed && parsed.trim() && parsed !== "downloads/youtube") ? parsed : "";
+      if (parsed && parsed.trim() && parsed !== "downloads/youtube") return parsed;
+      const shared = localStorage.getItem("fb_shared_video_folder");
+      if (shared && shared.trim()) return shared.trim();
+      return "";
     } catch {
       return "";
     }
@@ -64,6 +67,9 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
     }
   });
   const [isRunning, setIsRunning] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isPickingFolder, setIsPickingFolder] = useState(false);
+  const isActionLockedRef = useRef(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [pageSize, setPageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
@@ -139,23 +145,22 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
     if (!isConfigLoadedRef.current) return;
     if (!downloadFolder || !downloadFolder.trim()) return;
     try {
-      localStorage.setItem("fb_youtube_config", JSON.stringify({ downloadFolder, delaySec, maxVideos, concurrency }));
-      saveYoutubeConfig({ download_folder: downloadFolder, max_videos: maxVideos });
+      const numVideos = Math.max(1, parseInt(maxVideos, 10) || 1);
+      localStorage.setItem("fb_youtube_config", JSON.stringify({ downloadFolder, delaySec, maxVideos: numVideos, concurrency }));
+      saveYoutubeConfig({ download_folder: downloadFolder, max_videos: numVideos });
     } catch {}
   }, [downloadFolder, delaySec, maxVideos, concurrency]);
   const handleSelectFolder = async () => {
-    if (downloadFolder && downloadFolder.trim()) {
-      const check = await checkFolderData(downloadFolder);
-      if (check && check.has_data) {
-        setHasDownloadedData(true);
-        try { localStorage.setItem("fb_youtube_has_data", "true"); } catch {}
+    if (isPickingFolder || isActionLockedRef.current) return;
+    isActionLockedRef.current = true;
+    setIsPickingFolder(true);
+    try {
+      if (hasDownloadedData) {
         alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!");
         return;
       }
-    }
-    setHasDownloadedData(false);
-    try { localStorage.removeItem("fb_youtube_has_data"); } catch {}
-    try {
+      setHasDownloadedData(false);
+      try { localStorage.removeItem("fb_youtube_has_data"); } catch {}
       const res = await selectFolder(downloadFolder);
       if (res && res.error) {
         setHasDownloadedData(true);
@@ -173,12 +178,16 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
           try { localStorage.removeItem("fb_youtube_has_data"); } catch {}
         }
         setDownloadFolder(res.folder);
+        setSharedVideoFolder(res.folder);
         setFolderError(false);
+        saveYoutubeConfig({ download_folder: res.folder, max_videos: Math.max(1, parseInt(maxVideos, 10) || 1) });
         return;
       }
-    } catch {}
-    if (folderInputRef.current) {
-      folderInputRef.current.click();
+    } catch (err) {
+      console.warn("Lỗi chọn thư mục:", err);
+    } finally {
+      setIsPickingFolder(false);
+      isActionLockedRef.current = false;
     }
   };
   const handleFolderFileChange = async (e) => {
@@ -349,6 +358,7 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
     }
   };
   const handleStartItem = async (it) => {
+    if (isRunning || isStarting || isActionLockedRef.current) return;
     if (!downloadFolder || !downloadFolder.trim()) {
       setFolderError(true);
       alert("Vui Lòng Chọn Hoặc Nhập Thư Mục Lưu Video Trước Khi Kích Hoạt!");
@@ -367,15 +377,17 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
       savePageItemData(it.page_id, targetItem.keyword || "", targetItem.link || "");
     }
     setFolderError(false);
+    isActionLockedRef.current = true;
+    setIsStarting(true);
     setIsRunning(true);
     const displayName = targetItem.link && targetItem.keyword ? `${targetItem.link} ["${targetItem.keyword}"]` : (targetItem.link || (targetItem.keyword ? `Từ Khóa: "${targetItem.keyword}"` : (targetItem.page_name || "Fanpage")));
-    addLog(`[${getUtc7Time()}] Thư Mục Lưu: ${downloadFolder} | Giới Hạn: ${maxVideos} Video/Page`);
+    addLog(`[${getUtc7Time()}] Thư Mục Lưu: ${downloadFolder} | Giới Hạn: ${Number(maxVideos) || 1} Video/Page`);
     addLog(`[${getUtc7Time()}] Bắt Đầu Tải Cho Fanpage "${targetItem.page_name}" (${displayName})...`);
     setItems((prev) => prev.map((item) => (item.id === it.id ? { ...item, status: "RUNNING", message: "Đang Tải Video..." } : item)));
     const res = await startYouTubeDownloadJob({
       download_folder: downloadFolder,
       delay_sec: delaySec,
-      max_videos: maxVideos,
+      max_videos: Number(maxVideos) || 1,
       concurrency: concurrency,
       items: [targetItem]
     });
@@ -431,6 +443,8 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
       setItems((prev) => prev.map((item) => (item.id === it.id ? { ...item, status: "FAILED", message: "Lỗi Khởi Chạy" } : item)));
       addLog(`[${getUtc7Time()}] Lỗi Khởi Chạy Tác Vụ Tải Cho Fanpage "${it.page_name}"!`);
     }
+    setIsStarting(false);
+    isActionLockedRef.current = false;
   };
   const handleStopItem = async (it) => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
@@ -440,6 +454,7 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
     addLog(`[${getUtc7Time()}] Đã Gửi Lệnh Dừng Tải Cho Fanpage "${it.page_name}".`);
   };
   const handleStart = async () => {
+    if (isRunning || isStarting || isActionLockedRef.current) return;
     if (isConfigLoading) {
       alert("Hệ Thống Đang Nạp Cấu Hình. Vui Lòng Đợi Trong Giây Lát!");
       return;
@@ -454,6 +469,8 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
       alert("Không Có Fanpage Nào Để Thực Hiện Tải! Vui Lòng Kết Nối Fanpage Trước.");
       return;
     }
+    isActionLockedRef.current = true;
+    setIsStarting(true);
     Object.keys(saveTimerMapRef.current).forEach((pid) => {
       clearTimeout(saveTimerMapRef.current[pid]);
       delete saveTimerMapRef.current[pid];
@@ -461,13 +478,13 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
       if (cur) savePageItemData(pid, cur.keyword || "", cur.link || "");
     });
     setIsRunning(true);
-    addLog(`[${getUtc7Time()}] Thư Mục Lưu: ${downloadFolder} | Giới Hạn: ${maxVideos} Video/Page`);
+    addLog(`[${getUtc7Time()}] Thư Mục Lưu: ${downloadFolder} | Giới Hạn: ${Number(maxVideos) || 1} Video/Page`);
     addLog(`[${getUtc7Time()}] Bắt Đầu Tác Vụ Tải Hàng Loạt YouTube (${items.length} Fanpage)...`);
     loggedStatusesRef.current = {};
     const res = await startYouTubeDownloadJob({
       download_folder: downloadFolder,
       delay_sec: delaySec,
-      max_videos: maxVideos,
+      max_videos: Number(maxVideos) || 1,
       concurrency: concurrency,
       items: items
     });
@@ -541,6 +558,8 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
       setIsRunning(false);
       addLog(`[${getUtc7Time()}] Lỗi Khởi Chạy Tác Vụ Tải YouTube!`);
     }
+    setIsStarting(false);
+    isActionLockedRef.current = false;
   };
   const handleStop = async () => {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
@@ -608,8 +627,23 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
                 <div className="flex gap-2">
                   <input ref={folderInputRef} type="file" webkitdirectory="" directory="" className="hidden" onChange={handleFolderFileChange} />
                   <Input value={downloadFolder} readOnly={hasDownloadedData} onClick={() => { if (hasDownloadedData) alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!"); }} onChange={(e) => { if (hasDownloadedData) { alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!"); return; } setDownloadFolder(e.target.value); if (e.target.value.trim()) setFolderError(false); }} placeholder="Chưa Chọn Thư Mục Lưu Video (Bắt Buộc)..." className={`h-8 text-xs font-normal font-mono ${hasDownloadedData ? "cursor-not-allowed" : ""} ${folderError || !downloadFolder.trim() ? "border-amber-400 focus-visible:border-amber-500" : ""}`} />
-                  <Button variant="outline" size="sm" type="button" onClick={handleSelectFolder} className="h-8 shrink-0 text-xs font-normal gap-1">
-                    <FolderOpen className="w-3.5 h-3.5 text-blue-600" /> Chọn Thư Mục
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    disabled={isPickingFolder || isRunning || isStarting}
+                    onClick={handleSelectFolder}
+                    className="h-8 shrink-0 text-xs font-normal gap-1 disabled:opacity-50"
+                  >
+                    {isPickingFolder ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" /> Đang Mở...
+                      </>
+                    ) : (
+                      <>
+                        <FolderOpen className="w-3.5 h-3.5 text-blue-600" /> Chọn Thư Mục
+                      </>
+                    )}
                   </Button>
                 </div>
               </div>
@@ -619,7 +653,21 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
                   <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" title="Số Lượng Video Mới Cần Tải Cho Mỗi Fanpage Trong Đợt Kích Hoạt Này." />
                 </div>
                 <div className="flex items-center gap-2">
-                  <Input type="number" min={1} value={maxVideos} onChange={(e) => setMaxVideos(Number(e.target.value))} className="h-8 text-xs font-normal font-mono w-20 shrink-0" />
+                  <Input
+                    type="text"
+                    value={maxVideos}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, "").replace(/^0+/, "");
+                      setMaxVideos(val);
+                    }}
+                    onBlur={() => {
+                      if (!maxVideos || Number(maxVideos) < 1) {
+                        setMaxVideos("1");
+                      }
+                    }}
+                    className="h-8 text-xs font-normal font-mono w-20 shrink-0"
+                    placeholder="1"
+                  />
                   <Button
                     variant="outline"
                     size="sm"
@@ -818,7 +866,7 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
                                   <Square className="w-3 h-3 fill-current" /> Dừng
                                 </Button>
                               ) : (
-                                <Button size="sm" variant="outline" onClick={() => handleStartItem(it)} disabled={isRunning || !isReadyToStart} className="h-7 px-2 text-[11px] font-normal text-blue-600 border-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/40 gap-1 shadow-none disabled:opacity-40" title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (!downloadFolder || !downloadFolder.trim()) ? "Vui Lòng Cài Đặt Thư Mục Lưu Video Trước Khi Kích Hoạt!" : "Kích Hoạt Tải Riêng Fanpage Này"}>
+                                <Button size="sm" variant="outline" onClick={() => handleStartItem(it)} disabled={isRunning || isStarting || !isReadyToStart} className="h-7 px-2 text-[11px] font-normal text-blue-600 border-blue-200 hover:bg-blue-50 dark:hover:bg-blue-950/40 gap-1 shadow-none disabled:opacity-40" title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (!downloadFolder || !downloadFolder.trim()) ? "Vui Lòng Cài Đặt Thư Mục Lưu Video Trước Khi Kích Hoạt!" : "Kích Hoạt Tải Riêng Fanpage Này"}>
                                   <Play className="w-3 h-3 fill-current" /> Kích Hoạt
                                 </Button>
                               )}
@@ -862,8 +910,22 @@ export default function YouTubeDownloadTab({ pages = [], loading = false, onPage
                   </div>
                 )}
                 <div className="flex items-center gap-3">
-                  <Button variant="outline" className="flex-1 font-normal text-xs h-9 text-blue-600 border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-900/60 dark:text-blue-400 dark:hover:bg-blue-950/40 gap-2 shadow-none disabled:opacity-40" disabled={isRunning || items.length === 0 || !isReadyToStart} onClick={handleStart} title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (!downloadFolder || !downloadFolder.trim()) ? "Vui Lòng Cài Đặt Thư Mục Lưu Video Trước Khi Kích Hoạt!" : items.length === 0 ? "Chưa Có Fanpage Nào Để Kích Hoạt" : "Kích Hoạt Tải Hàng Loạt Cho Tất Cả Fanpage"}>
-                    <Play className="w-3.5 h-3.5 fill-current" /> Kích Hoạt Tất Cả
+                  <Button
+                    variant="outline"
+                    className="flex-1 font-normal text-xs h-9 text-blue-600 border-blue-200 hover:bg-blue-50 hover:text-blue-700 dark:border-blue-900/60 dark:text-blue-400 dark:hover:bg-blue-950/40 gap-2 shadow-none disabled:opacity-40"
+                    disabled={isRunning || isStarting || items.length === 0 || !isReadyToStart}
+                    onClick={handleStart}
+                    title={isConfigLoading ? "Đang Nạp Cấu Hình Hệ Thống..." : (!downloadFolder || !downloadFolder.trim()) ? "Vui Lòng Cài Đặt Thư Mục Lưu Video Trước Khi Kích Hoạt!" : items.length === 0 ? "Chưa Có Fanpage Nào Để Kích Hoạt" : "Kích Hoạt Tải Hàng Loạt Cho Tất Cả Fanpage"}
+                  >
+                    {isStarting ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" /> Đang Khởi Động...
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-3.5 h-3.5 fill-current" /> Kích Hoạt Tất Cả
+                      </>
+                    )}
                   </Button>
                   <Button variant="outline" className="flex-1 font-normal text-xs h-9 text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700 dark:border-rose-900/60 dark:text-rose-400 dark:hover:bg-rose-950/40 gap-2 shadow-none disabled:opacity-40" disabled={!isRunning} onClick={handleStop}>
                     <Square className="w-3.5 h-3.5 fill-current" /> Dừng Tất Cả

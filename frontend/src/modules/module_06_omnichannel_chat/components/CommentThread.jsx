@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Avatar, relativeTime } from "./atoms";
@@ -175,7 +175,15 @@ function CommentAttachment({ attachment, depth = 0 }) {
   );
 }
 
-function CommentCard({ comment, pageName, pageId, onChanged, depth = 0 }) {
+function CommentCard({
+  comment,
+  pageName,
+  pageId,
+  onChanged,
+  onReplyComment,
+  activeReplyCommentId,
+  depth = 0,
+}) {
   // `is_hidden` từ Graph: bình luận đang bị ẩn vẫn ở lại trong danh sách, chỉ mờ
   // đi và đeo nhãn — bỏ khỏi danh sách thì không còn đường nào bỏ ẩn nữa.
   const [isHidden, setIsHidden] = useState(() => Boolean(comment?.is_hidden));
@@ -185,8 +193,6 @@ function CommentCard({ comment, pageName, pageId, onChanged, depth = 0 }) {
   const [actionError, setActionError] = useState("");
   const [likeBusy, setLikeBusy] = useState(false);
   const [messaging, setMessaging] = useState(false);
-  const [replying, setReplying] = useState(false);
-  const [replyText, setReplyText] = useState("");
   const [busy, setBusy] = useState(false);
   // Trạng thái thực tế từ Graph (`user_likes`), không phải đoán từ lần bấm —
   // tải lại trang vẫn đúng, và biết cả lúc nào nên hiện "Bỏ thích".
@@ -202,8 +208,25 @@ function CommentCard({ comment, pageName, pageId, onChanged, depth = 0 }) {
   const [loadingReplies, setLoadingReplies] = useState(false);
   const [repliesError, setRepliesError] = useState("");
 
-  const name = comment?.from?.name || "Người dùng";
-  if (removed) return null;
+  // Lắng nghe sự kiện cảm xúc bình luận realtime từ WebSocket
+  useEffect(() => {
+    const handleCommentReaction = (e) => {
+      const data = e.detail;
+      if (!data || !data.comment_id) return;
+      // Khớp comment_id trực tiếp hoặc đuôi ID
+      const targetCid = String(data.comment_id);
+      const myCid = String(comment.id || "");
+      if (myCid === targetCid || myCid.endsWith(targetCid) || targetCid.endsWith(myCid)) {
+        const delta = data.verb === "remove" ? -1 : 1;
+        setLikeDelta((d) => d + delta);
+      }
+    };
+
+    window.addEventListener("fb_comment_reaction", handleCommentReaction);
+    return () => {
+      window.removeEventListener("fb_comment_reaction", handleCommentReaction);
+    };
+  }, [comment.id]);
 
   const hasText = Boolean(comment?.message);
   const reactions = Math.max(0, reactionCountOf(comment) + likeDelta);
@@ -242,22 +265,6 @@ function CommentCard({ comment, pageName, pageId, onChanged, depth = 0 }) {
       );
     } finally {
       setLikeBusy(false);
-    }
-  };
-
-  const sendReply = async () => {
-    const text = replyText.trim();
-    if (!text || busy) return;
-    setBusy(true);
-    try {
-      await replyToComment(comment.id, pageId, text);
-      setReplyText("");
-      setReplying(false);
-      onChanged?.();
-    } catch {
-      /* giữ nội dung để thử lại */
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -410,7 +417,15 @@ function CommentCard({ comment, pageName, pageId, onChanged, depth = 0 }) {
             {liked && <ReactionIcon type="like" size={13} />}
             {liked ? "Đã thích" : "Thích"}
           </button>
-          <button type="button" onClick={() => setReplying((v) => !v)} className={cn("font-semibold text-slate-600 hover:underline", FOCUS)}>
+          <button
+            type="button"
+            onClick={() => onReplyComment?.(comment)}
+            className={cn(
+              "font-semibold hover:underline",
+              activeReplyCommentId === comment.id ? "text-blue-600 font-bold" : "text-slate-600",
+              FOCUS
+            )}
+          >
             Trả lời
           </button>
           <button
@@ -468,27 +483,6 @@ function CommentCard({ comment, pageName, pageId, onChanged, depth = 0 }) {
           </p>
         )}
 
-        {replying && (
-          <div className="mt-2 flex items-center gap-2">
-            <input
-              type="text"
-              value={replyText}
-              onChange={(e) => setReplyText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && sendReply()}
-              placeholder={`Trả lời dưới tên ${pageName || "Page"}...`}
-              className="flex-1 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-800 placeholder:text-slate-400 outline-none focus:border-sky-400 focus:bg-white focus:ring-2 focus:ring-sky-100"
-            />
-            <button
-              type="button"
-              disabled={busy || !replyText.trim()}
-              onClick={sendReply}
-              className={cn("shrink-0 rounded-full bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50", FOCUS)}
-            >
-              Gửi
-            </button>
-          </div>
-        )}
-
         {/* Câu trả lời — chỉ lồng một cấp, vì stream đã gộp phẳng mọi cấp con */}
         {replies.length > 0 && (
           <ul className="mt-2.5 flex flex-col gap-2.5">
@@ -499,6 +493,8 @@ function CommentCard({ comment, pageName, pageId, onChanged, depth = 0 }) {
                 pageName={pageName}
                 pageId={pageId}
                 onChanged={onChanged}
+                onReplyComment={onReplyComment}
+                activeReplyCommentId={activeReplyCommentId}
                 depth={depth + 1}
               />
             ))}
@@ -529,7 +525,17 @@ function CommentCard({ comment, pageName, pageId, onChanged, depth = 0 }) {
   );
 }
 
-export default function CommentThread({ post, postId, pageId, pageName, order, onChanged, dimmed }) {
+export default function CommentThread({
+  post,
+  postId,
+  pageId,
+  pageName,
+  order,
+  onChanged,
+  onReplyComment,
+  activeReplyCommentId,
+  dimmed,
+}) {
   const seeded = post?.comments;
   const [comments, setComments] = useState(() => seeded?.data || []);
   const [after, setAfter] = useState(() => seeded?.paging?.cursors?.after || null);
@@ -574,6 +580,8 @@ export default function CommentThread({ post, postId, pageId, pageName, order, o
             pageName={pageName}
             pageId={pageId}
             onChanged={onChanged}
+            onReplyComment={onReplyComment}
+            activeReplyCommentId={activeReplyCommentId}
           />
         ))}
       </ul>

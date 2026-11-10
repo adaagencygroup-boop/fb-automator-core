@@ -19,9 +19,9 @@ engine_kwargs = {
 
 if not DATABASE_URL.startswith("sqlite"):
     engine_kwargs.update({
-        "pool_size": 5,
-        "max_overflow": 5,
-        "pool_timeout": 20,
+        "pool_size": 10,
+        "max_overflow": 15,
+        "pool_timeout": 30,
         "pool_recycle": 300
     })
 
@@ -41,3 +41,4 @@ def get_db():
         yield db
     finally:
         db.close()
+

@@ -34,7 +34,7 @@ class DatabaseManager:
             # minconn=1: máy mạng chậm / AV không mở sẵn 2 TCP tới Supabase lúc boot.
             self._pg_pool = pool.ThreadedConnectionPool(
                 minconn=1,
-                maxconn=20,
+                maxconn=60,
                 dsn=DATABASE_URL,
                 connect_timeout=10,
             )
@@ -104,3 +104,4 @@ class DatabaseManager:
         return self._is_postgres
 
 db = DatabaseManager()
+

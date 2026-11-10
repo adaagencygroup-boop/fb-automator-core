@@ -112,7 +112,37 @@ let activeEventSource = null;
 let activeWebSocket = null;
 let activeSubscribersCount = 0;
 let isConnectedGlobal = false;
+/** Chỉ ghi 1 lần “Đã kết nối…” / phiên — tránh SSE reconnect spam làm terminal nháy. */
+let hasAnnouncedConnection = false;
+let offlineNotifyTimer = null;
 const connectionListeners = new Set();
+
+function setConnectedStatus(next) {
+  if (next) {
+    if (offlineNotifyTimer) {
+      clearTimeout(offlineNotifyTimer);
+      offlineNotifyTimer = null;
+    }
+    if (isConnectedGlobal) return;
+    isConnectedGlobal = true;
+    connectionListeners.forEach((l) => l(true));
+    return;
+  }
+  // Debounce offline: SSE hay drop/reconnect sau job — đừng nháy Online/Offline liên tục
+  if (!isConnectedGlobal) return;
+  if (offlineNotifyTimer) return;
+  offlineNotifyTimer = setTimeout(() => {
+    offlineNotifyTimer = null;
+    const wsAlive =
+      activeWebSocket &&
+      (activeWebSocket.readyState === WebSocket.OPEN ||
+        activeWebSocket.readyState === WebSocket.CONNECTING);
+    if (wsAlive) return;
+    if (!isConnectedGlobal) return;
+    isConnectedGlobal = false;
+    connectionListeners.forEach((l) => l(false));
+  }, 4000);
+}
 
 function getOrCreateEventSource() {
   if (typeof window === "undefined") return;
@@ -125,8 +155,7 @@ function getOrCreateEventSource() {
     const es = {};
 
     es.onopen = () => {
-      isConnectedGlobal = true;
-      connectionListeners.forEach((l) => l(true));
+      setConnectedStatus(true);
       markEngineConnected("SSE Stream & WebSocket Realtime");
     };
 
@@ -139,8 +168,8 @@ function getOrCreateEventSource() {
     };
 
     es.onerror = () => {
-      isConnectedGlobal = false;
-      connectionListeners.forEach((l) => l(false));
+      // Transient SSE close/retry — không flip offline ngay nếu WS còn sống
+      setConnectedStatus(false);
     };
     activeEventSource = connectSSE(sseUrl, {
       getHeaders: () => {
@@ -164,9 +193,12 @@ function getOrCreateEventSource() {
 }
 
 function markEngineConnected(label) {
+  if (hasAnnouncedConnection) return;
+  hasAnnouncedConnection = true;
   const logs = loadFromStorage();
-  const lastMsg = logs.length > 0 ? logs[logs.length - 1].message : "";
-  if (lastMsg.includes("Đã kết nối với Local Python Engine")) return;
+  if (logs.some((item) => String(item?.message || "").includes("Đã kết nối với Local Python Engine"))) {
+    return;
+  }
   const connMsg = {
     timestamp: formatVietnamTime(),
     type: "info",
@@ -186,6 +218,12 @@ function appendEngineLog(data) {
     if (String(data.message || "").toLowerCase().includes("sse stream connected")) return;
   }
 
+  const msgText = String(data.message ?? "").trim();
+  const typeLower = String(data.type || "").toLowerCase();
+  if (typeLower === "ping" || typeLower === "pong" || msgText === "ping" || msgText === "pong") return;
+  // Không đẩy gói tin rỗng / object vô nghĩa lên terminal
+  if (!msgText) return;
+
   const currentLogs = loadFromStorage();
   const stamp = data.time || data.timestamp;
   let displayTime = formatVietnamTime();
@@ -195,7 +233,7 @@ function appendEngineLog(data) {
   const newMsg = {
     timestamp: displayTime,
     type: String(data.level || data.type || "info").toLowerCase(),
-    message: translateLogMessage(data.message || JSON.stringify(data)),
+    message: translateLogMessage(msgText),
     uid: data.uid,
     extra: data,
   };
@@ -230,11 +268,8 @@ function getOrCreateWebSocket() {
 
     // Module 02/04 broadcast mirror qua /ws/logs — quan trọng cho bản .exe
     ws.onopen = () => {
-      if (!isConnectedGlobal) {
-        isConnectedGlobal = true;
-        connectionListeners.forEach((l) => l(true));
-        markEngineConnected("WebSocket Realtime");
-      }
+      setConnectedStatus(true);
+      markEngineConnected("WebSocket Realtime");
       try {
         ws.send("ping");
       } catch (e) {}
@@ -242,13 +277,16 @@ function getOrCreateWebSocket() {
 
     ws.onmessage = (event) => {
       try {
-        appendEngineLog(JSON.parse(event.data));
+        const raw = event.data;
+        if (raw === "ping" || raw === "pong") return;
+        appendEngineLog(JSON.parse(raw));
       } catch (e) {}
     };
 
     ws.onerror = () => {};
     ws.onclose = () => {
       activeWebSocket = null;
+      setConnectedStatus(false);
     };
   } catch (err) {}
 }
@@ -287,7 +325,12 @@ export function useLocalSSE(enabled = true) {
           activeWebSocket.close();
           activeWebSocket = null;
         }
+        if (offlineNotifyTimer) {
+          clearTimeout(offlineNotifyTimer);
+          offlineNotifyTimer = null;
+        }
         isConnectedGlobal = false;
+        hasAnnouncedConnection = false;
       }
     };
   }, [enabled]);

@@ -164,12 +164,16 @@ def get_notifications(
     # Dem o day tren cung pham vi (2 tuan + page duoc phep + page_id neu co),
     # nhung KHONG an theo tab/filter/search dang chon — badge phai dung yen khi
     # nguoi dung doi tab.
-    counted = (
+    base_counted = (
         db.query(Notification)
         .filter(Notification.created_time >= two_weeks_ago)
         .filter(Notification.page_id.in_(allowed_page_ids))
-        .filter(Notification.unread == True)
     )
+    type_counts = {
+        "comment": base_counted.filter(Notification.notification_type == "comment").count(),
+        "interaction": base_counted.filter(Notification.notification_type != "comment").count(),
+    }
+    counted = base_counted.filter(Notification.unread == True)
     unread_counts = {
         "comment": counted.filter(Notification.notification_type == "comment").count(),
         "interaction": counted.filter(Notification.notification_type != "comment").count(),
@@ -225,6 +229,7 @@ def get_notifications(
             items=notif_list,
             notifications=notif_list,
             unread_counts=unread_counts,
+            type_counts=type_counts,
             page_unread=page_unread,
             total=total,
             page=effective_page,

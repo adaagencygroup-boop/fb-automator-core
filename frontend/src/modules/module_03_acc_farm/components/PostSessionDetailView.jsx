@@ -8,7 +8,6 @@ import {
   Pause,
   Square,
   RotateCcw,
-  Filter,
   Check,
   Copy,
   Trash2,
@@ -24,6 +23,8 @@ import { useFarmLogs, clearFarmLogs } from "../hooks/useFarmLogs";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/lib/toast";
 import { EmergencyStopModal } from "./EmergencyStopModal";
+import { PostProgressPreview } from "./PostProgressPreview";
+import { ProgressActivityCell } from "./ProgressPostLink";
 
 const LEVEL_COLORS = {
   SUCCESS: "text-emerald-400",
@@ -43,7 +44,6 @@ export function PostSessionDetailView({ sessionId }) {
   const [isFinished, setIsFinished] = useState(false);
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
-  const [statusFilter, setStatusFilter] = useState("all");
   const [copiedUid, setCopiedUid] = useState(null);
   const [selectedThreadFilter, setSelectedThreadFilter] = useState("");
 
@@ -58,6 +58,7 @@ export function PostSessionDetailView({ sessionId }) {
   });
 
   const [threads, setThreads] = useState([]);
+  const [previewPostId, setPreviewPostId] = useState(null);
   const [serverLogs, setServerLogs] = useState([]);
 
   // Socket logs realtime
@@ -71,7 +72,27 @@ export function PostSessionDetailView({ sessionId }) {
       if (d) {
         setSessionData(d);
         if (d.metrics) setMetrics(d.metrics);
-        if (Array.isArray(d.threads)) setThreads(d.threads);
+        if (Array.isArray(d.threads) && d.threads.length > 0) {
+          setThreads((prev) => {
+            if (!prev?.length || d.threads.length >= prev.length) return d.threads;
+            const used = new Set();
+            const updated = prev.map((row) => {
+              const byId = d.threads.find((t) => String(t.id) === String(row.id));
+              if (byId) {
+                used.add(String(byId.id));
+                return { ...row, ...byId };
+              }
+              return row;
+            });
+            for (const t of d.threads) {
+              const tid = String(t.id || t.threadId || "");
+              if (tid && !used.has(tid) && !updated.some((r) => String(r.id) === tid)) {
+                updated.push(t);
+              }
+            }
+            return updated;
+          });
+        }
         if (Array.isArray(d.recent_logs)) setServerLogs(d.recent_logs);
         if (d.is_paused !== undefined) setIsPaused(d.is_paused);
         if (d.is_stopped) setIsStopped(true);
@@ -138,6 +159,30 @@ export function PostSessionDetailView({ sessionId }) {
     setIsStopping(true);
     setIsStopped(true);
     setIsPaused(false);
+    if (pollingRef.current) clearInterval(pollingRef.current);
+
+    // Giữ màn giám sát giống khi chạy xong — ẩn Pause/Stop, hiện nút tạo bài mới
+    setThreads((prev) =>
+      prev.map((r) =>
+        r.status === "Hoàn thành" || r.status === "Lỗi hệ thống" || r.status === "Acc chết"
+          ? r
+          : { ...r, status: "Đã dừng", currentActivity: "Đã dừng theo yêu cầu (khẩn cấp)" }
+      )
+    );
+    setMetrics((prev) => {
+      const stoppedNow = Math.max(
+        1,
+        (prev.running || 0) + (prev.paused || 0) + (prev.waiting || 0) + (prev.stopped || 0)
+      );
+      return {
+        ...prev,
+        running: 0,
+        paused: 0,
+        waiting: 0,
+        stopped: stoppedNow,
+      };
+    });
+
     try {
       await api.post("/api/post/stop");
       toast.info("Đã gửi lệnh dừng khẩn cấp toàn bộ các luồng.", "DỪNG TIẾN TRÌNH");
@@ -154,19 +199,6 @@ export function PostSessionDetailView({ sessionId }) {
     navigator.clipboard?.writeText(text);
     toast.success(`Đã sao chép ${filteredLogs.length} dòng log vào bộ nhớ tạm!`, "ĐÃ SAO CHÉP");
   };
-
-  // Filter threads by status badge
-  const filteredThreads = threads.filter((t) => {
-    if (statusFilter === "all") return true;
-    if (statusFilter === "running") return t.status === "Đang chạy";
-    if (statusFilter === "paused") return t.status === "Tạm dừng";
-    if (statusFilter === "waiting") return t.status === "Chờ thực thi";
-    if (statusFilter === "completed") return t.status === "Hoàn thành";
-    if (statusFilter === "systemError") return t.status === "Lỗi hệ thống";
-    if (statusFilter === "deadAccount") return t.status === "Acc chết";
-    if (statusFilter === "stopped") return t.status === "Đã dừng";
-    return true;
-  });
 
   return (
     <div className="space-y-6 container mx-auto pb-12">
@@ -273,154 +305,77 @@ export function PostSessionDetailView({ sessionId }) {
         </div>
       </div>
 
-      {/* ── 7 Thống kê Metrics (Figma node 1613:2258) ── */}
+      {/* ── 7 Thống kê Metrics — chỉ hiển thị tổng quan, không lọc ── */}
       <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-xs space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
-            <Activity size={16} className="text-blue-600" />
-            <span className="text-sm font-bold text-slate-900">Giám sát tiến trình đăng bài</span>
-          </div>
-          {statusFilter !== "all" && (
-            <button
-              type="button"
-              onClick={() => setStatusFilter("all")}
-              className="text-xs text-blue-600 hover:underline font-semibold cursor-pointer"
-            >
-              Bỏ lọc (Xem tất cả)
-            </button>
-          )}
+        <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
+          <Activity size={16} className="text-blue-600" />
+          <span className="text-sm font-bold text-slate-900">Giám sát tiến trình đăng bài</span>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2.5">
-          <button
-            type="button"
-            onClick={() => setStatusFilter(statusFilter === "running" ? "all" : "running")}
-            className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${
-              statusFilter === "running"
-                ? "border-blue-500 ring-2 ring-blue-500/20 shadow-sm bg-blue-50/20"
-                : "border-slate-200/80 hover:border-blue-300 hover:shadow-xs"
-            }`}
-          >
-            <div className="flex items-center justify-between w-full">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">ĐANG CHẠY</span>
-              <span className="w-2 h-2 rounded-full bg-blue-600" />
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 md:grid-cols-7">
+          <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+            <div className="flex w-full items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ĐANG CHẠY</span>
+              <span className="h-2 w-2 rounded-full bg-blue-600" />
             </div>
-            <span className="text-2xl font-black text-blue-600 mt-1">{metrics.running}</span>
-          </button>
+            <span className="mt-1 text-2xl font-black text-blue-600">{metrics.running}</span>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setStatusFilter(statusFilter === "paused" ? "all" : "paused")}
-            className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${
-              statusFilter === "paused"
-                ? "border-amber-500 ring-2 ring-amber-500/20 shadow-sm bg-amber-50/20"
-                : "border-slate-200/80 hover:border-amber-300 hover:shadow-xs"
-            }`}
-          >
-            <div className="flex items-center justify-between w-full">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">TẠM DỪNG</span>
-              <span className="w-2 h-2 rounded-full bg-amber-500" />
+          <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+            <div className="flex w-full items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">TẠM DỪNG</span>
+              <span className="h-2 w-2 rounded-full bg-amber-500" />
             </div>
-            <span className="text-2xl font-black text-amber-500 mt-1">{metrics.paused}</span>
-          </button>
+            <span className="mt-1 text-2xl font-black text-amber-500">{metrics.paused}</span>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setStatusFilter(statusFilter === "waiting" ? "all" : "waiting")}
-            className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${
-              statusFilter === "waiting"
-                ? "border-slate-500 ring-2 ring-slate-500/20 shadow-sm bg-slate-50"
-                : "border-slate-200/80 hover:border-slate-300 hover:shadow-xs"
-            }`}
-          >
-            <div className="flex items-center justify-between w-full">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">CHỜ THỰC THI</span>
-              <span className="w-2 h-2 rounded-full bg-slate-400" />
+          <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+            <div className="flex w-full items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">CHỜ THỰC THI</span>
+              <span className="h-2 w-2 rounded-full bg-slate-400" />
             </div>
-            <span className="text-2xl font-black text-slate-700 mt-1">{metrics.waiting}</span>
-          </button>
+            <span className="mt-1 text-2xl font-black text-slate-700">{metrics.waiting}</span>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setStatusFilter(statusFilter === "completed" ? "all" : "completed")}
-            className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${
-              statusFilter === "completed"
-                ? "border-emerald-500 ring-2 ring-emerald-500/20 shadow-sm bg-emerald-50/20"
-                : "border-slate-200/80 hover:border-emerald-300 hover:shadow-xs"
-            }`}
-          >
-            <div className="flex items-center justify-between w-full">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">THÀNH CÔNG</span>
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+          <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+            <div className="flex w-full items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">THÀNH CÔNG</span>
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
             </div>
-            <span className="text-2xl font-black text-emerald-600 mt-1">{metrics.completed}</span>
-          </button>
+            <span className="mt-1 text-2xl font-black text-emerald-600">{metrics.completed}</span>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setStatusFilter(statusFilter === "systemError" ? "all" : "systemError")}
-            className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${
-              statusFilter === "systemError"
-                ? "border-rose-500 ring-2 ring-rose-500/20 shadow-sm bg-rose-50/20"
-                : "border-slate-200/80 hover:border-rose-300 hover:shadow-xs"
-            }`}
-          >
-            <div className="flex items-center justify-between w-full">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">LỖI HỆ THỐNG</span>
-              <span className="w-2 h-2 rounded-full bg-rose-500" />
+          <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+            <div className="flex w-full items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">LỖI HỆ THỐNG</span>
+              <span className="h-2 w-2 rounded-full bg-rose-500" />
             </div>
-            <span className="text-2xl font-black text-rose-600 mt-1">{metrics.systemError}</span>
-          </button>
+            <span className="mt-1 text-2xl font-black text-rose-600">{metrics.systemError}</span>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setStatusFilter(statusFilter === "deadAccount" ? "all" : "deadAccount")}
-            className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${
-              statusFilter === "deadAccount"
-                ? "border-red-600 ring-2 ring-red-600/20 shadow-sm bg-red-50/20"
-                : "border-slate-200/80 hover:border-red-400 hover:shadow-xs"
-            }`}
-          >
-            <div className="flex items-center justify-between w-full">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">ACC CHẾT</span>
-              <span className="w-2 h-2 rounded-full bg-red-700" />
+          <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+            <div className="flex w-full items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ACC CHẾT</span>
+              <span className="h-2 w-2 rounded-full bg-red-700" />
             </div>
-            <span className="text-2xl font-black text-red-700 mt-1">{metrics.deadAccount}</span>
-          </button>
+            <span className="mt-1 text-2xl font-black text-red-700">{metrics.deadAccount}</span>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setStatusFilter(statusFilter === "stopped" ? "all" : "stopped")}
-            className={`p-3 rounded-2xl bg-white border transition-all text-left flex flex-col justify-between cursor-pointer ${
-              statusFilter === "stopped"
-                ? "border-slate-800 ring-2 ring-slate-800/20 shadow-sm bg-slate-100"
-                : "border-slate-200/80 hover:border-slate-400 hover:shadow-xs"
-            }`}
-          >
-            <div className="flex items-center justify-between w-full">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">ĐÃ DỪNG</span>
-              <span className="w-2 h-2 rounded-full bg-slate-800" />
+          <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
+            <div className="flex w-full items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ĐÃ DỪNG</span>
+              <span className="h-2 w-2 rounded-full bg-slate-800" />
             </div>
-            <span className="text-2xl font-black text-slate-800 mt-1">{metrics.stopped}</span>
-          </button>
+            <span className="mt-1 text-2xl font-black text-slate-800">{metrics.stopped}</span>
+          </div>
         </div>
 
-        {/* Filter Indicator */}
-        {statusFilter !== "all" && (
-          <div className="p-2.5 bg-blue-50/60 border border-blue-200/60 rounded-xl flex items-center justify-between text-xs text-blue-700">
-            <span className="flex items-center gap-1.5 font-medium">
-              <Filter size={13} className="text-blue-600" />
-              Đang lọc trạng thái: <strong className="uppercase">{statusFilter}</strong>
-            </span>
-            <button
-              type="button"
-              onClick={() => setStatusFilter("all")}
-              className="font-bold underline hover:text-blue-900 cursor-pointer"
-            >
-              Hiển thị tất cả luồng
-            </button>
-          </div>
-        )}
+        <PostProgressPreview
+          rows={threads}
+          postType={sessionData?.post_type || "status"}
+          selectedId={previewPostId}
+          onSelectId={setPreviewPostId}
+        />
 
         {/* Progress Monitoring Table */}
         <div className="overflow-x-auto pt-2">
@@ -436,7 +391,7 @@ export function PostSessionDetailView({ sessionId }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredThreads.length === 0 ? (
+              {threads.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-8 text-center text-slate-400">
                     {threads.length === 0
@@ -445,8 +400,14 @@ export function PostSessionDetailView({ sessionId }) {
                   </td>
                 </tr>
               ) : (
-                filteredThreads.map((row) => (
-                  <tr key={row.id || row.threadId} className="hover:bg-slate-50/70 transition-colors">
+                threads.map((row) => (
+                  <tr
+                    key={row.id || row.threadId}
+                    className={`hover:bg-slate-50/70 transition-colors cursor-pointer ${
+                      String(previewPostId) === String(row.id || row.threadId) ? "bg-blue-50/50" : ""
+                    }`}
+                    onClick={() => setPreviewPostId(String(row.id || row.threadId))}
+                  >
                     <td className="py-2.5 px-4 font-mono font-bold text-blue-600">
                       {row.threadId}
                     </td>
@@ -482,16 +443,11 @@ export function PostSessionDetailView({ sessionId }) {
                         {row.status}
                       </span>
                     </td>
-                    <td className="py-2.5 px-4 max-w-[200px] truncate text-slate-700 font-mono text-[11px]" title={row.contentPreview}>
+                    <td className="py-2.5 px-4 max-w-[200px] truncate text-slate-700 font-mono text-[11px]" title={row.content || row.contentPreview}>
                       {row.contentPreview || "--"}
                     </td>
                     <td className="py-2.5 px-4">
-                      <span className="flex items-center gap-1.5 text-slate-700 text-xs font-medium">
-                        <span className={`w-1.5 h-1.5 rounded-full ${
-                          row.status === "Đang chạy" ? "bg-blue-500" : "bg-amber-500"
-                        }`} />
-                        {row.currentActivity || "Đang xử lý..."}
-                      </span>
+                      <ProgressActivityCell row={row} />
                     </td>
                     <td className="py-2.5 px-4 font-mono text-slate-600 text-xs">
                       {row.elapsedTime || "0:00"}
