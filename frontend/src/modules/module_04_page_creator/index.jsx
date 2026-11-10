@@ -1376,7 +1376,7 @@ function CreateView() {
       toast.warning("Chọn danh sách tài khoản Facebook tạo page trước khi thiết lập Job.", "TẠO PAGE");
       return;
     }
-    if (!plannedPages.length) {
+    if (!plannedRows.length) {
       toast.warning("Nhập ít nhất một tên page.", "TẠO PAGE");
       return;
     }

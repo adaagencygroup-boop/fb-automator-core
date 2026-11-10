@@ -8,7 +8,7 @@ import { FOCUS_RING, GLOW_BUTTON } from "./AuthFields";
 // Màu: theme sáng "Background+Shadow" (nền trắng, panel #EFF4FF, chữ #0B1C30, nhấn #2563EB)
 
 export const APP_NAME = "FB Page Creator";
-export const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || "3.1.0";
+export const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || "2.0.10";
 export const DOCS_URL = process.env.NEXT_PUBLIC_DOCS_URL || "";
 
 const FEATURES = [
