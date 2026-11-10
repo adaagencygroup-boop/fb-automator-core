@@ -189,12 +189,7 @@ def _append_member_log(job_id: str, message: str, level: str = "info", thread: s
             if len(logs) > 1000:
                 job["logs"] = logs[-800:]
 
-    # Đồng bộ vào CSDL nếu có session
-    try:
-        from modules.module_10_group_scan.models import add_session_log
-        add_session_log(job_id, level.upper(), f"[{thread}] {message}")
-    except Exception:
-        pass
+
 
 
 def _set_member_job(job_id: str, **kwargs: Any) -> None:

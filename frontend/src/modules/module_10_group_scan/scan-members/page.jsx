@@ -208,7 +208,14 @@ export default function GroupScanMembersPage() {
   const [currentPage, setCurrentPage] = useState(1);
 
   // --- Section 5: Logs & Execution ---
-  const [logs, setLogs] = useState([]);
+  const [logs, setLogs] = useState([
+    {
+      time: "—",
+      thread: "System",
+      message: "Module 10.2 sẵn sàng. Chọn tài khoản & nhóm cần quét thành viên, sau đó bấm Bắt đầu thực thi.",
+      color: "text-slate-300",
+    },
+  ]);
   const [isExecuting, setIsExecuting] = useState(false);
   const [activeJobId, setActiveJobId] = useState(null);
   const [copiedLog, setCopiedLog] = useState(false);

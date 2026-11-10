@@ -58,37 +58,84 @@ RESULTS_ROOT_LOCATORS = [
 ]
 
 CLICK_JOIN_BUTTON_JS = """
-return ((targetUrl) => {
-  const cleanUrl = (targetUrl || '').split('?')[0].replace(/\\/+$/, '').toLowerCase();
+return ((targetUrl, targetName) => {
+  const cleanUrl = (targetUrl || '').split('?')[0].replace(/\/+$/, '').toLowerCase();
   const root =
     document.querySelector('[aria-label="Search results"][role="main"]') ||
     document.querySelector('[aria-label="Search results"]') ||
     document.querySelector('[role="main"]') ||
     document.body;
 
+  const isAlreadyJoined = (text) => {
+    return /^(đã tham gia|joined|đang chờ|requested|hủy yêu cầu|hủy lời mời|chờ phê duyệt|đang chờ duyệt)$/i.test((text || '').trim());
+  };
+
+  const isJoinText = (text) => {
+    return /^(tham gia|tham gia nhóm|join|join group)$/i.test((text || '').trim());
+  };
+
+  const clickElement = (el) => {
+    if (!el) return false;
+    const btn = el.closest('div[role="button"], button') || el;
+    try {
+      btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+    } catch (e) {}
+    try {
+      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    } catch (e) {}
+    btn.click();
+    return true;
+  };
+
   // 1. Thử tìm trên thẻ card tương ứng với targetUrl trong Search results
   if (cleanUrl) {
     const anchors = root.querySelectorAll('a[href*="/groups/"]');
     for (const a of anchors) {
-      const href = (a.getAttribute('href') || a.href || '').split('?')[0].replace(/\\/+$/, '').toLowerCase();
+      const href = (a.getAttribute('href') || a.href || '').split('?')[0].replace(/\/+$/, '').toLowerCase();
       let matched = (href === cleanUrl);
       if (!matched && cleanUrl.includes('/groups/')) {
         const slug = cleanUrl.split('/groups/')[1].split('/')[0];
         if (slug && href.includes('/groups/' + slug)) matched = true;
       }
+      if (!matched && targetName) {
+        const aText = (a.textContent || '').trim().toLowerCase();
+        if (aText && aText === targetName.toLowerCase()) matched = true;
+      }
+
       if (matched) {
         let card = a;
-        for (let i = 0; i < 9 && card && card !== root; i++) {
+        for (let i = 0; i < 10 && card && card !== root; i++) {
           card = card.parentElement;
           if (!card) break;
+
+          // Kiểm tra xem trên card đã ở trạng thái đã tham gia chưa
+          const spans = card.querySelectorAll('span');
+          for (const sp of spans) {
+            const spText = (sp.textContent || '').trim();
+            if (isAlreadyJoined(spText)) {
+              return { status: 'already_joined', label: spText };
+            }
+          }
+
+          // Ưu tiên tìm đúng element: <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft">Tham gia</span>
+          for (const sp of spans) {
+            const spText = (sp.textContent || '').trim();
+            if (isJoinText(spText)) {
+              clickElement(sp);
+              return { status: 'clicked_join', label: spText };
+            }
+          }
+
+          // Fallback tìm button trên card
           const btns = card.querySelectorAll('div[role="button"], button');
           for (const btn of btns) {
             const text = (btn.innerText || btn.getAttribute('aria-label') || '').trim();
-            if (/^(đã tham gia|joined|đang chờ|requested|hủy yêu cầu|hủy lời mời)$/i.test(text)) {
+            if (isAlreadyJoined(text)) {
               return { status: 'already_joined', label: text };
             }
-            if (/^(tham gia nhóm|tham gia|join group|join)$/i.test(text)) {
-              btn.click();
+            if (isJoinText(text)) {
+              clickElement(btn);
               return { status: 'clicked_join', label: text };
             }
           }
@@ -97,21 +144,35 @@ return ((targetUrl) => {
     }
   }
 
-  // 2. Nếu ở trang nhóm trực tiếp (Group page)
-  const allBtns = document.querySelectorAll('div[role="button"], button');
-  for (const btn of allBtns) {
-    const text = (btn.innerText || btn.getAttribute('aria-label') || '').trim();
-    if (/^(đã tham gia|joined|đang chờ|requested|hủy yêu cầu)$/i.test(text)) {
-      return { status: 'already_joined', label: text };
+  // 2. Nếu ở trang nhóm trực tiếp (Group page) hoặc fallback trên toàn trang
+  // Ưu tiên tìm span có class x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft
+  const allSpans = document.querySelectorAll('span.x1lliihq, span');
+  for (const sp of allSpans) {
+    const spText = (sp.textContent || '').trim();
+    if (isAlreadyJoined(spText)) {
+      return { status: 'already_joined', label: spText };
     }
-    if (/^(tham gia nhóm|tham gia|join group|join)$/i.test(text)) {
-      btn.click();
-      return { status: 'clicked_join', label: text };
+    if (isJoinText(spText)) {
+      clickElement(sp);
+      return { status: 'clicked_join', label: spText };
     }
   }
 
   return { status: 'not_found' };
-})(arguments[0]);
+})(arguments[0], arguments[1]);
+"""
+
+CHECK_GROUP_QUESTIONS_DIALOG_JS = """
+return (() => {
+  const d = document.querySelector('div[role="dialog"]') || document.querySelector('[aria-modal="true"]');
+  if (!d) return { hasDialog: false };
+  const text = (d.innerText || d.textContent || '').toLowerCase();
+  const isQuestionDialog = /câu hỏi|câu trả lời|quy tắc|rules|question|yêu cầu tham gia|membership|trả lời|đồng ý|gửi|submit/i.test(text);
+  return {
+    hasDialog: isQuestionDialog || !!d,
+    title: (d.querySelector('h1, h2, h3, [role="heading"]')?.textContent || '').trim(),
+  };
+})();
 """
 
 ANSWER_GROUP_QUESTIONS_JS = """
@@ -143,6 +204,7 @@ return (() => {
       }
       element.dispatchEvent(new Event('input', { bubbles: true }));
       element.dispatchEvent(new Event('change', { bubbles: true }));
+      element.dispatchEvent(new Event('blur', { bubbles: true }));
     } catch (e) {
       try {
         element.value = value;
@@ -150,12 +212,16 @@ return (() => {
     }
   };
 
-  // 1. TEXT INPUTS & TEXTAREAS (Các câu hỏi tự luận)
+  // 1. TEXT INPUTS & TEXTAREAS (Các câu hỏi tự luận - Nhập text)
   const textInputs = targetRoot.querySelectorAll('textarea, input[type="text"], div[role="textbox"], div[contenteditable="true"]');
   textInputs.forEach((el) => {
     if (el.getAttribute('aria-label')?.includes('Search') || el.getAttribute('placeholder')?.includes('Tìm kiếm')) {
       return;
     }
+    try {
+      el.scrollIntoView({ behavior: 'instant', block: 'center' });
+    } catch (e) {}
+
     let questionText = '';
     let curr = el.parentElement;
     for (let depth = 0; depth < 6 && curr && curr !== targetRoot; depth++) {
@@ -168,7 +234,7 @@ return (() => {
     }
     const qLower = questionText.toLowerCase();
 
-    let ans = 'Tôi cam kết tuân thủ đầy đủ mọi quy tắc và văn hóa của nhóm, không spam, chia sẻ kiến thức tích cực.';
+    let ans = 'Tôi đồng ý và cam kết tuân thủ đầy đủ mọi quy tắc và văn hóa nhóm, tích cực chia sẻ kiến thức hữu ích.';
     if (/số điện thoại|sđt|phone|mobile/i.test(qLower)) {
       ans = '0988668899';
     } else if (/email|mail/i.test(qLower)) {
@@ -185,14 +251,15 @@ return (() => {
       setNativeValue(el, ans);
     } else {
       el.focus();
-      el.innerText = ans;
+      el.textContent = ans;
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur', { bubbles: true }));
     }
     result.answeredCount++;
   });
 
-  // 2. RADIO BUTTONS (Trắc nghiệm 1 đáp án)
+  // 2. RADIO BUTTONS (Trắc nghiệm 1 đáp án - Tích radio)
   const allRadios = targetRoot.querySelectorAll('div[role="radio"], input[type="radio"]');
   const radioGroups = new Map();
   allRadios.forEach((r, idx) => {
@@ -215,6 +282,7 @@ return (() => {
     }
     if (chosen) {
       try {
+        chosen.scrollIntoView({ behavior: 'instant', block: 'center' });
         chosen.click();
         chosen.setAttribute('aria-checked', 'true');
         chosen.dispatchEvent(new Event('change', { bubbles: true }));
@@ -223,7 +291,7 @@ return (() => {
     }
   });
 
-  // 3. CHECKBOXES (Hộp kiểm chọn chủ đề / quy tắc)
+  // 3. CHECKBOXES (Hộp kiểm chọn chủ đề / quy tắc - Tích checkbox)
   const checkboxes = targetRoot.querySelectorAll('div[role="checkbox"], input[type="checkbox"]');
   checkboxes.forEach((cb) => {
     const isChecked = cb.getAttribute('aria-checked') === 'true' || cb.checked === true;
@@ -231,6 +299,7 @@ return (() => {
 
     if (!isChecked) {
       try {
+        cb.scrollIntoView({ behavior: 'instant', block: 'center' });
         cb.click();
         cb.setAttribute('aria-checked', 'true');
         cb.dispatchEvent(new Event('change', { bubbles: true }));
@@ -246,16 +315,6 @@ return (() => {
     }
   });
 
-  // 4. KIỂM TRA NÚT GỬI / SUBMIT
-  const allButtons = targetRoot.querySelectorAll('div[role="button"], button');
-  for (const btn of allButtons) {
-    const btnText = (btn.innerText || btn.getAttribute('aria-label') || '').trim();
-    if (/^(gửi|submit|gửi câu trả lời|hoàn tất|xong|done|gửi cho quản trị viên|submit answers)$/i.test(btnText)) {
-      result.hasSubmitBtn = true;
-      break;
-    }
-  }
-
   return result;
 })();
 """
@@ -267,24 +326,52 @@ return (() => {
     document.querySelector('[aria-modal="true"]') ||
     document.body;
 
-  const allButtons = dialog.querySelectorAll('div[role="button"], button');
-  for (const btn of allButtons) {
-    const btnText = (btn.innerText || btn.getAttribute('aria-label') || '').trim();
-    if (/^(gửi|submit|gửi câu trả lời|hoàn tất|xong|done|gửi cho quản trị viên|submit answers)$/i.test(btnText)) {
-      if (btn.getAttribute('aria-disabled') === 'true' || btn.disabled) {
-        btn.removeAttribute('disabled');
-        btn.setAttribute('aria-disabled', 'false');
-      }
-      btn.click();
-      return { clicked: true, text: btnText };
+  const isSubmitText = (text) => {
+    return /^(gửi|submit|gửi câu trả lời|hoàn tất|xong|done|gửi cho quản trị viên|submit answers)$/i.test((text || '').trim());
+  };
+
+  const clickSubmit = (el) => {
+    const btn = el.closest('div[role="button"], button') || el;
+    if (btn.getAttribute('aria-disabled') === 'true' || btn.disabled) {
+      btn.removeAttribute('disabled');
+      btn.setAttribute('aria-disabled', 'false');
+    }
+    try {
+      btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+    } catch (e) {}
+    btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    btn.click();
+    return true;
+  };
+
+  // 1. Ưu tiên tìm đúng element: <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft">Gửi</span>
+  const spans = dialog.querySelectorAll('span.x1lliihq, span');
+  for (const sp of spans) {
+    const text = (sp.textContent || '').trim();
+    if (isSubmitText(text)) {
+      clickSubmit(sp);
+      return { clicked: true, text: text, method: 'span' };
     }
   }
 
-  // Thử đóng modal nếu đã nộp hoặc kẹt
-  const closeBtn = dialog.querySelector('div[aria-label="Đóng"], div[aria-label="Close"]');
-  if (closeBtn) {
-    closeBtn.click();
-    return { clicked: true, text: 'Close' };
+  // 2. Tìm button hoặc div[role="button"] có text hoặc aria-label là Gửi
+  const allButtons = dialog.querySelectorAll('div[role="button"], button');
+  for (const btn of allButtons) {
+    const btnText = (btn.innerText || btn.getAttribute('aria-label') || '').trim();
+    if (isSubmitText(btnText)) {
+      clickSubmit(btn);
+      return { clicked: true, text: btnText, method: 'button' };
+    }
+  }
+
+  // 3. Fallback nút tiếp tục / xác nhận nếu có phân trang câu hỏi
+  for (const btn of allButtons) {
+    const btnText = (btn.innerText || btn.getAttribute('aria-label') || '').trim();
+    if (/^(tiếp|tiếp tục|next|xác nhận|confirm)$/i.test(btnText)) {
+      clickSubmit(btn);
+      return { clicked: true, text: btnText, method: 'next' };
+    }
   }
 
   return { clicked: false };
@@ -294,8 +381,15 @@ return (() => {
 
 def _auto_join_group(driver, item: dict[str, Any], job_id: Optional[str] = None) -> str:
     """
-    Tự động nhấp tham gia nhóm và bắt DOM trả lời toàn bộ câu hỏi xét duyệt (cho nhóm riêng tư hoặc nhóm có câu hỏi).
-    Trả về trạng thái: 'joined' | 'pending' | 'not_joined'
+    Tự động nhấp tham gia nhóm với element <span ...>Tham gia</span>
+    - Nhóm riêng tư: Đợi 1 lúc xem nhóm đó có bắt trả lời câu hỏi không
+      + Nếu không bắt trả lời: tiếp tục quét
+      + Nếu có popup câu hỏi: xem popup có những gì:
+        * nhập text nếu có câu hỏi tự luận
+        * tích radio nếu có trắc nghiệm
+        * tích checkbox nếu có quy tắc / điều khoản
+        * bấm nút <span ...>Gửi</span>
+    - Trả về trạng thái ghi chú: 'joined' | 'pending' | 'not_joined'
     """
     if not driver:
         return item.get("note") or "—"
@@ -307,7 +401,8 @@ def _auto_join_group(driver, item: dict[str, Any], job_id: Optional[str] = None)
     try:
         from modules.module_02_account_manager.automation import human_sleep
 
-        res = driver.execute_script(CLICK_JOIN_BUTTON_JS, url) or {}
+        # 1. Bấm nút Tham gia
+        res = driver.execute_script(CLICK_JOIN_BUTTON_JS, url, name) or {}
         st = res.get("status")
 
         if st == "already_joined":
@@ -318,75 +413,93 @@ def _auto_join_group(driver, item: dict[str, Any], job_id: Optional[str] = None)
             return "joined"
 
         if st != "clicked_join":
+            _append_log(job_id, f"ℹ️ «{name}»: Không tìm thấy nút [Tham gia] khả dụng.", "info")
             return item.get("note") or "—"
 
         _append_log(job_id, f"👉 «{name}»: Đã bấm nút [{res.get('label', 'Tham gia')}]...", "info")
-        human_sleep(1.5, 2.5)
 
-        # Kiểm tra xem có xuất hiện Modal Dialog câu hỏi xét duyệt không
-        check_dialog_js = """
-        return (() => {
-            const d = document.querySelector('div[role="dialog"]') || document.querySelector('[aria-modal="true"]');
-            if (!d) return false;
-            const t = (d.innerText || '').toLowerCase();
-            return /câu hỏi|câu trả lời|quy tắc|rules|question|yêu cầu tham gia|membership/i.test(t);
-        })();
-        """
+        # 2. Đợi 1 lúc xem nhóm đó có bắt trả lời câu hỏi không (đặc biệt là nhóm riêng tư)
         has_dialog = False
-        try:
-            has_dialog = bool(driver.execute_script(check_dialog_js))
-        except Exception:
-            has_dialog = False
+        for _ in range(5):
+            human_sleep(0.5, 0.6)
+            try:
+                check_res = driver.execute_script(CHECK_GROUP_QUESTIONS_DIALOG_JS) or {}
+                if check_res.get("hasDialog"):
+                    has_dialog = True
+                    break
+            except Exception:
+                pass
 
-        if has_dialog:
+        if not has_dialog:
+            # Nhóm không bắt trả lời câu hỏi -> tiếp tục quét
+            _append_log(job_id, f"ℹ️ «{name}»: Không có popup câu hỏi xét duyệt, tiếp tục quét...", "info")
+            if privacy == "private":
+                _append_log(job_id, f"⏳ «{name}» (Riêng tư): Đang chờ quản trị viên duyệt.", "info")
+                return "pending"
+            _append_log(job_id, f"✅ «{name}» (Công khai): Đã tham gia thành công!", "success")
+            return "joined"
+
+        # 3. Có popup câu hỏi: Phân tích xem có những gì: text, radio, checkbox
+        _append_log(
+            job_id,
+            f"📝 Phát hiện popup câu hỏi nhóm «{name}». Đang tự động kiểm tra và trả lời...",
+            "info",
+        )
+        human_sleep(0.8, 1.2)
+
+        answer_res = driver.execute_script(ANSWER_GROUP_QUESTIONS_JS) or {}
+        ans_count = answer_res.get("answeredCount", 0)
+        rad_count = answer_res.get("radiosSelected", 0)
+        chk_count = answer_res.get("checkboxesChecked", 0)
+        rules_ok = answer_res.get("rulesAgreed", False)
+
+        detail_parts = []
+        if ans_count:
+            detail_parts.append(f"{ans_count} câu tự luận (nhập text)")
+        if rad_count:
+            detail_parts.append(f"{rad_count} câu trắc nghiệm (tích radio)")
+        if chk_count:
+            detail_parts.append(f"{chk_count} hộp kiểm (tích checkbox)")
+        if rules_ok:
+            detail_parts.append("đồng ý quy tắc nhóm")
+        details_str = ", ".join(detail_parts) if detail_parts else "đã điền thông tin xét duyệt"
+
+        _append_log(job_id, f"✍️ «{name}»: Đã điền xong ({details_str}). Đang bấm nút [Gửi]...", "info")
+        human_sleep(0.8, 1.2)
+
+        # 4. Bấm nút Gửi (<span class="... xuxw1ft">Gửi</span>)
+        sub_res = driver.execute_script(SUBMIT_GROUP_QUESTIONS_JS) or {}
+        human_sleep(1.5, 2.0)
+
+        # Xử lý trường hợp có bước thứ 2 (xác nhận tiếp quy tắc nhóm)
+        try:
+            check_again = driver.execute_script(CHECK_GROUP_QUESTIONS_DIALOG_JS) or {}
+            if check_again.get("hasDialog"):
+                driver.execute_script(ANSWER_GROUP_QUESTIONS_JS)
+                human_sleep(0.8, 1.0)
+                driver.execute_script(SUBMIT_GROUP_QUESTIONS_JS)
+                human_sleep(1.5, 2.0)
+        except Exception:
+            pass
+
+        btn_label = sub_res.get("text", "Gửi")
+        if sub_res.get("clicked"):
             _append_log(
                 job_id,
-                f"📝 Phát hiện câu hỏi nhóm riêng tư «{name}». Đang tự động bắt DOM và điền câu trả lời...",
-                "info",
+                f"✅ Đã bấm nút [{btn_label}] ({details_str}) thành công cho nhóm «{name}»!",
+                "success",
             )
-            answer_res = driver.execute_script(ANSWER_GROUP_QUESTIONS_JS) or {}
-            ans_count = answer_res.get("answeredCount", 0)
-            rad_count = answer_res.get("radiosSelected", 0)
-            chk_count = answer_res.get("checkboxesChecked", 0)
-            rules_ok = answer_res.get("rulesAgreed", False)
-
-            detail_parts = []
-            if ans_count:
-                detail_parts.append(f"{ans_count} câu tự luận")
-            if rad_count:
-                detail_parts.append(f"{rad_count} trắc nghiệm")
-            if chk_count:
-                detail_parts.append(f"{chk_count} hộp kiểm")
-            if rules_ok:
-                detail_parts.append("đồng ý quy tắc nhóm")
-            details_str = ", ".join(detail_parts) if detail_parts else "đã điền thông tin"
-
-            human_sleep(1.0, 1.8)
-
-            sub_res = driver.execute_script(SUBMIT_GROUP_QUESTIONS_JS) or {}
-            human_sleep(1.5, 2.5)
-
-            if sub_res.get("clicked"):
-                _append_log(
-                    job_id,
-                    f"✅ Đã gửi câu trả lời ({details_str}) thành công cho quản trị viên nhóm «{name}»!",
-                    "success",
-                )
-            else:
-                _append_log(
-                    job_id,
-                    f"✅ Đã hoàn tất trả lời câu hỏi nhóm «{name}» ({details_str}).",
-                    "success",
-                )
-            return "pending"
         else:
-            _append_log(job_id, f"✅ Đã tham gia thành công nhóm «{name}»!", "success")
-            return "joined" if privacy == "public" else "pending"
+            _append_log(
+                job_id,
+                f"✅ Đã hoàn tất xử lý câu hỏi nhóm «{name}» ({details_str}).",
+                "success",
+            )
+        return "pending"
 
     except Exception as exc:
         _append_log(job_id, f"⚠️ Xử lý tham gia nhóm «{name}» gặp sự cố: {exc}", "warn")
         return item.get("note") or "—"
-
 
 
 def _pending_key(owner: Optional[str], uid: str) -> str:
@@ -484,11 +597,7 @@ def _append_log(job_id: str, text: str, tone: str = "info") -> None:
         broadcast(level, text, uid=_jobs.get(job_id, {}).get("uid"))
     except Exception:
         pass
-    try:
-        from modules.module_10_group_scan.models import add_session_log
-        add_session_log(job_id, tone, text)
-    except Exception:
-        pass
+
 
 
 def _set_job(job_id: str, **fields) -> None:

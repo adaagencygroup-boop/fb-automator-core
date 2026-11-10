@@ -64,15 +64,7 @@ DDL_STATEMENTS = [
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     """,
-    """
-    CREATE TABLE IF NOT EXISTS scanned_group_session_logs (
-        id SERIAL PRIMARY KEY,
-        session_id VARCHAR(64) NOT NULL,
-        level VARCHAR(20) DEFAULT 'INFO',
-        message TEXT NOT NULL,
-        logged_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    """,
+
     """
     CREATE TABLE IF NOT EXISTS scanned_group_categories (
         id SERIAL PRIMARY KEY,
@@ -94,7 +86,6 @@ DDL_STATEMENTS = [
     );
     """,
     "CREATE INDEX IF NOT EXISTS idx_scanned_group_sessions_owner ON scanned_group_sessions (owner_username, created_at DESC);",
-    "CREATE INDEX IF NOT EXISTS idx_scanned_group_session_logs_sid ON scanned_group_session_logs (session_id);",
     "CREATE INDEX IF NOT EXISTS idx_scanned_group_cat_owner ON scanned_group_categories (owner_username, name);",
     "CREATE INDEX IF NOT EXISTS idx_scanned_group_cat_grp_owner ON scanned_group_category_groups (owner_username, category_name);",
     """
@@ -190,7 +181,6 @@ def init_models() -> None:
     # Tự động di chuyển/đổi tên bảng cũ sang tên chuẩn bắt đầu bằng scanned_ (nếu có)
     rename_statements = [
         "ALTER TABLE IF EXISTS group_scan_sessions RENAME TO scanned_group_sessions;",
-        "ALTER TABLE IF EXISTS group_scan_session_logs RENAME TO scanned_group_session_logs;",
         "ALTER TABLE IF EXISTS group_scan_categories RENAME TO scanned_group_categories;",
         "ALTER TABLE IF EXISTS group_scan_category_groups RENAME TO scanned_group_category_groups;",
     ]
@@ -199,6 +189,12 @@ def init_models() -> None:
             db.execute(r_stmt)
         except Exception:
             pass
+
+    # Luôn loại bỏ bảng scanned_group_session_logs nếu có để không tốn dung lượng DB
+    try:
+        db.execute("DROP TABLE IF EXISTS scanned_group_session_logs CASCADE;")
+    except Exception:
+        pass
 
     for statement in DDL_STATEMENTS:
         try:
@@ -713,15 +709,8 @@ def update_scan_session(
 
 
 def add_session_log(session_id: str, level: str, message: str) -> None:
-    if not session_id or not message:
-        return
-    try:
-        db.execute(
-            "INSERT INTO scanned_group_session_logs (session_id, level, message) VALUES (?, ?, ?)",
-            (session_id, (level or "INFO").upper(), str(message)),
-        )
-    except Exception:
-        pass
+    """Không lưu log chi tiết vào database để tối ưu hiệu năng và dung lượng."""
+    return
 
 
 def list_scan_sessions(
@@ -809,19 +798,18 @@ def list_scan_sessions(
         if target_words:
             sample_results = list_groups_for_keywords(owner, target_words, limit=10)
 
-        log_rows = db.fetch_all(
-            "SELECT level, message, logged_at FROM scanned_group_session_logs WHERE session_id = ? ORDER BY id ASC LIMIT 50",
-            (sid,),
-        )
-        logs_list = []
-        for lr in log_rows:
-            l_time = lr.get("logged_at")
-            l_time_str = l_time.strftime("%H:%M:%S") if hasattr(l_time, "strftime") else "--:--:--"
-            logs_list.append({
-                "time": l_time_str,
-                "level": lr.get("level") or "INFO",
-                "message": lr.get("message") or "",
-            })
+        logs_list = [
+            {
+                "time": start_str.split(" ")[-1] if " " in start_str else "00:00:00",
+                "level": "INFO",
+                "message": f"Bắt đầu phiên quét {sid}",
+            },
+            {
+                "time": end_str.split(" ")[-1] if " " in end_str else "00:00:00",
+                "level": "SUCCESS",
+                "message": f"Hoàn tất quét. Thu thập được {r.get('total_found') or len(sample_results)} kết quả.",
+            },
+        ]
 
         total_cnt = int(r.get("total_found") or len(sample_results))
         target_cnt = int(r.get("target_count") or max(total_cnt, 30))
@@ -886,7 +874,6 @@ def delete_scan_session(owner: Optional[str], session_id: str) -> bool:
     owner = (owner or "").strip()
     if not owner or not session_id:
         return False
-    db.execute("DELETE FROM scanned_group_session_logs WHERE session_id = ?", (session_id,))
     db.execute(
         "DELETE FROM scanned_group_sessions WHERE owner_username = ? AND session_id = ?",
         (owner, session_id),

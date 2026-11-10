@@ -215,7 +215,14 @@ export default function GroupScanPostsPage() {
   // Execution & Logs
   const [isExecuting, setIsExecuting] = useState(false);
   const [activeJobId, setActiveJobId] = useState(null);
-  const [logs, setLogs] = useState([]);
+  const [logs, setLogs] = useState([
+    {
+      time: "—",
+      thread: "System",
+      message: "Module 10.3 sẵn sàng. Chọn tài khoản & nhóm cần quét bài viết, sau đó bấm Bắt đầu thực thi.",
+      color: "text-slate-300",
+    },
+  ]);
   const [copiedLog, setCopiedLog] = useState(false);
 
   // Polling Live Status

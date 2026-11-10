@@ -171,11 +171,7 @@ def _append_post_log(job_id: str, message: str, level: str = "info", thread: str
             if len(logs) > 1000:
                 job["logs"] = logs[-800:]
 
-    try:
-        from modules.module_10_group_scan.models import add_session_log
-        add_session_log(job_id, level.upper(), f"[{thread}] {message}")
-    except Exception:
-        pass
+
 
 
 def _set_post_job(job_id: str, **kwargs: Any) -> None:
