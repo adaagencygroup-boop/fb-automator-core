@@ -2762,6 +2762,7 @@ def _acquire_page_scanner_browser(
     Trả về (driver, created_new_driver, lock, acquired_lock).
     """
     from core.browser import (
+        close_driver_for_uid,
         get_active_drivers,
         get_profile_lock,
         load_cookies,
@@ -2789,17 +2790,30 @@ def _acquire_page_scanner_browser(
     if not acquired_lock:
         raise RuntimeError(f"Profile của nick {target_uid} đang bị khóa bởi tiến trình khác")
 
-    driver = open_browser(
-        uid=target_uid,
-        owner=owner,
-        proxy=proxy,
-        scope="page_scanner",
-        headless=headless,
-        verify_egress=False,
-        allow_direct_fallback=allow_direct_fallback,
-    )
-    if cookie_str:
-        load_cookies(driver, cookie_str)
+    driver = None
+    try:
+        driver = open_browser(
+            uid=target_uid,
+            owner=owner,
+            proxy=proxy,
+            scope="page_scanner",
+            headless=headless,
+            verify_egress=False,
+            allow_direct_fallback=allow_direct_fallback,
+        )
+        if cookie_str:
+            load_cookies(driver, cookie_str)
+    except Exception:
+        # Nơi gọi không nhận được lock khi hàm này ném lỗi → phải tự nhả ở đây,
+        # nếu không profile bị khóa vĩnh viễn (kể cả Module 02) tới khi restart app.
+        if driver is not None:
+            try:
+                close_driver_for_uid(target_uid, owner=owner)
+            except Exception:
+                pass
+        lock.release()
+        raise
+
     try:
         _ensure_scanner_page_load_timeout(driver)
     except Exception:
