@@ -79,8 +79,15 @@ class LoginBody(BaseModel):
     password: str = ""
 
 
+class FeatureItem(BaseModel):
+    key: str
+    days: Optional[int] = 0
+    enabled: Optional[bool] = True
+
+
 class DaysBody(BaseModel):
     days: int
+    features: Optional[List[FeatureItem]] = None
 
 
 class ResetHwidBody(BaseModel):
@@ -95,6 +102,7 @@ class CreateUserBody(BaseModel):
     status: str = "approved"
     role: Optional[str] = "user"
     hwid: Optional[str] = None
+    features: Optional[List[FeatureItem]] = None
 
 
 class EditUserBody(BaseModel):
@@ -105,6 +113,7 @@ class EditUserBody(BaseModel):
     status: Optional[str] = None
     role: Optional[str] = None
     hwid: Optional[str] = None
+    features: Optional[List[FeatureItem]] = None
 
 
 class PasswordBody(BaseModel):
@@ -459,7 +468,8 @@ def admins(authorization: Optional[str] = Header(None), status_filter: str = "")
 
 @admin_router.post("/users")
 def create_user(body: CreateUserBody, request: Request):
-    return create_user_admin(body.username, body.password, body.contact_info or "", body.days, body.status, body.role or "user", request, hwid=body.hwid)
+    feat_list = [f.model_dump() for f in body.features] if body.features else None
+    return create_user_admin(body.username, body.password, body.contact_info or "", body.days, body.status, body.role or "user", request, hwid=body.hwid, features=feat_list)
 
 
 @admin_router.put("/users/{user_id}")
@@ -474,12 +484,14 @@ def remove_user(user_id: int, request: Request):
 
 @admin_router.put("/users/{user_id}/approve")
 def approve(user_id: int, body: DaysBody, request: Request):
-    return approve_user(user_id, body.days, request)
+    feat_list = [f.model_dump() for f in body.features] if body.features else None
+    return approve_user(user_id, body.days, request, features=feat_list)
 
 
 @admin_router.put("/users/{user_id}/extend")
 def extend(user_id: int, body: DaysBody, request: Request):
-    return extend_user(user_id, body.days, request)
+    feat_list = [f.model_dump() for f in body.features] if body.features else None
+    return extend_user(user_id, body.days, request, features=feat_list)
 
 
 @admin_router.put("/users/{user_id}/ban")
