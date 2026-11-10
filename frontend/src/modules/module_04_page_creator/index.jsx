@@ -111,6 +111,7 @@ function stateFromRun(run) {
   const latest = run[run.length - 1];
   if (!latest) return "queued";
   if (latest.action === "completed") return "done";
+  if (latest.action === "partial") return "partial";
   if (latest.action === "failed") return "error";
   if (latest.action === "step") return "running";
   if (latest.action === "claim") return "claimed";
@@ -175,7 +176,7 @@ function buildJobRows(pages, accounts, logs, startMs) {
   const buckets = new Map();
   logs.forEach((log) => {
     const event = eventOf(log);
-    if (!["claim", "step", "completed", "failed"].includes(event.action)) return;
+    if (!["claim", "step", "completed", "partial", "failed"].includes(event.action)) return;
     const stamp = Date.parse(event.time);
     if (startMs && Number.isFinite(stamp) && stamp + 5000 < startMs) return;
     const key = `${event.uid}::${event.pageName}`;
@@ -206,7 +207,7 @@ function buildJobRows(pages, accounts, logs, startMs) {
     const latest = run[run.length - 1];
     const state = stateFromRun(run);
     const account = accounts.find((item) => item.uid === page.uid);
-    const percent = latest?.percent || (state === "done" || state === "error" ? 100 : 0);
+      const percent = latest?.percent || (state === "done" || state === "partial" || state === "error" ? 100 : 0);
     return {
       key: `${key}-${index}`,
       index,
@@ -262,6 +263,7 @@ const JOB_STATUS = {
   claimed: { label: "Chờ luồng", className: "bg-[#E5EEFF] text-[#565E74]", dot: true },
   queued: { label: "Chờ chạy", className: "bg-[#E5EEFF] text-[#565E74]", dot: true },
   done: { label: "Đã chạy", className: "bg-[#D1FAE5] text-[#065F46]", icon: "status_done" },
+  partial: { label: "Một phần", className: "bg-amber-50 text-amber-700", icon: "status_error" },
   error: { label: "Chạy lỗi", className: "bg-[#FFDAD6] text-[#93000A]", icon: "status_error" },
   paused: { label: "Tạm dừng", className: "bg-amber-50 text-amber-700", dot: true },
 };
@@ -269,13 +271,13 @@ const JOB_STATUS = {
 const RUN_CARD = "rounded-xl bg-white shadow-[0_1px_4px_rgba(15,23,42,0.04)]";
 
 /** Màn "Đang tạo Fanpage" — theo Figma node 1020:11714 */
-function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
+function RunningScreen({ task, accounts, logs, paused, stopped, finished, onPause, onStop, onBackToSetup }) {
   const logRef = useRef(null);
   const pages = Array.isArray(task?.pages) ? task.pages : [];
   const startMs = Number(task?.start_time) || 0;
   const rows = useMemo(() => buildJobRows(pages, accounts, logs, startMs), [pages, accounts, logs, startMs]);
   const success = rows.filter((row) => row.state === "done").length;
-  const failed = rows.filter((row) => row.state === "error").length;
+  const failed = rows.filter((row) => row.state === "error" || row.state === "partial").length;
   const active = rows.filter((row) => row.state === "running");
   const waiting = rows.filter((row) => row.state === "claimed");
   const liveRows = active.length ? active : waiting;
@@ -288,41 +290,66 @@ function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
     }),
     [logs, startMs]
   );
+  const sessionEnded = stopped || finished;
 
   useEffect(() => {
     const node = logRef.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [engineLogs.length]);
 
+  const title = stopped
+    ? "Đã dừng khẩn cấp"
+    : finished
+      ? "Hoàn tất tạo Fanpage"
+      : paused
+        ? "Đang tạm dừng"
+        : "Đang tạo Fanpage";
+  const subtitle = stopped
+    ? "Tiến trình đã dừng. Bạn có thể xem lại kết quả các luồng bên dưới rồi quay về màn cấu hình khi sẵn sàng."
+    : finished
+      ? "Đã hoàn tất toàn bộ luồng. Xem kết quả bên dưới, bấm Quay về cấu hình khi muốn thiết lập job mới."
+      : "Quá trình tạo Fanpage đang diễn ra, vui lòng không đóng cửa sổ để tránh ngắt quãng luồng xử lý.";
+  const dotClass = stopped ? "bg-[#BA1A1A]" : finished ? "bg-[#059669]" : paused ? "bg-amber-500" : "bg-[#004AC6]";
+
   return (
     <div className={`${PAGE_FONT} -m-6 flex min-h-full flex-col gap-6 bg-[#F8F9FF] p-4 sm:p-6`}>
       <section className={`${RUN_CARD} flex flex-col gap-4 p-6 lg:flex-row lg:items-center lg:justify-between`}>
         <div className="flex max-w-[581px] flex-col gap-1">
           <div className="flex items-center gap-2">
-            <span aria-hidden="true" className={`size-2.5 shrink-0 rounded-full ${paused ? "bg-amber-500" : "bg-[#004AC6]"}`} />
-            <h1 className="text-2xl leading-8 font-bold tracking-[-0.6px] text-[#0B1C30]">{paused ? "Đang tạm dừng" : "Đang tạo Fanpage"}</h1>
+            <span aria-hidden="true" className={`size-2.5 shrink-0 rounded-full ${dotClass}`} />
+            <h1 className="text-2xl leading-8 font-bold tracking-[-0.6px] text-[#0B1C30]">{title}</h1>
           </div>
-          <p className="text-sm leading-[22px] text-[#6B5D5D]">
-            Quá trình tạo Fanpage đang diễn ra, vui lòng không đóng cửa sổ để tránh ngắt quãng luồng xử lý.
-          </p>
+          <p className="text-sm leading-[22px] text-[#6B5D5D]">{subtitle}</p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={onPause}
-            className="flex h-9 items-center gap-2 rounded-lg bg-[#EFF4FF] px-4 text-sm leading-5 font-medium text-[#0B1C30] shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#E5EEFF]"
-          >
-            {paused ? <Play aria-hidden="true" className="size-3.5" /> : <CreatorIcon name="run_pause" />}
-            {paused ? "Chạy tiếp" : "Tạm dừng"}
-          </button>
-          <button
-            type="button"
-            onClick={onStop}
-            className="flex h-9 items-center gap-2 rounded-lg bg-[#BA1A1A] px-4 text-sm leading-5 font-medium text-white shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#A11616]"
-          >
-            <CreatorIcon name="run_stop" />
-            Dừng khẩn cấp
-          </button>
+          {sessionEnded ? (
+            <button
+              type="button"
+              onClick={onBackToSetup}
+              className="flex h-9 items-center gap-2 rounded-lg bg-[#0B1C30] px-4 text-sm leading-5 font-medium text-white shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#152A42]"
+            >
+              Quay về cấu hình
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onPause}
+                className="flex h-9 items-center gap-2 rounded-lg bg-[#EFF4FF] px-4 text-sm leading-5 font-medium text-[#0B1C30] shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#E5EEFF]"
+              >
+                {paused ? <Play aria-hidden="true" className="size-3.5" /> : <CreatorIcon name="run_pause" />}
+                {paused ? "Chạy tiếp" : "Tạm dừng"}
+              </button>
+              <button
+                type="button"
+                onClick={onStop}
+                className="flex h-9 items-center gap-2 rounded-lg bg-[#BA1A1A] px-4 text-sm leading-5 font-medium text-white shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#A11616]"
+              >
+                <CreatorIcon name="run_stop" />
+                Dừng khẩn cấp
+              </button>
+            </>
+          )}
         </div>
       </section>
 
@@ -332,9 +359,9 @@ function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
         <MetricCard
           label="Đang chạy"
           value={active.length}
-          suffix={paused ? "đang tạm dừng" : "luồng song song"}
+          suffix={stopped ? "đã dừng" : finished ? "đã hoàn tất" : paused ? "đang tạm dừng" : "luồng song song"}
           icon="kpi_running"
-          iconClass={`bg-[#DBE1FF] text-[#004AC6] ${active.length && !paused ? "[&>span]:animate-spin" : ""}`}
+          iconClass={`bg-[#DBE1FF] text-[#004AC6] ${active.length && !paused && !sessionEnded ? "[&>span]:animate-spin" : ""}`}
           valueClass="text-[#2563EB]"
         />
         <MetricCard label="Hàng đợi" value={queued} suffix="chờ xử lý" icon="kpi_queue" iconClass="bg-[#DAE2FD] text-[#565E74]" />
@@ -365,7 +392,13 @@ function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
                       <td colSpan={4} className="px-4 py-8 text-sm text-[#434655]">Chưa nhận được danh sách page của phiên này.</td>
                     </tr>
                   ) : rows.map((row) => {
-                    const visual = paused && row.state === "running" ? "paused" : row.state;
+                    const visual = stopped && (row.state === "running" || row.state === "claimed" || row.state === "queued")
+                      ? "error"
+                      : finished && (row.state === "running" || row.state === "claimed" || row.state === "queued")
+                        ? "queued"
+                        : paused && row.state === "running"
+                          ? "paused"
+                          : row.state;
                     const badge = JOB_STATUS[visual];
                     return (
                       <tr key={row.key} className="even:bg-[rgba(248,249,255,0.5)]">
@@ -999,6 +1032,8 @@ function CreateView() {
   const [geminiModel, setGeminiModel] = useState("gemini-3.8-flash");
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [stopped, setStopped] = useState(false);
+  const [finished, setFinished] = useState(false);
   const [task, setTask] = useState(null);
   const [starting, setStarting] = useState(false);
   const [testingKey, setTestingKey] = useState(false);
@@ -1107,9 +1142,34 @@ function CreateView() {
   const refreshStatus = useCallback(async () => {
     try {
       const status = await getCreatorTaskStatus();
-      setTask(status);
-      setRunning(Boolean(status?.running));
+      setTask((current) => {
+        // Giữ pages/start_time đã gắn lúc start — status API có thể không còn pages sau khi dừng
+        if (!current?.pages?.length) return status;
+        return {
+          ...status,
+          pages: current.pages,
+          start_time: current.start_time || status?.start_time,
+          total_pages: current.total_pages || status?.total_pages,
+        };
+      });
+      const isRunning = Boolean(status?.running);
+      setRunning((wasRunning) => {
+        if (wasRunning && !isRunning) {
+          if (status?.stopped) {
+            setStopped(true);
+            setFinished(false);
+          } else {
+            setFinished(true);
+            setStopped(false);
+          }
+        }
+        return isRunning;
+      });
       setPaused(Boolean(status?.paused));
+      if (status?.stopped) {
+        setStopped(true);
+        setFinished(false);
+      }
     } catch {
       /* engine có thể đang khởi động lại */
     }
@@ -1211,6 +1271,24 @@ function CreateView() {
     const timer = setInterval(refreshStatus, 2500);
     return () => clearInterval(timer);
   }, [running, refreshStatus]);
+
+  // SSE/WS all_finished: luôn giữ màn tiến trình (dừng khẩn cấp hoặc hoàn tất thành công)
+  useEffect(() => {
+    if ((!running && !stopped && !finished) || !logs.length) return;
+    const latest = logs[logs.length - 1];
+    if (latest?.extra?.action !== "all_finished") return;
+    setRunning(false);
+    setPaused(false);
+    if (latest.extra.stopped) {
+      setStopped(true);
+      setFinished(false);
+      setTask((current) => (current ? { ...current, running: false, paused: false, stopped: true, finished: false } : current));
+      return;
+    }
+    setStopped(false);
+    setFinished(true);
+    setTask((current) => (current ? { ...current, running: false, paused: false, stopped: false, finished: true } : current));
+  }, [logs, running, stopped, finished]);
 
   useEffect(() => {
     if (!showPreview) return;
@@ -1404,9 +1482,13 @@ function CreateView() {
         threads: threadsNum,
         start_time: Date.now(),
         paused: false,
+        stopped: false,
+        finished: false,
       });
       setRunning(true);
       setPaused(false);
+      setStopped(false);
+      setFinished(false);
       refreshStatus();
     } catch (err) {
       toast.error(err.message || "Không bắt đầu được", "TẠO PAGE");
@@ -1416,13 +1498,18 @@ function CreateView() {
   };
 
   const handlePause = async () => {
+    if (stopped || finished) return;
     try {
       if (paused) {
         await resumePageCreation();
         setPaused(false);
+        setTask((current) => (current ? { ...current, paused: false } : current));
+        toast.success("Đã tiếp tục chạy các luồng.", "TẠO PAGE");
       } else {
         await pausePageCreation();
         setPaused(true);
+        setTask((current) => (current ? { ...current, paused: true } : current));
+        toast.success("Tạm dừng thành công. Các luồng đã được tạm dừng.", "TẠO PAGE");
       }
     } catch (err) {
       toast.error(err.message || "Không đổi được trạng thái", "TẠO PAGE");
@@ -1430,26 +1517,40 @@ function CreateView() {
   };
 
   const handleStop = async () => {
+    if (stopped || finished) return;
     if (!window.confirm("Dừng khẩn cấp sẽ đóng các Chrome đang tạo page. Tiếp tục?")) return;
     try {
       await stopPageCreation();
       setRunning(false);
       setPaused(false);
-      toast.info("Đã gửi lệnh dừng.", "TẠO PAGE");
+      setFinished(false);
+      setStopped(true);
+      setTask((current) => (current ? { ...current, running: false, paused: false, stopped: true, finished: false } : current));
+      toast.info("Đã dừng toàn bộ luồng. Đang giữ màn tiến trình.", "TẠO PAGE");
     } catch (err) {
       toast.error(err.message || "Không dừng được", "TẠO PAGE");
     }
   };
 
-  if (running) {
+  const handleBackToSetup = () => {
+    setStopped(false);
+    setFinished(false);
+    setRunning(false);
+    setPaused(false);
+  };
+
+  if (running || stopped || finished) {
     return (
       <RunningScreen
         task={task}
         accounts={Object.values(knownAccounts)}
         logs={logs}
         paused={paused}
+        stopped={stopped}
+        finished={finished}
         onPause={handlePause}
         onStop={handleStop}
+        onBackToSetup={handleBackToSetup}
       />
     );
   }

@@ -24,18 +24,11 @@ logger = logging.getLogger(__name__)
 
 
 def clean_group_url(raw_url: str) -> str:
-    """
-    Chuẩn hóa URL nhóm Facebook (Tương tự logic line.split('?')[0] trong FaceBook_Post_Group.py).
-    Loại bỏ giao thức http://, https://, query string ?ref=..., và dấu gạch chéo cuối.
-    """
     if not raw_url:
         return ""
     text = raw_url.strip()
-    # Loại bỏ query string đằng sau dấu ?
     text = text.split("?")[0].strip()
-    # Loại bỏ hash #
     text = text.split("#")[0].strip()
-    # Loại bỏ tiền tố giao thức
     text = re.sub(r"^https?://", "", text, flags=re.IGNORECASE)
     # Loại bỏ m.facebook.com, web.facebook.com thành facebook.com
     text = re.sub(r"^(m|web|touch|mbasic)\.facebook\.com", "facebook.com", text, flags=re.IGNORECASE)
@@ -196,7 +189,13 @@ def scrape_real_groups_via_browser(
     acquired_lock = False
 
     try:
-        from core.browser import get_active_drivers, get_profile_lock, load_cookies, open_browser
+        from core.browser import (
+            get_active_drivers,
+            get_profile_lock,
+            load_cookies,
+            open_browser,
+            unregister_active_driver,
+        )
 
         active_drivers = get_active_drivers(target_uid, owner=owner_val)
         if active_drivers:
@@ -672,13 +671,27 @@ def search_facebook_via_browser(
     acquired_lock = False
 
     try:
-        from core.browser import get_active_drivers, get_profile_lock, load_cookies, open_browser
+        from core.browser import (
+            get_active_drivers,
+            get_profile_lock,
+            load_cookies,
+            open_browser,
+            unregister_active_driver,
+        )
 
         active_drivers = get_active_drivers(target_uid, owner=owner)
         if active_drivers:
             driver = active_drivers[0]
-            logger.info(f"[{target_uid}] Tận dụng trình duyệt Chrome đang mở để cào nhóm.")
-        else:
+            try:
+                # Registry có thể còn giữ driver sau khi cửa sổ Chrome/session đã bị đóng.
+                _ = driver.current_url
+                logger.info(f"[{target_uid}] Tận dụng trình duyệt Chrome đang mở để cào nhóm.")
+            except Exception as exc:
+                logger.warning(f"[{target_uid}] Chrome session cũ không còn hợp lệ, mở session mới: {exc}")
+                unregister_active_driver(driver)
+                driver = None
+                active_drivers = []
+        if not active_drivers:
             lock = get_profile_lock(target_uid, owner=owner)
             acquired_lock = lock.acquire(timeout=8)
             if not acquired_lock:

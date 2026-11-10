@@ -155,187 +155,239 @@ def run_share_admin(
     creator_uid: str = "",
 ) -> dict:
     """
-    Thực thi toàn bộ luồng phân quyền Admin (UC-06) và đăng bài chào mừng.
-    Args:
-        driver: WebDriver đã mở tại Page vừa tạo.
-        target_admin_uid: UID tài khoản sẽ được cấp quyền Admin.
-        creator_password: Mật khẩu plaintext của nick đang chạy.
-        post_content: Nội dung bài viết chào mừng (từ Gemini).
-        image_path: Đường dẫn ảnh bài viết.
-        creator_uid: UID của nick đang thực thi tạo Page.
+    UC-06: phân quyền Admin rồi đăng bài chào mừng.
+    Gán Admin thất bại vẫn tiếp tục bước đăng bài — không dừng luồng.
     Returns:
-        dict: success (bool), error (str), page_url (str)
+        dict: success, admin_success, posted, error, page_url, admin_name
     """
-    result = {"success": False, "error": "", "page_url": "", "admin_name": ""}
+    from modules.module_04_page_creator.routes import (
+        CreatorStopRequested,
+        raise_if_creator_stopped,
+        stop_task_requested,
+        wait_if_paused,
+    )
+    from modules.module_04_page_creator.automation.page_flow import clean_facebook_page_url
 
-    try:
-        clean_target = (target_admin_uid or "").strip()
-        clean_creator = (creator_uid or "").strip()
+    result = {
+        "success": False,
+        "admin_success": False,
+        "posted": False,
+        "error": "",
+        "page_url": "",
+        "admin_name": "",
+    }
+    clean_target = (target_admin_uid or "").strip()
+    clean_creator = (creator_uid or "").strip()
 
-        # ── Trường hợp đặc biệt: UID nhận Admin trùng chính nick tạo trang ──
-        if clean_target and clean_creator and clean_target == clean_creator:
-            logger.info(f"Target admin UID ({clean_target}) matches creator UID. Account is already Page Owner/Full Control. Skipping admin delegation.")
+    def _try_post_welcome():
+        if not post_content:
+            return False
+        wait_if_paused()
+        raise_if_creator_stopped()
+        logger.info("Publishing welcome content on Fanpage...")
+        ok = _post_welcome_content(driver, post_content, image_path)
+        human_sleep(3.0, 5.0)
+        return bool(ok)
 
-            # Vẫn thực hiện đăng bài viết chào mừng (nếu có nội dung)
-            if post_content:
-                logger.info("Publishing welcome content on Fanpage...")
-                _post_welcome_content(driver, post_content, image_path)
-                human_sleep(3.0, 5.0)
-
-            from modules.module_04_page_creator.automation.page_flow import clean_facebook_page_url
-            cur_url = clean_facebook_page_url(driver.current_url or "")
-            result["success"] = True
-            result["page_url"] = cur_url
-            try:
-                from modules.module_02_account_manager.automation.login_flow import ensure_personal_profile
-                ensure_personal_profile(driver, uid=clean_creator)
-            except Exception:
-                pass
-            return result
-
-        # ── Bước 1: Điều hướng tới trang quản lý quyền truy cập ──
-        logger.info("Navigating to profile access settings...")
-        driver.get(PROFILE_ACCESS_URL)
-        human_sleep(4.0, 6.0)
-
-        # ── Bước 2: Click "Thêm mới" ──
-        add_btn = wait_and_find(driver, SHARE_ADMIN["add_new_button"], timeout=25)
+    def _return_personal():
         try:
-            add_btn.click()
-        except Exception:
-            driver.execute_script("arguments[0].click();", add_btn)
-        human_sleep(2.0, 3.5)
-
-        # ── Bước 3: Click "Tiếp" trên popup giới thiệu ──
-        try:
-            intro_next = wait_and_find(driver, SHARE_ADMIN["intro_next_button"], timeout=12)
-            try:
-                intro_next.click()
-            except Exception:
-                driver.execute_script("arguments[0].click();", intro_next)
-            human_sleep(1.5, 2.5)
-        except TimeoutException:
-            logger.info("No intro popup found, continuing to search admin...")
-
-        # ── Bước 4: Tìm kiếm UID Admin ──
-        search_input = wait_and_find(driver, SHARE_ADMIN["search_admin_input"], timeout=20)
-        search_input.clear()
-        human_type(search_input, target_admin_uid)
-        human_sleep(3.0, 4.5)
-
-        # ── Bước 5: Đọc tên trên kết quả, rồi mới click ──
-        first_result = wait_and_find(driver, SHARE_ADMIN["first_search_result"], timeout=20)
-        admin_name = read_admin_display_name(first_result, clean_target)
-        if admin_name:
-            result["admin_name"] = admin_name
-            logger.info(f"Admin display name for UID {clean_target}: {admin_name}")
-        try:
-            first_result.click()
-        except Exception:
-            driver.execute_script("arguments[0].click();", first_result)
-        human_sleep(2.0, 3.5)
-
-        # ── Bước 6: Bật switch "Toàn quyền kiểm soát" (Full Control) ──
-        logger.info("Locating full control switch in modal...")
-        switch_toggled = False
-
-        try:
-            switch_el = wait_and_find(driver, SHARE_ADMIN["full_control_switch"], timeout=20)
-            aria_checked = switch_el.get_attribute("aria-checked")
-            logger.info(f"Full control switch found. Initial aria-checked={aria_checked}")
-
-            if aria_checked == "false" or aria_checked is None:
-                # 1. Thử click trực tiếp vào input switch
-                try:
-                    switch_el.click()
-                except Exception:
-                    driver.execute_script("arguments[0].click();", switch_el)
-
-                human_sleep(1.0, 2.0)
-                aria_after = switch_el.get_attribute("aria-checked")
-
-                # 2. Nếu vẫn là false, click vào container cha hoặc trigger JS click
-                if aria_after == "false" or aria_after is None:
-                    logger.info("Input click didn't toggle state, attempting container click...")
-                    try:
-                        container = wait_and_find(driver, SHARE_ADMIN["full_control_switch_container"], timeout=6)
-                        container.click()
-                        human_sleep(1.0, 2.0)
-                    except Exception:
-                        driver.execute_script(
-                            "arguments[0].checked = true; "
-                            "arguments[0].setAttribute('aria-checked', 'true'); "
-                            "arguments[0].dispatchEvent(new Event('change', { bubbles: true })); "
-                            "arguments[0].click();",
-                            switch_el
-                        )
-                        human_sleep(1.0, 2.0)
-
-            switch_toggled = True
-            logger.info(f"Full control switch toggle complete. Final state: {switch_el.get_attribute('aria-checked')}")
-        except TimeoutException:
-            logger.warning("Full control switch input not found via primary locators, trying container click...")
-            try:
-                container = wait_and_find(driver, SHARE_ADMIN["full_control_switch_container"], timeout=10)
-                container.click()
-                switch_toggled = True
-                human_sleep(1.0, 2.0)
-            except Exception as e:
-                logger.error(f"Failed to toggle full control switch: {e}")
-
-        human_sleep(2.0, 3.5)
-
-        # ── Bước 7: Click "Cấp quyền truy cập" ──
-        grant_btn = wait_and_find(driver, SHARE_ADMIN["grant_access_button"], timeout=20)
-        try:
-            grant_btn.click()
-        except Exception:
-            driver.execute_script("arguments[0].click();", grant_btn)
-        human_sleep(3.0, 4.5)
-
-        # ── Bước 8: Nhập mật khẩu xác thực ──
-        pass_input = wait_and_find(driver, SHARE_ADMIN["password_confirm_input"], timeout=20)
-        pass_input.clear()
-        human_type(pass_input, creator_password)
-        human_sleep(1.0, 2.0)
-
-        confirm_btn = wait_and_find(driver, SHARE_ADMIN["confirm_password_button"], timeout=20)
-        try:
-            confirm_btn.click()
-        except Exception:
-            driver.execute_script("arguments[0].click();", confirm_btn)
-
-        logger.info(f"Admin access granted to UID: {target_admin_uid}. Waiting 15s for FB processing...")
-        human_sleep(15.0, 20.0)
-
-        # ── Bước 9: Đăng bài viết chào mừng trên Fanpage (nếu có nội dung) ──
-        if post_content:
-            logger.info("Publishing welcome content on Fanpage...")
-            _post_welcome_content(driver, post_content, image_path)
-            human_sleep(3.0, 5.0)
-
-        # ── Bước 10: Lấy URL Page trước khi chuyển trạng thái về nick cá nhân ──
-        from modules.module_04_page_creator.automation.page_flow import clean_facebook_page_url
-        cur_url = clean_facebook_page_url(driver.current_url or "")
-        if cur_url:
-            result["page_url"] = cur_url
-
-        try:
-            logger.info(f"[{clean_creator}] Switching profile back to personal account...")
             from modules.module_02_account_manager.automation.login_flow import ensure_personal_profile
             ensure_personal_profile(driver, uid=clean_creator)
         except Exception as e:
             logger.warning(f"Failed to return to personal profile: {e}")
 
-        result["success"] = True
+    try:
+        wait_if_paused()
+        raise_if_creator_stopped()
 
+        # ── UID Admin trùng nick tạo → bỏ qua phân quyền, vẫn đăng bài ──
+        if clean_target and clean_creator and clean_target == clean_creator:
+            logger.info(
+                f"Target admin UID ({clean_target}) matches creator UID. "
+                "Account is already Page Owner/Full Control. Skipping admin delegation."
+            )
+            result["admin_success"] = True
+            try:
+                result["posted"] = _try_post_welcome()
+            except CreatorStopRequested:
+                raise
+            except Exception as post_err:
+                logger.warning(f"Welcome post after same-UID skip failed: {post_err}")
+            result["page_url"] = clean_facebook_page_url(driver.current_url or "")
+            _return_personal()
+            result["success"] = True
+            return result
+
+        # ── Phân quyền Admin (lỗi → ghi nhận, không abort đăng bài) ──
+        try:
+            wait_if_paused()
+            raise_if_creator_stopped()
+            logger.info("Navigating to profile access settings...")
+            driver.get(PROFILE_ACCESS_URL)
+            human_sleep(4.0, 6.0)
+
+            wait_if_paused()
+            raise_if_creator_stopped()
+            add_btn = wait_and_find(driver, SHARE_ADMIN["add_new_button"], timeout=25)
+            try:
+                add_btn.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", add_btn)
+            human_sleep(2.0, 3.5)
+
+            try:
+                intro_next = wait_and_find(driver, SHARE_ADMIN["intro_next_button"], timeout=12)
+                try:
+                    intro_next.click()
+                except Exception:
+                    driver.execute_script("arguments[0].click();", intro_next)
+                human_sleep(1.5, 2.5)
+            except TimeoutException:
+                logger.info("No intro popup found, continuing to search admin...")
+
+            wait_if_paused()
+            raise_if_creator_stopped()
+            search_input = wait_and_find(driver, SHARE_ADMIN["search_admin_input"], timeout=20)
+            search_input.clear()
+            human_type(search_input, target_admin_uid)
+            human_sleep(3.0, 4.5)
+
+            wait_if_paused()
+            raise_if_creator_stopped()
+            first_result = wait_and_find(driver, SHARE_ADMIN["first_search_result"], timeout=20)
+            admin_name = read_admin_display_name(first_result, clean_target)
+            if admin_name:
+                result["admin_name"] = admin_name
+                logger.info(f"Admin display name for UID {clean_target}: {admin_name}")
+            try:
+                first_result.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", first_result)
+            human_sleep(2.0, 3.5)
+
+            logger.info("Locating full control switch in modal...")
+            try:
+                switch_el = wait_and_find(driver, SHARE_ADMIN["full_control_switch"], timeout=20)
+                aria_checked = switch_el.get_attribute("aria-checked")
+                logger.info(f"Full control switch found. Initial aria-checked={aria_checked}")
+
+                if aria_checked == "false" or aria_checked is None:
+                    try:
+                        switch_el.click()
+                    except Exception:
+                        driver.execute_script("arguments[0].click();", switch_el)
+
+                    human_sleep(1.0, 2.0)
+                    aria_after = switch_el.get_attribute("aria-checked")
+                    if aria_after == "false" or aria_after is None:
+                        logger.info("Input click didn't toggle state, attempting container click...")
+                        try:
+                            container = wait_and_find(driver, SHARE_ADMIN["full_control_switch_container"], timeout=6)
+                            container.click()
+                            human_sleep(1.0, 2.0)
+                        except Exception:
+                            driver.execute_script(
+                                "arguments[0].checked = true; "
+                                "arguments[0].setAttribute('aria-checked', 'true'); "
+                                "arguments[0].dispatchEvent(new Event('change', { bubbles: true })); "
+                                "arguments[0].click();",
+                                switch_el,
+                            )
+                            human_sleep(1.0, 2.0)
+
+                logger.info(
+                    f"Full control switch toggle complete. Final state: {switch_el.get_attribute('aria-checked')}"
+                )
+            except TimeoutException:
+                logger.warning("Full control switch input not found via primary locators, trying container click...")
+                try:
+                    container = wait_and_find(driver, SHARE_ADMIN["full_control_switch_container"], timeout=10)
+                    container.click()
+                    human_sleep(1.0, 2.0)
+                except Exception as e:
+                    raise RuntimeError(f"Không bật được Full Control: {e}") from e
+
+            human_sleep(2.0, 3.5)
+
+            wait_if_paused()
+            raise_if_creator_stopped()
+            grant_btn = wait_and_find(driver, SHARE_ADMIN["grant_access_button"], timeout=20)
+            try:
+                grant_btn.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", grant_btn)
+            human_sleep(3.0, 4.5)
+
+            wait_if_paused()
+            raise_if_creator_stopped()
+            pass_input = wait_and_find(driver, SHARE_ADMIN["password_confirm_input"], timeout=20)
+            pass_input.clear()
+            human_type(pass_input, creator_password)
+            human_sleep(1.0, 2.0)
+
+            confirm_btn = wait_and_find(driver, SHARE_ADMIN["confirm_password_button"], timeout=20)
+            try:
+                confirm_btn.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", confirm_btn)
+
+            logger.info(f"Admin access granted to UID: {target_admin_uid}. Waiting 15s for FB processing...")
+            slept = 0.0
+            target_wait = 15.0
+            while slept < target_wait:
+                wait_if_paused()
+                raise_if_creator_stopped()
+                step = min(0.5, target_wait - slept)
+                time.sleep(step)
+                slept += step
+
+            result["admin_success"] = True
+        except CreatorStopRequested:
+            raise
+        except Exception as admin_err:
+            if stop_task_requested:
+                raise CreatorStopRequested("stopped") from admin_err
+            logger.exception(f"Share admin step failed (will still try welcome post): {admin_err}")
+            result["admin_success"] = False
+            result["error"] = str(admin_err)
+            # Đóng modal/settings nếu còn kẹt để bước đăng bài không bị chặn
+            try:
+                driver.get("https://web.facebook.com")
+                human_sleep(2.0, 3.5)
+            except Exception:
+                pass
+
+        # ── Đăng bài chào mừng: luôn chạy dù Admin thất bại ──
+        try:
+            result["posted"] = _try_post_welcome()
+        except CreatorStopRequested:
+            raise
+        except Exception as post_err:
+            logger.warning(f"Welcome post step failed: {post_err}")
+            if not result["error"]:
+                result["error"] = f"Đăng bài thất bại: {post_err}"
+
+        cur_url = clean_facebook_page_url(driver.current_url or "")
+        if cur_url:
+            result["page_url"] = cur_url
+
+        _return_personal()
+        # Luồng page coi là đi hết tiến trình nếu Admin OK hoặc đã cố đăng bài
+        result["success"] = bool(result["admin_success"] or result["posted"] or not post_content)
+        if not result["admin_success"] and not result["error"]:
+            result["error"] = "Cấp quyền Admin thất bại"
+        return result
+
+    except CreatorStopRequested:
+        result["error"] = "Đã dừng khẩn cấp"
+        result["success"] = False
+        return result
     except Exception as e:
+        if stop_task_requested:
+            result["error"] = "Đã dừng khẩn cấp"
+            result["success"] = False
+            return result
         logger.exception(f"Share admin flow failed: {e}")
         result["error"] = str(e)
-        try:
-            from modules.module_02_account_manager.automation.login_flow import ensure_personal_profile
-            ensure_personal_profile(driver, uid=clean_creator)
-        except Exception:
-            pass
-
-    return result
+        _return_personal()
+        return result

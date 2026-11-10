@@ -55,6 +55,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const editorRef = useRef(null);
   const completionToastJobRef = useRef(null);
   const draftWriteInitializedRef = useRef(false);
+  const draftBaselineRef = useRef(null);
   const { setUnsavedChanges } = useUnsavedChanges();
 
   // Bước 1: Chiến dịch
@@ -254,7 +255,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
       draftWriteInitializedRef.current = true;
       return;
     }
-    writeGroupPostDraft({
+    const draft = {
       campaignId,
       campaignName,
       campaignDescription,
@@ -291,8 +292,14 @@ export default function GroupPostModule({ actionType = "POST" }) {
       scheduleDate,
       scheduleTime,
       isPostingSettingsLocked,
-    }, draftScope);
-    setUnsavedChanges(true, async () => {
+    };
+    const draftSnapshot = JSON.stringify(draft);
+    if (draftBaselineRef.current === null) {
+      draftBaselineRef.current = draftSnapshot;
+    }
+    writeGroupPostDraft(draft, draftScope);
+    const hasUnsavedChanges = draftSnapshot !== draftBaselineRef.current;
+    setUnsavedChanges(hasUnsavedChanges, async () => {
       await clearGroupPostDraft(draftScope);
       await writeGroupPostDraftMedia([], draftScope);
     });
@@ -642,8 +649,9 @@ export default function GroupPostModule({ actionType = "POST" }) {
 
     const delayMinValue = Number(delayMin);
     const delayMaxValue = Number(delayMax);
-    if (!Number.isFinite(delayMinValue) || !Number.isFinite(delayMaxValue) || delayMinValue < 0 || delayMaxValue < delayMinValue) {
-      toast.warning("Bước 7: khoảng nghỉ phải là số không âm và giá trị 'Đến' không được nhỏ hơn giá trị 'Từ'.", "CẤU HÌNH CHƯA HỢP LỆ");
+    const delayLimit = delayUnit === "minutes" ? 60 : 3600;
+    if (!Number.isFinite(delayMinValue) || !Number.isFinite(delayMaxValue) || delayMinValue < 0 || delayMaxValue < delayMinValue || delayMinValue > delayLimit || delayMaxValue > delayLimit) {
+      toast.warning(`Bước 7: khoảng nghỉ phải từ 0 đến ${delayLimit} ${delayUnit === "minutes" ? "phút" : "giây"}, và giá trị 'Đến' không được nhỏ hơn giá trị 'Từ'.`, "CẤU HÌNH CHƯA HỢP LỆ");
       document.getElementById("step-7-posting")?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
@@ -949,9 +957,9 @@ export default function GroupPostModule({ actionType = "POST" }) {
       {/* Bước 9: Tiến trình */}
       <div id="step-9-progress" className="scroll-mt-6">
         <GroupProgressSection
-          stepNumber="9"
           runState={runState}
           campaignProgress={campaignProgress}
+          onClearLogs={() => setCampaignProgress((current) => current ? { ...current, logs: [] } : current)}
         />
       </div>
 

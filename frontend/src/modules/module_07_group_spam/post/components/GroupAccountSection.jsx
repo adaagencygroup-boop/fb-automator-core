@@ -36,6 +36,9 @@ export default function GroupAccountSection({
   stepNumber = "2",
 }) {
   const effectiveAccounts = useMemo(() => accounts || [], [accounts]);
+  const isEligible = (account) =>
+    String(account?.status || "").toLowerCase() === "live" &&
+    String(account?.login_status || "").toLowerCase() === "logged_in";
 
   const [accountSearch, setAccountSearch] = useState("");
 
@@ -48,6 +51,11 @@ export default function GroupAccountSection({
     );
   }, [accountSearch, effectiveAccounts]);
 
+  const displayedAccounts = useMemo(
+    () => filteredAccounts.filter((account) => String(account.login_status || "").toLowerCase() === "logged_in"),
+    [filteredAccounts]
+  );
+
   const tableContainerRef = useRef(null);
   const rowsRef = useRef(filteredAccounts);
   const selectedKeysRef = useRef(selectedAccountKeys);
@@ -57,11 +65,17 @@ export default function GroupAccountSection({
     selectedKeysRef.current = selectedAccountKeys;
   }, [filteredAccounts, selectedAccountKeys]);
 
+  useEffect(() => {
+    if (!effectiveAccounts.length) return;
+    const eligibleKeys = new Set(effectiveAccounts.filter(isEligible).map((account) => account.key));
+    setSelectedAccountKeys((current) => current.filter((key) => eligibleKeys.has(key)));
+  }, [effectiveAccounts, setSelectedAccountKeys]);
+
   // Gắn cơ chế drag-to-select (giữ chuột kéo để chọn nhiều dòng liên tục)
   useEffect(() => {
     if (!tableContainerRef.current) return;
     return attachDragSelection(tableContainerRef.current, {
-      getVisibleKeys: () => rowsRef.current.map((row) => row.key),
+      getVisibleKeys: () => rowsRef.current.filter(isEligible).map((row) => row.key),
       getSelectedKeys: () => selectedKeysRef.current,
       onSelectionChange: (keys) => {
         selectedKeysRef.current = keys;
@@ -73,6 +87,8 @@ export default function GroupAccountSection({
 
   // Toggle chọn 1 tài khoản
   const toggleAccount = (key, checked) => {
+    const account = effectiveAccounts.find((item) => item.key === key);
+    if (!account || !isEligible(account)) return;
     setSelectedAccountKeys((current) =>
       checked ? [...new Set([...current, key])] : current.filter((item) => item !== key)
     );
@@ -87,7 +103,7 @@ export default function GroupAccountSection({
 
   // Chọn tất cả tài khoản trong kết quả lọc
   const handleSelectAll = () => {
-    setSelectedAccountKeys(filteredAccounts.map((account) => account.key));
+    setSelectedAccountKeys(filteredAccounts.filter(isEligible).map((account) => account.key));
   };
 
   // Làm mới và đồng bộ lại danh sách tài khoản
@@ -142,34 +158,38 @@ export default function GroupAccountSection({
                 <th className="w-12 px-4 py-3">
                   <Checkbox
                     checked={
-                      filteredAccounts.length > 0 &&
-                      filteredAccounts.every((account) => selectedAccountKeys.includes(account.key))
+                      displayedAccounts.some(isEligible) &&
+                      displayedAccounts.filter(isEligible).every((account) => selectedAccountKeys.includes(account.key))
                     }
                     onCheckedChange={(checked) =>
-                      setSelectedAccountKeys(checked ? filteredAccounts.map((account) => account.key) : [])
+                      setSelectedAccountKeys(checked ? displayedAccounts.filter(isEligible).map((account) => account.key) : [])
                     }
                   />
                 </th>
                 <th className="px-3 py-3 font-semibold">Tài khoản Facebook</th>
                 <th className="px-3 py-3 font-semibold">UID Facebook</th>
-                <th className="px-3 py-3 font-semibold">Trạng thái</th>
+                <th className="px-3 py-3 font-semibold">Trạng thái tài khoản</th>
+                <th className="px-3 py-3 font-semibold">Trạng thái đăng nhập</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredAccounts.map((account, index) => {
+              {displayedAccounts.map((account, index) => {
                 const selected = selectedAccountKeys.includes(account.key);
+                const eligible = isEligible(account);
+                const loggedIn = String(account.login_status || "").toLowerCase() === "logged_in";
                 return (
                   <tr
                     key={account.key}
                     data-account-key={account.key}
-                    onClick={(e) => handleRowClick(account.key, e)}
-                    className={`cursor-pointer transition-colors select-none ${
+                    onClick={(e) => eligible && handleRowClick(account.key, e)}
+                    className={`${eligible ? "cursor-pointer" : "cursor-not-allowed opacity-50"} transition-colors select-none ${
                       selected ? "bg-blue-50/70 hover:bg-blue-100/60" : "bg-white hover:bg-slate-50"
                     }`}
                   >
                     <td className="px-4 py-2.5">
                       <Checkbox
                         checked={selected}
+                        disabled={!eligible}
                         onCheckedChange={(checked) => toggleAccount(account.key, checked)}
                       />
                     </td>
@@ -203,13 +223,16 @@ export default function GroupAccountSection({
                         </span>
                       )}
                     </td>
+                    <td className="px-3 py-2.5">
+                      {loggedIn && <span className="font-semibold text-emerald-600">● Đã đăng nhập</span>}
+                    </td>
                   </tr>
                 );
               })}
 
-              {!accountsLoading && !filteredAccounts.length && (
+              {!accountsLoading && !displayedAccounts.length && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-10 text-center">
+                  <td colSpan={5} className="px-4 py-10 text-center">
                     <div className="flex flex-col items-center justify-center space-y-2">
                       <Users className="size-8 text-slate-300" />
                       <p className="text-xs font-semibold text-slate-600">
@@ -239,7 +262,7 @@ export default function GroupAccountSection({
 
               {accountsLoading && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-10 text-center text-slate-400">
+                  <td colSpan={5} className="px-4 py-10 text-center text-slate-400">
                     <RefreshCw className="inline mr-2 size-4 animate-spin text-primary" />
                     Đang tải tài khoản từ Module 2...
                   </td>
