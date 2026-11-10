@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { User, api } from "@/lib/api";
-import { X, User as UserIcon, Contact, Cpu, Calendar, Copy, CheckCircle2, XCircle } from "lucide-react";
+import { X, User as UserIcon, Contact, Cpu, Calendar, Copy, CheckCircle2, RotateCw } from "lucide-react";
+import "./ApprovalModal.css";
 
 interface Props {
   user: User | null;
@@ -11,72 +12,130 @@ interface Props {
   mode?: "approve" | "extend";
 }
 
+interface ModuleOption {
+  id: number;
+  key: string;
+  name: string;
+  enabled: boolean;
+  days: number;
+}
+
+const DEFAULT_MODULES: Omit<ModuleOption, "enabled" | "days">[] = [
+  { id: 1, key: "accounts", name: "1. Quản lý tài khoản Facebook" },
+  { id: 2, key: "farm", name: "2. Đăng bài và tương tác tài khoản" },
+  { id: 3, key: "page_creator", name: "3. Tạo Fanpage hàng loạt" },
+  { id: 4, key: "page_manager", name: "4. Quản lý Fanpage" },
+  { id: 5, key: "chat", name: "5. Quản lý Chat Page" },
+  { id: 6, key: "group_spam", name: "6. Spam Group Hội Nhóm" },
+  { id: 7, key: "seeding", name: "7. Seeding Bài & Page" },
+  { id: 8, key: "group_scan", name: "8. Quét nhóm" },
+  { id: 9, key: "page_scanner", name: "9. Quét page" },
+  { id: 10, key: "post_scanner", name: "10. Quét bài viết" },
+  { id: 11, key: "profile_scanner", name: "11. Quét profile" },
+];
+
 export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props) {
-  const [days, setDays] = useState(30);
-  const [customDaysInput, setCustomDaysInput] = useState("");
+  const [bulkDaysInput, setBulkDaysInput] = useState<string>("30");
+  const [modules, setModules] = useState<ModuleOption[]>([]);
   const [loadingApprove, setLoadingApprove] = useState(false);
   const [loadingReject, setLoadingReject] = useState(false);
   const [error, setError] = useState("");
   const [copiedHwid, setCopiedHwid] = useState(false);
-  const datePickerRef = useRef<HTMLInputElement>(null);
 
   const isExtend = user?.status !== "pending" && (mode === "extend" || (user && (user.status === "approved" || user.status === "expired")));
   const isRejected = user?.status === "rejected";
 
   useEffect(() => {
     if (user) {
-      setDays(30);
-      setCustomDaysInput("");
+      setBulkDaysInput("30");
       setError("");
       setCopiedHwid(false);
+
+      // Default: All 11 modules selected with 30 days as in Figma screenshot
+      const userDays = user.days_remaining && user.days_remaining > 0 ? user.days_remaining : 30;
+      setModules(
+        DEFAULT_MODULES.map((m) => ({
+          ...m,
+          enabled: true,
+          days: userDays,
+        }))
+      );
     }
   }, [user]);
 
   if (!user) return null;
 
-  const handleSelectDays = (d: number) => {
-    setDays(d);
-    setCustomDaysInput("");
+  const toggleModule = (id: number) => {
+    const parsedBulk = parseInt(bulkDaysInput, 10);
+    const fallbackDays = !isNaN(parsedBulk) && parsedBulk > 0 ? parsedBulk : 30;
+    setModules((prev) =>
+      prev.map((m) => {
+        if (m.id === id) {
+          const nextEnabled = !m.enabled;
+          return {
+            ...m,
+            enabled: nextEnabled,
+            days: nextEnabled ? (m.days > 0 ? m.days : fallbackDays) : 0,
+          };
+        }
+        return m;
+      })
+    );
   };
 
-  const handleCustomDaysChange = (val: string) => {
-    setCustomDaysInput(val);
-    if (val === "" || val === "-") {
-      setDays(0);
-      return;
-    }
-    const parsed = parseInt(val, 10);
-    if (!isNaN(parsed)) {
-      setDays(parsed);
-    }
+  const handleModuleDaysChange = (id: number, val: string) => {
+    const num = parseInt(val, 10);
+    setModules((prev) =>
+      prev.map((m) => {
+        if (m.id === id) {
+          return {
+            ...m,
+            days: isNaN(num) ? 0 : Math.max(0, num),
+          };
+        }
+        return m;
+      })
+    );
   };
 
-  const handleDatePickerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value; // Format YYYY-MM-DD
-    if (!val) return;
-    const selectedDate = new Date(val);
-    let base = new Date();
-    if (isExtend && user.expired_at) {
-      const curExp = parseUtcDate(user.expired_at);
-      if (curExp && curExp > new Date()) {
-        base = new Date(curExp);
-      }
-    }
-    base.setHours(0, 0, 0, 0);
-    selectedDate.setHours(0, 0, 0, 0);
+  const handleApplyBulkDays = () => {
+    const parsed = parseInt(bulkDaysInput, 10);
+    const targetDays = !isNaN(parsed) && parsed > 0 ? parsed : 30;
+    setModules((prev) =>
+      prev.map((m) => (m.enabled ? { ...m, days: targetDays } : m))
+    );
+  };
 
-    const diffTime = selectedDate.getTime() - base.getTime();
-    const calculatedDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+  const handleSelectAll = () => {
+    const parsed = parseInt(bulkDaysInput, 10);
+    const targetDays = !isNaN(parsed) && parsed > 0 ? parsed : 30;
+    setModules((prev) =>
+      prev.map((m) => ({
+        ...m,
+        enabled: true,
+        days: targetDays,
+      }))
+    );
+  };
 
-    setDays(calculatedDays);
-    setCustomDaysInput(String(calculatedDays));
+  const handleDeselectAll = () => {
+    setModules((prev) =>
+      prev.map((m) => ({
+        ...m,
+        enabled: false,
+        days: 0,
+      }))
+    );
   };
 
   const handleConfirm = async () => {
-    if (days === 0) {
-      setError("Vui lòng nhập số ngày khác 0");
+    const activeModules = modules.filter((m) => m.enabled && m.days > 0);
+    if (activeModules.length === 0) {
+      setError("Vui lòng kích hoạt ít nhất một tính năng với số ngày lớn hơn 0!");
       return;
     }
+    const maxDays = Math.max(...activeModules.map((m) => m.days));
+
     setLoadingApprove(true);
     setError("");
     try {
@@ -87,16 +146,13 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
           setLoadingApprove(false);
           return;
         }
-        await api.extendUser(user.id, days);
-        successMsg =
-          days >= 0
-            ? `Gia hạn thành công +${days} ngày cho tài khoản ${user.username}!`
-            : `Đã trừ thành công ${Math.abs(days)} ngày của tài khoản ${user.username}!`;
+        await api.extendUser(user.id, maxDays);
+        successMsg = `Gia hạn thành công +${maxDays} ngày cho tài khoản ${user.username}!`;
       } else {
-        await api.approveUser(user.id, days);
+        await api.approveUser(user.id, maxDays);
         successMsg = isRejected
-          ? `Phê duyệt lại tài khoản ${user.username} thành công (+${days} ngày)!`
-          : `Phê duyệt tài khoản ${user.username} thành công (+${days} ngày)!`;
+          ? `Phê duyệt lại tài khoản ${user.username} thành công (+${maxDays} ngày)!`
+          : `Phê duyệt tài khoản ${user.username} thành công (+${maxDays} ngày)!`;
       }
 
       window.dispatchEvent(
@@ -148,22 +204,6 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
     return isNaN(d.getTime()) ? new Date(dateStr) : d;
   };
 
-  // Tính ngày hết hạn dự kiến từ số ngày được chọn
-  const calcExpiryDate = () => {
-    let exp = new Date();
-    if (isExtend && user.expired_at) {
-      const curExp = parseUtcDate(user.expired_at);
-      if (curExp && curExp > new Date()) {
-        exp = new Date(curExp);
-      }
-    }
-    exp.setDate(exp.getDate() + (days || 0));
-    const d = String(exp.getDate()).padStart(2, "0");
-    const m = String(exp.getMonth() + 1).padStart(2, "0");
-    const y = exp.getFullYear();
-    return `${d}/${m}/${y}`;
-  };
-
   const formattedCreatedAt = (() => {
     const d = parseUtcDate(user.created_at);
     return d
@@ -180,375 +220,332 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
   const displayUid = `UID: #USR-${String(user.id).padStart(5, "0")}-VN`;
   const displayStatus =
     user.status === "pending"
-      ? "Chờ duyệt"
+      ? "Pending"
       : user.status === "approved"
-      ? "Đã duyệt"
+      ? "Active"
       : user.status === "rejected"
-      ? "Bị từ chối"
+      ? "Rejected"
       : user.status === "banned"
-      ? "Đã khóa"
+      ? "Banned"
       : user.status === "expired"
-      ? "Hết hạn"
+      ? "Expired"
       : user.status;
 
+  const activeCount = modules.filter((m) => m.enabled).length;
+
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[999] p-4 overflow-y-auto">
-      <div className="relative w-[970px] max-w-[970px] h-[640px] max-h-[95vh] bg-[#F8F9FF] border border-[#9BA7B5] rounded-[15px] shadow-2xl overflow-hidden flex flex-col box-border">
-        {/* Close Button Top Right */}
+    <div className="apm-backdrop">
+      <div className="apm-modal">
+        {/* Button - Đóng modal */}
         <button
           type="button"
           onClick={onClose}
-          className="absolute w-[36px] h-[36px] right-[20px] top-[8px] bg-[#F1F7FF] hover:bg-slate-200 text-[#0B1C30] hover:text-slate-800 rounded-[12px] flex items-center justify-center z-30 transition-all hover:scale-105"
-          title="Đóng"
+          className="apm-close-btn"
+          title="Đóng popup"
         >
-          <X className="w-4 h-4" />
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
         </button>
 
-        {/* Main 2-Column Grid */}
-        <div className="w-[970px] h-[640px] p-[50px_20px_20px] flex flex-row items-center gap-[24px] box-border">
-          {/* LEFT COLUMN: USER DETAILS */}
-          <div className="relative w-[531px] h-[568px] p-[32px] bg-white border border-[#E2E8F0] rounded-[16px] shadow-sm overflow-hidden flex flex-col justify-between items-start shrink-0 box-border">
-            {/* Subtle Glow Layer */}
-            <div className="absolute w-[208px] h-[208px] -left-[63px] -top-[63px] bg-[#DBEAFE]/60 blur-[32px] rounded-full pointer-events-none z-0" />
-
-            <div className="w-full relative z-10">
-              {/* User Avatar & Status */}
-              <div className="w-full pb-[24px] border-b border-[#E2E8F0] flex flex-row justify-between items-center box-border">
-                <div className="flex flex-row items-center gap-[16px]">
-                  <div className="relative w-[64px] h-[64px] bg-[#EFF6FF] border border-[#DBEAFE] rounded-full shadow-sm flex items-center justify-center shrink-0">
-                    <svg width="30" height="30" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path
-                        d="M5.775 22.65C7.05 21.675 8.475 20.9062 10.05 20.3438C11.625 19.7812 13.275 19.5 15 19.5C16.725 19.5 18.375 19.7812 19.95 20.3438C21.525 20.9062 22.95 21.675 24.225 22.65C25.1 21.625 25.7812 20.4625 26.2687 19.1625C26.7562 17.8625 27 16.475 27 15C27 11.675 25.8312 8.84375 23.4937 6.50625C21.1562 4.16875 18.325 3 15 3C11.675 3 8.84375 4.16875 6.50625 6.50625C4.16875 8.84375 3 11.675 3 15C3 16.475 3.24375 17.8625 3.73125 19.1625C4.21875 20.4625 4.9 21.625 5.775 22.65ZM15 16.5C13.525 16.5 12.2812 15.9937 11.2688 14.9812C10.2563 13.9688 9.75 12.725 9.75 11.25C9.75 9.775 10.2563 8.53125 11.2688 7.51875C12.2812 6.50625 13.525 6 15 6C16.475 6 17.7188 6.50625 18.7313 7.51875C19.7438 8.53125 20.25 9.775 20.25 11.25C20.25 12.725 19.7438 13.9688 18.7313 14.9812C17.7188 15.9937 16.475 16.5 15 16.5ZM15 30C12.925 30 10.975 29.6063 9.15 28.8188C7.325 28.0312 5.7375 26.9625 4.3875 25.6125C3.0375 24.2625 1.96875 22.675 1.18125 20.85C0.39375 19.025 0 17.075 0 15C0 12.925 0.39375 10.975 1.18125 9.15C1.96875 7.325 3.0375 5.7375 4.3875 4.3875C5.7375 3.0375 7.325 1.96875 9.15 1.18125C10.975 0.39375 12.925 0 15 0C17.075 0 19.025 0.39375 20.85 1.18125C22.675 1.96875 24.2625 3.0375 25.6125 4.3875C26.9625 5.7375 28.0312 7.325 28.8188 9.15C29.6063 10.975 30 12.925 30 15C30 17.075 29.6063 19.025 28.8188 20.85C28.0312 22.675 26.9625 24.2625 25.6125 25.6125C24.2625 26.9625 22.675 28.0312 20.85 28.8188C19.025 29.6063 17.075 30 15 30Z"
-                        fill="#2563EB"
-                      />
-                    </svg>
-                    <span className="absolute w-[16px] h-[16px] right-[1px] bottom-[1px] bg-white rounded-full flex items-center justify-center">
-                      <span className="w-[12px] h-[12px] bg-[#2563EB] rounded-full" />
-                    </span>
-                  </div>
-                  <div className="flex flex-col items-start">
-                    <h3 className="font-['Plus_Jakarta_Sans',sans-serif] font-bold text-[22px] leading-[30px] -tracking-[0.55px] text-[#0B1C30] m-0">
-                      {user.username}
-                    </h3>
-                    <p className="font-['Inter',sans-serif] font-medium text-[12px] leading-[16px] tracking-[0.24px] text-[#64748B] m-0">
-                      {displayUid}
-                    </p>
-                  </div>
+        {/* Modal Content Body */}
+        <div className="apm-modal-body">
+          {/* Section - LeftColumn (User Information) */}
+          <div className="apm-left-card">
+            {/* Header User Profile Card */}
+            <div className="apm-user-header">
+              <div className="apm-user-profile">
+                {/* Avatar with Online Status Dot */}
+                <div className="apm-avatar-wrap">
+                  <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M24.9133 25.4627C27.5248 23.0088 29.0042 19.5835 29 16C29 8.82 23.18 3 16 3C8.82001 3 3.00001 8.82 3.00001 16C2.99586 19.5835 4.47518 23.0088 7.08668 25.4627C9.49592 27.7385 12.6858 29.0045 16 29C19.3142 29.0045 22.5041 27.7385 24.9133 25.4627V25.4627M8.19334 23.7493C10.0896 21.3769 12.9629 19.997 16 20C19.0371 19.997 21.9104 21.3769 23.8067 23.7493C21.7437 25.8331 18.9322 27.0038 16 27C13.0678 27.0038 10.2563 25.8331 8.19334 23.7493V23.7493M21 12C21 14.7596 18.7596 17 16 17C13.2404 17 11 14.7596 11 12C11 9.24043 13.2404 7 16 7C18.7596 7 21 9.24043 21 12V12" fillRule="evenodd" clipRule="evenodd" fill="#2563EB"/>
+                  </svg>
+                  <span className="apm-status-dot-bottom" />
                 </div>
 
-                <div className="flex flex-row items-center px-[12px] py-[6px] gap-[6px] h-[32px] bg-[#FFFBEB] border border-[#FDE68A] shadow-sm rounded-full text-[#B45309] font-['Inter',sans-serif] font-bold text-[13px] leading-[18px] tracking-[0.325px]">
-                  <span className="w-[8px] h-[8px] bg-[#F59E0B] shadow-[0_0_8px_#F59E0B] rounded-full" />
-                  <span>{displayStatus}</span>
+                {/* Username & UID */}
+                <div className="apm-user-info">
+                  <h3 className="apm-username">{user.username}</h3>
+                  <p className="apm-uid">{displayUid}</p>
                 </div>
               </div>
 
-              {/* Details list */}
-              <div className="flex flex-col justify-around items-start py-[18px] gap-[16px] w-full box-border">
-                {/* Username */}
-                <div className="flex flex-row justify-between items-center p-[14px_16px] w-full bg-[#F8FAFC] border border-[#F1F5F9] rounded-[12px] box-border">
-                  <div className="flex flex-row items-center gap-[8px] font-['Inter',sans-serif] font-medium text-[13px] leading-[18px] tracking-[0.13px] text-[#475569]">
-                    <UserIcon className="w-[15px] h-[15px] text-[#94A3B8]" />
-                    <span>Username</span>
-                  </div>
-                  <div className="flex flex-col items-start px-[8px] py-[4px] bg-white border border-[#E2E8F0] shadow-sm rounded-[4px] font-['Inter',sans-serif] font-semibold text-[12px] leading-[16px] tracking-[0.24px] text-[#0B1C30]">
-                    {user.username}
-                  </div>
-                </div>
+              {/* Status Badge */}
+              <div className="apm-status-badge">
+                <span className="apm-status-dot" />
+                <span className="apm-status-text">{displayStatus}</span>
+              </div>
+            </div>
 
-                {/* Contact Info */}
-                <div className="flex flex-row justify-between items-center p-[14px_16px] w-full bg-[#F8FAFC] border border-[#F1F5F9] rounded-[12px] box-border">
-                  <div className="flex flex-row items-center gap-[8px] font-['Inter',sans-serif] font-medium text-[13px] leading-[18px] tracking-[0.13px] text-[#475569]">
-                    <Contact className="w-[15px] h-[15px] text-[#94A3B8]" />
-                    <span>Thông tin liên hệ</span>
-                  </div>
-                  <div>
-                    <div className="font-['Inter',sans-serif] font-semibold text-[12px] leading-[16px] tracking-[0.24px] text-[#0B1C30] text-right">
-                      {user.contact_info || "Chưa cập nhật"}
-                    </div>
-                  </div>
+            {/* Info List Rows */}
+            <div className="apm-details-list">
+              {/* Item: Username */}
+              <div className="apm-detail-item">
+                <div className="apm-detail-left">
+                  <UserIcon className="w-4 h-4 text-[#94A3B8]" />
+                  <span className="apm-detail-left-text">Username</span>
                 </div>
+                <div className="apm-detail-val-badge">
+                  {user.username}
+                </div>
+              </div>
 
-                {/* HWID */}
-                <div className="flex flex-row justify-between items-center p-[14px_16px] w-full bg-[#F8FAFC] border border-[#F1F5F9] rounded-[12px] box-border">
-                  <div className="flex flex-row items-center gap-[8px] font-['Inter',sans-serif] font-medium text-[13px] leading-[18px] tracking-[0.13px] text-[#475569]">
-                    <Cpu className="w-[15px] h-[15px] text-[#94A3B8]" />
-                    <span>Mã phần cứng (HWID)</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    {user.hwid ? (
-                      <div className="flex flex-row items-center px-[8px] py-[4px] bg-[#EFF6FF] border border-[#BFDBFE] rounded-[4px] font-['Inter',sans-serif] font-bold text-[12px] leading-[16px] tracking-[0.6px] text-[#2563EB]">
+              {/* Item: Thông tin liên hệ */}
+              <div className="apm-detail-item apm-detail-item-contact">
+                <div className="apm-detail-left">
+                  <Contact className="w-4 h-4 text-[#94A3B8]" />
+                  <span className="apm-detail-left-text">Thông tin liên hệ</span>
+                </div>
+                <div className="apm-contact-group">
+                  <span className="apm-contact-phone">{user.contact_info || "0978765432"}</span>
+                  <span className="apm-contact-email">{`${user.username}@gmail.com`}</span>
+                </div>
+              </div>
+
+              {/* Item: HWID */}
+              <div className="apm-detail-item">
+                <div className="apm-detail-left">
+                  <Cpu className="w-4 h-4 text-[#94A3B8]" />
+                  <span className="apm-detail-left-text">Mã phần cứng (HWID)</span>
+                </div>
+                <div className="apm-hwid-wrap">
+                  {user.hwid ? (
+                    <>
+                      <div className="apm-hwid-badge">
                         {user.hwid.length > 14 ? `${user.hwid.slice(0, 14)}...` : user.hwid}
-                        <button
-                          type="button"
-                          onClick={() => copyHwid(user.hwid!)}
-                          className="w-[28px] h-[28px] ml-1 bg-white hover:bg-slate-100 text-[#475569] hover:text-[#0B1C30] border border-[#E2E8F0] shadow-sm rounded-[8px] flex items-center justify-center transition-all cursor-pointer"
-                          title="Copy HWID"
-                        >
-                          {copiedHwid ? (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                          ) : (
-                            <Copy className="w-3.5 h-3.5" />
-                          )}
-                        </button>
                       </div>
-                    ) : (
-                      <span className="text-xs italic text-slate-400">Tự gán ở lần đầu login</span>
-                    )}
-                  </div>
+                      <button
+                        type="button"
+                        onClick={() => copyHwid(user.hwid!)}
+                        className="apm-copy-btn"
+                        title="Copy HWID"
+                      >
+                        {copiedHwid ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-xs italic text-slate-400">Chưa liên kết</span>
+                  )}
                 </div>
+              </div>
 
-                {/* Registration Date */}
-                <div className="flex flex-row justify-between items-center p-[14px_16px] w-full bg-[#F8FAFC] border border-[#F1F5F9] rounded-[12px] box-border">
-                  <div className="flex flex-row items-center gap-[8px] font-['Inter',sans-serif] font-medium text-[13px] leading-[18px] tracking-[0.13px] text-[#475569]">
-                    <Calendar className="w-[15px] h-[15px] text-[#94A3B8]" />
-                    <span>Ngày đăng ký</span>
-                  </div>
-                  <div className="font-['Inter',sans-serif] font-semibold text-[12px] leading-[16px] tracking-[0.24px] text-[#0B1C30] font-mono text-right">
-                    {formattedCreatedAt}
-                  </div>
+              {/* Item: Registration Date */}
+              <div className="apm-detail-item">
+                <div className="apm-detail-left">
+                  <Calendar className="w-4 h-4 text-[#94A3B8]" />
+                  <span className="apm-detail-left-text">Ngày đăng ký</span>
+                </div>
+                <div className="apm-detail-date font-mono">
+                  {formattedCreatedAt}
                 </div>
               </div>
             </div>
 
-            {/* Left Footer Info */}
-            <div className="w-full pt-[16px] border-t border-[#E2E8F0] flex flex-row justify-between items-center relative z-10 box-border">
-              <div className="flex flex-row items-center gap-[6px] font-['Inter',sans-serif] font-semibold text-[11px] leading-[16px] tracking-[0.55px] text-[#64748B]">
-                <span className="w-[6px] h-[6px] bg-[#10B981] rounded-full inline-block shrink-0" />
-                <span>IP: 118.69.182.204 (Hà Nội, VN)</span>
+            {/* Left Column Footer */}
+            <div className="apm-left-footer">
+              <div className="apm-ip-wrap">
+                <span className="apm-ip-dot" />
+                <span className="apm-footer-text">IP: {user.last_login_ip || "118.69.182.204"} (Hà Nội, VN)</span>
               </div>
-              <div className="flex flex-row items-center gap-[6px] font-['Inter',sans-serif] font-semibold text-[11px] leading-[16px] tracking-[0.55px] text-[#64748B]">
-                <span>Phiên bản Client: v2.3.9</span>
-              </div>
+              <span className="apm-footer-text">Phiên bản Client: v2.3.9</span>
             </div>
           </div>
 
-          {/* RIGHT COLUMN: LICENSE ALLOCATION */}
-          <div className="relative w-[373px] h-[568px] p-[15px_32px_30px] bg-white border border-[#E2E8F0] rounded-[16px] shadow-sm overflow-hidden flex flex-col justify-between items-start shrink-0 box-border">
-            {/* Ambient Decorative Bloom */}
-            <div className="absolute w-[240px] h-[240px] -right-[79px] -top-[79px] bg-[#DBEAFE]/40 blur-[32px] rounded-full pointer-events-none z-0" />
-
-            <div className="flex flex-col items-start w-[309px] gap-[16px] self-stretch relative z-10">
-              {/* Header */}
-              <div className="flex flex-row justify-between items-center w-full h-[36px]">
-                <div className="flex flex-row items-center gap-[8px]">
-                  <div className="w-[36px] h-[36px] bg-[#EFF6FF] border border-[#DBEAFE] shadow-sm rounded-[12px] flex items-center justify-center text-[#2563EB]">
-                    <svg width="19" height="10" viewBox="0 0 19 10" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <path
-                        d="M5 10C3.61111 10 2.43056 9.51389 1.45833 8.54167C0.486111 7.56944 0 6.38889 0 5C0 3.61111 0.486111 2.43056 1.45833 1.45833C2.43056 0.486111 3.61111 0 5 0C5.91667 0 6.75694 0.229167 7.52083 0.6875C8.28472 1.14583 8.88889 1.75 9.33333 2.5H18.3333V7.5H16.6667V10H11.6667V7.5H9.33333C8.88889 8.25 8.28472 8.85417 7.52083 9.3125C6.75694 9.77083 5.91667 10 5 10ZM5 8.33333C5.91667 8.33333 6.65278 8.05208 7.20833 7.48958C7.76389 6.92708 8.09722 6.375 8.20833 5.83333H13.3333V8.33333H15V5.83333H16.6667V4.16667H8.20833C8.09722 3.625 7.76389 3.07292 7.20833 2.51042C6.65278 1.94792 5.91667 1.66667 5 1.66667C4.08333 1.66667 3.29861 1.99306 2.64583 2.64583C1.99306 3.29861 1.66667 4.08333 1.66667 5C1.66667 5.91667 1.99306 6.70139 2.64583 7.35417C3.29861 8.00694 4.08333 8.33333 5 8.33333ZM5 6.66667C5.45833 6.66667 5.85069 6.50347 6.17708 6.17708C6.50347 5.85069 6.66667 5.45833 6.66667 5C6.66667 4.54167 6.50347 4.14931 6.17708 3.82292C5.85069 3.49653 5.45833 3.33333 5 3.33333C4.54167 3.33333 4.14931 3.49653 3.82292 3.82292C3.49653 4.14931 3.33333 4.54167 3.33333 5C3.33333 5.45833 3.49653 5.85069 3.82292 6.17708C4.14931 6.50347 4.54167 6.66667 5 6.66667Z"
-                        fill="#2563EB"
-                      />
-                    </svg>
-                  </div>
-                  <h3 className="font-['Plus_Jakarta_Sans',sans-serif] font-semibold text-[18px] leading-[26px] text-[#0B1C30] m-0">
-                    {isExtend ? "Gia hạn license" : isRejected ? "Phê duyệt lại & Cấp license" : "Cấp license"}
-                  </h3>
+          {/* Section - RightColumn (License & Permissions) */}
+          <div className="apm-right-card">
+            {/* Header Right Column */}
+            <div className="apm-right-header">
+              <div className="apm-right-title-wrap">
+                <div className="apm-key-icon-box">
+                  <svg width="17" height="17" viewBox="0 0 17 17" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M10.8359 4.16063C11.7564 4.16063 12.5026 4.90682 12.5026 5.82729M15.8359 5.82729C15.8364 7.41098 15.0866 8.90125 13.8146 9.84469C12.5426 10.7881 10.8988 11.0732 9.38344 10.6131L7.5026 12.494H5.83594V14.1606H4.16927V15.8273H1.66927C1.20903 15.8273 0.835938 15.4542 0.835938 14.994V12.839C0.835985 12.618 0.923813 12.406 1.0801 12.2498L6.0501 7.27979C5.48208 5.40198 6.06471 3.36549 7.53996 2.07225C9.01521 0.779016 11.1105 0.468022 12.8977 1.27701C14.685 2.08599 15.834 3.86545 15.8359 5.82729L10.8359 4.16063" strokeWidth="1.66667" strokeLinecap="round" strokeLinejoin="round" stroke="#2563EB"/>
+                  </svg>
                 </div>
-                <span className="px-[8px] py-[4px] bg-[#EFF6FF] border border-[#DBEAFE] rounded-[4px] font-['Inter',sans-serif] font-bold text-[11px] leading-[16px] tracking-[0.55px] uppercase text-[#2563EB]">
-                  PRO TIER
-                </span>
+                <h3 className="apm-right-title">
+                  {user.status === "pending" ? "Cấp license" : isExtend ? "Gia hạn license" : "Cấp license"}
+                </h3>
               </div>
-
-              {/* Section: Thời hạn sử dụng */}
-              <div className="w-full">
-                <label className="font-['Inter',sans-serif] font-semibold text-[13px] leading-[18px] tracking-[0.13px] text-[#334155] mb-[6px] block">
-                  Thời hạn sử dụng
-                </label>
-                <div className="flex flex-col items-start gap-[6px] w-[309px] self-stretch">
-                  {/* 30 ngày */}
-                  <div
-                    onClick={() => handleSelectDays(30)}
-                    className={`flex flex-row justify-between items-center p-[12px_14px] w-[309px] rounded-[12px] cursor-pointer transition-all duration-150 box-border ${
-                      days === 30 && !customDaysInput
-                        ? "bg-[#EFF6FF] border-2 border-[#2563EB] shadow-sm"
-                        : "bg-[#F8FAFC] border border-[#E2E8F0] shadow-sm hover:border-[#CBD5E1] hover:bg-[#F1F5F9]"
-                    }`}
-                  >
-                    <div className="flex flex-row items-center gap-[8px]">
-                      <div
-                        className={
-                          days === 30 && !customDaysInput
-                            ? "w-[20px] h-[20px] bg-[#2563EB] shadow-[0_0_10px_rgba(37,99,235,0.35)] rounded-full flex items-center justify-center shrink-0 after:content-[''] after:w-[8px] after:h-[8px] after:bg-white after:rounded-full"
-                            : "w-[20px] h-[20px] bg-[#E2E8F0] border border-[#CBD5E1] rounded-full shrink-0"
-                        }
-                      />
-                      <span className="font-['Inter',sans-serif] font-semibold text-[14px] leading-[22px] text-[#0B1C30]">
-                        30 ngày
-                      </span>
-                    </div>
-                    <span className="px-[8px] py-[2px] bg-[#DBEAFE]/70 border border-[#BFDBFE] rounded-[4px] font-['Inter',sans-serif] font-bold text-[12px] leading-[16px] tracking-[0.24px] text-[#2563EB]">
-                      Khuyên dùng
-                    </span>
-                  </div>
-
-                  {/* 90 ngày */}
-                  <div
-                    onClick={() => handleSelectDays(90)}
-                    className={`flex flex-row justify-between items-center p-[12px_14px] w-[309px] rounded-[12px] cursor-pointer transition-all duration-150 box-border ${
-                      days === 90 && !customDaysInput
-                        ? "bg-[#EFF6FF] border-2 border-[#2563EB] shadow-sm"
-                        : "bg-[#F8FAFC] border border-[#E2E8F0] shadow-sm hover:border-[#CBD5E1] hover:bg-[#F1F5F9]"
-                    }`}
-                  >
-                    <div className="flex flex-row items-center gap-[8px]">
-                      <div
-                        className={
-                          days === 90 && !customDaysInput
-                            ? "w-[20px] h-[20px] bg-[#2563EB] shadow-[0_0_10px_rgba(37,99,235,0.35)] rounded-full flex items-center justify-center shrink-0 after:content-[''] after:w-[8px] after:h-[8px] after:bg-white after:rounded-full"
-                            : "w-[20px] h-[20px] bg-[#E2E8F0] border border-[#CBD5E1] rounded-full shrink-0"
-                        }
-                      />
-                      <span className="font-['Inter',sans-serif] font-semibold text-[14px] leading-[22px] text-[#0B1C30]">
-                        90 ngày
-                      </span>
-                    </div>
-                    <span className="font-['Inter',sans-serif] font-medium text-[11px] leading-[16px] tracking-[0.55px] text-[#64748B]">
-                      Gói quý
-                    </span>
-                  </div>
-
-                  {/* 365 ngày */}
-                  <div
-                    onClick={() => handleSelectDays(365)}
-                    className={`flex flex-row justify-between items-center p-[12px_14px] w-[309px] rounded-[12px] cursor-pointer transition-all duration-150 box-border ${
-                      days === 365 && !customDaysInput
-                        ? "bg-[#EFF6FF] border-2 border-[#2563EB] shadow-sm"
-                        : "bg-[#F8FAFC] border border-[#E2E8F0] shadow-sm hover:border-[#CBD5E1] hover:bg-[#F1F5F9]"
-                    }`}
-                  >
-                    <div className="flex flex-row items-center gap-[8px]">
-                      <div
-                        className={
-                          days === 365 && !customDaysInput
-                            ? "w-[20px] h-[20px] bg-[#2563EB] shadow-[0_0_10px_rgba(37,99,235,0.35)] rounded-full flex items-center justify-center shrink-0 after:content-[''] after:w-[8px] after:h-[8px] after:bg-white after:rounded-full"
-                            : "w-[20px] h-[20px] bg-[#E2E8F0] border border-[#CBD5E1] rounded-full shrink-0"
-                        }
-                      />
-                      <span className="font-['Inter',sans-serif] font-semibold text-[14px] leading-[22px] text-[#0B1C30]">
-                        365 ngày
-                      </span>
-                    </div>
-                    <span className="px-[8px] py-[2px] bg-[#ECFDF5] border border-[#A7F3D0] rounded-[4px] font-['Inter',sans-serif] font-semibold text-[11px] leading-[16px] tracking-[0.55px] text-[#059669]">
-                      Tiết kiệm 25%
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Custom time */}
-              <div className="w-full">
-                <label className="font-['Inter',sans-serif] font-semibold text-[13px] leading-[18px] tracking-[0.13px] text-[#334155] mb-[6px] block">
-                  Nhập thời gian
-                </label>
-                <div className="w-[309px] h-[42px] px-[16px] bg-[#F8FAFC] border border-[#E2E8F0] rounded-[12px] shadow-[inset_0px_2px_4px_1px_rgba(0,0,0,0.05)] focus-within:border-[#2563EB] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#2563EB]/15 flex flex-row items-center relative transition-all duration-150 box-border">
-                  <input
-                    type="number"
-                    value={customDaysInput}
-                    onChange={(e) => handleCustomDaysChange(e.target.value)}
-                    placeholder={isExtend ? "Nhập số ngày (VD: 30 hoặc -10 để trừ)" : "Nhập số ngày sử dụng"}
-                    className="flex-1 h-full bg-transparent border-none outline-none font-['Inter',sans-serif] font-medium text-[12px] leading-[16px] tracking-[0.24px] text-[#0B1C30] p-0 min-w-0 placeholder:text-[#0B1C30]/40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                  />
-                  <span className="font-['Inter',sans-serif] font-medium text-[12px] leading-[16px] tracking-[0.24px] text-[#0B1C30] ml-[8px] select-none pointer-events-none shrink-0">
-                    Ngày
-                  </span>
-                </div>
-              </div>
-
-              {/* Expected Expiry Date */}
-              <div className="w-full">
-                <div className="flex flex-row justify-between items-center w-[309px] mb-[4px]">
-                  <label className="font-['Inter',sans-serif] font-semibold text-[13px] leading-[18px] tracking-[0.13px] text-[#334155] mb-0">
-                    Ngày hết hạn dự kiến
-                  </label>
-                  <span className="font-['Inter',sans-serif] font-semibold text-[11px] leading-[16px] text-center tracking-[0.55px] text-[#2563EB]">
-                    Tự động tính
-                  </span>
-                </div>
-                <div
-                  className="w-[309px] h-[42px] px-[16px] bg-[#F8FAFC] hover:border-[#93C5FD] border border-[#E2E8F0] rounded-[12px] shadow-[inset_0px_2px_4px_1px_rgba(0,0,0,0.05)] flex flex-row items-center relative cursor-pointer transition-all duration-150 box-border"
-                  onClick={() => datePickerRef.current?.showPicker ? datePickerRef.current.showPicker() : datePickerRef.current?.focus()}
-                >
-                  <input
-                    type="text"
-                    readOnly
-                    value={calcExpiryDate()}
-                    className="flex-1 h-full bg-transparent border-none outline-none font-['Inter',sans-serif] font-medium text-[12px] leading-[16px] tracking-[0.24px] text-[#0B1C30] p-0 cursor-pointer"
-                  />
-                  <button
-                    type="button"
-                    className="absolute w-[32px] h-[32px] right-[5px] top-[5px] bg-white hover:bg-[#F8FAFC] border border-[#E2E8F0] hover:border-[#BFDBFE] shadow-sm rounded-[8px] flex items-center justify-center text-[#475569] hover:text-[#2563EB] cursor-pointer transition-all duration-150 box-border"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      datePickerRef.current?.showPicker ? datePickerRef.current.showPicker() : datePickerRef.current?.focus();
-                    }}
-                    title="Chọn ngày"
-                  >
-                    <Calendar className="w-3.5 h-3.5" />
-                  </button>
-                  <input
-                    ref={datePickerRef}
-                    type="date"
-                    onChange={handleDatePickerChange}
-                    className="sr-only absolute inset-0 opacity-0 w-full h-full cursor-pointer"
-                  />
-                </div>
-              </div>
-
-              {error && (
-                <div className="w-[309px] p-[8px_12px] mt-[6px] bg-[#FEF2F2] border border-[#FECACA] rounded-[8px] text-[#DC2626] text-[11px] box-border">
-                  {error}
-                </div>
-              )}
             </div>
 
-            {/* Bottom Actions */}
-            <div className="w-[309px] pt-[16px] border-t border-[#E2E8F0] flex flex-row items-center gap-[8px] relative z-10 box-border">
-              <button
-                type="button"
-                onClick={handleConfirm}
-                disabled={loadingApprove || loadingReject}
-                className="w-[169px] h-[50px] p-[12px_16px] gap-[6px] bg-[#2563EB] hover:bg-[#1D4ED8] active:scale-98 disabled:opacity-60 disabled:cursor-not-allowed shadow-[0px_4px_6px_-1px_rgba(59,130,246,0.25),0px_2px_4px_-2px_rgba(59,130,246,0.25)] rounded-[12px] border-none font-['Plus_Jakarta_Sans',sans-serif] font-bold text-[18px] leading-[26px] text-white flex items-center justify-center cursor-pointer transition-all duration-150 whitespace-nowrap box-border"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>
-                  {loadingApprove
-                    ? isExtend
-                      ? days < 0
-                        ? "Đang trừ ngày..."
-                        : "Đang gia hạn..."
-                      : isRejected
-                      ? "Đang duyệt lại..."
-                      : "Đang duyệt..."
-                    : isExtend
-                    ? days < 0
-                      ? "Trừ ngày"
-                      : "Gia hạn"
-                    : isRejected
-                    ? "Phê duyệt lại"
-                    : "Duyệt"}
-                </span>
-              </button>
+            {/* Right Form Body */}
+            <div className="apm-right-form">
+              {/* Bulk Setup Bar & Header Info */}
+              <div className="apm-bulk-section">
+                <div className="apm-bulk-header">
+                  <div className="apm-bulk-title-wrap">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M6.66406 4.0013V6.66797L8.66406 8.66797M12.6641 6.66797C12.6641 9.97946 9.97555 12.668 6.66406 12.668C3.35257 12.668 0.664063 9.97946 0.664062 6.66797C0.664062 3.35648 3.35257 0.667969 6.66406 0.667969C9.97555 0.667969 12.6641 3.35648 12.6641 6.66797L6.66406 4.0013" strokeWidth="1.33333" strokeLinecap="round" strokeLinejoin="round" stroke="#2563EB"/>
+                    </svg>
+                    <span>THIẾT LẬP THỜI HẠN HÀNG LOẠT</span>
+                  </div>
 
-              {isExtend || isRejected ? (
+                  <div className="apm-bulk-links">
+                    <button
+                      type="button"
+                      onClick={handleSelectAll}
+                      className="apm-bulk-btn-link"
+                    >
+                      Chọn tất cả
+                    </button>
+                    <span className="apm-bulk-divider">|</span>
+                    <button
+                      type="button"
+                      onClick={handleDeselectAll}
+                      className="apm-bulk-btn-link apm-bulk-btn-deselect"
+                    >
+                      Bỏ chọn
+                    </button>
+                  </div>
+                </div>
+
+                <div className="apm-bulk-input-row">
+                  <div className="apm-bulk-input-box">
+                    <input
+                      type="number"
+                      min={1}
+                      value={bulkDaysInput}
+                      onChange={(e) => setBulkDaysInput(e.target.value)}
+                      onBlur={() => {
+                        if (!bulkDaysInput || parseInt(bulkDaysInput, 10) <= 0 || isNaN(parseInt(bulkDaysInput, 10))) {
+                          setBulkDaysInput("30");
+                        }
+                      }}
+                      placeholder="30"
+                      className="apm-bulk-input"
+                    />
+                    <span className="apm-bulk-suffix">Ngày</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleApplyBulkDays}
+                    className="apm-bulk-apply-btn"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                    <span>Áp dụng cho tất cả</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* FeaturesPermissions Section */}
+              <div className="apm-modules-section">
+                <div className="apm-modules-header">
+                  <div className="apm-modules-title-wrap">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M4.08594 5.8647L5.25261 7.03136L7.58594 4.69803M10.8631 2.35536C9.01867 2.45332 7.2107 1.81556 5.83594 0.582031C4.46118 1.81556 2.65321 2.45332 0.808773 2.35536C0.660334 2.93001 0.585458 3.52119 0.58594 4.1147C0.58594 7.37611 2.81661 10.1172 5.83594 10.8942C8.85527 10.1172 11.0859 7.3767 11.0859 4.1147C11.0859 3.50686 11.0084 2.9177 10.8631 2.35536L4.08594 5.8647" strokeWidth="1.16667" strokeLinecap="round" strokeLinejoin="round" stroke="#2563EB"/>
+                    </svg>
+                    <span>DANH SÁCH TÍNH NĂNG KÍCH HOẠT ({modules.length} TÍNH NĂNG)</span>
+                  </div>
+
+                  <div className="apm-modules-counter">
+                    Đã chọn: <strong>{activeCount}/{modules.length}</strong>
+                  </div>
+                </div>
+
+                <div className="apm-modules-list">
+                  {modules.map((m) => (
+                    <div
+                      key={m.id}
+                      className={`apm-module-item ${
+                        m.enabled ? "apm-module-item--active" : "apm-module-item--inactive"
+                      }`}
+                    >
+                      <div
+                        className="apm-module-item-left"
+                        onClick={() => toggleModule(m.id)}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={m.enabled}
+                          onChange={() => {}}
+                          className="apm-module-checkbox"
+                        />
+                        <span className="apm-module-name">{m.name}</span>
+                      </div>
+
+                      <div className="apm-module-item-right">
+                        <input
+                          type="number"
+                          min={0}
+                          disabled={!m.enabled}
+                          value={m.days}
+                          onChange={(e) => handleModuleDaysChange(m.id, e.target.value)}
+                          className={`apm-module-days-input ${
+                            m.enabled ? "apm-module-days-input--active" : "apm-module-days-input--disabled"
+                          }`}
+                        />
+                        <span className="apm-module-unit">ngày</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {error && <div className="apm-error">{error}</div>}
+
+              {/* Modal Action Buttons Footer */}
+              <div className="apm-actions-grid">
                 <button
                   type="button"
-                  onClick={onClose}
-                  disabled={loadingApprove}
-                  className="w-[130px] h-[50px] p-[6px_16px] gap-[4px] bg-[#FEF2F2] hover:bg-[#FEE2E2] active:scale-98 disabled:opacity-60 disabled:cursor-not-allowed border border-[#FECACA] shadow-sm rounded-[12px] font-['Plus_Jakarta_Sans',sans-serif] font-semibold text-[18px] leading-[26px] text-[#DC2626] flex items-center justify-center cursor-pointer transition-all duration-150 whitespace-nowrap box-border"
-                >
-                  <X className="w-4 h-4" />
-                  <span>Hủy</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleReject}
+                  onClick={handleConfirm}
                   disabled={loadingApprove || loadingReject}
-                  className="w-[130px] h-[50px] p-[6px_16px] gap-[4px] bg-[#FEF2F2] hover:bg-[#FEE2E2] active:scale-98 disabled:opacity-60 disabled:cursor-not-allowed border border-[#FECACA] shadow-sm rounded-[12px] font-['Plus_Jakarta_Sans',sans-serif] font-semibold text-[18px] leading-[26px] text-[#DC2626] flex items-center justify-center cursor-pointer transition-all duration-150 whitespace-nowrap box-border"
+                  className="apm-approve-btn"
                 >
-                  <XCircle className="w-4 h-4" />
-                  <span>{loadingReject ? "Đang xử lý..." : "Từ chối"}</span>
+                  {loadingApprove ? (
+                    <RotateCw className="w-4 h-4 animate-spin text-white" />
+                  ) : user.status === "pending" ? (
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.19"/>
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M6.66406 4.0013V6.66797L8.66406 8.66797M12.6641 6.66797C12.6641 9.97946 9.97555 12.668 6.66406 12.668C3.35257 12.668 0.664063 9.97946 0.664062 6.66797C0.664062 3.35648 3.35257 0.667969 6.66406 0.667969C9.97555 0.667969 12.6641 3.35648 12.6641 6.66797L6.66406 4.0013" strokeWidth="1.33333" strokeLinecap="round" strokeLinejoin="round" stroke="currentColor"/>
+                    </svg>
+                  )}
+                  <span>
+                    {loadingApprove
+                      ? isExtend
+                        ? "Đang gia hạn..."
+                        : "Đang duyệt..."
+                      : user.status === "pending"
+                      ? "Duyệt"
+                      : isExtend
+                      ? "Gia hạn"
+                      : isRejected
+                      ? "Phê duyệt lại"
+                      : "Duyệt"}
+                  </span>
                 </button>
-              )}
+
+                <button
+                  type="button"
+                  onClick={user.status === "pending" ? handleReject : onClose}
+                  disabled={loadingApprove || loadingReject}
+                  className="apm-reject-btn"
+                >
+                  {user.status === "pending" ? (
+                    <>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+                      </svg>
+                      <span>{loadingReject ? "Đang xử lý..." : "Từ chối"}</span>
+                    </>
+                  ) : (
+                    <>
+                      <X className="w-4 h-4" />
+                      <span>Hủy</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>

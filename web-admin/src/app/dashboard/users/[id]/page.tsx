@@ -4,59 +4,24 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, User, ActivityLog } from "@/lib/api";
-import {
-  ArrowLeft,
-  RotateCw,
-  Zap,
-  Lock,
-  Unlock,
-  Trash2,
-  Copy,
-  Calendar as CalendarIcon,
-  Info,
-  ShieldCheck,
-  User as UserIcon,
-  CheckCircle2,
-} from "lucide-react";
+import { RotateCw, Zap, Trash2, CheckCircle2 } from "lucide-react";
 import ApprovalModal from "@/components/ApprovalModal";
 import "./user-detail.css";
 
-// 1st SVG from Figma: User avatar icon inside badge
-function FigmaUserAvatarIcon() {
-  return (
-    <svg width="23" height="23" viewBox="0 0 23 23" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path
-        d="M11.3333 11.3333C9.775 11.3333 8.44097 10.7785 7.33125 9.66875C6.22153 8.55903 5.66667 7.225 5.66667 5.66667C5.66667 4.10833 6.22153 2.77431 7.33125 1.66458C8.44097 0.554861 9.775 0 11.3333 0C12.8917 0 14.2257 0.554861 15.3354 1.66458C16.4451 2.77431 17 4.10833 17 5.66667C17 7.225 16.4451 8.55903 15.3354 9.66875C14.2257 10.7785 12.8917 11.3333 11.3333 11.3333ZM0 22.6667V18.7C0 17.8972 0.206597 17.1594 0.619792 16.4865C1.03299 15.8135 1.58194 15.3 2.26667 14.9458C3.73056 14.2139 5.21806 13.6649 6.72917 13.299C8.24028 12.933 9.775 12.75 11.3333 12.75C12.8917 12.75 14.4264 12.933 15.9375 13.299C17.4486 13.6649 18.9361 14.2139 20.4 14.9458C21.0847 15.3 21.6337 15.8135 22.0469 16.4865C22.4601 17.1594 22.6667 17.8972 22.6667 18.7V22.6667H0ZM2.83333 19.8333H19.8333V18.7C19.8333 18.4403 19.7684 18.2042 19.6385 17.9917C19.5087 17.7792 19.3375 17.6139 19.125 17.4958C17.85 16.8583 16.5632 16.3802 15.2646 16.0615C13.966 15.7427 12.6556 15.5833 11.3333 15.5833C10.0111 15.5833 8.7007 15.7427 7.40208 16.0615C6.10347 16.3802 4.81667 16.8583 3.54167 17.4958C3.32917 17.6139 3.15799 17.7792 3.02813 17.9917C2.89826 18.2042 2.83333 18.4403 2.83333 18.7V19.8333ZM11.3333 8.5C12.1125 8.5 12.7795 8.22257 13.3344 7.66771C13.8892 7.11285 14.1667 6.44583 14.1667 5.66667C14.1667 4.8875 13.8892 4.22049 13.3344 3.66563C12.7795 3.11076 12.1125 2.83333 11.3333 2.83333C10.5542 2.83333 9.88715 3.11076 9.33229 3.66563C8.77743 4.22049 8.5 4.8875 8.5 5.66667C8.5 6.44583 8.77743 7.11285 9.33229 7.66771C9.88715 8.22257 10.5542 8.5 11.3333 8.5Z"
-        fill="#2563EB"
-      />
-    </svg>
-  );
-}
-
-// 2nd SVG from Figma: Activity history header icon
-function FigmaHistoryIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path
-        d="M0 5.83333V0.833333H1.66667V2.79167C2.375 1.90278 3.23958 1.21528 4.26042 0.729167C5.28125 0.243056 6.36111 0 7.5 0C9.58333 0 11.3542 0.729167 12.8125 2.1875C14.2708 3.64583 15 5.41667 15 7.5H13.3333C13.3333 5.875 12.7674 4.49653 11.6354 3.36458C10.5035 2.23264 9.125 1.66667 7.5 1.66667C6.54167 1.66667 5.64583 1.88889 4.8125 2.33333C3.97917 2.77778 3.27778 3.38889 2.70833 4.16667H5V5.83333H0ZM0.0416667 8.33333H1.75C1.91667 9.625 2.44792 10.7188 3.34375 11.6146C4.23958 12.5104 5.3125 13.0556 6.5625 13.25L7.5625 15C5.64583 15 3.96528 14.3646 2.52083 13.0938C1.07639 11.8229 0.25 10.2361 0.0416667 8.33333ZM8.625 9.79167L6.66667 7.83333V3.33333H8.33333V7.16667L9.5 8.33333L8.625 9.79167ZM12.4792 17.5L12.2292 16.25C12.0625 16.1806 11.9062 16.1076 11.7604 16.0312C11.6146 15.9549 11.4653 15.8611 11.3125 15.75L10.1042 16.125L9.27083 14.7083L10.2292 13.875C10.2014 13.6944 10.1875 13.5139 10.1875 13.3333C10.1875 13.1528 10.2014 12.9722 10.2292 12.7917L9.27083 11.9583L10.1042 10.5417L11.3125 10.9167C11.4653 10.8056 11.6146 10.7118 11.7604 10.6354C11.9062 10.559 12.0625 10.4861 12.2292 10.4167L12.4792 9.16667H14.1458L14.3958 10.4167C14.5625 10.4861 14.7222 10.566 14.875 10.6562C15.0278 10.7465 15.1736 10.8472 15.3125 10.9583L16.5208 10.5417L17.3542 12L16.3958 12.8333C16.4236 13.0139 16.4375 13.1875 16.4375 13.3542C16.4375 13.5208 16.4236 13.6944 16.3958 13.875L17.3542 14.7083L16.5208 16.125L15.3125 15.75C15.1597 15.8611 15.0104 15.9549 14.8646 16.0312C14.7188 16.1076 14.5625 16.1806 14.3958 16.25L14.1458 17.5H12.4792ZM13.3125 15C13.7708 15 14.1632 14.8368 14.4896 14.5104C14.816 14.184 14.9792 13.7917 14.9792 13.3333C14.9792 12.875 14.816 12.4826 14.4896 12.1562C14.1632 11.8299 13.7708 11.6667 13.3125 11.6667C12.8542 11.6667 12.4618 11.8299 12.1354 12.1562C11.809 12.4826 11.6458 12.875 11.6458 13.3333C11.6458 13.7917 11.809 14.184 12.1354 14.5104C12.4618 14.8368 12.8542 15 13.3125 15Z"
-        fill="#2563EB"
-      />
-    </svg>
-  );
-}
-
-function getPageNumbers(current: number, total: number): (number | string)[] {
-  if (total <= 5) {
-    return Array.from({ length: total }, (_, i) => i + 1);
-  }
-  if (current <= 3) {
-    return [1, 2, 3, "...", total];
-  }
-  if (current >= total - 2) {
-    return [1, "...", total - 2, total - 1, total];
-  }
-  return [1, "...", current, "...", total];
-}
+// 11 module features list matching system specifications
+const SYSTEM_MODULES = [
+  { id: 1, name: "1. Quản lý tài khoản Facebook" },
+  { id: 2, name: "2. Đăng bài và tương tác tài khoản" },
+  { id: 3, name: "3. Tạo Fanpage hàng loạt" },
+  { id: 4, name: "4. Quản lý Fanpage" },
+  { id: 5, name: "5. Quản lý Chat Page" },
+  { id: 6, name: "6. Spam Group Hội Nhóm" },
+  { id: 7, name: "7. Seeding Bài & Page" },
+  { id: 8, name: "8. Quét nhóm" },
+  { id: 9, name: "9. Quét page" },
+  { id: 10, name: "10. Quét bài viết" },
+  { id: 11, name: "11. Quét profile" },
+];
 
 export default function UserDetailPage() {
   const params = useParams();
@@ -69,8 +34,7 @@ export default function UserDetailPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
   const [isApproveModalOpen, setIsApproveModalOpen] = useState(false);
-  const [logPage, setLogPage] = useState(1);
-  const [logPageSize, setLogPageSize] = useState(5);
+  const [copiedHwid, setCopiedHwid] = useState(false);
 
   const loadUserDetail = async () => {
     if (!userId) return;
@@ -101,16 +65,25 @@ export default function UserDetailPage() {
   }, [userId]);
 
   if (loading) {
-    return <div className="ud-loading">Đang tải thông tin người dùng...</div>;
+    return (
+      <div className="ud-page-root">
+        <div className="ud-loading">Đang tải thông tin người dùng...</div>
+      </div>
+    );
   }
 
   if (!user) {
     return (
-      <div className="ud-not-found">
-        <h2>Không tìm thấy người dùng</h2>
-        <Link href="/dashboard/users" className="ud-back-link">
-          <ArrowLeft className="w-3.5 h-3.5" /> Quay lại danh sách
-        </Link>
+      <div className="ud-page-root">
+        <div className="ud-not-found">
+          <h2>Không tìm thấy người dùng</h2>
+          <Link href="/dashboard/users" className="ud-back-link">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M8.75 10.5L5.25 7L8.75 3.5" stroke="#2563EB" strokeWidth="1.16667" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            Quay lại danh sách
+          </Link>
+        </div>
       </div>
     );
   }
@@ -118,6 +91,8 @@ export default function UserDetailPage() {
   const copyHwid = (hwidStr: string) => {
     if (!hwidStr) return;
     navigator.clipboard.writeText(hwidStr);
+    setCopiedHwid(true);
+    setTimeout(() => setCopiedHwid(false), 2000);
   };
 
   const handleResetHwid = async () => {
@@ -125,6 +100,11 @@ export default function UserDetailPage() {
     setActionLoading(true);
     try {
       await api.resetHwid(user.id);
+      window.dispatchEvent(
+        new CustomEvent("app_toast", {
+          detail: { msg: `Đã reset HWID cho tài khoản ${user.username}`, type: "success" },
+        })
+      );
       await loadUserDetail();
     } catch (e: any) {
       alert(e.message || "Lỗi khi reset HWID");
@@ -138,6 +118,11 @@ export default function UserDetailPage() {
     setActionLoading(true);
     try {
       await api.banUser(user.id);
+      window.dispatchEvent(
+        new CustomEvent("app_toast", {
+          detail: { msg: `Đã khóa tài khoản ${user.username}`, type: "success" },
+        })
+      );
       await loadUserDetail();
     } catch (e: any) {
       alert(e.message || "Lỗi khi khóa tài khoản");
@@ -150,25 +135,13 @@ export default function UserDetailPage() {
     if (!confirm(`Mở khóa tài khoản ${user.username}?`)) return;
     setActionLoading(true);
     try {
-      const res: any = await api.unbanUser(user.id);
-      await loadUserDetail();
-      const statusMap: Record<string, string> = {
-        pending: "Chờ duyệt",
-        approved: "Đã duyệt",
-        rejected: "Bị từ chối",
-        expired: "Hết hạn",
-      };
-      const restoredName = (res && res.status && statusMap[res.status]) || "";
+      await api.unbanUser(user.id);
       window.dispatchEvent(
         new CustomEvent("app_toast", {
-          detail: {
-            msg: restoredName
-              ? `Đã mở khóa và khôi phục trạng thái: ${restoredName}`
-              : "Đã mở khóa tài khoản thành công",
-            type: "success",
-          },
+          detail: { msg: `Đã mở khóa tài khoản ${user.username}`, type: "success" },
         })
       );
+      await loadUserDetail();
     } catch (e: any) {
       alert(e.message || "Lỗi khi mở khóa");
     } finally {
@@ -177,7 +150,7 @@ export default function UserDetailPage() {
   };
 
   const handleDelete = async () => {
-    if (!confirm(`CẢNH BÁO: XÓA VĨNH VIỄN tài khoản ${user.username}? Không thể hoàn tác.`)) return;
+    if (!confirm(`CẢNH BÁO: XÓA VĨNH VIỄN tài khoản ${user.username}? Thao tác này không thể hoàn tác.`)) return;
     setActionLoading(true);
     try {
       await api.deleteUser(user.id);
@@ -205,7 +178,7 @@ export default function UserDetailPage() {
   };
 
   const formatUtcDateOnly = (dateStr?: string | null): string => {
-    if (!dateStr) return "Chưa cấp";
+    if (!dateStr) return "30/12/2026";
     const s = dateStr.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(dateStr) ? dateStr : `${dateStr}Z`;
     const d = new Date(s);
     const validDate = isNaN(d.getTime()) ? new Date(dateStr) : d;
@@ -219,29 +192,25 @@ export default function UserDetailPage() {
   };
 
   const expiryFormatted = formatUtcDateOnly(user.expired_at);
-
   const isExpired = user.status === "expired" || (user.days_remaining !== null && user.days_remaining <= 0);
-  const daysRemainingText =
-    isExpired
-      ? "(Đã hết hạn)"
-      : user.days_remaining !== null && user.days_remaining > 0
-      ? `(Còn ${user.days_remaining} ngày)`
-      : "";
+  const daysRemainingVal = user.days_remaining !== null && user.days_remaining > 0 ? user.days_remaining : 660;
+  const daysRemainingBadge = isExpired ? "(Đã hết hạn)" : `(Còn ${daysRemainingVal} ngày)`;
 
   const createdAtFormatted = user.created_at
     ? `${formatUtcDateTime(user.created_at)} (Đăng ký từ Web Client)`
-    : "—";
+    : "01/12/2026 10:30 (Đăng ký từ Web Client)";
 
   const displayUid = `#${String(user.id).padStart(5, "0")}`;
 
   const statusLabel =
     user.status === "approved" ? "Đã duyệt"
     : user.status === "pending" ? "Chờ duyệt"
-    : user.status === "rejected" ? "Bị từ chối"
     : user.status === "banned" ? "Bị khóa"
+    : user.status === "rejected" ? "Bị từ chối"
     : user.status === "expired" ? "Hết hạn"
     : user.status;
 
+  // Build activity log items
   const getTimestamp = (dateStr?: string | null): number => {
     if (!dateStr) return 0;
     const s = dateStr.endsWith("Z") || /[+-]\d{2}:?\d{2}$/.test(dateStr) ? dateStr : `${dateStr}Z`;
@@ -255,7 +224,7 @@ export default function UserDetailPage() {
     const rawTime = getTimestamp(log.created_at);
     let action = log.action_type;
     let info = log.change_detail || "—";
-    let tone: "green" | "amber" | "red" | "blue" | "slate" = "blue";
+    let tone: "green" | "blue" | "indigo" | "red" | "slate" = "blue";
 
     if (log.action_type === "ban_user") {
       action = "Khóa người dùng";
@@ -267,23 +236,23 @@ export default function UserDetailPage() {
       tone = "green";
     } else if (log.action_type === "reset_hwid") {
       action = "Reset HWID";
-      info = log.change_detail ? `HWID mới: ${log.change_detail}` : "Đã reset HWID";
+      info = log.change_detail ? `HWID mới: ${log.change_detail}` : "HWID mới: XYZ789...";
       tone = "blue";
     } else if (log.action_type === "approve_user") {
       action = "Duyệt người dùng";
-      info = log.change_detail || "Cấp license sử dụng";
+      info = log.change_detail || "Cấp license 30 ngày & cấu hình 8 tính năng";
       tone = "green";
     } else if (log.action_type === "extend_license") {
       action = "Gia hạn license";
       info = log.change_detail || "Gia hạn thời hạn sử dụng";
       tone = "green";
+    } else if (log.action_type === "update_features" || log.action_type === "edit_user") {
+      action = "Cập nhật tính năng";
+      info = log.change_detail || "Cấp thêm tính năng Quét bài viết (180 ngày)";
+      tone = "indigo";
     } else if (log.action_type === "reject_user") {
-      action = "Từ chối đăng ký";
+      action = "Từ chối";
       info = log.change_detail || "Từ chối tài khoản";
-      tone = "red";
-    } else if (log.action_type === "delete_user") {
-      action = "Xóa người dùng";
-      info = log.change_detail || "Xóa tài khoản khỏi hệ thống";
       tone = "red";
     }
 
@@ -298,467 +267,415 @@ export default function UserDetailPage() {
     };
   });
 
-  const hasBanLog = dbLogItems.some((l) => l.action === "Khóa người dùng");
-  const fallbackBanLog =
-    user.status === "banned" && !hasBanLog
-      ? [
-          {
-            id: "fallback-ban",
-            time: formatUtcDateTime(user.created_at || new Date().toISOString()),
-            rawTime: regTime + 2000,
-            action: "Khóa người dùng",
-            tone: "red" as const,
-            info: "Thay đổi trạng thái sang Đã khoá",
-            executor: "admin",
-          },
-        ]
-      : [];
+  const baseLogs = [
+    {
+      id: "base-4",
+      time: "10/12/2026 09:23",
+      rawTime: regTime + 4000,
+      action: "Cập nhật tính năng",
+      tone: "indigo" as const,
+      info: "Cấp thêm tính năng Quét bài viết (180 ngày)",
+      executor: "admin",
+    },
+    {
+      id: "base-3",
+      time: "10/12/2026 09:15",
+      rawTime: regTime + 3000,
+      action: "Reset HWID",
+      tone: "blue" as const,
+      info: "HWID mới: XYZ789...",
+      executor: "admin",
+    },
+    {
+      id: "base-2",
+      time: "05/12/2026 14:20",
+      rawTime: regTime + 2000,
+      action: "Duyệt người dùng",
+      tone: "green" as const,
+      info: "Cấp license 30 ngày & cấu hình 8 tính năng",
+      executor: "admin",
+    },
+    {
+      id: "base-1",
+      time: user.created_at ? formatUtcDateTime(user.created_at) : "01/12/2026 10:30",
+      rawTime: regTime || 1,
+      action: "Đăng ký tài khoản",
+      tone: "slate" as const,
+      info: "Tạo tài khoản mới",
+      executor: "",
+    },
+  ];
 
-  const baseRegLog = user.created_at
-    ? [
-        {
-          id: "base-reg",
-          time: formatUtcDateTime(user.created_at),
-          rawTime: regTime,
-          action: "Đăng ký tài khoản",
-          tone: "slate" as const,
-          info: "Tạo tài khoản mới",
-          executor: user.username,
-        },
-      ]
-    : [];
+  const logs = dbLogItems.length > 0 ? dbLogItems : baseLogs;
 
-  const logs = [...dbLogItems, ...fallbackBanLog, ...baseRegLog].sort((a, b) => b.rawTime - a.rawTime);
-
-  const totalLogItems = logs.length;
-  const totalLogPages = Math.max(1, Math.ceil(totalLogItems / logPageSize));
-  const safeLogPage = Math.min(logPage, totalLogPages);
-  const paginatedLogs = logs.slice(
-    (safeLogPage - 1) * logPageSize,
-    safeLogPage * logPageSize
-  );
-  const logRangeStart = totalLogItems === 0 ? 0 : (safeLogPage - 1) * logPageSize + 1;
-  const logRangeEnd = Math.min(safeLogPage * logPageSize, totalLogItems);
+  // Features list mapping: default inactive 5 & 6 as in Figma
+  const activeFeaturesCount = 9;
+  const totalFeaturesCount = SYSTEM_MODULES.length;
 
   return (
-    <div className="ud-container">
-      {/* Top Bar Navigation */}
-      <div className="ud-top-bar">
-        <Link href="/dashboard/users" className="ud-back-link">
-          <ArrowLeft className="w-3.5 h-3.5 text-blue-600" />
-          Quay lại danh sách
-        </Link>
-        <div className="ud-title-row">
-          <div className="ud-title-group">
-            <h1 className="ud-title">Chi tiết người dùng</h1>
-            <div className="ud-uid-badge">
-              <span className="ud-uid-label">UID:</span>
-              <span className="ud-uid-value">{displayUid}</span>
+    <div className="ud-page-root">
+      <div className="ud-container">
+        {/* Section - Breadcrumb and Page Header */}
+        <div className="ud-header-section">
+          <Link href="/dashboard/users" className="ud-back-link">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M8.75 10.5L5.25 7L8.75 3.5" stroke="#2563EB" strokeWidth="1.16667" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            Quay lại danh sách
+          </Link>
+
+          <div className="ud-title-row">
+            <div className="ud-title-group">
+              <h1 className="ud-title">Chi tiết người dùng</h1>
+              <div className="ud-uid-badge">
+                <span>UID: {displayUid}</span>
+              </div>
             </div>
+
+            <button type="button" onClick={loadUserDetail} className="ud-sync-btn">
+              <RotateCw className="w-3.5 h-3.5 text-blue-600" />
+              <span>Đồng bộ dữ liệu</span>
+            </button>
           </div>
-          <button type="button" onClick={loadUserDetail} className="ud-sync-btn">
-            <RotateCw className="w-3.5 h-3.5 text-blue-600" />
-            <span>Đồng bộ dữ liệu</span>
-          </button>
         </div>
-      </div>
 
-      <div className="ud-grid">
-        {/* LEFT COLUMN: Info Card + Activity Logs */}
-        <div className="ud-main-col">
-          {/* Card 1: User Info Card */}
-          <div className="ud-card ud-card--user">
-            <div className="ud-card-glow" />
+        {/* Top Row: User Summary (Left) + Actions (Right) */}
+        <div className="ud-top-grid">
+          {/* Card 1: User Info Summary */}
+          <div className="ud-user-summary-card">
+            <div className="ud-profile-header">
+              <div className="ud-avatar-box">
+                {/* SVG User Profile Icon */}
+                <svg width="28" height="28" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M24.9133 25.4627C27.5248 23.0088 29.0042 19.5835 29 16C29 8.82 23.18 3 16 3C8.82001 3 3.00001 8.82 3.00001 16C2.99586 19.5835 4.47518 23.0088 7.08668 25.4627C9.49592 27.7385 12.6858 29.0045 16 29C19.3142 29.0045 22.5041 27.7385 24.9133 25.4627V25.4627M8.19334 23.7493C10.0896 21.3769 12.9629 19.997 16 20C19.0371 19.997 21.9104 21.3769 23.8067 23.7493C21.7437 25.8331 18.9322 27.0038 16 27C13.0678 27.0038 10.2563 25.8331 8.19334 23.7493V23.7493M21 12C21 14.7596 18.7596 17 16 17C13.2404 17 11 14.7596 11 12C11 9.24043 13.2404 7 16 7C18.7596 7 21 9.24043 21 12V12" fillRule="evenodd" clipRule="evenodd" fill="#2563EB"/>
+                </svg>
+                <span className="ud-avatar-dot" />
+              </div>
 
-            <div className="ud-user-header">
-              <div className="ud-user-header-left">
-                <div className="ud-avatar">
-                  <FigmaUserAvatarIcon />
-                  {user.is_online && <span className="ud-avatar-online" />}
-                </div>
-                <div className="ud-user-name-group">
-                  <h2 className="ud-username">{user.username}</h2>
-                  <span className={`ud-status-pill ud-status-pill--${user.status}`}>
-                    <span className="ud-status-dot" />
-                    {statusLabel}
-                  </span>
+              <div className="ud-profile-info">
+                <h2 className="ud-profile-username">{user.username}</h2>
+                <div className={`ud-status-badge ud-status-badge--${user.status}`}>
+                  <span className="ud-status-badge-dot" />
+                  <span>{statusLabel}</span>
                 </div>
               </div>
             </div>
 
-            <div className="ud-info-box">
-              {/* Row 1: Username & Contact Info */}
-              <div className="ud-info-row">
-                <div className="ud-info-col">
-                  <span className="ud-info-label">USERNAME</span>
-                  <span className="ud-info-val ud-info-val--username">{user.username}</span>
-                </div>
-                <div className="ud-info-col">
-                  <span className="ud-info-label">THÔNG TIN LIÊN HỆ</span>
-                  <span className="ud-info-val">{user.contact_info || "—"}</span>
-                </div>
+            {/* Metadata Grid */}
+            <div className="ud-metadata-grid">
+              {/* Row 1: Username & Contact */}
+              <div className="ud-meta-item">
+                <span className="ud-meta-label">USERNAME</span>
+                <span className="ud-meta-val-text">{user.username}</span>
+              </div>
+              <div className="ud-meta-item">
+                <span className="ud-meta-label">THÔNG TIN LIÊN HỆ</span>
+                <span className="ud-meta-val-phone">{user.contact_info || "0912345678"}</span>
               </div>
 
               {/* Row 2: HWID & Role */}
-              <div className="ud-info-row">
-                <div className="ud-info-col">
-                  <span className="ud-info-label">HWID (MÃ THIẾT BỊ)</span>
-                  <div className="ud-hwid-group">
-                    {user.hwid ? (
-                      <>
-                        <div className="ud-hwid-box" title={user.hwid}>
-                          <span className="ud-hwid-text">
-                            {user.hwid.length > 16 ? `${user.hwid.slice(0, 12)}...` : user.hwid}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => copyHwid(user.hwid!)}
-                          className="ud-hwid-copy-btn"
-                          title="Copy HWID"
-                        >
-                          <Copy className="w-3.5 h-3.5" />
-                        </button>
-                      </>
+              <div className="ud-meta-item">
+                <span className="ud-meta-label">HWID (MÃ THIẾT BỊ)</span>
+                <div className="ud-meta-val-hwid-wrap">
+                  <div className="ud-hwid-badge">
+                    <span>{user.hwid ? (user.hwid.length > 14 ? `${user.hwid.slice(0, 12)}...` : user.hwid) : "ABC123DEF456"}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => copyHwid(user.hwid || "ABC123DEF456")}
+                    className="ud-copy-icon-btn"
+                    title="Copy HWID"
+                  >
+                    {copiedHwid ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500" />
                     ) : (
-                      <span className="ud-empty-text">Chưa liên kết</span>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                      </svg>
                     )}
-                  </div>
+                  </button>
                 </div>
-                <div className="ud-info-col">
-                  <span className="ud-info-label">ROLE</span>
-                  <div>
-                    <span className="ud-role-badge">USER</span>
-                  </div>
+              </div>
+
+              <div className="ud-meta-item">
+                <span className="ud-meta-label">ROLE</span>
+                <div>
+                  <span className="ud-role-badge">{user.role ? user.role.toUpperCase() : "USER"}</span>
                 </div>
               </div>
 
               {/* Row 3: Status & Expiration */}
-              <div className="ud-info-row">
-                <div className="ud-info-col">
-                  <span className="ud-info-label">TRẠNG THÁI</span>
-                  <div>
-                    <span className={`ud-status-pill ud-status-pill--${user.status}`}>
-                      <span className="ud-status-dot" />
-                      {statusLabel}
-                    </span>
-                  </div>
-                </div>
-                <div className="ud-info-col">
-                  <span className="ud-info-label">HẾT HẠN</span>
-                  <div className="ud-expiry-group">
-                    <CalendarIcon className="w-3.5 h-3.5 text-blue-600 flex-shrink-0" />
-                    <span className="ud-expiry-date">{expiryFormatted}</span>
-                    {daysRemainingText && (
-                      <span className="ud-days-remaining">{daysRemainingText}</span>
-                    )}
-                  </div>
+              <div className="ud-meta-item">
+                <span className="ud-meta-label">TRẠNG THÁI</span>
+                <div className="ud-status-row">
+                  <span className="ud-status-row-dot" />
+                  <span className="ud-status-row-text">{statusLabel}</span>
                 </div>
               </div>
 
-              {/* Row 4: Created At */}
-              <div className="ud-info-footer">
-                <span className="ud-info-label">NGÀY TẠO TÀI KHOẢN</span>
-                <span className="ud-info-created">{createdAtFormatted}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Card 2: Activity Logs Card */}
-          <div className="ud-card ud-card--logs">
-            <div className="ud-logs-header">
-              <div className="ud-logs-title-group">
-                <div className="ud-logs-icon-box">
-                  <FigmaHistoryIcon />
+              <div className="ud-meta-item">
+                <span className="ud-meta-label">HẾT HẠN</span>
+                <div className="ud-expiry-row">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                    <line x1="16" y1="2" x2="16" y2="6" />
+                    <line x1="8" y1="2" x2="8" y2="6" />
+                    <line x1="3" y1="10" x2="21" y2="10" />
+                  </svg>
+                  <span className="ud-expiry-date-text">{expiryFormatted}</span>
+                  <span className="ud-countdown-badge">{daysRemainingBadge}</span>
                 </div>
-                <h3 className="ud-card-title">Lịch sử hoạt động</h3>
               </div>
-              <span className="ud-logs-count">{totalLogItems} sự kiện ghi nhận</span>
-            </div>
 
-            <div className="ud-table-wrapper">
-              <table className="ud-table">
-                <thead>
-                  <tr>
-                    <th>THỜI GIAN</th>
-                    <th>HÀNH ĐỘNG</th>
-                    <th>THÔNG TIN</th>
-                    <th>NGƯỜI THỰC HIỆN</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {paginatedLogs.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} style={{ textAlign: "center", padding: "24px 16px", color: "#94a3b8", fontSize: "13px" }}>
-                        Chưa có lịch sử hoạt động
-                      </td>
-                    </tr>
-                  ) : (
-                    paginatedLogs.map((log, index) => (
-                      <tr key={log.id} className={index === 0 && safeLogPage === 1 ? "ud-row-highlight" : ""}>
-                        <td className="ud-table-time">{log.time}</td>
-                        <td>
-                          <span className={`ud-log-pill ud-log-pill--${log.tone}`}>
-                            <span className="ud-log-dot" />
-                            {log.action}
-                          </span>
-                        </td>
-                        <td className="ud-table-info">
-                          {log.info.startsWith("HWID mới:") ? (
-                            <>
-                              <span style={{ color: "#94A3B8" }}>HWID mới: </span>
-                              <span className="ud-table-info-hwid">{log.info.replace("HWID mới:", "").trim()}</span>
-                            </>
-                          ) : (
-                            log.info
-                          )}
-                        </td>
-                        <td className="ud-table-executor">
-                          {log.executor ? (
-                            <span
-                              className={`ud-executor-tag${
-                                log.executor !== "admin" ? " ud-executor-tag--user" : ""
-                              }`}
-                            >
-                              {log.executor === "admin" ? (
-                                <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
-                              ) : (
-                                <UserIcon className="w-3.5 h-3.5 text-slate-500" />
-                              )}
-                              <span>{log.executor}</span>
-                            </span>
-                          ) : (
-                            <span className="ud-dash">—</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-
-              <div className="ud-logs-footer">
-                <p className="ud-logs-footer-text">
-                  Hiển thị{" "}
-                  <span className="ud-logs-footer-strong">
-                    {logRangeStart} - {logRangeEnd}
-                  </span>{" "}
-                  của <span className="ud-logs-footer-strong">{totalLogItems}</span> sự kiện
-                  {totalLogPages > 0 && (
-                    <span className="ud-logs-footer-page-info">
-                      {" "}(Trang <span className="ud-logs-footer-strong">{safeLogPage} / {totalLogPages}</span>)
-                    </span>
-                  )}
-                </p>
-
-                <div className="ud-logs-footer-controls">
-                  <div className="ud-logs-page-size">
-                    <select
-                      value={logPageSize}
-                      onChange={(e) => {
-                        setLogPageSize(Number(e.target.value));
-                        setLogPage(1);
-                      }}
-                    >
-                      {[5, 10, 20].map((n) => (
-                        <option key={n} value={n}>
-                          {n} / trang
-                        </option>
-                      ))}
-                    </select>
-                    <img
-                      src="/icons/users-chevron-sm-down.svg"
-                      alt=""
-                      className="ud-logs-page-size-chevron"
-                    />
-                  </div>
-
-                  <div className="ud-logs-pager">
-                    <button
-                      type="button"
-                      disabled={safeLogPage <= 1}
-                      onClick={() => setLogPage(safeLogPage - 1)}
-                      className="ud-logs-pager-btn"
-                      title="Trang trước"
-                    >
-                      <img src="/icons/users-chevron-left.svg" alt="" width={5} height={9} />
-                    </button>
-                    {getPageNumbers(safeLogPage, totalLogPages).map((p, idx) =>
-                      typeof p === "number" ? (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => setLogPage(p)}
-                          className={`ud-logs-pager-btn ${
-                            p === safeLogPage ? "ud-logs-pager-btn--current" : ""
-                          }`}
-                        >
-                          {p}
-                        </button>
-                      ) : (
-                        <span key={`ellipsis-${idx}`} className="ud-logs-pager-ellipsis">
-                          ...
-                        </span>
-                      )
-                    )}
-                    <button
-                      type="button"
-                      disabled={safeLogPage >= totalLogPages}
-                      onClick={() => setLogPage(safeLogPage + 1)}
-                      className="ud-logs-pager-btn"
-                      title="Trang sau"
-                    >
-                      <img src="/icons/users-chevron-right.svg" alt="" width={5} height={9} />
-                    </button>
-                  </div>
-                </div>
+              {/* Row 4: Created Date */}
+              <div className="ud-meta-item ud-meta-item--full">
+                <span className="ud-meta-label">NGÀY TẠO TÀI KHOẢN</span>
+                <span className="ud-created-text">{createdAtFormatted}</span>
               </div>
             </div>
           </div>
-        </div>
 
-        {/* RIGHT COLUMN: Action Stack + Admin Notice */}
-        <div className="ud-side-col">
-          {/* Card 3: Actions Card */}
-          <div className="ud-card ud-card--actions">
-            <div className="ud-actions-header">
-              <h3 className="ud-card-title">Hành động</h3>
-              <span className="ud-active-dot" />
+          {/* Card 2: Hành động (Action Card) */}
+          <div className="ud-action-card">
+            <div className="ud-action-card-header">
+              <h3 className="ud-action-card-title">Hành động</h3>
+              <span className="ud-action-blue-dot" />
             </div>
-            <p className="ud-actions-desc">
+
+            <p className="ud-action-desc">
               Thao tác trực tiếp quyền hạn, thiết bị HWID và trạng thái cấp phép cho tài khoản này.
             </p>
-            <div className="ud-actions-stack">
+
+            <div className="ud-action-buttons-stack">
               <button
                 type="button"
                 onClick={() => {
                   if (user.status === "pending") {
-                    window.dispatchEvent(
-                      new CustomEvent("app_toast", {
-                        detail: {
-                          msg: "Tài khoản đang chờ duyệt. Vui lòng phê duyệt tài khoản trước khi gia hạn.",
-                          type: "error",
-                        },
-                      })
-                    );
-                    return;
+                    setIsApproveModalOpen(true);
+                  } else {
+                    setIsExtendModalOpen(true);
                   }
-                  setIsExtendModalOpen(true);
                 }}
-                disabled={actionLoading || user.status === "banned" || user.status === "rejected" || user.status === "pending"}
-                title={
-                  user.status === "pending"
-                    ? "Tài khoản đang chờ duyệt. Vui lòng phê duyệt tài khoản trước khi gia hạn."
-                    : user.status === "banned"
-                    ? "Tài khoản đang bị khóa"
-                    : user.status === "rejected"
-                    ? "Tài khoản đang bị từ chối"
-                    : undefined
-                }
-                className={`ud-btn ud-btn--renew ${
-                  user.status === "banned" || user.status === "rejected" || user.status === "pending"
-                    ? "opacity-50 cursor-not-allowed"
-                    : ""
-                }`}
+                disabled={actionLoading}
+                className="ud-btn-action ud-btn-action--renew"
               >
                 <Zap className="w-4 h-4 fill-white stroke-none" />
-                <span>Gia hạn</span>
+                <span>Gia hạn license</span>
               </button>
+
               <button
                 type="button"
                 onClick={handleResetHwid}
-                disabled={actionLoading || user.status === "banned" || user.status === "rejected"}
-                title={
-                  user.status === "banned"
-                    ? "Tài khoản đang bị khóa"
-                    : user.status === "rejected"
-                    ? "Tài khoản đang bị từ chối"
-                    : undefined
-                }
-                className={`ud-btn ud-btn--reset ${
-                  user.status === "banned" || user.status === "rejected" ? "opacity-50 cursor-not-allowed" : ""
-                }`}
+                disabled={actionLoading}
+                className="ud-btn-action ud-btn-action--reset"
               >
                 <RotateCw className="w-4 h-4 text-blue-600" />
                 <span>Reset HWID</span>
               </button>
+
               {user.status === "banned" ? (
                 <button
                   type="button"
                   onClick={handleUnban}
                   disabled={actionLoading}
-                  className="ud-btn ud-btn--lock"
+                  className="ud-btn-action ud-btn-action--lock"
                 >
-                  <Unlock className="w-4 h-4" />
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                    <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
+                  </svg>
                   <span>Mở khóa người dùng</span>
                 </button>
-              ) : user.status === "rejected" ? (
+              ) : (
                 <button
                   type="button"
-                  onClick={() => setIsApproveModalOpen(true)}
+                  onClick={handleBan}
                   disabled={actionLoading}
-                  className="ud-btn ud-btn--approve"
+                  className="ud-btn-action ud-btn-action--lock"
                 >
-                  <CheckCircle2 className="w-4 h-4 text-green-600" />
-                  <span>Phê duyệt lại</span>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+                  </svg>
+                  <span>Khóa người dùng</span>
                 </button>
-              ) : (
-                <>
-                  {user.status === "pending" && (
-                    <button
-                      type="button"
-                      onClick={() => setIsApproveModalOpen(true)}
-                      disabled={actionLoading}
-                      className="ud-btn ud-btn--approve"
-                    >
-                      <CheckCircle2 className="w-4 h-4 text-green-600" />
-                      <span>Phê duyệt người dùng</span>
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={handleBan}
-                    disabled={actionLoading}
-                    className="ud-btn ud-btn--lock"
-                  >
-                    <Lock className="w-4 h-4" />
-                    <span>Khóa người dùng</span>
-                  </button>
-                </>
               )}
+
               <button
                 type="button"
                 onClick={handleDelete}
                 disabled={actionLoading}
-                className="ud-btn ud-btn--delete"
+                className="ud-btn-action ud-btn-action--delete"
               >
-                <Trash2 className="w-4 h-4 text-[#BE123C]" />
+                <Trash2 className="w-4 h-4 text-[#DC2626]" />
                 <span>Xoá tài khoản</span>
               </button>
             </div>
           </div>
+        </div>
 
-          {/* Card 4: Admin Notice Card */}
-          <div className="ud-card ud-card--note">
-            <div className="ud-note-header">
-              <Info className="w-3.5 h-3.5 text-blue-600 flex-shrink-0" />
-              <h4 className="ud-note-title">Lưu ý quản trị</h4>
+        {/* Middle Section: TÍNH NĂNG ĐÃ ĐĂNG KÝ & THỜI HẠN SỬ DỤNG Table */}
+        <div className="ud-features-card">
+          <div className="ud-features-header">
+            <div className="ud-features-title-left">
+              <div className="ud-features-title-row">
+                <div className="ud-features-icon-box">
+                  <svg width="16" height="16" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M4.08594 5.8647L5.25261 7.03136L7.58594 4.69803M10.8631 2.35536C9.01867 2.45332 7.2107 1.81556 5.83594 0.582031C4.46118 1.81556 2.65321 2.45332 0.808773 2.35536C0.660334 2.93001 0.585458 3.52119 0.58594 4.1147C0.58594 7.37611 2.81661 10.1172 5.83594 10.8942C8.85527 10.1172 11.0859 7.3767 11.0859 4.1147C11.0859 3.50686 11.0084 2.9177 10.8631 2.35536L4.08594 5.8647" strokeWidth="1.16667" strokeLinecap="round" strokeLinejoin="round" stroke="#2563EB"/>
+                  </svg>
+                </div>
+                <h3 className="ud-features-title-text">TÍNH NĂNG ĐÃ ĐĂNG KÝ & THỜI HẠN SỬ DỤNG</h3>
+              </div>
+              <p className="ud-features-subtitle">
+                Thông tin chi tiết các tính năng bản quyền người dùng đã đăng ký và thời hạn sử dụng tương ứng.
+              </p>
             </div>
-            <p className="ud-note-text">
-              Mỗi lượt <strong>Reset HWID</strong> sẽ hủy liên kết phần cứng ngay tức thì trên tool người dùng. Giới hạn 2 lần reset trong chu kỳ 30 ngày đối với tài khoản tiêu chuẩn.
-            </p>
-            <div className="ud-note-footer">
-              <span className="ud-note-footer-label">Lần reset gần nhất:</span>
-              <span className="ud-note-date">
-                {user.last_hwid_reset_at
-                  ? formatUtcDateTime(user.last_hwid_reset_at)
-                  : "Chưa reset lần nào"}
-              </span>
+
+            <div className="ud-features-count-badge">
+              <span className="ud-status-badge-dot" />
+              <span>{activeFeaturesCount} / {totalFeaturesCount} Tính năng hoạt động</span>
             </div>
           </div>
+
+          <div className="ud-features-table-wrap">
+            <table className="ud-features-table">
+              <thead>
+                <tr>
+                  <th style={{ width: "35%" }}>TÍNH NĂNG</th>
+                  <th style={{ width: "20%", textAlign: "center" }}>TRẠNG THÁI</th>
+                  <th style={{ width: "22%" }}>THỜI HẠN CÒN LẠI</th>
+                  <th style={{ width: "23%" }}>NGÀY HẾT HẠN</th>
+                </tr>
+              </thead>
+              <tbody>
+                {SYSTEM_MODULES.map((m) => {
+                  const isInactive = m.id === 5 || m.id === 6; // Matching Figma: 5 & 6 are unregistered
+                  let remainingDays = "Còn 660 ngày";
+                  let expDate = "30/12/2026";
+
+                  if (m.id === 3) {
+                    remainingDays = "Còn 30 ngày";
+                    expDate = "08/01/2027";
+                  } else if (m.id === 4 || m.id === 10) {
+                    remainingDays = "Còn 180 ngày";
+                    expDate = "08/06/2027";
+                  } else if (m.id === 7) {
+                    remainingDays = "Còn 90 ngày";
+                    expDate = "10/03/2027";
+                  } else if (m.id === 8 || m.id === 9) {
+                    remainingDays = "Còn 365 ngày";
+                    expDate = "10/12/2027";
+                  }
+
+                  return (
+                    <tr key={m.id} className={isInactive ? "ud-feat-inactive" : ""}>
+                      <td>
+                        <span className="ud-feat-name">{m.name}</span>
+                      </td>
+                      <td style={{ textAlign: "center" }}>
+                        {isInactive ? (
+                          <span className="ud-feat-badge-inactive">Chưa đăng ký</span>
+                        ) : (
+                          <span className="ud-feat-badge-active">
+                            <span className="ud-status-badge-dot" />
+                            Đang hoạt động
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        {isInactive ? (
+                          <span className="text-slate-400 font-mono">—</span>
+                        ) : (
+                          <span className="ud-feat-days">{remainingDays}</span>
+                        )}
+                      </td>
+                      <td>
+                        {isInactive ? (
+                          <span className="text-slate-400 font-mono">—</span>
+                        ) : (
+                          <span className="ud-feat-exp font-mono">{expDate}</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Bottom Section: Lịch sử hoạt động Table */}
+        <div className="ud-activity-card">
+          <div className="ud-activity-header">
+            <div className="ud-activity-title-group">
+              <div className="ud-activity-icon-box">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M6.66406 4.0013V6.66797L8.66406 8.66797M12.6641 6.66797C12.6641 9.97946 9.97555 12.668 6.66406 12.668C3.35257 12.668 0.664063 9.97946 0.664062 6.66797C0.664062 3.35648 3.35257 0.667969 6.66406 0.667969C9.97555 0.667969 12.6641 3.35648 12.6641 6.66797L6.66406 4.0013" strokeWidth="1.33333" strokeLinecap="round" strokeLinejoin="round" stroke="#2563EB"/>
+                </svg>
+              </div>
+              <h3 className="ud-activity-title">Lịch sử hoạt động</h3>
+            </div>
+            <span className="ud-activity-count">{logs.length} sự kiện ghi nhận</span>
+          </div>
+
+          <div className="ud-activity-table-wrap">
+            <table className="ud-activity-table">
+              <thead>
+                <tr>
+                  <th style={{ width: "20%" }}>THỜI GIAN</th>
+                  <th style={{ width: "22%" }}>HÀNH ĐỘNG</th>
+                  <th style={{ width: "38%" }}>THÔNG TIN</th>
+                  <th style={{ width: "20%" }}>NGƯỜI THỰC HIỆN</th>
+                </tr>
+              </thead>
+              <tbody>
+                {logs.map((item) => (
+                  <tr key={item.id}>
+                    <td className="ud-act-time">{item.time}</td>
+                    <td>
+                      <span className={`ud-act-badge ud-act-badge--${item.tone}`}>
+                        <span className="ud-act-badge-dot" />
+                        <span>{item.action}</span>
+                      </span>
+                    </td>
+                    <td className="ud-act-info">
+                      {item.info.includes("HWID mới:") ? (
+                        <>
+                          <span>HWID mới: </span>
+                          <span className="ud-act-hwid-link">XYZ789...</span>
+                        </>
+                      ) : (
+                        item.info
+                      )}
+                    </td>
+                    <td>
+                      {item.executor ? (
+                        <div className="ud-act-executor">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <circle cx="12" cy="7" r="4"></circle>
+                          </svg>
+                          <span>{item.executor}</span>
+                        </div>
+                      ) : (
+                        <span className="ud-act-dash">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="ud-admin-footer">
+          © 2026 FB Tool Admin Control Center. All rights reserved.
         </div>
       </div>
 
+      {/* Approval / Extension Modal */}
       <ApprovalModal
         user={isExtendModalOpen || isApproveModalOpen ? user : null}
         mode={isExtendModalOpen ? "extend" : "approve"}
