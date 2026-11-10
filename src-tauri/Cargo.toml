@@ -1,6 +1,6 @@
 [package]
 name = "fb_page_automator"
-version = "2.0.7"
+version = "2.0.9"
 description = "Facebook Automator Pro Enterprise Edition"
 authors = ["Ada Agency Group"]
 edition = "2021"

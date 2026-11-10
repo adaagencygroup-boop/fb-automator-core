@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
+  ChevronUp,
   CircleCheck,
   FileSpreadsheet,
   Info,
@@ -17,6 +18,7 @@ import {
   Play,
 } from "lucide-react";
 import CustomSelect from "@/components/ui/custom-select";
+import { annotateLines, splitLine } from "./validation.mjs";
 import {
   Dialog,
   DialogContent,
@@ -47,6 +49,8 @@ const TEMPLATE = [
   "Mộc Spa & Dưỡng Sinh | 0977777777 | mocspa.care@gmail.com | Hoàn Kiếm, Hà Nội",
 ].join("\n");
 
+const TEMPLATE_FILE = "mau_danh_sach_fanpage.txt";
+
 const COUNTRIES = [
   { value: "+84", label: "VN (+84) - Việt Nam" },
   { value: "+1", label: "US (+1) - Hoa Kỳ" },
@@ -70,38 +74,9 @@ const DELIMITERS = [
   { value: ";", symbol: ";", label: "(Chấm phẩy)" },
 ];
 
-/** Đoán ký tự phân cách của 1 dòng (dùng khi nạp tệp). Dấu phẩy xét cuối vì địa chỉ hay chứa dấu phẩy */
-function guessDelimiter(line) {
-  return ["|", "	", ";", ","].find((item) => line.includes(item)) || null;
-}
+/** Cắt dòng + quy tắc kiểm tra đều nằm ở validation.mjs để test được */
 
-/** forced: ký tự phân cách người dùng chọn; bỏ trống thì tự đoán (dùng khi nạp tệp) */
-function splitLine(line, forced) {
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-  const delimiter = forced || guessDelimiter(trimmed);
-  const parts = delimiter ? trimmed.split(delimiter).map((part) => part.trim()) : [trimmed];
-  return {
-    page_name: parts[0] || "",
-    phone: parts[1] || "",
-    email: parts[2] || "",
-    address: parts[3] || "",
-  };
-}
-
-function parsePageLines(text, delimiter) {
-  return text
-    .split(/\r?\n/)
-    .map((line) => splitLine(line, delimiter))
-    .filter((item) => item && item.page_name);
-}
-
-function rowIssues(page) {
-  const issues = [];
-  if (!page.phone) issues.push("Thiếu SĐT");
-  if (page.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(page.email)) issues.push("Sai email");
-  return issues;
-}
+/** Quy tắc kiểm tra nằm ở validation.mjs để test được — xem file đó */
 
 function eventOf(log) {
   const extra = log?.extra && typeof log.extra === "object" ? log.extra : {};
@@ -136,17 +111,72 @@ function stateFromRun(run) {
   const latest = run[run.length - 1];
   if (!latest) return "queued";
   if (latest.action === "completed") return "done";
+  if (latest.action === "partial") return "partial";
   if (latest.action === "failed") return "error";
   if (latest.action === "step") return "running";
   if (latest.action === "claim") return "claimed";
   return "queued";
 }
 
+/** UID admin: bắt buộc, chỉ số nguyên dương (không chữ/ký tự đặc biệt/dấu cách/thập phân). */
+function getAdminUidError(value) {
+  const raw = String(value ?? "");
+  if (!raw.trim()) return "UID admin không được để trống.";
+  if (/\s/.test(raw)) return "UID admin không được chứa dấu cách.";
+  if (/[.,]/.test(raw)) return "UID admin không được là số thập phân.";
+  if (/[a-zA-ZÀ-ỹ]/.test(raw)) return "UID admin không được chứa chữ cái.";
+  if (/[^0-9]/.test(raw)) return "UID admin không được chứa kí tự đặc biệt.";
+  if (!/^[1-9][0-9]*$/.test(raw)) return "UID admin phải là số nguyên dương.";
+  return "";
+}
+
+/** Số luồng: số nguyên dương 1–10 và không vượt số tài khoản FB đã chọn. */
+function getThreadsError(value, selectedCount) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "Số luồng không được để trống.";
+  if (!/^[1-9][0-9]*$/.test(raw)) return "Số luồng phải là số nguyên dương.";
+  const n = Number(raw);
+  if (n < 1) return "Số luồng phải lớn hơn 0.";
+  if (n > 10) return "Số luồng tối đa là 10.";
+  if (selectedCount > 0 && n > selectedCount) {
+    return `Số luồng không được lớn hơn số tài khoản FB đã chọn (${selectedCount}).`;
+  }
+  return "";
+}
+
+/** Số vòng lặp: bắt buộc, số nguyên dương (> 0). */
+function getRepeatCountError(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "Số vòng lặp không được để trống.";
+  if (!/^[1-9][0-9]*$/.test(raw)) return "Số vòng lặp phải là số nguyên dương.";
+  if (Number(raw) < 1) return "Số vòng lặp phải lớn hơn 0.";
+  return "";
+}
+
+/** Một ô delay: bắt buộc, số nguyên dương (> 0). */
+function getDelayFieldError(value, label) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return `${label} không được để trống.`;
+  if (!/^[1-9][0-9]*$/.test(raw)) return `${label} phải là số nguyên dương (> 0).`;
+  return "";
+}
+
+/** Cặp Min/Max delay: từng ô hợp lệ và Min <= Max. */
+function getDelayErrors(minVal, maxVal) {
+  const minError = getDelayFieldError(minVal, "Độ trễ Min");
+  const maxError = getDelayFieldError(maxVal, "Độ trễ Max");
+  let rangeError = "";
+  if (!minError && !maxError && Number(minVal) > Number(maxVal)) {
+    rangeError = "Độ trễ Min phải nhỏ hơn hoặc bằng Max.";
+  }
+  return { minError, maxError, rangeError };
+}
+
 function buildJobRows(pages, accounts, logs, startMs) {
   const buckets = new Map();
   logs.forEach((log) => {
     const event = eventOf(log);
-    if (!["claim", "step", "completed", "failed"].includes(event.action)) return;
+    if (!["claim", "step", "completed", "partial", "failed"].includes(event.action)) return;
     const stamp = Date.parse(event.time);
     if (startMs && Number.isFinite(stamp) && stamp + 5000 < startMs) return;
     const key = `${event.uid}::${event.pageName}`;
@@ -177,7 +207,7 @@ function buildJobRows(pages, accounts, logs, startMs) {
     const latest = run[run.length - 1];
     const state = stateFromRun(run);
     const account = accounts.find((item) => item.uid === page.uid);
-    const percent = latest?.percent || (state === "done" || state === "error" ? 100 : 0);
+      const percent = latest?.percent || (state === "done" || state === "partial" || state === "error" ? 100 : 0);
     return {
       key: `${key}-${index}`,
       index,
@@ -200,15 +230,19 @@ function clockLabel(value) {
   return date.toLocaleTimeString("vi-VN", { hour12: false });
 }
 
+/**
+ * Màu chữ log, chọn cho NỀN TỐI (#1E293B) — đổi nền thì phải đổi cả bảng màu
+ * này, không thì mọi dòng trừ dòng thành công đều chìm nghỉm.
+ */
 function logTone(log) {
   const type = String(log.type || log.extra?.level || "").toLowerCase();
   const message = log.message || "";
-  if (type === "error" || type === "failed") return "font-medium text-[#BA1A1A]";
+  if (type === "error" || type === "failed") return "font-medium text-rose-400";
   if (type === "success" || /thành công|hoàn tất/i.test(message)) return "font-semibold text-[#4EDEA3]";
-  if (type === "warning") return "font-medium text-amber-700";
-  if (/khởi tạo|bắt đầu|bốc page/i.test(message)) return "font-medium text-[#1B45A3]";
-  if (/bypass|captcha|token/i.test(message)) return "font-medium text-[#456E89]";
-  return "font-medium text-[#33353D]";
+  if (type === "warning") return "font-medium text-amber-300";
+  if (/khởi tạo|bắt đầu|bốc page/i.test(message)) return "font-medium text-sky-300";
+  if (/bypass|captcha|token/i.test(message)) return "font-medium text-cyan-300";
+  return "font-medium text-slate-300";
 }
 
 function LogLine({ message }) {
@@ -229,6 +263,7 @@ const JOB_STATUS = {
   claimed: { label: "Chờ luồng", className: "bg-[#E5EEFF] text-[#565E74]", dot: true },
   queued: { label: "Chờ chạy", className: "bg-[#E5EEFF] text-[#565E74]", dot: true },
   done: { label: "Đã chạy", className: "bg-[#D1FAE5] text-[#065F46]", icon: "status_done" },
+  partial: { label: "Một phần", className: "bg-amber-50 text-amber-700", icon: "status_error" },
   error: { label: "Chạy lỗi", className: "bg-[#FFDAD6] text-[#93000A]", icon: "status_error" },
   paused: { label: "Tạm dừng", className: "bg-amber-50 text-amber-700", dot: true },
 };
@@ -236,13 +271,13 @@ const JOB_STATUS = {
 const RUN_CARD = "rounded-xl bg-white shadow-[0_1px_4px_rgba(15,23,42,0.04)]";
 
 /** Màn "Đang tạo Fanpage" — theo Figma node 1020:11714 */
-function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
+function RunningScreen({ task, accounts, logs, paused, stopped, finished, onPause, onStop, onBackToSetup }) {
   const logRef = useRef(null);
   const pages = Array.isArray(task?.pages) ? task.pages : [];
   const startMs = Number(task?.start_time) || 0;
   const rows = useMemo(() => buildJobRows(pages, accounts, logs, startMs), [pages, accounts, logs, startMs]);
   const success = rows.filter((row) => row.state === "done").length;
-  const failed = rows.filter((row) => row.state === "error").length;
+  const failed = rows.filter((row) => row.state === "error" || row.state === "partial").length;
   const active = rows.filter((row) => row.state === "running");
   const waiting = rows.filter((row) => row.state === "claimed");
   const liveRows = active.length ? active : waiting;
@@ -255,41 +290,66 @@ function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
     }),
     [logs, startMs]
   );
+  const sessionEnded = stopped || finished;
 
   useEffect(() => {
     const node = logRef.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [engineLogs.length]);
 
+  const title = stopped
+    ? "Đã dừng khẩn cấp"
+    : finished
+      ? "Hoàn tất tạo Fanpage"
+      : paused
+        ? "Đang tạm dừng"
+        : "Đang tạo Fanpage";
+  const subtitle = stopped
+    ? "Tiến trình đã dừng. Bạn có thể xem lại kết quả các luồng bên dưới rồi quay về màn cấu hình khi sẵn sàng."
+    : finished
+      ? "Đã hoàn tất toàn bộ luồng. Xem kết quả bên dưới, bấm Quay về cấu hình khi muốn thiết lập job mới."
+      : "Quá trình tạo Fanpage đang diễn ra, vui lòng không đóng cửa sổ để tránh ngắt quãng luồng xử lý.";
+  const dotClass = stopped ? "bg-[#BA1A1A]" : finished ? "bg-[#059669]" : paused ? "bg-amber-500" : "bg-[#004AC6]";
+
   return (
     <div className={`${PAGE_FONT} -m-6 flex min-h-full flex-col gap-6 bg-[#F8F9FF] p-4 sm:p-6`}>
       <section className={`${RUN_CARD} flex flex-col gap-4 p-6 lg:flex-row lg:items-center lg:justify-between`}>
         <div className="flex max-w-[581px] flex-col gap-1">
           <div className="flex items-center gap-2">
-            <span aria-hidden="true" className={`size-2.5 shrink-0 rounded-full ${paused ? "bg-amber-500" : "bg-[#004AC6]"}`} />
-            <h1 className="text-2xl leading-8 font-bold tracking-[-0.6px] text-[#0B1C30]">{paused ? "Đang tạm dừng" : "Đang tạo Fanpage"}</h1>
+            <span aria-hidden="true" className={`size-2.5 shrink-0 rounded-full ${dotClass}`} />
+            <h1 className="text-2xl leading-8 font-bold tracking-[-0.6px] text-[#0B1C30]">{title}</h1>
           </div>
-          <p className="text-sm leading-[22px] text-[#6B5D5D]">
-            Quá trình tạo Fanpage đang diễn ra, vui lòng không đóng cửa sổ để tránh ngắt quãng luồng xử lý.
-          </p>
+          <p className="text-sm leading-[22px] text-[#6B5D5D]">{subtitle}</p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={onPause}
-            className="flex h-9 items-center gap-2 rounded-lg bg-[#EFF4FF] px-4 text-sm leading-5 font-medium text-[#0B1C30] shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#E5EEFF]"
-          >
-            {paused ? <Play aria-hidden="true" className="size-3.5" /> : <CreatorIcon name="run_pause" />}
-            {paused ? "Chạy tiếp" : "Tạm dừng"}
-          </button>
-          <button
-            type="button"
-            onClick={onStop}
-            className="flex h-9 items-center gap-2 rounded-lg bg-[#BA1A1A] px-4 text-sm leading-5 font-medium text-white shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#A11616]"
-          >
-            <CreatorIcon name="run_stop" />
-            Dừng khẩn cấp
-          </button>
+          {sessionEnded ? (
+            <button
+              type="button"
+              onClick={onBackToSetup}
+              className="flex h-9 items-center gap-2 rounded-lg bg-[#0B1C30] px-4 text-sm leading-5 font-medium text-white shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#152A42]"
+            >
+              Quay về cấu hình
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onPause}
+                className="flex h-9 items-center gap-2 rounded-lg bg-[#EFF4FF] px-4 text-sm leading-5 font-medium text-[#0B1C30] shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#E5EEFF]"
+              >
+                {paused ? <Play aria-hidden="true" className="size-3.5" /> : <CreatorIcon name="run_pause" />}
+                {paused ? "Chạy tiếp" : "Tạm dừng"}
+              </button>
+              <button
+                type="button"
+                onClick={onStop}
+                className="flex h-9 items-center gap-2 rounded-lg bg-[#BA1A1A] px-4 text-sm leading-5 font-medium text-white shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#A11616]"
+              >
+                <CreatorIcon name="run_stop" />
+                Dừng khẩn cấp
+              </button>
+            </>
+          )}
         </div>
       </section>
 
@@ -299,9 +359,9 @@ function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
         <MetricCard
           label="Đang chạy"
           value={active.length}
-          suffix={paused ? "đang tạm dừng" : "luồng song song"}
+          suffix={stopped ? "đã dừng" : finished ? "đã hoàn tất" : paused ? "đang tạm dừng" : "luồng song song"}
           icon="kpi_running"
-          iconClass={`bg-[#DBE1FF] text-[#004AC6] ${active.length && !paused ? "[&>span]:animate-spin" : ""}`}
+          iconClass={`bg-[#DBE1FF] text-[#004AC6] ${active.length && !paused && !sessionEnded ? "[&>span]:animate-spin" : ""}`}
           valueClass="text-[#2563EB]"
         />
         <MetricCard label="Hàng đợi" value={queued} suffix="chờ xử lý" icon="kpi_queue" iconClass="bg-[#DAE2FD] text-[#565E74]" />
@@ -332,7 +392,13 @@ function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
                       <td colSpan={4} className="px-4 py-8 text-sm text-[#434655]">Chưa nhận được danh sách page của phiên này.</td>
                     </tr>
                   ) : rows.map((row) => {
-                    const visual = paused && row.state === "running" ? "paused" : row.state;
+                    const visual = stopped && (row.state === "running" || row.state === "claimed" || row.state === "queued")
+                      ? "error"
+                      : finished && (row.state === "running" || row.state === "claimed" || row.state === "queued")
+                        ? "queued"
+                        : paused && row.state === "running"
+                          ? "paused"
+                          : row.state;
                     const badge = JOB_STATUS[visual];
                     return (
                       <tr key={row.key} className="even:bg-[rgba(248,249,255,0.5)]">
@@ -416,24 +482,28 @@ function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
           </section>
         </div>
 
-        <aside className="flex min-h-[480px] flex-col overflow-hidden rounded-xl border border-[rgba(65,71,84,0.2)] bg-[#F8F9FF] shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] xl:sticky xl:top-0 xl:h-[calc(100vh-140px)] xl:max-h-[951px]">
-          <div className="flex items-center gap-2 border-b border-[rgba(65,71,84,0.2)] bg-[#EFF4FF] p-2">
+        {/* Terminal nền tối cho khớp các module khác: module 02 (#0F172A),
+            module 03 LogConsole (#1E293B), module 10, module 11 và thanh
+            ConsoleTerminal dùng chung đều là nền tối chữ sáng. Riêng chỗ này
+            trước đây để nền sáng nên nhìn lạc hẳn. */}
+        <aside className="flex min-h-[480px] flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#1E293B] shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] xl:sticky xl:top-0 xl:h-[calc(100vh-140px)] xl:max-h-[951px]">
+          <div className="flex items-center gap-2 border-b border-slate-800 bg-[#0F172A] p-2">
             <span className="flex items-center gap-1.5" aria-hidden="true">
               <span className="size-2.5 rounded-full bg-[#FFB4AB]" />
               <span className="size-2.5 rounded-full bg-[#FEBC2E]" />
               <span className="size-2.5 rounded-full bg-[#4EDEA3]" />
             </span>
-            <p className="flex items-center gap-1 pl-1 text-xs leading-4 font-semibold tracking-[0.3px] text-[#33353D]">
+            <p className="flex items-center gap-1 pl-1 text-xs leading-4 font-semibold tracking-[0.3px] text-slate-300">
               <CreatorIcon name="terminal" className="text-[#7BD0FF]" />
               Realtime Automation Engine Log
             </p>
           </div>
-          <div ref={logRef} className={`flex-1 space-y-1.5 overflow-auto p-4 text-xs leading-[19.5px] tracking-[0.24px] text-[#32343D] ${SCROLLBAR}`}>
+          <div ref={logRef} className={`flex-1 space-y-1.5 overflow-auto p-4 font-mono text-xs leading-[19.5px] tracking-[0.24px] text-slate-300 ${SCROLLBAR}`}>
             {engineLogs.length === 0 ? (
-              <p className="text-[#737686]">Đang chờ log từ engine...</p>
+              <p className="text-slate-500">Đang chờ log từ engine...</p>
             ) : engineLogs.map((log, index) => (
               <p key={`${log.timestamp}-${index}`} className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2">
-                <span className="text-[#32343D]">[{clockLabel(log.extra?.time || log.timestamp)}]</span>
+                <span className="text-slate-500">[{clockLabel(log.extra?.time || log.timestamp)}]</span>
                 <span className={logTone(log)}>
                   <LogLine message={log.message} />
                 </span>
@@ -910,16 +980,24 @@ function CreateView() {
   const [uploadedFile, setUploadedFile] = useState(null);
   const [delimiter, setDelimiter] = useState("|");
   const [targetAdminUid, setTargetAdminUid] = useState("");
-  const [threads, setThreads] = useState(3);
+  const [adminUidError, setAdminUidError] = useState("");
+  const [threads, setThreads] = useState(1);
+  const [threadsError, setThreadsError] = useState("");
   const [delayMin, setDelayMin] = useState(45);
   const [delayMax, setDelayMax] = useState(120);
+  const [delayMinError, setDelayMinError] = useState("");
+  const [delayMaxError, setDelayMaxError] = useState("");
+  const [delayRangeError, setDelayRangeError] = useState("");
   const [repeatCount, setRepeatCount] = useState(1);
+  const [repeatCountError, setRepeatCountError] = useState("");
   const [countryCode, setCountryCode] = useState("+84");
   const [geminiKey, setGeminiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [geminiModel, setGeminiModel] = useState("gemini-3.8-flash");
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [stopped, setStopped] = useState(false);
+  const [finished, setFinished] = useState(false);
   const [task, setTask] = useState(null);
   const [starting, setStarting] = useState(false);
   const [testingKey, setTestingKey] = useState(false);
@@ -928,7 +1006,36 @@ function CreateView() {
   const [showPreview, setShowPreview] = useState(false);
   const { logs } = useLocalSSE(true);
 
-  const pages = useMemo(() => parsePageLines(pageText, delimiter), [pageText, delimiter]);
+  /**
+   * Soi từng dòng MỘT lần rồi dùng chung cho cả bảng đối soát và vệt vàng
+   * trên textarea. Hai chỗ phải luôn nói cùng một chuyện, nên không được soi
+   * hai lần bằng hai đường khác nhau.
+   */
+  const lineInfo = useMemo(() => annotateLines(pageText, delimiter), [pageText, delimiter]);
+  /** Dòng tạo ra page — giữ nguyên thứ tự để khớp với bảng đối soát */
+  const parsedRows = useMemo(() => lineInfo.filter((item) => item.page), [lineInfo]);
+  const pages = useMemo(() => parsedRows.map((item) => item.page), [parsedRows]);
+  /** Các dòng sai, kèm chỉ số dòng gốc trong textarea */
+  const lineErrors = useMemo(() => lineInfo.filter((item) => item.issues.length > 0), [lineInfo]);
+  const errorLineSet = useMemo(() => new Set(lineErrors.map((item) => item.index)), [lineErrors]);
+  const pasteRef = useRef(null);
+
+  /**
+   * Bấm vào một lỗi thì nhảy tới và BÔI ĐEN đúng dòng đó trong textarea.
+   *
+   * Với danh sách vài trăm dòng, biết "dòng 137 sai" mà vẫn phải tự cuộn đi
+   * tìm thì gần như không giúp được gì.
+   */
+  const jumpToLine = (index) => {
+    const el = pasteRef.current;
+    if (!el) return;
+    const lines = el.value.split("\n");
+    const start = lines.slice(0, index).reduce((sum, line) => sum + line.length + 1, 0);
+    el.focus();
+    el.setSelectionRange(start, start + (lines[index]?.length ?? 0));
+    // Đưa dòng được chọn vào giữa khung thay vì để nó dính sát mép trên
+    el.scrollTop = Math.max(0, index * LINE_HEIGHT - el.clientHeight / 2);
+  };
   // Danh sách thực thi: chỉ nick đã đăng nhập + Live (Die / lỗi DN không chọn được)
   const visibleAccounts = useMemo(
     () => accounts.filter((account) => account.login_status === "logged_in" && account.status === "live"),
@@ -964,23 +1071,69 @@ function CreateView() {
     });
   }, [accountsLoading, accountsError]);
   const allVisibleSelected = visibleAccounts.length > 0 && visibleAccounts.every((account) => selected.includes(account.uid));
-  const preview = pages.map((page, index) => {
-    const issues = rowIssues(page);
+  // Số page thật sự tạo = Số luồng × Số vòng lặp. Danh sách dán có thể dài
+  // hơn, phần dư KHÔNG chạy — thanh tổng kết nói rõ lấy bao nhiêu trên bao
+  // nhiêu dòng.
+  const threadsNum = Math.max(1, Number.parseInt(String(threads), 10) || 1);
+  const loopsNum = Math.max(1, Number.parseInt(String(repeatCount), 10) || 1);
+  const plannedCount = threadsNum * loopsNum;
+  const threadUids = selected.slice(0, Math.min(threadsNum, selected.length));
+  const plannedRows = parsedRows.slice(0, plannedCount);
+
+  const preview = plannedRows.map((item, index) => {
+    const page = item.page;
+    const uid = threadUids.length ? threadUids[index % threadUids.length] : "";
+    const loop_round = threadUids.length
+      ? Math.floor(index / threadUids.length) + 1
+      : Math.floor(index / threadsNum) + 1;
+    // Chỉ giữ MỘT khái niệm "lỗi" trong cả màn hình: sai dữ liệu ở dòng người
+    // dùng dán. Đó là thứ được bôi vàng trên textarea, liệt kê ở khối vàng,
+    // đếm ở thanh tổng kết, và chặn nút Bắt đầu — cả bốn chỗ cùng một con số.
+    //
+    // "Chưa gán UID" KHÔNG nằm trong đó: nó không sai dữ liệu mà chỉ là chưa
+    // chọn tài khoản, sửa bằng cách tick ở danh sách trên chứ không phải sửa
+    // text. Trạng thái dòng hiện riêng là "Chờ tài khoản".
     return {
       ...page,
       stt: String(index + 1).padStart(2, "0"),
-      uid: selected.length ? selected[index % selected.length] : "",
-      issues,
-      ok: issues.length === 0,
+      line: item.index + 1, // số dòng người dùng thấy trong textarea
+      uid,
+      loop_round,
+      dataIssues: item.issues,
     };
   });
 
   const refreshStatus = useCallback(async () => {
     try {
       const status = await getCreatorTaskStatus();
-      setTask(status);
-      setRunning(Boolean(status?.running));
+      setTask((current) => {
+        // Giữ pages/start_time đã gắn lúc start — status API có thể không còn pages sau khi dừng
+        if (!current?.pages?.length) return status;
+        return {
+          ...status,
+          pages: current.pages,
+          start_time: current.start_time || status?.start_time,
+          total_pages: current.total_pages || status?.total_pages,
+        };
+      });
+      const isRunning = Boolean(status?.running);
+      setRunning((wasRunning) => {
+        if (wasRunning && !isRunning) {
+          if (status?.stopped) {
+            setStopped(true);
+            setFinished(false);
+          } else {
+            setFinished(true);
+            setStopped(false);
+          }
+        }
+        return isRunning;
+      });
       setPaused(Boolean(status?.paused));
+      if (status?.stopped) {
+        setStopped(true);
+        setFinished(false);
+      }
     } catch {
       /* engine có thể đang khởi động lại */
     }
@@ -1064,7 +1217,7 @@ function CreateView() {
   useEffect(() => {
     getCreatorSettings()
       .then((settings) => {
-        if (settings?.gemini_api_key) setGeminiKey(settings.gemini_api_key);
+        // API key mặc định để trống — người dùng tự nhập key hợp lệ
         if (settings?.gemini_model) setGeminiModel(settings.gemini_model);
       })
       .catch(() => {});
@@ -1082,6 +1235,24 @@ function CreateView() {
     const timer = setInterval(refreshStatus, 2500);
     return () => clearInterval(timer);
   }, [running, refreshStatus]);
+
+  // SSE/WS all_finished: luôn giữ màn tiến trình (dừng khẩn cấp hoặc hoàn tất thành công)
+  useEffect(() => {
+    if ((!running && !stopped && !finished) || !logs.length) return;
+    const latest = logs[logs.length - 1];
+    if (latest?.extra?.action !== "all_finished") return;
+    setRunning(false);
+    setPaused(false);
+    if (latest.extra.stopped) {
+      setStopped(true);
+      setFinished(false);
+      setTask((current) => (current ? { ...current, running: false, paused: false, stopped: true, finished: false } : current));
+      return;
+    }
+    setStopped(false);
+    setFinished(true);
+    setTask((current) => (current ? { ...current, running: false, paused: false, stopped: false, finished: true } : current));
+  }, [logs, running, stopped, finished]);
 
   useEffect(() => {
     if (!showPreview) return;
@@ -1105,9 +1276,12 @@ function CreateView() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "mau_danh_sach_fanpage.txt";
+    link.download = TEMPLATE_FILE;
     link.click();
-    URL.revokeObjectURL(url);
+    // Thu hồi ở lượt sau: gọi ngay sau click() thì có trình duyệt huỷ luôn
+    // lượt tải vì URL đã mất trước khi nó kịp đọc blob.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    toast.success(`Đã tải tệp mẫu ${TEMPLATE_FILE}.`, "TẠO PAGE");
   };
 
   const onPickFile = async (file) => {
@@ -1155,52 +1329,130 @@ function CreateView() {
     }
   };
 
+  const canConfigureJob = selected.length > 0;
+  const warnSelectAccountsForJob = () => {
+    toast.warning("Chọn danh sách tài khoản Facebook tạo page trước khi thiết lập Job.", "TẠO PAGE");
+  };
+
+  useEffect(() => {
+    setThreadsError(getThreadsError(threads, selected.length));
+  }, [selected.length, threads]);
+
+  const handleAdminUidChange = (value) => {
+    setTargetAdminUid(value);
+    setAdminUidError(getAdminUidError(value));
+  };
+
+  const handleThreadsChange = (value) => {
+    setThreads(value);
+    setThreadsError(getThreadsError(value, selected.length));
+  };
+
+  const handleRepeatCountChange = (value) => {
+    setRepeatCount(value);
+    setRepeatCountError(getRepeatCountError(value));
+  };
+
+  const applyDelayErrors = (minVal, maxVal) => {
+    const { minError, maxError, rangeError } = getDelayErrors(minVal, maxVal);
+    setDelayMinError(minError);
+    setDelayMaxError(maxError);
+    setDelayRangeError(rangeError);
+    return minError || maxError || rangeError;
+  };
+
+  const handleDelayMinChange = (value) => {
+    setDelayMin(value);
+    applyDelayErrors(value, delayMax);
+  };
+
+  const handleDelayMaxChange = (value) => {
+    setDelayMax(value);
+    applyDelayErrors(delayMin, value);
+  };
+
   const handleStart = async () => {
     if (!selected.length) {
-      toast.warning("Chọn ít nhất một tài khoản đã import.", "TẠO PAGE");
+      toast.warning("Chọn danh sách tài khoản Facebook tạo page trước khi thiết lập Job.", "TẠO PAGE");
       return;
     }
-    if (!pages.length) {
+    if (!plannedPages.length) {
       toast.warning("Nhập ít nhất một tên page.", "TẠO PAGE");
       return;
     }
-    if (!targetAdminUid.trim()) {
-      toast.warning("Nhập UID admin sẽ nhận quyền quản trị page.", "TẠO PAGE");
+    const uidError = getAdminUidError(targetAdminUid);
+    if (uidError) {
+      setAdminUidError(uidError);
+      toast.warning(uidError, "TẠO PAGE");
       return;
     }
-    const invalid = preview.filter((row) => !row.ok).length;
-    if (invalid) {
-      toast.warning(`${invalid} dòng thiếu SĐT hoặc sai email. Job vẫn chạy với tên page đã có.`, "TẠO PAGE");
+    const threadErr = getThreadsError(threads, selected.length);
+    if (threadErr) {
+      setThreadsError(threadErr);
+      toast.warning(threadErr, "TẠO PAGE");
+      return;
+    }
+    const repeatErr = getRepeatCountError(repeatCount);
+    if (repeatErr) {
+      setRepeatCountError(repeatErr);
+      toast.warning(repeatErr, "TẠO PAGE");
+      return;
+    }
+    const delayErr = applyDelayErrors(delayMin, delayMax);
+    if (delayErr) {
+      toast.warning(delayErr, "TẠO PAGE");
+      return;
+    }
+    // Còn dòng sai thì KHÔNG chạy. Tạo Fanpage là thao tác thật trên tài
+    // khoản thật và không hoàn lại được — tạo 50 page với số điện thoại sai
+    // thì không có cách nào gỡ. Nút Bắt đầu đã mờ sẵn ở trường hợp này, đây
+    // là lớp chặn thứ hai.
+    const invalidRows = preview.filter((row) => row.dataIssues.length > 0);
+    if (invalidRows.length) {
+      const reasons = [...new Set(invalidRows.flatMap((row) => row.dataIssues))];
+      toast.error(
+        `${invalidRows.length} dòng có lỗi: ${reasons.join(", ")}. Sửa xong mới chạy được.`,
+        "TẠO PAGE",
+      );
+      return;
     }
     setStarting(true);
     try {
       if (geminiKey.trim()) await saveCreatorSetting("gemini_api_key", geminiKey.trim());
       if (geminiModel.trim()) await saveCreatorSetting("gemini_model", geminiModel.trim());
-      const assigned = pages.map((page, index) => ({
-        ...page,
-        uid: selected[index % selected.length],
-        loop_round: 1,
+      // Khớp bảng xem trước: chỉ tạo đúng Số luồng × Số vòng lặp page
+      const assigned = preview.map((row) => ({
+        page_name: row.page_name,
+        phone: row.phone,
+        email: row.email,
+        address: row.address,
+        uid: row.uid,
+        loop_round: row.loop_round || 1,
       }));
       await startPageCreation({
         pages: assigned,
         target_admin_uid: targetAdminUid.trim(),
-        threads: Number(threads) || 2,
+        threads: threadsNum,
         delay_min: Number(delayMin) || 0,
         delay_max: Number(delayMax) || 0,
-        repeat_count: Number(repeatCount) || 1,
+        repeat_count: loopsNum,
         country_code: countryCode || "+84",
       });
-      toast.info(`Đã bắt đầu tạo ${assigned.length} page.`, "TẠO PAGE");
+      toast.info(`Đã bắt đầu tạo ${assigned.length} page (${threadsNum} luồng × ${loopsNum} vòng).`, "TẠO PAGE");
       setTask({
         running: true,
         pages: assigned,
         total_pages: assigned.length,
-        threads: Number(threads) || 2,
+        threads: threadsNum,
         start_time: Date.now(),
         paused: false,
+        stopped: false,
+        finished: false,
       });
       setRunning(true);
       setPaused(false);
+      setStopped(false);
+      setFinished(false);
       refreshStatus();
     } catch (err) {
       toast.error(err.message || "Không bắt đầu được", "TẠO PAGE");
@@ -1210,13 +1462,18 @@ function CreateView() {
   };
 
   const handlePause = async () => {
+    if (stopped || finished) return;
     try {
       if (paused) {
         await resumePageCreation();
         setPaused(false);
+        setTask((current) => (current ? { ...current, paused: false } : current));
+        toast.success("Đã tiếp tục chạy các luồng.", "TẠO PAGE");
       } else {
         await pausePageCreation();
         setPaused(true);
+        setTask((current) => (current ? { ...current, paused: true } : current));
+        toast.success("Tạm dừng thành công. Các luồng đã được tạm dừng.", "TẠO PAGE");
       }
     } catch (err) {
       toast.error(err.message || "Không đổi được trạng thái", "TẠO PAGE");
@@ -1224,31 +1481,53 @@ function CreateView() {
   };
 
   const handleStop = async () => {
+    if (stopped || finished) return;
     if (!window.confirm("Dừng khẩn cấp sẽ đóng các Chrome đang tạo page. Tiếp tục?")) return;
     try {
       await stopPageCreation();
       setRunning(false);
       setPaused(false);
-      toast.info("Đã gửi lệnh dừng.", "TẠO PAGE");
+      setFinished(false);
+      setStopped(true);
+      setTask((current) => (current ? { ...current, running: false, paused: false, stopped: true, finished: false } : current));
+      toast.info("Đã dừng toàn bộ luồng. Đang giữ màn tiến trình.", "TẠO PAGE");
     } catch (err) {
       toast.error(err.message || "Không dừng được", "TẠO PAGE");
     }
   };
 
-  if (running) {
+  const handleBackToSetup = () => {
+    setStopped(false);
+    setFinished(false);
+    setRunning(false);
+    setPaused(false);
+  };
+
+  if (running || stopped || finished) {
     return (
       <RunningScreen
         task={task}
         accounts={Object.values(knownAccounts)}
         logs={logs}
         paused={paused}
+        stopped={stopped}
+        finished={finished}
         onPause={handlePause}
         onStop={handleStop}
+        onBackToSetup={handleBackToSetup}
       />
     );
   }
 
-  const validCount = preview.filter((row) => row.ok).length;
+  /**
+   * Số dòng sai dữ liệu — chặn nút Bắt đầu.
+   *
+   * Cố ý KHÔNG tính "Chưa gán UID": chưa chọn tài khoản thì mọi dòng đều mang
+   * lỗi đó, nút sẽ mờ và người dùng không còn cách nào thấy câu hướng dẫn
+   * "Chọn ít nhất một tài khoản đã import". Trường hợp đó để nút bấm được và
+   * `handleStart` nói rõ thiếu gì.
+   */
+  const invalidDataCount = preview.filter((row) => row.dataIssues.length > 0).length;
 
   return (
     <div className={`${PAGE_FONT} -m-6 flex min-h-full flex-col gap-4 bg-[#F8F9FF] px-4 pt-4 sm:gap-6 sm:px-6 sm:pt-6`}>
@@ -1493,14 +1772,19 @@ function CreateView() {
           </p>
 
           {inputMode === "paste" && (
-            <textarea
-              value={pageText}
-              onChange={(event) => setPageText(event.target.value)}
-              aria-label="Danh sách Fanpage cần tạo"
-              spellCheck={false}
-              placeholder={TEMPLATE}
-              className="min-h-64 w-full flex-1 resize-none sm:min-h-[356px] rounded-xl border border-[#C1C6D6] bg-white px-2 pt-2 pb-3.5 text-xs leading-[19.5px] font-medium tracking-[0.24px] text-[#161C27] shadow-[inset_0_2px_4px_rgba(0,0,0,0.05)] outline-none placeholder:text-[#737686] focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/20"
-            />
+            <>
+              <HighlightedTextarea
+                value={pageText}
+                onChange={(event) => setPageText(event.target.value)}
+                errorLines={errorLineSet}
+                textareaRef={pasteRef}
+                aria-label="Danh sách Fanpage cần tạo"
+                placeholder={TEMPLATE}
+                className="w-full flex-1"
+                inputClassName="min-h-64 sm:min-h-[356px]"
+              />
+              <LineErrorList errors={lineErrors} onJump={jumpToLine} />
+            </>
           )}
 
           {inputMode === "file" && !uploadedFile && (
@@ -1563,49 +1847,110 @@ function CreateView() {
           </div>
         </section>
 
-        <section className={`${PANEL} flex flex-col gap-5`}>
+        <section
+          className={`${PANEL} relative flex flex-col gap-5 ${canConfigureJob ? "" : "opacity-70"}`}
+          aria-disabled={!canConfigureJob}
+        >
+          {!canConfigureJob ? (
+            <button
+              type="button"
+              className="absolute inset-0 z-10 cursor-not-allowed rounded-[inherit] bg-transparent"
+              aria-label="Chọn tài khoản Facebook trước khi thiết lập Job"
+              onClick={warnSelectAccountsForJob}
+            />
+          ) : null}
+
           <SectionHeading
             icon="job_settings"
             title="Thiết Lập Job Tự Động"
             subtitle="Cấu hình quyền quản trị, luồng xử lý và tham số chống quét"
           />
 
+          {!canConfigureJob ? (
+            <p className="rounded-lg bg-[#FFF7ED] px-3 py-2 text-xs leading-5 text-[#C2410C]">
+              Chọn danh sách tài khoản Facebook tạo page trước khi thiết lập Job.
+            </p>
+          ) : null}
+
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <label htmlFor="creator-admin-uid" className="text-sm leading-5 font-semibold text-[#0B1C30]">Facebook UID Nhận Quyền Admin</label>
               <span className="text-[11px] leading-[14px] tracking-[0.33px] text-[#004AC6]">Quản trị viên</span>
             </div>
-            <label htmlFor="creator-admin-uid" className={SOFT_INPUT}>
-              <CreatorIcon name="admin_uid" className="mr-1 text-[#004AC6]" />
+            <label
+              htmlFor="creator-admin-uid"
+              className={`${SOFT_INPUT} ${adminUidError ? "!ring-2 !ring-[#F87171]/35 !bg-[#FFF1F2]" : ""}`}
+            >
+              <CreatorIcon name="admin_uid" className={`mr-1 ${adminUidError ? "text-[#BE123C]" : "text-[#004AC6]"}`} />
               <input
                 id="creator-admin-uid"
                 name="creator-admin-uid"
                 inputMode="numeric"
+                pattern="[1-9][0-9]*"
                 autoComplete="off"
                 data-1p-ignore
                 data-lpignore="true"
+                aria-invalid={Boolean(adminUidError)}
+                aria-describedby={adminUidError ? "creator-admin-uid-error" : undefined}
                 value={targetAdminUid}
-                onChange={(event) => setTargetAdminUid(event.target.value)}
+                disabled={!canConfigureJob}
+                onChange={(event) => handleAdminUidChange(event.target.value)}
+                onBlur={() => setAdminUidError(getAdminUidError(targetAdminUid))}
                 placeholder="Nhập UID Facebook"
-                className="w-full min-w-0 bg-transparent text-base font-semibold text-[#0B1C30] outline-none placeholder:font-normal placeholder:text-[#737686]"
+                className="w-full min-w-0 bg-transparent text-base font-semibold text-[#0B1C30] outline-none placeholder:font-normal placeholder:text-[#737686] disabled:cursor-not-allowed"
               />
             </label>
-            <p className="flex items-center gap-1.5 rounded-lg bg-[#ECFDF5] px-2.5 py-1.5 text-xs leading-[18px] text-[#047857]">
-              <CreatorIcon name="shield_check" />
-              Nick sẽ tự động nhận toàn quyền kiểm soát (Owner) ngay sau khi tạo xong.
-            </p>
+            {adminUidError ? (
+              <p id="creator-admin-uid-error" className="text-xs leading-[18px] text-[#BE123C]">
+                {adminUidError}
+              </p>
+            ) : (
+              <p className="flex items-center gap-1.5 rounded-lg bg-[#ECFDF5] px-2.5 py-1.5 text-xs leading-[18px] text-[#047857]">
+                <CreatorIcon name="shield_check" />
+                Nick sẽ tự động nhận toàn quyền kiểm soát (Owner) ngay sau khi tạo xong.
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="creator-threads" className={FIELD_LABEL}>Số Luồng Chạy</label>
-              <SuffixInput id="creator-threads" value={threads} onChange={setThreads} min={1} max={10} suffix="Luồng" bold />
-              <p className={FIELD_HINT}>Khuyên dùng 3-5 luồng</p>
+              <SuffixInput
+                id="creator-threads"
+                value={threads}
+                onChange={handleThreadsChange}
+                min={1}
+                max={10}
+                suffix="Luồng"
+                bold
+                steppers
+                disabled={!canConfigureJob}
+                invalid={Boolean(threadsError)}
+              />
+              {threadsError ? (
+                <p className="text-xs leading-[18px] text-[#BE123C]">{threadsError}</p>
+              ) : (
+                <p className={FIELD_HINT}>Mặc định 1; tối đa 10 và không vượt số nick đã chọn</p>
+              )}
             </div>
             <div className="flex flex-col gap-1.5">
               <label htmlFor="creator-loops" className={FIELD_LABEL}>Số Vòng Lặp</label>
-              <SuffixInput id="creator-loops" value={repeatCount} onChange={setRepeatCount} min={1} suffix="Vòng" bold />
-              <p className={FIELD_HINT}>Thực thi tuần tự</p>
+              <SuffixInput
+                id="creator-loops"
+                value={repeatCount}
+                onChange={handleRepeatCountChange}
+                min={1}
+                suffix="Vòng"
+                bold
+                steppers
+                disabled={!canConfigureJob}
+                invalid={Boolean(repeatCountError)}
+              />
+              {repeatCountError ? (
+                <p className="text-xs leading-[18px] text-[#BE123C]">{repeatCountError}</p>
+              ) : (
+                <p className={FIELD_HINT}>Thực thi tuần tự</p>
+              )}
             </div>
           </div>
 
@@ -1613,13 +1958,38 @@ function CreateView() {
             <div className="flex items-start justify-between gap-3">
               <span className={FIELD_LABEL}>Độ Trễ Mỗi Lần Tạo Page (Delay Random)</span>
               <span className="shrink-0 text-[11px] leading-[14px] font-bold tracking-[0.33px] whitespace-nowrap text-[#004AC6]">
-                {delayMin || 0}s - {delayMax || 0}s
+                {delayMin || "—"}s - {delayMax || "—"}s
               </span>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <SuffixInput id="creator-delay-min" value={delayMin} onChange={setDelayMin} min={0} prefix="Min:" suffix="giây" />
-              <SuffixInput id="creator-delay-max" value={delayMax} onChange={setDelayMax} min={0} prefix="Max:" suffix="giây" />
+              <div className="flex flex-col gap-1">
+                <SuffixInput
+                  id="creator-delay-min"
+                  value={delayMin}
+                  onChange={handleDelayMinChange}
+                  min={1}
+                  prefix="Min:"
+                  suffix="giây"
+                  disabled={!canConfigureJob}
+                  invalid={Boolean(delayMinError || delayRangeError)}
+                />
+                {delayMinError ? <p className="text-xs leading-[18px] text-[#BE123C]">{delayMinError}</p> : null}
+              </div>
+              <div className="flex flex-col gap-1">
+                <SuffixInput
+                  id="creator-delay-max"
+                  value={delayMax}
+                  onChange={handleDelayMaxChange}
+                  min={1}
+                  prefix="Max:"
+                  suffix="giây"
+                  disabled={!canConfigureJob}
+                  invalid={Boolean(delayMaxError || delayRangeError)}
+                />
+                {delayMaxError ? <p className="text-xs leading-[18px] text-[#BE123C]">{delayMaxError}</p> : null}
+              </div>
             </div>
+            {delayRangeError ? <p className="text-xs leading-[18px] text-[#BE123C]">{delayRangeError}</p> : null}
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -1629,6 +1999,7 @@ function CreateView() {
               onChange={setCountryCode}
               options={COUNTRIES}
               size="lg"
+              disabled={!canConfigureJob}
               buttonClassName="!h-10 !rounded-lg !border-transparent !bg-[#EFF4FF] !text-sm !font-medium !shadow-none"
             />
           </div>
@@ -1644,6 +2015,7 @@ function CreateView() {
                 value={geminiModel}
                 onChange={setGeminiModel}
                 options={MODELS}
+                disabled={!canConfigureJob}
                 buttonClassName="!h-9 !rounded-lg !border-transparent !bg-white !pl-4 !text-xs !font-semibold !shadow-none"
               />
             </div>
@@ -1656,17 +2028,19 @@ function CreateView() {
                     id="creator-gemini-key"
                     type={showKey ? "text" : "password"}
                     value={geminiKey}
+                    disabled={!canConfigureJob}
                     onChange={(event) => setGeminiKey(event.target.value)}
-                    placeholder="Dán API key hoặc dùng GEMINI_API_KEYS"
+                    placeholder="Nhập Gemini API key hợp lệ"
                     autoComplete="new-password"
                     spellCheck={false}
-                    className="w-full min-w-0 bg-transparent text-xs tracking-[1.2px] text-[#0B1C30] outline-none placeholder:tracking-normal placeholder:text-[#737686]"
+                    className="w-full min-w-0 bg-transparent text-xs tracking-[1.2px] text-[#0B1C30] outline-none placeholder:tracking-normal placeholder:text-[#737686] disabled:cursor-not-allowed"
                   />
                   <button
                     type="button"
                     onClick={() => setShowKey((value) => !value)}
+                    disabled={!canConfigureJob}
                     aria-label={showKey ? "Ẩn key" : "Hiện key"}
-                    className="shrink-0 text-[#737686] hover:text-[#0B1C30]"
+                    className="shrink-0 text-[#737686] hover:text-[#0B1C30] disabled:cursor-not-allowed"
                   >
                     {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
@@ -1674,7 +2048,7 @@ function CreateView() {
                 <button
                   type="button"
                   onClick={handleTestKey}
-                  disabled={testingKey}
+                  disabled={!canConfigureJob || testingKey}
                   className="flex h-9 shrink-0 items-center gap-1 rounded-lg bg-[#2563EB] px-3 text-[11px] leading-[14px] font-semibold tracking-[0.33px] text-white shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#1D4ED8] disabled:opacity-60"
                 >
                   {testingKey ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin" /> : <CreatorIcon name="check_key" />}
@@ -1703,7 +2077,7 @@ function CreateView() {
                   <th className={`${PREVIEW_HEAD} w-[115px]`}>Tên page</th>
                   <th className={`${PREVIEW_HEAD} w-[98px]`}>Số điện thoại</th>
                   <th className={`${PREVIEW_HEAD} w-[144px]`}>Email</th>
-                  <th className={`${PREVIEW_HEAD} text-center`}>Địa chỉ</th>
+                  <th className={PREVIEW_HEAD}>Địa chỉ</th>
                   <th className={`${PREVIEW_HEAD} pr-16 text-right`}>Trạng thái</th>
                 </tr>
               </thead>
@@ -1718,25 +2092,41 @@ function CreateView() {
                   preview.map((row) => (
                     <tr key={`${row.stt}-${row.page_name}`} className="h-[92px]">
                       <td className="py-3 pr-3 pl-16 text-center text-[#8B90A0]">{row.stt}</td>
-                      <td className="px-3 py-3 font-medium tracking-[0.3px] text-[#2563EB]">{row.uid || <span className="font-normal tracking-normal text-[#8B90A0]">Chưa gán</span>}</td>
-                      <td className="max-w-[115px] px-3 py-3 font-medium text-[#5E616B]">{row.page_name}</td>
+                      <td className="px-3 py-3 font-medium tracking-[0.3px] text-[#2563EB]">
+                        {/* Vàng chứ không đỏ: chưa gán UID không phải lỗi dữ liệu */}
+                        {row.uid || <span className="font-normal tracking-normal text-[#A16207]">Chưa gán</span>}
+                      </td>
+                      <td className="px-3 py-3 font-medium text-[#5E616B]">
+                        <PreviewCell issue={issueFor(row.dataIssues, "tên page")} value={row.page_name} width={115} />
+                      </td>
                       <td className="px-3 py-3">
-                        {row.phone || <ErrorChip>Thiếu SĐT</ErrorChip>}
+                        <PreviewCell issue={issueFor(row.dataIssues, "sđt")} value={row.phone} width={98} />
                       </td>
-                      <td className="max-w-[170px] truncate px-3 py-3 text-[11px]">
-                        {row.issues.includes("Sai email") ? <ErrorChip>Sai email</ErrorChip> : row.email || "—"}
+                      <td className="px-3 py-3 text-[11px]">
+                        <PreviewCell issue={issueFor(row.dataIssues, "email")} value={row.email} width={170} />
                       </td>
-                      <td className="px-3 py-3 text-center">{row.address || "—"}</td>
+                      <td className="px-3 py-3">
+                        <PreviewCell issue={issueFor(row.dataIssues, "địa chỉ")} value={row.address} width={220} />
+                      </td>
                       <td className="py-3 pr-16 pl-3 text-right">
-                        {row.ok ? (
+                        {/* Ba trạng thái chứ không phải hai: "Lỗi" chỉ dành cho
+                            sai dữ liệu — thứ người dùng sửa trong textarea và
+                            được bôi vàng ở đó. Chưa chọn tài khoản là việc
+                            khác hẳn, gọi chung là "Lỗi" thì một danh sách
+                            sạch tinh vẫn đỏ lòm chỉ vì chưa tick tài khoản. */}
+                        {row.dataIssues.length > 0 ? (
+                          <span title={row.dataIssues.join(", ")} className="inline-flex items-center gap-1 rounded-full bg-[rgba(255,180,171,0.15)] px-2 py-0.5 text-[11px] text-[#B01705]">
+                            <CreatorIcon name="error" />
+                            Lỗi
+                          </span>
+                        ) : row.uid ? (
                           <span className="inline-flex items-center gap-1 rounded-full bg-[rgba(78,222,163,0.1)] px-2 py-0.5 text-[11px] text-[#0F965F]">
                             <CreatorIcon name="valid" />
                             Hợp lệ
                           </span>
                         ) : (
-                          <span title={row.issues.join(", ")} className="inline-flex items-center gap-1 rounded-full bg-[rgba(255,180,171,0.15)] px-2 py-0.5 text-[11px] text-[#B01705]">
-                            <CreatorIcon name="error" />
-                            Lỗi
+                          <span title="Chọn tài khoản ở danh sách bên trên để gán UID" className="inline-flex items-center gap-1 rounded-full bg-[#FEF3C7] px-2 py-0.5 text-[11px] text-[#92400E]">
+                            Chờ tài khoản
                           </span>
                         )}
                       </td>
@@ -1755,8 +2145,11 @@ function CreateView() {
           <SummaryStat icon="stat_accounts"><b className="font-normal text-[#0B1C30]">{selected.length}</b> Account</SummaryStat>
           <span aria-hidden="true">•</span>
           <SummaryStat icon="stat_pages">
-            <b className="font-normal text-[#0B1C30]">{pages.length}</b> Fanpage
-            {pages.length !== validCount ? <span className="text-[#BE123C]"> ({pages.length - validCount} lỗi)</span> : null}
+            <b className="font-normal text-[#0B1C30]">{preview.length}</b> Fanpage
+            {pages.length > plannedCount ? (
+              <span className="text-[#737686]"> / {pages.length} dòng (lấy {plannedCount} = {threadsNum}×{loopsNum})</span>
+            ) : null}
+            {invalidDataCount > 0 ? <span className="text-[#BE123C]"> ({invalidDataCount} lỗi)</span> : null}
           </SummaryStat>
           <span aria-hidden="true">•</span>
           <SummaryStat icon="stat_threads">Đồng thời: {threads || 0} Luồng</SummaryStat>
@@ -1764,11 +2157,23 @@ function CreateView() {
           <SummaryStat icon="stat_admin">
             Admin UID: <span className="font-bold text-[#2563EB]">{targetAdminUid.trim() || "Chưa nhập"}</span>
           </SummaryStat>
+          {/* Nút Bắt đầu mờ đi khi còn dòng lỗi — phải nói ra lý do, không thể
+              chỉ dựa vào `title` vì hover không có trên cảm ứng và rất dễ bỏ qua */}
+          {/* {invalidDataCount > 0 && (
+            <p role="alert" className="w-full text-xs leading-4 font-semibold text-[#BE123C]">
+              {invalidDataCount} dòng còn lỗi — sửa trong bảng đối soát rồi mới chạy được.
+            </p>
+          )} */}
         </div>
         <button
           type="button"
           onClick={handleStart}
-          disabled={starting || running}
+          disabled={starting || running || invalidDataCount > 0}
+          title={
+            invalidDataCount > 0
+              ? `${invalidDataCount} dòng còn lỗi. Sửa trong danh sách rồi mới chạy được.`
+              : undefined
+          }
           className="flex h-12 w-full items-center justify-center sm:w-[219px] gap-2 rounded-xl bg-[#2563EB] px-3 text-xl leading-7 font-bold tracking-[-0.1px] text-white shadow-[0_10px_15px_-3px_rgba(37,99,235,0.25),0_4px_6px_-4px_rgba(37,99,235,0.25)] hover:bg-[#1D4ED8] disabled:cursor-not-allowed disabled:opacity-70"
         >
           {starting ? <Loader2 aria-hidden="true" className="size-5 animate-spin" /> : <CreatorIcon name="rocket" />}
@@ -1912,6 +2317,155 @@ function ErrorChip({ children }) {
   );
 }
 
+/**
+ * Thước chữ và padding dùng CHUNG cho textarea và lớp phủ bôi vàng.
+ *
+ * Lệch một chút là vệt vàng trôi khỏi dòng, nên không được khai báo hai lần ở
+ * hai nơi. Mọi thuộc tính ảnh hưởng tới vị trí ký tự đều phải nằm ở đây.
+ */
+const EDITOR_METRICS =
+  "px-2 pt-2 pb-3.5 text-xs leading-[19.5px] font-medium tracking-[0.24px] whitespace-pre-wrap break-words";
+
+/** Khớp với leading-[19.5px] ở EDITOR_METRICS — đổi một chỗ thì đổi cả hai */
+const LINE_HEIGHT = 19.5;
+
+/** Liệt kê hết thì dán 500 dòng sai 300 sẽ đẩy cả trang xuống, không đọc nổi */
+const MAX_LINE_ERRORS_SHOWN = 8;
+
+/**
+ * Danh sách lỗi ngay dưới textarea, mỗi dòng bấm được để nhảy tới chỗ sai.
+ *
+ * Để cạnh textarea chứ không chỉ trong bảng đối soát: sửa là sửa ở textarea,
+ * nên lỗi phải nằm trong tầm mắt của chỗ sửa.
+ */
+function LineErrorList({ errors, onJump }) {
+  if (!errors.length) return null;
+  const shown = errors.slice(0, MAX_LINE_ERRORS_SHOWN);
+  const rest = errors.length - shown.length;
+
+  return (
+    <div role="alert" className="mt-2 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-3 py-2.5">
+      <p className="text-[11px] leading-4 font-bold tracking-[0.55px] uppercase text-[#92400E]">
+        {errors.length} dòng còn lỗi
+      </p>
+      <ul className="mt-1.5 flex flex-col gap-1">
+        {shown.map((item) => (
+          <li key={item.index}>
+            <button
+              type="button"
+              onClick={() => onJump(item.index)}
+              className="rounded text-left text-xs leading-[18px] text-[#92400E] underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:outline-none"
+            >
+              <b className="font-bold">Dòng {item.index + 1}:</b> {item.issues.join(", ")}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {rest > 0 && <p className="mt-1 text-xs leading-[18px] text-[#A16207]">… và {rest} dòng nữa.</p>}
+    </div>
+  );
+}
+
+/**
+ * Textarea bôi vàng những dòng sai.
+ *
+ * Không có cách nào style từng dòng bên trong một <textarea>, nên dùng lối
+ * lớp phủ: một <div> nằm ngay dưới textarea, cùng thước chữ và padding, vẽ lại
+ * nguyên văn nội dung với màu chữ TRONG SUỐT và <mark> vàng ở các dòng lỗi.
+ * Textarea nằm trên với nền trong suốt, nên chữ người dùng thấy vẫn là chữ
+ * thật trong textarea — chọn, gõ, dán đều bình thường.
+ *
+ * Ba điều kiện để vệt vàng không trôi:
+ *   1. Cùng thước chữ + padding  -> EDITOR_METRICS
+ *   2. Cùng cách ngắt dòng       -> whitespace-pre-wrap + break-words
+ *   3. Cùng vị trí cuộn          -> đồng bộ scrollTop/scrollLeft
+ *
+ * Khung viền và vòng focus chuyển lên thẻ bọc ngoài, để hai lớp nằm trong
+ * cùng một hộp và không phải bù trừ độ dày viền.
+ */
+function HighlightedTextarea({
+  value,
+  onChange,
+  errorLines,
+  textareaRef,
+  className = "",
+  inputClassName = "",
+  ...rest
+}) {
+  const backdropRef = useRef(null);
+
+  const syncScroll = (el) => {
+    if (!el || !backdropRef.current) return;
+    backdropRef.current.scrollTop = el.scrollTop;
+    backdropRef.current.scrollLeft = el.scrollLeft;
+  };
+
+  // Gõ ở đáy vùng đã cuộn thì trình duyệt tự cuộn theo; chạy sau khi dựng lại
+  // để vệt vàng không trễ một nhịp so với con trỏ.
+  useLayoutEffect(() => {
+    syncScroll(textareaRef?.current);
+  }, [value, textareaRef]);
+
+  const lines = String(value || "").split("\n");
+
+  return (
+    <div
+      className={`relative overflow-hidden rounded-xl border border-[#C1C6D6] bg-white shadow-[inset_0_2px_4px_rgba(0,0,0,0.05)] focus-within:border-[#2563EB] focus-within:ring-2 focus-within:ring-[#2563EB]/20 ${className}`}
+    >
+      <div
+        ref={backdropRef}
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-0 overflow-hidden text-transparent ${EDITOR_METRICS}`}
+      >
+        {lines.map((line, index) => (
+          <span key={index}>
+            {errorLines.has(index) ? (
+              <mark className="rounded-sm bg-[#FEF08A] text-transparent">{line || " "}</mark>
+            ) : (
+              line
+            )}
+            {index < lines.length - 1 ? "\n" : null}
+          </span>
+        ))}
+      </div>
+
+      <textarea
+        ref={textareaRef}
+        value={value}
+        onChange={onChange}
+        onScroll={(event) => syncScroll(event.currentTarget)}
+        spellCheck={false}
+        className={`relative block w-full resize-none bg-transparent text-[#161C27] outline-none placeholder:text-[#737686] ${EDITOR_METRICS} ${inputClassName}`}
+        {...rest}
+      />
+    </div>
+  );
+}
+
+/** Lỗi đầu tiên liên quan tới một trường, để hiện ngay tại ô của trường đó */
+function issueFor(issues, key) {
+  return issues.find((text) => text.toLowerCase().includes(key)) || "";
+}
+
+/**
+ * Một ô trong bảng đối soát: có lỗi thì hiện chip, không thì hiện nội dung đã
+ * cắt bớt theo chiều rộng cột.
+ *
+ * Nội dung bọc trong <div> chứ không đặt `truncate` thẳng lên <td>: bảng này
+ * dùng table-layout tự động nên `max-width` trên <td> gần như bị bỏ qua — chữ
+ * dài vẫn nong cột ra và đè sang cột bên cạnh. Thẻ block bên trong thì tôn
+ * trọng max-width, nên cắt được. `title` để vẫn đọc được đầy đủ khi hover.
+ */
+function PreviewCell({ issue, value, width }) {
+  if (issue) return <ErrorChip>{issue}</ErrorChip>;
+  if (!value) return <span className="text-[#8B90A0]">—</span>;
+  return (
+    <div style={{ maxWidth: width }} className="truncate" title={value}>
+      {value}
+    </div>
+  );
+}
+
 function SummaryStat({ icon, children }) {
   return (
     <span className="flex items-center gap-1.5 whitespace-nowrap">
@@ -2023,23 +2577,102 @@ function UploadDropzone({ onPick, onDropFile }) {
   );
 }
 
-/** Ô số có tiền tố / hậu tố đơn vị (Luồng, Vòng, giây) */
-function SuffixInput({ id, value, onChange, min = 0, max, suffix, prefix, bold = false }) {
+/**
+ * Ô số có tiền tố / hậu tố đơn vị (Luồng, Vòng, giây).
+ * Số bên trái, đơn vị sát phải; `steppers` bật cặp mũi tên tăng/giảm.
+ *
+ * Mũi tên là nút tự vẽ chứ không phải spinner mặc định của trình duyệt:
+ * spinner mặc định ở Chrome chỉ hiện khi rê chuột vào ô, bé tí, mỗi trình
+ * duyệt một kiểu và không đổi được màu. Ticket yêu cầu "có dấu mũi tên lên
+ * xuống" nên nó phải thấy được ngay, không phải rê chuột mới ra.
+ * Vì vậy CSS ẩn spinner gốc vẫn giữ nguyên cho mọi ô.
+ *
+ * Hai nút để `tabIndex={-1}`: ô vốn là `type="number"` nên bàn phím đã tăng
+ * giảm được bằng phím mũi tên; cho nút vào luồng Tab chỉ khiến mỗi trường tốn
+ * thêm hai lần nhấn Tab mà không thêm khả năng nào.
+ */
+/**
+ * Luôn ẩn spinner gốc của trình duyệt, kể cả khi `steppers` bật: mũi tên đã do
+ * hai nút tự vẽ đảm nhiệm, để `[appearance:auto]` thì hiện chồng hai cặp.
+ */
+const HIDE_NATIVE_SPINNER =
+  "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none";
+
+function SuffixInput({
+  id,
+  value,
+  onChange,
+  min = 0,
+  max,
+  suffix,
+  prefix,
+  bold = false,
+  disabled = false,
+  invalid = false,
+  steppers = false,
+  step = 1,
+}) {
   const unit = "text-[11px] leading-[14px] tracking-[0.33px] text-[#434655]";
+  const current = Number(value);
+  const atMin = Number.isFinite(current) && current <= min;
+  const atMax = typeof max === "number" && Number.isFinite(current) && current >= max;
+
+  // Ô rỗng hoặc đang là chữ thì coi như đang ở `min`, bấm tăng là nhảy lên min+step
+  const bump = (delta) => {
+    const base = Number.isFinite(current) ? current : min;
+    const next = Math.min(typeof max === "number" ? max : Infinity, Math.max(min, base + delta));
+    onChange(String(next));
+  };
+
+  const arrow =
+    "flex h-3.5 w-5 items-center justify-center rounded text-[#5B6478] hover:bg-[#DBE4FF] hover:text-[#1B45A3] disabled:opacity-30 disabled:hover:bg-transparent";
+
   return (
-    <label htmlFor={id} className={SOFT_INPUT}>
-      {prefix && <span className={`${unit} font-semibold`}>{prefix}</span>}
+    <label
+      htmlFor={id}
+      className={`${SOFT_INPUT} ${disabled ? "opacity-60" : ""} ${invalid ? "!ring-2 !ring-[#F87171]/35 !bg-[#FFF1F2]" : ""}`}
+    >
+      {prefix ? <span className={`${unit} shrink-0 font-semibold`}>{prefix}</span> : null}
       <input
         id={id}
         type="number"
         inputMode="numeric"
         min={min}
         max={max}
+        step={step}
         value={value}
+        disabled={disabled}
+        aria-invalid={invalid}
         onChange={(event) => onChange(event.target.value)}
-        className={`w-full min-w-0 bg-transparent text-base ${bold ? "font-bold" : "font-semibold"} text-[#0B1C30] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`}
+        className={`min-w-0 flex-1 bg-transparent text-left text-base ${bold ? "font-bold" : "font-semibold"} text-[#0B1C30] outline-none disabled:cursor-not-allowed ${HIDE_NATIVE_SPINNER}`}
       />
-      <span className={`${unit} shrink-0 ${bold ? "font-medium" : "font-semibold"}`}>{suffix}</span>
+      {suffix ? (
+        <span className={`${unit} ml-auto shrink-0 ${bold ? "font-medium" : "font-semibold"}`}>{suffix}</span>
+      ) : null}
+      {steppers ? (
+        <span className="flex shrink-0 flex-col">
+          <button
+            type="button"
+            tabIndex={-1}
+            disabled={disabled || atMax}
+            onClick={() => bump(step)}
+            aria-label={`Tăng ${suffix}`}
+            className={arrow}
+          >
+            <ChevronUp className="size-3" strokeWidth={2.5} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            tabIndex={-1}
+            disabled={disabled || atMin}
+            onClick={() => bump(-step)}
+            aria-label={`Giảm ${suffix}`}
+            className={arrow}
+          >
+            <ChevronDown className="size-3" strokeWidth={2.5} aria-hidden="true" />
+          </button>
+        </span>
+      ) : null}
     </label>
   );
 }
