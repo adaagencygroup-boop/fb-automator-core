@@ -41,7 +41,7 @@ export function LoginForm({
         {/* Card Header */}
         <div className="flex flex-col gap-1.5">
           <h2 className="auth-form-title">
-            Đăng nhập 123
+            Đăng nhập
           </h2>
           <p className="auth-form-description">
             Vui lòng đăng nhập để tiếp tục sử dụng phần mềm
