@@ -33,6 +33,9 @@ class CreatedPage(Base):
     page_url = Column(Text, nullable=True)
     status = Column(String(30), nullable=False)
     log_detail = Column(Text, nullable=True)
+    # Toàn bộ dòng log của lần chạy (popup "Chi tiết lần tạo page").
+    # Tách khỏi log_detail vì log_detail là lý do lỗi ngắn, đang hiện ngay trên bảng.
+    run_log = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 
@@ -56,6 +59,7 @@ _ADDITIVE_COLUMNS = {
         "page_url": "TEXT",
         "status": "VARCHAR(30)",
         "log_detail": "TEXT",
+        "run_log": "TEXT",
         "created_at": "TIMESTAMP",
     },
     "creator_settings": {
