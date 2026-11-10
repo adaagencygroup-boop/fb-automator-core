@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
-import { Terminal, Activity, CheckCircle2, XCircle, ExternalLink } from "lucide-react";
+import { CheckCircle2, XCircle, ExternalLink, Maximize2, Minimize2 } from "lucide-react";
 
 function renderLogContent(message, colorClass) {
   if (!message) return null;
@@ -23,7 +23,7 @@ function renderLogContent(message, colorClass) {
               href={part}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-0.5 font-medium text-sky-600 hover:text-sky-800 underline underline-offset-2 break-all transition-colors mx-0.5"
+              className="inline-flex items-center gap-0.5 font-medium text-sky-300 hover:text-sky-100 underline underline-offset-2 break-all transition-colors mx-0.5"
               onClick={(e) => e.stopPropagation()}
             >
               <span>{part}</span>
@@ -40,37 +40,67 @@ function renderLogContent(message, colorClass) {
 export default function GroupProgressSection({
   runState = "idle",
   campaignProgress = null,
-  stepNumber = "9",
+  onClearLogs,
 }) {
   const status = campaignProgress?.status || (runState === "starting" ? "STARTING" : runState === "running" ? "RUNNING" : "IDLE");
   const logs = campaignProgress?.logs || [];
   const logContainerRef = useRef(null);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     if (!logs.length || !logContainerRef.current) return;
     logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
-  }, [logs.length]);
+  }, [logs]);
 
   return (
-    <Card className="min-h-72 border-slate-200 p-5 shadow-sm">
-      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-        <div className="flex items-center gap-2.5 text-sm font-bold text-slate-800">
-          <span className="flex size-6 items-center justify-center rounded-md bg-primary text-xs font-bold text-white shadow-xs">
-            {stepNumber}
+    <Card className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white p-0 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E2E8F0] bg-[#F8FAFC]/70 px-5 py-3.5">
+        <div className="flex items-center gap-2.5">
+          <span className={`size-2.5 rounded-full ${status === "RUNNING" || runState === "running" ? "animate-pulse bg-[#10B981]" : "bg-slate-300"}`} />
+          <h2 className="text-sm font-bold text-[#1E293B]">Nhật ký hoạt động (Live Logs)</h2>
+          <span className="rounded bg-[#F1F5F9] px-2 py-0.5 font-mono text-xs font-medium text-[#94A3B8]">
+            session#{String(campaignProgress?.session_id || String(logs.length).padStart(4, "0")).replace(/^session#/, "")}
           </span>
-          <span className="flex items-center gap-1.5">
-            <Terminal className="size-4 text-primary" />
-            Theo dõi tiến trình & Nhật ký hoạt động
-          </span>
+          {logs.length > 0 && <span className="text-xs text-slate-400">{logs.length} dòng</span>}
         </div>
-
-        {/* Trạng thái tiến trình */}
         <div className="flex items-center gap-2">
-          {logs.length > 0 && (
-            <span className="text-xs text-slate-400">
-              {logs.length} dòng nhật ký
-            </span>
-          )}
+          <button type="button" onClick={onClearLogs} disabled={!logs.length} className="rounded-lg px-2.5 py-1 text-xs font-semibold text-[#64748B] transition-colors hover:bg-slate-200/50 hover:text-[#1E293B] disabled:opacity-40">
+            Xóa logs
+          </button>
+          <button type="button" onClick={() => setExpanded((value) => !value)} title={expanded ? "Thu nhỏ nhật ký" : "Mở rộng nhật ký"} className="rounded-lg p-1 text-[#94A3B8] transition-colors hover:bg-slate-200/50 hover:text-[#1E293B]">
+            {expanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+          </button>
+        </div>
+      </div>
+
+      <div ref={logContainerRef} className={`space-y-2 overflow-y-auto bg-[#0F172A] p-4 font-mono text-xs text-[#CBD5E1] select-text transition-[height] duration-200 ${expanded ? "min-h-[320px] max-h-[460px]" : "min-h-[160px] max-h-[240px]"}`}>
+        {logs.length ? (
+          logs.map((log, index) => {
+            const isError = log.level === "ERROR";
+            const isSuccess = log.level === "SUCCESS";
+            const isWarning = log.level === "WARNING";
+            return (
+              <div key={`${log.time}-${index}`} className="flex items-start gap-2.5 leading-relaxed">
+                <span className="mt-0.5 shrink-0 select-none">
+                  {isSuccess ? <span className="font-bold text-[#34D399]">✓</span> : isError ? <span className="font-bold text-[#F43F5E]">×</span> : <span className="my-1 inline-block size-1.5 rounded-full bg-[#60A5FA]" />}
+                </span>
+                <time className="shrink-0 select-none text-[11px] tabular-nums text-[#94A3B8]">[{log.time?.split("T")[1] || log.time || "--:--:--"}]</time>
+                <div className={`min-w-0 flex-1 break-words ${isError ? "font-semibold text-[#F43F5E]" : isSuccess ? "font-medium text-[#34D399]" : isWarning ? "font-medium text-amber-300" : "text-[#CBD5E1]"}`}>
+                  {renderLogContent(log.message, "")}
+                </div>
+              </div>
+            );
+          })
+        ) : (
+          <div className="flex items-center gap-2 py-2 italic text-[#94A3B8]">
+            <span className="inline-block size-1.5 rounded-full bg-[#60A5FA]" />
+            <span>{runState === "idle" ? "Đang chờ sự kiện hoạt động từ hệ thống..." : "Chưa có nhật ký thực thi"}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between border-t border-[#E2E8F0] px-5 py-2.5">
+        <div className="flex items-center gap-2">
           {status === "RUNNING" || runState === "running" ? (
             <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-primary">
               <span className="size-2 rounded-full bg-primary animate-pulse" />
@@ -98,51 +128,6 @@ export default function GroupProgressSection({
           ) : null}
         </div>
       </div>
-
-      {runState !== "idle" || campaignProgress ? (
-        <div ref={logContainerRef} className="mt-4 min-h-64 max-h-[460px] space-y-0.5 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/70 p-2.5">
-          {logs.length ? (
-            logs.map((log, index) => {
-              const isError = log.level === "ERROR";
-              const isSuccess = log.level === "SUCCESS";
-              const isWarning = log.level === "WARNING";
-
-              return (
-                <div
-                  key={`${log.time}-${index}`}
-                  className="flex items-start gap-3 rounded-md border-b border-slate-100/80 px-3 py-2 text-xs sm:text-[13px] leading-relaxed transition-colors hover:bg-white last:border-b-0"
-                >
-                  <span className="shrink-0 font-mono text-[11px] sm:text-xs font-semibold text-slate-400 pt-0.5">
-                    {log.time?.split("T")[1] || "--:--:--"}
-                  </span>
-                  <div className="flex-1">
-                    {renderLogContent(
-                      log.message,
-                      isError
-                        ? "font-semibold text-rose-600"
-                        : isSuccess
-                        ? "font-medium text-emerald-700"
-                        : isWarning
-                        ? "font-medium text-amber-700"
-                        : "text-slate-700"
-                    )}
-                  </div>
-                </div>
-              );
-            })
-          ) : (
-            <div className="flex min-h-60 flex-col items-center justify-center gap-2 text-xs sm:text-sm text-slate-400">
-              <Activity className="size-5 animate-spin text-primary" />
-              <span>{runState === "starting" ? "Đang khởi tạo tác vụ và kết nối Chrome..." : "Chưa có nhật ký thực thi"}</span>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="flex min-h-60 flex-col items-center justify-center gap-2 text-xs sm:text-sm text-slate-400">
-          <Terminal className="size-6 text-slate-300" />
-          <span>Tiến trình và nhật ký sẽ hiển thị tại đây sau khi bắt đầu chiến dịch.</span>
-        </div>
-      )}
     </Card>
   );
 }

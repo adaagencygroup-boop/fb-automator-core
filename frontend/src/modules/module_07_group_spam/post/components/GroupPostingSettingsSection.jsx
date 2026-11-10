@@ -22,6 +22,12 @@ export default function GroupPostingSettingsSection({
   stepNumber = "7",
   contentType = "post",
 }) {
+  const maxDelay = delayUnit === "minutes" ? 60 : 3600;
+  const limitDelay = (value, setter) => {
+    if (value === "") return setter("");
+    const parsed = Number(value);
+    setter(Number.isFinite(parsed) ? String(Math.min(maxDelay, Math.max(0, parsed))) : "");
+  };
   const actionLabel = contentType === "comment" ? "bình luận" : "đăng bài";
   return (
     <SectionCard
@@ -69,9 +75,10 @@ export default function GroupPostingSettingsSection({
               <Input
                 type="number"
                 min="0"
+                max={maxDelay}
                 step={delayUnit === "minutes" ? "0.1" : "1"}
                 value={delayMin}
-                onChange={(event) => setDelayMin(event.target.value)}
+                onChange={(event) => limitDelay(event.target.value, setDelayMin)}
                 disabled={isLocked}
                 className="h-9 bg-white text-center text-xs"
               />
@@ -84,9 +91,10 @@ export default function GroupPostingSettingsSection({
               <Input
                 type="number"
                 min="0"
+                max={maxDelay}
                 step={delayUnit === "minutes" ? "0.1" : "1"}
                 value={delayMax}
-                onChange={(event) => setDelayMax(event.target.value)}
+                onChange={(event) => limitDelay(event.target.value, setDelayMax)}
                 disabled={isLocked}
                 className="h-9 bg-white text-center text-xs"
               />
