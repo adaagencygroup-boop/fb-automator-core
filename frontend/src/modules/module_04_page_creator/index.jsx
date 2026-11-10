@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
+  ChevronUp,
   CircleCheck,
   FileSpreadsheet,
   Info,
@@ -17,6 +18,7 @@ import {
   Play,
 } from "lucide-react";
 import CustomSelect from "@/components/ui/custom-select";
+import { annotateLines, splitLine } from "./validation.mjs";
 import {
   Dialog,
   DialogContent,
@@ -47,6 +49,8 @@ const TEMPLATE = [
   "Mộc Spa & Dưỡng Sinh | 0977777777 | mocspa.care@gmail.com | Hoàn Kiếm, Hà Nội",
 ].join("\n");
 
+const TEMPLATE_FILE = "mau_danh_sach_fanpage.txt";
+
 const COUNTRIES = [
   { value: "+84", label: "VN (+84) - Việt Nam" },
   { value: "+1", label: "US (+1) - Hoa Kỳ" },
@@ -70,38 +74,9 @@ const DELIMITERS = [
   { value: ";", symbol: ";", label: "(Chấm phẩy)" },
 ];
 
-/** Đoán ký tự phân cách của 1 dòng (dùng khi nạp tệp). Dấu phẩy xét cuối vì địa chỉ hay chứa dấu phẩy */
-function guessDelimiter(line) {
-  return ["|", "	", ";", ","].find((item) => line.includes(item)) || null;
-}
+/** Cắt dòng + quy tắc kiểm tra đều nằm ở validation.mjs để test được */
 
-/** forced: ký tự phân cách người dùng chọn; bỏ trống thì tự đoán (dùng khi nạp tệp) */
-function splitLine(line, forced) {
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-  const delimiter = forced || guessDelimiter(trimmed);
-  const parts = delimiter ? trimmed.split(delimiter).map((part) => part.trim()) : [trimmed];
-  return {
-    page_name: parts[0] || "",
-    phone: parts[1] || "",
-    email: parts[2] || "",
-    address: parts[3] || "",
-  };
-}
-
-function parsePageLines(text, delimiter) {
-  return text
-    .split(/\r?\n/)
-    .map((line) => splitLine(line, delimiter))
-    .filter((item) => item && item.page_name);
-}
-
-function rowIssues(page) {
-  const issues = [];
-  if (!page.phone) issues.push("Thiếu SĐT");
-  if (page.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(page.email)) issues.push("Sai email");
-  return issues;
-}
+/** Quy tắc kiểm tra nằm ở validation.mjs để test được — xem file đó */
 
 function eventOf(log) {
   const extra = log?.extra && typeof log.extra === "object" ? log.extra : {};
@@ -254,15 +229,19 @@ function clockLabel(value) {
   return date.toLocaleTimeString("vi-VN", { hour12: false });
 }
 
+/**
+ * Màu chữ log, chọn cho NỀN TỐI (#1E293B) — đổi nền thì phải đổi cả bảng màu
+ * này, không thì mọi dòng trừ dòng thành công đều chìm nghỉm.
+ */
 function logTone(log) {
   const type = String(log.type || log.extra?.level || "").toLowerCase();
   const message = log.message || "";
-  if (type === "error" || type === "failed") return "font-medium text-[#BA1A1A]";
+  if (type === "error" || type === "failed") return "font-medium text-rose-400";
   if (type === "success" || /thành công|hoàn tất/i.test(message)) return "font-semibold text-[#4EDEA3]";
-  if (type === "warning") return "font-medium text-amber-700";
-  if (/khởi tạo|bắt đầu|bốc page/i.test(message)) return "font-medium text-[#1B45A3]";
-  if (/bypass|captcha|token/i.test(message)) return "font-medium text-[#456E89]";
-  return "font-medium text-[#33353D]";
+  if (type === "warning") return "font-medium text-amber-300";
+  if (/khởi tạo|bắt đầu|bốc page/i.test(message)) return "font-medium text-sky-300";
+  if (/bypass|captcha|token/i.test(message)) return "font-medium text-cyan-300";
+  return "font-medium text-slate-300";
 }
 
 function LogLine({ message }) {
@@ -470,24 +449,28 @@ function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
           </section>
         </div>
 
-        <aside className="flex min-h-[480px] flex-col overflow-hidden rounded-xl border border-[rgba(65,71,84,0.2)] bg-[#F8F9FF] shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] xl:sticky xl:top-0 xl:h-[calc(100vh-140px)] xl:max-h-[951px]">
-          <div className="flex items-center gap-2 border-b border-[rgba(65,71,84,0.2)] bg-[#EFF4FF] p-2">
+        {/* Terminal nền tối cho khớp các module khác: module 02 (#0F172A),
+            module 03 LogConsole (#1E293B), module 10, module 11 và thanh
+            ConsoleTerminal dùng chung đều là nền tối chữ sáng. Riêng chỗ này
+            trước đây để nền sáng nên nhìn lạc hẳn. */}
+        <aside className="flex min-h-[480px] flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#1E293B] shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] xl:sticky xl:top-0 xl:h-[calc(100vh-140px)] xl:max-h-[951px]">
+          <div className="flex items-center gap-2 border-b border-slate-800 bg-[#0F172A] p-2">
             <span className="flex items-center gap-1.5" aria-hidden="true">
               <span className="size-2.5 rounded-full bg-[#FFB4AB]" />
               <span className="size-2.5 rounded-full bg-[#FEBC2E]" />
               <span className="size-2.5 rounded-full bg-[#4EDEA3]" />
             </span>
-            <p className="flex items-center gap-1 pl-1 text-xs leading-4 font-semibold tracking-[0.3px] text-[#33353D]">
+            <p className="flex items-center gap-1 pl-1 text-xs leading-4 font-semibold tracking-[0.3px] text-slate-300">
               <CreatorIcon name="terminal" className="text-[#7BD0FF]" />
               Realtime Automation Engine Log
             </p>
           </div>
-          <div ref={logRef} className={`flex-1 space-y-1.5 overflow-auto p-4 text-xs leading-[19.5px] tracking-[0.24px] text-[#32343D] ${SCROLLBAR}`}>
+          <div ref={logRef} className={`flex-1 space-y-1.5 overflow-auto p-4 font-mono text-xs leading-[19.5px] tracking-[0.24px] text-slate-300 ${SCROLLBAR}`}>
             {engineLogs.length === 0 ? (
-              <p className="text-[#737686]">Đang chờ log từ engine...</p>
+              <p className="text-slate-500">Đang chờ log từ engine...</p>
             ) : engineLogs.map((log, index) => (
               <p key={`${log.timestamp}-${index}`} className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2">
-                <span className="text-[#32343D]">[{clockLabel(log.extra?.time || log.timestamp)}]</span>
+                <span className="text-slate-500">[{clockLabel(log.extra?.time || log.timestamp)}]</span>
                 <span className={logTone(log)}>
                   <LogLine message={log.message} />
                 </span>
@@ -988,7 +971,36 @@ function CreateView() {
   const [showPreview, setShowPreview] = useState(false);
   const { logs } = useLocalSSE(true);
 
-  const pages = useMemo(() => parsePageLines(pageText, delimiter), [pageText, delimiter]);
+  /**
+   * Soi từng dòng MỘT lần rồi dùng chung cho cả bảng đối soát và vệt vàng
+   * trên textarea. Hai chỗ phải luôn nói cùng một chuyện, nên không được soi
+   * hai lần bằng hai đường khác nhau.
+   */
+  const lineInfo = useMemo(() => annotateLines(pageText, delimiter), [pageText, delimiter]);
+  /** Dòng tạo ra page — giữ nguyên thứ tự để khớp với bảng đối soát */
+  const parsedRows = useMemo(() => lineInfo.filter((item) => item.page), [lineInfo]);
+  const pages = useMemo(() => parsedRows.map((item) => item.page), [parsedRows]);
+  /** Các dòng sai, kèm chỉ số dòng gốc trong textarea */
+  const lineErrors = useMemo(() => lineInfo.filter((item) => item.issues.length > 0), [lineInfo]);
+  const errorLineSet = useMemo(() => new Set(lineErrors.map((item) => item.index)), [lineErrors]);
+  const pasteRef = useRef(null);
+
+  /**
+   * Bấm vào một lỗi thì nhảy tới và BÔI ĐEN đúng dòng đó trong textarea.
+   *
+   * Với danh sách vài trăm dòng, biết "dòng 137 sai" mà vẫn phải tự cuộn đi
+   * tìm thì gần như không giúp được gì.
+   */
+  const jumpToLine = (index) => {
+    const el = pasteRef.current;
+    if (!el) return;
+    const lines = el.value.split("\n");
+    const start = lines.slice(0, index).reduce((sum, line) => sum + line.length + 1, 0);
+    el.focus();
+    el.setSelectionRange(start, start + (lines[index]?.length ?? 0));
+    // Đưa dòng được chọn vào giữa khung thay vì để nó dính sát mép trên
+    el.scrollTop = Math.max(0, index * LINE_HEIGHT - el.clientHeight / 2);
+  };
   // Danh sách thực thi: chỉ nick đã đăng nhập + Live (Die / lỗi DN không chọn được)
   const visibleAccounts = useMemo(
     () => accounts.filter((account) => account.login_status === "logged_in" && account.status === "live"),
@@ -1024,26 +1036,35 @@ function CreateView() {
     });
   }, [accountsLoading, accountsError]);
   const allVisibleSelected = visibleAccounts.length > 0 && visibleAccounts.every((account) => selected.includes(account.uid));
-
-  // Page sẽ tạo = Số luồng × Số vòng lặp (chỉ lấy đúng số dòng đó từ danh sách dán)
+  // Số page thật sự tạo = Số luồng × Số vòng lặp. Danh sách dán có thể dài
+  // hơn, phần dư KHÔNG chạy — thanh tổng kết nói rõ lấy bao nhiêu trên bao
+  // nhiêu dòng.
   const threadsNum = Math.max(1, Number.parseInt(String(threads), 10) || 1);
   const loopsNum = Math.max(1, Number.parseInt(String(repeatCount), 10) || 1);
   const plannedCount = threadsNum * loopsNum;
   const threadUids = selected.slice(0, Math.min(threadsNum, selected.length));
-  const plannedPages = pages.slice(0, plannedCount);
-  const preview = plannedPages.map((page, index) => {
-    const issues = rowIssues(page);
+  const plannedRows = parsedRows.slice(0, plannedCount);
+
+  const preview = plannedRows.map((item, index) => {
+    const page = item.page;
     const uid = threadUids.length ? threadUids[index % threadUids.length] : "";
     const loop_round = threadUids.length
       ? Math.floor(index / threadUids.length) + 1
       : Math.floor(index / threadsNum) + 1;
+    // Chỉ giữ MỘT khái niệm "lỗi" trong cả màn hình: sai dữ liệu ở dòng người
+    // dùng dán. Đó là thứ được bôi vàng trên textarea, liệt kê ở khối vàng,
+    // đếm ở thanh tổng kết, và chặn nút Bắt đầu — cả bốn chỗ cùng một con số.
+    //
+    // "Chưa gán UID" KHÔNG nằm trong đó: nó không sai dữ liệu mà chỉ là chưa
+    // chọn tài khoản, sửa bằng cách tick ở danh sách trên chứ không phải sửa
+    // text. Trạng thái dòng hiện riêng là "Chờ tài khoản".
     return {
       ...page,
       stt: String(index + 1).padStart(2, "0"),
+      line: item.index + 1, // số dòng người dùng thấy trong textarea
       uid,
       loop_round,
-      issues,
-      ok: issues.length === 0,
+      dataIssues: item.issues,
     };
   });
 
@@ -1177,9 +1198,12 @@ function CreateView() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "mau_danh_sach_fanpage.txt";
+    link.download = TEMPLATE_FILE;
     link.click();
-    URL.revokeObjectURL(url);
+    // Thu hồi ở lượt sau: gọi ngay sau click() thì có trình duyệt huỷ luôn
+    // lượt tải vì URL đã mất trước khi nó kịp đọc blob.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    toast.success(`Đã tải tệp mẫu ${TEMPLATE_FILE}.`, "TẠO PAGE");
   };
 
   const onPickFile = async (file) => {
@@ -1301,9 +1325,18 @@ function CreateView() {
       toast.warning(delayErr, "TẠO PAGE");
       return;
     }
-    const invalid = preview.filter((row) => !row.ok).length;
-    if (invalid) {
-      toast.warning(`${invalid} dòng thiếu SĐT hoặc sai email. Job vẫn chạy với tên page đã có.`, "TẠO PAGE");
+    // Còn dòng sai thì KHÔNG chạy. Tạo Fanpage là thao tác thật trên tài
+    // khoản thật và không hoàn lại được — tạo 50 page với số điện thoại sai
+    // thì không có cách nào gỡ. Nút Bắt đầu đã mờ sẵn ở trường hợp này, đây
+    // là lớp chặn thứ hai.
+    const invalidRows = preview.filter((row) => row.dataIssues.length > 0);
+    if (invalidRows.length) {
+      const reasons = [...new Set(invalidRows.flatMap((row) => row.dataIssues))];
+      toast.error(
+        `${invalidRows.length} dòng có lỗi: ${reasons.join(", ")}. Sửa xong mới chạy được.`,
+        "TẠO PAGE",
+      );
+      return;
     }
     setStarting(true);
     try {
@@ -1385,7 +1418,15 @@ function CreateView() {
     );
   }
 
-  const validCount = preview.filter((row) => row.ok).length;
+  /**
+   * Số dòng sai dữ liệu — chặn nút Bắt đầu.
+   *
+   * Cố ý KHÔNG tính "Chưa gán UID": chưa chọn tài khoản thì mọi dòng đều mang
+   * lỗi đó, nút sẽ mờ và người dùng không còn cách nào thấy câu hướng dẫn
+   * "Chọn ít nhất một tài khoản đã import". Trường hợp đó để nút bấm được và
+   * `handleStart` nói rõ thiếu gì.
+   */
+  const invalidDataCount = preview.filter((row) => row.dataIssues.length > 0).length;
 
   return (
     <div className={`${PAGE_FONT} -m-6 flex min-h-full flex-col gap-4 bg-[#F8F9FF] px-4 pt-4 sm:gap-6 sm:px-6 sm:pt-6`}>
@@ -1630,14 +1671,19 @@ function CreateView() {
           </p>
 
           {inputMode === "paste" && (
-            <textarea
-              value={pageText}
-              onChange={(event) => setPageText(event.target.value)}
-              aria-label="Danh sách Fanpage cần tạo"
-              spellCheck={false}
-              placeholder={TEMPLATE}
-              className="min-h-64 w-full flex-1 resize-none sm:min-h-[356px] rounded-xl border border-[#C1C6D6] bg-white px-2 pt-2 pb-3.5 text-xs leading-[19.5px] font-medium tracking-[0.24px] text-[#161C27] shadow-[inset_0_2px_4px_rgba(0,0,0,0.05)] outline-none placeholder:text-[#737686] focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/20"
-            />
+            <>
+              <HighlightedTextarea
+                value={pageText}
+                onChange={(event) => setPageText(event.target.value)}
+                errorLines={errorLineSet}
+                textareaRef={pasteRef}
+                aria-label="Danh sách Fanpage cần tạo"
+                placeholder={TEMPLATE}
+                className="w-full flex-1"
+                inputClassName="min-h-64 sm:min-h-[356px]"
+              />
+              <LineErrorList errors={lineErrors} onJump={jumpToLine} />
+            </>
           )}
 
           {inputMode === "file" && !uploadedFile && (
@@ -1930,7 +1976,7 @@ function CreateView() {
                   <th className={`${PREVIEW_HEAD} w-[115px]`}>Tên page</th>
                   <th className={`${PREVIEW_HEAD} w-[98px]`}>Số điện thoại</th>
                   <th className={`${PREVIEW_HEAD} w-[144px]`}>Email</th>
-                  <th className={`${PREVIEW_HEAD} text-center`}>Địa chỉ</th>
+                  <th className={PREVIEW_HEAD}>Địa chỉ</th>
                   <th className={`${PREVIEW_HEAD} pr-16 text-right`}>Trạng thái</th>
                 </tr>
               </thead>
@@ -1945,25 +1991,41 @@ function CreateView() {
                   preview.map((row) => (
                     <tr key={`${row.stt}-${row.page_name}`} className="h-[92px]">
                       <td className="py-3 pr-3 pl-16 text-center text-[#8B90A0]">{row.stt}</td>
-                      <td className="px-3 py-3 font-medium tracking-[0.3px] text-[#2563EB]">{row.uid || <span className="font-normal tracking-normal text-[#8B90A0]">Chưa gán</span>}</td>
-                      <td className="max-w-[115px] px-3 py-3 font-medium text-[#5E616B]">{row.page_name}</td>
+                      <td className="px-3 py-3 font-medium tracking-[0.3px] text-[#2563EB]">
+                        {/* Vàng chứ không đỏ: chưa gán UID không phải lỗi dữ liệu */}
+                        {row.uid || <span className="font-normal tracking-normal text-[#A16207]">Chưa gán</span>}
+                      </td>
+                      <td className="px-3 py-3 font-medium text-[#5E616B]">
+                        <PreviewCell issue={issueFor(row.dataIssues, "tên page")} value={row.page_name} width={115} />
+                      </td>
                       <td className="px-3 py-3">
-                        {row.phone || <ErrorChip>Thiếu SĐT</ErrorChip>}
+                        <PreviewCell issue={issueFor(row.dataIssues, "sđt")} value={row.phone} width={98} />
                       </td>
-                      <td className="max-w-[170px] truncate px-3 py-3 text-[11px]">
-                        {row.issues.includes("Sai email") ? <ErrorChip>Sai email</ErrorChip> : row.email || "—"}
+                      <td className="px-3 py-3 text-[11px]">
+                        <PreviewCell issue={issueFor(row.dataIssues, "email")} value={row.email} width={170} />
                       </td>
-                      <td className="px-3 py-3 text-center">{row.address || "—"}</td>
+                      <td className="px-3 py-3">
+                        <PreviewCell issue={issueFor(row.dataIssues, "địa chỉ")} value={row.address} width={220} />
+                      </td>
                       <td className="py-3 pr-16 pl-3 text-right">
-                        {row.ok ? (
+                        {/* Ba trạng thái chứ không phải hai: "Lỗi" chỉ dành cho
+                            sai dữ liệu — thứ người dùng sửa trong textarea và
+                            được bôi vàng ở đó. Chưa chọn tài khoản là việc
+                            khác hẳn, gọi chung là "Lỗi" thì một danh sách
+                            sạch tinh vẫn đỏ lòm chỉ vì chưa tick tài khoản. */}
+                        {row.dataIssues.length > 0 ? (
+                          <span title={row.dataIssues.join(", ")} className="inline-flex items-center gap-1 rounded-full bg-[rgba(255,180,171,0.15)] px-2 py-0.5 text-[11px] text-[#B01705]">
+                            <CreatorIcon name="error" />
+                            Lỗi
+                          </span>
+                        ) : row.uid ? (
                           <span className="inline-flex items-center gap-1 rounded-full bg-[rgba(78,222,163,0.1)] px-2 py-0.5 text-[11px] text-[#0F965F]">
                             <CreatorIcon name="valid" />
                             Hợp lệ
                           </span>
                         ) : (
-                          <span title={row.issues.join(", ")} className="inline-flex items-center gap-1 rounded-full bg-[rgba(255,180,171,0.15)] px-2 py-0.5 text-[11px] text-[#B01705]">
-                            <CreatorIcon name="error" />
-                            Lỗi
+                          <span title="Chọn tài khoản ở danh sách bên trên để gán UID" className="inline-flex items-center gap-1 rounded-full bg-[#FEF3C7] px-2 py-0.5 text-[11px] text-[#92400E]">
+                            Chờ tài khoản
                           </span>
                         )}
                       </td>
@@ -1986,7 +2048,7 @@ function CreateView() {
             {pages.length > plannedCount ? (
               <span className="text-[#737686]"> / {pages.length} dòng (lấy {plannedCount} = {threadsNum}×{loopsNum})</span>
             ) : null}
-            {preview.length !== validCount ? <span className="text-[#BE123C]"> ({preview.length - validCount} lỗi)</span> : null}
+            {invalidDataCount > 0 ? <span className="text-[#BE123C]"> ({invalidDataCount} lỗi)</span> : null}
           </SummaryStat>
           <span aria-hidden="true">•</span>
           <SummaryStat icon="stat_threads">Đồng thời: {threads || 0} Luồng</SummaryStat>
@@ -1994,11 +2056,23 @@ function CreateView() {
           <SummaryStat icon="stat_admin">
             Admin UID: <span className="font-bold text-[#2563EB]">{targetAdminUid.trim() || "Chưa nhập"}</span>
           </SummaryStat>
+          {/* Nút Bắt đầu mờ đi khi còn dòng lỗi — phải nói ra lý do, không thể
+              chỉ dựa vào `title` vì hover không có trên cảm ứng và rất dễ bỏ qua */}
+          {/* {invalidDataCount > 0 && (
+            <p role="alert" className="w-full text-xs leading-4 font-semibold text-[#BE123C]">
+              {invalidDataCount} dòng còn lỗi — sửa trong bảng đối soát rồi mới chạy được.
+            </p>
+          )} */}
         </div>
         <button
           type="button"
           onClick={handleStart}
-          disabled={starting || running}
+          disabled={starting || running || invalidDataCount > 0}
+          title={
+            invalidDataCount > 0
+              ? `${invalidDataCount} dòng còn lỗi. Sửa trong danh sách rồi mới chạy được.`
+              : undefined
+          }
           className="flex h-12 w-full items-center justify-center sm:w-[219px] gap-2 rounded-xl bg-[#2563EB] px-3 text-xl leading-7 font-bold tracking-[-0.1px] text-white shadow-[0_10px_15px_-3px_rgba(37,99,235,0.25),0_4px_6px_-4px_rgba(37,99,235,0.25)] hover:bg-[#1D4ED8] disabled:cursor-not-allowed disabled:opacity-70"
         >
           {starting ? <Loader2 aria-hidden="true" className="size-5 animate-spin" /> : <CreatorIcon name="rocket" />}
@@ -2142,6 +2216,155 @@ function ErrorChip({ children }) {
   );
 }
 
+/**
+ * Thước chữ và padding dùng CHUNG cho textarea và lớp phủ bôi vàng.
+ *
+ * Lệch một chút là vệt vàng trôi khỏi dòng, nên không được khai báo hai lần ở
+ * hai nơi. Mọi thuộc tính ảnh hưởng tới vị trí ký tự đều phải nằm ở đây.
+ */
+const EDITOR_METRICS =
+  "px-2 pt-2 pb-3.5 text-xs leading-[19.5px] font-medium tracking-[0.24px] whitespace-pre-wrap break-words";
+
+/** Khớp với leading-[19.5px] ở EDITOR_METRICS — đổi một chỗ thì đổi cả hai */
+const LINE_HEIGHT = 19.5;
+
+/** Liệt kê hết thì dán 500 dòng sai 300 sẽ đẩy cả trang xuống, không đọc nổi */
+const MAX_LINE_ERRORS_SHOWN = 8;
+
+/**
+ * Danh sách lỗi ngay dưới textarea, mỗi dòng bấm được để nhảy tới chỗ sai.
+ *
+ * Để cạnh textarea chứ không chỉ trong bảng đối soát: sửa là sửa ở textarea,
+ * nên lỗi phải nằm trong tầm mắt của chỗ sửa.
+ */
+function LineErrorList({ errors, onJump }) {
+  if (!errors.length) return null;
+  const shown = errors.slice(0, MAX_LINE_ERRORS_SHOWN);
+  const rest = errors.length - shown.length;
+
+  return (
+    <div role="alert" className="mt-2 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-3 py-2.5">
+      <p className="text-[11px] leading-4 font-bold tracking-[0.55px] uppercase text-[#92400E]">
+        {errors.length} dòng còn lỗi
+      </p>
+      <ul className="mt-1.5 flex flex-col gap-1">
+        {shown.map((item) => (
+          <li key={item.index}>
+            <button
+              type="button"
+              onClick={() => onJump(item.index)}
+              className="rounded text-left text-xs leading-[18px] text-[#92400E] underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-[#2563EB] focus-visible:outline-none"
+            >
+              <b className="font-bold">Dòng {item.index + 1}:</b> {item.issues.join(", ")}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {rest > 0 && <p className="mt-1 text-xs leading-[18px] text-[#A16207]">… và {rest} dòng nữa.</p>}
+    </div>
+  );
+}
+
+/**
+ * Textarea bôi vàng những dòng sai.
+ *
+ * Không có cách nào style từng dòng bên trong một <textarea>, nên dùng lối
+ * lớp phủ: một <div> nằm ngay dưới textarea, cùng thước chữ và padding, vẽ lại
+ * nguyên văn nội dung với màu chữ TRONG SUỐT và <mark> vàng ở các dòng lỗi.
+ * Textarea nằm trên với nền trong suốt, nên chữ người dùng thấy vẫn là chữ
+ * thật trong textarea — chọn, gõ, dán đều bình thường.
+ *
+ * Ba điều kiện để vệt vàng không trôi:
+ *   1. Cùng thước chữ + padding  -> EDITOR_METRICS
+ *   2. Cùng cách ngắt dòng       -> whitespace-pre-wrap + break-words
+ *   3. Cùng vị trí cuộn          -> đồng bộ scrollTop/scrollLeft
+ *
+ * Khung viền và vòng focus chuyển lên thẻ bọc ngoài, để hai lớp nằm trong
+ * cùng một hộp và không phải bù trừ độ dày viền.
+ */
+function HighlightedTextarea({
+  value,
+  onChange,
+  errorLines,
+  textareaRef,
+  className = "",
+  inputClassName = "",
+  ...rest
+}) {
+  const backdropRef = useRef(null);
+
+  const syncScroll = (el) => {
+    if (!el || !backdropRef.current) return;
+    backdropRef.current.scrollTop = el.scrollTop;
+    backdropRef.current.scrollLeft = el.scrollLeft;
+  };
+
+  // Gõ ở đáy vùng đã cuộn thì trình duyệt tự cuộn theo; chạy sau khi dựng lại
+  // để vệt vàng không trễ một nhịp so với con trỏ.
+  useLayoutEffect(() => {
+    syncScroll(textareaRef?.current);
+  }, [value, textareaRef]);
+
+  const lines = String(value || "").split("\n");
+
+  return (
+    <div
+      className={`relative overflow-hidden rounded-xl border border-[#C1C6D6] bg-white shadow-[inset_0_2px_4px_rgba(0,0,0,0.05)] focus-within:border-[#2563EB] focus-within:ring-2 focus-within:ring-[#2563EB]/20 ${className}`}
+    >
+      <div
+        ref={backdropRef}
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-0 overflow-hidden text-transparent ${EDITOR_METRICS}`}
+      >
+        {lines.map((line, index) => (
+          <span key={index}>
+            {errorLines.has(index) ? (
+              <mark className="rounded-sm bg-[#FEF08A] text-transparent">{line || " "}</mark>
+            ) : (
+              line
+            )}
+            {index < lines.length - 1 ? "\n" : null}
+          </span>
+        ))}
+      </div>
+
+      <textarea
+        ref={textareaRef}
+        value={value}
+        onChange={onChange}
+        onScroll={(event) => syncScroll(event.currentTarget)}
+        spellCheck={false}
+        className={`relative block w-full resize-none bg-transparent text-[#161C27] outline-none placeholder:text-[#737686] ${EDITOR_METRICS} ${inputClassName}`}
+        {...rest}
+      />
+    </div>
+  );
+}
+
+/** Lỗi đầu tiên liên quan tới một trường, để hiện ngay tại ô của trường đó */
+function issueFor(issues, key) {
+  return issues.find((text) => text.toLowerCase().includes(key)) || "";
+}
+
+/**
+ * Một ô trong bảng đối soát: có lỗi thì hiện chip, không thì hiện nội dung đã
+ * cắt bớt theo chiều rộng cột.
+ *
+ * Nội dung bọc trong <div> chứ không đặt `truncate` thẳng lên <td>: bảng này
+ * dùng table-layout tự động nên `max-width` trên <td> gần như bị bỏ qua — chữ
+ * dài vẫn nong cột ra và đè sang cột bên cạnh. Thẻ block bên trong thì tôn
+ * trọng max-width, nên cắt được. `title` để vẫn đọc được đầy đủ khi hover.
+ */
+function PreviewCell({ issue, value, width }) {
+  if (issue) return <ErrorChip>{issue}</ErrorChip>;
+  if (!value) return <span className="text-[#8B90A0]">—</span>;
+  return (
+    <div style={{ maxWidth: width }} className="truncate" title={value}>
+      {value}
+    </div>
+  );
+}
+
 function SummaryStat({ icon, children }) {
   return (
     <span className="flex items-center gap-1.5 whitespace-nowrap">
@@ -2253,9 +2476,27 @@ function UploadDropzone({ onPick, onDropFile }) {
   );
 }
 
-/** Ô số có tiền tố / hậu tố đơn vị (Luồng, Vòng, giây).
- *  Số bên trái, đơn vị sát phải; steppers=true hiện mũi tên native type=number.
+/**
+ * Ô số có tiền tố / hậu tố đơn vị (Luồng, Vòng, giây).
+ * Số bên trái, đơn vị sát phải; `steppers` bật cặp mũi tên tăng/giảm.
+ *
+ * Mũi tên là nút tự vẽ chứ không phải spinner mặc định của trình duyệt:
+ * spinner mặc định ở Chrome chỉ hiện khi rê chuột vào ô, bé tí, mỗi trình
+ * duyệt một kiểu và không đổi được màu. Ticket yêu cầu "có dấu mũi tên lên
+ * xuống" nên nó phải thấy được ngay, không phải rê chuột mới ra.
+ * Vì vậy CSS ẩn spinner gốc vẫn giữ nguyên cho mọi ô.
+ *
+ * Hai nút để `tabIndex={-1}`: ô vốn là `type="number"` nên bàn phím đã tăng
+ * giảm được bằng phím mũi tên; cho nút vào luồng Tab chỉ khiến mỗi trường tốn
+ * thêm hai lần nhấn Tab mà không thêm khả năng nào.
  */
+/**
+ * Luôn ẩn spinner gốc của trình duyệt, kể cả khi `steppers` bật: mũi tên đã do
+ * hai nút tự vẽ đảm nhiệm, để `[appearance:auto]` thì hiện chồng hai cặp.
+ */
+const HIDE_NATIVE_SPINNER =
+  "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none";
+
 function SuffixInput({
   id,
   value,
@@ -2268,8 +2509,23 @@ function SuffixInput({
   disabled = false,
   invalid = false,
   steppers = false,
+  step = 1,
 }) {
   const unit = "text-[11px] leading-[14px] tracking-[0.33px] text-[#434655]";
+  const current = Number(value);
+  const atMin = Number.isFinite(current) && current <= min;
+  const atMax = typeof max === "number" && Number.isFinite(current) && current >= max;
+
+  // Ô rỗng hoặc đang là chữ thì coi như đang ở `min`, bấm tăng là nhảy lên min+step
+  const bump = (delta) => {
+    const base = Number.isFinite(current) ? current : min;
+    const next = Math.min(typeof max === "number" ? max : Infinity, Math.max(min, base + delta));
+    onChange(String(next));
+  };
+
+  const arrow =
+    "flex h-3.5 w-5 items-center justify-center rounded text-[#5B6478] hover:bg-[#DBE4FF] hover:text-[#1B45A3] disabled:opacity-30 disabled:hover:bg-transparent";
+
   return (
     <label
       htmlFor={id}
@@ -2282,18 +2538,39 @@ function SuffixInput({
         inputMode="numeric"
         min={min}
         max={max}
+        step={step}
         value={value}
         disabled={disabled}
         aria-invalid={invalid}
         onChange={(event) => onChange(event.target.value)}
-        className={`min-w-0 flex-1 bg-transparent text-left text-base ${bold ? "font-bold" : "font-semibold"} text-[#0B1C30] outline-none disabled:cursor-not-allowed ${
-          steppers
-            ? "[appearance:auto]"
-            : "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-        }`}
+        className={`min-w-0 flex-1 bg-transparent text-left text-base ${bold ? "font-bold" : "font-semibold"} text-[#0B1C30] outline-none disabled:cursor-not-allowed ${HIDE_NATIVE_SPINNER}`}
       />
       {suffix ? (
         <span className={`${unit} ml-auto shrink-0 ${bold ? "font-medium" : "font-semibold"}`}>{suffix}</span>
+      ) : null}
+      {steppers ? (
+        <span className="flex shrink-0 flex-col">
+          <button
+            type="button"
+            tabIndex={-1}
+            disabled={disabled || atMax}
+            onClick={() => bump(step)}
+            aria-label={`Tăng ${suffix}`}
+            className={arrow}
+          >
+            <ChevronUp className="size-3" strokeWidth={2.5} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            tabIndex={-1}
+            disabled={disabled || atMin}
+            onClick={() => bump(-step)}
+            aria-label={`Giảm ${suffix}`}
+            className={arrow}
+          >
+            <ChevronDown className="size-3" strokeWidth={2.5} aria-hidden="true" />
+          </button>
+        </span>
       ) : null}
     </label>
   );
