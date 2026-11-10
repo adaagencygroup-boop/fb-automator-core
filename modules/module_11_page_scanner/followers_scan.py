@@ -27,6 +27,7 @@ from .scanner import (
     _ACTIVE_SESSIONS_LOCK,
     _ACTIVE_STOP_EVENTS,
     _wait_if_paused,
+    _wait_if_paused_timed,
     append_session_log,
     create_scan_session,
     finalize_scan_session,
@@ -1007,7 +1008,10 @@ def run_follower_scan_flow(
                 if stop_event.is_set():
                     stop_reason = "USER_STOPPED"
                     break
-                if _wait_if_paused(session_id, stop_event):
+                stopped_in_pause, paused_s = _wait_if_paused_timed(session_id, stop_event)
+                # Thời gian tạm dừng không tính là idle của Page đang quét
+                last_new_at += paused_s
+                if stopped_in_pause:
                     stop_reason = "USER_STOPPED"
                     break
 

@@ -207,19 +207,40 @@ def append_session_log(
         logger.debug(f"[Scanner] append_session_log #{session_id}: {exc}")
 
 
-def _wait_if_paused(session_id: int, stop_event: threading.Event) -> bool:
+def _wait_if_paused_timed(
+    session_id: int,
+    stop_event: threading.Event,
+    poll_sec: float = 0.4,
+) -> Tuple[bool, float]:
     """
-    Treo tại điểm an toàn khi pause. Trả True nếu bị stop trong lúc pause.
+    Treo tại điểm an toàn khi pause. Trả (bị_stop, số_giây_đã_treo).
+    Nơi gọi dùng số giây treo để lùi mốc idle / timeout — thời gian tạm dừng
+    không được tính là "không có kết quả mới" hay "chạy quá lâu".
     """
+    paused_since: Optional[float] = None
     while True:
         with _ACTIVE_SESSIONS_LOCK:
             pause_ev = _ACTIVE_PAUSE_EVENTS.get(session_id)
             paused = bool(pause_ev and pause_ev.is_set())
         if not paused:
-            return False
+            waited = (time.time() - paused_since) if paused_since is not None else 0.0
+            if waited >= 1:
+                append_session_log(
+                    session_id,
+                    f"Tiếp tục sau {waited:.0f}s tạm dừng (không tính vào idle / timeout)",
+                    "info",
+                )
+            return False, waited
+        if paused_since is None:
+            paused_since = time.time()
         if stop_event.is_set():
-            return True
-        time.sleep(0.4)
+            return True, time.time() - paused_since
+        time.sleep(poll_sec)
+
+
+def _wait_if_paused(session_id: int, stop_event: threading.Event) -> bool:
+    """Như _wait_if_paused_timed nhưng chỉ trả True nếu bị stop trong lúc pause."""
+    return _wait_if_paused_timed(session_id, stop_event)[0]
 
 
 def _dom_scroll_metrics(driver) -> Tuple[frozenset, int, int]:
@@ -765,6 +786,7 @@ def run_page_search_flow(
     stop_reason = "COMPLETED"
     error_message: Optional[str] = None
     start_time = time.time()
+    paused_total = 0.0  # giây tạm dừng — không tính vào MAX_DURATION_SEC
     stagnant_scroll_streak = 0
     use_container_scroll = False
 
@@ -817,7 +839,9 @@ def run_page_search_flow(
 
         # 5. Vòng scroll thu hoạch chống lặp (chỉ dẫn mục 3)
         while True:
-            if _wait_if_paused(session_id, stop_event):
+            stopped_in_pause, paused_s = _wait_if_paused_timed(session_id, stop_event)
+            paused_total += paused_s
+            if stopped_in_pause:
                 stop_reason = "USER_STOPPED"
                 break
 
@@ -826,7 +850,7 @@ def run_page_search_flow(
                 stop_reason = "USER_STOPPED"
                 break
 
-            elapsed = int(time.time() - start_time)
+            elapsed = int(time.time() - start_time - paused_total)
             if elapsed >= MAX_DURATION_SEC:
                 stop_reason = "TIMEOUT"
                 break
@@ -3071,6 +3095,7 @@ def run_hashtag_search_flow(
     error_message: Optional[str] = None
     start_time = time.time()
     last_qualified_at = start_time
+    paused_total = 0.0  # giây tạm dừng — không tính vào MAX_DURATION_SEC
     stagnant_scroll_streak = 0
     use_container_scroll = False
 
@@ -3118,7 +3143,7 @@ def run_hashtag_search_flow(
                 stop_reason = "USER_STOPPED"
                 break
 
-            elapsed = int(time.time() - start_time)
+            elapsed = int(time.time() - start_time - paused_total)
             if elapsed >= MAX_DURATION_SEC:
                 stop_reason = "TIMEOUT"
                 break
@@ -3151,7 +3176,12 @@ def run_hashtag_search_flow(
             use_container_scroll = False
 
             while tag_posts_count < max_posts:
-                if _wait_if_paused(session_id, stop_event):
+                stopped_in_pause, paused_s = _wait_if_paused_timed(session_id, stop_event)
+                if paused_s:
+                    # Thời gian tạm dừng không tính là idle / chạy quá lâu
+                    paused_total += paused_s
+                    last_qualified_at += paused_s
+                if stopped_in_pause:
                     stop_reason = "USER_STOPPED"
                     break
                 batch_no += 1
@@ -3169,7 +3199,7 @@ def run_hashtag_search_flow(
                     )
                     break
 
-                elapsed = int(time.time() - start_time)
+                elapsed = int(time.time() - start_time - paused_total)
                 if elapsed >= MAX_DURATION_SEC:
                     stop_reason = "TIMEOUT"
                     break
