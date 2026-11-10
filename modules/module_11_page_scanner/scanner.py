@@ -72,6 +72,54 @@ _ACTIVE_PAUSE_EVENTS: Dict[int, threading.Event] = {}  # set = đang PAUSED
 _ACTIVE_SESSIONS_LOCK = threading.Lock()
 
 
+# Heartbeat: mỗi engine (mỗi máy) ghi heartbeat_at cho các phiên nó đang chạy.
+# Phiên RUNNING/PAUSED quá lâu không heartbeat = engine đã tắt → mồ côi (browser_session).
+HEARTBEAT_INTERVAL_SEC = 30
+_HEARTBEAT_THREAD: Optional[threading.Thread] = None
+_HEARTBEAT_GUARD = threading.Lock()
+
+
+def get_local_active_session_ids() -> List[int]:
+    """Phiên đang có worker chạy trong CHÍNH tiến trình này."""
+    with _ACTIVE_SESSIONS_LOCK:
+        return list(_ACTIVE_STOP_EVENTS.keys())
+
+
+def _heartbeat_once() -> int:
+    ids = get_local_active_session_ids()
+    if not ids:
+        return 0
+    db.execute(
+        """
+        UPDATE page_scan_sessions SET heartbeat_at = NOW()
+        WHERE id = ANY(%s) AND status IN ('RUNNING', 'PAUSED')
+        """,
+        (ids,),
+    )
+    return len(ids)
+
+
+def _heartbeat_loop() -> None:
+    while True:
+        time.sleep(HEARTBEAT_INTERVAL_SEC)
+        try:
+            _heartbeat_once()
+        except Exception as exc:
+            logger.debug(f"[Scanner] heartbeat: {exc}")
+
+
+def ensure_session_heartbeat() -> None:
+    """Khởi động (1 lần / tiến trình) luồng nền ghi heartbeat cho phiên đang chạy."""
+    global _HEARTBEAT_THREAD
+    with _HEARTBEAT_GUARD:
+        if _HEARTBEAT_THREAD is not None and _HEARTBEAT_THREAD.is_alive():
+            return
+        _HEARTBEAT_THREAD = threading.Thread(
+            target=_heartbeat_loop, daemon=True, name="page_scan_heartbeat"
+        )
+        _HEARTBEAT_THREAD.start()
+
+
 def request_stop_session(session_id: int) -> bool:
     """Dừng hẳn phiên (DỪNG KHẨN CẤP). Đồng thời gỡ pause nếu đang treo."""
     with _ACTIVE_SESSIONS_LOCK:
@@ -326,15 +374,16 @@ def create_scan_session(
         max_results, total_seen, total_unique, total_duplicates,
         total_sponsored, batches_count, duration_seconds, settings,
         campaign_id, logs,
-        started_at, created_at
+        heartbeat_at, started_at, created_at
     ) VALUES (
         %s, %s, %s, %s, 'RUNNING',
         %s, 0, 0, 0,
         0, 0, 0, %s,
         %s, %s,
-        NOW(), NOW()
+        NOW(), NOW(), NOW()
     ) RETURNING id;
     """
+    ensure_session_heartbeat()
     row = db.fetch_one(
         query,
         (

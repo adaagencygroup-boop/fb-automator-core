@@ -23,13 +23,18 @@ from ..page_source import (
     normalize_post_key,
     parse_page_file_content,
 )
-from ..browser_session import AccountBusyError, close_browsers_for_stopped_sessions
+from ..browser_session import (
+    AccountBusyError,
+    close_browsers_for_stopped_sessions,
+    mark_stale_running_sessions,
+)
 from ..followers_scan import start_follower_scan_background
 from ..posts_scan import start_post_scan_background
 from ..scanner import (
     append_session_log,
     create_scan_session,
     finalize_scan_session,
+    get_local_active_session_ids,
     request_stop_session,
     request_pause_session,
     request_resume_session,
@@ -88,6 +93,25 @@ def _get_owner() -> str:
     """Lấy định danh owner từ token phiên đăng nhập."""
     current = owner_context.get()
     return current if current and str(current).strip() else "system"
+
+
+def _sweep_orphan_sessions(owner: str) -> List[int]:
+    """
+    Phiên RUNNING/PAUSED của owner không còn engine nào chạy (vd app vừa tắt/mở lại)
+    → FAILED, để UI không treo ở trạng thái "đang chạy". Bỏ qua phiên đang chạy ở tiến trình này.
+    """
+    try:
+        return mark_stale_running_sessions(
+            owner_key=owner,
+            exclude_session_ids=get_local_active_session_ids(),
+        )
+    except Exception as exc:
+        logger.debug(f"[Module 11 API] sweep orphan sessions: {exc}")
+        return []
+
+
+def _is_orphan_candidate(session_id: int, status: Optional[str]) -> bool:
+    return status in ("RUNNING", "PAUSED") and int(session_id) not in get_local_active_session_ids()
 
 
 # ==================== SCHEMAS ====================
@@ -455,6 +479,7 @@ async def list_scan_sessions(
     Lấy danh sách lịch sử các phiên quét của user đăng nhập.
     """
     owner = _get_owner()
+    _sweep_orphan_sessions(owner)
     offset = (page - 1) * page_size
     params: List[Any] = [owner]
     conditions = ["owner_key = %s"]
@@ -503,12 +528,13 @@ async def get_scan_session_detail(session_id: int):
     Xem chi tiết thông số và thống kê của 1 phiên quét cụ thể.
     """
     owner = _get_owner()
-    row = db.fetch_one(
-        "SELECT * FROM page_scan_sessions WHERE id = %s AND owner_key = %s",
-        (session_id, owner),
-    )
+    detail_sql = "SELECT * FROM page_scan_sessions WHERE id = %s AND owner_key = %s"
+    row = db.fetch_one(detail_sql, (session_id, owner))
     if not row:
         raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét yêu cầu")
+    # UI poll phiên RUNNING mà engine đã tắt → chuyển FAILED để UI dừng chờ
+    if _is_orphan_candidate(session_id, row.get("status")) and session_id in _sweep_orphan_sessions(owner):
+        row = db.fetch_one(detail_sql, (session_id, owner)) or row
 
     # Đếm số page đã thu hoạch trong phiên
     pages_count_row = db.fetch_one(
@@ -803,6 +829,7 @@ async def get_active_campaign():
     Dùng để khôi phục state sau reload (chỉ dẫn 1.3).
     """
     owner = _get_owner()
+    _sweep_orphan_sessions(owner)
     top = db.fetch_one(
         """
         SELECT * FROM page_scan_sessions
@@ -848,8 +875,11 @@ async def pause_scan_session(session_id: int):
     )
     if not session:
         raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét")
-    if session.get("status") not in ("RUNNING", "PAUSED"):
-        raise HTTPException(status_code=400, detail=f"Phiên không thể tạm dừng (status={session.get('status')})")
+    status = session.get("status")
+    if _is_orphan_candidate(session_id, status) and session_id in _sweep_orphan_sessions(owner):
+        status = "FAILED"
+    if status not in ("RUNNING", "PAUSED"):
+        raise HTTPException(status_code=400, detail=f"Phiên không thể tạm dừng (status={status})")
 
     ok = request_pause_session(session_id)
     return {
@@ -870,8 +900,11 @@ async def resume_scan_session(session_id: int):
     )
     if not session:
         raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét")
-    if session.get("status") not in ("PAUSED", "RUNNING"):
-        raise HTTPException(status_code=400, detail=f"Phiên không thể tiếp tục (status={session.get('status')})")
+    status = session.get("status")
+    if _is_orphan_candidate(session_id, status) and session_id in _sweep_orphan_sessions(owner):
+        status = "FAILED"
+    if status not in ("PAUSED", "RUNNING"):
+        raise HTTPException(status_code=400, detail=f"Phiên không thể tiếp tục (status={status})")
 
     ok = request_resume_session(session_id)
     return {
