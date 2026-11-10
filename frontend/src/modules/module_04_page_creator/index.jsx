@@ -142,6 +142,60 @@ function stateFromRun(run) {
   return "queued";
 }
 
+/** UID admin: bắt buộc, chỉ số nguyên dương (không chữ/ký tự đặc biệt/dấu cách/thập phân). */
+function getAdminUidError(value) {
+  const raw = String(value ?? "");
+  if (!raw.trim()) return "UID admin không được để trống.";
+  if (/\s/.test(raw)) return "UID admin không được chứa dấu cách.";
+  if (/[.,]/.test(raw)) return "UID admin không được là số thập phân.";
+  if (/[a-zA-ZÀ-ỹ]/.test(raw)) return "UID admin không được chứa chữ cái.";
+  if (/[^0-9]/.test(raw)) return "UID admin không được chứa kí tự đặc biệt.";
+  if (!/^[1-9][0-9]*$/.test(raw)) return "UID admin phải là số nguyên dương.";
+  return "";
+}
+
+/** Số luồng: số nguyên dương 1–10 và không vượt số tài khoản FB đã chọn. */
+function getThreadsError(value, selectedCount) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "Số luồng không được để trống.";
+  if (!/^[1-9][0-9]*$/.test(raw)) return "Số luồng phải là số nguyên dương.";
+  const n = Number(raw);
+  if (n < 1) return "Số luồng phải lớn hơn 0.";
+  if (n > 10) return "Số luồng tối đa là 10.";
+  if (selectedCount > 0 && n > selectedCount) {
+    return `Số luồng không được lớn hơn số tài khoản FB đã chọn (${selectedCount}).`;
+  }
+  return "";
+}
+
+/** Số vòng lặp: bắt buộc, số nguyên dương (> 0). */
+function getRepeatCountError(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "Số vòng lặp không được để trống.";
+  if (!/^[1-9][0-9]*$/.test(raw)) return "Số vòng lặp phải là số nguyên dương.";
+  if (Number(raw) < 1) return "Số vòng lặp phải lớn hơn 0.";
+  return "";
+}
+
+/** Một ô delay: bắt buộc, số nguyên dương (> 0). */
+function getDelayFieldError(value, label) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return `${label} không được để trống.`;
+  if (!/^[1-9][0-9]*$/.test(raw)) return `${label} phải là số nguyên dương (> 0).`;
+  return "";
+}
+
+/** Cặp Min/Max delay: từng ô hợp lệ và Min <= Max. */
+function getDelayErrors(minVal, maxVal) {
+  const minError = getDelayFieldError(minVal, "Độ trễ Min");
+  const maxError = getDelayFieldError(maxVal, "Độ trễ Max");
+  let rangeError = "";
+  if (!minError && !maxError && Number(minVal) > Number(maxVal)) {
+    rangeError = "Độ trễ Min phải nhỏ hơn hoặc bằng Max.";
+  }
+  return { minError, maxError, rangeError };
+}
+
 function buildJobRows(pages, accounts, logs, startMs) {
   const buckets = new Map();
   logs.forEach((log) => {
@@ -910,10 +964,16 @@ function CreateView() {
   const [uploadedFile, setUploadedFile] = useState(null);
   const [delimiter, setDelimiter] = useState("|");
   const [targetAdminUid, setTargetAdminUid] = useState("");
-  const [threads, setThreads] = useState(3);
+  const [adminUidError, setAdminUidError] = useState("");
+  const [threads, setThreads] = useState(1);
+  const [threadsError, setThreadsError] = useState("");
   const [delayMin, setDelayMin] = useState(45);
   const [delayMax, setDelayMax] = useState(120);
+  const [delayMinError, setDelayMinError] = useState("");
+  const [delayMaxError, setDelayMaxError] = useState("");
+  const [delayRangeError, setDelayRangeError] = useState("");
   const [repeatCount, setRepeatCount] = useState(1);
+  const [repeatCountError, setRepeatCountError] = useState("");
   const [countryCode, setCountryCode] = useState("+84");
   const [geminiKey, setGeminiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
@@ -964,12 +1024,24 @@ function CreateView() {
     });
   }, [accountsLoading, accountsError]);
   const allVisibleSelected = visibleAccounts.length > 0 && visibleAccounts.every((account) => selected.includes(account.uid));
-  const preview = pages.map((page, index) => {
+
+  // Page sẽ tạo = Số luồng × Số vòng lặp (chỉ lấy đúng số dòng đó từ danh sách dán)
+  const threadsNum = Math.max(1, Number.parseInt(String(threads), 10) || 1);
+  const loopsNum = Math.max(1, Number.parseInt(String(repeatCount), 10) || 1);
+  const plannedCount = threadsNum * loopsNum;
+  const threadUids = selected.slice(0, Math.min(threadsNum, selected.length));
+  const plannedPages = pages.slice(0, plannedCount);
+  const preview = plannedPages.map((page, index) => {
     const issues = rowIssues(page);
+    const uid = threadUids.length ? threadUids[index % threadUids.length] : "";
+    const loop_round = threadUids.length
+      ? Math.floor(index / threadUids.length) + 1
+      : Math.floor(index / threadsNum) + 1;
     return {
       ...page,
       stt: String(index + 1).padStart(2, "0"),
-      uid: selected.length ? selected[index % selected.length] : "",
+      uid,
+      loop_round,
       issues,
       ok: issues.length === 0,
     };
@@ -1064,7 +1136,7 @@ function CreateView() {
   useEffect(() => {
     getCreatorSettings()
       .then((settings) => {
-        if (settings?.gemini_api_key) setGeminiKey(settings.gemini_api_key);
+        // API key mặc định để trống — người dùng tự nhập key hợp lệ
         if (settings?.gemini_model) setGeminiModel(settings.gemini_model);
       })
       .catch(() => {});
@@ -1155,17 +1227,78 @@ function CreateView() {
     }
   };
 
+  const canConfigureJob = selected.length > 0;
+  const warnSelectAccountsForJob = () => {
+    toast.warning("Chọn danh sách tài khoản Facebook tạo page trước khi thiết lập Job.", "TẠO PAGE");
+  };
+
+  useEffect(() => {
+    setThreadsError(getThreadsError(threads, selected.length));
+  }, [selected.length, threads]);
+
+  const handleAdminUidChange = (value) => {
+    setTargetAdminUid(value);
+    setAdminUidError(getAdminUidError(value));
+  };
+
+  const handleThreadsChange = (value) => {
+    setThreads(value);
+    setThreadsError(getThreadsError(value, selected.length));
+  };
+
+  const handleRepeatCountChange = (value) => {
+    setRepeatCount(value);
+    setRepeatCountError(getRepeatCountError(value));
+  };
+
+  const applyDelayErrors = (minVal, maxVal) => {
+    const { minError, maxError, rangeError } = getDelayErrors(minVal, maxVal);
+    setDelayMinError(minError);
+    setDelayMaxError(maxError);
+    setDelayRangeError(rangeError);
+    return minError || maxError || rangeError;
+  };
+
+  const handleDelayMinChange = (value) => {
+    setDelayMin(value);
+    applyDelayErrors(value, delayMax);
+  };
+
+  const handleDelayMaxChange = (value) => {
+    setDelayMax(value);
+    applyDelayErrors(delayMin, value);
+  };
+
   const handleStart = async () => {
     if (!selected.length) {
-      toast.warning("Chọn ít nhất một tài khoản đã import.", "TẠO PAGE");
+      toast.warning("Chọn danh sách tài khoản Facebook tạo page trước khi thiết lập Job.", "TẠO PAGE");
       return;
     }
-    if (!pages.length) {
+    if (!plannedPages.length) {
       toast.warning("Nhập ít nhất một tên page.", "TẠO PAGE");
       return;
     }
-    if (!targetAdminUid.trim()) {
-      toast.warning("Nhập UID admin sẽ nhận quyền quản trị page.", "TẠO PAGE");
+    const uidError = getAdminUidError(targetAdminUid);
+    if (uidError) {
+      setAdminUidError(uidError);
+      toast.warning(uidError, "TẠO PAGE");
+      return;
+    }
+    const threadErr = getThreadsError(threads, selected.length);
+    if (threadErr) {
+      setThreadsError(threadErr);
+      toast.warning(threadErr, "TẠO PAGE");
+      return;
+    }
+    const repeatErr = getRepeatCountError(repeatCount);
+    if (repeatErr) {
+      setRepeatCountError(repeatErr);
+      toast.warning(repeatErr, "TẠO PAGE");
+      return;
+    }
+    const delayErr = applyDelayErrors(delayMin, delayMax);
+    if (delayErr) {
+      toast.warning(delayErr, "TẠO PAGE");
       return;
     }
     const invalid = preview.filter((row) => !row.ok).length;
@@ -1176,26 +1309,30 @@ function CreateView() {
     try {
       if (geminiKey.trim()) await saveCreatorSetting("gemini_api_key", geminiKey.trim());
       if (geminiModel.trim()) await saveCreatorSetting("gemini_model", geminiModel.trim());
-      const assigned = pages.map((page, index) => ({
-        ...page,
-        uid: selected[index % selected.length],
-        loop_round: 1,
+      // Khớp bảng xem trước: chỉ tạo đúng Số luồng × Số vòng lặp page
+      const assigned = preview.map((row) => ({
+        page_name: row.page_name,
+        phone: row.phone,
+        email: row.email,
+        address: row.address,
+        uid: row.uid,
+        loop_round: row.loop_round || 1,
       }));
       await startPageCreation({
         pages: assigned,
         target_admin_uid: targetAdminUid.trim(),
-        threads: Number(threads) || 2,
+        threads: threadsNum,
         delay_min: Number(delayMin) || 0,
         delay_max: Number(delayMax) || 0,
-        repeat_count: Number(repeatCount) || 1,
+        repeat_count: loopsNum,
         country_code: countryCode || "+84",
       });
-      toast.info(`Đã bắt đầu tạo ${assigned.length} page.`, "TẠO PAGE");
+      toast.info(`Đã bắt đầu tạo ${assigned.length} page (${threadsNum} luồng × ${loopsNum} vòng).`, "TẠO PAGE");
       setTask({
         running: true,
         pages: assigned,
         total_pages: assigned.length,
-        threads: Number(threads) || 2,
+        threads: threadsNum,
         start_time: Date.now(),
         paused: false,
       });
@@ -1563,49 +1700,110 @@ function CreateView() {
           </div>
         </section>
 
-        <section className={`${PANEL} flex flex-col gap-5`}>
+        <section
+          className={`${PANEL} relative flex flex-col gap-5 ${canConfigureJob ? "" : "opacity-70"}`}
+          aria-disabled={!canConfigureJob}
+        >
+          {!canConfigureJob ? (
+            <button
+              type="button"
+              className="absolute inset-0 z-10 cursor-not-allowed rounded-[inherit] bg-transparent"
+              aria-label="Chọn tài khoản Facebook trước khi thiết lập Job"
+              onClick={warnSelectAccountsForJob}
+            />
+          ) : null}
+
           <SectionHeading
             icon="job_settings"
             title="Thiết Lập Job Tự Động"
             subtitle="Cấu hình quyền quản trị, luồng xử lý và tham số chống quét"
           />
 
+          {!canConfigureJob ? (
+            <p className="rounded-lg bg-[#FFF7ED] px-3 py-2 text-xs leading-5 text-[#C2410C]">
+              Chọn danh sách tài khoản Facebook tạo page trước khi thiết lập Job.
+            </p>
+          ) : null}
+
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <label htmlFor="creator-admin-uid" className="text-sm leading-5 font-semibold text-[#0B1C30]">Facebook UID Nhận Quyền Admin</label>
               <span className="text-[11px] leading-[14px] tracking-[0.33px] text-[#004AC6]">Quản trị viên</span>
             </div>
-            <label htmlFor="creator-admin-uid" className={SOFT_INPUT}>
-              <CreatorIcon name="admin_uid" className="mr-1 text-[#004AC6]" />
+            <label
+              htmlFor="creator-admin-uid"
+              className={`${SOFT_INPUT} ${adminUidError ? "!ring-2 !ring-[#F87171]/35 !bg-[#FFF1F2]" : ""}`}
+            >
+              <CreatorIcon name="admin_uid" className={`mr-1 ${adminUidError ? "text-[#BE123C]" : "text-[#004AC6]"}`} />
               <input
                 id="creator-admin-uid"
                 name="creator-admin-uid"
                 inputMode="numeric"
+                pattern="[1-9][0-9]*"
                 autoComplete="off"
                 data-1p-ignore
                 data-lpignore="true"
+                aria-invalid={Boolean(adminUidError)}
+                aria-describedby={adminUidError ? "creator-admin-uid-error" : undefined}
                 value={targetAdminUid}
-                onChange={(event) => setTargetAdminUid(event.target.value)}
+                disabled={!canConfigureJob}
+                onChange={(event) => handleAdminUidChange(event.target.value)}
+                onBlur={() => setAdminUidError(getAdminUidError(targetAdminUid))}
                 placeholder="Nhập UID Facebook"
-                className="w-full min-w-0 bg-transparent text-base font-semibold text-[#0B1C30] outline-none placeholder:font-normal placeholder:text-[#737686]"
+                className="w-full min-w-0 bg-transparent text-base font-semibold text-[#0B1C30] outline-none placeholder:font-normal placeholder:text-[#737686] disabled:cursor-not-allowed"
               />
             </label>
-            <p className="flex items-center gap-1.5 rounded-lg bg-[#ECFDF5] px-2.5 py-1.5 text-xs leading-[18px] text-[#047857]">
-              <CreatorIcon name="shield_check" />
-              Nick sẽ tự động nhận toàn quyền kiểm soát (Owner) ngay sau khi tạo xong.
-            </p>
+            {adminUidError ? (
+              <p id="creator-admin-uid-error" className="text-xs leading-[18px] text-[#BE123C]">
+                {adminUidError}
+              </p>
+            ) : (
+              <p className="flex items-center gap-1.5 rounded-lg bg-[#ECFDF5] px-2.5 py-1.5 text-xs leading-[18px] text-[#047857]">
+                <CreatorIcon name="shield_check" />
+                Nick sẽ tự động nhận toàn quyền kiểm soát (Owner) ngay sau khi tạo xong.
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
               <label htmlFor="creator-threads" className={FIELD_LABEL}>Số Luồng Chạy</label>
-              <SuffixInput id="creator-threads" value={threads} onChange={setThreads} min={1} max={10} suffix="Luồng" bold />
-              <p className={FIELD_HINT}>Khuyên dùng 3-5 luồng</p>
+              <SuffixInput
+                id="creator-threads"
+                value={threads}
+                onChange={handleThreadsChange}
+                min={1}
+                max={10}
+                suffix="Luồng"
+                bold
+                steppers
+                disabled={!canConfigureJob}
+                invalid={Boolean(threadsError)}
+              />
+              {threadsError ? (
+                <p className="text-xs leading-[18px] text-[#BE123C]">{threadsError}</p>
+              ) : (
+                <p className={FIELD_HINT}>Mặc định 1; tối đa 10 và không vượt số nick đã chọn</p>
+              )}
             </div>
             <div className="flex flex-col gap-1.5">
               <label htmlFor="creator-loops" className={FIELD_LABEL}>Số Vòng Lặp</label>
-              <SuffixInput id="creator-loops" value={repeatCount} onChange={setRepeatCount} min={1} suffix="Vòng" bold />
-              <p className={FIELD_HINT}>Thực thi tuần tự</p>
+              <SuffixInput
+                id="creator-loops"
+                value={repeatCount}
+                onChange={handleRepeatCountChange}
+                min={1}
+                suffix="Vòng"
+                bold
+                steppers
+                disabled={!canConfigureJob}
+                invalid={Boolean(repeatCountError)}
+              />
+              {repeatCountError ? (
+                <p className="text-xs leading-[18px] text-[#BE123C]">{repeatCountError}</p>
+              ) : (
+                <p className={FIELD_HINT}>Thực thi tuần tự</p>
+              )}
             </div>
           </div>
 
@@ -1613,13 +1811,38 @@ function CreateView() {
             <div className="flex items-start justify-between gap-3">
               <span className={FIELD_LABEL}>Độ Trễ Mỗi Lần Tạo Page (Delay Random)</span>
               <span className="shrink-0 text-[11px] leading-[14px] font-bold tracking-[0.33px] whitespace-nowrap text-[#004AC6]">
-                {delayMin || 0}s - {delayMax || 0}s
+                {delayMin || "—"}s - {delayMax || "—"}s
               </span>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <SuffixInput id="creator-delay-min" value={delayMin} onChange={setDelayMin} min={0} prefix="Min:" suffix="giây" />
-              <SuffixInput id="creator-delay-max" value={delayMax} onChange={setDelayMax} min={0} prefix="Max:" suffix="giây" />
+              <div className="flex flex-col gap-1">
+                <SuffixInput
+                  id="creator-delay-min"
+                  value={delayMin}
+                  onChange={handleDelayMinChange}
+                  min={1}
+                  prefix="Min:"
+                  suffix="giây"
+                  disabled={!canConfigureJob}
+                  invalid={Boolean(delayMinError || delayRangeError)}
+                />
+                {delayMinError ? <p className="text-xs leading-[18px] text-[#BE123C]">{delayMinError}</p> : null}
+              </div>
+              <div className="flex flex-col gap-1">
+                <SuffixInput
+                  id="creator-delay-max"
+                  value={delayMax}
+                  onChange={handleDelayMaxChange}
+                  min={1}
+                  prefix="Max:"
+                  suffix="giây"
+                  disabled={!canConfigureJob}
+                  invalid={Boolean(delayMaxError || delayRangeError)}
+                />
+                {delayMaxError ? <p className="text-xs leading-[18px] text-[#BE123C]">{delayMaxError}</p> : null}
+              </div>
             </div>
+            {delayRangeError ? <p className="text-xs leading-[18px] text-[#BE123C]">{delayRangeError}</p> : null}
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -1629,6 +1852,7 @@ function CreateView() {
               onChange={setCountryCode}
               options={COUNTRIES}
               size="lg"
+              disabled={!canConfigureJob}
               buttonClassName="!h-10 !rounded-lg !border-transparent !bg-[#EFF4FF] !text-sm !font-medium !shadow-none"
             />
           </div>
@@ -1644,6 +1868,7 @@ function CreateView() {
                 value={geminiModel}
                 onChange={setGeminiModel}
                 options={MODELS}
+                disabled={!canConfigureJob}
                 buttonClassName="!h-9 !rounded-lg !border-transparent !bg-white !pl-4 !text-xs !font-semibold !shadow-none"
               />
             </div>
@@ -1656,17 +1881,19 @@ function CreateView() {
                     id="creator-gemini-key"
                     type={showKey ? "text" : "password"}
                     value={geminiKey}
+                    disabled={!canConfigureJob}
                     onChange={(event) => setGeminiKey(event.target.value)}
-                    placeholder="Dán API key hoặc dùng GEMINI_API_KEYS"
+                    placeholder="Nhập Gemini API key hợp lệ"
                     autoComplete="new-password"
                     spellCheck={false}
-                    className="w-full min-w-0 bg-transparent text-xs tracking-[1.2px] text-[#0B1C30] outline-none placeholder:tracking-normal placeholder:text-[#737686]"
+                    className="w-full min-w-0 bg-transparent text-xs tracking-[1.2px] text-[#0B1C30] outline-none placeholder:tracking-normal placeholder:text-[#737686] disabled:cursor-not-allowed"
                   />
                   <button
                     type="button"
                     onClick={() => setShowKey((value) => !value)}
+                    disabled={!canConfigureJob}
                     aria-label={showKey ? "Ẩn key" : "Hiện key"}
-                    className="shrink-0 text-[#737686] hover:text-[#0B1C30]"
+                    className="shrink-0 text-[#737686] hover:text-[#0B1C30] disabled:cursor-not-allowed"
                   >
                     {showKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
@@ -1674,7 +1901,7 @@ function CreateView() {
                 <button
                   type="button"
                   onClick={handleTestKey}
-                  disabled={testingKey}
+                  disabled={!canConfigureJob || testingKey}
                   className="flex h-9 shrink-0 items-center gap-1 rounded-lg bg-[#2563EB] px-3 text-[11px] leading-[14px] font-semibold tracking-[0.33px] text-white shadow-[0_1px_2px_rgba(0,0,0,0.05)] hover:bg-[#1D4ED8] disabled:opacity-60"
                 >
                   {testingKey ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin" /> : <CreatorIcon name="check_key" />}
@@ -1755,8 +1982,11 @@ function CreateView() {
           <SummaryStat icon="stat_accounts"><b className="font-normal text-[#0B1C30]">{selected.length}</b> Account</SummaryStat>
           <span aria-hidden="true">•</span>
           <SummaryStat icon="stat_pages">
-            <b className="font-normal text-[#0B1C30]">{pages.length}</b> Fanpage
-            {pages.length !== validCount ? <span className="text-[#BE123C]"> ({pages.length - validCount} lỗi)</span> : null}
+            <b className="font-normal text-[#0B1C30]">{preview.length}</b> Fanpage
+            {pages.length > plannedCount ? (
+              <span className="text-[#737686]"> / {pages.length} dòng (lấy {plannedCount} = {threadsNum}×{loopsNum})</span>
+            ) : null}
+            {preview.length !== validCount ? <span className="text-[#BE123C]"> ({preview.length - validCount} lỗi)</span> : null}
           </SummaryStat>
           <span aria-hidden="true">•</span>
           <SummaryStat icon="stat_threads">Đồng thời: {threads || 0} Luồng</SummaryStat>
@@ -2023,12 +2253,29 @@ function UploadDropzone({ onPick, onDropFile }) {
   );
 }
 
-/** Ô số có tiền tố / hậu tố đơn vị (Luồng, Vòng, giây) */
-function SuffixInput({ id, value, onChange, min = 0, max, suffix, prefix, bold = false }) {
+/** Ô số có tiền tố / hậu tố đơn vị (Luồng, Vòng, giây).
+ *  Số bên trái, đơn vị sát phải; steppers=true hiện mũi tên native type=number.
+ */
+function SuffixInput({
+  id,
+  value,
+  onChange,
+  min = 0,
+  max,
+  suffix,
+  prefix,
+  bold = false,
+  disabled = false,
+  invalid = false,
+  steppers = false,
+}) {
   const unit = "text-[11px] leading-[14px] tracking-[0.33px] text-[#434655]";
   return (
-    <label htmlFor={id} className={SOFT_INPUT}>
-      {prefix && <span className={`${unit} font-semibold`}>{prefix}</span>}
+    <label
+      htmlFor={id}
+      className={`${SOFT_INPUT} ${disabled ? "opacity-60" : ""} ${invalid ? "!ring-2 !ring-[#F87171]/35 !bg-[#FFF1F2]" : ""}`}
+    >
+      {prefix ? <span className={`${unit} shrink-0 font-semibold`}>{prefix}</span> : null}
       <input
         id={id}
         type="number"
@@ -2036,10 +2283,18 @@ function SuffixInput({ id, value, onChange, min = 0, max, suffix, prefix, bold =
         min={min}
         max={max}
         value={value}
+        disabled={disabled}
+        aria-invalid={invalid}
         onChange={(event) => onChange(event.target.value)}
-        className={`w-full min-w-0 bg-transparent text-base ${bold ? "font-bold" : "font-semibold"} text-[#0B1C30] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`}
+        className={`min-w-0 flex-1 bg-transparent text-left text-base ${bold ? "font-bold" : "font-semibold"} text-[#0B1C30] outline-none disabled:cursor-not-allowed ${
+          steppers
+            ? "[appearance:auto]"
+            : "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+        }`}
       />
-      <span className={`${unit} shrink-0 ${bold ? "font-medium" : "font-semibold"}`}>{suffix}</span>
+      {suffix ? (
+        <span className={`${unit} ml-auto shrink-0 ${bold ? "font-medium" : "font-semibold"}`}>{suffix}</span>
+      ) : null}
     </label>
   );
 }
