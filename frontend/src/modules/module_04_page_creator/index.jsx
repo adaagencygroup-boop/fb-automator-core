@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
+  ChevronUp,
   CircleCheck,
   FileSpreadsheet,
   Info,
@@ -174,15 +175,19 @@ function clockLabel(value) {
   return date.toLocaleTimeString("vi-VN", { hour12: false });
 }
 
+/**
+ * Màu chữ log, chọn cho NỀN TỐI (#1E293B) — đổi nền thì phải đổi cả bảng màu
+ * này, không thì mọi dòng trừ dòng thành công đều chìm nghỉm.
+ */
 function logTone(log) {
   const type = String(log.type || log.extra?.level || "").toLowerCase();
   const message = log.message || "";
-  if (type === "error" || type === "failed") return "font-medium text-[#BA1A1A]";
+  if (type === "error" || type === "failed") return "font-medium text-rose-400";
   if (type === "success" || /thành công|hoàn tất/i.test(message)) return "font-semibold text-[#4EDEA3]";
-  if (type === "warning") return "font-medium text-amber-700";
-  if (/khởi tạo|bắt đầu|bốc page/i.test(message)) return "font-medium text-[#1B45A3]";
-  if (/bypass|captcha|token/i.test(message)) return "font-medium text-[#456E89]";
-  return "font-medium text-[#33353D]";
+  if (type === "warning") return "font-medium text-amber-300";
+  if (/khởi tạo|bắt đầu|bốc page/i.test(message)) return "font-medium text-sky-300";
+  if (/bypass|captcha|token/i.test(message)) return "font-medium text-cyan-300";
+  return "font-medium text-slate-300";
 }
 
 function LogLine({ message }) {
@@ -390,24 +395,28 @@ function RunningScreen({ task, accounts, logs, paused, onPause, onStop }) {
           </section>
         </div>
 
-        <aside className="flex min-h-[480px] flex-col overflow-hidden rounded-xl border border-[rgba(65,71,84,0.2)] bg-[#F8F9FF] shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] xl:sticky xl:top-0 xl:h-[calc(100vh-140px)] xl:max-h-[951px]">
-          <div className="flex items-center gap-2 border-b border-[rgba(65,71,84,0.2)] bg-[#EFF4FF] p-2">
+        {/* Terminal nền tối cho khớp các module khác: module 02 (#0F172A),
+            module 03 LogConsole (#1E293B), module 10, module 11 và thanh
+            ConsoleTerminal dùng chung đều là nền tối chữ sáng. Riêng chỗ này
+            trước đây để nền sáng nên nhìn lạc hẳn. */}
+        <aside className="flex min-h-[480px] flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#1E293B] shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] xl:sticky xl:top-0 xl:h-[calc(100vh-140px)] xl:max-h-[951px]">
+          <div className="flex items-center gap-2 border-b border-slate-800 bg-[#0F172A] p-2">
             <span className="flex items-center gap-1.5" aria-hidden="true">
               <span className="size-2.5 rounded-full bg-[#FFB4AB]" />
               <span className="size-2.5 rounded-full bg-[#FEBC2E]" />
               <span className="size-2.5 rounded-full bg-[#4EDEA3]" />
             </span>
-            <p className="flex items-center gap-1 pl-1 text-xs leading-4 font-semibold tracking-[0.3px] text-[#33353D]">
+            <p className="flex items-center gap-1 pl-1 text-xs leading-4 font-semibold tracking-[0.3px] text-slate-300">
               <CreatorIcon name="terminal" className="text-[#7BD0FF]" />
               Realtime Automation Engine Log
             </p>
           </div>
-          <div ref={logRef} className={`flex-1 space-y-1.5 overflow-auto p-4 text-xs leading-[19.5px] tracking-[0.24px] text-[#32343D] ${SCROLLBAR}`}>
+          <div ref={logRef} className={`flex-1 space-y-1.5 overflow-auto p-4 font-mono text-xs leading-[19.5px] tracking-[0.24px] text-slate-300 ${SCROLLBAR}`}>
             {engineLogs.length === 0 ? (
-              <p className="text-[#737686]">Đang chờ log từ engine...</p>
+              <p className="text-slate-500">Đang chờ log từ engine...</p>
             ) : engineLogs.map((log, index) => (
               <p key={`${log.timestamp}-${index}`} className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2">
-                <span className="text-[#32343D]">[{clockLabel(log.extra?.time || log.timestamp)}]</span>
+                <span className="text-slate-500">[{clockLabel(log.extra?.time || log.timestamp)}]</span>
                 <span className={logTone(log)}>
                   <LogLine message={log.message} />
                 </span>
@@ -2239,8 +2248,33 @@ function UploadDropzone({ onPick, onDropFile }) {
 }
 
 /** Ô số có tiền tố / hậu tố đơn vị (Luồng, Vòng, giây) */
-function SuffixInput({ id, value, onChange, min = 0, max, suffix, prefix, bold = false }) {
+/**
+ * Ô nhập số kèm nút tăng/giảm.
+ *
+ * Mũi tên là nút tự vẽ chứ không phải spinner mặc định của trình duyệt: spinner
+ * mặc định chỉ hiện khi rê chuột vào ô, bé tí, và mỗi trình duyệt một kiểu —
+ * nên `[appearance:textfield]` vẫn giữ để ẩn nó đi.
+ *
+ * Hai nút để `tabIndex={-1}`: ô vốn là `type="number"` nên bàn phím đã tăng
+ * giảm được bằng phím mũi tên; cho nút vào luồng Tab chỉ khiến mỗi trường tốn
+ * thêm hai lần nhấn Tab mà không thêm khả năng nào.
+ */
+function SuffixInput({ id, value, onChange, min = 0, max, suffix, prefix, bold = false, step = 1 }) {
   const unit = "text-[11px] leading-[14px] tracking-[0.33px] text-[#434655]";
+  const current = Number(value);
+  const atMin = Number.isFinite(current) && current <= min;
+  const atMax = typeof max === "number" && Number.isFinite(current) && current >= max;
+
+  // Ô rỗng hoặc đang là chữ thì coi như đang ở `min`, bấm tăng là nhảy lên min+step
+  const bump = (delta) => {
+    const base = Number.isFinite(current) ? current : min;
+    const next = Math.min(typeof max === "number" ? max : Infinity, Math.max(min, base + delta));
+    onChange(String(next));
+  };
+
+  const arrow =
+    "flex h-3.5 w-5 items-center justify-center rounded text-[#5B6478] hover:bg-[#DBE4FF] hover:text-[#1B45A3] disabled:opacity-30 disabled:hover:bg-transparent";
+
   return (
     <label htmlFor={id} className={SOFT_INPUT}>
       {prefix && <span className={`${unit} font-semibold`}>{prefix}</span>}
@@ -2250,11 +2284,34 @@ function SuffixInput({ id, value, onChange, min = 0, max, suffix, prefix, bold =
         inputMode="numeric"
         min={min}
         max={max}
+        step={step}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         className={`w-full min-w-0 bg-transparent text-base ${bold ? "font-bold" : "font-semibold"} text-[#0B1C30] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`}
       />
       <span className={`${unit} shrink-0 ${bold ? "font-medium" : "font-semibold"}`}>{suffix}</span>
+      <span className="flex shrink-0 flex-col">
+        <button
+          type="button"
+          tabIndex={-1}
+          disabled={atMax}
+          onClick={() => bump(step)}
+          aria-label={`Tăng ${suffix}`}
+          className={arrow}
+        >
+          <ChevronUp className="size-3" strokeWidth={2.5} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          tabIndex={-1}
+          disabled={atMin}
+          onClick={() => bump(-step)}
+          aria-label={`Giảm ${suffix}`}
+          className={arrow}
+        >
+          <ChevronDown className="size-3" strokeWidth={2.5} aria-hidden="true" />
+        </button>
+      </span>
     </label>
   );
 }
