@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,36 @@ def get_active_job_for_account(account_uid: str) -> Optional[Dict[str, Any]]:
         return dict(cur) if cur else None
 
 
+def get_busy_account_uids() -> Set[str]:
+    """UID các acc đang có job Selenium chạy (không được đóng Chrome của chúng)."""
+    with _ACCOUNT_JOB_LOCK:
+        return set(_ACCOUNT_ACTIVE_JOBS.keys())
+
+
+def close_browsers_for_stopped_sessions(
+    account_uids: Iterable[str],
+    stopped_session_ids: Iterable[int],
+) -> List[str]:
+    """
+    Dừng khẩn cấp: chỉ đóng Chrome page_scanner của acc thuộc các phiên bị dừng.
+    Bỏ qua acc đang chạy job của phiên KHÁC (vd bấm dừng phiên cũ khi acc đã sang job mới).
+    """
+    from core.browser import close_scoped_active_drivers
+
+    stopped = {int(s) for s in stopped_session_ids}
+    targets: Set[str] = set()
+    for raw in account_uids:
+        uid = str(raw or "").strip()
+        if not uid:
+            continue
+        active = get_active_job_for_account(uid)
+        if active is None or int(active.get("session_id") or 0) in stopped:
+            targets.add(uid)
+    if not targets:
+        return []
+    return close_scoped_active_drivers(scope="page_scanner", force=True, uids=targets)
+
+
 def acquire_browser(
     target_uid: str,
     owner: str,
@@ -98,6 +128,7 @@ def release_browser(
     keep_browser: bool,
     acquired_lock: bool,
     lock: Any,
+    target_uid: str,
 ) -> None:
     from .scanner import _release_page_scanner_browser
 
@@ -106,6 +137,7 @@ def release_browser(
         keep_browser=keep_browser,
         acquired_lock=acquired_lock,
         lock=lock,
+        target_uid=target_uid,
     )
 
 

@@ -895,6 +895,7 @@ def run_page_search_flow(
             keep_browser=keep_browser,
             acquired_lock=acquired_lock,
             lock=lock,
+            target_uid=target_uid,
         )
 
     return {
@@ -935,6 +936,20 @@ def start_page_search_background(
 
     target_uid = str(account.get("uid") or "").strip()
 
+    # Khóa 1 job / 1 acc (chung với HASHTAG / FOLLOW / POST_SCAN) — BUSY trước khi tạo phiên
+    from .browser_session import (
+        AccountBusyError,
+        get_active_job_for_account,
+        release_account_job,
+        try_acquire_account_job,
+    )
+
+    busy = get_active_job_for_account(target_uid)
+    if busy:
+        raise AccountBusyError(
+            target_uid, int(busy["session_id"]), str(busy.get("job_type") or "")
+        )
+
     merged_settings = {
         "include_sponsored": include_sponsored,
         "headless": headless,
@@ -960,9 +975,31 @@ def start_page_search_background(
         _ACTIVE_STOP_EVENTS[session_id] = threading.Event()
         _ACTIVE_PAUSE_EVENTS[session_id] = threading.Event()
 
+    # 2b. Giữ slot acc ngay (trước khi thread chạy) để race không double-start
+    try:
+        try_acquire_account_job(target_uid, session_id, "SEARCH")
+    except AccountBusyError:
+        try:
+            finalize_scan_session(
+                session_id, "FAILED", "ERROR", 0, 0, 0, 0, 0, 0,
+                "BUSY race — acc vừa bị chiếm",
+            )
+        except Exception:
+            pass
+        with _ACTIVE_SESSIONS_LOCK:
+            _ACTIVE_STOP_EVENTS.pop(session_id, None)
+            _ACTIVE_PAUSE_EVENTS.pop(session_id, None)
+        raise
+
+    def _search_runner(**kwargs):
+        try:
+            run_page_search_flow(**kwargs)
+        finally:
+            release_account_job(target_uid, session_id)
+
     # 3. Kích hoạt worker trong daemon thread
     worker_thread = threading.Thread(
-        target=run_page_search_flow,
+        target=_search_runner,
         kwargs={
             "keyword": clean_keyword,
             "account_uid": target_uid,
@@ -2758,9 +2795,11 @@ def _acquire_page_scanner_browser(
     """
     1 browser / 1 acc trong scope page_scanner:
     - Có driver đúng uid → tái sử dụng (không mở thêm).
-    - Không có → đóng mọi driver page_scanner (acc cũ) rồi mở mới cho uid này.
+    - Không có → đóng Chrome page_scanner nhàn rỗi (giữ lại từ keep_browser của acc
+      không còn job) rồi mở mới cho uid này. Chrome của acc đang chạy job khác được giữ.
     Trả về (driver, created_new_driver, lock, acquired_lock).
     """
+    from .browser_session import get_busy_account_uids
     from core.browser import (
         close_driver_for_uid,
         get_active_drivers,
@@ -2779,9 +2818,13 @@ def _acquire_page_scanner_browser(
             pass
         return active[0], False, None, False
 
-    # Đổi acc hoặc phiên đầu: dọn browser scope cũ rồi mở mới
+    # Đổi acc hoặc phiên đầu: chỉ dọn Chrome nhàn rỗi, không đụng acc đang chạy job khác
     try:
-        close_scoped_active_drivers(scope="page_scanner", force=True)
+        close_scoped_active_drivers(
+            scope="page_scanner",
+            force=True,
+            exclude_uids=get_busy_account_uids() - {str(target_uid)},
+        )
     except Exception:
         pass
 
@@ -2826,24 +2869,27 @@ def _release_page_scanner_browser(
     keep_browser: bool,
     acquired_lock: bool,
     lock: Any,
+    target_uid: str,
 ) -> None:
     """
     Giữ Chrome nếu phiên kết thúc bình thường và keep_browser=True (job kế cùng acc).
-    Đóng scope khi dừng khẩn cấp / lỗi / hết đợt (keep_browser=False).
+    Đóng Chrome của ĐÚNG acc phiên này khi dừng khẩn cấp / lỗi / hết đợt
+    (keep_browser=False) — không đụng Chrome của job khác đang chạy song song.
     """
     force_close = stop_reason in ("USER_STOPPED", "CHECKPOINT", "ERROR")
     should_close = force_close or not keep_browser
 
-    if acquired_lock and lock:
+    # Đóng Chrome trước rồi mới nhả khóa profile, để luồng khác không mở cùng profile giữa chừng
+    if should_close and target_uid:
         try:
-            lock.release()
+            from core.browser import close_scoped_active_drivers
+            close_scoped_active_drivers(scope="page_scanner", force=True, uids=[str(target_uid)])
         except Exception:
             pass
 
-    if should_close:
+    if acquired_lock and lock:
         try:
-            from core.browser import close_scoped_active_drivers
-            close_scoped_active_drivers(scope="page_scanner", force=True)
+            lock.release()
         except Exception:
             pass
 
@@ -3629,6 +3675,7 @@ def run_hashtag_search_flow(
             keep_browser=keep_browser,
             acquired_lock=acquired_lock,
             lock=lock,
+            target_uid=target_uid,
         )
 
     # Trả về bản sao an toàn JSON: matched_hashtags đang là set trong page_kho,

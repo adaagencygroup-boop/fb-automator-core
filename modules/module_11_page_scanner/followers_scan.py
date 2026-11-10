@@ -1200,7 +1200,7 @@ def run_follower_scan_flow(
             f"Kết thúc FOLLOW · {final_status}/{stop_reason} · unique={total_unique}",
             "success" if final_status == "COMPLETED" else "warn",
         )
-        release_browser(stop_reason, keep_browser, acquired_lock, lock)
+        release_browser(stop_reason, keep_browser, acquired_lock, lock, target_uid)
         release_account_job(target_uid, session_id)
         with _ACTIVE_SESSIONS_LOCK:
             _ACTIVE_STOP_EVENTS.pop(session_id, None)

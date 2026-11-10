@@ -23,7 +23,7 @@ from ..page_source import (
     normalize_post_key,
     parse_page_file_content,
 )
-from ..browser_session import AccountBusyError
+from ..browser_session import AccountBusyError, close_browsers_for_stopped_sessions
 from ..followers_scan import start_follower_scan_background
 from ..posts_scan import start_post_scan_background
 from ..scanner import (
@@ -296,6 +296,17 @@ async def search_pages(item: SearchPageInput):
             "status": "RUNNING",
             "message": f"Phiên quét #{session_id} đã được khởi động thành công",
         }
+    except AccountBusyError as busy:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "BUSY",
+                "message": str(busy),
+                "active_session_id": busy.active_session_id,
+                "job_type": busy.job_type,
+                "account_uid": busy.account_uid,
+            },
+        )
     except ValueError as val_err:
         raise HTTPException(status_code=422, detail=str(val_err))
     except Exception as exc:
@@ -879,25 +890,29 @@ async def stop_scan_session(session_id: int):
     """
     owner = _get_owner()
     session = db.fetch_one(
-        "SELECT id, status, campaign_id FROM page_scan_sessions WHERE id = %s AND owner_key = %s",
+        "SELECT id, status, campaign_id, account_uid FROM page_scan_sessions WHERE id = %s AND owner_key = %s",
         (session_id, owner),
     )
     if not session:
         raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét")
 
     stopped = request_stop_session(session_id)
+    stopped_ids = {int(session_id)}
+    stopped_uids = {session.get("account_uid")}
     # Dừng cả các phiên cùng campaign còn RUNNING/PAUSED
     campaign_id = session.get("campaign_id")
     if campaign_id:
         siblings = db.fetch_all(
             """
-            SELECT id FROM page_scan_sessions
+            SELECT id, account_uid FROM page_scan_sessions
             WHERE owner_key = %s AND campaign_id = %s AND status IN ('RUNNING', 'PAUSED')
             """,
             (owner, campaign_id),
         )
         for row in siblings or []:
             sid = int(row["id"])
+            stopped_ids.add(sid)
+            stopped_uids.add(row.get("account_uid"))
             request_stop_session(sid)
             db.execute(
                 """
@@ -913,12 +928,12 @@ async def stop_scan_session(session_id: int):
             (session_id,),
         )
 
-    # Dừng khẩn cấp → đóng Chrome page_scanner (kể cả đang keep_browser giữa các job)
+    # Dừng khẩn cấp → đóng Chrome page_scanner của acc thuộc các phiên bị dừng
+    # (kể cả đang keep_browser giữa các job); không đụng job của acc khác.
     try:
-        from core.browser import close_scoped_active_drivers
-        close_scoped_active_drivers(scope="page_scanner", force=True)
-    except Exception:
-        pass
+        close_browsers_for_stopped_sessions(stopped_uids, stopped_ids)
+    except Exception as exc:
+        logger.warning(f"[Module 11 API] Đóng Chrome khi dừng phiên #{session_id}: {exc}")
 
     return {
         "session_id": session_id,
