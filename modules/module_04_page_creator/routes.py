@@ -96,6 +96,31 @@ pause_task_requested = False
 _open_browser_pending = set()
 _open_browser_pending_lock = threading.Lock()
 active_creator_task: Optional[asyncio.Task] = None
+# Hàng đợi page theo vòng (gán khi job chạy) — dừng khẩn cấp phải xả ngay
+_active_round_queues: Optional[dict] = None
+_active_round_queues_lock = threading.Lock()
+
+
+class CreatorStopRequested(Exception):
+    """Worker bị cắt bởi Dừng khẩn cấp."""
+
+
+def raise_if_creator_stopped():
+    if stop_task_requested:
+        raise CreatorStopRequested("stopped")
+
+
+def drain_active_round_queues():
+    """Xóa toàn bộ page chưa chạy để worker không bốc thêm việc."""
+    with _active_round_queues_lock:
+        queues = _active_round_queues
+        if not queues:
+            return 0
+        drained = 0
+        for pages_list in queues.values():
+            drained += len(pages_list)
+            pages_list.clear()
+        return drained
 
 from modules.module_02_account_manager.automation.browser_manager import (
     register_active_driver,
@@ -129,7 +154,10 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
     from modules.module_02_account_manager.services.credentials import decrypt
 
     if stop_task_requested:
-        return
+        return {"success": False, "reason": "stopped"}
+    wait_if_paused()
+    if stop_task_requested:
+        return {"success": False, "reason": "stopped"}
 
     owner = owner_username or item.get("owner_username")
     uid = item["uid"]
@@ -137,6 +165,9 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
     broadcast("info", f"🤖 [{uid}] Bắt đầu xử lý page: '{page_name}' (Mã QG: {country_code})", uid=uid, extra={"action": "step", "page_name": page_name, "step": "Bước 1/5: Bắt đầu xử lý & kết nối nick", "subStage": "Khởi tạo môi trường", "percent": 15})
 
     # Tự động đóng trình duyệt Live cũ của nick (nếu có) để nhường quyền ưu tiên cho tiến trình Tạo Page
+    wait_if_paused()
+    if stop_task_requested:
+        return {"success": False, "reason": "stopped"}
     close_driver_for_uid(uid)
 
     profile_lock = get_profile_lock(uid)
@@ -146,8 +177,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
     driver = None
     admin_name = ""
     try:
-        if stop_task_requested:
-            return {"success": False, "reason": "stopped"}
+        raise_if_creator_stopped()
         account = AccountRepo.get_by_uid(db, uid, owner_username=owner) or AccountRepo.get_by_uid(db, uid)
         if not account:
             broadcast("error", f"❌ [{uid}] Không tìm thấy tài khoản", uid=uid, extra={"action": "failed", "page_name": page_name, "percent": 100})
@@ -166,6 +196,8 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
         broadcast("info", f"📋 [{uid}] Dữ liệu bóc tách: Page='{page_name}' | SĐT='{input_phone}' | Mail='{input_email}' | Địa chỉ='{input_address}' | Mã QG='{country_code}'", uid=uid)
 
         # ── Bước AI: Gọi Gemini ──
+        wait_if_paused()
+        raise_if_creator_stopped()
         gemini_key = SettingRepo.get(db, "gemini_api_key")
         gemini_model = SettingRepo.get(db, "gemini_model") or "gemini-3.8-flash"
         ai_data = {}
@@ -198,9 +230,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
         else:
             broadcast("info", f"ℹ️ [{uid}] Chưa cấu hình Gemini API Key. Sử dụng nội dung mặc định.", uid=uid)
 
-        if stop_task_requested:
-            broadcast("warning", f"⏹️ [{uid}] Đã nhận lệnh dừng khẩn cấp trước khi mở trình duyệt.", uid=uid)
-            return
+        raise_if_creator_stopped()
 
         category = ai_data.get("category", "Dịch vụ kinh doanh")
         bio = ai_data.get("bio", f"Chào mừng bạn đến với {page_name}!")
@@ -209,24 +239,28 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
 
         # ── Sinh/Tải ảnh AI chuyên nghiệp chuẩn tỉ lệ FB (Avatar 800x800, Cover Banner 1640x624, Post Banner 1080x1080) ──
         broadcast("info", f"🎨 [{uid}] Đang khởi tạo bộ nhận diện thương hiệu AI (Avatar Emblem Logo 800x800, Cover Banner 1640x624 & Post Image 1080x1080)...", uid=uid, extra={"action": "step", "page_name": page_name, "step": "Bước 3/5: Tải & Tối ưu Avatar, Cover Banner Spintax AI", "subStage": "Media Branding AI", "percent": 55})
+        raise_if_creator_stopped()
         avatar_path = generate_ai_page_media(
             uid=uid,
             kind="avatar",
             page_name=page_name,
             prompt=ai_data.get("avatar_prompt", "")
         )
+        raise_if_creator_stopped()
         cover_path = generate_ai_page_media(
             uid=uid,
             kind="cover",
             page_name=page_name,
             prompt=ai_data.get("cover_prompt", "")
         )
+        raise_if_creator_stopped()
         post_img_path = generate_ai_page_media(
             uid=uid,
             kind="post",
             page_name=page_name,
             prompt=post_image_prompt
         )
+        raise_if_creator_stopped()
 
         if not validate_image(avatar_path):
             avatar_path = create_placeholder_image(uid, "avatar", page_name)
@@ -234,13 +268,12 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
             cover_path = create_placeholder_image(uid, "cover", page_name)
 
         # ── Mở Chrome & Tạo Page ──
+        raise_if_creator_stopped()
         broadcast("info", f"🌐 [{uid}] Mở Chrome & Tạo Page '{page_name}'...", uid=uid, extra={"action": "step", "page_name": page_name, "step": "Bước 4/5: Mở Chromium Headless & Điền Form Page", "subStage": "Đang ghi đè Bio", "percent": 75})
         driver = create_driver(uid, proxy=account.proxy if account else None, scope="creator")
         register_active_driver(driver, uid=uid, scope="creator")
 
-        if stop_task_requested:
-            broadcast("warning", f"⏹️ [{uid}] Đã nhận lệnh dừng khẩn cấp sau khi mở trình duyệt.", uid=uid)
-            return {"success": False, "reason": "stopped"}
+        raise_if_creator_stopped()
 
         # ── ĐẢM BẢO ĐÃ ĐĂNG NHẬP (Tự động đăng nhập lại nếu phiên bị hết hạn) ──
         from modules.module_02_account_manager.automation.login_flow import ensure_logged_in
@@ -289,6 +322,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
         except Exception as pe:
             logger.debug(f"[{uid}] ensure_personal_profile note: {pe}")
 
+        raise_if_creator_stopped()
         page_result = run_page_creation(
             driver=driver,
             page_name=page_name,
@@ -303,21 +337,22 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
         )
 
         wait_if_paused()
-        if stop_task_requested:
-            broadcast("warning", f"⏹️ [{uid}] Tiến trình bị ngắt bởi lệnh dừng khẩn cấp.", uid=uid)
-            return {"success": False, "reason": "stopped"}
+        raise_if_creator_stopped()
 
         if not page_result["success"]:
-            broadcast("error", f"❌ [{uid}] Tạo page thất bại: {page_result['error']}", uid=uid, extra={"action": "failed", "page_name": page_name, "percent": 100})
+            err_msg = page_result.get("error") or ""
+            if stop_task_requested or "dừng khẩn cấp" in err_msg.lower():
+                raise CreatorStopRequested("stopped")
+            broadcast("error", f"❌ [{uid}] Tạo page thất bại: {err_msg}", uid=uid, extra={"action": "failed", "page_name": page_name, "percent": 100})
             PageRepo.create(db, {
                 "owner_username": owner,
                 "creator_fb_uid": uid,
                 "shared_admin_uid": target_admin_uid,
                 "page_name": page_name,
                 "status": "FAILED",
-                "log_detail": page_result["error"],
+                "log_detail": err_msg,
             }, owner_username=owner)
-            return {"success": False, "reason": "page_create_failed", "error": page_result["error"]}
+            return {"success": False, "reason": "page_create_failed", "error": err_msg}
 
         # Hoàn tất (Skip WhatsApp, Done)
         actual_page_url = finalize_page(driver)
@@ -374,6 +409,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
                 }
             )
 
+        raise_if_creator_stopped()
         admin_result = run_share_admin(
             driver=driver,
             target_admin_uid=target_admin_uid,
@@ -382,6 +418,22 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
             image_path=post_img_path or avatar_path or cover_path,
             creator_uid=uid,
         )
+        if stop_task_requested or "dừng khẩn cấp" in (admin_result.get("error") or "").lower():
+            raise CreatorStopRequested("stopped")
+        if not admin_result.get("admin_success", admin_result.get("success", False)):
+            broadcast(
+                "warning",
+                f"⚠️ [{uid}] Gán Admin thất bại — vẫn tiếp tục bước đăng bài chào mừng. Chi tiết: {admin_result.get('error') or 'không rõ'}",
+                uid=uid,
+                extra={
+                    "action": "step",
+                    "page_name": page_name,
+                    "page_url": final_url_so_far,
+                    "step": "Bước 5/5: Admin lỗi — chuyển sang đăng bài",
+                    "subStage": "Tiếp tục đăng bài",
+                    "percent": 92,
+                },
+            )
         admin_name = (admin_result.get("admin_name") or "").strip()
         if not admin_name and is_same_uid and account is not None:
             admin_name = (account.profile_name or "").strip()
@@ -407,16 +459,27 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
             except Exception:
                 pass
 
-        # ── Phân loại trạng thái chuẩn xác ──
+        # ── Phân loại trạng thái: Admin fail vẫn coi page đã tạo, không dừng nick ──
+        admin_ok = bool(admin_result.get("admin_success", admin_result.get("success", False)))
+        posted_ok = bool(admin_result.get("posted", False))
         if not final_url_so_far:
             status = "FAILED"
             log = "Không lấy được liên kết Fanpage sau khi tạo"
-        elif not admin_result.get("success", False):
-            status = "FAILED"
-            log = f"Tạo trang thành công nhưng cấp quyền Admin thất bại: {admin_result.get('error', 'Lỗi không xác định')}"
+            worker_ok = False
+        elif not admin_ok:
+            status = "PARTIAL"
+            admin_err = admin_result.get("error") or "Lỗi không xác định"
+            if posted_ok:
+                log = f"Tạo trang OK, cấp Admin thất bại ({admin_err}), đã tiếp tục đăng bài chào mừng."
+            elif post_content:
+                log = f"Tạo trang OK, cấp Admin thất bại ({admin_err}), bước đăng bài cũng không hoàn tất."
+            else:
+                log = f"Tạo trang OK nhưng cấp quyền Admin thất bại: {admin_err}"
+            worker_ok = True
         else:
             status = "SUCCESS"
             log = None
+            worker_ok = True
 
         # ── Lưu kết quả vào DB ──
         PageRepo.create(db, {
@@ -434,14 +497,35 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
         url_msg = f" ({final_url_so_far})" if final_url_so_far else ""
         if status == "SUCCESS":
             broadcast("success", f"🎉 [{uid}] Hoàn tất! Page '{page_name}'{url_msg} - Status: {status}", uid=uid, extra={"action": "completed", "page_name": page_name, "page_url": final_url_so_far, "percent": 100})
-            return {"success": True, "page_url": final_url_so_far, "status": status}
+        elif status == "PARTIAL":
+            broadcast(
+                "warning",
+                f"⚠️ [{uid}] Page '{page_name}'{url_msg} — {log}",
+                uid=uid,
+                extra={
+                    "action": "partial",
+                    "status": "PARTIAL",
+                    "page_name": page_name,
+                    "page_url": final_url_so_far,
+                    "percent": 100,
+                },
+            )
         else:
             broadcast("error", f"❌ [{uid}] {log}{url_msg}", uid=uid, extra={"action": "failed", "page_name": page_name, "page_url": final_url_so_far, "percent": 100, "error": log})
-            return {"success": False, "page_url": final_url_so_far, "status": status, "reason": log}
+        return {"success": worker_ok, "page_url": final_url_so_far, "status": status, "reason": log}
 
+    except CreatorStopRequested:
+        broadcast(
+            "warning",
+            f"⏹️ [{uid}] Đã cắt luồng tạo page theo lệnh dừng khẩn cấp.",
+            uid=uid,
+            extra={"action": "failed", "page_name": page_name, "percent": 100, "error": "Đã dừng khẩn cấp"},
+        )
+        return {"success": False, "reason": "stopped"}
     except Exception as e:
         if stop_task_requested:
-            broadcast("warning", f"⏹️ [{uid}] Đã đóng trình duyệt theo lệnh dừng khẩn cấp.", uid=uid)
+            broadcast("warning", f"⏹️ [{uid}] Đã đóng trình duyệt theo lệnh dừng khẩn cấp.", uid=uid,
+                      extra={"action": "failed", "page_name": page_name, "percent": 100, "error": "Đã dừng khẩn cấp"})
         else:
             logger.exception(f"[{uid}] Create page worker crashed: {e}")
             broadcast("error", f"💥 [{uid}] Lỗi nghiêm trọng: {e}", uid=uid, extra={"action": "failed", "page_name": page_name, "percent": 100})
@@ -457,7 +541,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
                 }, owner_username=owner)
             except Exception:
                 pass
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": str(e), "reason": "stopped" if stop_task_requested else "error"}
 
     finally:
         if driver:
@@ -472,10 +556,14 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
 
 @router.post("/tasks/pause")
 async def pause_tasks():
-    """API tạm dừng tất cả tác vụ đang chạy."""
+    """API tạm dừng ngay: worker không bốc page mới và đứng tại checkpoint tiếp theo."""
     global pause_task_requested
     pause_task_requested = True
-    broadcast("warning", "⏸️ ĐÃ TẠM DỪNG TIẾN TRÌNH! Bấm 'Tiếp tục chạy' để tiến trình chạy tiếp.")
+    broadcast(
+        "warning",
+        "⏸️ TẠM DỪNG THÀNH CÔNG! Toàn bộ luồng đã được tạm dừng. Bấm 'Chạy tiếp' để tiếp tục.",
+        extra={"action": "paused", "paused": True},
+    )
     return {"paused": True}
 
 
@@ -484,7 +572,11 @@ async def resume_tasks():
     """API tiếp tục chạy tất cả tác vụ đang tạm dừng."""
     global pause_task_requested
     pause_task_requested = False
-    broadcast("info", "▶️ ĐÃ TIẾP TỤC CHẠY TIẾN TRÌNH!")
+    broadcast(
+        "info",
+        "▶️ ĐÃ TIẾP TỤC CHẠY! Các luồng tạo Page đang chạy lại.",
+        extra={"action": "resumed", "paused": False},
+    )
     return {"resumed": True}
 
 
@@ -533,21 +625,43 @@ async def get_task_status(request: Request = None, owner_username: Optional[str]
 
 @router.post("/tasks/stop")
 async def stop_tasks():
-    """API dừng khẩn cấp tất cả tác vụ tạo Page đang chạy."""
+    """API dừng khẩn cấp: cắt ngay mọi luồng tạo Page (kill Chrome + xả queue + hủy asyncio)."""
     global stop_task_requested, pause_task_requested, current_task_status, active_creator_task
     stop_task_requested = True
     pause_task_requested = False
+    now_finished = int(time.time() * 1000)
+    batch_id = current_task_status.get("batch_id") or ""
     current_task_status["running"] = False
-    broadcast("warning", "🛑 ĐÃ NHẬN LỆNH DỪNG KHẨN CẤP! Đang đóng toàn bộ trình duyệt Tạo Page & dừng tất cả tiến trình...")
+    current_task_status["finished_time"] = now_finished
 
-    # 1. Hủy ngay asyncio task đang chạy (hủy sleep delay, hủy gather)
-    if active_creator_task and not active_creator_task.done():
-        active_creator_task.cancel()
+    broadcast(
+        "warning",
+        "🛑 ĐÃ NHẬN LỆNH DỪNG KHẨN CẤP! Đang cắt toàn bộ luồng, đóng Chrome Tạo Page ngay...",
+    )
 
-    # 2. Đóng CHỈ các trình duyệt thuộc tiến trình Tạo Page (không đóng trình duyệt live bên Accounts)
-    close_scoped_active_drivers(scope="creator", force=True)
+    # 1. Xả hàng đợi — không cho worker bốc page mới
+    drained = drain_active_round_queues()
 
-    return {"stopped": True}
+    # 2. Kill Chrome trước để Selenium trong ThreadPool bị ngắt ngay
+    closed_uids = close_scoped_active_drivers(scope="creator", force=True)
+
+    # 3. Hủy asyncio orchestrator (delay / gather) — không chờ cleanup để API trả về ngay
+    task = active_creator_task
+    if task and not task.done():
+        task.cancel()
+
+    broadcast(
+        "warning",
+        f"🛑 ĐÃ DỪNG TOÀN BỘ TẠO PAGE. Đóng {len(closed_uids)} Chrome, hủy {drained} page còn trong hàng đợi.",
+        extra={
+            "action": "all_finished",
+            "running": False,
+            "stopped": True,
+            "batch_id": batch_id,
+            "finished_time": now_finished,
+        },
+    )
+    return {"stopped": True, "closed_uids": closed_uids, "drained_pages": drained}
 
 
 @router.post("/tasks/start")
@@ -606,6 +720,10 @@ async def start_create_pages(req: CreatePageRequest, background_tasks: Backgroun
         round_locks = {rnd: asyncio.Lock() for rnd in range(1, max_rounds + 1)}
         uids = list(dict.fromkeys(p.uid for p in req.pages))
 
+        global _active_round_queues
+        with _active_round_queues_lock:
+            _active_round_queues = pages_by_round
+
         async def account_worker(uid):
             global stop_task_requested
             for r in range(1, max_rounds + 1):
@@ -632,11 +750,15 @@ async def start_create_pages(req: CreatePageRequest, background_tasks: Backgroun
                 # Bốc page tiếp theo trong hàng đợi của vòng r
                 page_item = None
                 async with round_locks[r]:
+                    if stop_task_requested:
+                        break
                     if pages_by_round[r]:
                         page_item = pages_by_round[r].pop(0)
 
                 # Nếu vòng này đã hết page để bốc -> nick này dừng
                 if not page_item:
+                    break
+                if stop_task_requested:
                     break
 
                 page_dict = page_item.model_dump() if hasattr(page_item, "model_dump") else page_item.dict()
@@ -718,6 +840,9 @@ async def start_create_pages(req: CreatePageRequest, background_tasks: Backgroun
         except asyncio.CancelledError:
             logger.info("Main create pages task was cancelled.")
         finally:
+            with _active_round_queues_lock:
+                if _active_round_queues is pages_by_round:
+                    _active_round_queues = None
             # Dọn sạch và thông báo hủy cho toàn bộ các page còn tồn đọng trong hàng đợi chưa kịp chạy
             remaining_unprocessed_pages = []
             for rnd_key, pages_list in pages_by_round.items():
@@ -769,9 +894,8 @@ async def start_create_pages(req: CreatePageRequest, background_tasks: Backgroun
                     }
                 )
             current_task_status["running"] = False
-            close_scoped_active_drivers(scope="creator")
-            # Reset cờ dừng sau khi dọn dẹp để không lưu vết
-            stop_task_requested = False
+            close_scoped_active_drivers(scope="creator", force=is_stopped_run)
+            # Giữ stop_task_requested=True đến khi /tasks/start job mới — worker thread còn đọc cờ
             pause_task_requested = False
 
     active_creator_task = asyncio.create_task(_run_with_owner(owner, run))
