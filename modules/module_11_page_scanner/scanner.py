@@ -244,36 +244,66 @@ def _wait_dom_settle_after_scroll(
             return
 
 
+BLOCKED_ACCOUNT_STATUSES = ("DIE", "CHECKPOINT", "ERROR")
+
+
+def accounts_owner_for(owner_key: Optional[str]) -> Optional[str]:
+    """
+    owner_key của Module 11 → giá trị accounts.user_id (cùng quy ước Module 02):
+    'system' / rỗng = chưa đăng nhập = user_id NULL.
+    """
+    owner = str(owner_key or "").strip()
+    return None if not owner or owner == "system" else owner
+
+
 def get_scraping_account(
     account_uid: Optional[str] = None,
     owner_key: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Lấy tài khoản quét từ Module 02 theo tiêu chí preflight:
-    - Nếu có account_uid, ưu tiên kiểm tra đúng nick đó.
-    - Nếu không có, lấy nick LIVE, có cookie, ít được dùng nhất trong ngày.
+    Lấy tài khoản quét từ Module 02 — CHỈ trong số acc của đúng owner (như Module 02/07):
+    - Có account_uid: đúng nick đó của owner. Không thuộc owner hoặc đang
+      DIE/CHECKPOINT/ERROR → ValueError (API trả 422), không âm thầm đổi sang nick khác.
+    - Không có: nick đầu tiên của owner có cookie và không DIE/CHECKPOINT/ERROR.
+    Trả None khi không có nick phù hợp hoặc lỗi truy vấn DB.
     """
-    try:
-        if account_uid and str(account_uid).strip():
-            acc = db.fetch_one(
-                "SELECT id, uid, user_id, cookie, proxy, profile_name, status FROM accounts WHERE uid = %s LIMIT 1",
-                (str(account_uid).strip(),),
-            )
-            if acc:
-                return acc
+    owner = accounts_owner_for(owner_key)
+    uid = str(account_uid or "").strip()
 
-        # Vòng quay chọn acc đủ điều kiện, ưu tiên status LIVE / NEW và có cookie
-        acc = db.fetch_one(
-            """
-            SELECT id, uid, user_id, cookie, proxy, profile_name, status 
-            FROM accounts 
-            WHERE cookie IS NOT NULL 
-              AND status NOT IN ('DIE', 'CHECKPOINT', 'ERROR')
-            ORDER BY id ASC 
-            LIMIT 1
-            """
-        )
+    if uid:
+        try:
+            acc = db.fetch_one(
+                """
+                SELECT id, uid, user_id, cookie, proxy, profile_name, status
+                FROM accounts
+                WHERE uid = %s AND user_id IS NOT DISTINCT FROM %s
+                LIMIT 1
+                """,
+                (uid, owner),
+            )
+        except Exception as exc:
+            logger.warning(f"[Scanner] Lỗi truy vấn tài khoản cào {uid}: {exc}")
+            return None
+        if not acc:
+            raise ValueError(f"Tài khoản {uid} không tồn tại hoặc không thuộc về bạn")
+        status = str(acc.get("status") or "").strip().upper()
+        if status in BLOCKED_ACCOUNT_STATUSES:
+            raise ValueError(f"Tài khoản {uid} đang ở trạng thái {status} — không dùng để quét")
         return acc
+
+    try:
+        return db.fetch_one(
+            """
+            SELECT id, uid, user_id, cookie, proxy, profile_name, status
+            FROM accounts
+            WHERE user_id IS NOT DISTINCT FROM %s
+              AND cookie IS NOT NULL
+              AND UPPER(COALESCE(status, '')) NOT IN ('DIE', 'CHECKPOINT', 'ERROR')
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (owner,),
+        )
     except Exception as exc:
         logger.warning(f"[Scanner] Lỗi truy vấn tài khoản cào: {exc}")
         return None
