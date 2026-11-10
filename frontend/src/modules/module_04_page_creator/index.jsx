@@ -601,12 +601,13 @@ function csvCell(value) {
 }
 
 function exportHistoryCsv(rows) {
-  const header = ["STT", "Thời gian", "Tên Fanpage", "Link", "UID tạo", "Admin nhận", "Hạng mục", "Trạng thái", "Chi tiết"];
+  const header = ["STT", "Thời gian", "Tên Fanpage", "Link", "Tài khoản tạo", "UID tạo", "Admin nhận", "Hạng mục", "Trạng thái", "Chi tiết"];
   const lines = rows.map((row, index) => [
     index + 1,
     formatVietnamDateTime(row.created_at).full,
     row.page_name,
     row.page_url || "",
+    row.creator_name || "",
     row.creator_fb_uid,
     row.shared_admin_uid || "",
     row.page_category || "",
@@ -660,7 +661,7 @@ function HistoryView() {
       if (statusFilter !== "all" && row.status !== statusFilter) return false;
       if (!matchesHistoryRange(row.created_at, range)) return false;
       if (!needle) return true;
-      const blob = `${row.page_name || ""} ${row.creator_fb_uid || ""} ${row.shared_admin_uid || ""} ${row.page_url || ""}`.toLowerCase();
+      const blob = `${row.page_name || ""} ${row.creator_name || ""} ${row.creator_fb_uid || ""} ${row.shared_admin_uid || ""} ${row.page_url || ""}`.toLowerCase();
       return blob.includes(needle);
     });
   }, [rows, query, statusFilter, range]);
@@ -713,7 +714,7 @@ function HistoryView() {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Tìm theo tên Page, Creator UID, Admin UID..."
+            placeholder="Tìm theo tên Page, tài khoản tạo, Creator UID, Admin UID..."
             className="h-[34px] w-full rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] pr-3 pl-9 text-xs text-[#0F172A] outline-none placeholder:text-[#475569] focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/20"
           />
             </label>
@@ -759,10 +760,11 @@ function HistoryView() {
           </div>
         ) : (
           <div className={`overflow-x-auto ${SCROLLBAR}`}>
-            <table className="w-full min-w-[760px] border-collapse text-left text-xs leading-4">
+            <table className="w-full min-w-[900px] border-collapse text-left text-xs leading-4">
               <thead className="border-b border-[#E2E8F0] bg-[rgba(248,250,252,0.8)] text-[11px] leading-4 font-bold tracking-[0.55px] whitespace-nowrap text-[#475569] uppercase">
                 <tr className="h-[46px]">
                   <th className="pr-4 pl-6">Tên Fanpage</th>
+                  <th className="w-[160px] px-4">Tài khoản tạo</th>
                   <th className="w-[140px] px-4">Creator UID</th>
                   <th className="w-[140px] px-4">Admin UID</th>
                   <th className="w-[1%] px-4">Trạng thái</th>
@@ -772,7 +774,7 @@ function HistoryView() {
               <tbody>
                 {pageRows.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-5 py-12 text-center text-sm text-[#475569]">
+                    <td colSpan={6} className="px-5 py-12 text-center text-sm text-[#475569]">
                       {rows.length === 0 ? "Chưa có lịch sử tạo Fanpage." : "Không có dòng nào khớp bộ lọc."}
                     </td>
                   </tr>
@@ -803,6 +805,15 @@ function HistoryView() {
                             )}
                           </div>
                         </div>
+                      </td>
+                      <td className="px-4 py-3.5">
+                        {row.creator_name ? (
+                          <span className="block max-w-[150px] truncate font-semibold text-[#0F172A]" title={row.creator_name}>
+                            {row.creator_name}
+                          </span>
+                        ) : (
+                          <span className="text-[#94A3B8]" title="Nick đã bị xoá khỏi danh sách tài khoản">Không rõ</span>
+                        )}
                       </td>
                       <td className="px-4 py-3.5 text-[#475569]">{row.creator_fb_uid || "—"}</td>
                       <td className="px-4 py-3.5 text-[#475569]">{row.shared_admin_uid || "—"}</td>
@@ -914,12 +925,40 @@ function HistoryMetric({ label, value, icon: Icon, iconClass, valueClass = "text
   );
 }
 
+/**
+ * Khu vực LOG của popup chi tiết.
+ *
+ * `run_log` là toàn bộ dòng log của lần chạy (engine lưu lại từ chính luồng
+ * SSE). `log_detail` chỉ là lý do lỗi một dòng — thứ đang hiện ngay trên bảng.
+ * Những lần tạo từ trước khi engine lưu run_log sẽ không có gì, nên nói rõ lý
+ * do thay vì chỉ "Không có log." khiến người đọc tưởng hệ thống mất log.
+ */
+function LogPanel({ runLog, reason }) {
+  const body = String(runLog || "").trim();
+  const short = String(reason || "").trim();
+  return (
+    <div className="rounded-xl bg-[#0F172A] p-3">
+      <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Log</p>
+      {body ? (
+        <pre className={`mt-1.5 max-h-56 overflow-auto font-mono text-[11px] leading-5 whitespace-pre-wrap break-words text-slate-300 ${SCROLLBAR}`}>
+          {body}
+        </pre>
+      ) : (
+        <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-slate-300">
+          {short || "Lần tạo này chạy trước khi hệ thống lưu log chi tiết."}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function HistoryDetail({ row }) {
   const stamp = formatVietnamDateTime(row.created_at);
   const meta = historyStatusMeta(row.status);
   const fields = [
     ["Thời gian", stamp.full],
     ["Tên Fanpage", row.page_name || "—"],
+    ["Tài khoản tạo", row.creator_name || "Không rõ"],
     ["UID tạo", row.creator_fb_uid || "—"],
     ["Admin nhận", row.shared_admin_uid || "—"],
     ["Hạng mục", row.page_category || "—"],
@@ -944,10 +983,7 @@ function HistoryDetail({ row }) {
           Mở Fanpage
         </a>
       ) : null}
-      <div className="rounded-xl bg-[#F8F9FF] p-3">
-        <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Log</p>
-        <p className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-slate-600">{row.log_detail || "Không có log."}</p>
-      </div>
+      <LogPanel runLog={row.run_log} reason={row.log_detail} />
     </div>
   );
 }
@@ -2069,16 +2105,28 @@ function CreateView() {
           className="scroll-mt-6 overflow-hidden rounded-lg bg-white"
         >
           <div className={`max-h-[420px] overflow-auto ${SCROLLBAR}`}>
-            <table className="w-full min-w-[860px] border-collapse text-left text-xs leading-[18px] text-[#252629]">
+            <table className="w-full min-w-[920px] table-fixed border-collapse text-left text-xs leading-[18px] text-[#252629]">
+              {/* table-fixed + colgroup: cột giữ nguyên tỉ lệ dù dữ liệu dài ngắn
+                  thế nào. Để bảng tự co giãn thì Địa chỉ nuốt hết chỗ trống còn
+                  Tên page — cột đáng đọc nhất — bị cắt sớm. */}
+              <colgroup>
+                <col className="w-[8%]" />
+                <col className="w-[12%]" />
+                <col className="w-[20%]" />
+                <col className="w-[11%]" />
+                <col className="w-[17%]" />
+                <col className="w-[20%]" />
+                <col className="w-[12%]" />
+              </colgroup>
               <thead className="sticky top-0 z-10 bg-[#EFF4FF]">
                 <tr className="h-[52px]">
-                  <th className={`${PREVIEW_HEAD} w-[31px] pl-16 text-center`}>STT</th>
-                  <th className={`${PREVIEW_HEAD} w-[104px]`}>UID</th>
-                  <th className={`${PREVIEW_HEAD} w-[115px]`}>Tên page</th>
-                  <th className={`${PREVIEW_HEAD} w-[98px]`}>Số điện thoại</th>
-                  <th className={`${PREVIEW_HEAD} w-[144px]`}>Email</th>
+                  <th className={`${PREVIEW_HEAD} pl-6 text-center`}>STT</th>
+                  <th className={PREVIEW_HEAD}>UID</th>
+                  <th className={PREVIEW_HEAD}>Tên page</th>
+                  <th className={`${PREVIEW_HEAD} whitespace-nowrap`}>SĐT</th>
+                  <th className={PREVIEW_HEAD}>Email</th>
                   <th className={PREVIEW_HEAD}>Địa chỉ</th>
-                  <th className={`${PREVIEW_HEAD} pr-16 text-right`}>Trạng thái</th>
+                  <th className={`${PREVIEW_HEAD} pr-6 text-right`}>Trạng thái</th>
                 </tr>
               </thead>
               <tbody>
@@ -2090,25 +2138,25 @@ function CreateView() {
                   </tr>
                 ) : (
                   preview.map((row) => (
-                    <tr key={`${row.stt}-${row.page_name}`} className="h-[92px]">
-                      <td className="py-3 pr-3 pl-16 text-center text-[#8B90A0]">{row.stt}</td>
-                      <td className="px-3 py-3 font-medium tracking-[0.3px] text-[#2563EB]">
+                    <tr key={`${row.stt}-${row.page_name}`} className="h-[68px] align-middle">
+                      <td className="py-3 pr-3 pl-6 text-center text-[#8B90A0]">{row.stt}</td>
+                      <td className="truncate px-3 py-3 font-medium tracking-[0.3px] text-[#2563EB]" title={row.uid || ""}>
                         {/* Vàng chứ không đỏ: chưa gán UID không phải lỗi dữ liệu */}
                         {row.uid || <span className="font-normal tracking-normal text-[#A16207]">Chưa gán</span>}
                       </td>
                       <td className="px-3 py-3 font-medium text-[#5E616B]">
-                        <PreviewCell issue={issueFor(row.dataIssues, "tên page")} value={row.page_name} width={115} />
+                        <PreviewCell issue={issueFor(row.dataIssues, "tên page")} value={row.page_name} />
                       </td>
                       <td className="px-3 py-3">
-                        <PreviewCell issue={issueFor(row.dataIssues, "sđt")} value={row.phone} width={98} />
+                        <PreviewCell issue={issueFor(row.dataIssues, "sđt")} value={row.phone} />
                       </td>
                       <td className="px-3 py-3 text-[11px]">
-                        <PreviewCell issue={issueFor(row.dataIssues, "email")} value={row.email} width={170} />
+                        <PreviewCell issue={issueFor(row.dataIssues, "email")} value={row.email} />
                       </td>
                       <td className="px-3 py-3">
-                        <PreviewCell issue={issueFor(row.dataIssues, "địa chỉ")} value={row.address} width={220} />
+                        <PreviewCell issue={issueFor(row.dataIssues, "địa chỉ")} value={row.address} />
                       </td>
-                      <td className="py-3 pr-16 pl-3 text-right">
+                      <td className="py-3 pr-6 pl-3 text-right">
                         {/* Ba trạng thái chứ không phải hai: "Lỗi" chỉ dành cho
                             sai dữ liệu — thứ người dùng sửa trong textarea và
                             được bôi vàng ở đó. Chưa chọn tài khoản là việc
@@ -2310,8 +2358,8 @@ function LiveBadge({ status }) {
 
 function ErrorChip({ children }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded bg-[rgba(255,180,171,0.5)] px-2 py-0.5 text-[10px] leading-[18px] whitespace-nowrap text-[#BA4A3C]">
-      <CreatorIcon name="warning" className="text-[#D57063]" />
+    <span className="inline-flex items-start gap-1 rounded bg-[rgba(255,180,171,0.5)] px-2 py-0.5 text-[10px] leading-[18px] break-words text-[#BA4A3C]">
+      <CreatorIcon name="warning" className="mt-0.5 shrink-0 text-[#D57063]" />
       {children}
     </span>
   );
@@ -2451,16 +2499,14 @@ function issueFor(issues, key) {
  * Một ô trong bảng đối soát: có lỗi thì hiện chip, không thì hiện nội dung đã
  * cắt bớt theo chiều rộng cột.
  *
- * Nội dung bọc trong <div> chứ không đặt `truncate` thẳng lên <td>: bảng này
- * dùng table-layout tự động nên `max-width` trên <td> gần như bị bỏ qua — chữ
- * dài vẫn nong cột ra và đè sang cột bên cạnh. Thẻ block bên trong thì tôn
- * trọng max-width, nên cắt được. `title` để vẫn đọc được đầy đủ khi hover.
+ * Bảng đối soát dùng table-fixed + colgroup, nên bề rộng cột đã cố định sẵn và
+ * ô chỉ việc cắt phần thừa. `title` để vẫn đọc được đầy đủ khi rê chuột.
  */
-function PreviewCell({ issue, value, width }) {
+function PreviewCell({ issue, value }) {
   if (issue) return <ErrorChip>{issue}</ErrorChip>;
   if (!value) return <span className="text-[#8B90A0]">—</span>;
   return (
-    <div style={{ maxWidth: width }} className="truncate" title={value}>
+    <div className="truncate" title={value}>
       {value}
     </div>
   );
