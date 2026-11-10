@@ -82,6 +82,8 @@ export default function AccountMethodCard({
   validFileRowsCount = 0,
   duplicateFileRowsCount = 0,
   displayedFileRows = [],
+  skipInvalidRows = true,
+  onSkipInvalidRowsChange,
 }) {
   return (
     <section className="flex flex-col h-full rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
@@ -335,9 +337,15 @@ export default function AccountMethodCard({
                           </span>
                         </td>
                         <td className="px-3 py-2 text-center">
-                          <span className="inline-flex items-center rounded-full bg-[#ECFDF5] border border-[#A7F3D0] px-2.5 py-0.5 text-[10px] font-semibold text-[#059669]">
-                            Hợp lệ
-                          </span>
+                          {item.status === "valid" ? (
+                            <span className="inline-flex items-center rounded-full bg-[#ECFDF5] border border-[#A7F3D0] px-2.5 py-0.5 text-[10px] font-semibold text-[#059669]">
+                              Hợp lệ
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center rounded-full bg-[#FEE2E2] border border-[#FECACA] px-2.5 py-0.5 text-[10px] font-semibold text-[#B91C1C]">
+                              Sai định dạng
+                            </span>
+                          )}
                         </td>
                         <td className="px-2 py-2 text-center">
                           <button
@@ -362,6 +370,18 @@ export default function AccountMethodCard({
       {/* Tab File */}
       {method === "file" && (
         <div className="space-y-4">
+          <div className="flex items-center justify-between pb-1">
+            <span className="text-xs font-bold text-[#0F172A]">Tải tệp danh sách nhóm (.txt / .csv / .xlsx)</span>
+            <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-medium text-slate-600 hover:text-slate-900">
+              <input
+                type="checkbox"
+                checked={skipInvalidRows}
+                onChange={(e) => onSkipInvalidRowsChange?.(e.target.checked)}
+                className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+              />
+              <span>Bỏ qua các dòng trống và định dạng sai</span>
+            </label>
+          </div>
           <label className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-[#CBD5E1] rounded-2xl bg-white hover:bg-[#F8FAFC] transition-colors cursor-pointer group">
             <input
               type="file"

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import {
   RefreshCw,
   Pencil,
@@ -7,6 +8,10 @@ import {
   FolderInput,
   Trash2,
   Loader2,
+  Download,
+  ChevronDown,
+  FileSpreadsheet,
+  FileText,
 } from "lucide-react";
 import CustomSelect from "@/components/ui/custom-select";
 
@@ -48,7 +53,21 @@ export default function GroupTableToolbar({
   onToggleSelectAll,
   onOpenMoveModal,
   onDeleteSelected,
+  onExport,
 }) {
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (exportRef.current && !exportRef.current.contains(e.target)) {
+        setExportOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   return (
     <div className="space-y-4">
       {/* Detail Title & Action */}
@@ -64,6 +83,51 @@ export default function GroupTableToolbar({
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* Menu Xuất file (UC-GIS-08) */}
+          <div className="relative" ref={exportRef}>
+            <button
+              type="button"
+              onClick={() => setExportOpen(!exportOpen)}
+              className="h-[30px] px-3 bg-white border border-[#CBD5E1] shadow-sm rounded-lg text-xs font-medium text-[#334155] flex items-center gap-1.5 hover:bg-slate-50 transition-colors"
+            >
+              <Download className="w-3.5 h-3.5 text-[#64748B]" />
+              <span>Xuất file {selectedCount > 0 ? `(${selectedCount})` : ""}</span>
+              <ChevronDown className="w-3 h-3 text-[#94A3B8]" />
+            </button>
+            {exportOpen && (
+              <div className="absolute right-0 top-8 z-30 w-48 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg animate-in fade-in duration-150">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExportOpen(false);
+                    onExport?.("xlsx");
+                  }}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                >
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <div>
+                    <p className="font-semibold text-slate-800">Xuất Excel (.xlsx)</p>
+                    <p className="text-[10px] text-slate-400">Khuyến nghị, chuẩn format</p>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExportOpen(false);
+                    onExport?.("csv");
+                  }}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                >
+                  <FileText className="w-4 h-4 text-blue-600 shrink-0" />
+                  <div>
+                    <p className="font-semibold text-slate-800">Xuất CSV (.csv)</p>
+                    <p className="text-[10px] text-slate-400">UTF-8 with BOM</p>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
+
           <button
             type="button"
             onClick={onRefresh}
@@ -173,4 +237,3 @@ export default function GroupTableToolbar({
     </div>
   );
 }
-

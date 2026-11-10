@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, Loader2 } from "lucide-react";
+import { Copy, ExternalLink, Loader2, Trash2 } from "lucide-react";
 import Pagination from "@/components/ui/pagination";
 import CustomSelect from "@/components/ui/custom-select";
 
@@ -24,12 +24,14 @@ export default function GroupDataTable({
   currentPage,
   totalPages,
   onPageChange,
+  onDeleteSingle,
+  onCopyLink,
 }) {
   return (
     <>
       {/* Data Table */}
       <div className="border border-[#E2E8F0] rounded-lg overflow-x-auto">
-        <table className="w-full text-left border-collapse min-w-[700px]">
+        <table className="w-full text-left border-collapse min-w-[760px]">
           <thead>
             <tr className="bg-[#F8FAFC]/80 border-b border-[#E2E8F0] h-[48px]">
               <th className="w-10 px-3 py-2 text-center">
@@ -61,12 +63,15 @@ export default function GroupDataTable({
               <th className="px-3 py-2 text-[11px] font-bold uppercase text-[#475569]">
                 GHI CHÚ
               </th>
+              <th className="w-20 px-3 py-2 text-center text-[11px] font-bold uppercase text-[#475569]">
+                THAO TÁC
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[#F1F5F9]">
             {loading ? (
               <tr>
-                <td colSpan={8} className="py-12 text-center text-xs text-slate-500">
+                <td colSpan={9} className="py-12 text-center text-xs text-slate-500">
                   <div className="flex items-center justify-center gap-2">
                     <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
                     <span>Đang tải danh sách nhóm từ Database...</span>
@@ -76,7 +81,7 @@ export default function GroupDataTable({
             ) : paginatedGroups.length === 0 ? (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="py-12 text-center text-xs text-slate-400"
                 >
                   Không tìm thấy nhóm nào phù hợp trong danh mục này.
@@ -162,6 +167,28 @@ export default function GroupDataTable({
                         <span className="text-[#94A3B8]">—</span>
                       )}
                     </td>
+
+                    {/* THAO TÁC ĐƠN LẺ (UC-GIS-10) */}
+                    <td className="w-20 px-3 py-4 text-center">
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => onCopyLink?.(g.url || g.href)}
+                          title="Sao chép liên kết"
+                          className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteSingle?.(g.id)}
+                          title="Xóa nhóm này"
+                          className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 );
               })
@@ -204,4 +231,3 @@ export default function GroupDataTable({
     </>
   );
 }
-

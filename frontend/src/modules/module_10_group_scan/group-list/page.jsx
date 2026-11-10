@@ -350,6 +350,105 @@ export default function GroupScanListPage() {
     }
   };
 
+  // Xóa đơn lẻ 1 nhóm
+  const handleDeleteSingleGroup = async (id) => {
+    try {
+      await deleteScannedGroupsBulk([id]);
+      await loadGroups();
+      setSelectedIds((curr) => {
+        const next = new Set(curr);
+        next.delete(id);
+        return next;
+      });
+      toast.success("Đã xóa nhóm thành công khỏi Database!");
+    } catch (err) {
+      console.error(err);
+      toast.error("Không thể xóa nhóm.");
+    }
+  };
+
+  // Sao chép liên kết nhóm
+  const handleCopyLink = async (url) => {
+    if (!url) return;
+    try {
+      const full = url.startsWith("http") ? url : `https://${url}`;
+      await navigator.clipboard.writeText(full);
+      toast.success("Đã sao chép liên kết nhóm vào bộ nhớ tạm!");
+    } catch {
+      toast.info(`Link nhóm: ${url}`);
+    }
+  };
+
+  // Xuất báo cáo dữ liệu nhóm (UC-GIS-08)
+  const handleExport = async (format = "xlsx") => {
+    const rows = selectedIds.size
+      ? filteredGroups.filter((g) => selectedIds.has(g.id))
+      : filteredGroups;
+    if (!rows.length) {
+      toast.warning("Chưa có nhóm để xuất báo cáo.");
+      return;
+    }
+    try {
+      const typeLabel = (t) => (t === "private" ? "Riêng tư" : "Công khai");
+      const headers = ["STT", "Từ khóa", "Tên nhóm", "Loại nhóm", "Thành viên", "URL nhóm", "Ghi chú"];
+      const dataRows = rows.map((g, index) => [
+        index + 1,
+        g.keyword || "",
+        g.name || "",
+        typeLabel(g.type),
+        g.members || "",
+        g.url || g.href || "",
+        g.note || "",
+      ]);
+
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+      const fileName = `GroupInfo_${stamp}.${format}`;
+
+      if (format === "csv") {
+        const escapeCsv = (val) => {
+          const str = String(val == null ? "" : val);
+          if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+            return `"${str.replace(/"/g, '""')}"`;
+          }
+          return str;
+        };
+        const csvContent = "\uFEFF" + [
+          headers.map(escapeCsv).join(","),
+          ...dataRows.map((r) => r.map(escapeCsv).join(",")),
+        ].join("\r\n");
+        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } else {
+        const XLSX = await import("xlsx");
+        const sheet = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
+        sheet["!cols"] = [
+          { wch: 6 },
+          { wch: 22 },
+          { wch: 36 },
+          { wch: 14 },
+          { wch: 14 },
+          { wch: 48 },
+          { wch: 20 },
+        ];
+        const book = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(book, sheet, "Kho nhom");
+        XLSX.writeFile(book, fileName);
+      }
+      toast.success(`Đã xuất thành công file báo cáo: ${fileName}`);
+    } catch (err) {
+      toast.error("Xuất báo cáo thất bại: " + (err.message || "Lỗi"));
+    }
+  };
+
   // Xóa các nhóm đã chọn
   const handleDeleteSelectedGroups = async () => {
     if (selectedIds.size === 0) return;
@@ -449,6 +548,7 @@ export default function GroupScanListPage() {
               setShowMoveModal(true);
             }}
             onDeleteSelected={handleDeleteSelectedGroups}
+            onExport={handleExport}
           />
 
           <GroupStatsOverview stats={stats} />
@@ -470,6 +570,8 @@ export default function GroupScanListPage() {
             currentPage={currentPage}
             totalPages={totalPages}
             onPageChange={(p) => setPage(p)}
+            onDeleteSingle={handleDeleteSingleGroup}
+            onCopyLink={handleCopyLink}
           />
         </div>
       </div>
@@ -477,6 +579,7 @@ export default function GroupScanListPage() {
       {/* MODALS */}
       <GroupListModals
         mounted={mounted}
+        groups={groups}
         showAddCatModal={showAddCatModal}
         onCloseAddCatModal={() => setShowAddCatModal(false)}
         newCatName={newCatName}

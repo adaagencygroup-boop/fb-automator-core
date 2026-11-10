@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, FileSpreadsheet, FileText } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import CustomSelect from "@/components/ui/custom-select";
 import {
@@ -72,6 +74,7 @@ export default function ScanResultSection({
   results,
   filteredResults,
   onExportExcel,
+  onExportFile,
   method,
   onOpenSaveModal,
   selectedRows,
@@ -90,6 +93,28 @@ export default function ScanResultSection({
   onToggleAllRows,
   onToggleRow,
 }) {
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (exportRef.current && !exportRef.current.contains(event.target)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const handleExport = (format) => {
+    setExportMenuOpen(false);
+    if (onExportFile) {
+      onExportFile(format);
+    } else if (onExportExcel) {
+      onExportExcel();
+    }
+  };
+
   return (
     <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#F1F5F9] px-5 py-4">
@@ -100,14 +125,48 @@ export default function ScanResultSection({
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={onExportExcel}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#E2E8F0] px-3 text-xs font-semibold text-[#64748B] hover:bg-slate-50"
-          >
-            <IconDownload color="#64748B" />
-            Xuất Excel
-          </button>
+          {/* Menu Xuất file kép Excel / CSV (UC-GIS-08) */}
+          <div className="relative" ref={exportRef}>
+            <button
+              type="button"
+              onClick={() => setExportMenuOpen(!exportMenuOpen)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-white px-3 text-xs font-semibold text-[#334155] hover:bg-slate-50 transition-colors shadow-2xs"
+            >
+              <IconDownload color="#475569" />
+              <span>
+                Xuất file {selectedRows.size > 0 ? `(${selectedRows.size} đã chọn)` : ""}
+              </span>
+              <ChevronDown className="size-3 text-slate-400" />
+            </button>
+
+            {exportMenuOpen && (
+              <div className="absolute right-0 top-9 z-20 w-48 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg animate-in fade-in duration-150">
+                <button
+                  type="button"
+                  onClick={() => handleExport("xlsx")}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                >
+                  <FileSpreadsheet className="size-4 text-emerald-600 shrink-0" />
+                  <div>
+                    <p className="font-semibold text-slate-800">Xuất Excel (.xlsx)</p>
+                    <p className="text-[10px] text-slate-400">Khuyến nghị, định dạng chuẩn</p>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExport("csv")}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                >
+                  <FileText className="size-4 text-blue-600 shrink-0" />
+                  <div>
+                    <p className="font-semibold text-slate-800">Xuất CSV (.csv)</p>
+                    <p className="text-[10px] text-slate-400">Chuẩn UTF-8 with BOM</p>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
+
           {method !== "keyword" && (
             <button
               type="button"
@@ -232,4 +291,3 @@ export default function ScanResultSection({
     </section>
   );
 }
-

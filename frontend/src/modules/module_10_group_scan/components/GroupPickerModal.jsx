@@ -114,7 +114,10 @@ export default function GroupPickerModal({
   useEffect(() => {
     if (open) {
       const initialSet = new Set(
-        (selectedGroups || []).map((g) => g.id || g.group_id).filter(Boolean)
+        (selectedGroups || [])
+          .flatMap((g) => [g.id, g.group_id, g.groupId, g.uid, g.dbId])
+          .filter(Boolean)
+          .map(String)
       );
       setSelectedIds(initialSet);
     }
@@ -142,19 +145,55 @@ export default function GroupPickerModal({
         getScanCategories(),
       ]);
 
-      const loadedGroups = (groupsRes?.groups || []).map((g) => ({
-        ...g,
-        id: g.id || g.group_id,
-        uid: g.group_id || g.id,
-        name: g.name || g.group_name || g.group_id || "Nhóm Facebook",
-        type: g.type === "private" || g.privacy === "private" ? "private" : "public",
-        typeLabel: g.type === "private" || g.privacy === "private" ? "Riêng tư" : "Công khai",
-        membersCount: Number(g.membersCount || g.member_count || 0) || 0,
-        members: g.members || (g.membersCount ? Number(g.membersCount).toLocaleString("vi-VN") : "—"),
-        url: g.url || (g.group_id ? `https://www.facebook.com/groups/${g.group_id}` : "#"),
-        keyword: g.keyword || g.category_name || "",
-        note: g.note || (g.joined ? "Đã tham gia" : "—"),
-      }));
+      const loadedGroups = (groupsRes?.groups || []).map((g) => {
+        const rawGid = String(g.group_id || g.uid || "");
+        const fallbackDbId = String(g.id || "");
+
+        let extractedSlug = "";
+        const rawUrl = String(g.url || g.href || "");
+        if (rawUrl.includes("/groups/")) {
+          const parts = rawUrl.split("/groups/")[1].split("/")[0].split("?")[0].trim();
+          if (parts && (!/^\d{1,7}$/.test(parts))) {
+            extractedSlug = parts;
+          }
+        }
+
+        let realGid = "";
+        if (rawGid && (!/^\d{1,7}$/.test(rawGid))) {
+          realGid = rawGid;
+        } else if (extractedSlug) {
+          realGid = extractedSlug;
+        }
+
+        let realUrl = "";
+        if (rawUrl && (!/\/groups\/\d{1,7}(?:[/?#]|$)/.test(rawUrl))) {
+          realUrl = rawUrl;
+        } else if (realGid && (!/^\d{1,7}$/.test(realGid))) {
+          realUrl = `https://www.facebook.com/groups/${realGid}`;
+        } else {
+          realUrl = "";
+        }
+
+        const primaryId = realGid || fallbackDbId;
+
+        return {
+          ...g,
+          id: primaryId,
+          group_id: realGid,
+          groupId: realGid,
+          dbId: fallbackDbId,
+          uid: realGid,
+          name: g.name || g.group_name || realGid || `Nhóm #${fallbackDbId}`,
+          type: g.type === "private" || g.privacy === "private" ? "private" : "public",
+          typeLabel: g.type === "private" || g.privacy === "private" ? "Riêng tư" : "Công khai",
+          membersCount: Number(g.membersCount || g.member_count || 0) || 0,
+          members: g.members || (g.membersCount ? Number(g.membersCount).toLocaleString("vi-VN") : "—"),
+          url: realUrl,
+          href: realUrl,
+          keyword: g.keyword || g.category_name || "",
+          note: g.note || (g.joined ? "Đã tham gia" : "—"),
+        };
+      });
 
       setGroups(loadedGroups);
 
@@ -320,7 +359,21 @@ export default function GroupPickerModal({
     if (allCurrentViewSelected) {
       filteredGroups.forEach((g) => next.delete(g.id));
     } else {
-      filteredGroups.forEach((g) => next.add(g.id));
+      let reachedLimit = false;
+      for (const g of filteredGroups) {
+        if (!next.has(g.id)) {
+          if (next.size >= 20) {
+            reachedLimit = true;
+            break;
+          }
+          next.add(g.id);
+        }
+      }
+      if (reachedLimit) {
+        toast.warning(
+          "Số lượng nhóm mục tiêu trong một phiên quét không được vượt quá 20 nhóm để bảo đảm an toàn tài khoản!"
+        );
+      }
     }
     setSelectedIds(next);
   };
@@ -330,6 +383,12 @@ export default function GroupPickerModal({
     if (next.has(id)) {
       next.delete(id);
     } else {
+      if (next.size >= 20) {
+        toast.warning(
+          "Số lượng nhóm mục tiêu trong một phiên quét không được vượt quá 20 nhóm để bảo đảm an toàn tài khoản!"
+        );
+        return;
+      }
       next.add(id);
     }
     setSelectedIds(next);
@@ -439,12 +498,15 @@ export default function GroupPickerModal({
   // Confirm selection and pass back to parent
   const handleConfirmSelection = () => {
     const selectedGroupObjects = groups
-      .filter((g) => selectedIds.has(g.id))
+      .filter((g) => selectedIds.has(g.id) || (g.dbId && selectedIds.has(g.dbId)))
       .map((g, idx) => ({
-        id: g.id,
+        id: g.group_id || g.uid || g.id,
+        groupId: g.group_id || g.uid || g.id,
+        group_id: g.group_id || g.uid || g.id,
+        dbId: g.dbId || g.id,
         stt: String(idx + 1).padStart(2, "0"),
         name: g.name,
-        uid: g.uid,
+        uid: g.group_id || g.uid || g.id,
         tag: (g.name || "FB").slice(0, 2).toUpperCase(),
         tagBg: "bg-[#DBEAFE]",
         tagText: "text-[#2563EB]",
@@ -452,7 +514,8 @@ export default function GroupPickerModal({
         typeLabel: g.typeLabel,
         members: g.members,
         memberCount: g.membersCount,
-        url: g.url,
+        url: g.url || (g.group_id && !/^\d{1,7}$/.test(g.group_id) ? `https://www.facebook.com/groups/${g.group_id}` : ""),
+        href: g.url || (g.group_id && !/^\d{1,7}$/.test(g.group_id) ? `https://www.facebook.com/groups/${g.group_id}` : ""),
         keyword: g.keyword,
         note: g.note,
       }));
