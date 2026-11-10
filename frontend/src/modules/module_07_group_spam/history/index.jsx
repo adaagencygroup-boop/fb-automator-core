@@ -567,7 +567,7 @@ export default function GroupHistoryModule() {
                           ) : (
                             <ExternalLink className="size-3" />
                           )}
-                          <span>{openingRecordId === item.id ? "Đang mở" : (item.has_permalink ? "Mở bài" : "Mở nhóm")}</span>
+                          <span>{openingRecordId === item.id ? "Đang mở" : "Mở bài viết"}</span>
                         </button>
                       ) : (
                         <span className="text-[10px] italic text-slate-300" title="Không có liên kết được lưu">

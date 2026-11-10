@@ -505,7 +505,11 @@ class FacebookGroupPoster:
                     const selection = window.getSelection();
                     const range = document.createRange();
                     range.selectNodeContents(arguments[0]);
-                    range.collapse(false);
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                    document.execCommand('delete', false, null);
+                    range.selectNodeContents(arguments[0]);
+                    range.collapse(true);
                     selection.removeAllRanges();
                     selection.addRange(range);
                     document.execCommand('insertText', false, arguments[1]);
