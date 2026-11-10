@@ -21,17 +21,17 @@ interface ModuleOption {
 }
 
 const DEFAULT_MODULES: Omit<ModuleOption, "enabled" | "days">[] = [
-  { id: 1, key: "accounts", name: "1. Quản lý tài khoản Facebook" },
-  { id: 2, key: "farm", name: "2. Đăng bài và tương tác tài khoản" },
-  { id: 3, key: "page_creator", name: "3. Tạo Fanpage hàng loạt" },
-  { id: 4, key: "page_manager", name: "4. Quản lý Fanpage" },
-  { id: 5, key: "chat", name: "5. Quản lý Chat Page" },
-  { id: 6, key: "group_spam", name: "6. Spam Group Hội Nhóm" },
+  { id: 1, key: "fb_account", name: "1. Quản lý tài khoản Facebook" },
+  { id: 2, key: "post_interact", name: "2. Đăng bài và tương tác tài khoản" },
+  { id: 3, key: "create_fanpage", name: "3. Tạo Fanpage hàng loạt" },
+  { id: 4, key: "manage_fanpage", name: "4. Quản lý Fanpage" },
+  { id: 5, key: "chat_fanpage", name: "5. Quản lý Chat Page" },
+  { id: 6, key: "spam_group", name: "6. Spam Group Hội Nhóm" },
   { id: 7, key: "seeding", name: "7. Seeding Bài & Page" },
-  { id: 8, key: "group_scan", name: "8. Quét nhóm" },
-  { id: 9, key: "page_scanner", name: "9. Quét page" },
-  { id: 10, key: "post_scanner", name: "10. Quét bài viết" },
-  { id: 11, key: "profile_scanner", name: "11. Quét profile" },
+  { id: 8, key: "scan_group", name: "8. Quét nhóm" },
+  { id: 9, key: "scan_page", name: "9. Quét page" },
+  { id: 10, key: "scan_post", name: "10. Quét bài viết" },
+  { id: 11, key: "scan_profile", name: "11. Quét profile" },
 ];
 
 export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props) {
@@ -50,16 +50,37 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
       setBulkDaysInput("30");
       setError("");
       setCopiedHwid(false);
-
-      // Default: All 11 modules selected with 30 days as in Figma screenshot
       const userDays = user.days_remaining && user.days_remaining > 0 ? user.days_remaining : 30;
-      setModules(
-        DEFAULT_MODULES.map((m) => ({
-          ...m,
-          enabled: true,
-          days: userDays,
-        }))
-      );
+
+      // Nếu user đã có cấu hình tính năng riêng từ DB, tải lên modal
+      if (user.features && Array.isArray(user.features) && user.features.length > 0) {
+        setModules(
+          DEFAULT_MODULES.map((m) => {
+            const found = user.features?.find((f) => f.key === m.key);
+            if (found) {
+              return {
+                ...m,
+                enabled: found.is_enabled,
+                days: found.days_remaining > 0 ? found.days_remaining : found.days_granted || 30,
+              };
+            }
+            return {
+              ...m,
+              enabled: true,
+              days: userDays,
+            };
+          })
+        );
+      } else {
+        // Default: All 11 modules selected with user days
+        setModules(
+          DEFAULT_MODULES.map((m) => ({
+            ...m,
+            enabled: true,
+            days: userDays,
+          }))
+        );
+      }
     }
   }, [user]);
 
@@ -140,16 +161,22 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
     setError("");
     try {
       let successMsg = "";
+      const featurePayload = modules.map((m) => ({
+        key: m.key,
+        days: m.days,
+        enabled: m.enabled,
+      }));
+
       if (isExtend) {
         if (user.status === "pending") {
           setError("Tài khoản đang chờ duyệt không thể gia hạn. Vui lòng phê duyệt tài khoản trước.");
           setLoadingApprove(false);
           return;
         }
-        await api.extendUser(user.id, maxDays);
+        await api.extendUser(user.id, maxDays, featurePayload);
         successMsg = `Gia hạn thành công +${maxDays} ngày cho tài khoản ${user.username}!`;
       } else {
-        await api.approveUser(user.id, maxDays);
+        await api.approveUser(user.id, maxDays, featurePayload);
         successMsg = isRejected
           ? `Phê duyệt lại tài khoản ${user.username} thành công (+${maxDays} ngày)!`
           : `Phê duyệt tài khoản ${user.username} thành công (+${maxDays} ngày)!`;

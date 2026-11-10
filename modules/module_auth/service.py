@@ -189,11 +189,87 @@ def session_is_active(user, token: str) -> bool:
     return False
 
 
+def get_user_feature_licenses(user_id: int):
+    """Lấy danh sách bản quyền 11 tính năng của người dùng từ user_feature_licenses"""
+    rows = db.fetch_all(
+        """SELECT sf.feature_key, sf.feature_name, sf.order_index,
+                  ufl.is_enabled, ufl.days_granted, ufl.expired_at
+           FROM system_features sf
+           LEFT JOIN user_feature_licenses ufl
+                  ON sf.feature_key = ufl.feature_key AND ufl.user_id = ?
+           WHERE sf.is_active = TRUE
+           ORDER BY sf.order_index ASC""",
+        (user_id,),
+    )
+    now = utcnow()
+    features = []
+    for r in rows:
+        exp = _as_dt(r.get("expired_at"))
+        is_active = bool(r.get("is_enabled") and exp and exp > now)
+        remaining = days_remaining(exp, now) if exp else 0
+        features.append({
+            "key": r["feature_key"],
+            "name": r["feature_name"],
+            "order_index": r["order_index"],
+            "is_enabled": bool(r.get("is_enabled")),
+            "is_active": is_active,
+            "days_granted": r.get("days_granted") or 0,
+            "days_remaining": remaining if remaining > 0 else 0,
+            "expired_at": exp.isoformat() + "Z" if exp else None,
+        })
+    return features
+
+
+def sync_user_feature_licenses(user_id: int, feature_items: list, base_expired_at=None):
+    """
+    Cập nhật hoặc đồng bộ license cho từng tính năng của user.
+    feature_items: list of dict, vd: [{'key': 'fb_account', 'days': 30, 'enabled': True}, ...]
+    """
+    now = utcnow()
+    max_expired = base_expired_at
+    for item in feature_items:
+        key = item.get("key")
+        if not key:
+            continue
+        days = int(item.get("days") or 0)
+        enabled = bool(item.get("enabled", False))
+        
+        # Nếu tính năng không được kích hoạt (enabled=False), đặt days_granted = 0 và expired_at = now
+        if not enabled:
+            days = 0
+            feat_expired = now
+        elif days > 0:
+            feat_expired = now + timedelta(days=days)
+        elif base_expired_at:
+            feat_expired = base_expired_at
+        else:
+            feat_expired = now
+
+        if enabled and (not max_expired or feat_expired > max_expired):
+            max_expired = feat_expired
+
+        db.execute(
+            """INSERT INTO user_feature_licenses (user_id, feature_key, is_enabled, days_granted, expired_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT (user_id, feature_key) DO UPDATE
+               SET is_enabled = EXCLUDED.is_enabled,
+                   days_granted = EXCLUDED.days_granted,
+                   expired_at = EXCLUDED.expired_at,
+                   updated_at = CURRENT_TIMESTAMP""",
+            (user_id, key, enabled, days, feat_expired),
+        )
+    return max_expired
+
+
 def public_user(user, now=None):
     now = now or utcnow()
     expired = _as_dt(user.get("expired_at"))
+    user_id = user["id"]
+    features = get_user_feature_licenses(user_id)
+    active_features = [f["key"] for f in features if f["is_active"]]
+    
     return {
-        "id": user["id"],
+        "id": user_id,
         "username": user["username"],
         "contact_info": user.get("contact_info") or "",
         "hwid": user.get("hwid"),
@@ -204,7 +280,10 @@ def public_user(user, now=None):
         "created_at": str(user.get("created_at") or ""),
         "last_login_at": str(user.get("last_login_at") or user.get("last_login") or ""),
         "last_login_ip": user.get("last_login_ip"),
+        "client_version": user.get("client_version") or "v2.3.9",
         "last_hwid_reset_at": str(user.get("last_hwid_reset_at") or ""),
+        "features": features,
+        "permissions": active_features,
     }
 
 
@@ -550,7 +629,7 @@ def list_admins(status_filter: str = ""):
     return rows
 
 
-def create_user_admin(username, password, contact_info, days, status, role, request: Request, hwid: Optional[str] = None):
+def create_user_admin(username, password, contact_info, days, status, role, request: Request, hwid: Optional[str] = None, features: Optional[list] = None):
     admin, ip_address, ua = _actor(request)
     username = validate_username(username)
     validate_password(password)
@@ -565,7 +644,18 @@ def create_user_admin(username, password, contact_info, days, status, role, requ
         (username, hash_password(password), contact_info or "", role, status, (hwid or "").strip() or None, expired_at, utcnow()),
     )
     user = _row(username)
-    log_activity(admin["username"], admin.get("role"), "create_user", username, user["id"], role, status, ip_address, ua)
+    user_id = user["id"]
+
+    # Cấp quyền tính năng trong user_feature_licenses
+    if status == "approved":
+        if features and isinstance(features, list):
+            sync_user_feature_licenses(user_id, features, expired_at)
+        elif expired_at:
+            sys_feats = db.fetch_all("SELECT feature_key FROM system_features WHERE is_active = TRUE")
+            default_items = [{"key": f["feature_key"], "days": days, "enabled": True} for f in sys_feats]
+            sync_user_feature_licenses(user_id, default_items, expired_at)
+
+    log_activity(admin["username"], admin.get("role"), "create_user", username, user_id, role, status, ip_address, ua)
     return public_user(user)
 
 
@@ -612,6 +702,8 @@ def edit_user_admin(user_id: int, payload: dict, request: Request):
             WHERE id = ?""",
         tuple(params),
     )
+    if "features" in payload and isinstance(payload["features"], list):
+        sync_user_feature_licenses(user_id, payload["features"], expired_at)
     if payload.get("password") or username != user["username"] or status in LOCKED_STATUSES or hwid_changed:
         revoke_active_sessions(user_id)
     log_activity(admin["username"], admin.get("role"), "edit_user", username, user_id, role, f"status={status}", ip_address, ua)
@@ -845,7 +937,7 @@ def _actor(request: Request):
     return admin, _client_ip(request), request.headers.get("user-agent", "")
 
 
-def approve_user(user_id: int, days: int, request: Request):
+def approve_user(user_id: int, days: int, request: Request, features: Optional[list] = None):
     admin, ip_address, ua = _actor(request)
     user = _row_by_id(user_id)
     if not user:
@@ -854,6 +946,16 @@ def approve_user(user_id: int, days: int, request: Request):
         raise HTTPException(400, "Số ngày phải lớn hơn 0")
     old = user.get("status")
     expired_at = utcnow() + timedelta(days=days)
+    
+    # Đồng bộ sang user_feature_licenses nếu có truyền danh sách tính năng
+    if features and isinstance(features, list):
+        sync_user_feature_licenses(user_id, features, expired_at)
+    else:
+        # Mặc định cấp toàn bộ tính năng theo số ngày này
+        sys_feats = db.fetch_all("SELECT feature_key FROM system_features WHERE is_active = TRUE")
+        default_items = [{"key": f["feature_key"], "days": days, "enabled": True} for f in sys_feats]
+        sync_user_feature_licenses(user_id, default_items, expired_at)
+
     db.execute("UPDATE users SET status = 'approved', expired_at = ? WHERE id = ?", (expired_at, user_id))
     notify(user_id, "LICENSE_EXTENDED", "user", f"Tài khoản của bạn đã được Admin phê duyệt ({days} ngày sử dụng)!")
     log_activity(admin["username"], admin.get("role"), "approve_user", user["username"], user_id, user.get("role"),
@@ -861,7 +963,7 @@ def approve_user(user_id: int, days: int, request: Request):
     return {"message": f"User {user['username']} approved for {days} days", "expired_at": expired_at.isoformat() + "Z"}
 
 
-def extend_user(user_id: int, days: int, request: Request):
+def extend_user(user_id: int, days: int, request: Request, features: Optional[list] = None):
     admin, ip_address, ua = _actor(request)
     user = _row_by_id(user_id)
     if not user:
@@ -870,6 +972,16 @@ def extend_user(user_id: int, days: int, request: Request):
     if base < utcnow():
         base = utcnow()
     expired_at = base + timedelta(days=days)
+
+    if features and isinstance(features, list):
+        max_exp = sync_user_feature_licenses(user_id, features, expired_at)
+        if max_exp:
+            expired_at = max_exp
+    else:
+        sys_feats = db.fetch_all("SELECT feature_key FROM system_features WHERE is_active = TRUE")
+        default_items = [{"key": f["feature_key"], "days": days, "enabled": True} for f in sys_feats]
+        sync_user_feature_licenses(user_id, default_items, expired_at)
+
     db.execute("UPDATE users SET status = 'approved', expired_at = ? WHERE id = ?", (expired_at, user_id))
     notify(user_id, "LICENSE_EXTENDED", "user", f"Admin đã gia hạn tài khoản thêm {days} ngày.")
     log_activity(admin["username"], admin.get("role"), "extend_user", user["username"], user_id, user.get("role"),
@@ -948,11 +1060,30 @@ def reset_hwid(user_id: int, reason: str, request: Request):
     return {"message": f"HWID reset for {user['username']}", "last_hwid_reset_at": now.isoformat() + "Z"}
 
 
-def licensed_for_modules(user) -> bool:
+def licensed_for_modules(user, feature_key: Optional[str] = None) -> bool:
+    """
+    Kiểm tra xem người dùng có quyền truy cập module / tính năng cụ thể hay không.
+    Nếu không truyền feature_key: kiểm tra quyền chung của tài khoản.
+    """
     role = user.get("role")
     if role in ("admin", "ADMIN"):
         return user.get("status") not in LOCKED_STATUSES
     if user.get("status") != "approved":
         return False
     expired = _as_dt(user.get("expired_at"))
-    return bool(expired and expired > utcnow())
+    if not (expired and expired > utcnow()):
+        return False
+
+    if feature_key:
+        row = db.fetch_one(
+            """SELECT is_enabled, expired_at FROM user_feature_licenses
+               WHERE user_id = ? AND feature_key = ?""",
+            (user["id"], feature_key),
+        )
+        if not row:
+            # Nếu chưa có cấu hình riêng tính năng, dùng hạn chung
+            return True
+        f_exp = _as_dt(row.get("expired_at"))
+        return bool(row.get("is_enabled") and f_exp and f_exp > utcnow())
+
+    return True

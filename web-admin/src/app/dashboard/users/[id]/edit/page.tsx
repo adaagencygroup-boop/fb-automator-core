@@ -75,6 +75,24 @@ export default function UserEditPage() {
         setContactInfo(found.contact_info || "");
         setStatus(found.status || "approved");
 
+        if (found.features && Array.isArray(found.features) && found.features.length > 0) {
+          setFeatures(
+            DEFAULT_FEATURES.map((df) => {
+              const f = found.features?.find((item) => item.key === df.key);
+              if (f) {
+                return {
+                  ...df,
+                  checked: Boolean(f.is_enabled),
+                  days: f.is_enabled
+                    ? (f.days_remaining > 0 ? f.days_remaining : f.days_granted || 30)
+                    : 0,
+                };
+              }
+              return df;
+            })
+          );
+        }
+
         if (logsData) {
           const userLogs = logsData.filter(
             (l) => l.target_uid === userId || l.target_username === found.username
@@ -225,9 +243,15 @@ export default function UserEditPage() {
         status?: string;
         password?: string;
         days?: number;
+        features?: { key: string; days: number; enabled: boolean }[];
       } = {
         contact_info: contactInfo,
         status: status,
+        features: features.map((f) => ({
+          key: f.key,
+          days: f.days,
+          enabled: f.checked,
+        })),
       };
 
       if (maxDays > 0) {
@@ -545,17 +569,17 @@ export default function UserEditPage() {
                 key={feature.key}
                 className={`ue-feature-item ${feature.checked ? "checked" : "unchecked"}`}
               >
-                <label className="ue-feature-label" onClick={() => handleToggleFeature(idx)}>
+                <label className="ue-feature-label cursor-pointer select-none">
                   <input
                     type="checkbox"
-                    checked={feature.checked}
+                    checked={Boolean(feature.checked)}
                     onChange={() => handleToggleFeature(idx)}
                     className="ue-checkbox"
                   />
                   <span>{feature.name}</span>
                 </label>
 
-                <div className="ue-days-input-wrap">
+                <div className="ue-days-input-wrap" onClick={(e) => e.stopPropagation()}>
                   <input
                     type="number"
                     min="0"

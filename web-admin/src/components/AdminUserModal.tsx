@@ -22,17 +22,17 @@ interface ModuleOption {
 }
 
 const DEFAULT_MODULES: Omit<ModuleOption, "enabled" | "days">[] = [
-  { id: 1, key: "accounts", name: "1. Quản lý tài khoản Facebook" },
-  { id: 2, key: "farm", name: "2. Đăng bài và tương tác tài khoản" },
-  { id: 3, key: "page_creator", name: "3. Tạo Fanpage hàng loạt" },
-  { id: 4, key: "page_manager", name: "4. Quản lý Fanpage" },
-  { id: 5, key: "chat", name: "5. Quản lý Chat Page" },
-  { id: 6, key: "group_spam", name: "6. Spam Group Hội Nhóm" },
+  { id: 1, key: "fb_account", name: "1. Quản lý tài khoản Facebook" },
+  { id: 2, key: "post_interact", name: "2. Đăng bài và tương tác tài khoản" },
+  { id: 3, key: "create_fanpage", name: "3. Tạo Fanpage hàng loạt" },
+  { id: 4, key: "manage_fanpage", name: "4. Quản lý Fanpage" },
+  { id: 5, key: "chat_fanpage", name: "5. Quản lý Chat Page" },
+  { id: 6, key: "spam_group", name: "6. Spam Group Hội Nhóm" },
   { id: 7, key: "seeding", name: "7. Seeding Bài & Page" },
-  { id: 8, key: "group_scan", name: "8. Quét nhóm" },
-  { id: 9, key: "page_scanner", name: "9. Quét page" },
-  { id: 10, key: "post_scanner", name: "10. Quét bài viết" },
-  { id: 11, key: "profile_scanner", name: "11. Quét profile" },
+  { id: 8, key: "scan_group", name: "8. Quét nhóm" },
+  { id: 9, key: "scan_page", name: "9. Quét page" },
+  { id: 10, key: "scan_post", name: "10. Quét bài viết" },
+  { id: 11, key: "scan_profile", name: "11. Quét profile" },
 ];
 
 export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Props) {
@@ -220,6 +220,12 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
     const activeModules = modules.filter((m) => m.enabled && m.days > 0);
     const maxDays = activeModules.length > 0 ? Math.max(...activeModules.map((m) => m.days)) : 30;
 
+    const featurePayload = modules.map((m) => ({
+      key: m.key,
+      days: m.days,
+      enabled: m.enabled,
+    }));
+
     setLoading(true);
 
     try {
@@ -231,6 +237,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
           days: maxDays,
           ...(password.trim() ? { password: password.trim() } : {}),
           hwid: hwid.trim(),
+          features: featurePayload,
         });
       } else {
         // Add mode
@@ -242,6 +249,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
           status: "approved",
           role: "user",
           ...(hwid.trim() ? { hwid: hwid.trim() } : {}),
+          features: featurePayload,
         });
       }
       onSuccess();

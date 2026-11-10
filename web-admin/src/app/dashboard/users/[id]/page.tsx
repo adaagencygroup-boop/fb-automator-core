@@ -10,17 +10,17 @@ import "./user-detail.css";
 
 // 11 module features list matching system specifications
 const SYSTEM_MODULES = [
-  { id: 1, name: "1. Quản lý tài khoản Facebook" },
-  { id: 2, name: "2. Đăng bài và tương tác tài khoản" },
-  { id: 3, name: "3. Tạo Fanpage hàng loạt" },
-  { id: 4, name: "4. Quản lý Fanpage" },
-  { id: 5, name: "5. Quản lý Chat Page" },
-  { id: 6, name: "6. Spam Group Hội Nhóm" },
-  { id: 7, name: "7. Seeding Bài & Page" },
-  { id: 8, name: "8. Quét nhóm" },
-  { id: 9, name: "9. Quét page" },
-  { id: 10, name: "10. Quét bài viết" },
-  { id: 11, name: "11. Quét profile" },
+  { id: 1, key: "fb_account", name: "1. Quản lý tài khoản Facebook" },
+  { id: 2, key: "post_interact", name: "2. Đăng bài và tương tác tài khoản" },
+  { id: 3, key: "create_fanpage", name: "3. Tạo Fanpage hàng loạt" },
+  { id: 4, key: "manage_fanpage", name: "4. Quản lý Fanpage" },
+  { id: 5, key: "chat_fanpage", name: "5. Quản lý Chat Page" },
+  { id: 6, key: "spam_group", name: "6. Spam Group Hội Nhóm" },
+  { id: 7, key: "seeding", name: "7. Seeding Bài & Page" },
+  { id: 8, key: "scan_group", name: "8. Quét nhóm" },
+  { id: 9, key: "scan_page", name: "9. Quét page" },
+  { id: 10, key: "scan_post", name: "10. Quét bài viết" },
+  { id: 11, key: "scan_profile", name: "11. Quét profile" },
 ];
 
 export default function UserDetailPage() {
@@ -308,8 +308,10 @@ export default function UserDetailPage() {
 
   const logs = dbLogItems.length > 0 ? dbLogItems : baseLogs;
 
-  // Features list mapping: default inactive 5 & 6 as in Figma
-  const activeFeaturesCount = 9;
+  // Features list mapping from real DB data
+  const activeFeaturesCount = user.features && user.features.length > 0
+    ? user.features.filter((f) => f.is_active).length
+    : 9;
   const totalFeaturesCount = SYSTEM_MODULES.length;
 
   return (
@@ -550,31 +552,31 @@ export default function UserDetailPage() {
               </thead>
               <tbody>
                 {SYSTEM_MODULES.map((m) => {
-                  const isInactive = m.id === 5 || m.id === 6; // Matching Figma: 5 & 6 are unregistered
-                  let remainingDays = "Còn 660 ngày";
-                  let expDate = "30/12/2026";
+                  const userFeat = user.features?.find((f) => f.key === m.key);
+                  // Nếu user có cấu hình features từ DB: kiểm tra is_enabled
+                  // Nếu chưa có mảng features: fallback kiểm tra tài khoản đã duyệt và chưa hết hạn
+                  const hasFeatures = Array.isArray(user.features) && user.features.length > 0;
+                  const isRegistered = hasFeatures
+                    ? Boolean(userFeat && userFeat.is_enabled)
+                    : Boolean(user.status === "approved" && !isExpired);
 
-                  if (m.id === 3) {
-                    remainingDays = "Còn 30 ngày";
-                    expDate = "08/01/2027";
-                  } else if (m.id === 4 || m.id === 10) {
-                    remainingDays = "Còn 180 ngày";
-                    expDate = "08/06/2027";
-                  } else if (m.id === 7) {
-                    remainingDays = "Còn 90 ngày";
-                    expDate = "10/03/2027";
-                  } else if (m.id === 8 || m.id === 9) {
-                    remainingDays = "Còn 365 ngày";
-                    expDate = "10/12/2027";
-                  }
+                  const daysLeft = userFeat && userFeat.days_remaining !== undefined
+                    ? userFeat.days_remaining
+                    : user.days_remaining || 0;
+
+                  const expDate = userFeat?.expired_at
+                    ? formatUtcDateOnly(userFeat.expired_at)
+                    : user.expired_at
+                    ? formatUtcDateOnly(user.expired_at)
+                    : "—";
 
                   return (
-                    <tr key={m.id} className={isInactive ? "ud-feat-inactive" : ""}>
+                    <tr key={m.id} className={!isRegistered ? "ud-feat-inactive" : ""}>
                       <td>
                         <span className="ud-feat-name">{m.name}</span>
                       </td>
                       <td style={{ textAlign: "center" }}>
-                        {isInactive ? (
+                        {!isRegistered ? (
                           <span className="ud-feat-badge-inactive">Chưa đăng ký</span>
                         ) : (
                           <span className="ud-feat-badge-active">
@@ -584,14 +586,14 @@ export default function UserDetailPage() {
                         )}
                       </td>
                       <td>
-                        {isInactive ? (
+                        {!isRegistered ? (
                           <span className="text-slate-400 font-mono">—</span>
                         ) : (
-                          <span className="ud-feat-days">{remainingDays}</span>
+                          <span className="ud-feat-days">Còn {daysLeft} ngày</span>
                         )}
                       </td>
                       <td>
-                        {isInactive ? (
+                        {!isRegistered ? (
                           <span className="text-slate-400 font-mono">—</span>
                         ) : (
                           <span className="ud-feat-exp font-mono">{expDate}</span>
