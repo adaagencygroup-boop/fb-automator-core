@@ -99,11 +99,34 @@ def reset_database(
                 detail="Phi\u00ean \u0111\u0103ng nh\u1eadp \u0111\u00e3 h\u1ebft h\u1ea1n. Vui l\u00f2ng \u0111\u0103ng nh\u1eadp l\u1ea1i \u0111\u1ec3 th\u1ef1c hi\u1ec7n x\u00f3a d\u1eef li\u1ec7u."
             )
 
-        # 2. Xoa tin nhan, thong bao, hoi thoai theo page_ids
+        # 2. Xóa tin nhắn, thông báo, Page theo page_ids.
+        # LƯU Ý QUAN TRỌNG VỀ NHÃN & ĐÁNH DẤU SAO:
+        # Nhãn (tags), đánh dấu sao (is_starred) và nhân viên phân công (assigned_user_id) là dữ liệu
+        # quản lý nội bộ trên hệ thống, Facebook không hề lưu các thông tin này.
+        # Vì vậy khi "Reset dữ liệu", chúng ta TUYỆT ĐỐI KHÔNG xoá Conversation có tags hoặc is_starred!
+        # Với các hội thoại có tags/star, ta chỉ xoá tin nhắn (Message) và reset preview last_message để chờ đồng bộ lại,
+        # chỉ xóa hẳn những Conversation rác không có nhãn/sao.
         if page_ids:
+            # Xoá tin nhắn và thông báo
             db.query(Message).filter(Message.page_id.in_(page_ids)).delete(synchronize_session=False)
             db.query(Notification).filter(Notification.page_id.in_(page_ids)).delete(synchronize_session=False)
-            db.query(Conversation).filter(Conversation.page_id.in_(page_ids)).delete(synchronize_session=False)
+
+            # Xoá các Conversation không gắn sao, không gắn nhãn
+            db.query(Conversation).filter(
+                Conversation.page_id.in_(page_ids),
+                Conversation.is_starred == False,
+                or_(Conversation.tags == None, Conversation.tags == "")
+            ).delete(synchronize_session=False)
+
+            # Với các Conversation có nhãn hoặc có gắn sao: GIỮ NGUYÊN bản ghi, chỉ xóa preview tạm để đồng bộ lại
+            db.query(Conversation).filter(
+                Conversation.page_id.in_(page_ids)
+            ).update(
+                {Conversation.last_message: ""},
+                synchronize_session=False
+            )
+
+            # Xoá bảng Page để đồng bộ mới lại
             db.query(Page).filter(Page.page_id.in_(page_ids)).delete(synchronize_session=False)
 
         # 3. Xoa theo fb_user_ids

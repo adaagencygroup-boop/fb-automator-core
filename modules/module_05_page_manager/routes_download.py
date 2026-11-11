@@ -774,13 +774,13 @@ def get_job_status(job_id: int):
   return {"job": job, "items": items}
 @router.post("/select-folder")
 def select_folder_endpoint(req: Optional[SelectFolderRequest] = None):
+  """
+  Mở hộp thoại Windows native FolderBrowserDialog độc lập qua PowerShell (STA thread).
+  Hoạt động 100% ổn định trên Windows cả khi chạy dev lẫn khi build đóng gói PyInstaller / Tauri.
+  """
   init_dir = (req.initial_dir if req else None) or ""
-  if init_dir and init_dir.strip():
-    has_vids, _ = check_folder_has_page_videos(init_dir.strip())
-    if has_vids:
-      return {"folder": "", "error": "Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!", "success": False}
   clean_init = init_dir.strip().strip('"').strip("'") if init_dir else ""
-  dialog_init = clean_init if (clean_init and os.path.exists(clean_init) and os.path.isdir(clean_init)) else None
+  dialog_init = clean_init if (clean_init and os.path.exists(clean_init) and os.path.isdir(clean_init)) else ""
 
   if not _picker_lock.acquire(blocking=False):
     return {"folder": "", "error": "Cửa sổ chọn thư mục đang mở, vui lòng thao tác trên cửa sổ đó!", "success": False}
@@ -788,21 +788,13 @@ def select_folder_endpoint(req: Optional[SelectFolderRequest] = None):
   selected = ""
   error_msg = ""
   try:
-    import subprocess
-    helper_path = os.path.join(os.path.dirname(__file__), "picker_helper.py")
-    venv_python = sys.executable
-    cmd = [venv_python, helper_path]
-    if dialog_init:
-      cmd.append(dialog_init)
+    if sys.platform == "win32":
+      from modules.module_05_page_manager.picker_helper import pick_folder_powershell
+      selected = pick_folder_powershell(dialog_init, "Chọn thư mục lưu video")
     else:
-      cmd.append("")
-    cmd.append("Chọn thư mục lưu video")
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    selected = res.stdout.strip()
-    if res.returncode != 0:
-      error_msg = f"picker_helper code {res.returncode}: {res.stderr.strip()}"
+      selected = ""
   except Exception as e:
-    error_msg = f"subprocess error: {str(e)}"
+    error_msg = f"Lỗi chọn thư mục: {str(e)}"
     selected = ""
   finally:
     _picker_lock.release()

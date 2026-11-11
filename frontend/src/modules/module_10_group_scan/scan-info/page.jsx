@@ -101,7 +101,10 @@ function mapGroupRow(g) {
     }
   }
   let name = String(g?.name || "")
-    .replace(/^(Profile photo of|Ảnh đại diện của)\s*/i, "")
+    .replace(/^[\(\[]\d+\+?[\)\]]\s*/, "")
+    .replace(/^(Profile photo of|Ảnh đại diện của|Anh dai dien cua)\s*/i, "")
+    .replace(/\s*\|\s*Facebook$/i, "")
+    .replace(/^[\(\[]\d+\+?[\)\]]\s*/, "")
     .trim();
   return {
     id: g.id || g.href || g.url,
@@ -152,6 +155,9 @@ export default function GroupScanInfoPage() {
   const [runState, setRunState] = useState("idle"); // idle | running | paused
   const [checkJobId, setCheckJobId] = useState("");
   const running = runState === "running" || runState === "paused";
+  const [pausing, setPausing] = useState(false);
+  const [aborting, setAborting] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const [resultQuery, setResultQuery] = useState("");
   const [filterType, setFilterType] = useState("all");
   const [filterMembers, setFilterMembers] = useState("all");
@@ -307,6 +313,35 @@ export default function GroupScanInfoPage() {
     setKeywords((current) => current.filter((item) => item !== word));
   };
 
+  // Helper kiểm tra & chuẩn hóa liên kết Facebook Group cho Tải tệp & Nhập link
+  const isFbGroupLink = (raw) => {
+    let clean = String(raw || "").trim();
+    if (!clean) return false;
+    if (/^[0-9]{5,}$/.test(clean)) return true;
+    if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+      clean = `https://${clean}`;
+    }
+    return /(facebook\.com|fb\.com)\/(groups\/[0-9a-zA-Z._-]+|[0-9]{5,})/i.test(clean);
+  };
+
+  const normalizeFbGroupLink = (raw) => {
+    let clean = String(raw || "").trim();
+    if (/^[0-9]{5,}$/.test(clean)) {
+      return `https://www.facebook.com/groups/${clean}`;
+    }
+    if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+      clean = `https://${clean}`;
+    }
+    try {
+      const url = new URL(clean);
+      url.search = "";
+      url.hash = "";
+      return url.toString().replace(/\/+$/, "");
+    } catch {
+      return clean.replace(/\/+$/, "");
+    }
+  };
+
   // Handler Phương thức Nhập Link
   const handleClearAllLinks = () => {
     setLinkText("");
@@ -326,14 +361,11 @@ export default function GroupScanInfoPage() {
     const seen = new Set();
     const list = [];
     lines.forEach((line) => {
-      let clean = line;
-      if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
-        clean = `https://${clean}`;
-      }
+      const isFbGroup = isFbGroupLink(line);
+      const clean = isFbGroup ? normalizeFbGroupLink(line) : (line.startsWith("http") ? line : `https://${line}`);
       const key = clean.toLowerCase().replace(/\/+$/, "");
       if (seen.has(key)) return;
       seen.add(key);
-      const isFbGroup = /(facebook\.com|fb\.com)\/(groups\/[0-9a-zA-Z._-]+|[0-9]{5,})/i.test(clean) || /^[0-9]{5,}$/.test(line.trim());
       list.push({
         id: `link-${list.length + 1}`,
         stt: list.length + 1,
@@ -361,7 +393,7 @@ export default function GroupScanInfoPage() {
     });
   };
 
-  // Handler Phương thức Tải tệp
+  // Handler Phương thức Tải tệp (CHỈ chấp nhận link nhóm Facebook, loại bỏ hoàn toàn từ khóa)
   const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -380,7 +412,7 @@ export default function GroupScanInfoPage() {
           if (Array.isArray(row)) {
             row.forEach((cell) => {
               const text = String(cell || "").trim();
-              if (text && !text.startsWith("#") && !/^(stt|tên|link|nhóm|keyword|group)/i.test(text)) {
+              if (text && !text.startsWith("#") && !/^(stt|tên|link|nhóm|group|url|đường dẫn)/i.test(text)) {
                 rawLines.push(text);
               }
             });
@@ -403,24 +435,42 @@ export default function GroupScanInfoPage() {
       const rows = [];
       let validCount = 0;
       let dupCount = 0;
+      let invalidCount = 0;
 
       rawLines.forEach((line, idx) => {
-        const norm = line.toLowerCase().replace(/\/+$/, "");
-        if (seen.has(norm)) {
+        const isGroup = isFbGroupLink(line);
+        if (!isGroup) {
+          invalidCount += 1;
+          rows.push({
+            id: `f-${idx + 1}`,
+            line: idx + 1,
+            raw: line,
+            url: line,
+            status: "invalid",
+            reason: "Không phải liên kết nhóm Facebook hợp lệ",
+          });
+          return;
+        }
+
+        const normalizedUrl = normalizeFbGroupLink(line);
+        const normKey = normalizedUrl.toLowerCase().replace(/\/+$/, "");
+        if (seen.has(normKey)) {
           dupCount += 1;
           rows.push({
             id: `f-${idx + 1}`,
             line: idx + 1,
             raw: line,
+            url: normalizedUrl,
             status: "duplicate",
           });
         } else {
-          seen.add(norm);
+          seen.add(normKey);
           validCount += 1;
           rows.push({
             id: `f-${idx + 1}`,
             line: idx + 1,
             raw: line,
+            url: normalizedUrl,
             status: "valid",
           });
         }
@@ -433,16 +483,25 @@ export default function GroupScanInfoPage() {
         totalCount: rows.length,
         validCount,
         dupCount,
+        invalidCount,
         rows,
       });
       setFileQuotas((current) => {
         const next = { ...current };
         rows.forEach((item) => {
-          if (item.status === "valid" && next[item.raw] == null) next[item.raw] = 30;
+          const targetKey = item.url || item.raw;
+          if (item.status === "valid" && next[targetKey] == null) next[targetKey] = 30;
         });
         return next;
       });
-      toast.success(`Đã nhận diện tệp ${name}: ${validCount} dòng hợp lệ, ${dupCount} trùng lặp.`);
+
+      if (validCount === 0) {
+        toast.error(`Tệp «${name}» không chứa liên kết nhóm Facebook nào (${invalidCount} dòng sai định dạng). Vui lòng kiểm tra lại!`);
+      } else {
+        toast.success(
+          `Đã nhận diện tệp ${name}: ${validCount} link nhóm hợp lệ${dupCount > 0 ? `, ${dupCount} trùng lặp` : ""}${invalidCount > 0 ? `, ${invalidCount} không phải link nhóm (loại trừ)` : ""}.`
+        );
+      }
     } catch (err) {
       console.error(err);
       toast.error("Lỗi đọc tệp: " + (err.message || "Định dạng không hỗ trợ"));
@@ -455,6 +514,7 @@ export default function GroupScanInfoPage() {
     if (!fileData?.rows) return [];
     if (fileFilter === "valid") return fileData.rows.filter((r) => r.status === "valid");
     if (fileFilter === "duplicate") return fileData.rows.filter((r) => r.status === "duplicate");
+    if (fileFilter === "invalid") return fileData.rows.filter((r) => r.status === "invalid");
     return fileData.rows;
   }, [fileData, fileFilter]);
 
@@ -520,10 +580,13 @@ export default function GroupScanInfoPage() {
       }));
     } else if (method === "file") {
       const validRows = (fileData?.rows || []).filter((r) => r.status === "valid");
-      payloadKeywords = validRows.map((r) => ({
-        keyword: r.raw,
-        limit: Math.max(1, Math.min(200, Number(fileQuotas[r.raw]) || 30)),
-      }));
+      payloadKeywords = validRows.map((r) => {
+        const target = r.url || r.raw;
+        return {
+          keyword: target,
+          limit: Math.max(1, Math.min(200, Number(fileQuotas[target] ?? fileQuotas[r.raw]) || 30)),
+        };
+      });
     }
 
     const firstWord = payloadKeywords[0]?.keyword || "";
@@ -594,12 +657,19 @@ export default function GroupScanInfoPage() {
 
         if (status.status === "paused") {
           setRunState("paused");
+          setPausing(false);
+          setResuming(false);
           if (!finishedNotified) {
             finishedNotified = true;
-            toast.info("Đã tạm dừng sau từ khóa hiện tại.");
+            toast.info("Đã tạm dừng.");
           }
-          if (timer) clearInterval(timer);
           return;
+        }
+
+        if (status.status === "running") {
+          finishedNotified = false;
+          setRunState("running");
+          setResuming(false);
         }
 
         if (status.status === "done" || status.status === "error" || status.status === "aborted") {
@@ -614,6 +684,9 @@ export default function GroupScanInfoPage() {
             }
           }
           setRunState("idle");
+          setPausing(false);
+          setAborting(false);
+          setResuming(false);
           if (timer) clearInterval(timer);
         }
       } catch {
@@ -652,7 +725,7 @@ export default function GroupScanInfoPage() {
     if (method === "file") {
       const validRows = (fileData?.rows || []).filter((r) => r.status === "valid");
       if (!validRows.length) {
-        toast.warning("Vui lòng tải tệp danh sách nhóm trước khi bắt đầu.");
+        toast.warning("Tệp không chứa liên kết nhóm Facebook hợp lệ nào. Vui lòng kiểm tra lại tệp!");
         return;
       }
     }
@@ -667,6 +740,8 @@ export default function GroupScanInfoPage() {
     const uid = selectedUids[0];
     const body = buildScanBody(wordList);
     setRunState("running");
+    setPausing(false);
+    setAborting(false);
     if (method === "keyword") {
       try {
         await Promise.all(
@@ -697,7 +772,7 @@ export default function GroupScanInfoPage() {
     } else {
       const validCnt = (fileData?.rows || []).filter((r) => r.status === "valid").length;
       pushLog(
-        `Bắt đầu thực thi quét theo tệp: nick ${uid}, ${validCnt} mục từ ${fileData?.name || "tệp"}…`,
+        `Bắt đầu thực thi quét theo tệp: nick ${uid}, ${validCnt} liên kết nhóm Facebook từ ${fileData?.name || "tệp"}…`,
         "info",
       );
     }
@@ -747,25 +822,54 @@ export default function GroupScanInfoPage() {
   };
 
   const pauseRun = async () => {
-    if (!checkJobId || runState !== "running") return;
+    if (!checkJobId || runState !== "running" || pausing) return;
+    setPausing(true);
     try {
       const res = await controlScanJob({ jobId: checkJobId, action: "pause" });
       setRunState("paused");
-      toast.info(res?.message || "Sẽ tạm dừng sau khi xong từ khóa hiện tại.");
+      toast.info(res?.message || "Đã gửi lệnh tạm dừng.");
       pushLog(res?.message || "Đã gửi lệnh tạm dừng.", "warn");
     } catch (error) {
       toast.error(error.message || "Không tạm dừng được.");
+    } finally {
+      setPausing(false);
+    }
+  };
+
+  const resumeRun = async () => {
+    if (!checkJobId || runState !== "paused" || resuming) return;
+    setResuming(true);
+    try {
+      const res = await controlScanJob({ jobId: checkJobId, action: "resume" });
+      setRunState("running");
+      toast.success(res?.message || "Đang tiếp tục quét…");
+      pushLog(res?.message || "▶️ Đã gửi lệnh tiếp tục quét.", "info");
+    } catch (error) {
+      toast.error(error.message || "Không tiếp tục được phiên quét.");
+    } finally {
+      setResuming(false);
     }
   };
 
   const abortRun = async () => {
-    if (!checkJobId || (runState !== "running" && runState !== "paused")) return;
+    if (!checkJobId || (runState !== "running" && runState !== "paused") || aborting) return;
+    setAborting(true);
     try {
       const res = await controlScanJob({ jobId: checkJobId, action: "abort" });
       toast.warning(res?.message || "Đang dừng khẩn cấp…");
       pushLog(res?.message || "Đã gửi dừng khẩn cấp.", "warn");
     } catch (error) {
       toast.error(error.message || "Không dừng được.");
+    } finally {
+      setAborting(false);
+    }
+  };
+
+  const handlePrimaryAction = async () => {
+    if (runState === "paused" && checkJobId) {
+      await resumeRun();
+    } else {
+      await startRun();
     }
   };
 
@@ -802,7 +906,18 @@ export default function GroupScanInfoPage() {
         const kw = String(row.keyword || "").trim().toLowerCase();
         if (kw !== filterKeyword.trim().toLowerCase()) return false;
       }
-      if (filterNote !== "all" && row.note !== filterNote) return false;
+      if (filterNote !== "all") {
+        const n = String(row.note || "—").toLowerCase();
+        if (filterNote === "joined") {
+          if (n !== "joined" && !n.includes("đã tham gia")) return false;
+        } else if (filterNote === "pending") {
+          if (n !== "pending" && !n.includes("đang chờ")) return false;
+        } else if (filterNote === "not_joined") {
+          if (n !== "not_joined" && !n.includes("chưa vào")) return false;
+        } else if (filterNote === "none") {
+          if (n !== "—" && n !== "") return false;
+        }
+      }
       if (!q) return true;
       return `${row.name || ""} ${row.url || ""} ${row.keyword || ""}`.toLowerCase().includes(q);
     });
@@ -820,8 +935,8 @@ export default function GroupScanInfoPage() {
       const typeLabel = (t) => (t === "private" ? "Riêng tư" : "Công khai");
       const noteLabel = (n) => {
         if (n === "not_joined" || n === "Chưa vào nhóm") return "Chưa vào nhóm";
-        if (n === "joined") return "Đã tham gia";
-        if (n === "pending") return "Đang chờ QTV duyệt";
+        if (n === "joined" || n === "Đã tham gia") return "Đã tham gia";
+        if (n === "pending" || String(n).includes("Đang chờ")) return "Đang chờ QTV duyệt";
         return n && n !== "—" ? n : "";
       };
       const headers = ["STT", "Từ khóa", "Tên nhóm", "Loại nhóm", "Thành viên", "URL nhóm", "Ghi chú"];
@@ -943,6 +1058,7 @@ export default function GroupScanInfoPage() {
             onFileFilterChange={setFileFilter}
             validFileRowsCount={validFileRows.length}
             duplicateFileRowsCount={(fileData?.rows || []).filter((r) => r.status === "duplicate").length}
+            invalidFileRowsCount={(fileData?.rows || []).filter((r) => r.status === "invalid").length}
             displayedFileRows={displayedFileRows}
             skipInvalidRows={skipInvalidRows}
             onSkipInvalidRowsChange={setSkipInvalidRows}
@@ -1020,31 +1136,41 @@ export default function GroupScanInfoPage() {
         <div className="space-y-3">
           <button
             type="button"
-            onClick={startRun}
-            disabled={runState === "running"}
+            onClick={handlePrimaryAction}
+            disabled={runState === "running" || pausing || aborting || resuming}
             className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#2563EB] text-sm font-bold tracking-wide text-white hover:bg-blue-600 disabled:opacity-60"
           >
-            {runState === "running" ? <Loader2 className="size-4 animate-spin" /> : <IconPlay color="#fff" />}
-            {runState === "running" ? "ĐANG QUÉT…" : runState === "paused" ? "TIẾP TỤC / BẮT ĐẦU LẠI" : "BẮT ĐẦU THỰC THI"}
+            {runState === "running" || resuming ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <IconPlay color="#fff" />
+            )}
+            {runState === "running"
+              ? "ĐANG QUÉT…"
+              : resuming
+              ? "ĐANG TIẾP TỤC…"
+              : runState === "paused"
+              ? "TIẾP TỤC QUÉT"
+              : "BẮT ĐẦU THỰC THI"}
           </button>
           <div className="grid gap-3 sm:grid-cols-2">
             <button
               type="button"
-              disabled={runState !== "running"}
+              disabled={runState !== "running" || pausing || aborting}
               onClick={pauseRun}
               className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#FECACA] bg-white text-sm font-bold tracking-wide text-[#DC2626] disabled:opacity-40"
             >
-              <IconPause color="#DC2626" />
-              TẠM DỪNG
+              {pausing ? <Loader2 className="size-4 animate-spin text-[#DC2626]" /> : <IconPause color="#DC2626" />}
+              {pausing ? "ĐANG TẠM DỪNG…" : "TẠM DỪNG"}
             </button>
             <button
               type="button"
-              disabled={runState !== "running" && runState !== "paused"}
+              disabled={(runState !== "running" && runState !== "paused") || aborting || pausing}
               onClick={abortRun}
               className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#EF4444] text-sm font-bold tracking-wide text-white disabled:opacity-40"
             >
-              <IconStop color="#fff" />
-              DỪNG KHẨN CẤP
+              {aborting ? <Loader2 className="size-4 animate-spin text-white" /> : <IconStop color="#fff" />}
+              {aborting ? "ĐANG DỪNG KHẨN CẤP…" : "DỪNG KHẨN CẤP"}
             </button>
           </div>
         </div>

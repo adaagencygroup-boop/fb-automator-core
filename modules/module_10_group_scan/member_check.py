@@ -22,8 +22,9 @@ _member_jobs_lock = threading.Lock()
 
 SCRAPE_MEMBERS_JS = """
 (() => {
-  const members = [];
-  const seenUids = new Set();
+  // Ưu tiên thẻ tên thành viên dạng:
+  // <a href="/groups/{gid}/user/{uid}/" role="link">Emily Martin</a>
+  const byUid = new Map();
 
   const cleanName = (raw) => {
     let n = (raw || '').replace(/\\s+/g, ' ').trim();
@@ -33,6 +34,8 @@ SCRAPE_MEMBERS_JS = """
     if (/^(join|tham gia|joined|đang chờ|xem tất cả|see all|quản trị viên|admin|người kiểm duyệt|moderator|thành viên|members?|bạn bè|friends)$/i.test(n)) {
       return '';
     }
+    // Bỏ tên quá dài (thường là block text lẫn nút)
+    if (n.length > 80) return '';
     return n;
   };
 
@@ -44,114 +47,122 @@ SCRAPE_MEMBERS_JS = """
     return parseInt(numStr, 10) || 0;
   };
 
-  // Trích xuất tất cả liên kết thành viên trong nhóm
-  // Bao gồm thẻ a có href dạng /groups/{groupId}/user/{uid}/ hoặc /user/{uid}/
-  const anchors = document.querySelectorAll(
-    'a[href*="/user/"], a[role="link"][href*="/user/"], a[role="link"][href*="facebook.com/"], a[role="link"][href*="/groups/"]'
+  const extractUid = (href) => {
+    if (!href) return '';
+    // /groups/790752766302091/user/61554844533119/
+    let m = href.match(/\\/groups\\/[^/]+\\/user\\/(\\d+)/i);
+    if (m) return m[1];
+    m = href.match(/\\/user\\/(\\d+)/i);
+    if (m) return m[1];
+    m = href.match(/[?&]id=(\\d+)/i);
+    if (m) return m[1];
+    return '';
+  };
+
+  const isAvatarOnlyLink = (a) => {
+    const aria = (a.getAttribute('aria-label') || '').toLowerCase();
+    if (/profile photo|ảnh đại diện|anh dai dien/.test(aria)) return true;
+    const text = (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim();
+    const hasImg = !!a.querySelector('img, image, svg image');
+    // Link chỉ chứa ảnh, không có tên chữ
+    if (hasImg && (!text || text.length < 2)) return true;
+    return false;
+  };
+
+  const nameFromAnchor = (a) => {
+    // Ưu tiên text trực tiếp của thẻ a (đúng case "Emily Martin")
+    let raw = '';
+    // Child text nodes / span text trước
+    const spans = a.querySelectorAll('span');
+    for (const sp of spans) {
+      const t = (sp.innerText || sp.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (t && t.length >= 2 && t.length <= 80 && !sp.querySelector('img, svg')) {
+        raw = t;
+        break;
+      }
+    }
+    if (!raw) {
+      raw = (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim();
+    }
+    if (!raw || raw.length < 2) {
+      const aria = (a.getAttribute('aria-label') || '').trim();
+      if (aria && !/profile photo|ảnh đại diện/i.test(aria)) raw = aria;
+    }
+    return cleanName(raw);
+  };
+
+  const upsertMember = (uid, payload) => {
+    const prev = byUid.get(uid);
+    if (!prev) {
+      byUid.set(uid, payload);
+      return;
+    }
+    // Giữ tên đẹp hơn (có chữ, không rỗng) và avatar nếu thiếu
+    const betterName = payload.name && (!prev.name || payload.name.length > prev.name.length);
+    byUid.set(uid, {
+      ...prev,
+      ...payload,
+      name: betterName ? payload.name : prev.name,
+      avatarUrl: payload.avatarUrl || prev.avatarUrl,
+      friendCount: payload.friendCount || prev.friendCount,
+      role: payload.role && payload.role !== 'member' ? payload.role : prev.role,
+      isAdmin: payload.isAdmin || prev.isAdmin,
+      isMod: payload.isMod || prev.isMod,
+    });
+  };
+
+  // 1) PRIMARY: đúng pattern /groups/.../user/{uid}/
+  const primaryAnchors = document.querySelectorAll(
+    'a[href*="/groups/"][href*="/user/"], a[role="link"][href*="/groups/"][href*="/user/"]'
   );
 
-  for (const a of anchors) {
-    let href = a.getAttribute('href') || a.href || '';
-    if (!href) continue;
+  for (const a of primaryAnchors) {
+    const href = a.getAttribute('href') || a.href || '';
+    const uid = extractUid(href);
+    if (!uid) continue;
+    if (isAvatarOnlyLink(a)) {
+      // Vẫn lấy avatar từ link ảnh nếu đã có bản ghi tên
+      continue;
+    }
+    const name = nameFromAnchor(a);
+    if (!name) continue;
 
-    let uid = '';
-    const userMatch = href.match(/\\/user\\/(\\d+)/i);
-    if (userMatch) {
-      uid = userMatch[1];
-    } else if (href.includes('/groups/') && href.includes('/user/')) {
-      const parts = href.split('/user/');
-      if (parts[1]) {
-        uid = parts[1].split('/')[0].split('?')[0].trim();
-      }
-    } else {
-      const profileMatch = href.match(/[?&]id=(\\d+)/i);
-      if (profileMatch) {
-        uid = profileMatch[1];
-      } else {
-        const uMatch = href.match(/(?:facebook\\.com|^)\\/([^/?#]+)/i);
-        if (uMatch) {
-          const slug = uMatch[1].trim();
-          const systemSlugs = [
-            'groups', 'messages', 'profile.php', 'notifications', 'watch',
-            'marketplace', 'gaming', 'events', 'photos', 'about', 'posts',
-            'home', 'friends', 'settings', 'help', 'login', 'recover'
-          ];
-          if (!systemSlugs.includes(slug.toLowerCase()) && !/^feed/i.test(slug)) {
-            uid = slug;
-          }
+    let row = a.closest('div[role="listitem"]')
+      || a.closest('div[data-visualcompletion="ignore-dynamic-rendering"]')
+      || a.parentElement;
+    let avatarUrl = '';
+    if (row) {
+      const img = row.querySelector('img[src*="scontent"], img[src*="fbcdn"], image');
+      if (img) avatarUrl = img.getAttribute('xlink:href') || img.getAttribute('src') || '';
+    }
+    const rowText = row ? (row.innerText || row.textContent || '') : '';
+    const friendCount = parseFriends(rowText);
+
+    let isAdmin = false;
+    let isMod = false;
+    let role = 'member';
+    if (row) {
+      const leafElements = row.querySelectorAll('span, div');
+      for (const el of leafElements) {
+        if (el.children.length !== 0) continue;
+        const leafText = (el.innerText || el.textContent || '').trim().toLowerCase();
+        if (leafText === 'quản trị viên' || leafText === 'admin') {
+          isAdmin = true;
+          role = 'admin';
+          break;
         }
-      }
-    }
-
-    if (!uid || seenUids.has(uid)) continue;
-
-    // Lấy họ tên thành viên: kiểm tra innerText, textContent hoặc thẻ span con bên trong thẻ a
-    let rawName = (a.innerText || a.textContent || a.getAttribute('aria-label') || '').trim();
-    if (!rawName || rawName.length < 2) {
-      const innerSpan = a.querySelector('span');
-      if (innerSpan) {
-        rawName = (innerSpan.innerText || innerSpan.textContent || '').trim();
-      }
-    }
-    const name = cleanName(rawName);
-    if (!name || name.length < 2) continue;
-
-    // Tìm dòng (row) chứa thành viên (tối đa 3 cấp cha để không bị lan ra tiêu đề section)
-    let row = a.closest('div[role="listitem"]') || a.closest('div[data-visualcompletion="ignore-dynamic-rendering"]');
-    if (!row) {
-      let cur = a;
-      for (let d = 0; d < 3 && cur && cur !== document.body; d++) {
-        cur = cur.parentElement;
-        if (cur && cur.children.length > 1) {
-          row = cur;
+        if (leafText === 'người kiểm duyệt' || leafText === 'moderator') {
+          isMod = true;
+          role = 'moderator';
           break;
         }
       }
     }
 
-    // Ảnh đại diện
-    let avatarUrl = '';
-    if (row) {
-      const img = row.querySelector('img[src*="scontent"], img[src*="fbcdn"], image');
-      if (img) {
-        avatarUrl = img.getAttribute('xlink:href') || img.getAttribute('src') || '';
-      }
-    }
-
-    // Số lượng bạn bè
-    const rowText = row ? (row.innerText || row.textContent || '') : '';
-    const friendCount = parseFriends(rowText);
-
-    // Nhận diện vai trò Admin / Mod chính xác:
-    // CHỈ kiểm tra các node con dạng lá (leaf text) nằm trong row của thành viên.
-    // TUYỆT ĐỐI không kiểm tra regex trên toàn bộ section cha vì sẽ bắt nhầm tiêu đề 'Quản trị viên & người kiểm duyệt'.
-    let isAdmin = false;
-    let isMod = false;
-    let role = 'member';
-
-    if (row) {
-      const leafElements = row.querySelectorAll('span, div');
-      for (const el of leafElements) {
-        if (el.children.length === 0) {
-          const leafText = (el.innerText || el.textContent || '').trim().toLowerCase();
-          if (leafText === 'quản trị viên' || leafText === 'admin') {
-            isAdmin = true;
-            role = 'admin';
-            break;
-          } else if (leafText === 'người kiểm duyệt' || leafText === 'moderator') {
-            isMod = true;
-            role = 'moderator';
-            break;
-          }
-        }
-      }
-    }
-
-    seenUids.add(uid);
-    members.push({
+    upsertMember(uid, {
       uid,
       name,
-      href: href.startsWith('http') ? href : 'https://www.facebook.com' + href,
+      href: href.startsWith('http') ? href.split('?')[0] : ('https://www.facebook.com' + href.split('?')[0]),
       avatarUrl,
       friendCount,
       role,
@@ -160,7 +171,44 @@ SCRAPE_MEMBERS_JS = """
     });
   }
 
-  return members;
+  // 2) Bổ sung avatar từ link ảnh cùng /groups/.../user/{uid}/
+  for (const a of primaryAnchors) {
+    const href = a.getAttribute('href') || a.href || '';
+    const uid = extractUid(href);
+    if (!uid || !byUid.has(uid)) continue;
+    const img = a.querySelector('img[src*="scontent"], img[src*="fbcdn"], image');
+    if (!img) continue;
+    const avatarUrl = img.getAttribute('xlink:href') || img.getAttribute('src') || '';
+    if (!avatarUrl) continue;
+    const prev = byUid.get(uid);
+    if (!prev.avatarUrl) {
+      byUid.set(uid, { ...prev, avatarUrl });
+    }
+  }
+
+  // 3) FALLBACK hẹp: /user/{uid}/ ngoài pattern groups (ít dùng trên /members)
+  if (byUid.size === 0) {
+    const fallback = document.querySelectorAll('a[href*="/user/"]');
+    for (const a of fallback) {
+      const href = a.getAttribute('href') || a.href || '';
+      const uid = extractUid(href);
+      if (!uid || isAvatarOnlyLink(a)) continue;
+      const name = nameFromAnchor(a);
+      if (!name) continue;
+      upsertMember(uid, {
+        uid,
+        name,
+        href: href.startsWith('http') ? href.split('?')[0] : ('https://www.facebook.com' + href.split('?')[0]),
+        avatarUrl: '',
+        friendCount: 0,
+        role: 'member',
+        isAdmin: false,
+        isMod: false,
+      });
+    }
+  }
+
+  return Array.from(byUid.values());
 })();
 """
 def _now_str() -> str:
