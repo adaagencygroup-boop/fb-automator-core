@@ -11,6 +11,8 @@ from modules.module_07_group_spam.app.services.campaign import (
     FacebookGroupPoster,
     _friendly_automation_error,
     html_to_facebook_text,
+    _group_key,
+    _group_url,
 )
 
 
@@ -440,6 +442,62 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual(result["status"], "COMPLETED")
         logs = result["logs"]
         self.assertTrue(any("Chiến dịch đã hoàn thành thành công" in log["message"] for log in logs))
+
+
+    def test_group_dto_compatibility(self):
+        from modules.module_07_group_spam.app.schemas.request import GroupDTO
+        from modules.module_07_group_spam.app.schemas.response import GroupResponse
+
+        dto = GroupDTO(key="g123", url="https://facebook.com/groups/g123?ref=share", name="Test Group")
+        self.assertEqual(_group_key(dto), "g123")
+        self.assertEqual(_group_url(dto), "https://facebook.com/groups/g123")
+
+        dto_uid = GroupDTO(id="987654321")
+        self.assertEqual(_group_key(dto_uid), "987654321")
+        self.assertEqual(_group_url(dto_uid), "https://www.facebook.com/groups/987654321")
+
+        resp = GroupResponse(
+            id="resp-1",
+            key="resp-key",
+            name="Response Group",
+            url="facebook.com/groups/resp123",
+            uid="resp123",
+            frequency="10",
+            members="1000",
+            privacy="PUBLIC",
+            already_posted=False,
+        )
+        self.assertEqual(_group_key(resp), "resp-key")
+        self.assertEqual(_group_url(resp), "https://facebook.com/groups/resp123")
+
+        d = {"url": "https://facebook.com/groups/dict123"}
+        self.assertEqual(_group_key(d), "https://facebook.com/groups/dict123")
+        self.assertEqual(_group_url(d), "https://facebook.com/groups/dict123")
+
+
+    def test_join_group_already_joined_button(self):
+        class Button:
+            def __init__(self, text):
+                self.text = text
+            def is_displayed(self):
+                return True
+
+        class Driver:
+            current_url = "https://facebook.com/groups/g1"
+            def execute_script(self, _script, *args):
+                return "complete"
+            def get(self, url):
+                pass
+            def find_elements(self, by, xpath):
+                if "Đã tham gia" in xpath or "Joined" in xpath:
+                    return [Button("Đã tham gia")]
+                return []
+
+        poster = FacebookGroupPoster({"uid": "100"}, threading.Event(), lambda *_: None)
+        poster.driver = Driver()
+        result = poster.join_group({"url": "https://facebook.com/groups/g1"})
+        self.assertEqual(result["status"], "ALREADY_MEMBER")
+        self.assertIn("đã là thành viên", result["message"])
 
 
 if __name__ == "__main__":

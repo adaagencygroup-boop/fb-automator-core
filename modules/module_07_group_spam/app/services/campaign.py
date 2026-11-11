@@ -15,6 +15,11 @@ from typing import Any, Callable
 from modules.module_02_account_manager.context import owner_scope
 from ..core.constants import BLOCK_TAGS, TERMINAL_STATES, LogLevel
 from .supabase_storage import download_or_cache_media, upload_local_file_to_supabase
+from ..schemas.request import AccountDTO, GroupDTO
+from ..schemas.response import GroupResponse
+
+GroupItem = GroupDTO | GroupResponse | dict[str, Any]
+AccountItem = AccountDTO | dict[str, Any]   
 
 
 class _TextExtractor(HTMLParser):
@@ -43,13 +48,24 @@ def html_to_facebook_text(value: str) -> str:
     parser.feed(value or "")
     return "\n".join(line.rstrip() for line in parser.text().splitlines()).strip()
 
+def _extract_group_field(group: GroupItem, *arg: str) -> str:
+    for field in arg:
+        if isinstance(group, dict):
+            val = group.get(field)
+        else:
+            val = getattr(group, field, None)
+        if val:
+            return str(val).strip()
+    return ""
 
-def _group_key(group: dict[str, Any]) -> str:
-    return str(group.get("key") or group.get("id") or group.get("url") or "").strip()
+
+def _group_key(group: GroupItem) -> str:
+    return _extract_group_field(group, "key", "id", "url")
 
 
-def _group_url(group: dict[str, Any]) -> str:
-    value = str(group.get("url") or group.get("link") or _group_key(group)).strip()
+# xử lí URL nhóm
+def _group_url(group: GroupItem) -> str:
+    value = _extract_group_field(group, "url", "link", "key", "id")
     if value.startswith("http://") or value.startswith("https://"):
         return value.split("?", 1)[0].rstrip("/")
     if value.startswith("facebook.com/") or value.startswith("www.facebook.com/"):
@@ -104,7 +120,7 @@ _SENSITIVE_CONFIG_KEYS = {
     "api_key",
     "access_token",
     "token",
-    "cookie",
+    "cookie", 
     "password",
     "pass_mail",
     "two_fa",
@@ -198,7 +214,7 @@ class CampaignJob:
 class FacebookGroupPoster:
     """One account browser session; each instance is used by one worker thread."""
 
-    def __init__(self, account: dict[str, Any], cancel: threading.Event, log: Callable[[str, str], None]):
+    def __init__(self, account: AccountItem, cancel: threading.Event, log: Callable[[str, str], None]):
         self.account = account
         self.cancel = cancel
         self.log = log
@@ -380,7 +396,9 @@ class FacebookGroupPoster:
             # A stale dialog means Facebook removed it from the DOM.
             return True
 
-    def join_group(self, group: dict[str, Any]) -> dict[str, Any]:
+
+
+    def join_group(self, group: GroupItem) -> dict[str, Any]:
         """Open a group and join it when needed before the posting stage."""
         from selenium.webdriver.common.by import By
 
@@ -397,6 +415,22 @@ class FacebookGroupPoster:
         )
         if any(part in (driver.current_url or "").lower() for part in ("checkpoint", "/login", "two_step")):
             raise RuntimeError("Tài khoản bị đăng xuất hoặc checkpoint")
+
+        already_joined_xpath = (
+            "//*[@role='button' and (normalize-space(.)='Đã tham gia' or "
+            "normalize-space(.)='Joined' or contains(@aria-label,'Đã tham gia') or "
+            "contains(@aria-label,'Joined'))]"
+        )
+        if any(self._is_displayed(b) for b in driver.find_elements(By.XPATH, already_joined_xpath)):
+            return {"status": "ALREADY_MEMBER", "message": "Tài khoản đã là thành viên nhóm"}
+
+        pending_xpath = (
+            "//*[@role='button' and (contains(@aria-label,'Hủy yêu cầu') or "
+            "contains(@aria-label,'Cancel request') or contains(.,'Đang chờ') or "
+            "contains(.,'Pending'))]"
+        )
+        if any(self._is_displayed(b) for b in driver.find_elements(By.XPATH, pending_xpath)):
+            return {"status": "PENDING_APPROVAL", "message": "Đã gửi yêu cầu, đang chờ quản trị viên duyệt"}
 
         join_xpath = (
             "//*[@role='button' and (contains(@aria-label,'Tham gia nhóm') or "
@@ -439,7 +473,7 @@ class FacebookGroupPoster:
         self._dismiss_group_join_overlays()
         return {"status": "JOINED", "message": "Tham gia nhóm thành công"}
 
-    def post(self, group: dict[str, Any], content: str, media: list[str]) -> dict[str, Any]:
+    def post(self, group: GroupItem, content: str, media: list[str]) -> dict[str, Any]:
         from selenium.webdriver.common.by import By
 
         self._raise_if_cancelled()
@@ -638,7 +672,7 @@ class FacebookGroupPoster:
 
     def comment(
         self,
-        group: dict[str, Any],
+        group: GroupItem,
         content: str,
         media: list[str],
         *,
@@ -1240,7 +1274,7 @@ class CampaignManager:
             job.finished_at = datetime.now().isoformat(timespec="seconds")
             self._persist_final_results(job)
 
-    def _run_account(self, job: CampaignJob, account: dict[str, Any], groups: list[dict[str, Any]]) -> None:
+    def _run_account(self, job: CampaignJob, account: AccountItem, groups: list[dict[str, Any]]) -> None:
         settings = job.payload.get("settings") or {}
         posts = [html_to_facebook_text(p) for p in job.payload.get("posts") or [] if html_to_facebook_text(p)]
         media_pool = list(job.payload.get("media") or [])
@@ -1258,7 +1292,7 @@ class CampaignManager:
                 for index, group in enumerate(groups):
                     if job.cancel.is_set():
                         raise InterruptedError()
-                    group_name = group.get("name") or _group_key(group)
+                    group_name = _extract_group_field(group, "name") or _group_key(group)
                     group_url = _group_url(group)
                     url_display = f" ({group_url})" if group_url else ""
                     job.log("INFO", f"[{uid}] Luồng tham gia: kiểm tra {group_name}{url_display}")
@@ -1389,7 +1423,7 @@ class CampaignManager:
             "account_id": account.get("id"),
             "account_name": account.get("profile_name"),
             "group_key": _group_key(group),
-            "group_name": group.get("name"),
+            "group_name": _extract_group_field(group, "name") or None,
             "group_url": _group_url(group),
             "status": status,
             "message": result.get("message", ""),

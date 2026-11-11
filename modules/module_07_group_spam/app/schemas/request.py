@@ -86,6 +86,43 @@ class SearchGroupInput(BaseModel):
     account_uid: str | None = None
 
 
+class AccountDTO(BaseModel):
+    uid: str # Unique identifier for the account (e.g., Facebook UID).
+    id: int | str | None = None # Optional account ID (could be numeric or string) saved in the database.
+    profile_name: str | None = None
+    password: str | None = None
+    two_fa: str | None = None
+    cookie: str | None = None
+    proxy: str | None = None
+
+    model_config = {"extra": "allow"}
+
+    def get(self, key: str, default: Any = None) -> Any:
+        val = getattr(self, key, None)
+        return default if val is None else val
+
+    def __getitem__(self, item: str) -> Any:
+        val = getattr(self, item, None)
+        if val is None:
+            raise KeyError(item)
+        return val
+
+
+class GroupDTO(BaseModel):
+    id: str | None = None
+    key: str | None = None
+    name: str | None = None
+    url: str | None = None
+    link: str | None = None
+    uid: str | None = None
+
+    model_config = {"extra": "allow"}
+
+    def get(self, key: str, default: Any = None) -> Any:
+        val = getattr(self, key, None)
+        return default if val is None else val
+
+
 class CampaignInput(BaseModel):
     campaign_id: str | None = Field(default=None, max_length=100)
     name: str | None = Field(default=None, min_length=1, max_length=200)
@@ -93,7 +130,7 @@ class CampaignInput(BaseModel):
     action_type: str = ActionType.POST.value
     account_ids: list[Any] = Field(default_factory=list)
     account_uids: list[str] = Field(default_factory=list)
-    groups: list[dict[str, Any]] = Field(default_factory=list)
+    groups: list[GroupDTO | dict[str, Any]] = Field(default_factory=list)
     posts: list[str] = Field(default_factory=list)
     media: list[str] = Field(default_factory=list)
     settings: dict[str, Any] = Field(default_factory=dict)
@@ -116,12 +153,16 @@ class CampaignInput(BaseModel):
 
     @field_validator("groups")
     @classmethod
-    def unique_valid_groups(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        unique: list[dict[str, Any]] = []
+    def unique_valid_groups(cls, value: list[Any]) -> list[Any]:
+        unique: list[Any] = []
         seen: set[str] = set()
         for group in value:
-            url = str(group.get("url") or "").strip()
-            key = str(group.get("key") or group.get("uid") or url).strip().lower()
+            if isinstance(group, dict):
+                url = str(group.get("url") or "").strip()
+                key = str(group.get("key") or group.get("uid") or url).strip().lower()
+            else:
+                url = str(getattr(group, "url", None) or "").strip()
+                key = str(getattr(group, "key", None) or getattr(group, "uid", None) or url).strip().lower()
             if not url or not key or key in seen:
                 continue
             seen.add(key)
@@ -147,6 +188,8 @@ __all__ = [
     "CampaignInput",
     "ConnectionTestInput",
     "GeneratePostsInput",
+    "AccountDTO",
+    "GroupDTO",
     "ModelListInput",
     "ParseFileInput",
     "SearchGroupInput",
