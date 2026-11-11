@@ -135,42 +135,45 @@ export default function ScanTargetConfigCard({
           <>
             <div className="flex items-center justify-between">
               <p className="text-[11px] font-semibold text-[#64748B]">
-                Số nhóm cần quét / mục tiêu tệp {validFileRows.length > 0 && `(${validFileRows.length})`}
+                Số nhóm cần quét / liên kết trong tệp {validFileRows.length > 0 && `(${validFileRows.length})`}
               </p>
               {validFileRows.length > 5 && (
                 <span className="text-[10px] text-blue-600 font-medium">Cuộn để xem thêm ({validFileRows.length} mục)</span>
               )}
             </div>
             {!fileData || validFileRows.length === 0 ? (
-              <p className="text-xs text-[#94A3B8]">Tải file .txt hoặc .csv ở cột trái để đặt hạn mức số nhóm.</p>
+              <p className="text-xs text-[#94A3B8]">Tải file chứa danh sách link nhóm ở cột trái để đặt hạn mức.</p>
             ) : (
               <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
-                {validFileRows.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-[#F1F5F9] bg-[#F8FAFC] px-3 py-2"
-                  >
-                    <div className="min-w-0 flex items-center gap-2">
-                      <span className="text-xs font-bold text-[#2563EB]">Dòng {item.line}</span>
-                      <span className="truncate text-xs font-medium text-[#0F172A]" title={item.raw}>
-                        {item.raw}
-                      </span>
+                {validFileRows.map((item) => {
+                  const targetKey = item.url || item.raw;
+                  return (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-[#F1F5F9] bg-[#F8FAFC] px-3 py-2"
+                    >
+                      <div className="min-w-0 flex items-center gap-2">
+                        <span className="text-xs font-bold text-[#2563EB]">Dòng {item.line}</span>
+                        <span className="truncate text-xs font-medium text-[#0F172A]" title={targetKey}>
+                          {targetKey}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <input
+                          type="number"
+                          min={1}
+                          max={5000}
+                          value={fileQuotas[targetKey] ?? fileQuotas[item.raw] ?? 30}
+                          onChange={(event) =>
+                            onFileQuotaChange(targetKey, Math.max(1, Math.min(5000, Number(event.target.value) || 1)))
+                          }
+                          className={`${inputClass} w-16`}
+                        />
+                        <span className="text-[11px] text-[#94A3B8]">nhóm</span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <input
-                        type="number"
-                        min={1}
-                        max={5000}
-                        value={fileQuotas[item.raw] ?? 30}
-                        onChange={(event) =>
-                          onFileQuotaChange(item.raw, Math.max(1, Math.min(5000, Number(event.target.value) || 1)))
-                        }
-                        className={`${inputClass} w-16`}
-                      />
-                      <span className="text-[11px] text-[#94A3B8]">nhóm</span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </>

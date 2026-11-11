@@ -526,6 +526,15 @@ def delete_scanned_groups_bulk(owner: Optional[str], ids: list[Any]) -> int:
     return cnt
 
 
+def clean_group_name(raw: str) -> str:
+    name = re.sub(r"\s+", " ", str(raw or "").strip())
+    name = name.split("\n")[0].strip()
+    name = re.sub(r"^[\(\[]\d+\+?[\)\]]\s*", "", name).strip()
+    name = re.sub(r"^(Profile photo of|Ảnh đại diện của|Anh dai dien cua)\s*", "", name, flags=re.I).strip()
+    name = re.sub(r"\s*\|\s*Facebook$", "", name, flags=re.I).strip()
+    name = re.sub(r"^[\(\[]\d+\+?[\)\]]\s*", "", name).strip()
+    return name
+
 def upsert_scanned_group(
     *,
     owner: Optional[str],
@@ -546,7 +555,7 @@ def upsert_scanned_group(
     if not gid or not href:
         return False
 
-    name = (group.get("name") or "")[:500]
+    name = clean_group_name(group.get("name") or "")[:500]
     privacy = str(group.get("type") or group.get("privacy") or "unknown")[:20]
     members_label = (group.get("members") or group.get("members_label") or "")[:80] or None
     members_count = group.get("members_count")
@@ -1067,6 +1076,15 @@ def create_scan_category(owner: Optional[str], name: str, description: str = "")
     name = re.sub(r"\s+", " ", (name or "").strip())
     if not owner or not name:
         return {"ok": False, "error": "Thiếu tên danh mục"}
+    name_lower = name.lower()
+    if (
+        name_lower.startswith("http")
+        or "/groups/" in name_lower
+        or "facebook.com" in name_lower
+        or "fb.com" in name_lower
+        or name_lower == "directlink"
+    ):
+        return {"ok": False, "error": "Không tạo danh mục cho liên kết URL hoặc directlink"}
     try:
         row = db.fetch_one(
             "SELECT id, name, description FROM scanned_group_categories WHERE owner_username = ? AND lower(name) = lower(?)",

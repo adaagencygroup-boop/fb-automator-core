@@ -101,7 +101,10 @@ function mapGroupRow(g) {
     }
   }
   let name = String(g?.name || "")
-    .replace(/^(Profile photo of|Ảnh đại diện của)\s*/i, "")
+    .replace(/^[\(\[]\d+\+?[\)\]]\s*/, "")
+    .replace(/^(Profile photo of|Ảnh đại diện của|Anh dai dien cua)\s*/i, "")
+    .replace(/\s*\|\s*Facebook$/i, "")
+    .replace(/^[\(\[]\d+\+?[\)\]]\s*/, "")
     .trim();
   return {
     id: g.id || g.href || g.url,
@@ -307,6 +310,35 @@ export default function GroupScanInfoPage() {
     setKeywords((current) => current.filter((item) => item !== word));
   };
 
+  // Helper kiểm tra & chuẩn hóa liên kết Facebook Group cho Tải tệp & Nhập link
+  const isFbGroupLink = (raw) => {
+    let clean = String(raw || "").trim();
+    if (!clean) return false;
+    if (/^[0-9]{5,}$/.test(clean)) return true;
+    if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+      clean = `https://${clean}`;
+    }
+    return /(facebook\.com|fb\.com)\/(groups\/[0-9a-zA-Z._-]+|[0-9]{5,})/i.test(clean);
+  };
+
+  const normalizeFbGroupLink = (raw) => {
+    let clean = String(raw || "").trim();
+    if (/^[0-9]{5,}$/.test(clean)) {
+      return `https://www.facebook.com/groups/${clean}`;
+    }
+    if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+      clean = `https://${clean}`;
+    }
+    try {
+      const url = new URL(clean);
+      url.search = "";
+      url.hash = "";
+      return url.toString().replace(/\/+$/, "");
+    } catch {
+      return clean.replace(/\/+$/, "");
+    }
+  };
+
   // Handler Phương thức Nhập Link
   const handleClearAllLinks = () => {
     setLinkText("");
@@ -326,14 +358,11 @@ export default function GroupScanInfoPage() {
     const seen = new Set();
     const list = [];
     lines.forEach((line) => {
-      let clean = line;
-      if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
-        clean = `https://${clean}`;
-      }
+      const isFbGroup = isFbGroupLink(line);
+      const clean = isFbGroup ? normalizeFbGroupLink(line) : (line.startsWith("http") ? line : `https://${line}`);
       const key = clean.toLowerCase().replace(/\/+$/, "");
       if (seen.has(key)) return;
       seen.add(key);
-      const isFbGroup = /(facebook\.com|fb\.com)\/(groups\/[0-9a-zA-Z._-]+|[0-9]{5,})/i.test(clean) || /^[0-9]{5,}$/.test(line.trim());
       list.push({
         id: `link-${list.length + 1}`,
         stt: list.length + 1,
@@ -361,7 +390,7 @@ export default function GroupScanInfoPage() {
     });
   };
 
-  // Handler Phương thức Tải tệp
+  // Handler Phương thức Tải tệp (CHỈ chấp nhận link nhóm Facebook, loại bỏ hoàn toàn từ khóa)
   const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -380,7 +409,7 @@ export default function GroupScanInfoPage() {
           if (Array.isArray(row)) {
             row.forEach((cell) => {
               const text = String(cell || "").trim();
-              if (text && !text.startsWith("#") && !/^(stt|tên|link|nhóm|keyword|group)/i.test(text)) {
+              if (text && !text.startsWith("#") && !/^(stt|tên|link|nhóm|group|url|đường dẫn)/i.test(text)) {
                 rawLines.push(text);
               }
             });
@@ -403,24 +432,42 @@ export default function GroupScanInfoPage() {
       const rows = [];
       let validCount = 0;
       let dupCount = 0;
+      let invalidCount = 0;
 
       rawLines.forEach((line, idx) => {
-        const norm = line.toLowerCase().replace(/\/+$/, "");
-        if (seen.has(norm)) {
+        const isGroup = isFbGroupLink(line);
+        if (!isGroup) {
+          invalidCount += 1;
+          rows.push({
+            id: `f-${idx + 1}`,
+            line: idx + 1,
+            raw: line,
+            url: line,
+            status: "invalid",
+            reason: "Không phải liên kết nhóm Facebook hợp lệ",
+          });
+          return;
+        }
+
+        const normalizedUrl = normalizeFbGroupLink(line);
+        const normKey = normalizedUrl.toLowerCase().replace(/\/+$/, "");
+        if (seen.has(normKey)) {
           dupCount += 1;
           rows.push({
             id: `f-${idx + 1}`,
             line: idx + 1,
             raw: line,
+            url: normalizedUrl,
             status: "duplicate",
           });
         } else {
-          seen.add(norm);
+          seen.add(normKey);
           validCount += 1;
           rows.push({
             id: `f-${idx + 1}`,
             line: idx + 1,
             raw: line,
+            url: normalizedUrl,
             status: "valid",
           });
         }
@@ -433,16 +480,25 @@ export default function GroupScanInfoPage() {
         totalCount: rows.length,
         validCount,
         dupCount,
+        invalidCount,
         rows,
       });
       setFileQuotas((current) => {
         const next = { ...current };
         rows.forEach((item) => {
-          if (item.status === "valid" && next[item.raw] == null) next[item.raw] = 30;
+          const targetKey = item.url || item.raw;
+          if (item.status === "valid" && next[targetKey] == null) next[targetKey] = 30;
         });
         return next;
       });
-      toast.success(`Đã nhận diện tệp ${name}: ${validCount} dòng hợp lệ, ${dupCount} trùng lặp.`);
+
+      if (validCount === 0) {
+        toast.error(`Tệp «${name}» không chứa liên kết nhóm Facebook nào (${invalidCount} dòng sai định dạng). Vui lòng kiểm tra lại!`);
+      } else {
+        toast.success(
+          `Đã nhận diện tệp ${name}: ${validCount} link nhóm hợp lệ${dupCount > 0 ? `, ${dupCount} trùng lặp` : ""}${invalidCount > 0 ? `, ${invalidCount} không phải link nhóm (loại trừ)` : ""}.`
+        );
+      }
     } catch (err) {
       console.error(err);
       toast.error("Lỗi đọc tệp: " + (err.message || "Định dạng không hỗ trợ"));
@@ -455,6 +511,7 @@ export default function GroupScanInfoPage() {
     if (!fileData?.rows) return [];
     if (fileFilter === "valid") return fileData.rows.filter((r) => r.status === "valid");
     if (fileFilter === "duplicate") return fileData.rows.filter((r) => r.status === "duplicate");
+    if (fileFilter === "invalid") return fileData.rows.filter((r) => r.status === "invalid");
     return fileData.rows;
   }, [fileData, fileFilter]);
 
@@ -520,10 +577,13 @@ export default function GroupScanInfoPage() {
       }));
     } else if (method === "file") {
       const validRows = (fileData?.rows || []).filter((r) => r.status === "valid");
-      payloadKeywords = validRows.map((r) => ({
-        keyword: r.raw,
-        limit: Math.max(1, Math.min(200, Number(fileQuotas[r.raw]) || 30)),
-      }));
+      payloadKeywords = validRows.map((r) => {
+        const target = r.url || r.raw;
+        return {
+          keyword: target,
+          limit: Math.max(1, Math.min(200, Number(fileQuotas[target] ?? fileQuotas[r.raw]) || 30)),
+        };
+      });
     }
 
     const firstWord = payloadKeywords[0]?.keyword || "";
@@ -652,7 +712,7 @@ export default function GroupScanInfoPage() {
     if (method === "file") {
       const validRows = (fileData?.rows || []).filter((r) => r.status === "valid");
       if (!validRows.length) {
-        toast.warning("Vui lòng tải tệp danh sách nhóm trước khi bắt đầu.");
+        toast.warning("Tệp không chứa liên kết nhóm Facebook hợp lệ nào. Vui lòng kiểm tra lại tệp!");
         return;
       }
     }
@@ -697,7 +757,7 @@ export default function GroupScanInfoPage() {
     } else {
       const validCnt = (fileData?.rows || []).filter((r) => r.status === "valid").length;
       pushLog(
-        `Bắt đầu thực thi quét theo tệp: nick ${uid}, ${validCnt} mục từ ${fileData?.name || "tệp"}…`,
+        `Bắt đầu thực thi quét theo tệp: nick ${uid}, ${validCnt} liên kết nhóm Facebook từ ${fileData?.name || "tệp"}…`,
         "info",
       );
     }
@@ -943,6 +1003,7 @@ export default function GroupScanInfoPage() {
             onFileFilterChange={setFileFilter}
             validFileRowsCount={validFileRows.length}
             duplicateFileRowsCount={(fileData?.rows || []).filter((r) => r.status === "duplicate").length}
+            invalidFileRowsCount={(fileData?.rows || []).filter((r) => r.status === "invalid").length}
             displayedFileRows={displayedFileRows}
             skipInvalidRows={skipInvalidRows}
             onSkipInvalidRowsChange={setSkipInvalidRows}
