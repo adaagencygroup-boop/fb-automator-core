@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import { Search, Filter, RotateCcw, AlertCircle } from "lucide-react";
+import { Search, RotateCcw, AlertCircle } from "lucide-react";
 import CustomSelect from "@/components/ui/custom-select";
 
 const typeOptions = [
@@ -18,11 +18,12 @@ const statusOptions = [
 ];
 
 const timePresetOptions = [
-  { value: "CUSTOM", label: "Tùy chọn" },
+  { value: "ALL", label: "Tất cả" },
   { value: "TODAY", label: "Hôm nay" },
   { value: "LAST_7_DAYS", label: "7 ngày qua" },
   { value: "LAST_30_DAYS", label: "30 ngày qua" },
   { value: "THIS_MONTH", label: "Tháng này" },
+  { value: "CUSTOM", label: "Tùy chọn" },
 ];
 
 export default function HistoryFilters({
@@ -32,15 +33,18 @@ export default function HistoryFilters({
   onTypeFilterChange,
   statusFilter,
   onStatusFilterChange,
+  timePreset,
+  onTimePresetChange,
   fromDate,
   onFromDateChange,
   toDate,
   onToDateChange,
   onReset,
-  onApply,
   appliedSummary,
 }) {
-  const [timePreset, setTimePreset] = useState("CUSTOM");
+  const [internalTimePreset, setInternalTimePreset] = useState("ALL");
+  const currentPreset = timePreset !== undefined ? timePreset : internalTimePreset;
+  const setPreset = onTimePresetChange || setInternalTimePreset;
 
   const formatDate = (d) => {
     const year = d.getFullYear();
@@ -50,10 +54,13 @@ export default function HistoryFilters({
   };
 
   const handlePresetChange = (val) => {
-    setTimePreset(val);
+    setPreset(val);
     const now = new Date();
 
-    if (val === "TODAY") {
+    if (val === "ALL") {
+      onFromDateChange("");
+      onToDateChange("");
+    } else if (val === "TODAY") {
       const todayStr = formatDate(now);
       onFromDateChange(todayStr);
       onToDateChange(todayStr);
@@ -99,14 +106,17 @@ export default function HistoryFilters({
         statusFilter === "COMPLETED"
           ? "Hoàn thành"
           : statusFilter === "FAILED"
-          ? "Thất bại"
+          ? "Không hoàn thành"
           : statusFilter === "RUNNING"
           ? "Đang chạy"
           : statusFilter
       );
     }
-    if (searchTerm.trim()) {
+    if (searchTerm && searchTerm.trim()) {
       parts.push(`"${searchTerm.trim()}"`);
+    }
+    if (fromDate && toDate && fromDate <= toDate) {
+      parts.push(`${fromDate} đến ${toDate}`);
     }
     return parts.length > 0 ? parts.join(", ") : "Tất cả";
   };
@@ -142,12 +152,6 @@ export default function HistoryFilters({
               type="text"
               value={searchTerm}
               onChange={(e) => onSearchTermChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  onApply();
-                }
-              }}
               placeholder="Tìm kiếm mục tiêu, link..."
               className="w-full h-10 pl-10 pr-3 text-xs rounded-xl border border-slate-200 bg-white text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-medium"
             />
@@ -185,14 +189,14 @@ export default function HistoryFilters({
         </div>
       </div>
 
-      {/* Row 2: Thời gian (25%), Từ ngày (25%), Đến ngày (25%), Đặt lại + Lọc (25%) */}
+      {/* Row 2: Thời gian (25%), Từ ngày (25%), Đến ngày (25%), Đặt lại (25%) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-12 gap-4 items-end">
         <div className="md:col-span-3 space-y-1.5">
           <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
             THỜI GIAN
           </label>
           <CustomSelect
-            value={timePreset}
+            value={currentPreset}
             onChange={handlePresetChange}
             options={timePresetOptions}
             className="w-full"
@@ -202,16 +206,23 @@ export default function HistoryFilters({
         </div>
 
         <div className="md:col-span-3 space-y-1.5">
-          <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
-            TỪ NGÀY
-          </label>
+          <div className="flex items-center justify-between">
+            <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
+              TỪ NGÀY
+            </label>
+            {fromDate && !toDate && (
+              <span className="text-[10px] font-medium text-amber-600 italic">
+                (chọn thêm Đến ngày)
+              </span>
+            )}
+          </div>
           <div className="relative">
             <input
               type="date"
               value={fromDate}
               max={toDate && toDate < todayStr ? toDate : todayStr}
               onChange={(e) => {
-                setTimePreset("CUSTOM");
+                setPreset("CUSTOM");
                 let val = e.target.value;
                 if (val && val > todayStr) val = todayStr;
                 onFromDateChange(val);
@@ -229,9 +240,16 @@ export default function HistoryFilters({
         </div>
 
         <div className="md:col-span-3 space-y-1.5">
-          <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
-            ĐẾN NGÀY
-          </label>
+          <div className="flex items-center justify-between">
+            <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
+              ĐẾN NGÀY
+            </label>
+            {toDate && !fromDate && (
+              <span className="text-[10px] font-medium text-amber-600 italic">
+                (chọn thêm Từ ngày)
+              </span>
+            )}
+          </div>
           <div className="relative">
             <input
               type="date"
@@ -239,7 +257,7 @@ export default function HistoryFilters({
               min={fromDate || undefined}
               max={todayStr}
               onChange={(e) => {
-                setTimePreset("CUSTOM");
+                setPreset("CUSTOM");
                 let val = e.target.value;
                 if (val && val > todayStr) val = todayStr;
                 onToDateChange(val);
@@ -256,30 +274,17 @@ export default function HistoryFilters({
           </div>
         </div>
 
-        <div className="md:col-span-3 flex items-center justify-end gap-3">
+        <div className="md:col-span-3 flex items-center justify-end">
           <button
             type="button"
             onClick={() => {
-              setTimePreset("CUSTOM");
+              setPreset("ALL");
               onReset();
             }}
-            className="h-10 px-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm shrink-0 cursor-pointer"
+            className="h-10 px-5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm shrink-0 cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
             Đặt lại
-          </button>
-          <button
-            type="button"
-            onClick={onApply}
-            disabled={Boolean(dateErrorMessage)}
-            className={`h-10 px-7 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm flex-1 sm:flex-initial ${
-              dateErrorMessage
-                ? "bg-slate-200 text-slate-400 border border-slate-300/80 cursor-not-allowed select-none shadow-none"
-                : "bg-blue-600 hover:bg-blue-700 text-white shadow-blue-500/20 cursor-pointer"
-            }`}
-          >
-            <Filter className="w-3.5 h-3.5" />
-            Lọc
           </button>
         </div>
       </div>
