@@ -532,7 +532,7 @@ export default function PageScannerSearch() {
     let ignore = false;
     (async () => {
       try {
-        const data = await getActiveCampaign();
+        const data = await getActiveCampaign("DISCOVERY");
         if (ignore || !data?.active || !(data.sessions || []).length) return;
         const sessions = data.sessions;
         const top = sessions.find((s) => s.id === data.primary_session_id) || sessions[sessions.length - 1];

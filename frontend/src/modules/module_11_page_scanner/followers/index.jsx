@@ -27,6 +27,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   createFollowerSession,
+  getActiveCampaign,
   getScannedPages,
   getPageFollowers,
   stopScanSession,
@@ -34,7 +35,7 @@ import {
   resumeScanSession,
   getScanSessionDetail,
 } from "../service";
-import { LiveLogConsole, nowStamp, LIVE_STATUSES } from "../_shared";
+import { LiveLogConsole, nowStamp, LIVE_STATUSES, parseJsonField } from "../_shared";
 import {
   DEFAULT_SCANNED_PAGES,
   SelectAccountsModal,
@@ -387,6 +388,62 @@ export default function PageScannerFollowers() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  /* Khôi phục phiên FOLLOW đang chạy / tạm dừng khi quay lại trang hoặc reload */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await getActiveCampaign("FOLLOW");
+        if (cancelled || !data?.active || !(data.sessions || []).length) return;
+        const top =
+          data.sessions.find((s) => s.id === data.primary_session_id) ||
+          data.sessions[data.sessions.length - 1];
+        const settings = parseJsonField(top.settings, {});
+        const pageKeys = (settings.page_keys || []).filter(Boolean);
+        let kho = [];
+        try {
+          kho = (await getScannedPages({ page: 1, page_size: 200, sort_by: "followers" })).items || [];
+        } catch {
+          kho = [];
+        }
+        if (cancelled) return;
+        const byKey = new Map(kho.map((p) => [p.page_key, p]));
+        const pages = pageKeys.map((pk, i) => mapKhoToPage(byKey.get(pk) || { page_key: pk }, i));
+
+        setSelectedPages(pages);
+        if (settings.max_per_page) setMaxPerPage(Number(settings.max_per_page));
+        if (typeof settings.skip_existing === "boolean") setDedupAcrossPages(settings.skip_existing);
+        scanPageKeysRef.current = pageKeys;
+        setResultPages(
+          pages.map((p) => ({
+            page_key: p.page_key,
+            page_name: p.page_name,
+            page_url: p.page_url || "",
+            follower_count: p.follower_count || 0,
+            category: p.category || "Fanpage",
+            scanned_uid_count: 0,
+            status: "QUEUE",
+            status_label: "Đang chờ hàng đợi",
+            avatar_initials: p.avatar_initials,
+          })),
+        );
+        setActivePageKey(pageKeys[0] || "");
+        setSessionId(top.id);
+        setResultCount(top.total_unique || 0);
+        setRunPhase(top.status === "PAUSED" ? "paused" : "running");
+        syncSessionLogs(top);
+        pushLog(`Khôi phục phiên FOLLOW #${top.id} · ${top.status}`, "warn");
+        startPoll(top.id);
+      } catch {
+        /* không có phiên đang chạy */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleStart = async () => {

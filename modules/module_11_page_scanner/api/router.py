@@ -110,6 +110,9 @@ def _sweep_orphan_sessions(owner: str) -> List[int]:
         return []
 
 
+ACTIVE_JOB_TYPES = ("DISCOVERY", "FOLLOW", "POST_SCAN")
+
+
 def _is_orphan_candidate(session_id: int, status: Optional[str]) -> bool:
     return status in ("RUNNING", "PAUSED") and int(session_id) not in get_local_active_session_ids()
 
@@ -822,22 +825,31 @@ async def list_scanned_pages(
 
 
 @router.get("/campaigns/active")
-async def get_active_campaign():
+async def get_active_campaign(
+    job_type: str = Query(
+        "DISCOVERY",
+        description="DISCOVERY (Quét thông tin page) | FOLLOW (Quét followers) | POST_SCAN (Quét bài viết)",
+    ),
+):
     """
-    GET /api/page-scanner/campaigns/active
-    Phiên RUNNING/PAUSED mới nhất của owner + toàn bộ phiên cùng campaign_id.
-    Dùng để khôi phục state sau reload (chỉ dẫn 1.3).
+    GET /api/page-scanner/campaigns/active?job_type=...
+    Phiên RUNNING/PAUSED mới nhất của owner CHO ĐÚNG LOẠI JOB + toàn bộ phiên cùng campaign_id.
+    Mỗi trang chỉ khôi phục job của mình — trang Quét page không nhận nhầm job FOLLOW/POST_SCAN.
     """
     owner = _get_owner()
+    jt = str(job_type or "DISCOVERY").strip().upper()
+    if jt not in ACTIVE_JOB_TYPES:
+        raise HTTPException(status_code=422, detail=f"job_type không hợp lệ: {job_type}")
     _sweep_orphan_sessions(owner)
     top = db.fetch_one(
         """
         SELECT * FROM page_scan_sessions
         WHERE owner_key = %s AND status IN ('RUNNING', 'PAUSED')
+          AND COALESCE(job_type, 'DISCOVERY') = %s
         ORDER BY id DESC
         LIMIT 1
         """,
-        (owner,),
+        (owner, jt),
     )
     if not top:
         return {"active": False, "campaign_id": None, "sessions": []}
@@ -848,15 +860,17 @@ async def get_active_campaign():
             """
             SELECT * FROM page_scan_sessions
             WHERE owner_key = %s AND campaign_id = %s
+              AND COALESCE(job_type, 'DISCOVERY') = %s
             ORDER BY id ASC
             """,
-            (owner, campaign_id),
+            (owner, campaign_id, jt),
         )
     else:
         sessions = [top]
 
     return {
         "active": True,
+        "job_type": jt,
         "campaign_id": campaign_id,
         "primary_session_id": top.get("id"),
         "status": top.get("status"),

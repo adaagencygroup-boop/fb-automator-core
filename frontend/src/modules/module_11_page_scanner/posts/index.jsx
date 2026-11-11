@@ -24,6 +24,7 @@ import { normalizeAccount, initialsOf } from "@/modules/module_07_group_spam/sha
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
   createPostScanSession,
+  getActiveCampaign,
   getScannedPages,
   getScannedPosts,
   stopScanSession,
@@ -31,7 +32,7 @@ import {
   resumeScanSession,
   getScanSessionDetail,
 } from "../service";
-import { LiveLogConsole, nowStamp, LIVE_STATUSES } from "../_shared";
+import { LiveLogConsole, nowStamp, LIVE_STATUSES, parseJsonField } from "../_shared";
 import {
   DEFAULT_SCANNED_PAGES,
   SelectAccountsModal,
@@ -294,6 +295,46 @@ export default function PageScannerPosts() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  /* Khôi phục phiên POST_SCAN đang chạy / tạm dừng khi quay lại trang hoặc reload */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await getActiveCampaign("POST_SCAN");
+        if (cancelled || !data?.active || !(data.sessions || []).length) return;
+        const top =
+          data.sessions.find((s) => s.id === data.primary_session_id) ||
+          data.sessions[data.sessions.length - 1];
+        const settings = parseJsonField(top.settings, {});
+        const pageKeys = (settings.page_keys || []).filter(Boolean);
+        let kho = [];
+        try {
+          kho = (await getScannedPages({ page: 1, page_size: 200, sort_by: "followers" })).items || [];
+        } catch {
+          kho = [];
+        }
+        if (cancelled) return;
+        const byKey = new Map(kho.map((p) => [p.page_key, p]));
+        setSelectedPages(pageKeys.map((pk, i) => mapKhoToPage(byKey.get(pk) || { page_key: pk }, i)));
+        if (settings.max_posts_per_page) setMaxPostsPerPage(Number(settings.max_posts_per_page));
+        if (typeof settings.skip_existing === "boolean") setDeduplicatePosts(settings.skip_existing);
+        setSessionId(top.id);
+        setResultCount(top.total_unique || 0);
+        setRunPhase(top.status === "PAUSED" ? "paused" : "running");
+        syncSessionLogs(top);
+        pushLog(`Khôi phục phiên POST_SCAN #${top.id} · ${top.status}`, "warn");
+        refreshPosts(top.id);
+        startPoll(top.id);
+      } catch {
+        /* không có phiên đang chạy */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

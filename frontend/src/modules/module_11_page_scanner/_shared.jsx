@@ -117,6 +117,18 @@ export function LiveLogConsole({ title, logs, phase }) {
   );
 }
 
+/** Trường JSON lưu dạng chuỗi trong DB (settings, logs) → object/array an toàn. */
+export function parseJsonField(value, fallback) {
+  if (value == null || value === "") return fallback;
+  if (typeof value !== "string") return value;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export function nowStamp() {
   return new Date().toLocaleTimeString("vi-VN", { hour12: false });
 }

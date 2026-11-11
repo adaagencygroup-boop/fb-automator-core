@@ -77,9 +77,12 @@ export async function resumeScanSession(sessionId) {
   return api.post(`/api/page-scanner/sessions/${sessionId}/resume`);
 }
 
-/** Đợt đang chạy (RUNNING/PAUSED) + toàn bộ phiên con cùng campaign_id. */
-export async function getActiveCampaign() {
-  return api.get("/api/page-scanner/campaigns/active");
+/**
+ * Đợt đang chạy (RUNNING/PAUSED) + toàn bộ phiên con cùng campaign_id — theo đúng loại job
+ * của trang: DISCOVERY (Quét thông tin page) | FOLLOW (followers) | POST_SCAN (bài viết).
+ */
+export async function getActiveCampaign(jobType = "DISCOVERY") {
+  return api.get("/api/page-scanner/campaigns/active", { params: { job_type: jobType } });
 }
 
 /** @deprecated dùng getActiveCampaign */
