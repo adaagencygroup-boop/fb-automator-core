@@ -775,8 +775,8 @@ def get_job_status(job_id: int):
 @router.post("/select-folder")
 def select_folder_endpoint(req: Optional[SelectFolderRequest] = None):
   """
-  Mở trực tiếp Windows Native Folder Picker siêu tốc (dưới 0.02 giây),
-  không gọi truy vấn mạng Supabase check_folder_has_page_videos gây trễ, không spawn subprocess.
+  Mở hộp thoại Windows native FolderBrowserDialog độc lập qua PowerShell (STA thread).
+  Hoạt động 100% ổn định trên Windows cả khi chạy dev lẫn khi build đóng gói PyInstaller / Tauri.
   """
   init_dir = (req.initial_dir if req else None) or ""
   clean_init = init_dir.strip().strip('"').strip("'") if init_dir else ""
@@ -789,23 +789,12 @@ def select_folder_endpoint(req: Optional[SelectFolderRequest] = None):
   error_msg = ""
   try:
     if sys.platform == "win32":
-      try:
-        from modules.module_05_page_manager.picker_helper import pick_folder_win32
-        selected = pick_folder_win32(dialog_init, "Chọn thư mục lưu video")
-      except Exception as w32_err:
-        selected = ""
-
-    if not selected and sys.platform != "win32":
-      import subprocess
-      helper_path = os.path.join(os.path.dirname(__file__), "picker_helper.py")
-      venv_python = sys.executable
-      cmd = [venv_python, helper_path, dialog_init or "", "Chọn thư mục lưu video"]
-      res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-      selected = res.stdout.strip()
-      if res.returncode != 0:
-        error_msg = f"picker_helper code {res.returncode}: {res.stderr.strip()}"
+      from modules.module_05_page_manager.picker_helper import pick_folder_powershell
+      selected = pick_folder_powershell(dialog_init, "Chọn thư mục lưu video")
+    else:
+      selected = ""
   except Exception as e:
-    error_msg = f"picker error: {str(e)}"
+    error_msg = f"Lỗi chọn thư mục: {str(e)}"
     selected = ""
   finally:
     _picker_lock.release()

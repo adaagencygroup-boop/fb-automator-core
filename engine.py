@@ -211,6 +211,7 @@ _PUBLIC_API = {
     "/api/facebook/config",
     "/api/post/dialog/file",
     "/api/post/dialog/folder",
+    "/api/pages/select-folder",
     "/api/pages/reels/select-folder",
     "/api/groups/source/template",
     "/api/page-scanner/source/template",
