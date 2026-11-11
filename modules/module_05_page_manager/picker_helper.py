@@ -148,26 +148,73 @@ def pick_folder_qt(initial_dir="", title="Chọn thư mục video"):
     return ""
 
 
+def pick_folder_powershell(initial_dir="", title="Chọn thư mục video") -> str:
+    """
+    Mở hộp thoại FolderBrowserDialog native qua PowerShell độc lập (STA thread).
+    Hoạt động 100% ổn định trên Windows cả khi chạy source dev lẫn khi build đóng gói (PyInstaller / Tauri).
+    Không bao giờ phụ thuộc sys.executable là python.exe hay local_engine.exe.
+    """
+    import subprocess
+    clean_init = initial_dir.strip().strip('"').strip("'") if initial_dir else ""
+    if clean_init and not (os.path.exists(clean_init) and os.path.isdir(clean_init)):
+        clean_init = ""
+
+    safe_title = (title or "Chọn thư mục video").replace("'", "''")
+    safe_init = clean_init.replace("'", "''")
+
+    ps_script = f"""
+Add-Type -AssemblyName System.Windows.Forms
+$f = New-Object System.Windows.Forms.FolderBrowserDialog
+$f.Description = '{safe_title}'
+$f.ShowNewFolderButton = $true
+$init = '{safe_init}'
+if ($init -and (Test-Path -LiteralPath $init)) {{
+    $f.SelectedPath = $init
+}}
+$top = New-Object System.Windows.Forms.Form
+$top.TopMost = $true
+$res = $f.ShowDialog($top)
+$top.Dispose()
+if ($res -eq [System.Windows.Forms.DialogResult]::OK) {{
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    Write-Output $f.SelectedPath
+}}
+"""
+    cmd = ["powershell", "-NoProfile", "-NonInteractive", "-STA", "-Command", ps_script]
+    creation_flags = 0x08000000 if sys.platform == "win32" else 0
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=180,
+            creationflags=creation_flags,
+        )
+        out = (proc.stdout or "").strip()
+        if out and os.path.isdir(out):
+            return os.path.normpath(out)
+    except Exception as e:
+        sys.stderr.write(f"PowerShell folder dialog error: {e}\\n")
+    return ""
+
+
 def pick_folder(initial_dir="", title="Chọn thư mục video"):
     try:
-        # 1. Thử Win32 COM Native API trước (siêu nhanh, dưới 0.01 giây)
         if sys.platform == "win32":
-            win32_ok = False
+            selected = pick_folder_powershell(initial_dir, title)
+            if selected:
+                print(os.path.normpath(selected))
+                return
+            # Fallback sang Win32 COM nếu PowerShell không mở được
             try:
                 selected = pick_folder_win32(initial_dir, title)
                 if selected:
                     print(os.path.normpath(selected))
-                win32_ok = True
+                    return
             except Exception:
-                win32_ok = False
-
-            if win32_ok:
-                return
-
-        # 2. Fallback sang PyQt5 nếu Win32 gặp lỗi
-        selected = pick_folder_qt(initial_dir, title)
-        if selected:
-            print(os.path.normpath(selected))
+                pass
     except Exception as e:
         sys.stderr.write(str(e))
         sys.exit(1)
