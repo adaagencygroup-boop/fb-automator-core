@@ -42,10 +42,9 @@ export default function ScanTargetConfigCard({
         <h2 className="text-sm font-bold text-[#0B1C30]">Thiết lập cấu hình quét mục tiêu</h2>
       </div>
 
-      <div className="mb-4 space-y-2">
-        {/* Phương thức 1: Theo từ khóa */}
-        {method === "keyword" && (
-          <>
+      {method === "keyword" && (
+        <>
+          <div className="mb-4 space-y-2">
             <div className="flex items-center justify-between">
               <p className="text-[11px] font-semibold text-[#64748B]">
                 Số nhóm cần quét / từ khóa {keywords.length > 0 && `(${keywords.length})`}
@@ -81,114 +80,19 @@ export default function ScanTargetConfigCard({
                 ))}
               </div>
             )}
-          </>
-        )}
+          </div>
 
-        {/* Phương thức 2: Nhập Link */}
-        {method === "link" && (
-          <>
-            <div className="flex items-center justify-between">
-              <p className="text-[11px] font-semibold text-[#64748B]">
-                Số nhóm cần quét / liên kết {parsedLinks.length > 0 && `(${parsedLinks.length})`}
-              </p>
-              {parsedLinks.length > 5 && (
-                <span className="text-[10px] text-blue-600 font-medium">Cuộn để xem thêm ({parsedLinks.length} mục)</span>
-              )}
-            </div>
-            {parsedLinks.length === 0 ? (
-              <p className="text-xs text-[#94A3B8]">Dán danh sách link và bấm Kiểm tra & Lọc trùng lặp ở cột trái để đặt hạn mức.</p>
-            ) : (
-              <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
-                {parsedLinks.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-[#F1F5F9] bg-[#F8FAFC] px-3 py-2"
-                  >
-                    <div className="min-w-0 flex items-center gap-2">
-                      <span className="text-xs font-bold text-[#2563EB]">#{item.stt}</span>
-                      <span className="truncate text-xs font-medium text-[#0F172A]" title={item.url}>
-                        {item.url}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <input
-                        type="number"
-                        min={1}
-                        max={5000}
-                        value={linkQuotas[item.url] ?? 30}
-                        onChange={(event) =>
-                          onLinkQuotaChange(item.url, Math.max(1, Math.min(5000, Number(event.target.value) || 1)))
-                        }
-                        className={`${inputClass} w-16`}
-                      />
-                      <span className="text-[11px] text-[#94A3B8]">nhóm</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        )}
+          <div className="mb-4 flex items-start gap-2.5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-3 py-2.5">
+            <IconInfo className="mt-0.5" />
+            <p className="min-w-0 flex-1 text-[11px] leading-5 text-[#92400E]">
+              Kết quả tìm kiếm nằm ở top đầu thường có chất lượng tương tác tốt hơn. Nên đặt hạn mức vừa phải
+              theo từng từ khóa để ưu tiên nhóm chất lượng.
+            </p>
+          </div>
+        </>
+      )}
 
-        {/* Phương thức 3: Tải tệp */}
-        {method === "file" && (
-          <>
-            <div className="flex items-center justify-between">
-              <p className="text-[11px] font-semibold text-[#64748B]">
-                Số nhóm cần quét / liên kết trong tệp {validFileRows.length > 0 && `(${validFileRows.length})`}
-              </p>
-              {validFileRows.length > 5 && (
-                <span className="text-[10px] text-blue-600 font-medium">Cuộn để xem thêm ({validFileRows.length} mục)</span>
-              )}
-            </div>
-            {!fileData || validFileRows.length === 0 ? (
-              <p className="text-xs text-[#94A3B8]">Tải file chứa danh sách link nhóm ở cột trái để đặt hạn mức.</p>
-            ) : (
-              <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
-                {validFileRows.map((item) => {
-                  const targetKey = item.url || item.raw;
-                  return (
-                    <div
-                      key={item.id}
-                      className="flex items-center justify-between gap-3 rounded-lg border border-[#F1F5F9] bg-[#F8FAFC] px-3 py-2"
-                    >
-                      <div className="min-w-0 flex items-center gap-2">
-                        <span className="text-xs font-bold text-[#2563EB]">Dòng {item.line}</span>
-                        <span className="truncate text-xs font-medium text-[#0F172A]" title={targetKey}>
-                          {targetKey}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <input
-                          type="number"
-                          min={1}
-                          max={5000}
-                          value={fileQuotas[targetKey] ?? fileQuotas[item.raw] ?? 30}
-                          onChange={(event) =>
-                            onFileQuotaChange(targetKey, Math.max(1, Math.min(5000, Number(event.target.value) || 1)))
-                          }
-                          className={`${inputClass} w-16`}
-                        />
-                        <span className="text-[11px] text-[#94A3B8]">nhóm</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      <div className="mb-4 flex items-start gap-2.5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] px-3 py-2.5">
-        <IconInfo className="mt-0.5" />
-        <p className="min-w-0 flex-1 text-[11px] leading-5 text-[#92400E]">
-          Kết quả tìm kiếm nằm ở top đầu thường có chất lượng tương tác tốt hơn. Nên đặt hạn mức vừa phải
-          theo từng từ khóa để ưu tiên nhóm chất lượng.
-        </p>
-      </div>
-
-      <div className="space-y-3.5 border-t border-[#F1F5F9] pt-4">
+      <div className={`space-y-3.5 ${method === "keyword" ? "border-t border-[#F1F5F9] pt-4" : ""}`}>
         {/* Stepper 1: Switch Account Threshold */}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs font-medium text-[#334155]">
@@ -339,4 +243,3 @@ export default function ScanTargetConfigCard({
     </section>
   );
 }
-

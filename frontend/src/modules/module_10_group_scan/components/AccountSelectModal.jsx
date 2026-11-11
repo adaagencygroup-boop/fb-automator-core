@@ -1,35 +1,67 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, Copy, Loader2, Search, X } from "lucide-react";
+import { Check, ChevronDown, Copy, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import CustomSelect from "@/components/ui/custom-select";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { formatVietnamDateTime } from "@/lib/date-utils";
+import { useAccountCategories } from "@/modules/module_02_account_manager/hooks/useAccountCategories";
+import { categoryLabelStyle } from "@/modules/module_02_account_manager/components/CategorySelect";
+import { farmingDays } from "@/modules/module_02_account_manager/utils/farming-days.mjs";
 
-const AVATAR_PALETTE = [
-  "bg-[#2563EB]", // Blue (VA)
-  "bg-[#6366F1]", // Indigo/Purple (TB)
-  "bg-[#0284C7]", // Cyan/Light Blue (LC)
-  "bg-[#059669]", // Emerald (PD)
-  "bg-[#9333EA]", // Violet/Fuchsia (HM)
-  "bg-[#D97706]", // Amber
-  "bg-[#E11D48]", // Rose
-  "bg-[#0D9488]", // Teal
-];
+const AVATAR_COLORS = ["#1877F2", "#0084FF", "#087A62", "#4F46E5", "#0284C7"];
 
-function getAvatarBg(index) {
-  return AVATAR_PALETTE[index % AVATAR_PALETTE.length];
-}
+function AccountAvatar({ account, index = 0, size = 32 }) {
+  const primaryUrl = account?.avatar_url || account?.avatar || null;
+  const graphFallbackUrl = account?.uid
+    ? `https://graph.facebook.com/${encodeURIComponent(account.uid)}/picture?type=square&width=80&height=80`
+    : null;
 
-function initials(name = "") {
-  const clean = String(name || "").trim();
-  if (!clean || clean === "Chưa có tên" || /^\d+$/.test(clean)) return "FB";
-  const parts = clean.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) {
-    return (parts[parts.length - 2][0] + parts[parts.length - 1][0]).toUpperCase();
-  }
-  return clean.slice(0, 2).toUpperCase() || "FB";
+  const [currentSrc, setCurrentSrc] = useState(primaryUrl || graphFallbackUrl);
+
+  useEffect(() => {
+    setCurrentSrc(primaryUrl || graphFallbackUrl);
+  }, [primaryUrl, graphFallbackUrl]);
+
+  const handleImageError = () => {
+    if (currentSrc === primaryUrl && graphFallbackUrl && graphFallbackUrl !== primaryUrl) {
+      setCurrentSrc(graphFallbackUrl);
+    } else {
+      setCurrentSrc(null);
+    }
+  };
+
+  const color = AVATAR_COLORS[index % AVATAR_COLORS.length];
+  const initial = (account?.profile_name || account?.name || account?.uid || "FB").trim().charAt(0).toUpperCase();
+
+  return (
+    <span
+      className="relative rounded-full overflow-hidden flex items-center justify-center shrink-0 font-bold text-white shadow-2xs select-none"
+      style={{
+        width: size,
+        height: size,
+        backgroundColor: color,
+        fontSize: size >= 32 ? 11 : 10,
+      }}
+    >
+      {currentSrc ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          key={currentSrc}
+          src={currentSrc}
+          alt=""
+          referrerPolicy="no-referrer"
+          onError={handleImageError}
+          className="w-full h-full object-cover"
+        />
+      ) : (
+        initial
+      )}
+    </span>
+  );
 }
 
 function formatProxy(raw = "") {
@@ -39,9 +71,8 @@ function formatProxy(raw = "") {
   if (p.includes("@")) {
     p = p.split("@")[1];
   }
-  // Hiển thị vài ký tự đầu rồi ....
-  if (p.length > 10) {
-    return p.slice(0, 10) + "....";
+  if (p.length > 15) {
+    return p.slice(0, 15) + "....";
   }
   return p || "—";
 }
@@ -52,6 +83,16 @@ export function isScanReady(account) {
   const login = String(account.login_status || "").toLowerCase();
   if (status === "die") return false;
   return login === "logged_in" || login === "success";
+}
+
+function getFarmingDays(acc, currentNow) {
+  if (currentNow === null) return null;
+  const days = farmingDays(acc.first_login_at, currentNow);
+  if (days !== null) return days;
+  if (acc.nurture_days != null && !isNaN(Number(acc.nurture_days))) {
+    return Number(acc.nurture_days);
+  }
+  return null;
 }
 
 export default function AccountSelectModal({
@@ -66,63 +107,97 @@ export default function AccountSelectModal({
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [nurtureFilter, setNurtureFilter] = useState("all");
-  const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 5;
+  const [now, setNow] = useState(null);
 
   const [draft, setDraft] = useState(() => new Set(selectedUids));
+
+  // Tải danh mục từ Module 2
+  const categoryList = useAccountCategories(open);
+
+  const categoriesById = useMemo(() => {
+    const map = new Map();
+    (categoryList.categories || []).forEach((item) => {
+      map.set(item.id, item);
+      map.set(String(item.id), item);
+    });
+    return map;
+  }, [categoryList.categories]);
+
+  const categoryOptions = useMemo(() => {
+    const list = [
+      { value: "all", label: "Tất cả danh mục" },
+      { value: "uncategorized", label: "Chưa gán danh mục" },
+    ];
+    (categoryList.categories || []).forEach((cat) => {
+      list.push({
+        value: String(cat.id),
+        label: cat.name,
+        icon: cat.color ? (
+          <span
+            className="size-2 rounded-full shrink-0"
+            style={{ backgroundColor: cat.color }}
+          />
+        ) : undefined,
+      });
+    });
+    return list;
+  }, [categoryList.categories]);
+
+  const nurtureOptions = useMemo(
+    () => [
+      { value: "all", label: "Tất cả thời gian nuôi" },
+      { value: "under7", label: "Dưới 7 ngày" },
+      { value: "7_15", label: "7 - 15 ngày" },
+      { value: "15_30", label: "15 - 30 ngày" },
+      { value: "over30", label: "Trên 30 ngày" },
+      { value: "over60", label: "Trên 60 ngày" },
+    ],
+    []
+  );
+
+  useEffect(() => {
+    setNow(Date.now());
+  }, []);
 
   useEffect(() => {
     if (open) {
       setDraft(new Set(selectedUids));
-      setCurrentPage(1);
+      setNow(Date.now());
     }
   }, [open, selectedUids]);
 
-  const categories = useMemo(() => {
-    const set = new Set();
-    accounts.forEach((acc) => {
-      const cat = acc.category || acc.folder || "Folder Nuôi 01";
-      if (cat) set.add(cat);
-    });
-    return Array.from(set).sort();
-  }, [accounts]);
-
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const currentNow = now ?? Date.now();
     return accounts.filter((acc) => {
+      const accCategory = acc.category_id != null ? categoriesById.get(acc.category_id) : null;
+      const catName = (accCategory?.name || acc.category_name || acc.category || "").toLowerCase();
+
       if (q) {
-        const text = `${acc.profile_name || ""} ${acc.name || ""} ${acc.uid || ""} ${acc.proxy || ""} ${acc.category || ""}`.toLowerCase();
+        const text = `${acc.profile_name || ""} ${acc.name || ""} ${acc.uid || ""} ${acc.proxy || ""} ${catName}`.toLowerCase();
         if (!text.includes(q)) return false;
       }
+
       if (categoryFilter !== "all") {
-        const cat = acc.category || acc.folder || "Folder Nuôi 01";
-        if (cat !== categoryFilter) return false;
+        if (categoryFilter === "uncategorized") {
+          if (acc.category_id != null) return false;
+        } else {
+          if (String(acc.category_id) !== String(categoryFilter)) return false;
+        }
       }
+
       if (nurtureFilter !== "all") {
-        const days = Number(acc.nurture_days != null ? acc.nurture_days : 30);
+        const days = getFarmingDays(acc, currentNow);
+        if (days === null) return false;
         if (nurtureFilter === "under7" && days >= 7) return false;
         if (nurtureFilter === "7_15" && (days < 7 || days > 15)) return false;
-        if (nurtureFilter === "15_30" && (days <= 15 || days > 30)) return false;
+        if (nurtureFilter === "15_30" && (days < 15 || days > 30)) return false;
         if (nurtureFilter === "over30" && days <= 30) return false;
         if (nurtureFilter === "over60" && days <= 60) return false;
       }
       return true;
     });
-  }, [accounts, query, categoryFilter, nurtureFilter]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
-
-  // Reset page if filtered results shrink
-  useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(1);
-    }
-  }, [currentPage, totalPages]);
-
-  const startIndex = (currentPage - 1) * pageSize;
-  const paginated = useMemo(() => {
-    return filtered.slice(startIndex, startIndex + pageSize);
-  }, [filtered, startIndex, pageSize]);
+  }, [accounts, query, categoryFilter, nurtureFilter, categoriesById, now]);
 
   const readyRows = useMemo(() => {
     return filtered.filter(isScanReady);
@@ -163,18 +238,16 @@ export default function AccountSelectModal({
     }
   };
 
-  // Generate page numbers to display
-  const pageNumbers = useMemo(() => {
-    const pages = [];
-    for (let i = 1; i <= totalPages; i++) {
-      pages.push(i);
+  const handleRefresh = async () => {
+    categoryList.refresh?.();
+    if (onRefresh) {
+      await onRefresh();
     }
-    return pages;
-  }, [totalPages]);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[92vh] max-w-5xl flex-col gap-0 overflow-hidden p-0 rounded-2xl bg-white border border-slate-200 shadow-2xl">
+      <DialogContent className="flex max-h-[92vh] h-[85vh] max-w-5xl flex-col gap-0 overflow-hidden p-0 rounded-2xl bg-white border border-slate-200 shadow-2xl">
         {/* HEADER */}
         <div className="flex items-start justify-between px-6 pt-5 pb-3 pr-14">
           <div>
@@ -196,69 +269,61 @@ export default function AccountSelectModal({
         </div>
 
         {/* FILTER BAR */}
-        <div className="flex flex-col sm:flex-row items-center gap-3 px-6 py-3">
+        <div className="flex flex-col sm:flex-row items-center gap-3 px-6 py-3 border-b border-slate-100">
           {/* Search Box */}
           <div className="relative flex-1 w-full">
             <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setCurrentPage(1);
-              }}
-              placeholder="Tìm theo Tên tài khoản, UID, Proxy, Thư mục..."
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Tìm theo Tên tài khoản, UID, Proxy, Danh mục..."
               className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 text-xs sm:text-sm text-slate-700 placeholder:text-slate-400 outline-none transition-colors focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
             />
           </div>
 
           {/* Category Dropdown */}
-          <div className="relative w-full sm:w-auto">
-            <select
-              value={categoryFilter}
-              onChange={(e) => {
-                setCategoryFilter(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="h-10 w-full sm:w-[170px] appearance-none rounded-xl border border-slate-200 bg-white px-3.5 pr-8 text-xs sm:text-sm font-medium text-slate-700 outline-none transition-colors focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer"
-            >
-              <option value="all">Tất cả danh mục</option>
-              {categories.map((cat) => (
-                <option key={cat} value={cat}>
-                  {cat}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-          </div>
+          <CustomSelect
+            value={categoryFilter}
+            onChange={setCategoryFilter}
+            options={categoryOptions}
+            size="lg"
+            className="w-full sm:w-[190px]"
+            buttonClassName="!rounded-xl border-slate-200 text-xs sm:text-sm text-slate-700 bg-white"
+            dropdownClassName="!rounded-xl shadow-xl border-slate-200 z-50"
+          />
 
           {/* Nurture Time Dropdown */}
-          <div className="relative w-full sm:w-auto">
-            <select
-              value={nurtureFilter}
-              onChange={(e) => {
-                setNurtureFilter(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="h-10 w-full sm:w-[190px] appearance-none rounded-xl border border-slate-200 bg-white px-3.5 pr-8 text-xs sm:text-sm font-medium text-slate-700 outline-none transition-colors focus:border-blue-500 focus:ring-1 focus:ring-blue-500 cursor-pointer"
+          <CustomSelect
+            value={nurtureFilter}
+            onChange={setNurtureFilter}
+            options={nurtureOptions}
+            size="lg"
+            className="w-full sm:w-[200px]"
+            buttonClassName="!rounded-xl border-slate-200 text-xs sm:text-sm text-slate-700 bg-white"
+            dropdownClassName="!rounded-xl shadow-xl border-slate-200 z-50"
+          />
+
+          {/* Refresh Button */}
+          {onRefresh && (
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={loading || categoryList.loading}
+              title="Làm mới danh sách tài khoản & danh mục"
+              className="h-10 px-3 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50 transition-colors flex items-center justify-center shrink-0"
             >
-              <option value="all">Tất cả thời gian nuôi</option>
-              <option value="under7">Dưới 7 ngày</option>
-              <option value="7_15">7 - 15 ngày</option>
-              <option value="15_30">15 - 30 ngày</option>
-              <option value="over30">Trên 30 ngày</option>
-              <option value="over60">Trên 60 ngày</option>
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-          </div>
+              <RefreshCw className={cn("size-4", (loading || categoryList.isRefreshing) && "animate-spin text-blue-600")} />
+            </button>
+          )}
         </div>
 
-        {/* TABLE CONTENT */}
+        {/* SCROLLABLE TABLE CONTENT */}
         <div className="min-h-0 flex-1 overflow-x-auto overflow-y-auto px-6 py-1">
           <table className="w-full min-w-[860px] text-left text-xs sm:text-sm">
-            <thead>
-              <tr className="border-b border-slate-100 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                <th className="w-12 py-3 pl-2 pr-3">
+            <thead className="sticky top-0 z-10 bg-white shadow-[0_1px_0_0_#F1F5F9]">
+              <tr className="border-b border-slate-100 text-[11px] font-bold uppercase tracking-wider text-slate-400 bg-white">
+                <th className="w-12 py-3 pl-2 pr-3 bg-white">
                   <Checkbox
                     checked={allReadyChecked}
                     onCheckedChange={(val) => toggleAllReady(Boolean(val))}
@@ -269,14 +334,14 @@ export default function AccountSelectModal({
                     )}
                   />
                 </th>
-                <th className="w-12 py-3 text-slate-400">STT</th>
-                <th className="py-3 text-slate-500 font-bold">TÀI KHOẢN & HỌ TÊN</th>
-                <th className="py-3 text-slate-500 font-bold">UID FACEBOOK</th>
-                <th className="py-3 text-slate-500 font-bold">DANH MỤC</th>
-                <th className="py-3 text-slate-500 font-bold">TRẠNG THÁI TK</th>
-                <th className="py-3 text-slate-500 font-bold">ĐĂNG NHẬP</th>
-                <th className="py-3 text-slate-500 font-bold">PROXY GẮN KÈM</th>
-                <th className="py-3 pr-2 text-right text-slate-500 font-bold">THỜI GIAN NUÔI</th>
+                <th className="w-12 py-3 text-slate-400 bg-white">STT</th>
+                <th className="py-3 text-slate-500 font-bold bg-white">TÀI KHOẢN & HỌ TÊN</th>
+                <th className="py-3 text-slate-500 font-bold bg-white">UID FACEBOOK</th>
+                <th className="py-3 text-slate-500 font-bold bg-white">DANH MỤC</th>
+                <th className="py-3 text-slate-500 font-bold bg-white">TRẠNG THÁI TK</th>
+                <th className="py-3 text-slate-500 font-bold bg-white">ĐĂNG NHẬP</th>
+                <th className="py-3 text-slate-500 font-bold bg-white">PROXY GẮN KÈM</th>
+                <th className="py-3 pr-3 text-right text-slate-500 font-bold bg-white">THỜI GIAN NUÔI</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
@@ -289,28 +354,35 @@ export default function AccountSelectModal({
                     </div>
                   </td>
                 </tr>
-              ) : paginated.length === 0 ? (
+              ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="py-16 text-center text-sm text-slate-400">
                     Không tìm thấy tài khoản phù hợp với điều kiện lọc.
                   </td>
                 </tr>
               ) : (
-                paginated.map((acc, idx) => {
-                  const globalIdx = (currentPage - 1) * pageSize + idx;
-                  const stt = String(globalIdx + 1).padStart(2, "0");
+                filtered.map((acc, idx) => {
+                  const stt = String(idx + 1).padStart(2, "0");
                   const ready = isScanReady(acc);
                   const checked = draft.has(acc.uid);
                   const isLive = String(acc.status || "").toLowerCase() === "live";
                   const loginStatus = String(acc.login_status || "").toLowerCase();
                   const isLoggedIn = loginStatus === "logged_in" || loginStatus === "success";
-                  const nurtureDays = acc.nurture_days != null ? Number(acc.nurture_days) : 30;
-                  const avatarBg = getAvatarBg(globalIdx);
-                  const userInitials = initials(acc.profile_name || acc.name);
+
+                  // Danh mục từ Module 2
+                  const accCategory = acc.category_id != null ? categoriesById.get(acc.category_id) : null;
+                  const catName =
+                    accCategory?.name ||
+                    acc.category_name ||
+                    acc.category ||
+                    (acc.category_id != null ? `Danh mục #${acc.category_id}` : null);
+
+                  // Thời gian nuôi từ Module 2
+                  const days = getFarmingDays(acc, now);
 
                   return (
                     <tr
-                      key={acc.uid || globalIdx}
+                      key={acc.uid || idx}
                       className={cn(
                         "transition-colors",
                         ready ? "hover:bg-slate-50/70 cursor-pointer" : "opacity-60",
@@ -334,15 +406,11 @@ export default function AccountSelectModal({
                       </td>
                       <td className="py-3.5">
                         <div className="flex items-center gap-3">
-                          <div
-                            className={cn(
-                              "size-8 rounded-full flex items-center justify-center font-bold text-xs text-white shrink-0 shadow-2xs",
-                              avatarBg
-                            )}
+                          <AccountAvatar account={acc} index={idx} size={32} />
+                          <span
+                            className="font-semibold text-slate-900 text-xs sm:text-sm truncate max-w-[170px]"
+                            title={acc.profile_name || acc.name || "Chưa có tên"}
                           >
-                            {userInitials}
-                          </div>
-                          <span className="font-semibold text-slate-900 text-xs sm:text-sm truncate max-w-[170px]">
                             {acc.profile_name || acc.name || "Chưa có tên"}
                           </span>
                         </div>
@@ -364,9 +432,19 @@ export default function AccountSelectModal({
                         </div>
                       </td>
                       <td className="py-3.5">
-                        <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium text-slate-700 bg-slate-100/90 border border-slate-200/60">
-                          {acc.category || acc.folder || "Folder Nuôi 01"}
-                        </span>
+                        {catName ? (
+                          <span
+                            style={categoryLabelStyle(accCategory)}
+                            title={catName}
+                            className="inline-block max-w-[160px] truncate whitespace-nowrap rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold"
+                          >
+                            {catName}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs text-slate-400 bg-slate-50 border border-slate-200/60 font-medium">
+                            Chưa gán
+                          </span>
+                        )}
                       </td>
                       <td className="py-3.5">
                         {isLive ? (
@@ -409,8 +487,15 @@ export default function AccountSelectModal({
                           {formatProxy(acc.proxy)}
                         </span>
                       </td>
-                      <td className="py-3.5 pr-2 text-right text-xs font-medium text-slate-700">
-                        {nurtureDays ? `${nurtureDays} ngày` : "30 ngày"}
+                      <td
+                        className="py-3.5 pr-3 text-right text-xs font-medium text-slate-700 tabular-nums"
+                        title={
+                          acc.first_login_at
+                            ? `Bắt đầu nuôi: ${formatVietnamDateTime(acc.first_login_at).full}`
+                            : "Chưa ghi nhận ngày bắt đầu nuôi"
+                        }
+                      >
+                        {days === null ? "—" : `${days} ngày`}
                       </td>
                     </tr>
                   );
@@ -420,69 +505,35 @@ export default function AccountSelectModal({
           </table>
         </div>
 
-        {/* PAGINATION BAR */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-3 border-t border-slate-100 bg-white">
+        {/* BOTTOM ACTION BAR */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-3.5 border-t border-slate-100 bg-white">
           <p className="text-xs sm:text-sm text-slate-500">
-            Hiển thị {filtered.length === 0 ? 0 : startIndex + 1} - {Math.min(startIndex + pageSize, filtered.length)} của {filtered.length} tài khoản
+            Hiển thị <span className="font-semibold text-slate-800">{filtered.length}</span> tài khoản
+            {filtered.length !== accounts.length && (
+              <span className="text-slate-400"> (lọc từ {accounts.length} tài khoản)</span>
+            )}
           </p>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-3">
             <button
               type="button"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="px-3.5 py-1.5 text-xs font-semibold text-slate-500 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              onClick={() => onOpenChange(false)}
+              className="h-10 px-5 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs"
             >
-              Trước
+              Hủy bỏ
             </button>
-
-            {pageNumbers.map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setCurrentPage(p)}
-                className={cn(
-                  "w-8 h-8 flex items-center justify-center text-xs font-bold rounded-lg transition-colors",
-                  p === currentPage
-                    ? "bg-[#2563EB] text-white shadow-2xs"
-                    : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 font-medium"
-                )}
-              >
-                {p}
-              </button>
-            ))}
-
             <button
               type="button"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="px-3.5 py-1.5 text-xs font-semibold text-slate-700 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              onClick={() => {
+                onConfirm([...draft]);
+                onOpenChange(false);
+              }}
+              className="h-10 px-5 rounded-xl bg-[#0052CC] hover:bg-blue-700 text-sm font-bold text-white transition-colors flex items-center gap-2 shadow-sm"
             >
-              Sau
+              <Check className="size-4" strokeWidth={2.5} />
+              <span>Xác nhận chọn ({draft.size} tài khoản)</span>
             </button>
           </div>
-        </div>
-
-        {/* BOTTOM ACTION BAR */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-white">
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            className="h-10 px-5 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs"
-          >
-            Hủy bỏ
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              onConfirm([...draft]);
-              onOpenChange(false);
-            }}
-            className="h-10 px-5 rounded-xl bg-[#0052CC] hover:bg-blue-700 text-sm font-bold text-white transition-colors flex items-center gap-2 shadow-sm"
-          >
-            <Check className="size-4" strokeWidth={2.5} />
-            <span>Xác nhận chọn ({draft.size} tài khoản)</span>
-          </button>
         </div>
       </DialogContent>
     </Dialog>
