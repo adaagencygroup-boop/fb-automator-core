@@ -25,7 +25,8 @@ export async function scanPageLinks(payload) {
 }
 
 // ── SOURCE: UPLOAD FILE .txt/.csv ──
-export async function uploadPageFile(formData, params = { save_to_db: true, filter_existing: true }) {
+// Mặc định CHỈ xem trước / kiểm tra; truyền save_to_db: true khi người dùng bấm "Bắt đầu".
+export async function uploadPageFile(formData, params = { save_to_db: false, filter_existing: true }) {
   return api.post("/api/page-scanner/source/upload", formData, {
     headers: { "Content-Type": "multipart/form-data" },
     params,

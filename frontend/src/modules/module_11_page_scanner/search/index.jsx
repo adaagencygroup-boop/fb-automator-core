@@ -202,6 +202,7 @@ export default function PageScannerSearch() {
   const [topN, setTopN] = useState(""); // Top N sau lọc — khác max_results
   const [pasteContent, setPasteContent] = useState("");
   const [uploadResult, setUploadResult] = useState(null);
+  const [uploadFile, setUploadFile] = useState(null); // File gốc — chỉ lưu DB khi bấm Bắt đầu
   const [uploadFileMeta, setUploadFileMeta] = useState(null);
   const [uploadPreviewRows, setUploadPreviewRows] = useState([]);
   const [uploadFilterTab, setUploadFilterTab] = useState("ALL");
@@ -670,7 +671,8 @@ export default function PageScannerSearch() {
     } else if (sourceMode === "paste") {
       if (!pasteContent.trim()) errors.push("Chưa dán link Page.");
     } else if (sourceMode === "upload") {
-      if (!uploadResult) errors.push("Chưa tải file lên.");
+      if (!uploadFile) errors.push("Chưa tải file lên.");
+      else if (uploadResult && !uploadResult.valid_count) errors.push("File không có link Page hợp lệ.");
     }
 
     if (selectedUids.length) {
@@ -883,17 +885,22 @@ export default function PageScannerSearch() {
         }
     if (sourceMode === "upload") {
       setRunPhase("running");
+      pushLog(`Đang lưu danh sách page từ file "${uploadFile?.name || "file"}"…`, "info");
       try {
-        setSessionId(uploadResult.session_id);
-        setActiveSessionIds(uploadResult.session_id ? [uploadResult.session_id] : []);
-        setKeywordProgress([{ keyword: "Upload file", count: uploadResult.valid_count || 0, status: "done" }]);
-        if (uploadResult.session_id) {
-          await loadResults(uploadResult.session_id, 1, [uploadResult.session_id]);
+        const formData = new FormData();
+        formData.append("file", uploadFile);
+        const saved = await uploadPageFile(formData, { save_to_db: true, filter_existing: true });
+        setUploadResult(saved);
+        setSessionId(saved.session_id || null);
+        setActiveSessionIds(saved.session_id ? [saved.session_id] : []);
+        setKeywordProgress([{ keyword: "Upload file", count: saved.valid_count || 0, status: "done" }]);
+        if (saved.session_id) {
+          await loadResults(saved.session_id, 1, [saved.session_id]);
         }
         setRunPhase("done");
-        pushLog(`Upload: ${uploadResult.valid_count} page đã lưu.`, "success");
-        toast.success(`Đã lưu ${uploadResult.valid_count} Page từ file.`);
-    } catch (err) {
+        pushLog(`Upload: ${saved.valid_count} page đã lưu.`, "success");
+        toast.success(`Đã lưu ${saved.valid_count} Page từ file.`);
+      } catch (err) {
         setRunPhase("done");
         toast.error(err.message);
       }
@@ -945,9 +952,11 @@ export default function PageScannerSearch() {
     toast.warning("Đã dừng khẩn cấp.");
   };
 
+  /* Chọn file = CHỈ xem trước / kiểm tra (không lưu DB). Lưu khi bấm "Bắt đầu thực thi". */
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = "";
     const rawText = await file.text().catch(() => "");
     const parsedRows = parseRawLinesToPreview(rawText);
     setUploadPreviewRows(parsedRows);
@@ -956,16 +965,17 @@ export default function PageScannerSearch() {
       sizeKb: Math.max(0.1, Number((file.size / 1024).toFixed(1))),
       totalRows: parsedRows.length,
     });
+    setUploadFile(file);
+    setUploadResult(null);
     const formData = new FormData();
     formData.append("file", file);
     try {
-      const res = await uploadPageFile(formData);
+      const res = await uploadPageFile(formData, { save_to_db: false, filter_existing: true });
       setUploadResult(res);
       toast.success(`Đã nhận diện ${parsedRows.length || res.valid_count} dòng dữ liệu từ "${file.name}"`);
     } catch (err) {
       toast.error(`Lỗi đọc file: ${err.message}`);
     }
-    e.target.value = "";
   };
 
   /* "Xuất toàn bộ file" = TOÀN BỘ kết quả đang lọc của đợt (mọi phiên, mọi trang), không chỉ trang đang xem */
