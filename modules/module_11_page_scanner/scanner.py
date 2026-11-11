@@ -1023,9 +1023,14 @@ def run_page_search_flow(
             )
 
     except Exception as exc:
-        logger.error(f"[Scanner] Lỗi thực thi phiên #{session_id}: {exc}", exc_info=True)
-        stop_reason = "ERROR"
-        error_message = str(exc)
+        if stop_event.is_set():
+            # Dừng khẩn cấp đóng Chrome giữa chừng → lỗi WebDriver là hệ quả của việc dừng
+            logger.info(f"[Scanner] Phiên #{session_id} dừng giữa thao tác trình duyệt: {exc}")
+            stop_reason = "USER_STOPPED"
+        else:
+            logger.error(f"[Scanner] Lỗi thực thi phiên #{session_id}: {exc}", exc_info=True)
+            stop_reason = "ERROR"
+            error_message = str(exc)
     finally:
         with _ACTIVE_SESSIONS_LOCK:
             _ACTIVE_STOP_EVENTS.pop(session_id, None)
@@ -3788,9 +3793,9 @@ def run_hashtag_search_flow(
             )
 
     except Exception as exc:
-        if _is_tab_closed_exc(exc):
+        if stop_event.is_set() or _is_tab_closed_exc(exc):
             logger.warning(
-                f"[Scanner] Cửa sổ đóng giữa phiên hashtag #{session_id}: {exc}"
+                f"[Scanner] Cửa sổ đóng / dừng giữa phiên hashtag #{session_id}: {exc}"
             )
             stop_reason = "USER_STOPPED"
             error_message = f"Browser/tab đóng: {exc}"

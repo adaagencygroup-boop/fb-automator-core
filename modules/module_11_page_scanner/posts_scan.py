@@ -776,10 +776,15 @@ def run_post_scan_flow(
                 stop_reason = "NO_NEW_RESULTS"
 
     except Exception as exc:
-        logger.exception(f"[POST_SCAN] #{session_id}: {exc}")
-        stop_reason = "ERROR"
-        error_message = str(exc)[:500]
-        append_session_log(session_id, f"Lỗi: {error_message}", "error")
+        if stop_event.is_set():
+            # Dừng khẩn cấp đóng Chrome giữa chừng → lỗi WebDriver là hệ quả của việc dừng
+            logger.info(f"[POST_SCAN] #{session_id} dừng giữa thao tác trình duyệt: {exc}")
+            stop_reason = "USER_STOPPED"
+        else:
+            logger.exception(f"[POST_SCAN] #{session_id}: {exc}")
+            stop_reason = "ERROR"
+            error_message = str(exc)[:500]
+            append_session_log(session_id, f"Lỗi: {error_message}", "error")
     finally:
         duration = int(time.time() - start_time)
         final_status = {
