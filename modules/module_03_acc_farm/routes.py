@@ -1509,6 +1509,22 @@ async def on_shutdown():
 
 # ─────────────────────── ENDPOINTS: CHẠY ────────────────────────────
 
+class _StepTimer:
+    """Thời gian từng bước của Kích hoạt, ghi vào log để biết bước nào chậm khi CSDL ở xa."""
+
+    def __init__(self):
+        self.started = self.last = time.perf_counter()
+        self.steps: List[str] = []
+
+    def mark(self, name: str):
+        now = time.perf_counter()
+        self.steps.append(f"{name} {now - self.last:.1f}s")
+        self.last = now
+
+    def summary(self) -> str:
+        return f"tổng {time.perf_counter() - self.started:.1f}s (" + ", ".join(self.steps) + ")"
+
+
 @router.post("/start")
 async def start_farm_interactions(req: FarmStartRequest, request: Request):
     global _control, _active_task, _own_uids
@@ -1537,10 +1553,13 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
         if error:
             raise HTTPException(status_code=400, detail=error)
 
+    timer = _StepTimer()
     # Chỉ nick Live + Đã đăng nhập mới được chạy (VR-M03-ACC-01)
     eligible, rejected = [], []
+    found = await asyncio.to_thread(adapters.get_accounts, uids, owner)
+    timer.mark(f"đọc {len(uids)} nick")
     for uid in uids:
-        acc = await asyncio.to_thread(adapters.get_account, uid, owner)
+        acc = found.get(uid)
         if acc and acc["status"] == "live" and acc["login_status"] == "logged_in":
             eligible.append({"uid": acc["uid"], "name": acc["profile_name"]})
         else:
@@ -1551,6 +1570,7 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
     # Mỗi lần kích hoạt tạo lượt mới, giữ nguyên lịch sử lượt cũ (BR-STS-01)
     session_id = uuid.uuid4().hex
     machine_id = await asyncio.to_thread(adapters.get_machine_id)
+    timer.mark("mã máy")
     scope = _owner_scope(owner, machine_id)
     # Nick trong dàn (Module 02): trả nhóm / người của nick đã die / đã xóa trước khi chia, kết bạn bỏ qua nick nhà
     try:
@@ -1559,27 +1579,31 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
         logger.exception(f"Không đọc được danh sách nick trong dàn: {e}")
         dan_accounts = None
     release_notes = await asyncio.to_thread(_release_gone_owners, scope, dan_accounts)
+    timer.mark("dàn nick")
     try:
         assignments, split_notes = await asyncio.to_thread(_assign_targets, cfg, [a["uid"] for a in eligible], scope)
     except Exception as e:
         logger.exception(f"Không chia được link / từ khóa cho các nick: {e}")
         raise HTTPException(status_code=503, detail="Không đọc được nhóm / người đã có nick nhận trong dàn (lỗi CSDL). "
                                                     "Kiểm tra kết nối CSDL rồi thử lại, hoặc bỏ tick chia cho các nick.")
+    timer.mark("chia link / từ khóa")
     own_uids: Optional[frozenset] = frozenset()
     if cfg.enabled_add_friends:
         own_uids = frozenset(dan_accounts) if dan_accounts is not None else None
     try:
-        run_ids = {}
-        for acc in eligible:
-            run_ids[acc["uid"]] = await asyncio.to_thread(
-                repository.create_run, machine_id, acc["uid"], acc["name"], session_id, owner
-            )
+        run_ids = await asyncio.to_thread(repository.create_runs, machine_id, eligible, session_id, owner)
+        missing = [acc["uid"] for acc in eligible if acc["uid"] not in run_ids]
+        if missing:
+            raise RuntimeError(f"thiếu lượt chạy của {len(missing)} nick")
     except Exception as e:
         logger.exception(f"Không tạo được lượt chạy: {e}")
         raise HTTPException(status_code=503, detail="Không ghi được lượt chạy vào CSDL. Kiểm tra kết nối CSDL rồi thử lại.")
 
     threads = max(1, min(int(req.threads or 1), HARD_MAX_THREADS, len(eligible)))
+    timer.mark("tạo lượt chạy")
     history_alerts = await asyncio.to_thread(_history_checkpoint_alerts, machine_id)
+    timer.mark("cảnh báo checkpoint")
+    logger.info("Kích hoạt %s nick: %s", len(eligible), timer.summary())
     _control = FarmControl()
     with _state_lock:
         _history_data.clear()
@@ -1865,6 +1889,29 @@ async def farm_history(
     return data
 
 
+@router.get("/history/accounts")
+async def farm_history_accounts(request: Request):
+    """
+    Nick có lịch sử trên máy này cho bộ lọc theo tài khoản: [{uid, name}]. Chỉ trả uid + tên (không cần cả danh sách
+    tài khoản Module 02 kèm mật khẩu / cookie). Tên lấy theo Module 02 hiện tại, nick đã xóa thì lấy tên trong lịch sử.
+    """
+    owner = await asyncio.to_thread(adapters.owner_from_request, request)
+    try:
+        rows = await asyncio.to_thread(repository.history_accounts, adapters.get_machine_id())
+    except Exception as e:
+        logger.warning(f"Không đọc được danh sách nick trong lịch sử: {e}")
+        raise HTTPException(status_code=503, detail="Không đọc được danh sách tài khoản trong lịch sử từ CSDL.")
+    uids = [str(r["fb_uid"]) for r in rows if r.get("fb_uid")]
+    try:
+        names = await asyncio.to_thread(adapters.get_profile_names, uids, owner)
+    except Exception as e:
+        logger.warning(f"Không đọc được tên nick ở Module 02, dùng tên trong lịch sử: {e}")
+        names = {}
+    items = [{"uid": str(r["fb_uid"]), "name": names.get(str(r["fb_uid"])) or (r.get("fb_name") or "").strip()}
+             for r in rows if r.get("fb_uid")]
+    return sorted(items, key=lambda a: ((a["name"] or a["uid"]).lower(), a["uid"]))
+
+
 _CSV_COLUMNS = [
     ("id", "Mã"), ("started_at", "Bắt đầu (UTC)"), ("finished_at", "Kết thúc (UTC)"),
     ("duration_seconds", "Thời lượng (giây)"), ("fb_uid", "UID"), ("fb_name", "Tên nick"),
@@ -1964,6 +2011,87 @@ async def farm_run_targets(run_id: int):
             t for t in _json_list(row["targets"])
             if isinstance(t, dict) and not str(t.get("result") or "").startswith("skipped_"))
     return lists
+
+
+# ─────────────── MỞ LINK NHÓM / TRANG CÁ NHÂN BẰNG CHROME CỦA NICK ───────────────
+
+OPEN_LINK_HOSTS = {"facebook.com", "www.facebook.com", "web.facebook.com", "m.facebook.com"}
+
+
+class OpenLinkRequest(BaseModel):
+    uid: str
+    url: str
+
+
+def _open_link_url(url: str) -> Optional[str]:
+    """Chỉ mở link https Facebook (danh sách nhóm / người trong lịch sử của tool)."""
+    try:
+        parsed = urlparse((url or "").strip())
+    except ValueError:
+        return None
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() not in OPEN_LINK_HOSTS:
+        return None
+    return parsed.geturl()
+
+
+def _open_in_live_browser(uid: str, owner: Optional[str], url: str) -> bool:
+    """
+    Chrome "Mở trình duyệt" (Module 02, scope "live") của nick còn mở: mở link ở tab mới của cửa sổ đó, không tắt / mở
+    lại Chrome như khi gọi Module 02 (mỗi lần mở lại mất 5-15 giây và mất tab đang xem). False = không có cửa sổ nào.
+    Nick đang chạy tương tác / Module 02 đang mở trình duyệt thì profile đang bị khóa: báo bận, không đụng vào.
+    """
+    from core.browser import bring_chrome_to_front, get_active_drivers, get_profile_lock
+
+    lock = get_profile_lock(uid, owner)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="Nick đang chạy tương tác hoặc đang mở trình duyệt, thử lại sau.")
+    try:
+        for driver in get_active_drivers(uid, owner, scope="live"):
+            try:
+                before = set(driver.window_handles)
+                driver.execute_script("window.open(arguments[0], '_blank');", url)
+                opened = [h for h in driver.window_handles if h not in before]
+                if opened:
+                    driver.switch_to.window(opened[-1])
+                bring_chrome_to_front(driver)
+                return True
+            except Exception as e:  # Cửa sổ đã bị đóng tay: thử cửa sổ khác / mở Chrome mới
+                logger.info(f"[{uid}] Chrome đang mở của nick không dùng được ({type(e).__name__}), mở Chrome mới")
+        return False
+    finally:
+        lock.release()
+
+
+@router.post("/open-link")
+async def open_link_in_nick_browser(item: OpenLinkRequest, request: Request):
+    """
+    Mở nhóm / trang cá nhân bằng Chrome đã đăng nhập của nick để thấy đúng trạng thái của nick đó (đã vào nhóm, đã gửi
+    lời mời). Chrome của nick đang mở thì mở tab mới; không thì nhờ Module 02 mở Chrome (tự đăng nhập lại nếu cần).
+    """
+    url = _open_link_url(item.url)
+    if not url:
+        raise HTTPException(status_code=400, detail="Chỉ mở được link Facebook (https).")
+    uid = str(item.uid or "").strip()
+    owner = await asyncio.to_thread(adapters.owner_from_request, request)
+    try:
+        owned = await asyncio.to_thread(adapters.list_owner_accounts, owner)
+    except Exception as e:
+        logger.warning(f"Không đọc được danh sách nick để mở link: {e}")
+        raise HTTPException(status_code=503, detail="Không đọc được danh sách tài khoản từ CSDL.")
+    if uid not in owned:
+        raise HTTPException(status_code=404, detail="Nick không còn trong Quản lý tài khoản.")
+    if await asyncio.to_thread(_open_in_live_browser, uid, owner, url):
+        return {"mode": "tab"}
+    from modules.module_02_account_manager.context import owner_scope as account_owner_scope
+    from modules.module_02_account_manager.services.browser_service import queue_open_browser
+
+    try:
+        with account_owner_scope(owner):  # worker của Module 02 chép context: đọc đúng nick của người đang đăng nhập
+            result = queue_open_browser(uid, target_url=url)
+    except RuntimeError as e:
+        logger.warning(f"[{uid}] Module 02 không mở được trình duyệt: {e}")
+        raise HTTPException(status_code=503, detail="Chưa mở được trình duyệt, thử lại sau.")
+    return {"mode": "opening", **(result or {})}
 
 
 def _json_list(value) -> List:

@@ -24,6 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "@/lib/toast";
 import { EmergencyStopModal } from "./EmergencyStopModal";
 import { PostProgressPreview } from "./PostProgressPreview";
+import { ProgressActivityCell } from "./ProgressPostLink";
 
 const LEVEL_COLORS = {
   SUCCESS: "text-emerald-400",
@@ -446,12 +447,7 @@ export function PostSessionDetailView({ sessionId }) {
                       {row.contentPreview || "--"}
                     </td>
                     <td className="py-2.5 px-4">
-                      <span className="flex items-center gap-1.5 text-slate-700 text-xs font-medium">
-                        <span className={`w-1.5 h-1.5 rounded-full ${
-                          row.status === "Đang chạy" ? "bg-blue-500" : "bg-amber-500"
-                        }`} />
-                        {row.currentActivity || "Đang xử lý..."}
-                      </span>
+                      <ProgressActivityCell row={row} />
                     </td>
                     <td className="py-2.5 px-4 font-mono text-slate-600 text-xs">
                       {row.elapsedTime || "0:00"}

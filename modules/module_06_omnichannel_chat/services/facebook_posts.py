@@ -369,7 +369,7 @@ class FacebookPostService:
         # viewer_reaction -> Page da tha LOAI cam xuc nao; day la thu duy nhat canh
         #                    /reactions chiu tra ve, vi no la cam xuc cua chinh minh
         fields = (
-            "id,message,created_time,shares,"
+            "id,message,created_time,shares,permalink_url,"
             "reactions.summary(total_count,viewer_reaction),"
             "likes.summary(total_count,can_like,has_liked).limit(0),"
             "attachments{media,url,type},"

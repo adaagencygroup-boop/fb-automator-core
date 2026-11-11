@@ -8,7 +8,15 @@ import {
 import { toast } from "@/lib/toast";
 import AccountSelectModal, { isScanReady } from "../components/AccountSelectModal";
 import GroupPickerModal from "../components/GroupPickerModal";
-import { getScanAccounts, getScanCategories, getScannedGroups } from "../service";
+import {
+  controlPostScan,
+  getPostScanStatus,
+  getScanAccounts,
+  getScanCategories,
+  getScannedGroups,
+  getScannedPosts,
+  startPostScan,
+} from "../service";
 import AccountGroupPickerCard from "./_components/AccountGroupPickerCard";
 import AdvancedScanFilterCard from "./_components/AdvancedScanFilterCard";
 import GroupPreviewSection from "./_components/GroupPreviewSection";
@@ -85,18 +93,44 @@ export default function GroupScanPostsPage() {
   // Load available groups & categories from Database
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState("");
-  const [posts] = useState([]);
+  const [posts, setPosts] = useState([]);
 
-  useEffect(() => {
-    getScannedGroups()
-      .then((res) => {
-        const list = res?.groups || [];
-        setAvailableGroups(
-          list.map((g, idx) => ({
-            id: g.id || g.group_id,
+  const loadCategoriesAndGroups = useCallback(async () => {
+    try {
+      const res = await getScannedGroups();
+      const list = res?.groups || [];
+      setAvailableGroups(
+        list.map((g, idx) => {
+          const rawGid = String(g.group_id || g.uid || "");
+          const dbId = g.id;
+          let realGid = "";
+          let rawUrl = String(g.url || g.href || "");
+          if (rawUrl.includes("/groups/")) {
+            const parts = rawUrl.split("/groups/")[1].split("/")[0].split("?")[0].trim();
+            if (parts && !/^\d{1,7}$/.test(parts)) {
+              realGid = parts;
+            }
+          }
+          if (!realGid) {
+            if (rawGid && !/^\d{1,7}$/.test(rawGid)) {
+              realGid = rawGid;
+            }
+          }
+          let realUrl = "";
+          if (rawUrl && !/\/groups\/\d{1,7}(?:[/?#]|$)/.test(rawUrl)) {
+            realUrl = rawUrl;
+          } else if (realGid && !/^\d{1,7}$/.test(realGid)) {
+            realUrl = `https://www.facebook.com/groups/${realGid}`;
+          }
+
+          return {
+            id: realGid || String(dbId || idx),
+            groupId: realGid,
+            group_id: realGid,
+            dbId: dbId,
             stt: String(idx + 1).padStart(2, "0"),
-            name: g.name || g.group_id,
-            uid: g.group_id || g.id,
+            name: g.name || g.group_name || realGid || `Nhóm #${dbId}`,
+            uid: realGid,
             tag: (g.name || "FB").slice(0, 2).toUpperCase(),
             tagBg: "bg-[#DBEAFE]",
             tagText: "text-[#2563EB]",
@@ -104,29 +138,57 @@ export default function GroupScanPostsPage() {
             typeLabel: g.type === "private" ? "Riêng tư" : "Công khai",
             members: g.members || "—",
             memberCount: g.membersCount || 0,
-          }))
-        );
-      })
-      .catch(() => setAvailableGroups([]));
+            url: realUrl,
+          };
+        })
+      );
+    } catch {
+      setAvailableGroups([]);
+    }
 
-    getScanCategories()
-      .then((data) => {
-        const cats = Array.isArray(data) ? data : [];
-        setCategories(
-          cats.map((c) => ({
-            id: c.id,
-            name: c.name,
-            fullName: c.name,
-            memberSummary: `${c.group_count || 0} Nhóm`,
-            postCount: 0,
-          }))
-        );
-        if (cats.length > 0) {
-          setSelectedCategory(cats[0].id);
-        }
-      })
-      .catch(() => setCategories([]));
+    try {
+      const data = await getScanCategories();
+      const cats = Array.isArray(data) ? data : [];
+      setCategories(
+        cats.map((c) => ({
+          id: c.id,
+          name: c.name,
+          fullName: c.name,
+          memberSummary: `${c.count || 0} Nhóm`,
+          postCount: 0,
+        }))
+      );
+      if (cats.length > 0) {
+        setSelectedCategory((prev) => (prev && cats.some((c) => c.id === prev) ? prev : cats[0].id));
+      } else {
+        setSelectedCategory("");
+      }
+    } catch {
+      setCategories([]);
+    }
   }, []);
+
+  useEffect(() => {
+    loadCategoriesAndGroups();
+  }, [loadCategoriesAndGroups]);
+
+  // Nạp bài viết đã lưu từ CSDL
+  const loadDatabasePosts = useCallback(async (catId) => {
+    try {
+      const res = await getScannedPosts({ category_id: catId, page_size: 100 });
+      if (res?.posts && Array.isArray(res.posts)) {
+        setPosts(res.posts);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedCategory) {
+      loadDatabasePosts(selectedCategory);
+    }
+  }, [selectedCategory, loadDatabasePosts]);
 
   // Configuration options state
   const [minDelay, setMinDelay] = useState(5);
@@ -152,8 +214,54 @@ export default function GroupScanPostsPage() {
 
   // Execution & Logs
   const [isExecuting, setIsExecuting] = useState(false);
-  const [logs, setLogs] = useState([]);
+  const [activeJobId, setActiveJobId] = useState(null);
+  const [logs, setLogs] = useState([
+    {
+      time: "—",
+      thread: "System",
+      message: "Module 10.3 sẵn sàng. Chọn tài khoản & nhóm cần quét bài viết, sau đó bấm Bắt đầu thực thi.",
+      color: "text-slate-300",
+    },
+  ]);
   const [copiedLog, setCopiedLog] = useState(false);
+
+  // Polling Live Status
+  useEffect(() => {
+    if (!isExecuting || !activeJobId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await getPostScanStatus({ jobId: activeJobId });
+        const job = res?.job;
+        if (!job) return;
+
+        if (Array.isArray(job.logs) && job.logs.length > 0) {
+          setLogs(job.logs);
+        }
+
+        if (Array.isArray(job.posts) && job.posts.length > 0) {
+          setPosts(job.posts);
+        }
+
+        if (job.status === "done" || job.status === "aborted" || job.status === "error") {
+          setIsExecuting(false);
+          setActiveJobId(null);
+          if (job.status === "done") {
+            toast.success(`Đã hoàn thành phiên quét! Thu thập được ${job.total_posts_scanned || 0} bài viết.`);
+            if (selectedCategory) loadDatabasePosts(selectedCategory);
+          } else if (job.status === "aborted") {
+            toast.info("Phiên quét bài viết đã dừng lại.");
+          } else if (job.status === "error") {
+            toast.error(job.error || "Phiên quét gặp sự cố!");
+          }
+        }
+      } catch {
+        // Polling error ignored
+      }
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [isExecuting, activeJobId, selectedCategory, loadDatabasePosts]);
 
   // Remove Group handler
   const handleRemoveGroup = (groupId) => {
@@ -162,19 +270,17 @@ export default function GroupScanPostsPage() {
   };
 
   // Toggle Execution
-  const handleToggleExecution = () => {
+  const handleToggleExecution = async () => {
     if (isExecuting) {
+      if (activeJobId) {
+        try {
+          await controlPostScan({ jobId: activeJobId, action: "abort" });
+        } catch {
+          // ignore
+        }
+      }
       setIsExecuting(false);
       toast.info("Đã dừng tiến trình quét bài viết nhóm.");
-      setLogs((prev) => [
-        ...prev,
-        {
-          time: new Date().toLocaleTimeString("vi-VN", { hour12: false }),
-          thread: "Thread-01",
-          color: "text-rose-400",
-          message: "Người dùng đã tạm dừng tiến trình quét bài viết.",
-        },
-      ]);
     } else {
       if (selectedUids.length === 0) {
         toast.error("Vui lòng chọn ít nhất một tài khoản thực thi!");
@@ -184,23 +290,60 @@ export default function GroupScanPostsPage() {
         toast.error("Vui lòng chọn ít nhất một nhóm để quét!");
         return;
       }
-      setIsExecuting(true);
-      toast.success("Bắt đầu tiến trình quét bài viết nhóm...");
-      setLogs((prev) => [
-        ...prev,
-        {
-          time: new Date().toLocaleTimeString("vi-VN", { hour12: false }),
-          thread: "Thread-01",
-          color: "text-emerald-400",
-          message: `[Bắt đầu quét] Kích hoạt ${selectedUids.length} tài khoản quét bài viết cho ${selectedGroups.length} nhóm...`,
-        },
-        {
-          time: new Date().toLocaleTimeString("vi-VN", { hour12: false }),
-          thread: "Thread-01",
-          color: "text-slate-300",
-          message: `Cấu hình: Delay ${minDelay}-${maxDelay}s, Đổi nick sau ${switchAccThreshold} bài, Quét ${postsPerGroupLimit} bài mới nhất/nhóm.`,
-        },
-      ]);
+      if (selectedGroups.length > 20) {
+        toast.warning("Số lượng nhóm mục tiêu trong một phiên quét không được vượt quá 20 nhóm để bảo đảm an toàn tài khoản!");
+        return;
+      }
+      if (minDelay > maxDelay) {
+        toast.error("Thời gian trễ tối đa phải lớn hơn hoặc bằng thời gian tối thiểu!");
+        return;
+      }
+      if (maxDelay > 3600) {
+        toast.error("Thời gian trễ tối đa không được vượt quá 3600 giây!");
+        return;
+      }
+
+      try {
+        setIsExecuting(true);
+        setLogs([
+          {
+            time: new Date().toLocaleTimeString("vi-VN", { hour12: false }),
+            thread: "Thread-01",
+            color: "text-emerald-400",
+            message: `[Bắt đầu quét] Kích hoạt ${selectedUids.length} tài khoản quét bài viết cho ${selectedGroups.length} nhóm...`,
+          },
+          {
+            time: new Date().toLocaleTimeString("vi-VN", { hour12: false }),
+            thread: "Thread-01",
+            color: "text-slate-300",
+            message: `Cấu hình: Delay ${minDelay}-${maxDelay}s, Đổi nick sau ${switchAccThreshold} bài, Quét ${postsPerGroupLimit} bài mới nhất/nhóm.`,
+          },
+        ]);
+
+        const res = await startPostScan({
+          uids: selectedUids,
+          groups: selectedGroups,
+          delay_min: minDelay,
+          delay_max: maxDelay,
+          switch_acc_threshold: switchAccThreshold,
+          posts_limit: postsPerGroupLimit,
+          days_limit: filterDaysEnabled ? filterDays : 0,
+          skip_pinned_posts: skipPinnedPosts,
+          auto_dedupe_posts: autoDedupePosts,
+        });
+
+        if (res?.job_id) {
+          setActiveJobId(res.job_id);
+          toast.success("Bắt đầu tiến trình quét bài viết nhóm...");
+        } else {
+          setIsExecuting(false);
+          toast.error("Không thể khởi động phiên quét bài viết!");
+        }
+      } catch (err) {
+        setIsExecuting(false);
+        const errMsg = err?.response?.data?.detail || err?.message || "Đã xảy ra lỗi";
+        toast.error(`Khởi chạy thất bại: ${errMsg}`);
+      }
     }
   };
 
@@ -221,38 +364,76 @@ export default function GroupScanPostsPage() {
     );
   }, [categories, categorySearch]);
 
-  // Filter Posts
+  // Filter & Sort Posts (UC-GPS-05)
   const filteredPosts = useMemo(() => {
-    return posts.filter((p) => {
+    let result = posts.filter((p) => {
       const matchQuery =
         !postSearch.trim() ||
         (p.content || "").toLowerCase().includes(postSearch.toLowerCase()) ||
-        (p.authorName || "").toLowerCase().includes(postSearch.toLowerCase()) ||
-        (p.linkText || "").includes(postSearch.trim());
-      const matchLike = !minLikeFilter || minLikeFilter === "0" || (p.likes || 0) >= Number(minLikeFilter);
-      const matchCmt = !minCmtFilter || minCmtFilter === "0" || (p.comments || 0) >= Number(minCmtFilter);
-      const matchShare = !minShareFilter || minShareFilter === "0" || (p.shares || 0) >= Number(minShareFilter);
+        (p.author_name || p.authorName || "").toLowerCase().includes(postSearch.toLowerCase()) ||
+        String(p.post_id || p.postId || "").includes(postSearch.trim());
+      const l = Number(p.likes_count ?? p.likes ?? 0);
+      const c = Number(p.comments_count ?? p.comments ?? 0);
+      const s = Number(p.shares_count ?? p.shares ?? 0);
+      const matchLike = !minLikeFilter || minLikeFilter === "0" || l >= Number(minLikeFilter);
+      const matchCmt = !minCmtFilter || minCmtFilter === "0" || c >= Number(minCmtFilter);
+      const matchShare = !minShareFilter || minShareFilter === "0" || s >= Number(minShareFilter);
       return matchQuery && matchLike && matchCmt && matchShare;
     });
-  }, [posts, postSearch, minLikeFilter, minCmtFilter, minShareFilter]);
+
+    // BR-GPS-05.2: Xếp hạng Tương tác cao nhất: Like + (Comment * 2) + (Share * 3)
+    if (sortOption === "highest_interaction") {
+      result.sort((a, b) => {
+        const scoreA = Number(a.likes || a.likes_count || 0) + (Number(a.comments || a.comments_count || 0) * 2) + (Number(a.shares || a.shares_count || 0) * 3);
+        const scoreB = Number(b.likes || b.likes_count || 0) + (Number(b.comments || b.comments_count || 0) * 2) + (Number(b.shares || b.shares_count || 0) * 3);
+        return scoreB - scoreA;
+      });
+    } else if (sortOption === "most_likes") {
+      result.sort((a, b) => Number(b.likes || b.likes_count || 0) - Number(a.likes || a.likes_count || 0));
+    } else if (sortOption === "most_comments") {
+      result.sort((a, b) => Number(b.comments || b.comments_count || 0) - Number(a.comments || a.comments_count || 0));
+    }
+
+    return result;
+  }, [posts, postSearch, minLikeFilter, minCmtFilter, minShareFilter, sortOption]);
 
   const pageSize = 15;
   const totalPages = Math.max(1, Math.ceil(filteredPosts.length / pageSize));
   const paginatedPosts = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
-    return filteredPosts.slice(start, start + pageSize);
+    return filteredPosts.slice(start, start + pageSize).map((p, idx) => {
+      const aName = p.author_name || p.authorName || "Ẩn danh";
+      const pUrl = p.post_url || p.postUrl || (p.post_id ? `https://www.facebook.com/groups/${p.group_id}/posts/${p.post_id}/` : "");
+      const linkText = pUrl.replace(/^https?:\/\//, "").replace(/^www\./, "");
+      return {
+        ...p,
+        id: p.id || p.post_id || p.postId || `post-${idx}`,
+        stt: String(start + idx + 1).padStart(2, "0"),
+        linkText: linkText || `facebook.com/posts/${p.post_id || p.postId}`,
+        authorName: aName,
+        authorUid: p.author_uid || p.authorUid || "—",
+        authorTag: aName.slice(0, 2).toUpperCase(),
+        authorTagBg: "bg-[#DBEAFE]",
+        authorTagText: "text-[#1D4ED8]",
+        likes: Number(p.likes_count ?? p.likes ?? 0),
+        likesStr: Number(p.likes_count ?? p.likes ?? 0).toLocaleString("vi-VN"),
+        comments: Number(p.comments_count ?? p.comments ?? 0),
+        shares: Number(p.shares_count ?? p.shares ?? 0),
+        postedTime: p.posted_at || p.postedTime || "Vừa xong",
+      };
+    });
   }, [filteredPosts, currentPage, pageSize]);
 
   // Select all posts
   const allFilteredSelected =
-    filteredPosts.length > 0 &&
-    filteredPosts.every((p) => selectedPostIds.has(p.id));
+    paginatedPosts.length > 0 &&
+    paginatedPosts.every((p) => selectedPostIds.has(p.id));
 
   const handleToggleSelectAllPosts = () => {
     if (allFilteredSelected) {
       setSelectedPostIds(new Set());
     } else {
-      setSelectedPostIds(new Set(filteredPosts.map((p) => p.id)));
+      setSelectedPostIds(new Set(paginatedPosts.map((p) => p.id)));
     }
   };
 
@@ -265,14 +446,79 @@ export default function GroupScanPostsPage() {
     });
   };
 
+  // Export CSV Helper (UC-GPS-07: 13 cột chuẩn)
+  const exportPostsCsv = (postList, title = "PostScraping") => {
+    if (!postList || postList.length === 0) {
+      toast.warning("Chưa có bài viết nào để xuất!");
+      return;
+    }
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+    const filename = `${title}_${ts}.csv`;
+
+    const headers = [
+      "STT",
+      "Post ID",
+      "Nội dung bài viết",
+      "Đường dẫn bài viết (Post URL)",
+      "Tên tác giả",
+      "UID / Profile tác giả",
+      "Lượt Like",
+      "Lượt Comment",
+      "Lượt Share",
+      "Tên nhóm nguồn",
+      "Group ID nguồn",
+      "Ngày đăng bài",
+      "Thời gian quét",
+    ];
+
+    const rows = postList.map((p, idx) => [
+      idx + 1,
+      `\t${p.post_id || p.postId}`, // Tab prefix prevents Excel exponential notation
+      `"${(p.content || "").replace(/"/g, '""').replace(/\n/g, ' ')}"`,
+      `"${(p.post_url || p.postUrl || "").replace(/"/g, '""')}"`,
+      `"${(p.author_name || p.authorName || "Ẩn danh").replace(/"/g, '""')}"`,
+      `\t${p.author_uid || p.authorUid || ""}`,
+      p.likes_count ?? p.likes ?? 0,
+      p.comments_count ?? p.comments ?? 0,
+      p.shares_count ?? p.shares ?? 0,
+      `"${(p.group_name || "").replace(/"/g, '""')}"`,
+      `\t${p.group_id || ""}`,
+      `"${p.posted_at || p.postedTime || ""}"`,
+      `"${p.scanned_at || ""}"`,
+    ]);
+
+    const csvContent = "\uFEFF" + [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    toast.success(`Đã xuất ${postList.length} bài viết ra tệp: ${filename}`);
+  };
+
   // Export actions
   const handleExportAll = () => {
-    toast.success("Đang trích xuất toàn bộ bài viết ra file Excel / CSV...");
+    if (isExecuting) {
+      toast.warning("Đang quét bài viết, vui lòng đợi hoàn tất hoặc dừng tiến trình trước khi xuất file!");
+      return;
+    }
+    exportPostsCsv(posts, "PostScraping_All");
   };
 
   const handleExportGroup = () => {
+    if (isExecuting) {
+      toast.warning("Đang quét bài viết, vui lòng đợi hoàn tất hoặc dừng tiến trình trước khi xuất file!");
+      return;
+    }
     const curCat = categories.find((c) => c.id === selectedCategory);
-    toast.success(`Đang xuất bài viết của nhóm: ${curCat?.fullName || curCat?.name || "nhóm đang chọn"}...`);
+    const catName = curCat?.fullName || curCat?.name || "Group";
+    exportPostsCsv(filteredPosts, `PostScraping_${catName.replace(/[^a-zA-Z0-9]/g, "_")}`);
   };
 
   const handleResetFilters = () => {
@@ -280,6 +526,7 @@ export default function GroupScanPostsPage() {
     setMinLikeFilter("0");
     setMinCmtFilter("0");
     setMinShareFilter("0");
+    setSortOption("highest_interaction");
     toast.info("Đã đặt lại bộ lọc!");
   };
 
@@ -288,7 +535,6 @@ export default function GroupScanPostsPage() {
 
   return (
     <>
-      {/* Ẩn nút mũi tên tăng giảm số chỉ cho riêng Module 10 */}
       <style>{`
         input[type="number"]::-webkit-inner-spin-button,
         input[type="number"]::-webkit-outer-spin-button {
@@ -340,18 +586,18 @@ export default function GroupScanPostsPage() {
           onRemoveGroup={handleRemoveGroup}
         />
 
-        {/* NÚT THỰC THI TRUNG TÂM: BẮT ĐẦU THỰC THI */}
+        {/* BIG PRIMARY ACTION BUTTON: BẮT ĐẦU THỰC THI */}
         <button
           type="button"
           onClick={handleToggleExecution}
           className={`inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl text-sm font-bold tracking-wide text-white transition-colors shadow-sm ${
-            isExecuting ? "bg-[#DC2626] hover:bg-rose-700" : "bg-[#004AC6] hover:bg-blue-800"
+            isExecuting ? "bg-[#DC2626] hover:bg-rose-700" : "bg-[#1877F2] hover:bg-blue-600"
           }`}
         >
           {isExecuting ? (
             <>
               <Square className="size-4 fill-white" />
-              <span>DỪNG THỰC THI QUÉT BÀI VIẾT</span>
+              <span>DỪNG THỰC THI QUÉT</span>
             </>
           ) : (
             <>
@@ -374,20 +620,11 @@ export default function GroupScanPostsPage() {
           postSearch={postSearch}
           onPostSearchChange={setPostSearch}
           minLikeFilter={minLikeFilter}
-          onMinLikeFilterChange={(val) => {
-            setMinLikeFilter(val);
-            setCurrentPage(1);
-          }}
+          onMinLikeFilterChange={setMinLikeFilter}
           minCmtFilter={minCmtFilter}
-          onMinCmtFilterChange={(val) => {
-            setMinCmtFilter(val);
-            setCurrentPage(1);
-          }}
+          onMinCmtFilterChange={setMinCmtFilter}
           minShareFilter={minShareFilter}
-          onMinShareFilterChange={(val) => {
-            setMinShareFilter(val);
-            setCurrentPage(1);
-          }}
+          onMinShareFilterChange={setMinShareFilter}
           sortOption={sortOption}
           onSortOptionChange={setSortOption}
           onResetFilters={handleResetFilters}

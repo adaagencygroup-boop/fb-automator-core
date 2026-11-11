@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { Bot, ScanSearch } from "lucide-react";
+import { Bot, ListChecks, ScanSearch } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import CustomSelect from "@/components/ui/custom-select";
 import { Switch } from "@/components/ui/switch";
@@ -371,6 +371,18 @@ function LinkListPanel({ kind, value, onChange, limit, onLimit, delay, disabled,
   );
 }
 
+// Nút "Chọn tất cả": 7 kịch bản chính + Giới hạn mỗi ngày (không đụng tùy chọn con như Thả cảm xúc, Giữ nhóm Admin)
+export const SCENARIO_KEYS = [
+  "enabled_newsfeed",
+  "enabled_watch",
+  "enabled_story",
+  "enabled_leave_groups",
+  "enabled_join_groups",
+  "enabled_add_friends",
+  "enabled_check_notif",
+  "daily_limit_enabled",
+];
+
 export default function ScenarioConfig({ config, onChange, disabled }) {
   const set = (key) => (value) => onChange({ ...config, [key]: value });
   const range = (prefix, max, min) => ({
@@ -389,9 +401,26 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
   const limitable = config.enabled_join_groups || config.enabled_add_friends;
   const dailyOn = Boolean(config.daily_limit_enabled && limitable);
   const dailyDisabled = disabled || !limitable;
+  const allChecked = SCENARIO_KEYS.every((key) => config[key]);
+  const toggleAll = () => onChange({ ...config, ...Object.fromEntries(SCENARIO_KEYS.map((key) => [key, !allChecked])) });
 
   return (
-    <SectionCard icon={Bot} title="Cấu Hình Tương Tác" subtitle="Mỗi nick lấy ngẫu nhiên trong khoảng Min - Max; thứ tự kịch bản xáo ngẫu nhiên">
+    <SectionCard
+      icon={Bot}
+      title="Cấu Hình Tương Tác"
+      subtitle="Mỗi nick lấy ngẫu nhiên trong khoảng Min - Max; thứ tự kịch bản xáo ngẫu nhiên"
+      action={
+        <button
+          type="button"
+          onClick={toggleAll}
+          disabled={disabled}
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <ListChecks className="h-3.5 w-3.5 text-primary" />
+          {allChecked ? "Bỏ chọn tất cả" : "Chọn tất cả"}
+        </button>
+      }
+    >
       <div className="space-y-3">
         <Block
           checked={config.enabled_newsfeed}
@@ -505,10 +534,8 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
                 checked={config.groups_split_enabled}
                 onChange={set("groups_split_enabled")}
                 disabled={disabled}
-                label="Không vào trùng nhóm với nick khác trong dàn"
-                hint={groupList
-                  ? "Mỗi nhóm chỉ 1 nick vào, tính cả các lượt trước. Chạy nhiều nick thì link được chia cho từng nick. Bỏ tick nếu muốn nhiều nick vào chung nhóm."
-                  : "Mỗi nhóm chỉ 1 nick vào, tính cả các lượt trước. Chạy nhiều nick thì từ khóa được chia cho từng nick. Bỏ tick nếu muốn nhiều nick vào chung nhóm."}
+                label="Bỏ qua nhóm đã tham gia"
+                hint="Hệ thống không tham gia lại các nhóm mà tài khoản này hoặc tài khoản khác đã tham gia trước đó."
               />
             </div>
           )}
@@ -544,8 +571,8 @@ export default function ScenarioConfig({ config, onChange, disabled }) {
                 checked={config.friends_split_enabled}
                 onChange={set("friends_split_enabled")}
                 disabled={disabled}
-                label="Không gửi trùng lời mời với nick khác trong dàn"
-                hint="Mỗi người chỉ nhận lời mời từ 1 nick, tính cả các lượt trước. Chạy nhiều nick thì danh sách được chia cho từng nick. Bỏ tick thì các nick dùng chung danh sách, dễ thành bạn chung của nhau."
+                label="Bỏ qua người đã gửi lời mời"
+                hint="Hệ thống không gửi lại lời mời cho những người mà tài khoản này hoặc tài khoản khác đã gửi trước đó."
               />
             </div>
           ) : (

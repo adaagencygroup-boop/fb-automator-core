@@ -99,7 +99,7 @@ export default function PageSwitcher({
           FOCUS,
         )}
       >
-        {activePage ? <PageAvatar page={activePage} size={26} /> : <AllPagesGlyph />}
+        <AllPagesGlyph />
       </button>
 
       {open && (

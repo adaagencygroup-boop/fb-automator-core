@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import api from "@/services/api";
 import { clearSessionUserId } from "@/services/sessionIdentity.mjs";
 import { clearAuthTokens, clearRegistrationToken, getRefreshToken } from "@/services/authTokens.mjs";
+import { clearApiCache } from "@/services/api-cache.mjs";
 import LoginScreen from "@/modules/module_auth/LoginScreen";
 import RegisterScreen from "@/modules/module_auth/RegisterScreen";
 import PendingScreen from "@/modules/module_auth/PendingScreen";
@@ -14,8 +15,10 @@ import SessionOverlay from "@/components/auth/SessionOverlay";
 const ADMIN_URL = process.env.NEXT_PUBLIC_ADMIN_URL || "http://127.0.0.1:3010";
 /** Proactive refresh trước khi access hết hạn (12h) — desktop không có cookie. */
 const REFRESH_EVERY_MS = 30 * 60 * 1000;
-/** Timeout ngắn cho bước khôi phục phiên — tránh treo trắng 60s khi engine restart/chậm. */
-const AUTH_BOOT_TIMEOUT_MS = 30000;
+/** Timeout ngắn cho bước khôi phục phiên — tránh treo trắng khi engine restart/chậm. */
+const AUTH_BOOT_TIMEOUT_MS = 8000;
+/** Quá hạn thì mở login ngay — HWID retry ở LoginScreen, không chặn overlay. */
+const AUTH_BOOT_HARD_DEADLINE_MS = 20000;
 /** Chỉ đá phiên sau vài lần 401 liên tiếp — tránh dừng automation vì lỗi tạm. */
 const AUTH_KICK_AFTER_FAILURES = 3;
 
@@ -30,6 +33,7 @@ export default function AuthGate({ children }) {
   const loadMe = useCallback(async () => {
     // Called after an explicit successful login: permit the newly selected user.
     clearSessionUserId();
+    clearApiCache(); // người vừa đăng nhập không được thấy dữ liệu đã cache của người trước
     const me = await api.get("/api/v1/auth/me", { timeout: AUTH_BOOT_TIMEOUT_MS });
     localStorage.removeItem("pending_username");
     localStorage.removeItem("locked_username");
@@ -64,21 +68,46 @@ export default function AuthGate({ children }) {
     let stopped = false;
     let timer;
     let failures = 0;
+    const bootStartedAt = Date.now();
+    const finishBoot = (opts = {}) => {
+      if (stopped) return;
+      if (opts.connectionError) setConnectionError(true);
+      if (opts.clearConnectionError) setConnectionError(false);
+      setReady(true);
+    };
+    // Dù /me treo hay engine restart dài — không giữ overlay quá hard deadline
+    const hardDeadline = setTimeout(() => {
+      finishBoot({ connectionError: true });
+    }, AUTH_BOOT_HARD_DEADLINE_MS);
+
     async function restore() {
       try {
         const me = await api.get("/api/v1/auth/me", { timeout: AUTH_BOOT_TIMEOUT_MS });
         if (stopped) return;
+        clearTimeout(hardDeadline);
         localStorage.removeItem("pending_username");
         localStorage.removeItem("locked_username");
         setUser(me);
-        setConnectionError(false);
-        setReady(true);
+        finishBoot({ clearConnectionError: true });
       } catch (error) {
         if (stopped) return;
         if (![401, 403].includes(error.status)) {
           setConnectionError(true);
-          // Retry nhanh hơn: 1.5s → 3s → 6s → tối đa 8s (không chờ 30s).
-          timer = setTimeout(restore, Math.min(8000, 1500 * 2 ** failures++));
+          const elapsed = Date.now() - bootStartedAt;
+          if (elapsed >= AUTH_BOOT_HARD_DEADLINE_MS) {
+            clearTimeout(hardDeadline);
+            finishBoot({ connectionError: true });
+            return;
+          }
+          // Retry nhanh: 1.5s → 3s → 6s → tối đa 8s, dừng trước hard deadline
+          const wait = Math.min(8000, 1500 * 2 ** failures++);
+          const remain = AUTH_BOOT_HARD_DEADLINE_MS - elapsed;
+          if (remain <= 0) {
+            clearTimeout(hardDeadline);
+            finishBoot({ connectionError: true });
+            return;
+          }
+          timer = setTimeout(restore, Math.min(wait, remain));
           return;
         }
         const statusScreen = {
@@ -107,16 +136,16 @@ export default function AuthGate({ children }) {
             /* Login is available when the status ticket has expired. */
           }
         }
-        if (!stopped) {
-          setConnectionError(false);
-          setReady(true);
-        }
+        // Mở login ngay — useMachineHwid trên form tự retry khi engine đang boot.
+        clearTimeout(hardDeadline);
+        finishBoot({ clearConnectionError: true });
       }
     }
     restore();
     return () => {
       stopped = true;
       clearTimeout(timer);
+      clearTimeout(hardDeadline);
     };
   }, []);
 
@@ -156,6 +185,7 @@ export default function AuthGate({ children }) {
       localStorage.removeItem("pending_username");
       localStorage.removeItem("locked_username");
       clearAuthTokens();
+      clearApiCache();
       setUser(null);
       if (["ACCOUNT_BANNED", "ACCOUNT_LOCKED"].includes(message)) {
         if (sessionUsername) localStorage.setItem("locked_username", sessionUsername);
@@ -228,6 +258,7 @@ export default function AuthGate({ children }) {
     clearAuthTokens();
     clearRegistrationToken();
     clearSessionUserId();
+    clearApiCache();
     setUser(null);
     localStorage.removeItem("pending_username");
     localStorage.removeItem("locked_username");

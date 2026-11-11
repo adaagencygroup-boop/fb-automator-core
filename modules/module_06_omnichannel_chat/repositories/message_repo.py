@@ -18,6 +18,15 @@ class MessageRepository:
     def get_by_fb_message_id(self, facebook_message_id: str) -> Optional[Message]:
         return self.db.query(Message).filter(Message.facebook_message_id == facebook_message_id).first()
 
+    def get_by_id_or_fb_id(self, message_id_str: str) -> Optional[Message]:
+        if not message_id_str:
+            return None
+        if str(message_id_str).isdigit():
+            msg = self.db.query(Message).filter(Message.id == int(message_id_str)).first()
+            if msg:
+                return msg
+        return self.get_by_fb_message_id(str(message_id_str))
+
     def save_webhook_message(
         self, facebook_message_id: str, page_id: str, sender_id: str, text: str, timestamp: int, direction: str = "inbound", reply_to_message_id: Optional[str] = None
     ) -> Message:
@@ -91,4 +100,5 @@ class MessageRepository:
             .filter(Message.page_id == page_id, Message.sender_id == sender_id)\
             .order_by(Message.created_at.desc(), Message.id.desc())\
             .first()
+
 

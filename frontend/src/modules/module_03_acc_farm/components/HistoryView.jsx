@@ -7,8 +7,6 @@ import {
   Eraser,
   ExternalLink,
   Info,
-  ChevronLeft,
-  ChevronRight,
   ChevronDown,
   Copy,
   Check,
@@ -24,8 +22,10 @@ import {
 } from "lucide-react";
 import { api } from "@/services/api";
 import CustomSelect from "@/components/ui/custom-select";
+import Pagination from "@/components/ui/pagination";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/lib/toast";
+import { openPostInAccountBrowser } from "@/modules/module_03_acc_farm/openAccountPost";
 import { mediaFileUrl, normalizeImagePaths } from "./PostImageModal";
 
 function HistoryStatusImageCard({ path }) {
@@ -88,8 +88,6 @@ const STATUS_OPTIONS = [
   { value: "PUBLISHED", label: "Đã xuất bản" },
   { value: "STOPPED", label: "Đã dừng" },
   { value: "FAILED", label: "Lỗi hệ thống" },
-  { value: "DIE", label: "Tài khoản chết" },
-  { value: "BLOCKED", label: "Bị chặn" },
 ];
 
 /** Việt hóa thông báo lỗi đăng bài (kể cả bản ghi cũ còn stacktrace Selenium). */
@@ -177,6 +175,17 @@ export function HistoryView() {
   const [cleanupDays, setCleanupDays] = useState(30);
   const [isCleaning, setIsCleaning] = useState(false);
   const [reloadCounter, setReloadCounter] = useState(0);
+  const [openingLinkKey, setOpeningLinkKey] = useState(null);
+
+  const openHistoryPostLink = async (uid, url, key, title = "Mở liên kết bài viết") => {
+    if (!url || openingLinkKey) return;
+    setOpeningLinkKey(key);
+    try {
+      await openPostInAccountBrowser(uid, url, { title });
+    } finally {
+      setOpeningLinkKey(null);
+    }
+  };
 
   // Đóng modal khi bấm Escape và reset các state phụ
   useEffect(() => {
@@ -230,6 +239,9 @@ export function HistoryView() {
         raw.forEach((acc) => {
           const uid = String(acc.uid || acc.fb_uid || acc.account_uid || "").trim();
           if (!uid || seen.has(uid)) return;
+          // Chỉ hiện nick còn sống (Live) — khớp yêu cầu bỏ lọc Die/Blocked
+          const status = String(acc.status || "").toLowerCase();
+          if (status && status !== "live") return;
           seen.add(uid);
           const name = acc.name || acc.fb_name || acc.account_name || uid;
           opts.push({
@@ -368,6 +380,10 @@ export function HistoryView() {
     link.download = `Lich_su_dang_bai_${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     URL.revokeObjectURL(url);
+    toast.success(
+      `Xuất thành công ${postHistory.length} bài đăng ra file CSV!`,
+      "XUẤT THÀNH CÔNG"
+    );
   }, [postHistory, formatDateTime]);
 
   // ── Xuất file Excel (.xlsx) ──
@@ -440,6 +456,10 @@ export function HistoryView() {
       const book = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(book, sheet, "Lich su dang bai");
       XLSX.writeFile(book, `Lich_su_dang_bai_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      toast.success(
+        `Xuất thành công ${postHistory.length} bài đăng ra file Excel!`,
+        "XUẤT THÀNH CÔNG"
+      );
     } catch (err) {
       toast.error("Lỗi khi xuất file Excel: " + (err.message || err), "KHÔNG XUẤT ĐƯỢC FILE");
     }
@@ -695,29 +715,38 @@ export function HistoryView() {
                         <div className="flex items-center justify-center gap-2">
                           {(() => {
                             const targetUrl = row.facebook_post_url || (isPublished && row.account_uid ? (row.post_type === 'reels' ? `https://www.facebook.com/${row.account_uid}/reels` : row.post_type === 'story' ? `https://www.facebook.com/stories/${row.account_uid}` : `https://www.facebook.com/${row.account_uid}`) : null);
+                            const rowKey = `row-${row.id || row.account_uid}-${targetUrl || ""}`;
+                            const isOpening = openingLinkKey === rowKey;
                             return (
                               <button
                                 type="button"
-                                disabled={!isPublished || !targetUrl}
+                                disabled={!isPublished || !targetUrl || !row.account_uid || Boolean(openingLinkKey)}
                                 onClick={() => {
-                                  if (targetUrl) {
-                                    window.open(targetUrl, "_blank", "noopener,noreferrer");
+                                  if (targetUrl && row.account_uid) {
+                                    openHistoryPostLink(
+                                      row.account_uid,
+                                      targetUrl,
+                                      rowKey,
+                                      row.facebook_post_url ? "Mở liên kết bài viết" : "Xem trang cá nhân",
+                                    );
                                   }
                                 }}
                                 className={`p-1 transition-colors ${
-                                  isPublished && targetUrl
+                                  isPublished && targetUrl && row.account_uid
                                     ? "text-slate-400 hover:text-blue-600 cursor-pointer"
                                     : "text-slate-300 cursor-not-allowed opacity-30"
                                 }`}
                                 title={
                                   !isPublished
                                     ? "Không có liên kết (bài chưa xuất bản hoặc bị lỗi)"
+                                    : !row.account_uid
+                                    ? "Thiếu UID tài khoản — không mở được Chrome profile"
                                     : row.facebook_post_url
-                                    ? "Mở bài viết trên Facebook"
-                                    : "Mở trang cá nhân trên Facebook"
+                                    ? "Mở bài viết trong Chrome profile nick"
+                                    : "Mở trang cá nhân trong Chrome profile nick"
                                 }
                               >
-                                <ExternalLink size={15} />
+                                {isOpening ? <Loader2 size={15} className="animate-spin" /> : <ExternalLink size={15} />}
                               </button>
                             );
                           })()}
@@ -746,67 +775,11 @@ export function HistoryView() {
           Hiển thị <span className="font-bold text-slate-800">{String(postHistory.length).padStart(2, "0")}</span> / {totalRecords.toLocaleString("vi-VN")} kết quả
         </div>
 
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            disabled={currentPage <= 1}
-            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-            className="w-7 h-7 rounded-lg border border-slate-200 bg-white flex items-center justify-center text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
-          >
-            <ChevronLeft size={14} />
-          </button>
-
-          {/* Trang 1 */}
-          <button
-            type="button"
-            onClick={() => setCurrentPage(1)}
-            className={`w-7 h-7 rounded-lg font-bold text-xs flex items-center justify-center transition-all cursor-pointer ${
-              currentPage === 1
-                ? "bg-blue-600 text-white shadow-xs"
-                : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-            }`}
-          >
-            1
-          </button>
-
-          {currentPage > 3 && <span className="px-1 text-slate-400">...</span>}
-
-          {currentPage > 2 && currentPage < totalPages && (
-            <button
-              type="button"
-              className="w-7 h-7 rounded-lg font-bold text-xs bg-blue-600 text-white shadow-xs flex items-center justify-center"
-            >
-              {currentPage}
-            </button>
-          )}
-
-          {totalPages > 1 && currentPage < totalPages - 2 && (
-            <span className="px-1 text-slate-400">...</span>
-          )}
-
-          {totalPages > 1 && (
-            <button
-              type="button"
-              onClick={() => setCurrentPage(totalPages)}
-              className={`w-7 h-7 rounded-lg font-bold text-xs flex items-center justify-center transition-all cursor-pointer ${
-                currentPage === totalPages
-                  ? "bg-blue-600 text-white shadow-xs"
-                  : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-            >
-              {totalPages}
-            </button>
-          )}
-
-          <button
-            type="button"
-            disabled={currentPage >= totalPages}
-            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-            className="w-7 h-7 rounded-lg border border-slate-200 bg-white flex items-center justify-center text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
-          >
-            <ChevronRight size={14} />
-          </button>
-        </div>
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          onPageChange={setCurrentPage}
+        />
       </div>
 
       {/* ── Modal Chi tiết Bài viết (Info Dialog theo UC-M03-10) ── */}
@@ -1176,25 +1149,49 @@ export function HistoryView() {
               <div className="p-3.5 px-5 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between shrink-0">
                 <div>
                   {isPublished && postUrl ? (
-                    <a
-                      href={postUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3.5 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors border border-blue-200"
+                    <button
+                      type="button"
+                      disabled={!selectedDetailPost.account_uid || Boolean(openingLinkKey)}
+                      onClick={() =>
+                        openHistoryPostLink(
+                          selectedDetailPost.account_uid,
+                          postUrl,
+                          `detail-post-${selectedDetailPost.id}`,
+                          "Mở liên kết bài viết",
+                        )
+                      }
+                      className="px-3.5 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors border border-blue-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait"
+                      title="Mở bài viết trong Chrome profile nick đã đăng nhập"
                     >
-                      <ExternalLink size={13} />
+                      {openingLinkKey === `detail-post-${selectedDetailPost.id}` ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : (
+                        <ExternalLink size={13} />
+                      )}
                       <span>Mở liên kết bài viết</span>
-                    </a>
+                    </button>
                   ) : profileUrl ? (
-                    <a
-                      href={profileUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3.5 py-2 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors border border-slate-200"
+                    <button
+                      type="button"
+                      disabled={!selectedDetailPost.account_uid || Boolean(openingLinkKey)}
+                      onClick={() =>
+                        openHistoryPostLink(
+                          selectedDetailPost.account_uid,
+                          profileUrl,
+                          `detail-profile-${selectedDetailPost.id}`,
+                          "Xem trang cá nhân",
+                        )
+                      }
+                      className="px-3.5 py-2 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors border border-slate-200 cursor-pointer disabled:opacity-50 disabled:cursor-wait"
+                      title="Mở trang cá nhân trong Chrome profile nick đã đăng nhập"
                     >
-                      <ExternalLink size={13} />
+                      {openingLinkKey === `detail-profile-${selectedDetailPost.id}` ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : (
+                        <ExternalLink size={13} />
+                      )}
                       <span>Xem trang cá nhân Facebook</span>
-                    </a>
+                    </button>
                   ) : (
                     <span />
                   )}

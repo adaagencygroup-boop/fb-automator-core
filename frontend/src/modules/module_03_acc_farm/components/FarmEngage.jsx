@@ -20,6 +20,7 @@ import ProgressMonitor from "./ProgressMonitor";
 import ScenarioConfig, { DEFAULT_CONFIG, GROUP_KEYWORD_MAX_LEN, linkListError, rangeError, toPayload } from "./ScenarioConfig";
 import { NumberInput, PageTitle } from "./parts";
 import { useFarmAccounts } from "../hooks/useFarmAccounts";
+import { startNewFarmLogs } from "../hooks/useFarmLogs";
 
 const CONFIG_KEY = "m03.farm.config";
 const THREADS_KEY = "m03.farm.threads";
@@ -27,6 +28,12 @@ const THREADS_KEY = "m03.farm.threads";
 const LEFTOVER_KEY = "m03.farm.leftover_applied";
 const LEFTOVER_FIELDS = ["group_links", "group_keyword", "friend_links"];
 const POLL_MS = 2000;
+// Quá thời gian chờ Kích hoạt nhưng máy chủ vẫn đang chuẩn bị (CSDL ở xa chậm): hỏi trạng thái thêm ~1 phút
+const START_CONFIRM_TRIES = 30;
+// Phiên được tính là của lần bấm này khi bắt đầu sau lúc bấm (trừ hao lệch giờ nhỏ)
+const START_CLOCK_SLACK_S = 5;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function readSaved(key) {
   try {
@@ -178,6 +185,20 @@ export default function FarmEngage() {
     return { uids };
   };
 
+  // Hết thời gian chờ Kích hoạt: máy chủ không biết giao diện đã thôi chờ nên vẫn chạy tiếp, hỏi trạng thái tới khi
+  // thấy phiên bắt đầu sau lúc bấm (không hiện lỗi đọc trạng thái ở từng lần hỏi)
+  const confirmStarted = async (clickedAt) => {
+    for (let i = 0; i < START_CONFIRM_TRIES; i += 1) {
+      const next = await getFarmStatus().catch(() => null);
+      if (next?.started_at && next.started_at >= clickedAt - START_CLOCK_SLACK_S) {
+        setStatus(next);
+        return true;
+      }
+      await sleep(POLL_MS);
+    }
+    return false;
+  };
+
   const handleStart = async () => {
     const check = validate();
     if (typeof check === "string") {
@@ -187,6 +208,9 @@ export default function FarmEngage() {
     const payload = toPayload(config);
     const threadCount = Math.min(HARD_MAX_THREADS, check.uids.length, Math.max(1, parseInt(threads, 10) || 1));
     setBusy("start");
+    const clickedAt = Date.now() / 1000;
+    // Phiên mới: khung log và bộ lọc luồng chỉ còn của phiên này
+    const restoreLogs = startNewFarmLogs();
     try {
       // Giới hạn mỗi ngày là cấu hình theo máy: lưu lại để lần sau / máy khác mở ra thấy đúng
       await Promise.all([
@@ -203,7 +227,18 @@ export default function FarmEngage() {
       await loadStatus();
       setViewState("running");
     } catch (err) {
-      toast.error(err.message, "KÍCH HOẠT THẤT BẠI");
+      if (err.code !== "ECONNABORTED") {
+        restoreLogs();
+        toast.error(err.message, "KÍCH HOẠT THẤT BẠI");
+      } else if (await confirmStarted(clickedAt)) {
+        toast.success("Máy chủ phản hồi chậm nhưng phiên đã được kích hoạt.", "ĐÃ KÍCH HOẠT");
+        setViewState("running");
+      } else {
+        toast.warning(
+          "Máy chủ phản hồi quá chậm, chưa xác nhận được phiên chạy. Đợi ít phút rồi mở lại màn này để xem phiên đã chạy chưa trước khi bấm Kích hoạt lại.",
+          "CHƯA XÁC NHẬN ĐƯỢC"
+        );
+      }
     } finally {
       setBusy("");
     }

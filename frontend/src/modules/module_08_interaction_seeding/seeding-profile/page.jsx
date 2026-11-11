@@ -11,11 +11,14 @@ import ProfileActionBar from "./_components/ProfileActionBar";
 import ProfileProgressTerminal from "./_components/ProfileProgressTerminal";
 import ProfileSummaryCards from "./_components/ProfileSummaryCards";
 import ProfileTargetSection from "./_components/ProfileTargetSection";
+import AccountSelectModal from "../_components/AccountSelectModal";
 
 export default function SeedingProfilePage() {
   const [targets, setTargets] = useState([]);
   const [successMessage, setSuccessMessage] = useState(null);
   const [accountCount, setAccountCount] = useState(2);
+  const [selectedUids, setSelectedUids] = useState([]);
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [delayMin, setDelayMin] = useState(30);
   const [delayMax, setDelayMax] = useState(60);
   const [isRunning, setIsRunning] = useState(false);
@@ -41,7 +44,9 @@ export default function SeedingProfilePage() {
           );
           const validCount = validLiveLoggedIn.length;
           setLiveAccountsCount(validCount);
-          setAccountCount(validCount > 0 ? Math.min(validCount, 10) : 0);
+          const initialUids = validLiveLoggedIn.map((a) => a.uid);
+          setSelectedUids(initialUids);
+          setAccountCount(initialUids.length);
         }
       })
       .catch(() => {});
@@ -244,10 +249,26 @@ export default function SeedingProfilePage() {
       return;
     }
 
-    if (accountCount <= 0 || accountCount > liveAccountsCount) {
+    if (selectedUids.length === 0 && accountCount <= 0) {
       toast.warning(
-        `Số lượng tài khoản muốn chạy (${accountCount}) không hợp lệ hoặc vượt quá số tài khoản khả dụng (${liveAccountsCount})!`,
-        "SỐ LƯỢNG KHÔNG HỢP LỆ"
+        "Vui lòng chọn ít nhất 1 tài khoản để chạy seeding!",
+        "CHƯA CHỌN TÀI KHOẢN"
+      );
+      return;
+    }
+
+    if (!delayMin || !delayMax || Number(delayMax) <= Number(delayMin)) {
+      toast.warning(
+        `Thời gian tối đa (${delayMax || 0}s) phải lớn hơn thời gian tối thiểu (${delayMin || 0}s)!`,
+        "CẤU HÌNH THỜI GIAN KHÔNG HỢP LỆ"
+      );
+      return;
+    }
+
+    if (Number(delayMax) > 3600) {
+      toast.warning(
+        "Thời gian tối đa chỉ được nhập tối đa đến 3600 giây!",
+        "CẤU HÌNH THỜI GIAN KHÔNG HỢP LỆ"
       );
       return;
     }
@@ -268,7 +289,8 @@ export default function SeedingProfilePage() {
           url: t.url,
           display_name: t.display_name,
         })),
-        account_count: accountCount,
+        uids: selectedUids.length > 0 ? selectedUids : undefined,
+        account_count: selectedUids.length > 0 ? selectedUids.length : accountCount,
         threads: 1,
         delay_seconds_min: delayMin,
         delay_seconds_max: delayMax,
@@ -361,7 +383,9 @@ export default function SeedingProfilePage() {
       {/* Steps 2 & 3: Account Config & Delay */}
       <ProfileAccountConfig
         accountCount={accountCount}
-        onAccountCountChange={setAccountCount}
+        onAccountCountChange={(val) => {
+          setAccountCount(val);
+        }}
         availableAccounts={liveAccountsCount}
         liveAccounts={liveAccountsCount}
         totalAccounts={totalAccountsCount}
@@ -369,6 +393,12 @@ export default function SeedingProfilePage() {
         maxDelay={delayMax}
         onMinDelayChange={setDelayMin}
         onMaxDelayChange={setDelayMax}
+        onOpenAccountModal={() => {
+          if (isRunning || isStopping) return;
+          setIsAccountModalOpen(true);
+        }}
+        selectedUids={selectedUids}
+        isRunning={isRunning || isStopping}
       />
 
       {/* Summary Cards */}
@@ -388,9 +418,27 @@ export default function SeedingProfilePage() {
         isStopping={isStopping}
         onStart={handleStart}
         onStop={handleStop}
-        disabled={targets.length === 0}
+        disabled={
+          targets.length === 0 ||
+          !delayMin ||
+          !delayMax ||
+          Number(delayMax) <= Number(delayMin) ||
+          Number(delayMax) > 3600
+        }
         otherRunning={otherRunning}
         onStopOther={handleStopOther}
+      />
+
+      {/* Popup chọn tài khoản */}
+      <AccountSelectModal
+        isOpen={isAccountModalOpen}
+        onClose={() => setIsAccountModalOpen(false)}
+        selectedUids={selectedUids}
+        onConfirm={(uids) => {
+          setSelectedUids(uids);
+          setAccountCount(uids.length);
+        }}
+        isRunning={isRunning || isStopping}
       />
     </div>
   );

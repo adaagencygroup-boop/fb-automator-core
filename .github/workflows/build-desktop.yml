@@ -6,9 +6,31 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
+# Chỉ acc được phép mới build/release từ tag v* hoặc workflow_dispatch.
+# Set repo variable RELEASE_ALLOWED_ACTOR = GitHub username (vd: peterphenikaa).
+# Fallback cứng bên dưới nếu chưa tạo variable.
 jobs:
+  authorize-release:
+    name: Authorize releaser
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check actor
+        env:
+          ACTOR: ${{ github.actor }}
+          ALLOWED: ${{ vars.RELEASE_ALLOWED_ACTOR || 'peterphenikaa' }}
+        run: |
+          echo "Actor=$ACTOR allowed=$ALLOWED"
+          if [ "$ACTOR" != "$ALLOWED" ]; then
+            echo "::error::Chỉ @$ALLOWED được chạy desktop release (tag/workflow_dispatch). Actor hiện tại: @$ACTOR"
+            exit 1
+          fi
+
   build-desktop:
     name: Build ${{ matrix.platform }} Application
+    needs: authorize-release
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -17,9 +39,6 @@ jobs:
           - platform: Windows
             runner: windows-latest
             config: src-tauri/tauri.conf.json
-          - platform: Linux
-            runner: ubuntu-22.04
-            config: src-tauri/tauri.linux.conf.json
 
     steps:
       - name: Checkout Code
@@ -27,16 +46,6 @@ jobs:
 
       - name: Setup Rust Stable
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Linux Build Dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev build-essential pkg-config \
-            curl wget file libxdo-dev libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev \
-            patchelf libfuse2 python3-tk
 
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
@@ -54,6 +63,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-build.txt
+          # Tránh PyInstaller đóng gói simplejson dở (requests → JSONDecodeError)
+          python -m pip uninstall -y simplejson || true
 
       - name: Install Root & Frontend Dependencies
         run: |
@@ -63,9 +74,34 @@ jobs:
       - name: Test Native Packaging and Storage
         run: python -m unittest discover -s tests -p test_desktop_packaging.py
 
+      # Windows Release phải nhúng .env (DATABASE_URL) vào local_engine —
+      # không commit .env; lấy từ GitHub Secret DESKTOP_ENV_FILE.
+      - name: Write desktop .env for Windows sidecar bundle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          DESKTOP_ENV_FILE: ${{ secrets.DESKTOP_ENV_FILE }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DESKTOP_ENV_FILE)) {
+            throw "Thiếu GitHub Secret DESKTOP_ENV_FILE — paste nguyên nội dung file .env production vào secret này."
+          }
+          if ($env:DESKTOP_ENV_FILE -notmatch 'DATABASE_URL\s*=\s*.*postgresql') {
+            throw "DESKTOP_ENV_FILE phải có DATABASE_URL=postgresql://..."
+          }
+          # UTF-8 không BOM — dotenv/PyInstaller đọc ổn định trên Windows
+          [System.IO.File]::WriteAllText(
+            (Join-Path $pwd ".env"),
+            $env:DESKTOP_ENV_FILE.Trim() + "`n",
+            [System.Text.UTF8Encoding]::new($false)
+          )
+          Write-Host "Wrote .env for PyInstaller (DATABASE_URL postgresql OK)"
+
       - name: Build Python Sidecar Binary
         run: |
           python scripts/build_sidecar.py
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
 
       - name: Build Tauri Desktop Package
         run: |
@@ -73,7 +109,10 @@ jobs:
         env:
           CI: false
           NEXT_TELEMETRY_DISABLED: 1
-          APPIMAGE_EXTRACT_AND_RUN: 1
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload Installer Artifacts
         uses: actions/upload-artifact@v4
@@ -82,7 +121,59 @@ jobs:
           if-no-files-found: error
           path: |
             src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/msi/*.sig
+            src-tauri/target/release/bundle/msi/*.zip
             src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/nsis/*.sig
+            src-tauri/target/release/bundle/nsis/*.zip
 
+  publish-release:
+    name: Publish GitHub Release + latest.json
+    needs: build-desktop
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download All Installer Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: FB-Automator-*-Installer
+          merge-multiple: true
+
+      - name: Build latest.json
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python scripts/build_latest_json.py \
+            --version "$VERSION" \
+            --tag "$GITHUB_REF_NAME" \
+            --repo "${{ github.repository }}" \
+            --notes "Desktop release $GITHUB_REF_NAME" \
+            --artifact-dir release-artifacts \
+            --out latest.json
+          echo "---- latest.json ----"
+          cat latest.json
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: FB Page Automator ${{ github.ref_name }}
+          body: |
+            Desktop build from tag `${{ github.ref_name }}`.
+
+            - Installer assets attached below
+            - `latest.json` is consumed by the in-app Tauri updater
+          files: |
+            latest.json
+            release-artifacts/**
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

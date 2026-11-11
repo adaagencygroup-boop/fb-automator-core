@@ -74,8 +74,12 @@ async def process_webhook_event(event: Dict[str, Any]):
                         "wow": "😮",
                         "sad": "😢",
                         "angry": "😡",
+                        "❤": "❤️",
+                        "heart": "❤️",
                     }
                     final_emoji = emoji_map.get(raw_emoji, raw_emoji)
+                    if final_emoji == "❤":
+                        final_emoji = "❤️"
                     reaction_val = final_emoji if action == "react" else None
 
                     if mid:
@@ -90,11 +94,14 @@ async def process_webhook_event(event: Dict[str, Any]):
                                 "type": "reaction",
                                 "page_id": str(page_id),
                                 "data": {
+                                    "id": msg.id,
                                     "facebook_message_id": mid,
                                     "reactions": reaction_val,
+                                    "reaction": reaction_val,
+                                    "sender_id": msg.sender_id,
                                 },
                             }
-                            await manager.send_personal_message(ws_payload, fb_user_id)
+                            await manager.broadcast(ws_payload)
 
                 # 1.2 Handle read receipts (seen status) from customer
                 read_event = messaging.get("read")
@@ -414,7 +421,12 @@ async def process_webhook_event(event: Dict[str, Any]):
                         else:
                             title = f"{prefix} {sender_name} đã tương tác \"{item}\""
 
-                        notif_id = comment_id if comment_id else f"{post_id}_{item}_{verb}_{sender_id}"
+                        # Với reaction (cảm xúc), ID thông báo notification cần gắn với sender_id và verb
+                        # để không bị trùng với chính comment_id của bình luận đã tạo trước đó
+                        if item in ("like", "reaction"):
+                            notif_id = f"{comment_id or post_id}_{item}_{verb}_{sender_id}"
+                        else:
+                            notif_id = comment_id if comment_id else f"{post_id}_{item}_{verb}_{sender_id}"
 
                         if permalink and str(permalink).startswith("http"):
                             link = str(permalink)
@@ -422,6 +434,25 @@ async def process_webhook_event(event: Dict[str, Any]):
                             link = f"https://facebook.com/groups/{group_id}/permalink/{post_id}/"
                         else:
                             link = f"https://facebook.com/{post_id}"
+
+                    # Luôn phát gói comment_reaction realtime tới client nếu đây là cảm xúc trên bình luận
+                    if field_name == "feed" and item in ("like", "reaction") and comment_id:
+                        page_record = db.query(Page).filter(Page.page_id == page_id).first()
+                        fb_user_id = page_record.facebook_user_id if page_record else "all"
+                        reaction_type = value.get("reaction_type") or "like"
+                        comment_ws = {
+                            "type": "comment_reaction",
+                            "page_id": str(page_id),
+                            "data": {
+                                "post_id": post_id,
+                                "comment_id": comment_id,
+                                "reaction_type": reaction_type,
+                                "verb": verb,
+                                "sender_id": sender_id,
+                                "sender_name": sender_name,
+                            }
+                        }
+                        await manager.broadcast(comment_ws)
 
                     if title and notif_id:
                         db_notif = db.query(Notification).filter(
@@ -432,7 +463,7 @@ async def process_webhook_event(event: Dict[str, Any]):
                             page_record = db.query(Page).filter(Page.page_id == page_id).first()
                             from modules.module_06_omnichannel_chat.services import FacebookSyncService
                             sync_service = FacebookSyncService(db)
-                            profile_info = await sync_service.get_customer_profile(sender_id, page_id) if (sender_id and page_id) else {}
+                            profile_info = (await sync_service.get_customer_profile(sender_id, page_id)) or {} if (sender_id and page_id) else {}
                             avatar_url = profile_info.get("avatar_url", "")
                             if profile_info.get("name") and (not sender_name or sender_name == "Khách hàng"):
                                 sender_name = profile_info.get("name")
@@ -476,9 +507,12 @@ async def process_webhook_event(event: Dict[str, Any]):
                                     "from_user_name": db_notif.from_user_name,
                                     "from_user_avatar": db_notif.from_user_avatar,
                                     "notification_type": db_notif.notification_type,
+                                    "post_id": post_id,
+                                    "comment_id": comment_id,
                                 },
                             }
-                            await manager.send_personal_message(ws_payload, fb_user_id)
+                            await manager.broadcast(ws_payload)
+
 
                             # Trigger native Windows toast for feed interaction
                             if win_notifier:

@@ -164,6 +164,15 @@ class BaseFacebookBot:
                 except Exception:
                     pass
 
+            # Nếu đang ở màn hình lưu tài khoản / chọn nick (có nút "Dùng trang cá nhân khác")
+            for xpath in getattr(LoginLocators, "SAVED_ACCOUNT_SWITCH_XPATHS", []):
+                try:
+                    found = self.safe_find_element(By.XPATH, xpath, timeout=1)
+                    if found and found.is_displayed():
+                        return False
+                except Exception:
+                    pass
+
             # Dấu hiệu đã đăng nhập thành công
             for by, val in LoginLocators.SESSION_ALIVE_INDICATORS:
                 el = self.safe_find_element(by, val, timeout=2)
@@ -177,6 +186,75 @@ class BaseFacebookBot:
         except Exception as e:
             logger.debug(f"is_facebook_session_alive error: {e}")
             return False
+
+    def handle_saved_account_screen(self, callback: Optional[Callable[[str], None]] = None) -> bool:
+        """
+        Nếu xuất hiện màn hình tài khoản đã lưu (One-Click Login / có nút 'Dùng trang cá nhân khác'):
+        Click vào nút 'Dùng trang cá nhân khác' để chuyển sang form đăng nhập chuẩn như ở Module 02.
+        """
+        try:
+            # 1. Thử hàm chuẩn từ Module 02 nếu có
+            try:
+                from modules.module_02_account_manager.automation.login_flow import _handle_saved_account_screen
+                if _handle_saved_account_screen(self.driver, sleep_before_click=1.0):
+                    if callback:
+                        callback("Phát hiện màn hình lưu nick; đã bấm 'Dùng trang cá nhân khác' về form đăng nhập chuẩn.")
+                    logger.info("Module 02 _handle_saved_account_screen clicked successfully.")
+                    return True
+            except Exception as e:
+                logger.debug(f"Module 02 _handle_saved_account_screen call note: {e}")
+
+            # 2. Click bằng JavaScript tìm chính xác từ khóa trên DOM
+            js_script = """
+                var keywords = [
+                    "dùng trang cá nhân khác",
+                    "đăng nhập bằng tài khoản khác",
+                    "dùng tài khoản khác",
+                    "use another profile",
+                    "log into another account"
+                ];
+                var all = document.querySelectorAll('button, div[role="button"], a, div[tabindex="0"], span');
+                for (var i = 0; i < all.length; i++) {
+                    var text = (all[i].innerText || all[i].textContent || '').trim().toLowerCase();
+                    if (keywords.some(function(k) { return text.includes(k); })) {
+                        var btn = all[i].closest('[role="button"]') || all[i].closest('button') || all[i].closest('a') || all[i];
+                        btn.focus();
+                        btn.click();
+                        return true;
+                    }
+                }
+                return false;
+            """
+            try:
+                clicked_js = self.driver.execute_script(js_script)
+                if clicked_js:
+                    if callback:
+                        callback("Phát hiện màn hình lưu nick; đã bấm 'Dùng trang cá nhân khác' qua JS.")
+                    logger.info("JS clicked 'Dùng trang cá nhân khác'")
+                    time.sleep(2.0)
+                    return True
+            except Exception:
+                pass
+
+            # 3. Quét các XPath định danh nút 'Dùng trang cá nhân khác'
+            xpaths = getattr(LoginLocators, "SAVED_ACCOUNT_SWITCH_XPATHS", [])
+            for xpath in xpaths:
+                elems = self.safe_find_elements(By.XPATH, xpath)
+                for el in elems:
+                    try:
+                        if el.is_displayed():
+                            if callback:
+                                callback("Phát hiện màn hình lưu nick; đang bấm 'Dùng trang cá nhân khác'...")
+                            logger.info(f"Phát hiện nút chuyển tài khoản ({xpath}), đang click...")
+                            time.sleep(1.0)
+                            self.safe_click(el)
+                            time.sleep(2.0)
+                            return True
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.debug(f"handle_saved_account_screen error: {e}")
+        return False
 
     def extract_2fa_code(self, twofa_seed: str) -> Optional[str]:
         """Tự động sinh mã 2FA qua TOTP hoặc gọi API 2fa.live."""
@@ -204,44 +282,127 @@ class BaseFacebookBot:
             pass
         return None
 
-    def login_with_credentials(self, uid: str, password: str, twofa_seed: Optional[str] = None, callback: Optional[Callable[[str], None]] = None) -> bool:
-        """Đăng nhập bằng UID và Mật khẩu form login + Tự động điền 2FA nếu có."""
+    def login_with_credentials(
+        self,
+        uid: str,
+        password: str,
+        twofa_seed: Optional[str] = None,
+        callback: Optional[Callable[[str], None]] = None,
+    ) -> bool:
+        """Đăng nhập bằng UID và Mật khẩu form login + Tự động điền 2FA nếu có như ở Module 02."""
         try:
-            if callback:
-                callback(f"[{uid}] Đang đăng nhập bằng tài khoản & mật khẩu...")
-            self.driver.get("https://www.facebook.com/login.php")
-            time.sleep(3)
+            # 1. Thử tận dụng hàm ensure_logged_in của Module 02 đã được kiểm chứng hoạt động hoàn hảo
+            try:
+                from modules.module_02_account_manager.automation.login_flow import ensure_logged_in
+                if callback:
+                    callback(f"[{uid}] Đang kiểm tra và đăng nhập tài khoản theo chuẩn Module 02...")
+                res = ensure_logged_in(
+                    self.driver,
+                    uid=uid,
+                    password=password,
+                    two_fa=twofa_seed,
+                )
+                if res.get("success"):
+                    if callback:
+                        callback(f"[{uid}] ✓ Đăng nhập Facebook thành công!")
+                    return True
+                else:
+                    if callback and res.get("error"):
+                        callback(f"[{uid}] Ghi chú login Module 02: {res.get('error')}")
+            except Exception as e:
+                logger.info(f"[{uid}] ensure_logged_in note: {e}, chuyển sang luồng đăng nhập trực tiếp...")
 
-            email_el = self.safe_find_element(By.ID, "email", timeout=4) or self.safe_find_element(By.NAME, "email", timeout=3)
-            pass_el = self.safe_find_element(By.ID, "pass", timeout=4) or self.safe_find_element(By.NAME, "pass", timeout=3)
+            # 2. Luồng đăng nhập trực tiếp (tự xử lý màn hình lưu nick + điền thông tin + 2FA)
+            if callback:
+                callback(f"[{uid}] Đang mở trang đăng nhập Facebook...")
+            curr = (self.driver.current_url or "").lower()
+            if "login.php" not in curr and "login" not in curr:
+                self.driver.get("https://www.facebook.com/login.php")
+                time.sleep(2.5)
+
+            # Bấm "Dùng trang cá nhân khác" nếu màn hình lưu tài khoản xuất hiện
+            self.handle_saved_account_screen(callback=callback)
+
+            # Tìm ô email và mật khẩu với đa dạng locators
+            email_el = None
+            pass_el = None
+            start_find = time.time()
+            while time.time() - start_find < 8.0:
+                for by, val in getattr(LoginLocators, "EMAIL_INPUT_SELECTORS", [(By.ID, "email"), (By.NAME, "email")]):
+                    el = self.safe_find_element(by, val, timeout=1)
+                    if el and el.is_displayed():
+                        email_el = el
+                        break
+                for by, val in getattr(LoginLocators, "PASSWORD_INPUT_SELECTORS", [(By.ID, "pass"), (By.NAME, "pass")]):
+                    el = self.safe_find_element(by, val, timeout=1)
+                    if el and el.is_displayed():
+                        pass_el = el
+                        break
+                if email_el and pass_el:
+                    break
+                # Nếu chưa thấy form, kiểm tra lại xem có nút "Dùng trang cá nhân khác" chưa bấm không
+                if self.handle_saved_account_screen(callback=callback):
+                    time.sleep(1.0)
+                time.sleep(0.5)
 
             if not email_el or not pass_el:
+                logger.warning(f"[{uid}] Không tìm thấy ô nhập email/pass sau khi xử lý trang login")
                 return False
 
-            email_el.clear()
+            if callback:
+                callback(f"[{uid}] Đang điền tài khoản và mật khẩu...")
+            try:
+                email_el.clear()
+            except Exception:
+                pass
             email_el.send_keys(uid)
-            time.sleep(0.5)
+            time.sleep(random.uniform(0.3, 0.7))
 
-            pass_el.clear()
+            try:
+                pass_el.clear()
+            except Exception:
+                pass
             pass_el.send_keys(password)
-            time.sleep(0.5)
+            time.sleep(random.uniform(0.4, 0.8))
 
-            login_btn = self.safe_find_element(By.NAME, "login", timeout=3) or self.safe_find_element(By.XPATH, "//button[@type='submit']", timeout=3)
-            if login_btn:
-                self.safe_click(login_btn)
-            else:
+            # Nhấn nút Đăng nhập
+            clicked = False
+            for by, val in getattr(LoginLocators, "LOGIN_BUTTON_SELECTORS", [(By.NAME, "login"), (By.XPATH, "//button[@type='submit']")]):
+                btn = self.safe_find_element(by, val, timeout=1)
+                if btn and btn.is_displayed():
+                    try:
+                        self.safe_click(btn)
+                        clicked = True
+                        break
+                    except Exception:
+                        pass
+            if not clicked:
                 pass_el.send_keys(Keys.ENTER)
 
-            time.sleep(5)
+            time.sleep(4.5)
 
-            # Kiểm tra nếu hỏi 2FA
-            if "checkpoint" in self.driver.current_url.lower() or "two_step" in self.driver.current_url.lower():
+            # Kiểm tra và xử lý 2FA nếu xuất hiện
+            try:
+                from modules.module_02_account_manager.automation.login_flow import _is_2fa_required, _handle_2fa
+                if _is_2fa_required(self.driver) and twofa_seed:
+                    if callback:
+                        callback(f"[{uid}] Phát hiện xác thực 2FA, đang xử lý mã OTP...")
+                    _handle_2fa(self.driver, twofa_seed)
+            except Exception:
+                pass
+
+            curr_url = (self.driver.current_url or "").lower()
+            if "checkpoint" in curr_url or "two_step" in curr_url:
                 twofa_code = self.extract_2fa_code(twofa_seed) if twofa_seed else None
                 if twofa_code:
                     if callback:
-                        callback(f"[{uid}] Phát hiện 2FA, đang điền mã xác thực...")
+                        callback(f"[{uid}] Đang điền mã xác thực 2FA ({twofa_code})...")
                     code_box = self.safe_find_element(By.XPATH, LoginLocators.TWOFA_CODE_INPUT_XPATH, timeout=8)
                     if code_box:
+                        try:
+                            code_box.clear()
+                        except Exception:
+                            pass
                         code_box.send_keys(twofa_code)
                         time.sleep(1)
                         submit_btn = self.safe_find_element(By.XPATH, LoginLocators.TWOFA_SUBMIT_BUTTON_XPATH, timeout=4)
@@ -249,7 +410,32 @@ class BaseFacebookBot:
                             self.safe_click(submit_btn)
                         else:
                             code_box.send_keys(Keys.ENTER)
-                        time.sleep(6)
+                        time.sleep(5)
+
+            # Xử lý popups & chuyển về profile cá nhân nếu có
+            try:
+                from modules.module_02_account_manager.automation.login_flow import _handle_post_login_popups, ensure_personal_profile
+                _handle_post_login_popups(self.driver)
+                ensure_personal_profile(self.driver, uid)
+            except Exception:
+                pass
+
+            # Đồng bộ cookie phiên mới vào DB nếu đã đăng nhập thành công
+            if self.is_facebook_session_alive():
+                try:
+                    cookies = self.driver.get_cookies()
+                    c_user = next((c["value"] for c in cookies if c.get("name") == "c_user"), None)
+                    xs = next((c["value"] for c in cookies if c.get("name") == "xs"), None)
+                    if c_user and xs:
+                        fresh_cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies if c.get("name") and c.get("value")])
+                        from modules.module_02_account_manager.database.connection import SessionLocal
+                        from modules.module_02_account_manager.database.repository import AccountRepository as AccountRepo
+                        with SessionLocal() as _db:
+                            AccountRepo.update_cookies(_db, uid, fresh_cookie_str)
+                            AccountRepo.update_login_status(_db, uid, "logged_in")
+                        logger.info(f"[{uid}] Đã đồng bộ cookie phiên mới vào CSDL.")
+                except Exception as sync_err:
+                    logger.debug(f"[{uid}] Cookie sync note: {sync_err}")
 
             return self.is_facebook_session_alive()
         except Exception as e:

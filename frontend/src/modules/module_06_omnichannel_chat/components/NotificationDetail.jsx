@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import {
   ArrowLeft,
   MessageCircle,
@@ -13,6 +13,8 @@ import {
   Smile,
   Image as ImageIcon,
   SendHorizontal,
+  X,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { REACTION_META, ReactionIcon } from "./ReactionIcons";
@@ -20,6 +22,7 @@ import ReactionDialog from "./ReactionDialog";
 import CommentSortMenu from "./CommentSortMenu";
 import CommentThread from "./CommentThread";
 import PostInsightsDialog from "./PostInsightsDialog";
+import EmojiPickerPanel from "./EmojiPickerPanel";
 import { Initial } from "./atoms";
 import {
   getPostDetails,
@@ -27,6 +30,8 @@ import {
   DEFAULT_COMMENT_SORT,
   setPostLike,
   replyToComment,
+  uploadMedia,
+  displayMediaUrl,
   friendlyFbError,
 } from "../service";
 
@@ -139,14 +144,17 @@ function ReactionStack({ post, breakdown, total: totalProp, onOpen, size = 20 })
 }
 
 /** Một ô số liệu trong thanh: biểu tượng viền + con số gọn */
-function StatItem({ icon: Icon, value, label, onClick, title }) {
+function StatItem({ icon: Icon, value, label, onClick, title, actionLabel }) {
   const inner = (
     <>
       <Icon className="size-[18px]" strokeWidth={1.8} />
-      <span className="text-sm">{compactCount(value)}</span>
+      <span className="text-sm">{actionLabel || compactCount(value)}</span>
     </>
   );
-  const cls = "inline-flex items-center gap-1.5 text-slate-500";
+  const cls = cn(
+    "inline-flex items-center gap-1.5 transition-colors",
+    actionLabel ? "text-emerald-600 font-medium" : "text-slate-500"
+  );
   if (!onClick) {
     return (
       <span className={cls} title={title} aria-label={label}>
@@ -156,7 +164,7 @@ function StatItem({ icon: Icon, value, label, onClick, title }) {
   }
   return (
     <button type="button" onClick={onClick} title={title} aria-label={label}
-      className={cn(cls, "rounded transition-colors hover:text-slate-800", FOCUS)}>
+      className={cn(cls, "rounded hover:text-slate-800", FOCUS)}>
       {inner}
     </button>
   );
@@ -235,50 +243,263 @@ function Header({ title, subtitle, onBack }) {
   );
 }
 
+function Dropdown({ trigger, children, panelClassName, label }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const close = useCallback(() => setOpen(false), []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (e) => {
+      if (!rootRef.current?.contains(e.target)) close();
+    };
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") close();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open, close]);
+
+  return (
+    <div ref={rootRef} className="relative">
+      {trigger({ open, toggle: () => setOpen((o) => !o) })}
+      {open && (
+        <div
+          role="dialog"
+          aria-label={label}
+          className={cn(
+            "absolute z-30 bg-white border border-slate-200 rounded-xl shadow-lg shadow-slate-900/10",
+            panelClassName,
+          )}
+        >
+          {children(close)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Thanh soạn bình luận dưới tên Page (đáy khung) */
-function Composer({ pageName, page, disabled, onSubmit }) {
+function Composer({ pageName, page, disabled, onSubmit, replyTarget, onCancelReply }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [imageUrl, setImageUrl] = useState(null);
+  const [uploadError, setUploadError] = useState("");
+  const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  // Khi bấm Trả lời một ai đó -> tự động focus vào ô nhập
+  useEffect(() => {
+    if (replyTarget) {
+      inputRef.current?.focus();
+    }
+  }, [replyTarget]);
+
+  const handlePickEmoji = (emoji) => {
+    const el = inputRef.current;
+    if (!el) {
+      setText((prev) => prev + emoji);
+      return;
+    }
+    const start = el.selectionStart ?? text.length;
+    const end = el.selectionEnd ?? text.length;
+    const next = text.slice(0, start) + emoji + text.slice(end);
+    setText(next);
+    setTimeout(() => {
+      el.focus();
+      const pos = start + emoji.length;
+      el.setSelectionRange(pos, pos);
+    }, 0);
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    // Hiển thị preview ngay lập tức
+    const blobUrl = URL.createObjectURL(file);
+    setImagePreview(blobUrl);
+    setImageUrl(null);
+    setUploadError("");
+    setUploading(true);
+
+    try {
+      const uploadedUrl = await uploadMedia(file);
+      if (uploadedUrl) {
+        setImageUrl(uploadedUrl);
+      } else {
+        throw new Error("Không nhận được URL ảnh sau khi tải.");
+      }
+    } catch (err) {
+      setUploadError(err?.message || "Tải ảnh thất bại.");
+      setImagePreview(null);
+      setImageUrl(null);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const removeImage = () => {
+    setImagePreview(null);
+    setImageUrl(null);
+    setUploadError("");
+  };
+
   const submit = async () => {
     const value = text.trim();
-    if (!value || busy || disabled) return;
+    if ((!value && !imageUrl) || busy || disabled || uploading) return;
     setBusy(true);
     try {
-      await onSubmit(value);
+      await onSubmit(value, imageUrl);
       setText("");
+      removeImage();
     } finally {
       setBusy(false);
     }
   };
+
+  const canSubmit = !disabled && !busy && !uploading && (Boolean(text.trim()) || Boolean(imageUrl));
+
+  const placeholderText = replyTarget
+    ? `Trả lời ${replyTarget.name || "người dùng"} dưới tên ${pageName || "Page"}...`
+    : `Bình luận dưới tên ${pageName || "Page"}...`;
+
   return (
-    <div className="shrink-0 flex items-center gap-2 border-t border-slate-100 p-3">
-      <PageAvatar page={page} name={pageName} size={32} />
-      <div className="flex flex-1 items-center gap-1 rounded-full bg-slate-100 pl-3 pr-1.5 py-1">
-        <input
-          type="text"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          disabled={disabled}
-          placeholder={`Bình luận dưới tên ${pageName || "Page"}...`}
-          className="flex-1 bg-transparent text-sm text-slate-800 placeholder:text-slate-400 outline-none disabled:cursor-not-allowed"
-        />
-        <button type="button" aria-label="Biểu tượng cảm xúc" className={cn("shrink-0 size-7 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-600", FOCUS)}>
-          <Smile className="size-4" />
-        </button>
-        <button type="button" aria-label="Thêm ảnh" className={cn("shrink-0 size-7 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-600", FOCUS)}>
-          <ImageIcon className="size-4" />
-        </button>
+    <div className="shrink-0 flex flex-col border-t border-slate-100 bg-white">
+      {/* Banner đang trả lời ai đó */}
+      {replyTarget && (
+        <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/90 px-4 py-1.5 text-xs">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="text-slate-500">Đang trả lời</span>
+            <span className="font-semibold text-slate-800 truncate">{replyTarget.name || "Người dùng"}</span>
+            {replyTarget.message && (
+              <span className="text-slate-400 truncate max-w-[200px] italic">
+                “{replyTarget.message}”
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onCancelReply}
+            title="Huỷ trả lời (chuyển về bình luận bài viết)"
+            className="shrink-0 ml-2 rounded-full p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 transition-colors"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
+
+      <div className="p-3">
+        {/* Xem trước ảnh đính kèm nếu có */}
+        {imagePreview && (
+          <div className="relative mb-2 inline-flex items-center self-start rounded-lg border border-slate-200 bg-slate-50 p-1.5">
+            <img
+              src={imagePreview}
+              alt="Đính kèm"
+              className="h-16 w-16 rounded-md object-cover"
+            />
+            {uploading && (
+              <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/40">
+                <Loader2 className="size-5 animate-spin text-white" />
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={removeImage}
+              disabled={busy}
+              aria-label="Xoá ảnh"
+              className="absolute -top-2 -right-2 flex size-5 items-center justify-center rounded-full bg-slate-700 text-white shadow hover:bg-slate-900"
+            >
+              <X className="size-3" />
+            </button>
+          </div>
+        )}
+
+        {uploadError && (
+          <p className="mb-2 text-xs text-rose-500">{uploadError}</p>
+        )}
+
+        <div className="flex items-center gap-2">
+          <PageAvatar page={page} name={pageName} size={32} />
+          <div className="flex flex-1 items-center gap-1 rounded-full bg-slate-100 pl-3 pr-1.5 py-1">
+            <input
+              ref={inputRef}
+              type="text"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submit();
+                if (e.key === "Escape" && replyTarget) onCancelReply?.();
+              }}
+              disabled={disabled || busy}
+              placeholder={placeholderText}
+              className="flex-1 bg-transparent text-sm text-slate-800 placeholder:text-slate-400 outline-none disabled:cursor-not-allowed"
+            />
+
+            <Dropdown
+              label="Chọn biểu tượng cảm xúc"
+              panelClassName="right-0 bottom-full mb-3 overflow-hidden shadow-xl"
+              trigger={({ open, toggle }) => (
+                <button
+                  type="button"
+                  onClick={toggle}
+                  aria-expanded={open}
+                  aria-label="Biểu tượng cảm xúc"
+                  className={cn(
+                    "shrink-0 size-7 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-600",
+                    open && "text-blue-600 bg-blue-50",
+                    FOCUS
+                  )}
+                >
+                  <Smile className="size-4" />
+                </button>
+              )}
+            >
+              {() => <EmojiPickerPanel onPick={handlePickEmoji} />}
+            </Dropdown>
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy || uploading}
+              aria-label="Thêm ảnh"
+              className={cn(
+                "shrink-0 size-7 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-600 disabled:opacity-50",
+                FOCUS
+              )}
+            >
+              <ImageIcon className="size-4" />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={handleFileChange}
+            />
+          </div>
+
+          <button
+            type="button"
+            onClick={submit}
+            disabled={!canSubmit}
+            aria-label="Gửi bình luận"
+            className={cn(
+              "shrink-0 size-9 rounded-full flex items-center justify-center text-blue-600 hover:bg-blue-50 disabled:opacity-40",
+              FOCUS
+            )}
+          >
+            {busy ? <Loader2 className="size-5 animate-spin" /> : <SendHorizontal className="size-5" />}
+          </button>
+        </div>
       </div>
-      <button
-        type="button"
-        onClick={submit}
-        disabled={disabled || busy || !text.trim()}
-        aria-label="Gửi bình luận"
-        className={cn("shrink-0 size-9 rounded-full flex items-center justify-center text-blue-600 hover:bg-blue-50 disabled:opacity-40", FOCUS)}
-      >
-        <SendHorizontal className="size-5" />
-      </button>
     </div>
   );
 }
@@ -418,13 +639,30 @@ function LikeStat({ post, postId, pageId, liked, total, onToggled }) {
 }
 
 /** Biến thể bài viết Fanpage đầy đủ — Figma 1593:2826 */
-function InternalPostView({ post, page, pageName, postId, onReload, sort, onSortChange, refreshing, threadKey }) {
+function InternalPostView({ post, page, pageName, postId, onReload, sort, onSortChange, refreshing, threadKey, postLink }) {
   const videoSrc = post?.source || null;
   const imgSrc = post?.full_picture || null;
+  const [copiedShare, setCopiedShare] = useState(false);
 
   const [reactionsOpen, setReactionsOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const postPageId = page?.id || post?.page_id;
+
+  const handleShareClick = () => {
+    const rawLink = post?.permalink_url || postLink || `https://facebook.com/${postId}`;
+    // Nếu postId có dạng pageId_realPostId thì có thể tách ra link facebook.com/{pageId}/posts/{realPostId}
+    const cleanLink = rawLink.startsWith("http") ? rawLink : `https://facebook.com/${rawLink}`;
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(cleanLink).then(() => {
+        setCopiedShare(true);
+        setTimeout(() => setCopiedShare(false), 2000);
+      }).catch(() => {
+        window.open(cleanLink, "_blank", "noopener,noreferrer");
+      });
+    } else {
+      window.open(cleanLink, "_blank", "noopener,noreferrer");
+    }
+  };
 
   /**
    * Trạng thái Thích để ở đây chứ không trong LikeStat, vì cả thanh thống kê lẫn
@@ -461,9 +699,13 @@ function InternalPostView({ post, page, pageName, postId, onReload, sort, onSort
     return { ...bd, like: Math.max(0, (bd.like || 0) + likeDelta) };
   }, [post?.reaction_breakdown, likeDelta]);
 
-  const submitComment = async (text) => {
+  const [replyTarget, setReplyTarget] = useState(null); // { id, name, message }
+
+  const submitComment = async (text, attachmentUrl) => {
     try {
-      await replyToComment(postId, postPageId, text);
+      const targetId = replyTarget?.id || postId;
+      await replyToComment(targetId, postPageId, text, attachmentUrl);
+      setReplyTarget(null);
       onReload?.();
     } catch {
       /* lỗi gửi — giữ nguyên */
@@ -519,7 +761,9 @@ function InternalPostView({ post, page, pageName, postId, onReload, sort, onSort
               icon={Share2}
               value={countOf(post?.shares)}
               label="lượt chia sẻ"
-              title="Lượt chia sẻ"
+              title={copiedShare ? "Đã sao chép liên kết bài viết!" : "Bấm để sao chép liên kết chia sẻ bài viết"}
+              onClick={handleShareClick}
+              actionLabel={copiedShare ? "Đã sao chép" : undefined}
             />
             {/* Chỉ hiện khi Graph thực sự trả về — thiếu quyền read_insights thì
                 `insights` không có, hiện "0 lượt xem" là nói dối */}
@@ -555,10 +799,24 @@ function InternalPostView({ post, page, pageName, postId, onReload, sort, onSort
           order={sort}
           onChanged={onReload}
           dimmed={refreshing}
+          onReplyComment={(c) => {
+            setReplyTarget({
+              id: c.id,
+              name: c.from?.name || "Người dùng",
+              message: c.message || "",
+            });
+          }}
+          activeReplyCommentId={replyTarget?.id}
         />
       </div>
 
-      <Composer pageName={pageName} page={page} onSubmit={submitComment} />
+      <Composer
+        pageName={pageName}
+        page={page}
+        onSubmit={submitComment}
+        replyTarget={replyTarget}
+        onCancelReply={() => setReplyTarget(null)}
+      />
 
       {insightsOpen && (
         <PostInsightsDialog
@@ -672,6 +930,7 @@ export default function NotificationDetail({ notification, page, pageName, onBac
           onSortChange={setSort}
           refreshing={refreshing}
           threadKey={fetched.forKey}
+          postLink={notification?.link}
         />
       )}
 

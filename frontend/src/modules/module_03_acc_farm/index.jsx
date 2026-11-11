@@ -10,6 +10,7 @@ import { StatusPostView } from "./components/StatusPostView";
 import { ReelsPostView } from "./components/ReelsPostView";
 import { api } from "@/services/api";
 import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
+import { shouldRestoreProgressView } from "@/modules/module_03_acc_farm/postSessionUi";
 
 /**
  * Module 03: Đăng bài và tương tác tài khoản.
@@ -38,7 +39,6 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
   useEffect(() => {
     const urlTab = searchParams?.get("tab");
     if (urlTab && ["status", "reels", "story"].includes(urlTab) && urlTab !== postMode) {
-      // Không tự chuyển nếu đang có bài Status / unsaved
       if (statusNeedsLeaveConfirm) return;
       setPostMode(urlTab);
       if (typeof window !== "undefined") {
@@ -47,33 +47,36 @@ export default function AccFarmModule({ subPage = "interact.post" }) {
     }
   }, [searchParams, postMode, statusNeedsLeaveConfirm]);
 
+  // Khi vào lại trang Đăng bài: ưu tiên tab của phiên progress còn trên BE (kể cả vừa xong chưa reset)
   useEffect(() => {
-    // Kiểm tra server xem có phiên đăng bài đang chạy không để tự chuyển đúng tab (nếu URL chưa chỉ định tab)
+    if (subPage !== "interact.post") return undefined;
+    let cancelled = false;
     const checkActiveSession = async () => {
       try {
-        const urlTab = searchParams?.get("tab");
-        if (urlTab) return; // Nếu URL đã chỉ định rõ tab thì ưu tiên URL
-
         const res = await api.get("/api/post/status");
         const d = res?.data ?? res;
-        if (d && (d.is_running || d.is_paused || (d.session_id && !d.session_finished))) {
-          if (
-            d.post_type &&
-            ["status", "reels", "story"].includes(d.post_type) &&
-            !statusNeedsLeaveConfirm
-          ) {
-            setPostMode(d.post_type);
-            if (typeof window !== "undefined") {
-              localStorage.setItem("module_03_post_mode", d.post_type);
-            }
-          }
+        if (cancelled || !shouldRestoreProgressView(d)) return;
+        if (!d.post_type || !["status", "reels", "story"].includes(d.post_type)) return;
+
+        setPostMode(d.post_type);
+        if (typeof window !== "undefined") {
+          localStorage.setItem("module_03_post_mode", d.post_type);
+        }
+        const urlTab = searchParams?.get("tab");
+        if (urlTab !== d.post_type) {
+          router.replace(`/interact/post?tab=${d.post_type}`);
         }
       } catch {
         // quiet error
       }
     };
     checkActiveSession();
-  }, [searchParams, statusNeedsLeaveConfirm]);
+    return () => {
+      cancelled = true;
+    };
+    // Chỉ chạy khi mount trang post (rời module rồi quay lại sẽ remount)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subPage]);
 
   const applyModeChange = (mode) => {
     setPostMode(mode);

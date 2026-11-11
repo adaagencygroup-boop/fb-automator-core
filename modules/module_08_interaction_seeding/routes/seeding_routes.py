@@ -975,10 +975,14 @@ def create_seeding_campaign(
 
     if req.uids and len(req.uids) > 0:
         q = q.filter(Account.uid.in_(req.uids))
-    # Chọn NGẪU NHIÊN account_count nick trong số nick khả dụng (không lấy cố định N nick đầu danh sách),
-    # để mọi nick đều được dùng qua các lần chạy. random.sample trả về thứ tự ngẫu nhiên nên thứ tự chạy cũng ngẫu nhiên.
-    eligible_accounts = q.all()
-    available_accounts = random.sample(eligible_accounts, min(req.account_count, len(eligible_accounts)))
+        eligible_accounts = q.all()
+        # Người dùng tự tích chọn danh sách tài khoản: giữ nguyên 100% các nick đã chọn, không random
+        uid_map = {acc.uid: acc for acc in eligible_accounts}
+        available_accounts = [uid_map[u] for u in req.uids if u in uid_map]
+    else:
+        # Trường hợp không truyền uids cụ thể: chọn NGẪU NHIÊN account_count nick trong số nick khả dụng
+        eligible_accounts = q.all()
+        available_accounts = random.sample(eligible_accounts, min(req.account_count, len(eligible_accounts)))
 
     if not available_accounts:
         raise HTTPException(
@@ -987,7 +991,7 @@ def create_seeding_campaign(
         )
 
     account_uids = [acc.uid for acc in available_accounts]
-    used_uids = account_uids[: req.account_count]
+    used_uids = account_uids if (req.uids and len(req.uids) > 0) else account_uids[: req.account_count]
     actual_account_count = len(used_uids)
 
     # ─────────────────────────────────────────────────────────────

@@ -205,7 +205,7 @@ async def login(req: LoginRequest, background_tasks: BackgroundTasks, db: Sessio
 @router.post("/open-browser")
 async def open_browser(req: OpenBrowserRequest, db: Session = Depends(get_db)):
     accounts.require_account(db, req.uid)
-    return queue_open_browser(req.uid)
+    return queue_open_browser(req.uid, req.target_url)
 
 @router.get("/stream")
 async def stream():

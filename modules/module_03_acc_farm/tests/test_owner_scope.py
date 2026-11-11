@@ -144,10 +144,10 @@ class StartOwnerTests(unittest.TestCase):
         req = farm_routes.FarmStartRequest(uids=["100"], threads=1,
                                            config=farm_routes.FarmScenarioConfig(enabled_newsfeed=True))
         with patch.object(farm_routes.adapters, "owner_from_request", return_value="7"), \
-                patch.object(farm_routes.adapters, "get_account", return_value=None) as get_account:
+                patch.object(farm_routes.adapters, "get_accounts", return_value={}) as get_accounts:
             with self.assertRaises(HTTPException):
                 asyncio.run(farm_routes.start_farm_interactions(req, Mock()))
-        get_account.assert_called_once_with("100", "7")
+        get_accounts.assert_called_once_with(["100"], "7")
 
 
 if __name__ == "__main__":

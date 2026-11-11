@@ -9,6 +9,7 @@ import {
   setAuthTokens,
   setRegistrationToken,
 } from "./authTokens.mjs";
+import { clearApiCache, installApiCache } from "./api-cache.mjs";
 
 export const api = axios.create({
   baseURL: API_BASE,
@@ -19,6 +20,12 @@ export const api = axios.create({
     "X-Auth-Client": "user",
   },
 });
+
+// Cache GET cho mọi module. Phải gọi Ở ĐÂY, trước mọi interceptor bên dưới:
+// response interceptor của file này trả `response.data` (bóc mất object
+// response), nên interceptor của cache cần đăng ký trước để chạy trước và còn
+// thấy response thật mà lưu. Chi tiết trong api-cache.mjs.
+installApiCache(api);
 
 api.interceptors.request.use((config) => {
   const userId = getSessionUserId();
@@ -223,6 +230,7 @@ api.interceptors.response.use(
         return api.request(original);
       } catch (refreshError) {
         clearAuthTokens();
+        clearApiCache(); // không để dữ liệu phiên cũ còn lại cho người đăng nhập sau
         const refreshDetail = authDetail(refreshError);
         notifySessionLost(refreshDetail);
         return Promise.reject(apiError(refreshError));
@@ -230,6 +238,7 @@ api.interceptors.response.use(
     }
     if (TERMINAL_AUTH.has(detail) || detail === "SESSION_REVOKED") {
       clearAuthTokens();
+      clearApiCache();
       notifySessionLost(detail);
       return Promise.reject(apiError(error));
     }

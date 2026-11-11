@@ -1,5 +1,5 @@
-import React from "react";
-import { Users, Info, Clock } from "lucide-react";
+import React, { useMemo } from "react";
+import { Users, Info, Clock, UserCheck, AlertCircle } from "lucide-react";
 
 export default function PostAccountConfig({
   accountCount,
@@ -15,7 +15,35 @@ export default function PostAccountConfig({
   doLike,
   doComment,
   doShare,
+  onOpenAccountModal,
+  selectedUids = [],
+  isRunning = false,
 }) {
+  const delayErrorMessage = useMemo(() => {
+    if (
+      minDelay === "" ||
+      minDelay === null ||
+      minDelay === undefined ||
+      maxDelay === "" ||
+      maxDelay === null ||
+      maxDelay === undefined
+    ) {
+      return "Vui lòng nhập đầy đủ khoảng thời gian nghỉ tối thiểu và tối đa.";
+    }
+    const minVal = Number(minDelay);
+    const maxVal = Number(maxDelay);
+    if (minVal < 1) {
+      return "Thời gian tối thiểu phải từ 1 giây trở lên.";
+    }
+    if (maxVal > 3600) {
+      return "Thời gian tối đa chỉ được nhập tối đa đến 3600 giây (1 giờ).";
+    }
+    if (maxVal <= minVal) {
+      return `Thời gian tối đa (${maxVal}s) luôn phải lớn hơn thời gian tối thiểu (${minVal}s).`;
+    }
+    return "";
+  }, [minDelay, maxDelay]);
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
       {/* Step 4: Số lượng tài khoản sử dụng */}
@@ -32,58 +60,48 @@ export default function PostAccountConfig({
 
         {/* Content */}
         <div className="space-y-3.5 flex-1 flex flex-col justify-center">
-          <div className="flex items-center justify-between gap-3 bg-gray-50/70 p-3 rounded-xl border border-gray-100">
+          <div className="flex items-center justify-between gap-3 bg-gray-50/70 p-3.5 rounded-xl border border-gray-100">
             <div className="flex items-center gap-2 text-xs font-semibold text-gray-700">
               <Users className="w-4 h-4 text-blue-600" />
-              <span>Số lượng tài khoản</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min={availableAccounts > 0 ? 1 : 0}
-                max={Math.max(1, availableAccounts)}
-                value={availableAccounts === 0 ? 0 : accountCount}
-                onChange={(e) =>
-                  onAccountCountChange(
-                    Math.max(1, Math.min(Number(e.target.value) || 1, availableAccounts || 1))
-                  )
-                }
-                disabled={availableAccounts === 0}
-                className="w-20 text-center text-sm font-bold py-1.5 px-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-gray-800 bg-white disabled:bg-gray-100 disabled:text-gray-400"
-              />
-              <span className="text-xs text-gray-500 font-medium">
-                / {availableAccounts} khả dụng
+              <span>Số tài khoản chạy:</span>
+              <span className="px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 font-bold text-xs">
+                {accountCount} tài khoản
               </span>
             </div>
-          </div>
 
-          {/* Total Account Pills */}
-          <div className="flex items-center gap-2 text-xs">
-            <span
-              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-medium border w-full justify-start ${
-                liveAccounts > 0
-                  ? "bg-emerald-50 text-emerald-700 border-emerald-200/60"
-                  : "bg-amber-50 text-amber-700 border-amber-200/60"
+            <button
+              type="button"
+              onClick={() => {
+                if (isRunning || availableAccounts === 0) return;
+                onOpenAccountModal?.();
+              }}
+              disabled={isRunning || availableAccounts === 0}
+              title={
+                isRunning
+                  ? "Đang chạy seeding, không thể thay đổi tài khoản"
+                  : availableAccounts === 0
+                  ? "Không có tài khoản khả dụng"
+                  : "Bấm để chọn danh sách tài khoản tham gia seeding"
+              }
+              className={`inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm ${
+                isRunning || availableAccounts === 0
+                  ? "bg-slate-200 text-slate-400 border border-slate-300/80 cursor-not-allowed shadow-none select-none"
+                  : "bg-blue-600 hover:bg-blue-700 text-white shadow-blue-500/20 active:scale-[0.98] cursor-pointer"
               }`}
             >
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  liveAccounts > 0 ? "bg-emerald-500 animate-pulse" : "bg-amber-500"
-                }`}
-              />
-              Tổng tài khoản hiện có: <strong className="font-bold">{totalAccounts}</strong> ({" "}
-              <strong className={liveAccounts > 0 ? "text-emerald-800" : "text-amber-800"}>
-                {liveAccounts} Live & Đã đăng nhập
-              </strong>{" "}
-              )
-            </span>
+              <UserCheck className={`w-4 h-4 ${isRunning || availableAccounts === 0 ? "text-slate-400" : "text-white"}`} />
+              Chọn tài khoản ({accountCount})
+            </button>
           </div>
 
           {availableAccounts > 0 && accountCount > 0 && (
-            <p className="text-[11px] text-gray-500 px-1">
-              {accountCount < availableAccounts
-                ? `Mỗi lần chạy, hệ thống chọn ngẫu nhiên ${accountCount} trong ${availableAccounts} tài khoản khả dụng (thứ tự chạy cũng ngẫu nhiên).`
-                : `Dùng cả ${availableAccounts} tài khoản khả dụng, thứ tự chạy ngẫu nhiên.`}
+            <p className="text-[11px] text-gray-500 px-1 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+              <span>
+                {selectedUids && selectedUids.length > 0
+                  ? `Đã tích chọn chính xác ${selectedUids.length} tài khoản để tham gia chiến dịch seeding.`
+                  : `Chạy ${accountCount} tài khoản khả dụng đã chọn.`}
+              </span>
             </p>
           )}
         </div>
@@ -122,21 +140,39 @@ export default function PostAccountConfig({
         {/* Content */}
         <div className="space-y-3.5 flex-1 flex flex-col justify-center">
           <div className="space-y-2">
-            <label className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
-              <Clock className="w-4 h-4 text-blue-600" />
-              <span>Thời gian nghỉ giữa 2 lần tương tác (giây)</span>
+            <label className="text-xs font-semibold text-gray-700 flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-blue-600" />
+                <span>Thời gian nghỉ giữa 2 lần tương tác (giây)</span>
+              </span>
+              <span className="text-[11px] text-gray-400 font-normal">Tối đa: 3600s</span>
             </label>
             <div className="flex items-center gap-3">
               <div className="flex-1 flex items-center gap-2">
                 <input
                   type="number"
                   min={1}
+                  max={3599}
                   value={minDelay}
+                  disabled={isRunning}
                   onChange={(e) => {
                     const val = e.target.value;
-                    onMinDelayChange(val === "" ? "" : Math.max(1, Number(val)));
+                    if (val === "") {
+                      onMinDelayChange("");
+                    } else {
+                      let num = Number(val);
+                      if (num > 3599) num = 3599;
+                      if (num < 1) num = 1;
+                      onMinDelayChange(num);
+                    }
                   }}
-                  className="w-full text-center text-sm font-bold py-1.5 px-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-gray-800 bg-white"
+                  className={`w-full text-center text-sm font-bold py-1.5 px-2 rounded-lg border transition-all ${
+                    isRunning
+                      ? "border-gray-200 bg-gray-100/70 text-gray-400 cursor-not-allowed select-none"
+                      : delayErrorMessage
+                      ? "border-rose-400 bg-rose-50/20 text-rose-900 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+                      : "border-gray-200 bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  }`}
                   placeholder="30"
                 />
               </div>
@@ -146,17 +182,40 @@ export default function PostAccountConfig({
               <div className="flex-1 flex items-center gap-2">
                 <input
                   type="number"
-                  min={minDelay || 1}
+                  min={1}
+                  max={3600}
                   value={maxDelay}
+                  disabled={isRunning}
                   onChange={(e) => {
                     const val = e.target.value;
-                    onMaxDelayChange(val === "" ? "" : Math.max(Number(minDelay || 1), Number(val)));
+                    if (val === "") {
+                      onMaxDelayChange("");
+                    } else {
+                      let num = Number(val);
+                      if (num > 3600) num = 3600;
+                      if (num < 1) num = 1;
+                      onMaxDelayChange(num);
+                    }
                   }}
-                  className="w-full text-center text-sm font-bold py-1.5 px-2 rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-gray-800 bg-white"
+                  className={`w-full text-center text-sm font-bold py-1.5 px-2 rounded-lg border transition-all ${
+                    isRunning
+                      ? "border-gray-200 bg-gray-100/70 text-gray-400 cursor-not-allowed select-none"
+                      : delayErrorMessage
+                      ? "border-rose-400 bg-rose-50/20 text-rose-900 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+                      : "border-gray-200 bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  }`}
                   placeholder="60"
                 />
               </div>
             </div>
+
+            {/* Message cảnh báo lỗi thiết lập thời gian */}
+            {delayErrorMessage && (
+              <p className="flex items-center gap-1.5 text-rose-600 text-xs font-medium mt-1.5 animate-in fade-in slide-in-from-top-1">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 text-rose-500" />
+                <span>{delayErrorMessage}</span>
+              </p>
+            )}
           </div>
         </div>
 

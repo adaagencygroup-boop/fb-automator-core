@@ -7,12 +7,12 @@ import { LoginHeroBanner } from "./components/LoginHeroBanner";
 import { RegisterForm } from "./components/RegisterForm";
 import { AuthFeedback } from "./components/AuthFeedback";
 import { validateRegistrationField } from "./registrationValidation";
+import { useMachineHwid } from "./useMachineHwid";
 
 export default function RegisterScreen({ onLogin, onRegistered }) {
   const [fields, setFields] = useState({ username: "", password: "", confirmPassword: "", contactInfo: "", agreed: false });
   const [fieldErrors, setFieldErrors] = useState({});
-  const [hwid, setHwid] = useState("");
-  const [hwidLoading, setHwidLoading] = useState(true);
+  const { hwid, hwidLoading, hwidError, setHwid, reloadHwid } = useMachineHwid();
   const [copied, setCopied] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -24,12 +24,17 @@ export default function RegisterScreen({ onLogin, onRegistered }) {
 
   useEffect(() => {
     alive.current = true;
-    api.get("/api/v1/auth/hwid")
-      .then((data) => { if (alive.current) setHwid(data.hwid || ""); })
-      .catch(() => { if (alive.current) setFeedback({ title: "KẾT NỐI PHẦN CỨNG", message: "Chưa nhận diện được mã máy. Vui lòng kiểm tra Local Engine rồi thử lại." }); })
-      .finally(() => { if (alive.current) setHwidLoading(false); });
-    return () => { alive.current = false; clearTimeout(copyTimer.current); };
+    return () => {
+      alive.current = false;
+      clearTimeout(copyTimer.current);
+    };
   }, []);
+
+  useEffect(() => {
+    if (hwidError) {
+      setFeedback({ title: "KẾT NỐI PHẦN CỨNG", message: hwidError });
+    }
+  }, [hwidError]);
 
   function changeField(field, rawValue) {
     const value = field === "username" ? rawValue.replace(/\s+/g, "") : field === "contactInfo" ? rawValue.replace(/\D/g, "").slice(0, 10) : rawValue;
@@ -61,14 +66,16 @@ export default function RegisterScreen({ onLogin, onRegistered }) {
     const errors = Object.fromEntries(Object.entries(fields).map(([field, value]) => [field, validateRegistrationField(field, value, fields.password)]).filter(([, error]) => error));
     setFieldErrors(errors);
     if (Object.keys(errors).length) return;
+    if (hwidLoading) {
+      setFeedback({ title: "KẾT NỐI PHẦN CỨNG", message: "Đang nhận diện mã máy. Vui lòng đợi HWID hiện lên rồi đăng ký." });
+      return;
+    }
     submitting.current = true;
     setLoading(true);
     try {
       let currentHwid = hwid;
       if (!currentHwid) {
-        setHwidLoading(true);
-        const data = await api.get("/api/v1/auth/hwid");
-        currentHwid = data.hwid;
+        currentHwid = await reloadHwid();
         if (alive.current) setHwid(currentHwid || "");
         if (!currentHwid) throw new Error("Không nhận diện được mã máy (HWID). Vui lòng thử lại.");
       }
@@ -89,7 +96,7 @@ export default function RegisterScreen({ onLogin, onRegistered }) {
       setFeedback({ title: "ĐĂNG KÝ THẤT BẠI", message });
     } finally {
       submitting.current = false;
-      if (alive.current) { setLoading(false); setHwidLoading(false); }
+      if (alive.current) setLoading(false);
     }
   }
 

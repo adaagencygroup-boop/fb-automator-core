@@ -33,7 +33,7 @@ class StartValidationTests(unittest.TestCase):
         req = farm_routes.FarmStartRequest(uids=["1"], threads=1, config=farm_routes.FarmScenarioConfig(
             enabled_join_groups=join_enabled, enabled_check_notif=True, group_keyword=keyword))
         with patch.object(farm_routes.adapters, "owner_from_request", return_value=None), \
-                patch.object(farm_routes.adapters, "get_account", return_value=None):
+                patch.object(farm_routes.adapters, "get_accounts", return_value={}):
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(farm_routes.start_farm_interactions(req, Mock()))
         return ctx.exception

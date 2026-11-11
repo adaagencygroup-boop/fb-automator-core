@@ -39,8 +39,12 @@ class FacebookChatService:
             "messaging_type": "RESPONSE"
         }
 
+        resolved_mid = reply_to_message_id
         if reply_to_message_id:
-            payload["reply_to"] = {"mid": reply_to_message_id}
+            ref_msg = self.message_repo.get_by_id_or_fb_id(str(reply_to_message_id))
+            if ref_msg and ref_msg.facebook_message_id:
+                resolved_mid = ref_msg.facebook_message_id
+            payload["reply_to"] = {"mid": resolved_mid}
 
         params = {"access_token": page.page_access_token}
 
@@ -53,7 +57,7 @@ class FacebookChatService:
             if "error" in response_json:
                 if "reply_to" in payload:
                     del payload["reply_to"]
-                    payload["message"]["reply_to"] = {"mid": reply_to_message_id}
+                    payload["message"]["reply_to"] = {"mid": resolved_mid}
                     response = await asyncio.to_thread(
                         requests.post, url, params=params, json=payload, timeout=15
                     )
@@ -142,8 +146,12 @@ class FacebookChatService:
             "messaging_type": "RESPONSE"
         }
 
+        resolved_mid = reply_to_message_id
         if reply_to_message_id:
-            payload["reply_to"] = {"mid": reply_to_message_id}
+            ref_msg = self.message_repo.get_by_id_or_fb_id(str(reply_to_message_id))
+            if ref_msg and ref_msg.facebook_message_id:
+                resolved_mid = ref_msg.facebook_message_id
+            payload["reply_to"] = {"mid": resolved_mid}
 
         params = {"access_token": page.page_access_token}
 
@@ -216,21 +224,41 @@ class FacebookChatService:
         page_id: str,
         recipient_id: str,
         message_id: str,
-        reaction: str
+        reaction: Optional[str]
     ) -> Dict[str, Any]:
         page = self.page_repo.get_by_page_id(page_id)
         if not page or not page.page_access_token:
             raise ValueError(f"Page or page access token not found for Page ID {page_id}")
 
-        url = f"{FACEBOOK_BASE_URL}/me/messages"
+        # Resolve real facebook_message_id if internal numeric ID was passed
+        target_msg = self.message_repo.get_by_id_or_fb_id(message_id)
+        fb_mid = target_msg.facebook_message_id if target_msg else message_id
+
+        # Normalize emoji
+        # If reaction is provided, ensure heart has variation selector if needed, or map text to emoji
+        text_to_emoji = {
+            "like": "👍",
+            "love": "❤️",
+            "haha": "😆",
+            "wow": "😮",
+            "sad": "😢",
+            "angry": "😡",
+            "❤": "❤️",
+        }
+        emoji_reaction = text_to_emoji.get(reaction.lower() if isinstance(reaction, str) and reaction.isalpha() else reaction, reaction) if reaction else None
+
+        sender_action = "react" if emoji_reaction else "unreact"
         payload = {
             "recipient": {"id": recipient_id},
-            "sender_action": "react",
+            "sender_action": sender_action,
             "payload": {
-                "message_id": message_id,
-                "reaction": reaction
+                "message_id": fb_mid,
             }
         }
+        if emoji_reaction:
+            payload["payload"]["reaction"] = emoji_reaction
+
+        url = f"{FACEBOOK_BASE_URL}/me/messages"
         params = {"access_token": page.page_access_token}
 
         try:
@@ -243,17 +271,9 @@ class FacebookChatService:
 
         self.auth_service.handle_api_errors(response_json)
 
-        emoji_map = {
-            "love": "❤️",
-            "like": "👍",
-            "haha": "😂",
-            "wow": "😮",
-            "sad": "😢",
-            "angry": "😡",
-            "other": "👍"
-        }
-        saved_emoji = emoji_map.get(reaction.lower(), reaction)
-        self.message_repo.save_reaction(message_id, saved_emoji)
+        saved_emoji = emoji_reaction if emoji_reaction else None
+        if target_msg:
+            self.message_repo.save_reaction(target_msg.facebook_message_id, saved_emoji)
 
         return response_json
 

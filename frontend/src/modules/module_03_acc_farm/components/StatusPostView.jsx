@@ -49,7 +49,14 @@ import Image from "next/image";
 import { EmergencyStopModal } from "./EmergencyStopModal";
 import { PastScheduleModal } from "./PastScheduleModal";
 import { PostProgressPreview } from "./PostProgressPreview";
+import { ProgressActivityCell } from "./ProgressPostLink";
 import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
+import {
+  mapProgressThreads,
+  shouldRestoreProgressView,
+} from "@/modules/module_03_acc_farm/postSessionUi";
+import { useAccountCategories } from "@/modules/module_02_account_manager/hooks/useAccountCategories";
+import { categoryLabelStyle } from "@/modules/module_02_account_manager/components/CategorySelect";
 
 const STATUS_LEAVE_MESSAGE =
   "Bạn đang có Prompt AI hoặc bài viết trên màn Đăng Status. Nếu rời đi, bài đã lưu sẽ chuyển về chưa lưu và cần Lưu lại lần sau.";
@@ -196,6 +203,11 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
   const [copiedUid, setCopiedUid] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
+  const categoryList = useAccountCategories(true);
+  const categoriesById = useMemo(
+    () => new Map((categoryList.categories || []).map((item) => [item.id, item])),
+    [categoryList.categories]
+  );
 
   // ── Drafts State ──
   const [drafts, setDrafts] = useState([]);
@@ -296,8 +308,10 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
   // Có nhập Khung Prompt AI
   const hasPromptContent = Boolean(String(prompt || "").trim());
 
-  // Modal khi: có Prompt AI HOẶC có ≥ 1 bài viết đang hiển thị
-  const needsLeaveConfirm = hasDisplayedPosts || hasPromptContent;
+  // Chỉ cảnh báo unsaved trên màn thiết lập. Khi đã vào giám sát (đang chạy / xong / dừng)
+  // nội dung đã khóa / đã gửi engine — không hiện modal "Thay đổi chưa lưu".
+  const needsLeaveConfirm =
+    viewState === "config" && (hasDisplayedPosts || hasPromptContent);
 
   useEffect(() => {
     onHasPostsChange?.(needsLeaveConfirm);
@@ -536,6 +550,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
           connectionStatusCode: rawLoginStatus,
           accountStatus: accountStatusLabel,
           accountStatusCode: rawStatus,
+          category_id: a.category_id ?? null,
           selected: false,
         };
       });
@@ -549,7 +564,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
             a.connectionStatusCode === "logged_in",
         }))
       );
-      await checkActiveSessionOnMount(formatted);
+      // Gắn lại nick đã chọn trong phiên (nếu đang restore progress)
+      await applySessionAccountSelection(formatted);
     } catch (err) {
       console.error("Lỗi khi tải tài khoản:", err);
     } finally {
@@ -558,52 +574,46 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
   };
 
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+  const sessionAccountsRef = useRef([]);
 
-  const checkActiveSessionOnMount = async (currentAccounts = []) => {
+  const applySessionAccountSelection = async (currentAccounts = []) => {
+    const uids = sessionAccountsRef.current;
+    if (!Array.isArray(uids) || uids.length === 0) return;
+    const runningUidSet = new Set(uids.map(String));
+    setAccounts((prev) => {
+      const baseList = prev.length > 0 ? prev : currentAccounts;
+      if (!baseList.length) return prev;
+      return baseList.map((a) => ({
+        ...a,
+        selected: runningUidSet.has(String(a.uid || a.id)),
+      }));
+    });
+  };
+
+  const checkActiveSessionOnMount = async () => {
     try {
       const res = await api.get("/api/post/status");
       const d = res?.data ?? res;
-      if (d && (d.is_running || d.is_paused || (d.session_id && !d.session_finished))) {
-        if (!d.post_type || d.post_type === "status") {
-          setViewState("running");
-          setIsPaused(!!d.is_paused);
-          setIsStopped(!!d.is_stopped);
-          if (d.metrics) setMetrics(d.metrics);
-          if (Array.isArray(d.recent_logs) && d.recent_logs.length > 0) {
-            setLogs(d.recent_logs);
-          }
-          if (Array.isArray(d.threads) && d.threads.length > 0) {
-            setThreadRows(
-              d.threads.map((t) => ({
-                id: t.id || t.threadId,
-                threadId: t.threadId,
-                accountName: t.accountName || "Tài khoản",
-                accountUid: t.accountUid || "-",
-                status: t.status || "Đang chạy",
-                contentPreview: t.contentPreview || "Đang xử lý...",
-                currentActivity: t.currentActivity || "",
-                elapsedTime: t.elapsedTime || "0:00",
-                content: t.content || "",
-                imagePaths: Array.isArray(t.imagePaths) ? t.imagePaths : [],
-                mediaPath: t.mediaPath || "",
-                mediaName: t.mediaName || "",
-                postType: t.postType || "status",
-                checkpoint: t.checkpoint || "",
-              }))
-            );
-          } // mount: lấy full list từ API (đã theo bài, không theo luồng)
-          if (Array.isArray(d.session_accounts) && d.session_accounts.length > 0) {
-            const runningUidSet = new Set(d.session_accounts.map(String));
-            setAccounts((prev) => {
-              const baseList = prev.length > 0 ? prev : currentAccounts;
-              return baseList.map((a) => ({
-                ...a,
-                selected: runningUidSet.has(String(a.uid || a.id)),
-              }));
-            });
-          }
-          startStatusPolling();
-        }
+      if (!shouldRestoreProgressView(d)) return;
+      if (d.post_type && d.post_type !== "status") return;
+
+      setViewState("running");
+      setIsPaused(!!d.is_paused);
+      setIsStopped(!!d.is_stopped);
+      if (d.metrics) setMetrics(d.metrics);
+      if (Array.isArray(d.recent_logs) && d.recent_logs.length > 0) {
+        setLogs(d.recent_logs);
+      }
+      if (Array.isArray(d.threads) && d.threads.length > 0) {
+        setThreadRows(mapProgressThreads(d.threads, "status"));
+      }
+      if (Array.isArray(d.session_accounts) && d.session_accounts.length > 0) {
+        sessionAccountsRef.current = d.session_accounts;
+        await applySessionAccountSelection();
+      }
+      // Phiên còn chạy/pause thì poll; finished/stopped thì một vòng poll sẽ tự dừng
+      if (d.is_running || d.is_paused || !d.session_finished) {
+        startStatusPolling();
       }
     } catch {
       // quiet error
@@ -654,6 +664,11 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
+  }, []);
+
+  // Restore màn tiến trình ngay khi mount (không chờ load accounts)
+  useEffect(() => {
+    checkActiveSessionOnMount();
   }, []);
 
   useEffect(() => {
@@ -710,13 +725,17 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
         }
         if (!searchAccount) return true;
         const q = searchAccount.toLowerCase();
+        const cat =
+          a.category_id == null ? null : categoriesById.get(a.category_id);
+        const catName = cat?.name || (a.category_id != null ? `Danh mục #${a.category_id}` : "");
         return (
           (a.name && a.name.toLowerCase().includes(q)) ||
           (a.uid && a.uid.includes(q)) ||
-          (a.proxy && a.proxy.toLowerCase().includes(q))
+          (a.proxy && a.proxy.toLowerCase().includes(q)) ||
+          (catName && catName.toLowerCase().includes(q))
         );
       });
-  }, [accounts, viewState, searchAccount, accountFilter, loginFilter]);
+  }, [accounts, viewState, searchAccount, accountFilter, loginFilter, categoriesById]);
 
   const visibleEligibleAccounts = useMemo(
     () => filteredAccounts.filter(isAccountEligible),
@@ -1151,26 +1170,37 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
     return accounts.filter((a) => a.selected);
   }, [accounts]);
 
+  // Bug 6: chỉ hiện card khi đã có bài hợp lệ (nội dung hoặc ảnh).
+  // Chỉ chọn nick ở Bước 2 mà chưa THỰC THI / chưa có draft → empty state, không hiện card trắng.
   const previewCards = useMemo(() => {
-    return targetExecutionAccounts.map((acc) => {
-      const accUidStr = String(acc.uid || acc.id);
-      const draft = drafts.find((d) => String(d.accountUid) === accUidStr);
-      const contentStr = draft?.content || "";
-      const currentImg = draft?.imagePath || null;
-      const imgs = normalizeImagePaths(draft);
-      return {
-        key: `acc-${accUidStr}`,
-        draftId: draft?.id,
-        account: acc,
-        authorName: acc.name && acc.name.trim() !== "" ? acc.name : (acc.uid ? `UID: ${acc.uid}` : "Tài khoản"),
-        content: contentStr,
-        charCount: contentStr.length,
-        imagePaths: imgs,
-        imageCount: imgs.length,
-        imagePath: imgs[0] || null,
-        isSaved: !!draft?.isSaved,
-      };
-    });
+    return targetExecutionAccounts
+      .map((acc) => {
+        const accUidStr = String(acc.uid || acc.id);
+        const draft = drafts.find((d) => String(d.accountUid) === accUidStr);
+        const contentStr = draft?.content || "";
+        const imgs = normalizeImagePaths(draft);
+        const hasContent =
+          Boolean(String(contentStr).trim().length > 0) || imgs.length > 0;
+        return {
+          key: `acc-${accUidStr}`,
+          draftId: draft?.id,
+          account: acc,
+          authorName:
+            acc.name && acc.name.trim() !== ""
+              ? acc.name
+              : acc.uid
+                ? `UID: ${acc.uid}`
+                : "Tài khoản",
+          content: contentStr,
+          charCount: contentStr.length,
+          imagePaths: imgs,
+          imageCount: imgs.length,
+          imagePath: imgs[0] || null,
+          isSaved: !!draft?.isSaved,
+          hasContent,
+        };
+      })
+      .filter((card) => card.hasContent);
   }, [targetExecutionAccounts, drafts]);
 
   const CARDS_PER_PAGE = 3;
@@ -1529,7 +1559,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
 
   return (
     <div className="space-y-6  pb-20">
-      {/* ── BƯỚC 1: THIẾT LẬP CẤU HÌNH HỆ THỐNG ── */}
+      {/* ── BƯỚC 1: THIẾT LẬP CẤU HÌNH HỆ THỐNG (ẩn khi đang giám sát; hiện lại khi quay về cấu hình) ── */}
+      {viewState === "config" && (
       <div id="status-step1-config" className="space-y-3">
         <div className="flex items-center gap-2.5">
           <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
@@ -1741,6 +1772,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
           </div>
         </div>
       </div>
+      )}
 
       {/* ── BƯỚC 2: CHỌN DANH SÁCH THỰC THI ── */}
       <div className="space-y-3">
@@ -1804,12 +1836,13 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
 
           {/* Khung Table cuộn mượt chuẩn Figma 1558-1631 */}
           <div className="w-full overflow-x-auto max-h-[480px] overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#3B82F6] [&::-webkit-scrollbar-thumb]:rounded-full">
-            <table className="w-full border-collapse min-w-[760px] table-fixed">
+            <table className="w-full border-collapse min-w-[860px] table-fixed">
               <colgroup>
                 {viewState === "config" && <col className="w-14" />}
                 <col className="w-16" />
                 <col className="w-44" />
                 <col className="w-auto" />
+                <col className="w-40" />
                 <col className="w-40" />
                 <col className="w-32" />
               </colgroup>
@@ -1839,6 +1872,9 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                     HỌ & TÊN TÀI KHOẢN
                   </th>
                   <th className="px-3 py-2 font-bold text-xs uppercase tracking-wider text-[#334155] text-left">
+                    DANH MỤC
+                  </th>
+                  <th className="px-3 py-2 font-bold text-xs uppercase tracking-wider text-[#334155] text-left">
                     TRẠNG THÁI ĐN
                   </th>
                   <th className="px-3 py-2 font-bold text-xs uppercase tracking-wider text-[#334155] text-left">
@@ -1850,7 +1886,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
               <tbody className="divide-y divide-[#F1F5F9] text-xs">
                 {isLoadingAccounts && accounts.length === 0 ? (
                   <tr>
-                    <td colSpan={viewState === "config" ? 6 : 5} className="py-12 text-center text-slate-500">
+                    <td colSpan={viewState === "config" ? 7 : 6} className="py-12 text-center text-slate-500">
                       <div className="flex items-center justify-center gap-2">
                         <Loader2 size={16} className="animate-spin text-[#2563EB]" />
                         <span className="text-sm font-medium">Đang đồng bộ dữ liệu tài khoản từ Module 02...</span>
@@ -1859,7 +1895,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                   </tr>
                 ) : filteredAccounts.length === 0 ? (
                   <tr>
-                    <td colSpan={viewState === "config" ? 6 : 5} className="px-4 py-12 text-center text-slate-500">
+                    <td colSpan={viewState === "config" ? 7 : 6} className="px-4 py-12 text-center text-slate-500">
                       <div className="flex flex-col items-center justify-center gap-2 max-w-sm mx-auto">
                         <div className="w-10 h-10 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
                           <Search className="w-4 h-4" />
@@ -1884,6 +1920,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                 ) : (
                   filteredAccounts.map((acc, index) => {
                     const eligible = isAccountEligible(acc);
+                    const accCategory =
+                      acc.category_id == null ? null : categoriesById.get(acc.category_id);
                     return (
                       <tr
                         key={acc.id}
@@ -1967,7 +2005,22 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                           </span>
                         </td>
 
-                        {/* 5. Trạng Thái Đăng Nhập */}
+                        {/* 5. Danh mục (khớp Module 02) */}
+                        <td className="px-3 py-3 text-left">
+                          {acc.category_id == null ? (
+                            <span className="text-[#94A3B8]">—</span>
+                          ) : (
+                            <span
+                              style={categoryLabelStyle(accCategory)}
+                              title={accCategory?.name || `Danh mục #${acc.category_id}`}
+                              className="inline-block max-w-[160px] truncate whitespace-nowrap rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold"
+                            >
+                              {accCategory?.name || `Danh mục #${acc.category_id}`}
+                            </span>
+                          )}
+                        </td>
+
+                        {/* 6. Trạng Thái Đăng Nhập */}
                         <td className="px-3 py-3 text-left whitespace-nowrap">
                           {acc.connectionStatusCode === "logged_in" ? (
                             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-[#E8FAF0] text-[#059669]">
@@ -2668,11 +2721,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                         {row.contentPreview}
                       </td>
                       <td className="py-2.5 px-4">
-                        <span className="flex items-center gap-1.5 text-slate-700 text-xs font-medium">
-                          <span className={`w-1.5 h-1.5 rounded-full ${row.status === "Đang chạy" ? "bg-blue-500" : "bg-amber-500"
-                            }`} />
-                          {row.currentActivity}
-                        </span>
+                        <ProgressActivityCell row={row} />
                       </td>
                       <td className="py-2.5 px-4 font-mono text-slate-600 text-xs">
                         {row.elapsedTime}
