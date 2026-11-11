@@ -40,7 +40,7 @@ export function LoginForm({
       <div className="auth-form-content flex flex-col gap-[18px] w-full">
         {/* Card Header */}
         <div className="flex flex-col gap-1.5">
-          <h2 className="auth-form-title">
+          <h2 className="auth-form-title auth-form-title--login">
             Đăng nhập
           </h2>
           <p className="auth-form-description">
