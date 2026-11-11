@@ -11,8 +11,11 @@ import csv
 import io
 import logging
 import re
+import zipfile
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import parse_qs, urlparse
+from xml.etree import ElementTree as ET
 
 logger = logging.getLogger(__name__)
 
@@ -521,6 +524,92 @@ def normalize_post_key(url_or_key: str) -> str:
     return f"url:{lower[:200]}"
 
 
+_XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+XLSX_MAX_UNCOMPRESSED_BYTES = 30 * 1024 * 1024
+
+
+def _xlsx_col_index(ref: str, fallback: int) -> int:
+    letters = re.match(r"[A-Z]+", ref or "")
+    if not letters:
+        return fallback
+    idx = 0
+    for ch in letters.group(0):
+        idx = idx * 26 + (ord(ch) - 64)
+    return idx - 1
+
+
+def _xlsx_number_text(text: str) -> str:
+    """Ô số trong Excel (vd UID 1.09283746192847E+14) → chuỗi số nguyên nếu là số nguyên."""
+    try:
+        num = Decimal(text)
+    except InvalidOperation:
+        return text
+    if num == num.to_integral_value():
+        return str(int(num))
+    return text
+
+
+def xlsx_to_csv_text(data: bytes) -> str:
+    """
+    File .xlsx → nội dung CSV của sheet đầu tiên (không cần thư viện ngoài:
+    .xlsx là zip chứa XML). Dùng chung bộ phân tích parse_page_file_content.
+    """
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as exc:
+        raise ValueError("File Excel không hợp lệ hoặc bị hỏng") from exc
+    with zf:
+        if sum(info.file_size for info in zf.infolist()) > XLSX_MAX_UNCOMPRESSED_BYTES:
+            raise ValueError("File Excel quá lớn (tối đa 30MB sau giải nén)")
+        names = set(zf.namelist())
+        shared: List[str] = []
+        if "xl/sharedStrings.xml" in names:
+            root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+            for si in root.iter(f"{_XLSX_NS}si"):
+                shared.append("".join(t.text or "" for t in si.iter(f"{_XLSX_NS}t")))
+        sheets = sorted(
+            n for n in names if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")
+        )
+        sheet = "xl/worksheets/sheet1.xml" if "xl/worksheets/sheet1.xml" in names else (sheets[0] if sheets else None)
+        if not sheet:
+            raise ValueError("File Excel không có sheet dữ liệu")
+        root = ET.fromstring(zf.read(sheet))
+
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    for row in root.iter(f"{_XLSX_NS}row"):
+        cells: Dict[int, str] = {}
+        for pos, c in enumerate(row.iter(f"{_XLSX_NS}c")):
+            col = _xlsx_col_index(c.get("r", ""), pos)
+            kind = c.get("t")
+            v = c.find(f"{_XLSX_NS}v")
+            if kind == "s" and v is not None and (v.text or "").isdigit():
+                i = int(v.text)
+                val = shared[i] if i < len(shared) else ""
+            elif kind == "inlineStr":
+                val = "".join(t.text or "" for t in c.iter(f"{_XLSX_NS}t"))
+            elif v is not None and v.text:
+                val = v.text if kind in ("str", "b", "e") else _xlsx_number_text(v.text)
+            else:
+                val = ""
+            if val.strip():
+                cells[col] = val.strip()
+        if cells:
+            writer.writerow([cells.get(i, "") for i in range(max(cells) + 1)])
+    return out.getvalue()
+
+
+def decode_page_upload(filename: Optional[str], data: bytes) -> str:
+    """Nội dung file upload (.txt / .csv / .xlsx) → văn bản để parse_page_file_content xử lý."""
+    name = (filename or "").lower()
+    if name.endswith(".xls"):
+        raise ValueError("Định dạng .xls (Excel 97-2003) chưa hỗ trợ — hãy lưu lại thành .xlsx hoặc .csv")
+    if name.endswith(".xlsx") or data[:4] == b"PK\x03\x04":
+        return xlsx_to_csv_text(data)
+    # utf-8-sig: bỏ BOM của file CSV xuất từ Excel (nếu không header bị lệch)
+    return data.decode("utf-8-sig", errors="replace")
+
+
 def parse_page_file_content(
     content: str,
     filter_existing: bool = False,
@@ -544,6 +633,9 @@ def parse_page_file_content(
 
     lines = [line.strip() for line in content.splitlines()]
     non_empty = [l for l in lines if l and not l.startswith("#")]
+    # File 1 cột có dòng tiêu đề (vd "page_url") → bỏ tiêu đề, không tính là dòng lỗi
+    if non_empty and non_empty[0].strip().strip('"').lower() in ("page_url", "link", "url", "fanpage"):
+        non_empty = non_empty[1:]
     total_lines = len(non_empty)
 
     raw_candidates: List[str] = []

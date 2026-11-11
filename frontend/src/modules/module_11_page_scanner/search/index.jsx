@@ -181,6 +181,17 @@ function parseRawLinesToPreview(rawText) {
   });
 }
 
+/** line_items của /source/upload (VALID / DUPLICATE / INVALID) → dòng bảng xem trước. */
+function previewRowsFromLineItems(lineItems) {
+  const STATUS = { VALID: "valid", DUPLICATE: "duplicate", INVALID: "invalid" };
+  return (lineItems || []).map((it, idx) => ({
+    id: `srv_${it.line_no ?? idx}_${it.raw_input}`,
+    lineNo: it.line_no ?? idx + 1,
+    raw: it.raw_input || it.page_url || "",
+    status: STATUS[it.status] || "invalid",
+  }));
+}
+
 /* ════════════════════════════════════════════════════════════
    MAIN — Quét thông tin page (layout theo ảnh + tab Hashtag)
    ════════════════════════════════════════════════════════════ */
@@ -957,7 +968,9 @@ export default function PageScannerSearch() {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = "";
-    const rawText = await file.text().catch(() => "");
+    const isExcel = /\.xlsx$/i.test(file.name);
+    // .xlsx là file nhị phân → bảng xem trước lấy từ kết quả kiểm tra của server bên dưới
+    const rawText = isExcel ? "" : await file.text().catch(() => "");
     const parsedRows = parseRawLinesToPreview(rawText);
     setUploadPreviewRows(parsedRows);
     setUploadFileMeta({
@@ -972,7 +985,15 @@ export default function PageScannerSearch() {
     try {
       const res = await uploadPageFile(formData, { save_to_db: false, filter_existing: true });
       setUploadResult(res);
-      toast.success(`Đã nhận diện ${parsedRows.length || res.valid_count} dòng dữ liệu từ "${file.name}"`);
+      // Bảng xem trước theo đúng kết quả kiểm tra của server (giống lúc lưu)
+      const serverRows = previewRowsFromLineItems(res.line_items);
+      if (serverRows.length) {
+        setUploadPreviewRows(serverRows);
+        setUploadFileMeta((m) => (m ? { ...m, totalRows: serverRows.length } : m));
+      }
+      toast.success(
+        `Đã nhận diện ${serverRows.length || parsedRows.length || res.valid_count} dòng dữ liệu từ "${file.name}"`,
+      );
     } catch (err) {
       toast.error(`Lỗi đọc file: ${err.message}`);
     }
@@ -1302,14 +1323,15 @@ export default function PageScannerSearch() {
                   <FileUp className="size-5" />
                 </div>
                 <span className="text-xs font-semibold text-[#0F172A]">
-                  Kéo thả file <span className="text-[#1877F2]">.txt</span> hoặc{" "}
-                  <span className="text-[#1877F2]">.csv</span> vào đây hoặc{" "}
+                  Kéo thả file <span className="text-[#1877F2]">.txt</span>,{" "}
+                  <span className="text-[#1877F2]">.csv</span> hoặc{" "}
+                  <span className="text-[#1877F2]">.xlsx</span> vào đây hoặc{" "}
                   <span className="text-[#1877F2] underline">Bấm để tải lên</span>
                 </span>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".txt,.csv"
+                  accept=".txt,.csv,.xlsx"
                   className="hidden"
                   onChange={handleFileUpload}
                 />

@@ -19,6 +19,7 @@ from core.database.connection import db
 from modules.module_02_account_manager.api.router import scoped_owner
 from modules.module_02_account_manager.context import owner_context
 from ..page_source import (
+    decode_page_upload,
     get_sample_template,
     normalize_post_key,
     parse_page_file_content,
@@ -421,7 +422,8 @@ async def upload_pages_file(
     owner = _get_owner()
     try:
         content_bytes = await file.read()
-        content = content_bytes.decode("utf-8", errors="replace")
+        # .txt / .csv (utf-8, bỏ BOM) hoặc .xlsx (sheet đầu tiên) → văn bản
+        content = await asyncio.to_thread(decode_page_upload, file.filename, content_bytes)
         parsed = await asyncio.to_thread(
             parse_page_file_content,
             content,
