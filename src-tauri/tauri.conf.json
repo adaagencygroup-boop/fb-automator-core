@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "FB_Page_Automator",
-  "version": "2.0.10",
+  "version": "2.0.11",
   "identifier": "com.fbautomator.app",
   "build": {
     "beforeDevCommand": "npm --prefix frontend run dev",
     "devUrl": "http://localhost:3000",
-    "beforeBuildCommand": "npm --prefix frontend run build",
+    "beforeBuildCommand": "",
     "frontendDist": "../frontend/out"
   },
   "app": {
