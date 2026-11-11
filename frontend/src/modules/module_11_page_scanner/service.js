@@ -19,11 +19,6 @@ export async function parsePageLinks(payload) {
   return api.post("/api/page-scanner/source/parse", payload);
 }
 
-// ── SOURCE: SCAN BY LINKS (quét thông tin Fanpage theo danh sách link) ──
-export async function scanPageLinks(payload) {
-  return api.post("/api/page-scanner/source/scan-links", payload);
-}
-
 // ── SOURCE: UPLOAD FILE .txt/.csv ──
 // Mặc định CHỈ xem trước / kiểm tra; truyền save_to_db: true khi người dùng bấm "Bắt đầu".
 export async function uploadPageFile(formData, params = { save_to_db: false, filter_existing: true }) {
