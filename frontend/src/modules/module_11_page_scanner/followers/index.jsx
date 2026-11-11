@@ -36,11 +36,7 @@ import {
   getScanSessionDetail,
 } from "../service";
 import { LiveLogConsole, nowStamp, LIVE_STATUSES, parseJsonField } from "../_shared";
-import {
-  DEFAULT_SCANNED_PAGES,
-  SelectAccountsModal,
-  SelectPagesModal,
-} from "../shared/SelectPagesModal";
+import { SelectAccountsModal, SelectPagesModal } from "../shared/SelectPagesModal";
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
 const PAGE_SIZE = 10;
@@ -162,7 +158,6 @@ export default function PageScannerFollowers() {
   const [selectedUids, setSelectedUids] = useState([]);
   const [showAccountModal, setShowAccountModal] = useState(false);
 
-  const [availablePages, setAvailablePages] = useState(DEFAULT_SCANNED_PAGES);
   const [selectedPages, setSelectedPages] = useState([]);
   const [showPageModal, setShowPageModal] = useState(false);
   const [khoPages, setKhoPages] = useState([]);
@@ -369,20 +364,10 @@ export default function PageScannerFollowers() {
     let cancelled = false;
     (async () => {
       try {
-        const data = await getScannedPages({ page: 1, page_size: 100, sort_by: "followers" });
-        if (cancelled) return;
-        const items = data.items || [];
-        setKhoPages(items);
-        if (items.length) {
-          const mapped = items.map(mapKhoToPage);
-          const combined = [...DEFAULT_SCANNED_PAGES];
-          for (const m of mapped) {
-            if (!combined.some((c) => c.page_key === m.page_key)) combined.push(m);
-          }
-          setAvailablePages(combined);
-        }
+        const data = await getScannedPages({ page: 1, page_size: 200, sort_by: "followers" });
+        if (!cancelled) setKhoPages(data.items || []);
       } catch {
-        /* keep defaults */
+        /* modal chọn page tự tải kho page của nó */
       }
     })();
     return () => {
@@ -1358,7 +1343,6 @@ export default function PageScannerFollowers() {
       <SelectPagesModal
         open={showPageModal}
         onClose={() => setShowPageModal(false)}
-        availablePages={availablePages}
         selectedPages={selectedPages}
         onConfirm={(pages) => {
           setSelectedPages(pages.map((p, i) => mapKhoToPage(p, i)));

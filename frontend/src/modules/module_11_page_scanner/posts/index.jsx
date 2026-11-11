@@ -33,11 +33,7 @@ import {
   getScanSessionDetail,
 } from "../service";
 import { LiveLogConsole, nowStamp, LIVE_STATUSES, parseJsonField } from "../_shared";
-import {
-  DEFAULT_SCANNED_PAGES,
-  SelectAccountsModal,
-  SelectPagesModal,
-} from "../shared/SelectPagesModal";
+import { SelectAccountsModal, SelectPagesModal } from "../shared/SelectPagesModal";
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
 
@@ -126,7 +122,6 @@ export default function PageScannerPosts() {
   const [selectedUids, setSelectedUids] = useState([]);
   const [showAccountModal, setShowAccountModal] = useState(false);
 
-  const [availablePages, setAvailablePages] = useState(DEFAULT_SCANNED_PAGES);
   const [selectedPages, setSelectedPages] = useState([]);
   const [showPageModal, setShowPageModal] = useState(false);
 
@@ -269,27 +264,6 @@ export default function PageScannerPosts() {
         toast.error(`Lỗi tải tài khoản: ${err.message}`);
       } finally {
         if (!cancelled) setAccountsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await getScannedPages({ page: 1, page_size: 100, sort_by: "followers" });
-        if (cancelled || !data?.items?.length) return;
-        const mapped = data.items.map(mapKhoToPage);
-        const combined = [...DEFAULT_SCANNED_PAGES];
-        for (const m of mapped) {
-          if (!combined.some((c) => c.page_key === m.page_key)) combined.push(m);
-        }
-        setAvailablePages(combined);
-      } catch {
-        /* keep defaults */
       }
     })();
     return () => {
@@ -1429,7 +1403,6 @@ export default function PageScannerPosts() {
       <SelectPagesModal
         open={showPageModal}
         onClose={() => setShowPageModal(false)}
-        availablePages={availablePages}
         selectedPages={selectedPages}
         onConfirm={(pages) => {
           setSelectedPages(pages.map((p, i) => mapKhoToPage(p, i)));

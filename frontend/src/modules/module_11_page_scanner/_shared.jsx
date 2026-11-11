@@ -1,9 +1,12 @@
 "use client";
 
 import React, { useCallback } from "react";
-import { Copy } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { toast } from "@/lib/toast";
+import { pageWindow, parseJsonField } from "./utils.mjs";
+
+export { pageWindow, parseJsonField };
 
 export function SectionCard({ number, title, description, aside, children }) {
   return (
@@ -117,16 +120,58 @@ export function LiveLogConsole({ title, logs, phase }) {
   );
 }
 
-/** Trường JSON lưu dạng chuỗi trong DB (settings, logs) → object/array an toàn. */
-export function parseJsonField(value, fallback) {
-  if (value == null || value === "") return fallback;
-  if (typeof value !== "string") return value;
-  try {
-    const parsed = JSON.parse(value);
-    return parsed ?? fallback;
-  } catch {
-    return fallback;
-  }
+/**
+ * Thanh phân trang dùng chung.
+ * variant "chevron": ‹ 1 2 3 … N ›  (ảnh chọn page / followers / bài viết)
+ * variant "text":    Trước 1 2 3 Sau (ảnh chọn tài khoản / DS bài viết)
+ */
+export function Pager({ page, totalPages, onChange, variant = "chevron" }) {
+  const total = Math.max(1, Number(totalPages) || 1);
+  const current = Math.min(Math.max(1, page), total);
+  const edge =
+    "flex h-7 min-w-7 items-center justify-center rounded-lg border border-[#E2E8F0] bg-white px-2 text-xs font-semibold text-[#64748B] hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-40";
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        disabled={current <= 1}
+        onClick={() => onChange(current - 1)}
+        className={edge}
+        aria-label="Trang trước"
+      >
+        {variant === "text" ? "Trước" : <ChevronLeft className="size-3.5" />}
+      </button>
+      {pageWindow(current, total).map((p, i) =>
+        p === "…" ? (
+          <span key={`gap_${i}`} className="px-1 text-xs text-[#94A3B8]">
+            …
+          </span>
+        ) : (
+          <button
+            key={p}
+            type="button"
+            onClick={() => onChange(p)}
+            className={`flex h-7 min-w-7 items-center justify-center rounded-lg px-2 text-xs font-bold ${
+              p === current
+                ? "bg-[#1877F2] text-white"
+                : "border border-[#E2E8F0] bg-white text-[#475569] hover:bg-[#F8FAFC]"
+            }`}
+          >
+            {p}
+          </button>
+        ),
+      )}
+      <button
+        type="button"
+        disabled={current >= total}
+        onClick={() => onChange(current + 1)}
+        className={edge}
+        aria-label="Trang sau"
+      >
+        {variant === "text" ? "Sau" : <ChevronRight className="size-3.5" />}
+      </button>
+    </div>
+  );
 }
 
 export function nowStamp() {
