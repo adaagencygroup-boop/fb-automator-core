@@ -27,6 +27,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   createFollowerSession,
+  deletePageFollowers,
   getActiveCampaign,
   getScannedPages,
   getPageFollowers,
@@ -35,7 +36,7 @@ import {
   resumeScanSession,
   getScanSessionDetail,
 } from "../service";
-import { LiveLogConsole, nowStamp, LIVE_STATUSES, parseJsonField } from "../_shared";
+import { LiveLogConsole, nowStamp, LIVE_STATUSES, parseJsonField, runDelete } from "../_shared";
 import { SelectAccountsModal, SelectPagesModal } from "../shared/SelectPagesModal";
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
@@ -613,26 +614,20 @@ export default function PageScannerFollowers() {
     toast.success(`Đã xuất ${activeFollowers.length} UID của page.`);
   };
 
-  const handleDeleteSelected = () => {
-    if (!selectedRowIds.length || !activePage?.page_key) return;
-    const key = activePage.page_key;
-    setFollowersByPage((prev) => ({
-      ...prev,
-      [key]: (prev[key] || []).filter((u) => !selectedRowIds.includes(u.id)),
-    }));
-    setResultPages((prev) =>
-      prev.map((p) =>
-        p.page_key === key
-          ? {
-              ...p,
-              scanned_uid_count: Math.max(0, (p.scanned_uid_count || 0) - selectedRowIds.length),
-            }
-          : p,
-      ),
-    );
-    setSelectedRowIds([]);
-    toast.success("Đã xóa UID khỏi bảng xem trước (kho DB không đổi).");
+  /** Xóa UID khỏi kho followers (DB) rồi tải lại kết quả phiên. */
+  const deleteFollowerRows = async (rowIds) => {
+    const ids = rowIds.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+    const n = await runDelete({
+      count: ids.length,
+      noun: "UID",
+      request: () => deletePageFollowers({ follower_ids: ids }),
+    });
+    if (n == null) return;
+    setSelectedRowIds((prev) => prev.filter((id) => !rowIds.includes(id)));
+    await refreshResults(sessionId, scanPageKeysRef.current);
   };
+
+  const handleDeleteSelected = () => deleteFollowerRows(selectedRowIds);
 
   return (
     <div className="space-y-5 pb-10">
@@ -1237,16 +1232,7 @@ export default function PageScannerFollowers() {
                                 <button
                                   type="button"
                                   title="Xóa UID"
-                                  onClick={() => {
-                                    setFollowersByPage((prev) => ({
-                                      ...prev,
-                                      [activePageKey]: (prev[activePageKey] || []).filter(
-                                        (f) => f.id !== u.id,
-                                      ),
-                                    }));
-                                    setSelectedRowIds((prev) => prev.filter((id) => id !== u.id));
-                                    toast.success(`Đã xóa UID ${u.uid}`);
-                                  }}
+                                  onClick={() => deleteFollowerRows([u.id])}
                                   className="rounded p-1 text-[#94A3B8] hover:bg-red-50 hover:text-[#DC2626]"
                                 >
                                   <Trash2 className="size-3.5" />

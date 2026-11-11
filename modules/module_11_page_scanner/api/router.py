@@ -1557,59 +1557,62 @@ async def list_pages_with_followers():
     return {"items": items, "total": len(items), "total_uids": total_uids}
 
 
+def _delete_returning(sql: str, params: tuple, what: str) -> int:
+    """Xóa theo lô; trả số dòng THỰC SỰ bị xóa. Lỗi DB → 500 (không báo thành công giả)."""
+    try:
+        rows = db.fetch_all(sql, params)
+    except Exception as exc:
+        logger.error(f"[PageScanner] delete {what} fail: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Không xóa được {what}: {exc}")
+    return len(rows or [])
+
+
 @router.delete("/pages")
 async def delete_scanned_pages(item: DeletePagesInput):
-    """Xóa hàng loạt page khỏi kho scanned_pages."""
+    """Xóa hàng loạt page khỏi kho scanned_pages (đúng owner)."""
     owner = _get_owner()
-    keys = [str(k).strip() for k in (item.page_keys or []) if str(k).strip()]
-    deleted = 0
-    for k in keys:
-        try:
-            db.execute(
-                "DELETE FROM scanned_pages WHERE owner_key = %s AND page_key = %s",
-                (owner, k),
-            )
-            deleted += 1
-        except Exception as exc:
-            logger.warning(f"[PageScanner] delete page {k} fail: {exc}")
-    return {"deleted": deleted}
+    keys = list(dict.fromkeys(str(k).strip() for k in (item.page_keys or []) if str(k).strip()))
+    if not keys:
+        return {"deleted": 0, "requested": 0}
+    deleted = _delete_returning(
+        "DELETE FROM scanned_pages WHERE owner_key = %s AND page_key = ANY(%s) RETURNING page_key",
+        (owner, keys),
+        "page",
+    )
+    return {"deleted": deleted, "requested": len(keys)}
 
 
 @router.delete("/posts")
 async def delete_scanned_posts(item: DeletePostsInput):
-    """Xóa bài viết đã quét theo id hoặc post_key."""
+    """Xóa bài viết đã quét theo id (số) hoặc post_key."""
     owner = _get_owner()
-    deleted = 0
-    for raw_id in item.post_ids or []:
-        try:
-            if str(raw_id).isdigit():
-                db.execute(
-                    "DELETE FROM scanned_posts WHERE owner_key = %s AND id = %s",
-                    (owner, int(raw_id)),
-                )
-            else:
-                db.execute(
-                    "DELETE FROM scanned_posts WHERE owner_key = %s AND post_key = %s",
-                    (owner, str(raw_id)),
-                )
-            deleted += 1
-        except Exception as exc:
-            logger.warning(f"[PageScanner] delete post {raw_id} fail: {exc}")
-    return {"deleted": deleted}
+    raw = [str(x).strip() for x in (item.post_ids or []) if str(x).strip()]
+    ids = sorted({int(x) for x in raw if x.isdigit()})
+    keys = sorted({x for x in raw if not x.isdigit()})
+    if not ids and not keys:
+        return {"deleted": 0, "requested": 0}
+    deleted = _delete_returning(
+        """
+        DELETE FROM scanned_posts
+        WHERE owner_key = %s AND (id = ANY(%s) OR post_key = ANY(%s))
+        RETURNING id
+        """,
+        (owner, ids, keys),
+        "bài viết",
+    )
+    return {"deleted": deleted, "requested": len(raw)}
 
 
 @router.delete("/followers")
 async def delete_scanned_followers(item: DeleteFollowersInput):
-    """Xóa followers đã quét theo id."""
+    """Xóa followers đã quét theo id (đúng owner)."""
     owner = _get_owner()
-    deleted = 0
-    for fid in item.follower_ids or []:
-        try:
-            db.execute(
-                "DELETE FROM scanned_page_followers WHERE owner_key = %s AND id = %s",
-                (owner, int(fid)),
-            )
-            deleted += 1
-        except Exception as exc:
-            logger.warning(f"[PageScanner] delete follower {fid} fail: {exc}")
-    return {"deleted": deleted}
+    ids = sorted({int(f) for f in (item.follower_ids or [])})
+    if not ids:
+        return {"deleted": 0, "requested": 0}
+    deleted = _delete_returning(
+        "DELETE FROM scanned_page_followers WHERE owner_key = %s AND id = ANY(%s) RETURNING id",
+        (owner, ids),
+        "followers",
+    )
+    return {"deleted": deleted, "requested": len(ids)}

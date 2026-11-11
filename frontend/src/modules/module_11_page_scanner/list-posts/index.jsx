@@ -29,6 +29,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/lib/toast";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { getPagesWithPosts, getScannedPosts, deleteScannedPosts } from "../service";
+import { runDelete } from "../_shared";
 
 const PAGE_SIZE = 5;
 
@@ -523,11 +524,14 @@ export default function PageScannerListPosts() {
                   variant="outline"
                   className="h-7 gap-1 border-rose-200 bg-white text-[11px] text-rose-600 hover:bg-rose-50"
                   onClick={async () => {
-                    await deleteScannedPosts({ post_ids: selectedIds }).catch(() => null);
-                    setItems((prev) => prev.filter((r) => !selectedIds.includes(rowId(r))));
-                    setTotal((prev) => Math.max(0, prev - selectedIds.length));
-                    toast.success(`Đã xóa ${selectedIds.length} bài viết.`);
+                    const n = await runDelete({
+                      count: selectedIds.length,
+                      noun: "bài viết",
+                      request: () => deleteScannedPosts({ post_ids: selectedIds }),
+                    });
+                    if (n == null) return;
                     setSelectedIds([]);
+                    reload(page);
                   }}
                 >
                   <Trash2 className="size-3.5" /> Xóa
@@ -646,10 +650,14 @@ export default function PageScannerListPosts() {
                             <button
                               type="button"
                               onClick={async () => {
-                                await deleteScannedPosts({ post_ids: [id] }).catch(() => null);
-                                setItems((prev) => prev.filter((item) => rowId(item) !== id));
-                                setTotal((prev) => Math.max(0, prev - 1));
-                                toast.success("Đã xóa bài viết.");
+                                const n = await runDelete({
+                                  count: 1,
+                                  noun: "bài viết",
+                                  request: () => deleteScannedPosts({ post_ids: [id] }),
+                                });
+                                if (n == null) return;
+                                setSelectedIds((prev) => prev.filter((x) => x !== id));
+                                reload(page);
                               }}
                               className="inline-flex size-7 items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
                               title="Xóa bài viết"

@@ -174,6 +174,28 @@ export function Pager({ page, totalPages, onChange, variant = "chevron" }) {
   );
 }
 
+/**
+ * Xóa có xác nhận + báo đúng kết quả từ server (không nuốt lỗi, không báo thành công giả).
+ * Trả về số dòng đã xóa, hoặc null nếu người dùng hủy / API lỗi.
+ */
+export async function runDelete({ count, noun, request, confirm = true }) {
+  if (!count) return null;
+  if (confirm && !window.confirm(`Xóa vĩnh viễn ${count.toLocaleString("vi-VN")} ${noun}?`)) return null;
+  try {
+    const res = await request();
+    const deleted = Number(res?.deleted ?? 0);
+    if (deleted < count) {
+      toast.warning(`Đã xóa ${deleted}/${count} ${noun} — số còn lại không còn trong kho.`);
+    } else {
+      toast.success(`Đã xóa ${deleted.toLocaleString("vi-VN")} ${noun}.`);
+    }
+    return deleted;
+  } catch (err) {
+    toast.error(`Lỗi xóa ${noun}: ${err.message}`);
+    return null;
+  }
+}
+
 export function nowStamp() {
   return new Date().toLocaleTimeString("vi-VN", { hour12: false });
 }

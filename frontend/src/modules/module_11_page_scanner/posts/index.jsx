@@ -24,6 +24,7 @@ import { normalizeAccount, initialsOf } from "@/modules/module_07_group_spam/sha
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
   createPostScanSession,
+  deleteScannedPosts,
   getActiveCampaign,
   getScannedPages,
   getScannedPosts,
@@ -32,7 +33,7 @@ import {
   resumeScanSession,
   getScanSessionDetail,
 } from "../service";
-import { LiveLogConsole, nowStamp, LIVE_STATUSES, parseJsonField } from "../_shared";
+import { LiveLogConsole, nowStamp, LIVE_STATUSES, parseJsonField, runDelete } from "../_shared";
 import { SelectAccountsModal, SelectPagesModal } from "../shared/SelectPagesModal";
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
@@ -1258,14 +1259,19 @@ export default function PageScannerPosts() {
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => {
-                                      setPostsByPage((prev) => ({
-                                        ...prev,
-                                        [activePage.page_key]: (
-                                          prev[activePage.page_key] || []
-                                        ).filter((p) => p.id !== post.id),
-                                      }));
-                                      toast.success("Đã xóa bài viết khỏi danh sách.");
+                                    onClick={async () => {
+                                      const n = await runDelete({
+                                        count: 1,
+                                        noun: "bài viết",
+                                        request: () => deleteScannedPosts({ post_ids: [post.id] }),
+                                      });
+                                      if (n == null) return;
+                                      setSelectedPostIds((prev) => {
+                                        const next = new Set(prev);
+                                        next.delete(post.id);
+                                        return next;
+                                      });
+                                      refreshPosts(sessionId);
                                     }}
                                     className="cursor-pointer rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
                                     title="Xóa bài viết"
