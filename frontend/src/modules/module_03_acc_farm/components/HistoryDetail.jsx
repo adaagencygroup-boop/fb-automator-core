@@ -129,6 +129,14 @@ function configChips(c) {
   return chips;
 }
 
+/** Giới hạn mỗi ngày của lượt (bản cũ 1 công tắc chung, bản mới riêng nhóm / kết bạn) */
+function dailyLimitText(c) {
+  const friend = c.daily_friend_limit_enabled ?? c.daily_limit_enabled;
+  const group = c.daily_group_limit_enabled ?? c.daily_limit_enabled;
+  const parts = [friend && `${c.daily_friend_limit} lời mời`, group && `${c.daily_group_limit} nhóm`].filter(Boolean);
+  return parts.length ? `Giới hạn mỗi ngày: ${parts.join(" · ")}` : "Không giới hạn mỗi ngày";
+}
+
 function SectionTitle({ icon: Icon, children }) {
   return (
     <h4 className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">
@@ -473,9 +481,7 @@ export default function HistoryDetail({ id, onClose }) {
                       })}
                       <span className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-600">
                         <Clock className="h-3.5 w-3.5 shrink-0" />
-                        {h.config_snapshot.daily_limit_enabled
-                          ? `Giới hạn mỗi ngày: ${h.config_snapshot.daily_friend_limit} lời mời · ${h.config_snapshot.daily_group_limit} nhóm`
-                          : "Không giới hạn mỗi ngày"}
+                        {dailyLimitText(h.config_snapshot)}
                       </span>
                     </div>
                   ) : (
