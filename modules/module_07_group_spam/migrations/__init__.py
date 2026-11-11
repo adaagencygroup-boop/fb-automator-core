@@ -8,19 +8,23 @@ def up() -> None:
     from .migration_005_cloud_first_logs import up as run_005_up
     from .migration_006_postgres_only import up as run_006_up
     from .migration_007_remove_cloud_events import up as run_007_up
+    from .migration_008_account_groups import up as run_008_up
 
     run_003_up()
     run_004_up()
     run_005_up()
     run_006_up()
     run_007_up()
+    run_008_up()
 
 
 def down() -> None:
     """Remove the current Module 7 cloud schema."""
     from .migration_003_v2_campaign_runtime import down as run_003_down
     from .migration_004_remove_local_tables_from_cloud import down as run_004_down
+    from .migration_008_account_groups import down as run_008_down
 
+    run_008_down()
     run_004_down()
     run_003_down()
 

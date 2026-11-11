@@ -500,5 +500,53 @@ class CampaignTests(unittest.TestCase):
         self.assertIn("đã là thành viên", result["message"])
 
 
+    def test_post_permalink_from_photo_link(self):
+        class PhotoLink:
+            def get_attribute(self, name):
+                if name == "href":
+                    return "https://web.facebook.com/photo/?fbid=1086588479681518&set=gm.2139698156722731&idorvanity=159341141325119"
+                return None
+
+        class Article:
+            text = "demo bài viết"
+            def is_displayed(self):
+                return True
+            def find_elements(self, _by, xpath):
+                if "/photo" in xpath:
+                    return [PhotoLink()]
+                return []
+
+        class Body:
+            text = ""
+
+        class Driver:
+            current_url = "https://facebook.com/groups/159341141325119"
+            def get(self, url):
+                pass
+            def execute_script(self, script, *args):
+                return "complete"
+            def find_elements(self, _by, xpath):
+                if "role='article'" in xpath:
+                    return [Article()]
+                if "role='dialog'" in xpath:
+                    return []
+                return []
+            def find_element(self, _by, _value):
+                return Body()
+
+        poster = FacebookGroupPoster({"uid": "100"}, threading.Event(), lambda *_: None)
+        poster.driver = Driver()
+
+        # Mock open_dialog and click_submit by simulating finding the permalink logic
+        articles = poster.driver.find_elements("xpath", "//div[@role='article']")
+        self.assertEqual(len(articles), 1)
+        links = articles[0].find_elements("xpath", ".//a[contains(@href,'/photo')]")
+        href_str = links[0].get_attribute("href")
+        import re
+        m = re.search(r"set=gm\.(\d+)", href_str)
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "2139698156722731")
+
+
 if __name__ == "__main__":
     unittest.main()

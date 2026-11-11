@@ -1,44 +1,106 @@
 Project module_07_group_spam {
   database_type: "PostgreSQL"
   Note: '''
-    Module 7 uses PostgreSQL/Supabase only.
-    Legacy SQLite is imported once by migration 006 and is not used at runtime.
-    Progress messages remain in CampaignJob RAM for the job lifetime; only durable data is modeled here.
+    Cơ sở dữ liệu PostgreSQL/Supabase của Module 7.
+    Bốn bảng đang dùng: cloud_group_campaigns, cloud_group_runs,
+    cloud_group_logs và module7_account_groups.
+    Bảng accounts của Module 2 được đưa vào sơ đồ để quan sát liên kết tài khoản.
+    Hai bảng cũ group_sessions và group_session_logs đã được xóa.
+    Log tiến trình trực tiếp chỉ giữ trong RAM khi chiến dịch đang chạy.
   '''
 }
 
 Enum group_action_type {
-  POST
-  COMMENT
+  POST [note: "Đăng bài lên nhóm"]
+  COMMENT [note: "Bình luận trong nhóm"]
 }
 
 Enum group_run_status {
-  QUEUED
-  SCHEDULED
-  RUNNING
-  STOPPING
-  COMPLETED
-  PARTIAL
-  STOPPED
-  CANCELLED
-  FAILED
+  QUEUED [note: "Đang chờ xử lý"]
+  SCHEDULED [note: "Đã lên lịch, chưa bắt đầu chạy"]
+  RUNNING [note: "Đang chạy"]
+  STOPPING [note: "Đang dừng sau tác vụ hiện tại"]
+  COMPLETED [note: "Hoàn tất"]
+  PARTIAL [note: "Hoàn tất một phần"]
+  STOPPED [note: "Đã dừng"]
+  CANCELLED [note: "Đã hủy"]
+  FAILED [note: "Thất bại"]
 }
 
 Enum group_log_status {
-  SUCCESS
-  PENDING_APPROVAL
-  FAILED
-  SKIPPED
-  CANCELLED
+  SUCCESS [note: "Tác vụ thành công"]
+  PENDING_APPROVAL [note: "Đang chờ Facebook hoặc quản trị viên duyệt"]
+  FAILED [note: "Tác vụ thất bại"]
+  SKIPPED [note: "Đã bỏ qua"]
+  CANCELLED [note: "Đã hủy"]
+}
+
+Enum account_group_status {
+  JOINED [note: "Đã là thành viên nhóm"]
+  PENDING_APPROVAL [note: "Đã gửi yêu cầu, đang chờ duyệt"]
+  LEFT [note: "Đã rời nhóm"]
+  FAILED [note: "Thao tác tham gia thất bại"]
+}
+
+Table accounts {
+  id integer [pk, increment, note: "Khóa chính thực tế của tài khoản"]
+  category_id integer [note: "Khóa ngoại tới account_categories.id; khi xóa danh mục sẽ đặt NULL"]
+  user_id varchar(100) [note: "Chủ sở hữu; tương ứng owner_key trong Module 7"]
+  uid varchar(50) [not null, note: "UID Facebook; tương ứng account_uid trong Module 7"]
+  credential_encryption_version smallint [not null, default: 2]
+  password text [note: "Mật khẩu đã mã hóa"]
+  two_fa text [note: "Mã bí mật 2FA đã mã hóa"]
+  cookie text [note: "Cookie phiên đăng nhập"]
+  token text
+  email varchar(150)
+  pass_mail text [note: "Mật khẩu email đã mã hóa"]
+  mail_recovery varchar(150)
+  token_hotmail text
+  client_id varchar(100)
+  proxy varchar(255)
+  profile_name varchar(150)
+  avatar_url text
+  profile_path varchar(255)
+  status varchar(20) [not null, default: "NEW"]
+  login_status varchar(30) [not null, default: "NOT_LOGGED"]
+  status_checked_at timestamp
+  last_login_at timestamp
+  first_login_at timestamp
+  friends_count integer
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (user_id, uid) [unique, name: "uq_accounts_user_id_uid"]
+    (user_id, category_id) [name: "ix_accounts_user_category"]
+    (user_id) [name: "ix_accounts_user_id"]
+    (uid) [name: "ix_accounts_uid"]
+  }
+
+  Note: "Bảng tài khoản thuộc Module 2, được lặp lại trong sơ đồ này để thể hiện ngữ cảnh. Khóa chính là id; uid duy nhất theo từng user_id. Các bảng Module 7 lưu user_id thành owner_key và uid thành account_uid."
+}
+
+Table account_categories {
+  id integer [pk, increment]
+  user_id varchar(100) [note: "Chủ sở hữu danh mục; NULL là danh mục dùng chung"]
+  name varchar(100) [not null]
+  color varchar(7)
+  created_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP`]
+
+  indexes {
+    (user_id) [name: "ix_account_categories_user_id"]
+  }
+
+  Note: "Danh mục phân loại tài khoản Facebook. Tên danh mục được duy nhất không phân biệt hoa thường trong phạm vi người dùng; danh mục dùng chung cũng có quy tắc duy nhất riêng."
 }
 
 Table cloud_group_campaigns {
   campaign_id varchar(36) [pk, not null]
-  owner_key varchar(100) [not null, note: "Owner scope used to isolate user data"]
+  owner_key varchar(100) [not null, note: "Mã chủ sở hữu, dùng phân tách dữ liệu người dùng"]
   name varchar(200) [not null]
   description text
   action_type group_action_type [not null]
-  deleted_at timestamp [note: "Soft-delete timestamp; NULL means active"]
+  deleted_at timestamp [note: "Xóa mềm; NULL nghĩa là chiến dịch còn hoạt động"]
   created_at timestamp [not null, default: `CURRENT_TIMESTAMP AT TIME ZONE 'UTC'`]
   updated_at timestamp [not null, default: `CURRENT_TIMESTAMP AT TIME ZONE 'UTC'`]
 
@@ -48,17 +110,17 @@ Table cloud_group_campaigns {
     (owner_key, name) [name: "idx_cloud_group_campaigns_owner_name"]
   }
 
-  Note: "Campaign metadata, soft-delete state and rerun ownership."
+  Note: "Lưu thông tin chiến dịch như tên, mô tả, loại thao tác và trạng thái xóa mềm. Một chiến dịch có thể có nhiều lượt chạy trong cloud_group_runs."
 }
 
 Table cloud_group_runs {
   run_id varchar(36) [pk, not null]
   campaign_id varchar(36) [not null]
-  run_number integer [not null, default: 1, note: "Sequential within a campaign; must be >= 1"]
+  run_number integer [not null, default: 1, note: "Số thứ tự lượt chạy trong chiến dịch; bắt đầu từ 1"]
   owner_key varchar(100) [not null]
-  campaign_name varchar(200) [not null, note: "Name snapshot at execution time"]
+  campaign_name varchar(200) [not null, note: "Ảnh chụp tên chiến dịch tại thời điểm chạy"]
   action_type group_action_type [not null]
-  config_json jsonb [not null, default: `{}`, note: "Sanitized configuration used by Retry/Rerun"]
+  config_json jsonb [not null, default: `{}`, note: "Cấu hình đã loại bỏ thông tin nhạy cảm, dùng để chạy lại"]
   status group_run_status [not null]
   total_planned integer [not null, default: 0]
   total_success integer [not null, default: 0]
@@ -75,7 +137,7 @@ Table cloud_group_runs {
     (owner_key, action_type, finished_at) [name: "idx_cloud_group_runs_type"]
   }
 
-  Note: "Live and final run summary. Aggregate totals are non-negative and cannot exceed total_planned."
+  Note: "Mỗi bản ghi đại diện một lần chạy hoặc chạy lại chiến dịch; lưu trạng thái và tổng số tác vụ thành công, lỗi, bỏ qua."
 }
 
 Table cloud_group_logs {
@@ -83,7 +145,7 @@ Table cloud_group_logs {
   run_id varchar(36) [not null]
   owner_key varchar(100) [not null]
   action_type group_action_type [not null]
-  account_uid varchar(50) [not null, note: "Logical reference to the Module 2 Facebook account UID"]
+  account_uid varchar(50) [not null, note: "UID tài khoản Facebook từ Module 2; lưu dạng tham chiếu logic"]
   account_name varchar(150)
   group_key varchar(255) [not null]
   group_name varchar(255)
@@ -104,7 +166,30 @@ Table cloud_group_logs {
     (owner_key, group_key, finished_at) [name: "idx_cloud_group_logs_group"]
   }
 
-  Note: "Final outcome for each account/group action."
+  Note: "Lưu kết quả cuối cùng của từng tác vụ đăng bài hoặc bình luận trên một nhóm bằng một tài khoản. Một lượt chạy có nhiều log."
+}
+
+Table module7_account_groups {
+  id bigint [pk, increment]
+  owner_key varchar(100) [not null]
+  account_uid varchar(50) [not null]
+  group_key varchar(255) [not null]
+  group_name varchar(255)
+  group_url text [not null]
+  status account_group_status [not null]
+  search_keyword text [note: "Từ khóa dùng tìm nhóm; NULL nếu nhóm đến từ file hoặc nhập thủ công"]
+  campaign_id varchar(36)
+  requested_at timestamp
+  joined_at timestamp
+  updated_at timestamp [not null, default: `CURRENT_TIMESTAMP AT TIME ZONE 'UTC'`]
+
+  indexes {
+    (owner_key, account_uid, group_key) [unique, name: "uq_module7_account_groups_owner_account_group"]
+    (owner_key, account_uid, status) [name: "idx_module7_account_groups_account_status"]
+    (owner_key, group_key) [name: "idx_module7_account_groups_group"]
+  }
+
+  Note: "Theo dõi trạng thái tham gia nhóm của từng tài khoản. Module 7 cập nhật bản ghi khi Facebook xác nhận đã tham gia/đã là thành viên hoặc đang chờ duyệt. Khóa duy nhất owner_key + account_uid + group_key giúp tránh ghi trùng."
 }
 
 Ref fk_cloud_group_runs_campaign {
@@ -113,4 +198,16 @@ Ref fk_cloud_group_runs_campaign {
 
 Ref fk_cloud_group_logs_run {
   cloud_group_runs.run_id < cloud_group_logs.run_id [delete: cascade]
+}
+
+Ref module7_logs_account_logical {
+  accounts.(user_id, uid) < cloud_group_logs.(owner_key, account_uid) [note: "Liên kết logic để tra tài khoản; không phải khóa ngoại SQL"]
+}
+
+Ref module7_membership_account_logical {
+  accounts.(user_id, uid) < module7_account_groups.(owner_key, account_uid) [note: "Liên kết logic để tra tài khoản; không phải khóa ngoại SQL"]
+}
+
+Ref fk_accounts_category {
+  account_categories.id < accounts.category_id [delete: set null]
 }

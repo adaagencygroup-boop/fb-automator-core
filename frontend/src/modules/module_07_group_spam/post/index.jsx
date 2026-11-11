@@ -733,6 +733,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
       appendCampaignLog("INFO", `Đang gửi chiến dịch ${selectedAccounts.length} tài khoản × ${activeGroups.length} nhóm tới worker...`);
       const campaign = await runGroupCampaign({
         campaign_id: effectiveCampaignId,
+        search_keyword: groupSource === "search" ? groupSearch.trim() || null : null,
         name: trimmedCampaignName,
         description: campaignDescription || undefined,
         action_type: actionType,

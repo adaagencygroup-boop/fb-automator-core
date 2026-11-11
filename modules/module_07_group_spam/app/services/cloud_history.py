@@ -266,6 +266,53 @@ class CloudHistoryStore:
         except Exception:
             logger.warning("Cannot write Module 7 task outcome to cloud", exc_info=True)
 
+    def record_group_membership(
+        self,
+        *,
+        owner: str | None,
+        account_uid: str,
+        group_key: str,
+        group_name: str | None,
+        group_url: str,
+        status: str,
+        search_keyword: str | None,
+        campaign_id: str | None,
+    ) -> None:
+        """Upsert a confirmed or pending membership state for one account/group."""
+        normalized_status = str(status or "").strip().upper()
+        if normalized_status not in {"JOINED", "PENDING_APPROVAL"}:
+            return
+        requested_at = datetime.now().isoformat(timespec="seconds") if normalized_status == "PENDING_APPROVAL" else None
+        joined_at = datetime.now().isoformat(timespec="seconds") if normalized_status == "JOINED" else None
+        try:
+            self._db().execute(
+                """
+                INSERT INTO module7_account_groups
+                    (owner_key, account_uid, group_key, group_name, group_url,
+                     status, search_keyword, campaign_id, requested_at, joined_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+                ON CONFLICT (owner_key, account_uid, group_key) DO UPDATE SET
+                    group_name = COALESCE(EXCLUDED.group_name, module7_account_groups.group_name),
+                    group_url = EXCLUDED.group_url,
+                    status = CASE
+                        WHEN module7_account_groups.status = 'JOINED'
+                         AND EXCLUDED.status = 'PENDING_APPROVAL' THEN 'JOINED'
+                        ELSE EXCLUDED.status
+                    END,
+                    search_keyword = COALESCE(EXCLUDED.search_keyword, module7_account_groups.search_keyword),
+                    campaign_id = COALESCE(EXCLUDED.campaign_id, module7_account_groups.campaign_id),
+                    requested_at = COALESCE(EXCLUDED.requested_at, module7_account_groups.requested_at),
+                    joined_at = COALESCE(EXCLUDED.joined_at, module7_account_groups.joined_at),
+                    updated_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
+                """,
+                (
+                    owner or "", account_uid, group_key, group_name, group_url,
+                    normalized_status, search_keyword, campaign_id, requested_at, joined_at,
+                ),
+            )
+        except Exception:
+            logger.warning("Cannot write Module 7 group membership to cloud", exc_info=True)
+
 
 cloud_history = CloudHistoryStore()
 

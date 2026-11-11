@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
+import logging
+import re
 from pathlib import Path
 import random
 import threading
@@ -17,6 +19,8 @@ from ..core.constants import BLOCK_TAGS, TERMINAL_STATES, LogLevel
 from .supabase_storage import download_or_cache_media, upload_local_file_to_supabase
 from ..schemas.request import AccountDTO, GroupDTO
 from ..schemas.response import GroupResponse
+
+logger = logging.getLogger(__name__)
 
 GroupItem = GroupDTO | GroupResponse | dict[str, Any]
 AccountItem = AccountDTO | dict[str, Any]   
@@ -520,9 +524,15 @@ class FacebookGroupPoster:
         # Facebook thường thay toàn bộ node dialog sau animation. Mỗi lần retry phải
         # query lại từ driver, không giữ WebElement dialog/textbox cũ.
         textbox_xpath = (
-            "//div[@role='dialog']//*[@contenteditable='true' and "
-            "(@role='textbox' or @data-lexical-editor='true' or "
-            """contains(@aria-label,'Bạn đang nghĩ gì') or contains(@aria-label,"What's on your mind"))]"""
+            "//div[@role='dialog']//*[@contenteditable='true' and ("
+            "@role='textbox' or @data-lexical-editor='true' or "
+            "contains(@aria-label,'Tạo bài viết') or "
+            "contains(@aria-label,'Tạo bài viết công khai') or "
+            "contains(@aria-label,'Create a public post') or "
+            "contains(@aria-label,'Create a post') or "
+            "contains(@aria-label,'Bạn đang nghĩ gì') or "
+            "contains(@aria-label,\"What's on your mind\")"
+            ")]"
         )
 
         def insert_content():
@@ -581,7 +591,6 @@ class FacebookGroupPoster:
             if self.cancel.wait(2 + min(len(resolved_media) * 2, 8)):
                 self._raise_if_cancelled()
 
-        # FB mới: composer có bước Next → Post settings → Post (không còn Đăng ngay).
         post_xpath = (
             "//div[@role='dialog']//*[@role='button' and "
             "(@aria-label='Đăng' or @aria-label='Post' or normalize-space(.)='Đăng' or normalize-space(.)='Post') and "
@@ -612,7 +621,6 @@ class FacebookGroupPoster:
                 )
                 if nxt is not None:
                     driver.execute_script("arguments[0].click()", nxt)
-                    # Chưa phải Post — đợi vòng sau khi Post settings mở
                     return False
                 return False
             except Exception:
@@ -620,11 +628,37 @@ class FacebookGroupPoster:
 
         self._wait_until(click_submit, 45, "Nút Đăng/Post chưa sẵn sàng (sau bước Next)")
 
+        dismiss_xpath = (
+            "//*[@role='button' and (normalize-space(.)='Bỏ qua' or normalize-space(.)='Dismiss' or "
+            "contains(@aria-label,'Bỏ qua') or contains(@aria-label,'Dismiss'))]"
+        )
+
+        def handle_video_processing_toast():
+            try:
+                for btn in driver.find_elements(By.XPATH, dismiss_xpath):
+                    if self._is_displayed(btn):
+                        driver.execute_script("arguments[0].click()", btn)
+                        return True
+            except Exception:
+                pass
+            return False
+
         def dialog_is_closed():
+            handle_video_processing_toast()
             dialogs = driver.find_elements(By.XPATH, "//div[@role='dialog']")
-            return not any(self._is_displayed(d) for d in dialogs)
+            active_dialogs = []
+            for d in dialogs:
+                if not self._is_displayed(d):
+                    continue
+                d_text = (d.text or "").lower()
+                if any(m in d_text for m in ("đang xử lý video", "video is processing", "video trong bài viết")):
+                    handle_video_processing_toast()
+                    continue
+                active_dialogs.append(d)
+            return len(active_dialogs) == 0
 
         self._wait_until(dialog_is_closed, 35, "Facebook chưa đóng popup sau khi gửi bài")
+        handle_video_processing_toast()
 
         result_url = url
         content_marker = " ".join(content.split())[:80].lower()
@@ -640,12 +674,27 @@ class FacebookGroupPoster:
                         continue
                     links = article.find_elements(
                         By.XPATH,
-                        ".//a[contains(@href,'/posts/') or contains(@href,'/permalink/') or contains(@href,'story_fbid=')]",
+                        ".//a[contains(@href,'/posts/') or contains(@href,'/permalink/') or contains(@href,'story_fbid=') or contains(@href,'multi_permalinks=') or contains(@href,'/photo')]",
                     )
                     for link in links:
                         href = link.get_attribute("href")
-                        if href:
-                            return str(href).split("?", 1)[0]
+                        if not href:
+                            continue
+                        href_str = str(href)
+                        if "set=gm." in href_str:
+                            m = re.search(r"set=gm\.(\d+)", href_str)
+                            if m:
+                                clean_group = url.split("?", 1)[0].rstrip("/")
+                                return f"{clean_group}/posts/{m.group(1)}"
+                        if "multi_permalinks=" in href_str:
+                            m = re.search(r"multi_permalinks=(\d+)", href_str)
+                            if m:
+                                clean_group = url.split("?", 1)[0].rstrip("/")
+                                return f"{clean_group}/posts/{m.group(1)}"
+                        if "/posts/" in href_str or "/permalink/" in href_str:
+                            return href_str.split("?", 1)[0].rstrip("/")
+                        if "/photo" in href_str:
+                            return href_str.split("&__cft__", 1)[0]
             except Exception:
                 return None
             return None
@@ -1305,6 +1354,7 @@ class CampaignManager:
                         job.log("WARNING", f"[{uid}] Luồng tham gia lỗi nhưng luồng đăng vẫn tiếp tục")
                     join_results[index] = join_result
                     self._record_join_step(job, uid, group_name, join_result, group_url)
+                    self._record_group_membership(job, account, group, join_result)
 
                     # A failed or pending join remains informational. The requested
                     # action is attempted immediately before moving to the next group.
@@ -1387,6 +1437,42 @@ class CampaignManager:
     def _advance_step(job: CampaignJob, count: int = 1) -> None:
         with job.lock:
             job.completed_steps = min(job.total_steps, job.completed_steps + count)
+
+    def _record_group_membership(
+        self,
+        job: CampaignJob,
+        account: AccountItem,
+        group: GroupItem,
+        result: dict[str, Any],
+    ) -> None:
+        status = str(result.get("status") or "").upper()
+        if status in {"JOINED", "ALREADY_MEMBER"}:
+            membership_status = "JOINED"
+        elif status == "PENDING_APPROVAL":
+            membership_status = status
+        else:
+            return
+
+        group_url = _group_url(group)
+        group_key = _group_key(group) or group_url
+        if not group_key or not group_url:
+            return
+        record_membership = getattr(self.persistence, "record_group_membership", None)
+        if not callable(record_membership):
+            return
+        try:
+            record_membership(
+                owner=job.owner,
+                account_uid=str(account["uid"]),
+                group_key=group_key,
+                group_name=_extract_group_field(group, "name") or None,
+                group_url=group_url,
+                status=membership_status,
+                search_keyword=str(job.payload.get("search_keyword") or "").strip() or None,
+                campaign_id=job.campaign_id,
+            )
+        except Exception:
+            logger.warning("Cannot record Module 7 group membership", exc_info=True)
 
     @staticmethod
     def _record_join_step(
