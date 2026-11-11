@@ -862,7 +862,18 @@ export default function GroupScanInfoPage() {
         const kw = String(row.keyword || "").trim().toLowerCase();
         if (kw !== filterKeyword.trim().toLowerCase()) return false;
       }
-      if (filterNote !== "all" && row.note !== filterNote) return false;
+      if (filterNote !== "all") {
+        const n = String(row.note || "—").toLowerCase();
+        if (filterNote === "joined") {
+          if (n !== "joined" && !n.includes("đã tham gia")) return false;
+        } else if (filterNote === "pending") {
+          if (n !== "pending" && !n.includes("đang chờ")) return false;
+        } else if (filterNote === "not_joined") {
+          if (n !== "not_joined" && !n.includes("chưa vào")) return false;
+        } else if (filterNote === "none") {
+          if (n !== "—" && n !== "") return false;
+        }
+      }
       if (!q) return true;
       return `${row.name || ""} ${row.url || ""} ${row.keyword || ""}`.toLowerCase().includes(q);
     });
@@ -880,8 +891,8 @@ export default function GroupScanInfoPage() {
       const typeLabel = (t) => (t === "private" ? "Riêng tư" : "Công khai");
       const noteLabel = (n) => {
         if (n === "not_joined" || n === "Chưa vào nhóm") return "Chưa vào nhóm";
-        if (n === "joined") return "Đã tham gia";
-        if (n === "pending") return "Đang chờ QTV duyệt";
+        if (n === "joined" || n === "Đã tham gia") return "Đã tham gia";
+        if (n === "pending" || String(n).includes("Đang chờ")) return "Đang chờ QTV duyệt";
         return n && n !== "—" ? n : "";
       };
       const headers = ["STT", "Từ khóa", "Tên nhóm", "Loại nhóm", "Thành viên", "URL nhóm", "Ghi chú"];

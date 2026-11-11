@@ -32,6 +32,7 @@ const NOTE_FILTER_OPTIONS = [
   { value: "all", label: "Ghi chú: Tất cả" },
   { value: "joined", label: "Đã tham gia" },
   { value: "pending", label: "Đang chờ QTV duyệt" },
+  { value: "not_joined", label: "Chưa vào nhóm" },
   { value: "none", label: "Chưa có ghi chú" },
 ];
 

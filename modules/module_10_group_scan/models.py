@@ -25,6 +25,7 @@ DDL_STATEMENTS = [
         members_count INTEGER,
         keyword VARCHAR(255) NOT NULL,
         source_uid VARCHAR(50),
+        note VARCHAR(50) DEFAULT '—',
         first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -201,6 +202,13 @@ def init_models() -> None:
             db.execute(statement)
         except Exception as exc:
             print(f"[Module 10 DB] DDL error: {exc}")
+
+    # Đảm bảo cột note luôn tồn tại trong scanned_groups
+    try:
+        db.execute("ALTER TABLE scanned_groups ADD COLUMN IF NOT EXISTS note VARCHAR(50) DEFAULT '—';")
+    except Exception as exc:
+        print(f"[Module 10 DB] add note column error: {exc}")
+
     _normalize_existing_keywords()
     _sync_keywords_to_categories()
     print("[Module 10 DB] Schema scanned_groups / scanned_group_keywords / scanned_group_sessions ready.")
@@ -333,7 +341,7 @@ def list_groups_for_keywords(
             """
             SELECT g.group_id, g.group_url, g.group_name, g.privacy,
                    g.members_label, g.members_count, k.keyword, g.source_uid,
-                   g.last_seen_at
+                   g.last_seen_at, g.note
             FROM scanned_group_keywords k
             JOIN scanned_groups g
               ON g.owner_username = k.owner_username AND g.group_id = k.group_id
@@ -349,6 +357,9 @@ def list_groups_for_keywords(
                 continue
             href = normalize_group_url(row.get("group_url") or "")
             privacy = row.get("privacy") or "unknown"
+            note_val = row.get("note")
+            if not note_val or note_val == "—":
+                note_val = "not_joined" if privacy == "private" else "—"
             by_id[gid] = {
                 "id": href or gid,
                 "keyword": word,
@@ -358,7 +369,7 @@ def list_groups_for_keywords(
                 "members_count": row.get("members_count"),
                 "url": (href or "").replace("https://www.", "").replace("https://", ""),
                 "href": href,
-                "note": "not_joined" if privacy == "private" else "—",
+                "note": note_val,
             }
     return list(by_id.values())
 
@@ -406,7 +417,7 @@ def list_all_scanned_groups(
         f"""
         SELECT g.id, g.owner_username, g.group_id, g.group_url, g.group_name, g.privacy,
                g.members_label, g.members_count, g.keyword, g.source_uid,
-               g.created_at, g.last_seen_at,
+               g.created_at, g.last_seen_at, g.note,
                COALESCE(NULLIF(cg.category_name, ''), g.keyword, '') AS category_name,
                c.id as category_db_id
         FROM scanned_groups g
@@ -449,6 +460,9 @@ def list_all_scanned_groups(
         )
         cat_name = r.get("category_name") or r.get("keyword") or ""
         cat_db_id = r.get("category_db_id")
+        note_val = r.get("note")
+        if not note_val or note_val == "—":
+            note_val = "not_joined" if privacy_val == "private" else "—"
         out_groups.append({
             "id": str(r.get("id") or gid),
             "stt": idx,
@@ -464,7 +478,7 @@ def list_all_scanned_groups(
             "href": href or f"https://www.facebook.com/groups/{gid}",
             "source_uid": r.get("source_uid") or "",
             "created_at": created_str,
-            "note": "not_joined" if privacy_val == "private" else "—",
+            "note": note_val,
             "initialChecked": False,
         })
 
@@ -564,6 +578,9 @@ def upsert_scanned_group(
     except (TypeError, ValueError):
         members_count = None
     uid = (source_uid or group.get("source_uid") or "")[:50] or None
+    note_val = str(group.get("note") or "").strip()[:50]
+    if not note_val or note_val == "None":
+        note_val = "not_joined" if privacy == "private" else "—"
 
     existing = db.fetch_one(
         "SELECT id FROM scanned_groups WHERE owner_username = ? AND group_id = ?",
@@ -576,10 +593,10 @@ def upsert_scanned_group(
             """
             INSERT INTO scanned_groups (
                 owner_username, group_id, group_url, group_name, privacy,
-                members_label, members_count, keyword, source_uid
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                members_label, members_count, keyword, source_uid, note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (owner, gid, href, name, privacy, members_label, members_count, keyword, uid),
+            (owner, gid, href, name, privacy, members_label, members_count, keyword, uid, note_val),
         )
     else:
         db.execute(
@@ -591,6 +608,7 @@ def upsert_scanned_group(
                 members_label = COALESCE(?, members_label),
                 members_count = COALESCE(?, members_count),
                 source_uid = COALESCE(?, source_uid),
+                note = CASE WHEN ? != '—' AND ? != '' THEN ? ELSE note END,
                 last_seen_at = CURRENT_TIMESTAMP
             WHERE owner_username = ? AND group_id = ?
             """,
@@ -602,6 +620,9 @@ def upsert_scanned_group(
                 members_label,
                 members_count,
                 uid,
+                note_val,
+                note_val,
+                note_val,
                 owner,
                 gid,
             ),

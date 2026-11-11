@@ -59,12 +59,22 @@ RESULTS_ROOT_LOCATORS = [
 
 CLICK_JOIN_BUTTON_JS = """
 return ((targetUrl, targetName) => {
-  const isAlreadyJoined = (text) => {
-    return /^(đã tham gia|joined|joined group|đang chờ|requested|hủy yêu cầu|hủy lời mời|chờ phê duyệt|đang chờ duyệt|pending|cancel request)$/i.test((text || '').trim());
+  const isAlreadyJoined = (rawText) => {
+    const text = (rawText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!text) return false;
+    return (
+      /^(đã tham gia|joined|joined group|đang chờ|requested|hủy yêu cầu|hủy lời mời|chờ phê duyệt|đang chờ duyệt|pending|cancel request|truy cập|truy cập nhóm|visit|visit group|xem nhóm|view group)$/i.test(text) ||
+      /(đã tham gia|bạn đã tham gia|truy cập nhóm|visit group|đang chờ duyệt|yêu cầu tham gia đã gửi)/i.test(text)
+    );
   };
 
-  const isJoinText = (text) => {
-    return /^(join group|join|tham gia|tham gia nhóm)$/i.test((text || '').trim());
+  const isJoinText = (rawText) => {
+    const text = (rawText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!text) return false;
+    return (
+      /^(join group|join|tham gia|tham gia nhóm)$/i.test(text) ||
+      /(tham gia nhóm|join group)/i.test(text)
+    );
   };
 
   const clickElement = (el) => {
@@ -1097,7 +1107,7 @@ def _auto_join_group(driver, item: dict[str, Any], job_id: Optional[str] = None)
         if st == "already_joined":
             label = res.get("label", "Đã tham gia")
             _append_log(job_id, f"ℹ️ «{name}»: Tài khoản đã ở trạng thái [{label}].", "info")
-            if "chờ" in label.lower() or "request" in label.lower() or "pending" in label.lower():
+            if any(k in label.lower() for k in ["chờ", "request", "pending", "hủy"]):
                 return "pending"
             return "joined"
 
@@ -1669,7 +1679,7 @@ def _is_group_profile_url(url: str) -> bool:
 
 
 def _parse_member_count(raw: Any) -> Optional[int]:
-    """'463K' / '26K members' / '1.2M' / '1.234 thành viên' → int."""
+    """'463K' / '26N' / '1.2M' / '1,2 tr' / '1.234 thành viên' → int."""
     if raw is None:
         return None
     if isinstance(raw, (int, float)):
@@ -1678,29 +1688,52 @@ def _parse_member_count(raw: Any) -> Optional[int]:
     if not text or text == "—":
         return None
     m = re.search(
-        r"([\d.,]+)\s*([KkMmBb])?\s*(?:members?|thành viên|thanh vien)?",
+        r"([\d.,]+)\s*([KkMmBbNn]|tr|triệu|trieu|tỷ|ty)?\s*(?:members?|thành viên|thanh vien|người theo dõi)?",
         text,
         re.I,
     )
     if not m:
         digits = re.sub(r"[^\d]", "", text)
         return int(digits) if digits else None
-    num_s = m.group(1).replace(",", "").replace(" ", "")
-    # EU style 1.234.567 or 1,2
-    if num_s.count(".") > 1:
-        num_s = num_s.replace(".", "")
-    elif num_s.count(",") > 1:
-        num_s = num_s.replace(",", "")
-    elif "," in num_s and "." not in num_s:
-        # 1,2 → 1.2 (thập phân) hoặc 1,234 → bỏ phẩy nghìn
+
+    num_s = m.group(1).strip().replace(" ", "")
+    suffix = (m.group(2) or "").upper()
+
+    # Xử lý chuẩn xác dấu phân cách thập phân / hàng nghìn
+    if "." in num_s and "," in num_s:
+        if num_s.rfind(",") > num_s.rfind("."):
+            num_s = num_s.replace(".", "").replace(",", ".")
+        else:
+            num_s = num_s.replace(",", "")
+    elif "," in num_s:
         parts = num_s.split(",")
-        num_s = parts[0] + "." + parts[1] if len(parts) == 2 and len(parts[1]) <= 2 else num_s.replace(",", "")
+        if len(parts) == 2 and len(parts[1]) <= 2:
+            num_s = parts[0] + "." + parts[1]
+        else:
+            num_s = num_s.replace(",", "")
+    elif "." in num_s:
+        parts = num_s.split(".")
+        if len(parts) > 2:
+            num_s = num_s.replace(".", "")
+        elif len(parts) == 2 and len(parts[1]) == 3 and not suffix:
+            num_s = num_s.replace(".", "")
+
     try:
         value = float(num_s)
     except ValueError:
         return None
-    suffix = (m.group(2) or "").upper()
-    mult = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000}.get(suffix, 1)
+
+    mult = {
+        "K": 1_000,
+        "N": 1_000,
+        "M": 1_000_000,
+        "TR": 1_000_000,
+        "TRIỆU": 1_000_000,
+        "TRIEU": 1_000_000,
+        "B": 1_000_000_000,
+        "TỶ": 1_000_000_000,
+        "TY": 1_000_000_000,
+    }.get(suffix, 1)
     return int(value * mult)
 
 
@@ -1721,7 +1754,7 @@ def _parse_group_meta(meta: str) -> dict[str, Any]:
     members_label = "—"
     members_count: Optional[int] = None
     m = re.search(
-        r"([\d.,]+\s*[KkMmBb]?)\s*(?:members?|thành viên|thanh vien)",
+        r"([\d.,]+\s*(?:[KkMmBbNn]|tr|triệu|trieu|tỷ|ty)?)\s*(?:members?|thành viên|thanh vien|người theo dõi)",
         text,
         re.I,
     )
@@ -1760,6 +1793,8 @@ def _passes_filters(
         return False, f"bỏ (không private: {privacy})"
     if min_members is not None and min_members > 0:
         count = meta.get("members_count")
+        if count is None:
+            count = _parse_member_count(meta.get("members"))
         if count is None:
             return False, "bỏ (không đọc được số thành viên)"
         if count < min_members:
@@ -1857,6 +1892,8 @@ def _scrape_group_direct(
     source_uid: Optional[str] = None,
     known_group_ids: Optional[set[str]] = None,
     auto_join: bool = True,
+    delay_min: float = 0.0,
+    delay_max: float = 0.0,
 ) -> Optional[dict[str, Any]]:
     """Quét trực tiếp thông tin nhóm khi người dùng cung cấp link / file link.
     - Privacy: <div class="x9f619 x1n2onr6 x1ja2u2z x78zum5 xdt5ytf x2lah0s x193iq5w xeuugli x14vy60q xyiysdx x1120s5i x1nn3v0j">Public group</div>
@@ -2064,6 +2101,8 @@ def _scrape_groups_from_results(
     source_uid: Optional[str] = None,
     known_group_ids: Optional[set[str]] = None,
     auto_join: bool = True,
+    delay_min: float = 0.0,
+    delay_max: float = 0.0,
 ) -> list[dict[str, Any]]:
     from selenium.webdriver.common.by import By
 
@@ -2092,8 +2131,8 @@ def _scrape_groups_from_results(
       document.querySelector('[role="main"]');
     if (!root) return [];
     const byHref = new Map();
-    const metaRe = /(Public|Private|Công khai|Cong khai|Riêng tư|Rieng tu|Bí mật)\\s*[·•|]\\s*[\\d.,]+\\s*[KkMmBb]?\\s*(members?|thành viên|thanh vien)/i;
-    const softMetaRe = /[\\d.,]+\\s*[KkMmBb]?\\s*(members?|thành viên|thanh vien)/i;
+    const metaRe = /(Public|Private|Công khai|Cong khai|Riêng tư|Rieng tu|Bí mật)\\s*[·•|]\\s*[\\d.,]+\\s*(?:[KkMmBbNn]|tr|triệu|trieu)?\\s*(members?|thành viên|thanh vien|người theo dõi)/i;
+    const softMetaRe = /[\\d.,]+\\s*(?:[KkMmBbNn]|tr|triệu|trieu)?\\s*(members?|thành viên|thanh vien|người theo dõi)/i;
 
     const cleanName = (raw) => {
       let n = (raw || '').replace(/\\s+/g, ' ').trim();
@@ -2135,10 +2174,35 @@ def _scrape_groups_from_results(
       let name = cleanName(a.getAttribute('aria-label') || '');
       if (!name) name = cleanName(a.innerText || a.textContent || '');
       const meta = findMeta(a);
-      const prev = byHref.get(href) || { href, name: '', meta: '' };
-      // Ưu tiên tên thật (không rỗng), meta có members
+
+      // Nhận diện trạng thái nút trên card ngay lúc duyệt DOM
+      let cardState = '';
+      let card = a;
+      for (let depth = 0; depth < 10 && card && card !== root; depth++) {
+        const textElements = card.querySelectorAll ? card.querySelectorAll('div[role="button"], button, span') : [];
+        for (const el of textElements) {
+          const t = (el.innerText || el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+          if (/^(truy cập|truy cập nhóm|visit|visit group|đã tham gia|joined|view group)$/i.test(t) || /(đã tham gia|bạn đã tham gia|truy cập nhóm)/i.test(t)) {
+            cardState = 'joined';
+            break;
+          }
+          if (/^(đang chờ|đang chờ duyệt|hủy yêu cầu|pending|requested)$/i.test(t) || /(đang chờ|hủy yêu cầu)/i.test(t)) {
+            cardState = 'pending';
+            break;
+          }
+          if (/^(tham gia|tham gia nhóm|join|join group)$/i.test(t)) {
+            cardState = 'can_join';
+            break;
+          }
+        }
+        if (cardState) break;
+        card = card.parentElement;
+      }
+
+      const prev = byHref.get(href) || { href, name: '', meta: '', state: '' };
       if (name && (!prev.name || prev.name.length < name.length)) prev.name = name;
       if (meta && (!prev.meta || meta.length > prev.meta.length)) prev.meta = meta;
+      if (cardState && !prev.state) prev.state = cardState;
       byHref.set(href, prev);
     }
     return Array.from(byHref.values());
@@ -2196,8 +2260,14 @@ def _scrape_groups_from_results(
 
             members_label = _format_members_label(meta_info)
             privacy = meta_info.get("type") or "unknown"
-            # Private chưa join → ghi chú; Public không cần ghi chú đặc biệt
-            note = "not_joined" if privacy == "private" else "—"
+            state = row.get("state")
+            if state == "joined":
+                note = "joined"
+            elif state == "pending":
+                note = "pending"
+            else:
+                note = "not_joined" if privacy == "private" else "—"
+
             item = {
                 "id": url,
                 "keyword": keyword,
@@ -2212,9 +2282,16 @@ def _scrape_groups_from_results(
 
             # Tự động tham gia nhóm và trả lời câu hỏi nếu được kích hoạt
             if auto_join:
-                join_note = _auto_join_group(driver, item, job_id=job_id)
-                if join_note:
-                    item["note"] = join_note
+                if note == "joined":
+                    _append_log(job_id, f"ℹ️ «{name}»: Bạn đã là thành viên (Truy cập).", "info")
+                    item["note"] = "joined"
+                elif note == "pending":
+                    _append_log(job_id, f"ℹ️ «{name}»: Yêu cầu đang chờ QTV duyệt.", "info")
+                    item["note"] = "pending"
+                else:
+                    join_note = _auto_join_group(driver, item, job_id=job_id)
+                    if join_note:
+                        item["note"] = join_note
 
             # Lưu Supabase ngay — tránh mất khi tắt browser
             try:
@@ -2252,6 +2329,16 @@ def _scrape_groups_from_results(
             _update_keyword_stat(job_id, keyword, count=len(found), status="running")
             if len(found) >= limit:
                 break
+
+            # Khoảng cách giữa các lần quét: delay_min đến delay_max giây
+            if delay_max > 0:
+                wait_sec = random.uniform(delay_min, delay_max)
+                _append_log(job_id, f"⏳ Nghỉ {wait_sec:.1f}s trước khi quét nhóm tiếp theo…", "info")
+                end_time = time.time() + wait_sec
+                while time.time() < end_time:
+                    if _aborted():
+                        break
+                    time.sleep(min(0.5, max(0.0, end_time - time.time())))
 
         if len(found) >= limit:
             break
@@ -2453,6 +2540,21 @@ def _check_keywords_on_account(
         finally:
             db.close()
 
+        def _safe_login(d, target_uid, pwd, tfa, ck):
+            try:
+                res = ensure_logged_in(d, uid=target_uid, password=pwd, two_fa=tfa, cookie=ck)
+                if res.get("success"):
+                    return res
+            except Exception as exc:
+                _append_log(job_id, f"⚠️ [{target_uid}] Phản hồi khi xác thực: {exc}. Đang kiểm tra lại trạng thái phiên...", "warn")
+            try:
+                from modules.module_02_account_manager.automation.login_flow import _check_logged_in
+                if _check_logged_in(d):
+                    return {"success": True}
+            except Exception:
+                pass
+            return {"success": False, "error": "Không thể xác thực phiên đăng nhập Facebook"}
+
         _append_log(job_id, f"🌐 [{uid}] Đang mở Chrome (session Module 2)…", "info")
         driver = create_driver(
             uid,
@@ -2463,13 +2565,7 @@ def _check_keywords_on_account(
             verify_egress=False,
         )
 
-        login = ensure_logged_in(
-            driver,
-            uid=uid,
-            password=password,
-            two_fa=two_fa,
-            cookie=cookie,
-        )
+        login = _safe_login(driver, uid, password, two_fa, cookie)
         if not login.get("success"):
             msg = login.get("error") or "Không đăng nhập được Facebook"
             _append_log(job_id, f"❌ [{uid}] {msg}", "error")
@@ -2545,6 +2641,8 @@ def _check_keywords_on_account(
                         source_uid=uid,
                         known_group_ids=known_ids,
                         auto_join=auto_join,
+                        delay_min=delay_min,
+                        delay_max=delay_max,
                     )
                     groups = [group_item] if group_item else []
                 else:
@@ -2576,6 +2674,8 @@ def _check_keywords_on_account(
                         source_uid=uid,
                         known_group_ids=known_ids,
                         auto_join=auto_join,
+                        delay_min=delay_min,
+                        delay_max=delay_max,
                     )
                 from modules.module_10_group_scan.models import normalize_group_id as _ngid
 
@@ -2657,7 +2757,7 @@ def _check_keywords_on_account(
                                 acc_two_fa = decrypt_data(acc_obj.two_fa or "")
                                 _append_log(job_id, f"🌐 [{uid}] Mở Chrome cho tài khoản mới trong Bot Pool...", "info")
                                 driver = create_driver(uid, headless=False, detach=True, proxy=acc_proxy, scope="group-scan", verify_egress=False)
-                                login_res = ensure_logged_in(driver, uid=uid, password=acc_password, two_fa=acc_two_fa, cookie=acc_cookie)
+                                login_res = _safe_login(driver, uid, acc_password, acc_two_fa, acc_cookie)
                                 if login_res.get("success"):
                                     _append_log(job_id, f"✅ [{uid}] Đăng nhập thành công, tiếp tục thực thi các mục tiêu tiếp theo.", "success")
                                     last_switched_count = len(all_groups)

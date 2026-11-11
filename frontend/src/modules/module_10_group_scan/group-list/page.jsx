@@ -216,10 +216,16 @@ export default function GroupScanListPage() {
 
       // 4. Filter Ghi chú
       if (noteFilter !== "all") {
-        const note = g.note || "—";
-        if (noteFilter === "joined" && !note.includes("Đã tham gia")) return false;
-        if (noteFilter === "pending" && !note.includes("Đang chờ")) return false;
-        if (noteFilter === "none" && note !== "—") return false;
+        const note = (g.note || "—").toLowerCase();
+        if (noteFilter === "joined") {
+          if (!note.includes("đã tham gia") && note !== "joined") return false;
+        } else if (noteFilter === "pending") {
+          if (!note.includes("đang chờ") && note !== "pending") return false;
+        } else if (noteFilter === "not_joined") {
+          if (!note.includes("chưa vào") && note !== "not_joined") return false;
+        } else if (noteFilter === "none") {
+          if (note !== "—" && note !== "") return false;
+        }
       }
 
       return true;
@@ -390,6 +396,13 @@ export default function GroupScanListPage() {
     }
     try {
       const typeLabel = (t) => (t === "private" ? "Riêng tư" : "Công khai");
+      const noteLabel = (n) => {
+        if (!n || n === "—") return "—";
+        if (n === "joined" || n === "Đã tham gia") return "Đã tham gia";
+        if (n === "pending" || String(n).includes("Đang chờ")) return "Đang chờ QTV duyệt";
+        if (n === "not_joined" || n === "Chưa vào nhóm") return "Chưa vào nhóm";
+        return n;
+      };
       const headers = ["STT", "Từ khóa", "Tên nhóm", "Loại nhóm", "Thành viên", "URL nhóm", "Ghi chú"];
       const dataRows = rows.map((g, index) => [
         index + 1,
@@ -398,7 +411,7 @@ export default function GroupScanListPage() {
         typeLabel(g.type),
         g.members || "",
         g.url || g.href || "",
-        g.note || "",
+        noteLabel(g.note),
       ]);
 
       const now = new Date();
