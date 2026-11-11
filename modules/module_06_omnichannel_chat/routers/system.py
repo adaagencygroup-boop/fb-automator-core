@@ -99,45 +99,35 @@ def reset_database(
                 detail="Phi\u00ean \u0111\u0103ng nh\u1eadp \u0111\u00e3 h\u1ebft h\u1ea1n. Vui l\u00f2ng \u0111\u0103ng nh\u1eadp l\u1ea1i \u0111\u1ec3 th\u1ef1c hi\u1ec7n x\u00f3a d\u1eef li\u1ec7u."
             )
 
-        # 2. Xoa tin nhan, thong bao theo page_ids (LƯU Ý: Giữ lại bản sao nhãn & đánh dấu sao của hội thoại)
-        # Người dùng gắn nhãn (tags) hoặc đánh dấu sao (is_starred) thuộc về cấu hình quản lý nội bộ,
-        # khi "Reset dữ liệu" chỉ đồng bộ lại tin nhắn/thông báo từ Facebook chứ KHÔNG được làm mất nhãn và dấu sao.
-        saved_conv_meta = {}
+        # 2. Xóa tin nhắn, thông báo, Page theo page_ids.
+        # LƯU Ý QUAN TRỌNG VỀ NHÃN & ĐÁNH DẤU SAO:
+        # Nhãn (tags), đánh dấu sao (is_starred) và nhân viên phân công (assigned_user_id) là dữ liệu
+        # quản lý nội bộ trên hệ thống, Facebook không hề lưu các thông tin này.
+        # Vì vậy khi "Reset dữ liệu", chúng ta TUYỆT ĐỐI KHÔNG xoá Conversation có tags hoặc is_starred!
+        # Với các hội thoại có tags/star, ta chỉ xoá tin nhắn (Message) và reset preview last_message để chờ đồng bộ lại,
+        # chỉ xóa hẳn những Conversation rác không có nhãn/sao.
         if page_ids:
-            try:
-                existing_convs = db.query(Conversation).filter(Conversation.page_id.in_(page_ids)).all()
-                for c in existing_convs:
-                    if c.is_starred or c.tags or c.assigned_user_id:
-                        saved_conv_meta[(str(c.page_id), str(c.customer_psid))] = {
-                            "is_starred": bool(c.is_starred),
-                            "tags": c.tags or None,
-                            "assigned_user_id": c.assigned_user_id,
-                        }
-            except Exception as e:
-                print(f"[Reset Warning] Could not backup conversation tags/stars: {e}")
-
+            # Xoá tin nhắn và thông báo
             db.query(Message).filter(Message.page_id.in_(page_ids)).delete(synchronize_session=False)
             db.query(Notification).filter(Notification.page_id.in_(page_ids)).delete(synchronize_session=False)
-            db.query(Conversation).filter(Conversation.page_id.in_(page_ids)).delete(synchronize_session=False)
-            db.query(Page).filter(Page.page_id.in_(page_ids)).delete(synchronize_session=False)
 
-        # Khôi phục lại bản ghi Conversation cơ bản với nhãn và sao (để khi sync hội thoại về sẽ không bị mất)
-        if saved_conv_meta:
-            try:
-                for (pid, psid), meta in saved_conv_meta.items():
-                    db.add(Conversation(
-                        page_id=pid,
-                        customer_psid=psid,
-                        is_starred=meta.get("is_starred", False),
-                        tags=meta.get("tags"),
-                        assigned_user_id=meta.get("assigned_user_id"),
-                        last_message="",
-                        last_message_at=datetime.utcnow(),
-                    ))
-                db.commit()
-            except Exception as restore_err:
-                db.rollback()
-                print(f"[Reset Warning] Could not restore conversation tags/stars: {restore_err}")
+            # Xoá các Conversation không gắn sao, không gắn nhãn
+            db.query(Conversation).filter(
+                Conversation.page_id.in_(page_ids),
+                Conversation.is_starred == False,
+                or_(Conversation.tags == None, Conversation.tags == "")
+            ).delete(synchronize_session=False)
+
+            # Với các Conversation có nhãn hoặc có gắn sao: GIỮ NGUYÊN bản ghi, chỉ xóa preview tạm để đồng bộ lại
+            db.query(Conversation).filter(
+                Conversation.page_id.in_(page_ids)
+            ).update(
+                {Conversation.last_message: ""},
+                synchronize_session=False
+            )
+
+            # Xoá bảng Page để đồng bộ mới lại
+            db.query(Page).filter(Page.page_id.in_(page_ids)).delete(synchronize_session=False)
 
         # 3. Xoa theo fb_user_ids
         if fb_user_ids:
