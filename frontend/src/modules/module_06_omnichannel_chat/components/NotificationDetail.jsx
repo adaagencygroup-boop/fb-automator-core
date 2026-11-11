@@ -288,8 +288,8 @@ function Composer({ pageName, page, disabled, onSubmit, replyTarget, onCancelRep
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [imagePreview, setImagePreview] = useState(null);
-  const [imageUrl, setImageUrl] = useState(null);
+  const [mediaPreview, setMediaPreview] = useState(null); // { url, type: 'image' | 'video', name }
+  const [mediaUrl, setMediaUrl] = useState(null);
   const [uploadError, setUploadError] = useState("");
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -323,49 +323,54 @@ function Composer({ pageName, page, disabled, onSubmit, replyTarget, onCancelRep
     e.target.value = "";
     if (!file) return;
 
+    const isVid = file.type.startsWith("video/");
     // Hiển thị preview ngay lập tức
     const blobUrl = URL.createObjectURL(file);
-    setImagePreview(blobUrl);
-    setImageUrl(null);
+    setMediaPreview({
+      url: blobUrl,
+      type: isVid ? "video" : "image",
+      name: file.name,
+    });
+    setMediaUrl(null);
     setUploadError("");
     setUploading(true);
 
     try {
       const uploadedUrl = await uploadMedia(file);
       if (uploadedUrl) {
-        setImageUrl(uploadedUrl);
+        setMediaUrl(uploadedUrl);
       } else {
-        throw new Error("Không nhận được URL ảnh sau khi tải.");
+        throw new Error("Không nhận được URL sau khi tải lên.");
       }
     } catch (err) {
-      setUploadError(err?.message || "Tải ảnh thất bại.");
-      setImagePreview(null);
-      setImageUrl(null);
+      setUploadError(err?.message || "Tải tệp đính kèm thất bại.");
+      setMediaPreview(null);
+      setMediaUrl(null);
     } finally {
       setUploading(false);
     }
   };
 
-  const removeImage = () => {
-    setImagePreview(null);
-    setImageUrl(null);
+  const removeMedia = () => {
+    setMediaPreview(null);
+    setMediaUrl(null);
     setUploadError("");
   };
 
   const submit = async () => {
     const value = text.trim();
-    if ((!value && !imageUrl) || busy || disabled || uploading) return;
+    if ((!value && !mediaUrl) || busy || disabled || uploading) return;
     setBusy(true);
     try {
-      await onSubmit(value, imageUrl);
+      await onSubmit(value, mediaUrl);
       setText("");
-      removeImage();
+      removeMedia();
     } finally {
       setBusy(false);
     }
   };
 
-  const canSubmit = !disabled && !busy && !uploading && (Boolean(text.trim()) || Boolean(imageUrl));
+  const canSubmit = !disabled && !busy && !uploading && (Boolean(text.trim()) || Boolean(mediaUrl));
 
   const placeholderText = replyTarget
     ? `Trả lời ${replyTarget.name || "người dùng"} dưới tên ${pageName || "Page"}...`
@@ -397,14 +402,26 @@ function Composer({ pageName, page, disabled, onSubmit, replyTarget, onCancelRep
       )}
 
       <div className="p-3">
-        {/* Xem trước ảnh đính kèm nếu có */}
-        {imagePreview && (
+        {/* Xem trước ảnh/video đính kèm nếu có */}
+        {mediaPreview && (
           <div className="relative mb-2 inline-flex items-center self-start rounded-lg border border-slate-200 bg-slate-50 p-1.5">
-            <img
-              src={imagePreview}
-              alt="Đính kèm"
-              className="h-16 w-16 rounded-md object-cover"
-            />
+            {mediaPreview.type === "video" ? (
+              <video
+                src={mediaPreview.url}
+                className="h-16 w-16 rounded-md object-cover bg-black"
+                muted
+                autoPlay
+                loop
+                playsInline
+              />
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={mediaPreview.url}
+                alt="Đính kèm"
+                className="h-16 w-16 rounded-md object-cover"
+              />
+            )}
             {uploading && (
               <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/40">
                 <Loader2 className="size-5 animate-spin text-white" />
@@ -412,9 +429,9 @@ function Composer({ pageName, page, disabled, onSubmit, replyTarget, onCancelRep
             )}
             <button
               type="button"
-              onClick={removeImage}
+              onClick={removeMedia}
               disabled={busy}
-              aria-label="Xoá ảnh"
+              aria-label="Xoá tệp đính kèm"
               className="absolute -top-2 -right-2 flex size-5 items-center justify-center rounded-full bg-slate-700 text-white shadow hover:bg-slate-900"
             >
               <X className="size-3" />
@@ -469,7 +486,8 @@ function Composer({ pageName, page, disabled, onSubmit, replyTarget, onCancelRep
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={busy || uploading}
-              aria-label="Thêm ảnh"
+              aria-label="Thêm ảnh hoặc video"
+              title="Thêm ảnh hoặc video đính kèm"
               className={cn(
                 "shrink-0 size-7 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-600 disabled:opacity-50",
                 FOCUS
@@ -480,7 +498,7 @@ function Composer({ pageName, page, disabled, onSubmit, replyTarget, onCancelRep
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,video/*"
               hidden
               onChange={handleFileChange}
             />
@@ -706,7 +724,14 @@ function InternalPostView({ post, page, pageName, postId, onReload, sort, onSort
       const targetId = replyTarget?.id || postId;
       await replyToComment(targetId, postPageId, text, attachmentUrl);
       setReplyTarget(null);
+      // Nạp lại danh sách bình luận ngay lập tức
       onReload?.();
+      // Nếu gửi tệp/video: Facebook cần vài giây để mã hoá (render/encode) video.
+      // Tự động kích hoạt thêm 2 đợt refresh sau 2.5s và 5s để tự cập nhật player phát video mà không cần người dùng phải bấm F5 tải lại trang.
+      if (attachmentUrl) {
+        setTimeout(() => onReload?.(), 2500);
+        setTimeout(() => onReload?.(), 5000);
+      }
     } catch {
       /* lỗi gửi — giữ nguyên */
     }
@@ -863,7 +888,8 @@ export default function NotificationDetail({ notification, page, pageName, onBac
   useEffect(() => {
     if (!needFetch) return undefined;
     let alive = true;
-    getPostDetails(postId, pageId, sort)
+    // Luôn lấy dữ liệu mới nhất (fresh: true) để không bị giữ cache bài viết cũ khi có bình luận mới
+    getPostDetails(postId, pageId, sort, { fresh: true })
       .then((data) => {
         if (alive) setFetched({ forId: postId, forKey: fetchKey, post: data || {}, error: "" });
       })
@@ -881,6 +907,22 @@ export default function NotificationDetail({ notification, page, pageName, onBac
       alive = false;
     };
   }, [needFetch, postId, pageId, sort, fetchKey]);
+
+  // Tự động làm mới chi tiết bài viết khi có thông báo bình luận mới đến cho chính bài viết này
+  useEffect(() => {
+    const handleCommentUpdate = (e) => {
+      const incoming = e.detail;
+      if (!incoming) return;
+      const incomingPostId = incoming.post_id || incoming.postId;
+      if (incomingPostId && (incomingPostId === postId || String(postId).endsWith(String(incomingPostId)))) {
+        reload();
+      }
+    };
+    window.addEventListener("fb_new_notification", handleCommentUpdate);
+    return () => {
+      window.removeEventListener("fb_new_notification", handleCommentUpdate);
+    };
+  }, [postId]);
 
   const reload = () => setReloadKey((k) => k + 1);
   // Khung xương cả trang chỉ khi đổi bài; đổi thứ tự thì giữ bài, chỉ mờ danh sách

@@ -445,6 +445,9 @@ export default function OmnichannelChatModule() {
             } else if (payload.type === "notification" && payload.data) {
               const incomingNotif = mapNotification(payload.data);
 
+              // Phát CustomEvent fb_new_notification để NotificationDetail tự động tải lại nếu đang mở bài viết này
+              window.dispatchEvent(new CustomEvent("fb_new_notification", { detail: payload.data }));
+
               // Danh sách giờ là kết quả lọc của Backend, nên chỉ chèn vào khi cái
               // vừa tới đúng là thứ đang xem — không thì thông báo của Page khác
               // sẽ nhảy vào giữa danh sách đã lọc.
@@ -762,19 +765,54 @@ export default function OmnichannelChatModule() {
       .catch(() => patchMessage(conversationId, message.id, { status: "failed" }));
   };
 
-  const handleSend = (conversationId, { text, attachment, replyTo }) => {
+  const handleSend = (conversationId, { text, attachment, attachments, replyTo }) => {
+    // Nếu có danh sách nhiều đính kèm
+    const attList = attachments && attachments.length > 0 ? attachments : attachment ? [attachment] : [];
+
+    if (attList.length > 0) {
+      attList.forEach((att, index) => {
+        // Chỉ đính kèm nội dung văn bản ở tin nhắn đầu tiên (nếu có nhập text)
+        const msgText = index === 0 ? text || "" : "";
+        const message = {
+          id: `local-${Date.now()}-${index}`,
+          direction: "out",
+          text: msgText,
+          attachment: att,
+          replyTo: index === 0 ? replyTo : undefined,
+          createdAt: new Date(Date.now() + index * 50).toISOString(),
+          status: isMock ? undefined : "sending",
+        };
+        setThread(conversationId, (list) => [...list, message]);
+        const preview = msgText || attachmentLabel(att?.type);
+        updateConversation(conversationId, {
+          replied: true,
+          unread: false,
+          lastMessage: `Bạn: ${preview}`,
+          updatedAt: message.createdAt,
+        });
+        deliver(conversationId, message);
+      });
+      return;
+    }
+
+    // Trường hợp chỉ có văn bản (không đính kèm)
     const message = {
       id: `local-${Date.now()}`,
       direction: "out",
       text,
-      attachment,
+      attachment: undefined,
       replyTo,
       createdAt: new Date().toISOString(),
       status: isMock ? undefined : "sending",
     };
     setThread(conversationId, (list) => [...list, message]);
-    const preview = text || attachmentLabel(attachment?.type);
-    updateConversation(conversationId, { replied: true, unread: false, lastMessage: `Bạn: ${preview}`, updatedAt: message.createdAt });
+    const preview = text || "";
+    updateConversation(conversationId, {
+      replied: true,
+      unread: false,
+      lastMessage: `Bạn: ${preview}`,
+      updatedAt: message.createdAt,
+    });
     deliver(conversationId, message);
   };
 
