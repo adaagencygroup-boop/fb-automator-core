@@ -417,6 +417,31 @@ export default function OmnichannelChatModule() {
             } else if (payload.type === "comment_reaction" && payload.data) {
               // Bắn CustomEvent lên window để NotificationDetail / CommentThread bắt được realtime
               window.dispatchEvent(new CustomEvent("fb_comment_reaction", { detail: payload.data }));
+            } else if (payload.type === "notification_remove" && payload.data) {
+              const { id, page_id: pid, was_unread, notification_type } = payload.data;
+              setNotifications((prev) => prev.filter((n) => String(n.id) !== String(id) && String(n.rawId) !== String(id)));
+              if (was_unread) {
+                const typeKey = notification_type || "reaction";
+                setNotifMeta((m) => {
+                  const currentTotal = typeof m.total === "number" ? m.total : 0;
+                  const currentUnread = (m.unreadCounts && m.unreadCounts[typeKey]) || 0;
+                  const currentPageUnread = (m.pageUnread && m.pageUnread[String(pid)]) || 0;
+                  return {
+                    ...m,
+                    total: Math.max(0, currentTotal - 1),
+                    unreadCounts: {
+                      ...m.unreadCounts,
+                      [typeKey]: Math.max(0, currentUnread - 1),
+                    },
+                    pageUnread: pid
+                      ? {
+                          ...m.pageUnread,
+                          [String(pid)]: Math.max(0, currentPageUnread - 1),
+                        }
+                      : m.pageUnread,
+                  };
+                });
+              }
             } else if (payload.type === "notification" && payload.data) {
               const incomingNotif = mapNotification(payload.data);
 
