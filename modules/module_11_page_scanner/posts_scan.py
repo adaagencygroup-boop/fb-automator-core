@@ -644,6 +644,9 @@ def run_post_scan_flow(
 
             known = existing_post_keys(owner_key, page_key) if skip_existing else set()
             pinned_seen: Set[str] = set()
+            page_seen: Set[str] = set()
+            known_passed = 0
+            known_logged = 0
             page_got = 0
             last_new_at = time.time()
             stagnant = 0
@@ -661,11 +664,19 @@ def run_post_scan_flow(
 
                 batch = extract_posts_batch(driver)
                 new_items = []
+                fresh_known = 0  # bài đã có trong kho, LẦN ĐẦU hiện ra ở lượt quét Page này, trong khoảng ngày
                 for item in batch:
                     total_seen += 1
                     pk = item["post_key"]
+                    first_seen_on_page = pk not in page_seen
+                    page_seen.add(pk)
                     if pk in session_keys or pk in known:
                         total_dup += 1
+                        in_range = not item.get("published_at") or date_in_range(
+                            item["published_at"], date_from, date_to
+                        )
+                        if first_seen_on_page and in_range:
+                            fresh_known += 1
                         continue
                     if skip_pinned_posts and item.get("is_pinned"):
                         if pk not in pinned_seen:
@@ -706,6 +717,20 @@ def run_post_scan_flow(
                         f"{page_key}: +{len(new_items)} posts (ins={ins}/upd={upd}) · page={page_got}",
                         "success",
                     )
+                elif fresh_known:
+                    # Quét lại (skip_existing): feed vẫn đang cuộn qua bài đã có trong kho
+                    # → coi là tiến triển để đi tiếp tới bài cũ hơn chưa quét.
+                    # Bài ngoài khoảng ngày KHÔNG tính → vẫn dừng sớm khi đã qua mốc ngày.
+                    known_passed += fresh_known
+                    last_new_at = time.time()
+                    stagnant = 0
+                    if known_passed - known_logged >= 50:
+                        known_logged = known_passed
+                        append_session_log(
+                            session_id,
+                            f"{page_key}: đã đi qua {known_passed} bài có sẵn trong kho — tiếp tục tìm bài mới",
+                            "info",
+                        )
                 else:
                     stagnant += 1
 

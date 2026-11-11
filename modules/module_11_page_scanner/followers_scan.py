@@ -1024,6 +1024,9 @@ def run_follower_scan_flow(
             )
 
             page_got = 0
+            page_seen: Set[str] = set()
+            known_passed = 0
+            known_logged = 0
             last_new_at = time.time()
             idle_timeout_s = max(5.0, float(idle_timeout_s))
             stagnant = 0
@@ -1059,12 +1062,17 @@ def run_follower_scan_flow(
 
                 new_items = []
                 dup_this = 0
+                fresh_known = 0  # UID đã có trong kho nhưng LẦN ĐẦU hiện ra ở lượt quét Page này
                 for item in batch_items:
                     fk = item["follower_key"]
                     total_seen += 1
+                    first_seen_on_page = fk not in page_seen
+                    page_seen.add(fk)
                     if fk in session_keys or fk in known:
                         total_dup += 1
                         dup_this += 1
+                        if first_seen_on_page:
+                            fresh_known += 1
                         continue
                     new_items.append(item)
                     session_keys.add(fk)
@@ -1092,6 +1100,22 @@ def run_follower_scan_flow(
                         ),
                         "success",
                     )
+                elif fresh_known:
+                    # Quét lại (skip_existing): danh sách vẫn đang cuộn qua UID đã có trong kho
+                    # → coi là tiến triển để đi tiếp tới UID mới phía dưới, không dừng "all_duplicates".
+                    known_passed += fresh_known
+                    last_new_at = time.time()
+                    stagnant = 0
+                    empty_streak = 0
+                    dup_streak = 0
+                    scroll_stuck_streak = 0
+                    if known_passed - known_logged >= 100:
+                        known_logged = known_passed
+                        append_session_log(
+                            session_id,
+                            f"{page_key}: đã đi qua {known_passed} UID có sẵn trong kho — tiếp tục tìm UID mới",
+                            "info",
+                        )
                 else:
                     stagnant += 1
                     if raw_count == 0:
