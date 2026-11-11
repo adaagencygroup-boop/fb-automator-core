@@ -1,6 +1,47 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pageWindow, parseJsonField } from "../src/modules/module_11_page_scanner/utils.mjs";
+import {
+  filterScanResults,
+  pageWindow,
+  parseJsonField,
+  toCsv,
+} from "../src/modules/module_11_page_scanner/utils.mjs";
+
+const pagesFixture = Array.from({ length: 450 }, (_, i) => ({
+  page_key: `user:p${i}`,
+  page_name: `Page ${i}`,
+  follower_count: 450 - i, // đã sắp xếp giảm dần
+  source_keyword: i % 2 ? "#mypham" : "#thoitrang",
+  phone: i === 7 ? "0988 123 456" : "",
+}));
+
+test("filterScanResults returns the FULL filtered list, not one table page", () => {
+  const { pool, aboveMin, filtered } = filterScanResults(pagesFixture, {});
+  assert.equal(pool, 450);
+  assert.equal(aboveMin, 450);
+  assert.equal(filtered.length, 450); // > 200: không còn bị cắt ở 200 / phiên
+});
+
+test("filterScanResults applies follower range, search, keyword, order and top N", () => {
+  const r = filterScanResults(pagesFixture, {
+    minFollowersEnabled: true,
+    minFollowers: 100,
+    maxFollowers: 300,
+    filterKeyword: "#mypham",
+  });
+  assert.equal(r.aboveMin, 201); // follower 100..300
+  assert.ok(r.filtered.every((p) => p.follower_count >= 100 && p.follower_count <= 300));
+  assert.ok(r.filtered.every((p) => p.source_keyword === "#mypham"));
+
+  assert.deepEqual(filterScanResults(pagesFixture, { resultSearch: "0988" }).filtered.map((p) => p.page_key), ["user:p7"]);
+  assert.equal(filterScanResults(pagesFixture, { sortDir: "asc" }).filtered[0].page_key, "user:p449");
+  assert.equal(filterScanResults(pagesFixture, { topN: "10" }).filtered.length, 10);
+  assert.equal(filterScanResults(pagesFixture, { topN: "" }).filtered.length, 450);
+});
+
+test("toCsv quotes every cell and escapes quotes", () => {
+  assert.equal(toCsv(["A", "B"], [[1, 'say "hi"'], [null, "x,y"]]), '"A","B"\n"1","say ""hi"""\n"","x,y"');
+});
 
 test("pageWindow follows the design: 1 2 3 … N, window around current page", () => {
   assert.deepEqual(pageWindow(1, 1), [1]);
