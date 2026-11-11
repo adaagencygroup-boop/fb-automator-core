@@ -54,7 +54,12 @@ function writeSaved(key, value) {
 // farm_settings (theo máy) -> các ô giới hạn mỗi ngày
 function settingsToConfig(settings) {
   const out = {};
-  if (settings?.farm_daily_limit_enabled != null) out.daily_limit_enabled = settings.farm_daily_limit_enabled === "1";
+  // Bản cũ chỉ có 1 công tắc chung (farm_daily_limit_enabled): máy chưa lưu công tắc riêng thì lấy theo công tắc chung
+  const shared = settings?.farm_daily_limit_enabled;
+  for (const [field, key] of [["daily_friend_limit_enabled", "farm_daily_friend_limit_enabled"], ["daily_group_limit_enabled", "farm_daily_group_limit_enabled"]]) {
+    const value = settings?.[key] ?? shared;
+    if (value != null) out[field] = value === "1";
+  }
   if (settings?.farm_daily_friend_limit) out.daily_friend_limit = String(settings.farm_daily_friend_limit);
   if (settings?.farm_daily_group_limit) out.daily_group_limit = String(settings.farm_daily_group_limit);
   return out;
@@ -176,8 +181,12 @@ export default function FarmEngage() {
     const zeroRange = rangeError(config);
     if (zeroRange) return zeroRange;
     const groupList = config.group_source === "list";
-    if (config.enabled_join_groups && !groupList && config.group_keyword.trim().length > GROUP_KEYWORD_MAX_LEN) {
+    const byKeyword = config.group_source === "keyword";
+    if (config.enabled_join_groups && byKeyword && config.group_keyword.trim().length > GROUP_KEYWORD_MAX_LEN) {
       return `Từ khóa tham gia nhóm không được quá ${GROUP_KEYWORD_MAX_LEN} ký tự.`;
+    }
+    if (config.enabled_join_groups && byKeyword && !config.group_keyword.split(",").some((w) => w.trim())) {
+      return "Vui lòng nhập từ khóa tham gia nhóm, hoặc chọn Theo đề xuất để tham gia nhóm Facebook đề xuất.";
     }
     const listError = (config.enabled_join_groups && groupList && linkListError(config.group_links, "group"))
       || (config.enabled_add_friends && config.friend_source === "list" && linkListError(config.friend_links, "friend"));
@@ -214,7 +223,8 @@ export default function FarmEngage() {
     try {
       // Giới hạn mỗi ngày là cấu hình theo máy: lưu lại để lần sau / máy khác mở ra thấy đúng
       await Promise.all([
-        saveFarmSetting("farm_daily_limit_enabled", payload.daily_limit_enabled ? 1 : 0),
+        saveFarmSetting("farm_daily_friend_limit_enabled", payload.daily_friend_limit_enabled ? 1 : 0),
+        saveFarmSetting("farm_daily_group_limit_enabled", payload.daily_group_limit_enabled ? 1 : 0),
         saveFarmSetting("farm_daily_friend_limit", Math.min(100, Math.max(1, payload.daily_friend_limit))),
         saveFarmSetting("farm_daily_group_limit", Math.min(100, Math.max(1, payload.daily_group_limit))),
       ]).catch((err) => toast.warning(`Không lưu được giới hạn mỗi ngày: ${err.message}`));
