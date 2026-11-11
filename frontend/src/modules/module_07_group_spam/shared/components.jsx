@@ -12,8 +12,8 @@ export function SectionCard({ number, title, description, aside, children, class
             </span>
           )}
           <div className="min-w-0">
-            <h3 className="font-heading text-sm font-bold leading-5 text-slate-800">{title}</h3>
-            {description && <p className="mt-0.5 text-[11px] leading-4 text-slate-400">{description}</p>}
+            <h3 className="font-heading text-base font-bold leading-5 text-slate-800 uppercase">{title}</h3>
+            {description && <p className="mt-0.5 text-xs leading-4 text-slate-400">{description}</p>}
           </div>
         </div>
         {aside}
@@ -26,7 +26,7 @@ export function SectionCard({ number, title, description, aside, children, class
 export function Field({ label, required = false, children, className = "" }) {
   return (
     <div className={`block space-y-1.5 ${className}`}>
-      <span className="block text-[11px] font-semibold text-slate-600">
+      <span className="block text-sm font-semibold text-slate-600">
         {label} {required && <span className="text-slate-400">(bắt buộc)</span>}
       </span>
       {children}
@@ -50,7 +50,7 @@ export function SelectField({ value, onChange, children, className = "", disable
 
 export function CheckLabel({ checked, onCheckedChange, children }) {
   return (
-    <label className="flex cursor-pointer items-center gap-2 text-[11px] font-medium text-slate-700">
+    <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-slate-700">
       <Checkbox checked={checked} onCheckedChange={onCheckedChange} />
       {children}
     </label>

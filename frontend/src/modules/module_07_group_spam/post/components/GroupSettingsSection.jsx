@@ -23,6 +23,7 @@ export default function GroupSettingsSection({
       number={stepNumber}
       title="Cấu hình API & thông số chung"
       description="Chọn API đã cấu hình trong Hồ sơ cá nhân để tạo nội dung và số luồng xử lý song song."
+      className="relative z-20 !overflow-visible"
     >
       <div className="grid gap-3 lg:grid-cols-2">
         {/* Cột 1: Cấu hình Mô hình & API AI */}
@@ -33,8 +34,8 @@ export default function GroupSettingsSection({
                 <Sparkles className="size-4" />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-semibold text-slate-700">Mô hình & API AI</p>
-                <p className="text-[10px] text-slate-400">Chọn API để tự động sinh nội dung bài viết và bình luận</p>
+                <p className="text-base font-semibold text-slate-700">Mô hìn và API AI</p>
+                <p className="text-xs text-slate-400">Chọn API để tự động sinh nội dung bài viết và bình luận</p>
               </div>
             </div>
             <SavedApiSelector source={apiSource} disabled={busy} showActions={false} />
@@ -46,16 +47,16 @@ export default function GroupSettingsSection({
           <div>
             <div className="mb-3 flex items-center gap-2">
               <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-primary">
-                <Layers className="size-4" />
+                <Layers size={16} />
               </span>
               <div className="min-w-0">
-                <p className="text-xs font-semibold text-slate-700">Luồng chạy song song</p>
-                <p className="text-[10px] text-slate-400">Số tài khoản Chrome vận hành đồng thời</p>
+                <p className="text-base font-semibold text-slate-700">Luồng chạy song song</p>
+                <p className="text-xs text-slate-400">Số tài khoản Chrome vận hành đồng thời</p>
               </div>
             </div>
 
             <div className="space-y-3">
-              <Field label={`Số luồng (1 - ${maxThreads})`}>
+              <Field label={`Số luồng (${maxThreads})`}>
                 <Input
                   type="number"
                   min="1"

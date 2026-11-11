@@ -131,28 +131,16 @@ export default function GroupAccountSection({
         <Button
           type="button"
           variant="outline"
-          size="sm"
           onClick={handleSelectAll}
           className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Check className="mr-1.5 size-3.5" /> Chọn tất cả
         </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          disabled={accountsLoading}
-          className="size-8 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-          title="Đồng bộ danh sách từ Module 2"
-          onClick={handleRefresh}
-        >
-          <RefreshCw className={`size-3.5 ${accountsLoading ? "animate-spin text-primary" : ""}`} />
-        </Button>
       </div>
 
       <div className="overflow-hidden rounded-lg border border-slate-200">
         <div ref={tableContainerRef} className="max-h-[360px] overflow-auto select-none">
-          <table className="w-full min-w-[650px] text-left text-[11px] select-none">
+          <table className="w-full min-w-[650px] text-left text-xs select-none">
             <thead className="sticky top-0 z-10 bg-slate-50 text-slate-500 shadow-xs">
               <tr className="border-b border-slate-200">
                 <th className="w-12 px-4 py-3">
@@ -182,9 +170,8 @@ export default function GroupAccountSection({
                     key={account.key}
                     data-account-key={account.key}
                     onClick={(e) => eligible && handleRowClick(account.key, e)}
-                    className={`${eligible ? "cursor-pointer" : "cursor-not-allowed opacity-50"} transition-colors select-none ${
-                      selected ? "bg-blue-50/70 hover:bg-blue-100/60" : "bg-white hover:bg-slate-50"
-                    }`}
+                    className={`${eligible ? "cursor-pointer" : "cursor-not-allowed opacity-50"} transition-colors select-none ${selected ? "bg-blue-50/70 hover:bg-blue-100/60" : "bg-white hover:bg-slate-50"
+                      }`}
                   >
                     <td className="px-4 py-2.5">
                       <Checkbox
@@ -204,8 +191,8 @@ export default function GroupAccountSection({
                           </AvatarFallback>
                         </Avatar>
                         <div>
-                          <p className="font-semibold text-slate-700">{account.name}</p>
-                          <p className="text-[10px] text-slate-400">
+                          <p className="font-semibold text-slate-700 text-sm">{account.name}</p>
+                          <p className="text-xs text-slate-400">
                             {account.email || "Chưa có email"}
                           </p>
                         </div>
@@ -274,21 +261,21 @@ export default function GroupAccountSection({
       </div>
 
       {/* THÔNG TIN HỖ TRỢ & HƯỚNG DẪN CHỌN */}
-      <div className="mt-2.5 flex items-center justify-between text-[11px] text-slate-400">
+      <div className="mt-2.5 flex items-center justify-between text-sm text-slate-400">
         <span className="flex items-center gap-1 text-slate-400">
           {effectiveAccounts.length > 0 && (
             <span>Tổng cộng: <strong className="text-slate-600">{effectiveAccounts.length}</strong> tài khoản</span>
           )}
         </span>
         <span className="flex items-center gap-1.5 text-slate-400">
-          <MousePointerClick className="size-3 text-primary/70" />
+          <MousePointerClick className=" text-primary/70" size={16} />
           <span>Giữ & kéo chuột để chọn dải tài khoản</span>
         </span>
       </div>
 
-      <div className="mt-4 border-t border-slate-100 pt-4 text-[11px] text-slate-500">
+      <div className="mt-4 border-t border-slate-100 pt-4 text-xs text-slate-500">
         {selectedAccountKeys.length > 0
-          ? `Đã chọn ${selectedAccountKeys.length}/${effectiveAccounts.length} tài khoản`
+          ? `Đã chọn ${selectedAccountKeys.length}/${effectiveAccounts.length} Tài khoản`
           : "Chưa chọn tài khoản nào"}
       </div>
     </SectionCard>

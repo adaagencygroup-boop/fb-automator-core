@@ -102,6 +102,13 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const [minMedia, setMinMedia] = useState("1");
   const [maxMedia, setMaxMedia] = useState("4");
   const [isMediaLocked, setIsMediaLocked] = useState(false);
+  const selectedMediaCount = mediaFiles.length + savedMedia.length;
+
+  useEffect(() => {
+    if (selectedMediaCount > 0) {
+      setMaxMedia(String(selectedMediaCount));
+    }
+  }, [selectedMediaCount]);
 
   // Bước 6: Nội dung bài viết (Hỗ trợ AI)
   const [prompt, setPrompt] = useState("");
@@ -113,7 +120,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const [isContentLocked, setIsContentLocked] = useState(false);
 
   // Bước 7: Cài đặt đăng bài
-  const [delayMin, setDelayMin] = useState("30");
+  const [delayMin, setDelayMin] = useState("10");
   const [delayMax, setDelayMax] = useState("60");
   const [delayUnit, setDelayUnit] = useState("seconds");
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
@@ -400,7 +407,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
         setCampaignId(job.campaign_id);
         setRunState(job.status === "QUEUED" ? "starting" : "running");
       })
-      .catch(() => {});
+      .catch(() => { });
     return () => { cancelled = true; };
   }, [actionType]);
 
@@ -649,9 +656,10 @@ export default function GroupPostModule({ actionType = "POST" }) {
 
     const delayMinValue = Number(delayMin);
     const delayMaxValue = Number(delayMax);
-    const delayLimit = delayUnit === "minutes" ? 60 : 3600;
-    if (!Number.isFinite(delayMinValue) || !Number.isFinite(delayMaxValue) || delayMinValue < 0 || delayMaxValue < delayMinValue || delayMinValue > delayLimit || delayMaxValue > delayLimit) {
-      toast.warning(`Bước 7: khoảng nghỉ phải từ 0 đến ${delayLimit} ${delayUnit === "minutes" ? "phút" : "giây"}, và giá trị 'Đến' không được nhỏ hơn giá trị 'Từ'.`, "CẤU HÌNH CHƯA HỢP LỆ");
+    const delayMinimum = delayUnit === "minutes" ? 1 : 10;
+    const delayLimit = 60;
+    if (!Number.isFinite(delayMinValue) || !Number.isFinite(delayMaxValue) || delayMinValue < delayMinimum || delayMaxValue < delayMinValue || delayMinValue > delayLimit || delayMaxValue > delayLimit) {
+      toast.warning(`Bước 7: khoảng nghỉ phải từ ${delayMinimum} đến ${delayLimit} ${delayUnit === "minutes" ? "phút" : "giây"}, và giá trị 'Đến' không được nhỏ hơn giá trị 'Từ'.`, "CẤU HÌNH CHƯA HỢP LỆ");
       document.getElementById("step-7-posting")?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
@@ -791,10 +799,10 @@ export default function GroupPostModule({ actionType = "POST" }) {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="font-heading text-xl font-bold tracking-tight text-slate-800">
+        <h1 className="font-heading text-2xl font-bold tracking-tight text-slate-800 uppercase">
           {isComment ? "Spam Group – Bình luận" : "Spam Group – Đăng bài"}
         </h1>
-        <p className="mt-1 text-xs text-slate-400">
+        <p className="mt-1 text-sm text-slate-400">
           {isComment
             ? "Tự động bình luận vào bài viết đầu tiên của các nhóm Facebook theo từ khoá hoặc từ file link nhóm."
             : "Tự động tìm kiếm và đăng bài vào các hội nhóm Facebook theo từ khoá hoặc từ file link nhóm."}

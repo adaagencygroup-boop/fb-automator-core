@@ -53,27 +53,38 @@ export default function GroupProgressSection({
   }, [logs]);
 
   return (
-    <Card className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white p-0 shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E2E8F0] bg-[#F8FAFC]/70 px-5 py-3.5">
+    <Card className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-0 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-slate-50/70 px-5 py-3.5">
         <div className="flex items-center gap-2.5">
-          <span className={`size-2.5 rounded-full ${status === "RUNNING" || runState === "running" ? "animate-pulse bg-[#10B981]" : "bg-slate-300"}`} />
-          <h2 className="text-sm font-bold text-[#1E293B]">Nhật ký hoạt động (Live Logs)</h2>
-          <span className="rounded bg-[#F1F5F9] px-2 py-0.5 font-mono text-xs font-medium text-[#94A3B8]">
-            session#{String(campaignProgress?.session_id || String(logs.length).padStart(4, "0")).replace(/^session#/, "")}
-          </span>
+          <span className={`size-2.5 rounded-full ${status === "RUNNING" || runState === "running" ? "animate-pulse bg-emerald-500" : "bg-slate-300"}`} />
+          <h2 className="text-base font-bold text-slate-800 uppercase">Nhật ký hoạt động</h2>
           {logs.length > 0 && <span className="text-xs text-slate-400">{logs.length} dòng</span>}
         </div>
         <div className="flex items-center gap-2">
-          <button type="button" onClick={onClearLogs} disabled={!logs.length} className="rounded-lg px-2.5 py-1 text-xs font-semibold text-[#64748B] transition-colors hover:bg-slate-200/50 hover:text-[#1E293B] disabled:opacity-40">
+          <button
+            type="button"
+            onClick={onClearLogs}
+            disabled={!logs.length}
+            className="rounded-lg px-2.5 py-1 text-sm font-semibold text-slate-500 transition-colors hover:bg-slate-200/50 hover:text-slate-800 disabled:opacity-40"
+          >
             Xóa logs
           </button>
-          <button type="button" onClick={() => setExpanded((value) => !value)} title={expanded ? "Thu nhỏ nhật ký" : "Mở rộng nhật ký"} className="rounded-lg p-1 text-[#94A3B8] transition-colors hover:bg-slate-200/50 hover:text-[#1E293B]">
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            title={expanded ? "Thu nhỏ nhật ký" : "Mở rộng nhật ký"}
+            className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-200/50 hover:text-slate-800"
+          >
             {expanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
           </button>
         </div>
       </div>
 
-      <div ref={logContainerRef} className={`space-y-2 overflow-y-auto bg-[#0F172A] p-4 font-mono text-xs text-[#CBD5E1] select-text transition-[height] duration-200 ${expanded ? "min-h-[320px] max-h-[460px]" : "min-h-[160px] max-h-[240px]"}`}>
+      <div
+        ref={logContainerRef}
+        className={`space-y-2 overflow-y-auto bg-slate-900 p-4 font-mono text-xs text-slate-300 select-text transition-[height] duration-200 ${expanded ? "min-h-[320px] max-h-[460px]" : "min-h-[160px] max-h-[240px]"
+          }`}
+      >
         {logs.length ? (
           logs.map((log, index) => {
             const isError = log.level === "ERROR";
@@ -82,24 +93,41 @@ export default function GroupProgressSection({
             return (
               <div key={`${log.time}-${index}`} className="flex items-start gap-2.5 leading-relaxed">
                 <span className="mt-0.5 shrink-0 select-none">
-                  {isSuccess ? <span className="font-bold text-[#34D399]">✓</span> : isError ? <span className="font-bold text-[#F43F5E]">×</span> : <span className="my-1 inline-block size-1.5 rounded-full bg-[#60A5FA]" />}
+                  {isSuccess ? (
+                    <span className="font-bold text-emerald-400">✓</span>
+                  ) : isError ? (
+                    <span className="font-bold text-rose-500">×</span>
+                  ) : (
+                    <span className="my-1 inline-block size-1.5 rounded-full bg-blue-400" />
+                  )}
                 </span>
-                <time className="shrink-0 select-none text-[11px] tabular-nums text-[#94A3B8]">[{log.time?.split("T")[1] || log.time || "--:--:--"}]</time>
-                <div className={`min-w-0 flex-1 break-words ${isError ? "font-semibold text-[#F43F5E]" : isSuccess ? "font-medium text-[#34D399]" : isWarning ? "font-medium text-amber-300" : "text-[#CBD5E1]"}`}>
+                <time className="shrink-0 select-none text-[11px] tabular-nums text-slate-400">
+                  [{log.time?.split("T")[1] || log.time || "--:--:--"}]
+                </time>
+                <div
+                  className={`min-w-0 flex-1 break-words ${isError
+                    ? "font-semibold text-rose-500"
+                    : isSuccess
+                      ? "font-medium text-emerald-400"
+                      : isWarning
+                        ? "font-medium text-amber-300"
+                        : "text-slate-300"
+                    }`}
+                >
                   {renderLogContent(log.message, "")}
                 </div>
               </div>
             );
           })
         ) : (
-          <div className="flex items-center gap-2 py-2 italic text-[#94A3B8]">
-            <span className="inline-block size-1.5 rounded-full bg-[#60A5FA]" />
+          <div className="flex items-center gap-2 py-2 italic text-slate-400">
+            <span className="inline-block size-1.5 rounded-full bg-blue-400" />
             <span>{runState === "idle" ? "Đang chờ sự kiện hoạt động từ hệ thống..." : "Chưa có nhật ký thực thi"}</span>
           </div>
         )}
       </div>
 
-      <div className="flex items-center justify-between border-t border-[#E2E8F0] px-5 py-2.5">
+      <div className="flex items-center justify-between border-t border-slate-200 px-5 py-2.5">
         <div className="flex items-center gap-2">
           {status === "RUNNING" || runState === "running" ? (
             <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-primary">

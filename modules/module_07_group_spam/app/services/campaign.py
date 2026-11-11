@@ -403,7 +403,7 @@ class FacebookGroupPoster:
 
 
     def join_group(self, group: GroupItem) -> dict[str, Any]:
-        """Open a group and join it when needed before the posting stage."""
+        """Open a group, request membership if needed, and wait for Facebook's confirmation."""
         from selenium.webdriver.common.by import By
 
         self._raise_if_cancelled()
@@ -425,57 +425,71 @@ class FacebookGroupPoster:
             "normalize-space(.)='Joined' or contains(@aria-label,'Đã tham gia') or "
             "contains(@aria-label,'Joined'))]"
         )
-        if any(self._is_displayed(b) for b in driver.find_elements(By.XPATH, already_joined_xpath)):
-            return {"status": "ALREADY_MEMBER", "message": "Tài khoản đã là thành viên nhóm"}
-
         pending_xpath = (
             "//*[@role='button' and (contains(@aria-label,'Hủy yêu cầu') or "
             "contains(@aria-label,'Cancel request') or contains(.,'Đang chờ') or "
-            "contains(.,'Pending'))]"
+            "contains(.,'Đã gửi yêu cầu') or contains(.,'Yêu cầu đã gửi') or "
+            "contains(.,'Đã yêu cầu') or contains(.,'Request sent') or "
+            "contains(.,'Requested') or contains(.,'Pending'))]"
         )
-        if any(self._is_displayed(b) for b in driver.find_elements(By.XPATH, pending_xpath)):
-            return {"status": "PENDING_APPROVAL", "message": "Đã gửi yêu cầu, đang chờ quản trị viên duyệt"}
-
         join_xpath = (
             "//*[@role='button' and (contains(@aria-label,'Tham gia nhóm') or "
             "contains(@aria-label,'Join group') or normalize-space(.)='Tham gia nhóm' or "
             "normalize-space(.)='Join group' or normalize-space(.)='Tham gia')]"
         )
-        buttons = [b for b in driver.find_elements(By.XPATH, join_xpath) if self._is_displayed(b)]
-        if not buttons:
+
+        def visible(xpath: str) -> list[Any]:
+            return [element for element in driver.find_elements(By.XPATH, xpath) if self._is_displayed(element)]
+
+        if visible(already_joined_xpath):
             return {"status": "ALREADY_MEMBER", "message": "Tài khoản đã là thành viên nhóm"}
+        if visible(pending_xpath):
+            return {"status": "PENDING_APPROVAL", "message": "Đã gửi yêu cầu, đang chờ quản trị viên duyệt"}
+
+        buttons = visible(join_xpath)
+        if not buttons:
+            return {"status": "FAILED", "message": "Facebook không hiển thị nút tham gia hoặc trạng thái đã là thành viên"}
 
         try:
             driver.execute_script("arguments[0].click()", buttons[0])
-        except Exception:
-            pass
-        if self.cancel.wait(2):
-            self._raise_if_cancelled()
-
-        dialogs = [d for d in driver.find_elements(By.XPATH, "//div[@role='dialog']") if self._is_displayed(d)]
-        if dialogs:
+        except Exception as js_error:
             try:
-                dialog_text = " ".join((d.text or "").lower() for d in dialogs)
-                question_markers = ("trả lời câu hỏi", "answer questions", "câu hỏi thành viên", "membership questions")
+                buttons[0].click()
+            except Exception as click_error:
+                raise RuntimeError(
+                    f"Không bấm được nút tham gia (JavaScript: {js_error}; click trực tiếp: {click_error})"
+                ) from click_error
+
+        deadline = time.monotonic() + 12
+        while True:
+            self._raise_if_cancelled()
+            dialogs = visible("//div[@role='dialog']")
+            if dialogs:
+                dialog_text = " ".join((dialog.text or "").lower() for dialog in dialogs)
+                question_markers = (
+                    "trả lời câu hỏi", "answer questions", "câu hỏi thành viên", "membership questions",
+                )
                 if any(marker in dialog_text for marker in question_markers):
                     self._dismiss_group_join_overlays()
                     return {"status": "REQUIRES_ANSWERS", "message": "Nhóm yêu cầu trả lời câu hỏi tham gia"}
-            except Exception:
-                pass
 
-        pending_xpath = (
-            "//*[@role='button' and (contains(@aria-label,'Hủy yêu cầu') or "
-            "contains(@aria-label,'Cancel request') or contains(.,'Đang chờ') or "
-            "contains(.,'Pending'))]"
+            if visible(pending_xpath):
+                return {"status": "PENDING_APPROVAL", "message": "Đã gửi yêu cầu, đang chờ quản trị viên duyệt"}
+            if visible(already_joined_xpath):
+                return {"status": "JOINED", "message": "Facebook đã xác nhận tham gia nhóm thành công"}
+            if time.monotonic() >= deadline:
+                break
+            if self.cancel.wait(0.25):
+                self._raise_if_cancelled()
+
+        if visible(join_xpath):
+            raise RuntimeError(
+                "Facebook vẫn hiển thị nút Tham gia nhóm sau 12 giây; yêu cầu chưa được xác nhận. "
+                "Có thể thao tác bị chặn, nút bị che, hoặc Facebook từ chối yêu cầu."
+            )
+        raise RuntimeError(
+            "Nút Tham gia nhóm đã biến mất nhưng Facebook chưa hiển thị trạng thái đã tham gia hoặc chờ duyệt."
         )
-        if any(self._is_displayed(b) for b in driver.find_elements(By.XPATH, pending_xpath)):
-            return {"status": "PENDING_APPROVAL", "message": "Đã gửi yêu cầu, đang chờ quản trị viên duyệt"}
-
-        remaining = [b for b in driver.find_elements(By.XPATH, join_xpath) if self._is_displayed(b)]
-        if remaining:
-            raise RuntimeError("Facebook chưa xác nhận thao tác tham gia nhóm")
-        self._dismiss_group_join_overlays()
-        return {"status": "JOINED", "message": "Tham gia nhóm thành công"}
 
     def post(self, group: GroupItem, content: str, media: list[str]) -> dict[str, Any]:
         from selenium.webdriver.common.by import By

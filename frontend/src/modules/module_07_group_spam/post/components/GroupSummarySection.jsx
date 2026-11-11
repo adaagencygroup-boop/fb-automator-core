@@ -103,14 +103,14 @@ export default function GroupSummarySection({
 
   const safetyTooltip = (
     <div className="space-y-2.5 text-left">
-      <p className="flex items-center gap-1.5 border-b border-slate-200 pb-2 text-xs font-semibold text-slate-800">
+      <p className="flex items-center gap-1.5 border-b border-slate-200 pb-2 text-base font-semibold text-slate-800">
         <Info className="size-3.5 text-primary" />
         Lưu ý vận hành an toàn
       </p>
-      <p>Cần nhập API Key hợp lệ khi muốn tạo tự động nội dung {itemLabel} bằng AI.</p>
-      <p>Thiết lập luồng (1–3) và thời gian nghỉ tối thiểu 10 phút để tránh checkpoint.</p>
-      <p>Bật chế độ xáo trộn ngẫu nhiên để nội dung mỗi nhóm là duy nhất.</p>
-      <p>Kiểm tra trạng thái tài khoản Live trước khi nhấn bắt đầu tác vụ.</p>
+      <p className="text-sm text-slate-600">Cần nhập API Key hợp lệ khi muốn tạo tự động nội dung {itemLabel} bằng AI.</p>
+      <p className="text-sm text-slate-600">Thiết lập luồng (1 - 3) và thời gian nghỉ tối thiểu 10 phút để tránh checkpoint.</p>
+      <p className="text-sm text-slate-600">Bật chế độ xáo trộn ngẫu nhiên để nội dung mỗi nhóm là duy nhất.</p>
+      <p className="text-sm text-slate-600">Kiểm tra trạng thái tài khoản Live trước khi nhấn bắt đầu tác vụ.</p>
     </div>
   );
 
@@ -118,6 +118,7 @@ export default function GroupSummarySection({
     <SectionCard
       number={stepNumber}
       title="Thông tin cấu hình tổng hợp"
+      className="relative z-20 !overflow-visible"
       aside={(
         <Tooltip
           content={safetyTooltip}
@@ -132,12 +133,12 @@ export default function GroupSummarySection({
             aria-label="Xem lưu ý vận hành an toàn"
             className="inline-flex rounded-full text-primary transition-colors hover:text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
-            <Info className="size-4" />
+            <Info size={20} />
           </button>
         </Tooltip>
       )}
     >
-      <div className="grid gap-x-10 gap-y-3 text-[11px] md:grid-cols-2">
+      <div className="grid gap-x-10 gap-y-3 text-sm md:grid-cols-2">
         {summaryItems.map(([icon, label, value]) => (
           <div key={label} className="flex items-center justify-between border-b border-slate-100 pb-2.5">
             <span className="flex items-center gap-2 text-slate-500">
@@ -149,8 +150,8 @@ export default function GroupSummarySection({
                 value?.startsWith?.("Đã cấu hình") || (label === "Hẹn giờ" && scheduleEnabled)
                   ? "text-emerald-600"
                   : value === "Chưa cấu hình" || value === "Chưa chọn tài khoản"
-                  ? "text-amber-600"
-                  : "text-slate-700"
+                    ? "text-amber-600"
+                    : "text-slate-700"
               }
             >
               {value}

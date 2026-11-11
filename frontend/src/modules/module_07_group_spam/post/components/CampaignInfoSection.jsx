@@ -35,11 +35,11 @@ export default function CampaignInfoSection({
         )}
 
         <div>
-          <Field label="Tên chiến dịch *">
+          <Field label="Tên chiến dịch ">
             <Input
               value={campaignName}
               onChange={(e) => setCampaignName(e.target.value)}
-              placeholder="Ví dụ: Chiến dịch tuyển dụng Q1 / Seeding hội mua bán 2026..."
+              placeholder="Ví dụ: Chiến dịch tuyển dụng "
               className="text-xs"
             />
           </Field>

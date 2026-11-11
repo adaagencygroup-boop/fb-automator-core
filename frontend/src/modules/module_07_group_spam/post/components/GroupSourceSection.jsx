@@ -19,7 +19,8 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { attachDragSelection } from "../../shared/drag-selection";
 import { toast } from "@/lib/toast";
-import { SectionCard, SelectField } from "../../shared/components";
+import CustomSelect from "@/components/ui/custom-select";
+import { SectionCard } from "../../shared/components";
 import {
   parseGroupFileSource,
   uploadGroupSourceFile,
@@ -380,67 +381,76 @@ export default function GroupSourceSection({
 
   const renderGroupFilters = (className, includeMaxResults = false) => (
     <div className={className}>
-      <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+      <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
         Lọc kết quả
       </span>
       {includeMaxResults && (
-        <div className="min-w-[135px] flex-1 sm:flex-none">
-          <SelectField
-            value={maxResults}
-            onChange={(event) => setMaxResults(event.target.value)}
-            className="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
-          >
-            {[10, 20, 30, 50, 100, 150, 200].map((value) => (
-              <option key={value} value={value}>Tối đa {value} nhóm</option>
-            ))}
-          </SelectField>
+        <div className="min-w-[140px] flex-1 sm:flex-none">
+          <CustomSelect
+            value={String(maxResults)}
+            onChange={(val) => setMaxResults(String(val))}
+            options={[10, 20, 30, 50, 100, 150, 200].map((value) => ({
+              value: String(value),
+              label: `Tối đa ${value} nhóm`,
+            }))}
+            size="sm"
+            buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-xs"
+          />
         </div>
       )}
-      <div className="min-w-[145px] flex-1 sm:flex-none">
-        <SelectField
+      <div className="w-[190px] min-w-[190px] flex-none">
+        <CustomSelect
           value={memberFilter}
-          onChange={(event) => setMemberFilter(event.target.value)}
-          className="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
-        >
-          <option value="all">Mọi quy mô</option>
-          <option value="10k">Trên 10K thành viên</option>
-          <option value="50k">Trên 50K thành viên</option>
-          <option value="100k">Trên 100K thành viên</option>
-        </SelectField>
+          onChange={setMemberFilter}
+          options={[
+            { value: "all", label: "Mọi quy mô" },
+            { value: "10k", label: "Trên 10K thành viên" },
+            { value: "50k", label: "Trên 50K thành viên" },
+            { value: "100k", label: "Trên 100K thành viên" },
+          ]}
+          size="sm"
+          buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
+        />
       </div>
       <div className="min-w-[135px] flex-1 sm:flex-none">
-        <SelectField
+        <CustomSelect
           value={frequencyFilter}
-          onChange={(event) => setFrequencyFilter(event.target.value)}
-          className="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
-        >
-          <option value="all">Mọi tần suất</option>
-          <option value="5">5+ bài/ngày</option>
-          <option value="10">10+ bài/ngày</option>
-          <option value="20">20+ bài/ngày</option>
-        </SelectField>
+          onChange={setFrequencyFilter}
+          options={[
+            { value: "all", label: "Mọi tần suất" },
+            { value: "5", label: "5+ bài/ngày" },
+            { value: "10", label: "10+ bài/ngày" },
+            { value: "20", label: "20+ bài/ngày" },
+          ]}
+          size="sm"
+          buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
+        />
       </div>
       <div className="min-w-[125px] flex-1 sm:flex-none">
-        <SelectField
+        <CustomSelect
           value={groupTypeFilter}
-          onChange={(event) => setGroupTypeFilter(event.target.value)}
-          className="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
-        >
-          <option value="all">Mọi loại nhóm</option>
-          <option value="public">Công khai</option>
-          <option value="private">Kiểm duyệt</option>
-        </SelectField>
+          onChange={setGroupTypeFilter}
+          options={[
+            { value: "all", label: "Mọi loại nhóm" },
+            { value: "public", label: "Công khai" },
+            { value: "private", label: "Kiểm duyệt" },
+          ]}
+          size="sm"
+          buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
+        />
       </div>
       <div className="min-w-[135px] flex-1 sm:flex-none">
-        <SelectField
+        <CustomSelect
           value={membershipFilter}
-          onChange={(event) => setMembershipFilter(event.target.value)}
-          className="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
-        >
-          <option value="all">Mọi trạng thái tham gia</option>
-          <option value="joined">Đã tham gia</option>
-          <option value="not_joined">Chưa tham gia</option>
-        </SelectField>
+          onChange={setMembershipFilter}
+          options={[
+            { value: "all", label: "Mọi trạng thái tham gia" },
+            { value: "joined", label: "Đã tham gia" },
+            { value: "not_joined", label: "Chưa tham gia" },
+          ]}
+          size="sm"
+          buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
+        />
       </div>
       {(activeResultFilterCount > 0 || (includeMaxResults && maxResults !== "10")) && (
         <button
@@ -465,6 +475,7 @@ export default function GroupSourceSection({
       number={stepNumber}
       title="Nguồn nhóm"
       description="Tìm nhóm trên Facebook hoặc nhập danh sách có sẵn."
+      className="relative z-20 !overflow-visible"
       aside={
         <span className="rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-primary">
           {selectedGroupKeys.length}/{baseGroups.length} đã chọn
@@ -475,241 +486,227 @@ export default function GroupSourceSection({
         disabled={isLocked}
         className={`min-w-0 ${isLocked ? "pointer-events-none opacity-70" : ""}`}
       >
-      <div className="inline-flex w-full rounded-lg bg-slate-100 p-1 sm:w-auto">
-        <button
-          type="button"
-          onClick={() => setGroupSource("search")}
-          className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-xs font-semibold transition-colors sm:flex-none ${
-            groupSource === "search"
+        <div className="inline-flex w-full rounded-lg bg-slate-100 p-1 sm:w-auto">
+          <button
+            type="button"
+            onClick={() => setGroupSource("search")}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold transition-colors sm:flex-none ${groupSource === "search"
               ? "bg-white text-primary shadow-xs"
               : "text-slate-500 hover:text-slate-800"
-          }`}
-        >
-          <Search className="size-3.5" /> Tìm theo từ khóa
-        </button>
-        <button
-          type="button"
-          onClick={() => setGroupSource("file")}
-          className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-xs font-semibold transition-colors sm:flex-none ${
-            groupSource === "file"
+              }`}
+          >
+            <Search size={16} /> Tìm theo từ khóa
+          </button>
+          <button
+            type="button"
+            onClick={() => setGroupSource("file")}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold transition-colors sm:flex-none ${groupSource === "file"
               ? "bg-white text-primary shadow-xs"
               : "text-slate-500 hover:text-slate-800"
-          }`}
-        >
-          <FileUp className="size-3.5" /> Nhập từ file
-        </button>
-      </div>
+              }`}
+          >
+            <FileUp size={16} /> Nhập từ file
+          </button>
+        </div>
 
-      {groupSource === "file" && (
-        <div className="mt-3">
-          <input
-            ref={groupFileInputRef}
-            type="file"
-            accept=".txt,.csv,.xlsx"
-            className="hidden"
-            onChange={handleGroupFileChange}
-          />
-          <div
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={handleGroupFileDrop}
-            className={`rounded-lg border border-dashed p-3 transition-colors ${
-              isFileProcessing
+        {groupSource === "file" && (
+          <div className="mt-3">
+            <input
+              ref={groupFileInputRef}
+              type="file"
+              accept=".txt,.csv,.xlsx"
+              className="hidden"
+              onChange={handleGroupFileChange}
+            />
+            <div
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={handleGroupFileDrop}
+              className={`rounded-lg border border-dashed p-3 transition-colors ${isFileProcessing
                 ? "border-primary/40 bg-blue-50/50"
                 : "border-slate-300 bg-slate-50/50 hover:border-primary/40"
-            }`}
-          >
-            {isFileProcessing ? (
-              <div className="flex items-center justify-center gap-2 py-3 text-xs font-medium text-primary">
-                <Loader2 className="size-4 animate-spin" /> Đang đọc file và quét thông tin nhóm thật từ Facebook...
-              </div>
-            ) : groupFile ? (
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex min-w-0 items-center gap-3">
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
-                    <FileText className="size-4" />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="truncate text-xs font-semibold text-slate-800">{groupFile.name}</p>
-                      <span className="text-[10px] font-semibold text-emerald-600">
-                        {groupFile.validGroupsCount ?? 0} nhóm hợp lệ
-                      </span>
+                }`}
+            >
+              {isFileProcessing ? (
+                <div className="flex items-center justify-center gap-2 py-3 text-xs font-medium text-primary">
+                  <Loader2 className="size-4 animate-spin" /> Đang đọc file và quét thông tin nhóm thật từ Facebook...
+                </div>
+              ) : groupFile ? (
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
+                      <FileText className="size-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-xs font-semibold text-slate-800">{groupFile.name}</p>
+                        <span className="text-[10px] font-semibold text-emerald-600">
+                          {groupFile.validGroupsCount ?? 0} nhóm hợp lệ
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-[10px] text-slate-400">
+                        Đã bỏ {groupFile.dedupCount ?? 0} trùng lặp và {groupFile.invalidCount ?? 0} link lỗi
+                      </p>
                     </div>
-                    <p className="mt-0.5 text-[10px] text-slate-400">
-                      Đã bỏ {groupFile.dedupCount ?? 0} trùng lặp và {groupFile.invalidCount ?? 0} link lỗi
-                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => groupFileInputRef.current?.click()}
+                      className="h-7 px-2.5 text-[11px]"
+                    >
+                      <RotateCw className="mr-1 size-3" /> Đổi file
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleRemoveGroupFile}
+                      className="h-7 px-2 text-[11px] text-slate-500 hover:text-red-600"
+                    >
+                      <Trash2 className="mr-1 size-3" /> Xóa
+                    </Button>
                   </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => groupFileInputRef.current?.click()}
-                    className="h-7 px-2.5 text-[11px]"
-                  >
-                    <RotateCw className="mr-1 size-3" /> Đổi file
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleRemoveGroupFile}
-                    className="h-7 px-2 text-[11px] text-slate-500 hover:text-red-600"
-                  >
-                    <Trash2 className="mr-1 size-3" /> Xóa
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-blue-50 text-primary">
-                    <FileUp className="size-4" />
-                  </span>
-                  <div>
-                    <p className="text-xs font-medium text-slate-700">Kéo thả file danh sách nhóm vào đây</p>
-                    <p className="mt-0.5 text-[10px] text-slate-400">Hỗ trợ .txt, .csv và .xlsx</p>
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleDownloadTemplate}
-                    className="inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-primary"
-                  >
-                    <Download className="size-3" /> File mẫu
-                  </button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => groupFileInputRef.current?.click()}
-                    className="h-8 px-3 text-xs"
-                  >
-                    Chọn file
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {groupSource === "search" && (
-        <div className="mt-3 rounded-lg border border-slate-200 p-3">
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-              <Input
-                value={groupSearch}
-                onChange={(event) => setGroupSearch(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    if (!isSearching) handleSearchGroups();
-                  }
-                }}
-                placeholder="Nhập từ khóa, ví dụ: việc làm online"
-                className="h-9 pl-9 text-xs"
-              />
-            </div>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setShowSearchFilters((current) => !current)}
-              className={`h-9 shrink-0 px-3 text-xs ${
-                showSearchFilters || activeSearchFilterCount > 0
-                  ? "border-primary/40 bg-blue-50 text-primary"
-                  : ""
-              }`}
-            >
-              <ListFilter className="mr-1.5 size-3.5" /> Bộ lọc
-              {activeSearchFilterCount > 0 && (
-                <span className="ml-1 rounded-full bg-primary px-1.5 py-0.5 text-[9px] leading-none text-white">
-                  {activeSearchFilterCount}
-                </span>
-              )}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={isSearching}
-              onClick={handleSearchGroups}
-              className="h-9 shrink-0 px-4 text-xs"
-            >
-              {isSearching ? (
-                <Loader2 className="mr-1.5 size-3.5 animate-spin" />
               ) : (
-                <Search className="mr-1.5 size-3.5" />
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-blue-50 text-primary">
+                      <FileUp size={16} />
+                    </span>
+                    <div>
+                      <p className="text-base font-medium text-slate-700">Kéo thả file danh sách nhóm vào đây</p>
+                      <p className="mt-0.5 text-xs text-slate-400">Hỗ trợ .txt, .csv và .xlsx</p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-4">
+                    <button
+                      type="button"
+                      onClick={handleDownloadTemplate}
+                      className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-primary"
+                    >
+                      <Download size={16} /> File mẫu
+                    </button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => groupFileInputRef.current?.click()}
+                      className="h-8 px-4 text-sm "
+                    >
+                      Chọn File
+                    </Button>
+                  </div>
+                </div>
               )}
-              {isSearching ? "Đang quét..." : "Quét nhóm"}
-            </Button>
-          </div>
-
-          {(showSearchFilters || activeSearchFilterCount > 0) &&
-            renderGroupFilters(
-              "mt-2 flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50/60 px-2.5 py-2",
-              true
-            )}
-
-        </div>
-      )}
-
-      {shouldShowGroupTable && (
-        <div className="mt-3 overflow-hidden rounded-lg border border-slate-200">
-          <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50/60 p-2.5 sm:flex-row sm:items-center">
-            <div className="relative min-w-[180px] flex-1">
-              <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-              <Input
-                value={groupFilter}
-                onChange={(event) => setGroupFilter(event.target.value)}
-                placeholder="Lọc danh sách nhóm..."
-                className="h-8 bg-white pl-9 text-xs"
-              />
             </div>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setShowResultFilters((current) => !current)}
-              className={`h-8 shrink-0 px-2.5 text-[11px] ${
-                showResultFilters || activeResultFilterCount > 0
-                  ? "border-primary/40 bg-blue-50 text-primary"
-                  : ""
-              }`}
-            >
-              <ListFilter className="mr-1 size-3" /> Bộ lọc
-              {activeResultFilterCount > 0 && (
-                <span className="ml-1 rounded-full bg-primary px-1.5 py-0.5 text-[9px] leading-none text-white">
-                  {activeResultFilterCount}
-                </span>
-              )}
-            </Button>
-            <div className="flex items-center justify-between gap-2 sm:justify-end">
-              <span className="whitespace-nowrap text-[11px] text-slate-500">
-                <strong className="text-slate-700">{filteredGroups.length}</strong> nhóm ·{" "}
-                <strong className="text-primary">{selectedGroupKeys.length}</strong> đã chọn
-              </span>
+          </div>
+        )}
+
+        {groupSource === "search" && (
+          <div className="mt-3 rounded-lg border border-slate-200 p-3">
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+                <Input
+                  value={groupSearch}
+                  onChange={(event) => setGroupSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      if (!isSearching) handleSearchGroups();
+                    }
+                  }}
+                  placeholder="Nhập từ khóa, ví dụ: việc làm online"
+                  className="h-9 pl-9 text-sm"
+                />
+              </div>
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                onClick={handleSelectAll}
-                className="h-8 px-2.5 text-[11px]"
+                onClick={() => setShowSearchFilters((current) => !current)}
+                className={`h-9 shrink-0 px-3 text-sm ${showSearchFilters || activeSearchFilterCount > 0
+                  ? "border-primary/40 bg-blue-50 text-primary"
+                  : ""
+                  }`}
               >
-                <Check className="mr-1 size-3" /> Chọn tất cả
+                <ListFilter className="mr-2" size={16} /> Bộ lọc
+                {activeSearchFilterCount > 0 && (
+                  <span className="ml-1 rounded-full bg-primary px-1.5 py-0.5 text-sm leading-none text-white">
+                    {activeSearchFilterCount}
+                  </span>
+                )}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={isSearching}
+                onClick={handleSearchGroups}
+                className="h-9 shrink-0 px-4 text-sm"
+              >
+                {isSearching ? (
+                  <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                ) : (
+                  <Search className="mr-1.5 size-3.5" />
+                )}
+                {isSearching ? "Đang Quét..." : "Quét Nhóm"}
               </Button>
             </div>
+
+            {(showSearchFilters || activeSearchFilterCount > 0) &&
+              renderGroupFilters(
+                "mt-2 flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50/60 px-2.5 py-2",
+                true
+              )}
+
           </div>
+        )}
 
-          {(showResultFilters || activeResultFilterCount > 0) &&
-            renderGroupFilters(
-              "flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-2.5 py-2"
-            )}
+        {shouldShowGroupTable && (
+          <div className="mt-3 overflow-hidden rounded-lg border border-slate-200">
+            <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50/60 p-2.5 sm:flex-row sm:items-center">
+              <div className="relative min-w-[180px] flex-1">
+                <Search className="absolute left-3 top-1/2  -translate-y-1/2 text-slate-400" size={16} />
+                <Input
+                  value={groupFilter}
+                  onChange={(event) => setGroupFilter(event.target.value)}
+                  placeholder="Lọc danh sách nhóm..."
+                  className="h-8 bg-white pl-9 text-xs"
+                />
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setShowResultFilters((current) => !current)}
+                className={`h-8 shrink-0 px-2.5 text-sm ${showResultFilters || activeResultFilterCount > 0
+                  ? "border-primary/40 bg-blue-50 text-primary"
+                  : ""
+                  }`}
+              >
+                <ListFilter className="mr-2" size={16} /> Bộ lọc
+                {activeResultFilterCount > 0 && (
+                  <span className="ml-1 rounded-full bg-primary px-1.5 py-0.5 text-xs leading-none text-white">
+                    {activeResultFilterCount}
+                  </span>
+                )}
+              </Button>
+              <div className="flex items-center justify-between gap-2 sm:justify-end">
+                <span className="whitespace-nowrap text-xs text-slate-500">
+                  <strong className="text-slate-700">{filteredGroups.length}</strong> nhóm {" "} / {" "}
+                  <strong className="text-primary">{selectedGroupKeys.length}</strong> đã chọn
+                </span>
+              </div>
+            </div>
 
-          <div ref={tableContainerRef} className="max-h-[320px] overflow-auto">
-              <table className="w-full min-w-[620px] text-left text-[11px]">
+            {(showResultFilters || activeResultFilterCount > 0) &&
+              renderGroupFilters(
+                "flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-2.5 py-2"
+              )}
+
+            <div ref={tableContainerRef} className="max-h-[320px] overflow-auto">
+              <table className="w-full min-w-[700px] text-left text-sm">
                 <thead className="sticky top-0 z-10 bg-white text-slate-500 shadow-xs">
                   <tr className="border-b border-slate-200">
                     <th className="w-10 px-3 py-2">
@@ -734,8 +731,8 @@ export default function GroupSourceSection({
                   {isFileProcessing || isSearching ? (
                     <tr>
                       <td colSpan="6" className="py-10 text-center text-slate-500">
-                        <Loader2 className="mx-auto mb-2 size-5 animate-spin text-primary" />
-                        <p className="text-xs">
+                        <Loader2 className="mx-auto mb-2 animate-spin text-primary" size={20} />
+                        <p className="text-sm">
                           {isFileProcessing
                             ? "Đang đọc file và quét dữ liệu nhóm thật từ Facebook..."
                             : "Đang quét nhóm Facebook..."}
@@ -765,9 +762,8 @@ export default function GroupSourceSection({
                           key={group.key}
                           data-group-key={group.key}
                           onClick={(e) => handleRowClick(group.key, e)}
-                          className={`transition-colors select-none cursor-pointer ${
-                            isSelected ? "bg-blue-50/60 hover:bg-blue-50" : "bg-white hover:bg-slate-50"
-                          }`}
+                          className={`transition-colors select-none cursor-pointer ${isSelected ? "bg-blue-50/60 hover:bg-blue-50" : "bg-white hover:bg-slate-50"
+                            }`}
                         >
                           <td className="px-3 py-2">
                             <Checkbox
@@ -777,22 +773,22 @@ export default function GroupSourceSection({
                           </td>
                           <td className="px-2 py-2">
                             <div className="flex items-center gap-2">
-                              <span className="w-5 shrink-0 text-right font-mono text-[9px] text-slate-300">
+                              <span className="w-5 shrink-0 text-right font-mono text-sm text-slate-500">
                                 {idx + 1}
                               </span>
                               <div className="min-w-0">
                                 <div className="flex items-center gap-1.5">
                                   <p className="truncate font-semibold text-slate-800">{group.name || "Nhóm chưa có tên"}</p>
-                              {group.already_posted && (
+                                  {group.already_posted && (
                                     <span className="shrink-0 rounded bg-rose-50 px-1.5 py-0.5 text-[9px] text-rose-600">Đã đăng</span>
-                              )}
+                                  )}
                                 </div>
                                 {groupUrl && (
                                   <a
                                     href={groupUrl.startsWith("http") ? groupUrl : `https://${groupUrl}`}
                                     target="_blank"
                                     rel="noreferrer"
-                                    className="mt-0.5 flex max-w-md items-center gap-1 truncate font-mono text-[9px] text-slate-400 hover:text-primary"
+                                    className="mt-0.5 flex max-w-md items-center gap-1 truncate font-mono text-xs text-slate-400 hover:text-primary"
                                   >
                                     <span className="truncate">{groupUrl}</span>
                                     <ExternalLink className="size-2.5 shrink-0" />
@@ -802,8 +798,8 @@ export default function GroupSourceSection({
                             </div>
                           </td>
                           <td className="px-3 py-2">
-                            <span className={`inline-flex items-center gap-1 text-[10px] ${isPublic ? "text-emerald-600" : "text-amber-600"}`}>
-                              {isPublic ? <Globe className="size-3" /> : <Lock className="size-3" />}
+                            <span className={`inline-flex items-center gap-1 text-sm ${isPublic ? "text-emerald-600" : "text-amber-600"}`}>
+                              {isPublic ? <Globe size={16} /> : <Lock size={16} />}
                               {isPublic ? "Công khai" : "Kiểm duyệt"}
                             </span>
                           </td>
@@ -816,7 +812,7 @@ export default function GroupSourceSection({
                               className="rounded p-1 text-slate-300 hover:bg-red-50 hover:text-red-500"
                               title="Xóa nhóm này"
                             >
-                              <Trash2 className="size-3" />
+                              <Trash2 size={16} />
                             </button>
                           </td>
                         </tr>
@@ -825,14 +821,14 @@ export default function GroupSourceSection({
                   )}
                 </tbody>
               </table>
-          </div>
-          {filteredGroups.length > 0 && (
-            <div className="border-t border-slate-100 px-3 py-1.5 text-right text-[10px] text-slate-400">
-              Có thể giữ và kéo chuột để chọn nhiều nhóm.
             </div>
-          )}
-        </div>
-      )}
+            {filteredGroups.length > 0 && (
+              <div className="border-t border-slate-100 px-3 py-1.5 text-right text-sm text-slate-400">
+                Có thể giữ và kéo chuột để chọn nhiều nhóm.
+              </div>
+            )}
+          </div>
+        )}
 
       </fieldset>
 
