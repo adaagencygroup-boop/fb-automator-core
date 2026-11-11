@@ -35,6 +35,7 @@ import {
 } from "../service";
 import { LiveLogConsole, nowStamp, LIVE_STATUSES, parseJsonField, runDelete } from "../_shared";
 import { SelectAccountsModal, SelectPagesModal } from "../shared/SelectPagesModal";
+import { localIsoDate } from "../utils.mjs";
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
 
@@ -326,7 +327,7 @@ export default function PageScannerPosts() {
     if (!onlyRecentDays) return null;
     const d = new Date();
     d.setDate(d.getDate() - Math.max(1, recentDaysLimit));
-    return d.toISOString().slice(0, 10);
+    return localIsoDate(d); // ngày theo giờ máy (toISOString là UTC → lệch 1 ngày trước 7h sáng)
   };
 
   const handleStart = async () => {

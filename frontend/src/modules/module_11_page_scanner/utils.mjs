@@ -70,6 +70,16 @@ export function toCsv(headers, rows) {
   return [headers, ...rows].map((r) => r.map(cell).join(",")).join("\n");
 }
 
+/**
+ * Ngày YYYY-MM-DD theo giờ MÁY NGƯỜI DÙNG (toISOString() là ngày UTC → trước 7h sáng ở VN bị lùi 1 ngày).
+ */
+export function localIsoDate(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 /** Trường JSON lưu dạng chuỗi trong DB (settings, logs) → object/array an toàn. */
 export function parseJsonField(value, fallback) {
   if (value == null || value === "") return fallback;

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   filterScanResults,
+  localIsoDate,
   pageWindow,
   parseJsonField,
   toCsv,
@@ -37,6 +38,13 @@ test("filterScanResults applies follower range, search, keyword, order and top N
   assert.equal(filterScanResults(pagesFixture, { sortDir: "asc" }).filtered[0].page_key, "user:p449");
   assert.equal(filterScanResults(pagesFixture, { topN: "10" }).filtered.length, 10);
   assert.equal(filterScanResults(pagesFixture, { topN: "" }).filtered.length, 450);
+});
+
+test("localIsoDate uses the local calendar day, not the UTC day", () => {
+  // 03:00 ngày 21/10 theo giờ máy — toISOString() có thể trả 20/10 ở múi giờ dương
+  const early = new Date(2025, 9, 21, 3, 0, 0);
+  assert.equal(localIsoDate(early), "2025-10-21");
+  assert.equal(localIsoDate(new Date(2025, 0, 5, 23, 59)), "2025-01-05");
 });
 
 test("toCsv quotes every cell and escapes quotes", () => {

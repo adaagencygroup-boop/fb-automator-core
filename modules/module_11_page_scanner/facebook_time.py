@@ -12,8 +12,17 @@ Giữ `published_text` thô riêng — hàm này không ghi đè text.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
+
+# Ngày đăng hiển thị / lọc theo giờ Việt Nam (UTC+7, không có giờ mùa hè).
+# Trước đây utime đổi theo UTC → bài đăng 0h–7h sáng bị lùi 1 ngày khi lọc Từ ngày–Đến ngày.
+VN_TZ = timezone(timedelta(hours=7))
+
+
+def vn_now() -> datetime:
+    """Giờ Việt Nam hiện tại (naive) — mốc cho các mốc tương đối "2 giờ", "Hôm qua"…"""
+    return datetime.now(VN_TZ).replace(tzinfo=None)
 
 _MONTH_EN = {
     "january": 1,
@@ -60,7 +69,7 @@ def _from_utime(utime: Optional[int]) -> Optional[str]:
         # FB đôi khi gửi ms
         if ts > 10_000_000_000:
             ts //= 1000
-        return datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+        return datetime.fromtimestamp(ts, VN_TZ).strftime("%Y-%m-%d")
     except (TypeError, ValueError, OSError, OverflowError):
         return None
 
@@ -69,7 +78,14 @@ def _from_iso_attr(iso_attr: Optional[str]) -> Optional[str]:
     if not iso_attr:
         return None
     s = str(iso_attr).strip()
-    # 2025-10-21T07:39:00+07:00 / 2025-10-21
+    # Có múi giờ (…+07:00 / …Z) → đổi sang giờ Việt Nam rồi mới lấy ngày
+    if re.match(r"^\d{4}-\d{2}-\d{2}T", s) and re.search(r"(Z|[+-]\d{2}:?\d{2})$", s):
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            return dt.astimezone(VN_TZ).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    # 2025-10-21T07:39:00 (không múi giờ) / 2025-10-21
     m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
     if m:
         return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
@@ -101,7 +117,7 @@ def parse_facebook_published_at(
     t = re.sub(r"\s+", " ", t)
     # Bỏ prefix tooltip thừa
     t_clean = re.sub(r"^(Posted\s+|Đã đăng\s+)", "", t, flags=re.I).strip()
-    ref = now or datetime.now()
+    ref = now or vn_now()
 
     # --- Absolute EN: October 21, 2025 at 7:39 AM / October 21 at 7:39 AM / October 21, 2025 ---
     m = re.search(
