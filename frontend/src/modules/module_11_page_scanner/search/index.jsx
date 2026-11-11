@@ -455,16 +455,20 @@ export default function PageScannerSearch() {
 
           setKeywordProgress((prev) =>
             prev.map((row) =>
-              row.status === "scanning"
+              row.status === "scanning" || row.status === "paused"
                 ? {
                     ...row,
                     count,
                     status:
                       session.status === "PAUSED"
                         ? "paused"
-                        : DONE_STATUSES.includes(session.status)
-                          ? "done"
-                          : row.status,
+                        : session.status === "FAILED"
+                          ? "error"
+                          : DONE_STATUSES.includes(session.status)
+                            ? "done"
+                            : session.status === "RUNNING"
+                              ? "scanning"
+                              : row.status,
                   }
                 : row,
             ),
@@ -504,14 +508,23 @@ export default function PageScannerSearch() {
             loadResults(sid, 1, ids);
           }
           if (DONE_STATUSES.includes(session.status)) {
-    stopPolling();
+            stopPolling();
+            // Đợt khôi phục sau reload không có vòng runMixedCampaign → tự kết thúc UI,
+            // kể cả khi backend đánh FAILED phiên mồ côi (app đã tắt giữa chừng).
+            if (!campaignRef.current.active) {
+              setRunPhase("done");
+              pushLog(
+                `Phiên #${sid} đã kết thúc · ${session.status}${session.error_message ? ` · ${session.error_message}` : ""}`,
+                session.status === "FAILED" ? "error" : "info",
+              );
+            }
           }
         } catch (e) {
           console.error(e);
         }
       }, 1500);
     },
-    [loadResults, stopPolling],
+    [loadResults, stopPolling, pushLog],
   );
 
   /* Restore đợt đang chạy theo campaign_id (chỉ dẫn 1.3) */
@@ -702,7 +715,7 @@ export default function PageScannerSearch() {
     const jobs = buildCampaignJobs({ searchMode, keywords: plainKeywords, manualHashtags });
     const campId = newCampaignId();
     setCampaignId(campId);
-    campaignRef.current = { paused: false, abort: false, queue: jobs, accIndex: 0 };
+    campaignRef.current = { paused: false, abort: false, queue: jobs, accIndex: 0, active: true };
     sessionMetaRef.current = {};
     setSessionIds([]);
     setKeywordProgress(jobs.map((j) => ({ keyword: j.label, count: 0, status: "pending", channel: j.channel })));
@@ -835,6 +848,7 @@ export default function PageScannerSearch() {
       }
     }
 
+    campaignRef.current.active = false;
     stopPolling();
     setRunPhase("done");
     if (campaignRef.current.abort) {
@@ -1677,7 +1691,9 @@ export default function PageScannerSearch() {
                           ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                           : row.status === "scanning"
                             ? "border-amber-200 bg-amber-50 text-amber-700"
-                            : "border-[#E2E8F0] bg-[#F8FAFC] text-[#64748B]"
+                            : row.status === "error"
+                              ? "border-rose-200 bg-rose-50 text-rose-700"
+                              : "border-[#E2E8F0] bg-[#F8FAFC] text-[#64748B]"
                       }`}
                     >
                       {row.keyword}{" "}

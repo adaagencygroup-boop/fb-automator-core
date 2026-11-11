@@ -33,11 +33,14 @@ PAGE_CREATION = {
         '//textarea[contains(@placeholder, "Tiểu sử") or contains(@placeholder, "Bio") or contains(@placeholder, "bio")]',
         '//textarea',
     ],
-    # 4. Nút Tạo Trang (Song ngữ VI/EN)
+    # 4. Nút Tạo Trang / Create Page (Song ngữ VI/EN) — bắt buộc role/button, tránh XPath and/or sai
     "create_page_button": [
-        '//div[@aria-label="Tạo Trang" or @aria-label="Tạo trang" or @aria-label="Create Page" or @aria-label="Create page" and @role="button"]',
-        '//span[text()="Tạo Trang" or text()="Tạo trang" or text()="Create Page" or text()="Create page"]/ancestor::div[@role="button"]',
-        '//div[@role="button" and (contains(.,"Tạo Trang") or contains(.,"Tạo trang") or contains(.,"Create Page") or contains(.,"Create page"))]',
+        '//div[@role="button" and (@aria-label="Create Page" or @aria-label="Create page" or @aria-label="Tạo Trang" or @aria-label="Tạo trang")]',
+        '//button[@type="submit" or @type="button"][contains(normalize-space(.), "Create Page") or contains(normalize-space(.), "Create page") or contains(normalize-space(.), "Tạo Trang") or contains(normalize-space(.), "Tạo trang")]',
+        '//span[normalize-space()="Create Page" or normalize-space()="Create page" or normalize-space()="Tạo Trang" or normalize-space()="Tạo trang"]/ancestor::*[@role="button" or self::button][1]',
+        '//div[@role="button" and (contains(., "Create Page") or contains(., "Create page") or contains(., "Tạo Trang") or contains(., "Tạo trang"))]',
+        '//*[@role="button" and contains(@aria-label, "Create") and contains(@aria-label, "Page")]',
+        '//*[@role="button" and contains(@aria-label, "Tạo") and contains(translate(@aria-label,"TRANG","trang"), "trang")]',
     ],
     # 5. Mã quốc gia (Song ngữ VI/EN)
     "country_code_selector": [
@@ -84,8 +87,10 @@ PAGE_CREATION = {
     ],
     # 10. Nút Tiếp (Song ngữ VI/EN)
     "next_button": [
-        '//span[text()="Tiếp" or text()="tiếp" or text()="Next" or text()="next"]/ancestor::div[@role="button"]',
-        '//div[@aria-label="Tiếp" or @aria-label="tiếp" or @aria-label="Next" or @aria-label="next"]',
+        '//div[@role="button" and (@aria-label="Next" or @aria-label="next" or @aria-label="Tiếp" or @aria-label="tiếp")]',
+        '//span[normalize-space()="Next" or normalize-space()="next" or normalize-space()="Tiếp" or normalize-space()="tiếp"]/ancestor::*[@role="button" or self::button][1]',
+        '//button[normalize-space()="Next" or normalize-space()="Tiếp" or contains(., "Next") or contains(., "Tiếp")]',
+        '//div[@role="button" and (normalize-space(.)="Next" or normalize-space(.)="Tiếp" or contains(., "Next") or contains(., "Tiếp"))]',
     ],
     # 11-12. Upload Avatar & Cover
     "avatar_file_input": [

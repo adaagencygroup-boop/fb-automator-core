@@ -1,11 +1,14 @@
 """Owner-bound OAuth and atomic token/Page synchronization. Never returns credentials."""
 import hashlib
 import json
+import logging
 import secrets
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlencode, urlsplit, parse_qs
+
+logger = logging.getLogger(__name__)
 
 from core.database.connection import db
 from core.facebook.fb_graph_client import fb_client, MetaAPIError
@@ -56,6 +59,49 @@ def consume_state(state, owner, flow, uid=None):
         return row["account_uid"]
 
 
+def _verify_single_page(owner, page_id, access_token, user_id):
+    """Tiến trình ngầm kiểm tra tính hợp lệ của token từng Page và cập nhật DB."""
+    try:
+        meta = fb_client.inspect_token(access_token, user=False)
+        if meta.get("user_id") and str(meta["user_id"]) != str(user_id):
+            status = 'ERROR'
+            meta["error"] = "Page Token không thuộc danh tính Facebook đã xác thực."
+        else:
+            status = 'ACTIVE'
+    except Exception as exc:
+        status = 'ERROR'
+        meta = {"is_valid": False, "type": "PAGE", "error": str(exc), "expires_at": 0}
+
+    try:
+        with db.session() as cur:
+            cur.execute("""UPDATE pages
+                SET token_metadata = %s::jsonb, status = %s, updated_at = NOW()
+                WHERE user_id = %s AND page_id = %s""",
+                (json.dumps(meta), status, owner, str(page_id)))
+    except Exception as e:
+        logger.warning(f"Lỗi cập nhật metadata kiểm tra ngầm cho page {page_id}: {e}")
+
+
+def start_background_page_verification(owner, pages, user_id):
+    """Chạy ngầm đa luồng (8 workers) để kiểm tra token của từng Page mà không làm nghẽn UI."""
+    if not pages:
+        return
+
+    def _worker():
+        with ThreadPoolExecutor(max_workers=8, thread_name_prefix="page-token-verify") as executor:
+            futures = [
+                executor.submit(_verify_single_page, owner, p["id"], p["access_token"], user_id)
+                for p in pages if p.get("id") and p.get("access_token")
+            ]
+            for f in futures:
+                try:
+                    f.result()
+                except Exception:
+                    pass
+
+    threading.Thread(target=_worker, daemon=True, name="bg-page-verify").start()
+
+
 def prepare_token(raw_token, *, exchange=True):
     """Validate identity and all Pages before either account or standalone saves."""
     original = fb_client.inspect_token(raw_token)
@@ -65,10 +111,17 @@ def prepare_token(raw_token, *, exchange=True):
     if str(original["user_id"]) != str(metadata["user_id"]) or str(me["id"]) != str(metadata["user_id"]):
         raise ValueError("Danh tính token không khớp với Meta.")
     pages = fb_client.fetch_managed_pages(token)
+    now_ts = int(time.time())
     for page in pages:
-        page["token_metadata"] = fb_client.inspect_token(page["access_token"], user=False)
-        if page["token_metadata"].get("user_id") and str(page["token_metadata"]["user_id"]) != str(me["id"]):
-            raise ValueError("Page Token không thuộc danh tính Facebook đã xác thực.")
+        # Gán metadata tức thì (vĩnh viễn) kế thừa từ token dài hạn, không chặn UI gọi debug_token tuần tự
+        page["token_metadata"] = {
+            "app_id": metadata.get("app_id"),
+            "type": "PAGE",
+            "is_valid": True,
+            "expires_at": 0,
+            "data_access_expires_at": metadata.get("data_access_expires_at", 0),
+            "issued_at": now_ts,
+        }
     return {"token": token, "metadata": metadata, "identity": {"id": str(me["id"]), "name": me["name"]},
             "pages": pages}
 
@@ -113,6 +166,10 @@ def save(owner, uid, prepared):
                     web_connection_id = NULL,
                     token_metadata = EXCLUDED.token_metadata, status = 'ACTIVE', updated_at = NOW()""",
                 (owner, page["id"], page["name"], page["access_token"], page.get("category"), uid, json.dumps(page["token_metadata"])))
+
+    # Khởi chạy kiểm tra ngầm đa luồng cho các Page Token (8 workers, siêu nhẹ RAM)
+    start_background_page_verification(owner, prepared["pages"], identity["id"])
+
     return {"success": True, "count": len(prepared["pages"]), "identity": identity,
             "message": f"Đã lưu token và đồng bộ {len(prepared['pages'])} Fanpage."}
 
@@ -200,8 +257,6 @@ def confirm(owner, job_id, accept):
         job["status"] = "QUEUED"
         def task(_job):
             fb_client.inspect_token(prepared["token"])
-            for page in prepared["pages"]:
-                fb_client.inspect_token(page["access_token"], user=False)
             return save(owner, job["account_uid"], prepared)
         _executor.submit(_run, job, task)
         return {"job_id": job_id, "status": "QUEUED"}
@@ -239,7 +294,6 @@ def profile_task(owner, uid, headless=False):
                     token = (params.get("access_token") or [""])[0]
                     if not token:
                         raise ValueError("Callback không có Access Token.")
-                    check_cookie()
                     return sync_task(owner, uid, token, trusted_profile=True)(job)
                 if "checkpoint" in current.path or "login.php" in current.path:
                     raise ValueError("Profile cần đăng nhập lại hoặc xử lý checkpoint.")

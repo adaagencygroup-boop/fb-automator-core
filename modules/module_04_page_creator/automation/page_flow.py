@@ -24,6 +24,13 @@ logger = logging.getLogger(__name__)
 PAGE_CREATION_URL = "https://web.facebook.com/pages/creation/?ref_type=launch_point"
 
 
+def _raise_if_creator_stopped():
+    """Tạm dừng ngay nếu FE pause; cắt hẳn nếu dừng khẩn cấp (tránh import vòng)."""
+    from modules.module_04_page_creator.routes import raise_if_creator_stopped, wait_if_paused
+    wait_if_paused()
+    raise_if_creator_stopped()
+
+
 def _select_category(driver, category: str):
     """Điền hạng mục và chọn suggestion đầu tiên."""
     cat_input = wait_and_find(driver, PAGE_CREATION["category_input"])
@@ -329,6 +336,7 @@ def run_page_creation(
     result = {"success": False, "page_url": "", "error": ""}
 
     try:
+        _raise_if_creator_stopped()
         # ── Đảm bảo trình duyệt đang ở Profile cá nhân gốc, không kẹt trong Fanpage vòng trước ──
         try:
             from modules.module_02_account_manager.automation.login_flow import ensure_personal_profile
@@ -337,11 +345,13 @@ def run_page_creation(
             logger.debug(f"Pre-creation ensure_personal_profile note: {pe}")
 
         # ── B1: Truy cập trang tạo Page ──
+        _raise_if_creator_stopped()
         logger.info(f"Opening page creation form for '{page_name}'")
         driver.get(PAGE_CREATION_URL)
         human_sleep(3.0, 5.0)
 
         # ── B2: Nhập tên trang (kèm fallback nếu phiên FB bị kẹt hoặc chưa load) ──
+        _raise_if_creator_stopped()
         name_input = None
         try:
             name_input = wait_and_find(driver, PAGE_CREATION["page_name_input"], timeout=10)
@@ -352,6 +362,7 @@ def run_page_creation(
                 ensure_personal_profile(driver)
             except Exception:
                 pass
+            _raise_if_creator_stopped()
             driver.get(PAGE_CREATION_URL)
             human_sleep(3.5, 5.5)
             name_input = wait_and_find(driver, PAGE_CREATION["page_name_input"], timeout=15)
@@ -360,9 +371,11 @@ def run_page_creation(
         human_sleep(0.5, 1.0)
 
         # ── B3: Nhập hạng mục ──
+        _raise_if_creator_stopped()
         _select_category(driver, category)
 
         # ── B4: Nhập bio ──
+        _raise_if_creator_stopped()
         try:
             bio_el = wait_and_find(driver, PAGE_CREATION["bio_textarea"], timeout=8)
             human_type(bio_el, bio)
@@ -370,13 +383,64 @@ def run_page_creation(
         except TimeoutException:
             logger.warning("Bio textarea not found, skipping")
 
-        # ── B5: Click "Tạo Trang" ──
-        create_btn = wait_and_find(driver, PAGE_CREATION["create_page_button"])
-        create_btn.click()
-        logger.info("Clicked 'Tạo Trang' button, waiting for page to be created...")
-        human_sleep(6.0, 9.0)
+        # ── B5: Click "Tạo Trang" / "Create Page" ──
+        _raise_if_creator_stopped()
+        create_btn = wait_and_find(driver, PAGE_CREATION["create_page_button"], timeout=25)
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", create_btn)
+        except Exception:
+            pass
+        human_sleep(0.3, 0.6)
+        clicked = False
+        try:
+            create_btn.click()
+            clicked = True
+        except Exception as click_err:
+            logger.warning(f"Create Page native click failed, fallback JS: {click_err}")
+        if not clicked:
+            try:
+                driver.execute_script("arguments[0].click();", create_btn)
+                clicked = True
+            except Exception as js_err:
+                logger.warning(f"Create Page JS click failed: {js_err}")
+        if not clicked:
+            raise TimeoutException("Không bấm được nút Create Page / Tạo Trang")
+        logger.info("Clicked 'Create Page / Tạo Trang', waiting for next wizard step...")
+        # Chờ form tạo biến mất / sang bước tiếp (không còn nút Create Page) — tối đa ~20s
+        left_create_step = False
+        for _ in range(40):
+            _raise_if_creator_stopped()
+            time.sleep(0.5)
+            still_create = False
+            try:
+                for loc in PAGE_CREATION["create_page_button"][:3]:
+                    for el in driver.find_elements(By.XPATH, loc):
+                        if el.is_displayed():
+                            still_create = True
+                            break
+                    if still_create:
+                        break
+            except Exception:
+                still_create = False
+            if not still_create:
+                left_create_step = True
+                break
+            # Form vẫn còn: thử click lại 1 lần giữa chừng
+            if _ == 10:
+                try:
+                    again = wait_and_find(driver, PAGE_CREATION["create_page_button"], timeout=3)
+                    driver.execute_script("arguments[0].click();", again)
+                except Exception:
+                    pass
+        if not left_create_step:
+            raise TimeoutException(
+                "Đã bấm Create Page nhưng Facebook không chuyển bước (form tạo vẫn còn sau 20s). "
+                "Kiểm tra tên/hạng mục hợp lệ hoặc thử lại."
+            )
+        human_sleep(2.0, 3.5)
 
         # ── B6: Điền thông tin liên hệ ──
+        _raise_if_creator_stopped()
         if phone:
             try:
                 phone_el = wait_and_find(driver, PAGE_CREATION["phone_input"], timeout=12)
@@ -424,12 +488,14 @@ def run_page_creation(
                 logger.warning("Email input not found")
 
         # ── B7: Điền địa chỉ ──
+        _raise_if_creator_stopped()
         if address:
             _fill_address(driver, address)
 
         human_sleep(1.0, 2.0)
 
         # ── B8: Chọn "Luôn mở cửa" ──
+        _raise_if_creator_stopped()
         try:
             radio = wait_and_find(driver, PAGE_CREATION["always_open_radio"], timeout=10)
             if not radio.is_selected():
@@ -441,6 +507,7 @@ def run_page_creation(
             logger.warning("Always open radio not found")
 
         # ── B9: Bấm "Tiếp" để chuyển sang trang media ──
+        _raise_if_creator_stopped()
         next_btn = wait_and_find(driver, PAGE_CREATION["next_button"], timeout=20)
         try:
             next_btn.click()
@@ -449,12 +516,14 @@ def run_page_creation(
         human_sleep(4.0, 6.0)
 
         # ── B10: Tải Avatar ──
+        _raise_if_creator_stopped()
         if avatar_path:
             logger.info(f"Uploading avatar from: {avatar_path}")
             _upload_file(driver, PAGE_CREATION["avatar_file_input"], avatar_path)
             human_sleep(2.0, 3.5)
 
         # ── B10: Tải Cover ──
+        _raise_if_creator_stopped()
         if cover_path:
             logger.info(f"Uploading cover from: {cover_path}")
             # 1. Thử click nút "Thêm ảnh bìa" / "Add cover photo" để kích hoạt input
@@ -506,11 +575,17 @@ def run_page_creation(
         human_sleep(2.5, 4.0)
 
         # Trả về thành công ở bước điền form và upload media. URL chính thức sẽ được lấy ở finalize_page sau khi bấm Xong.
+        _raise_if_creator_stopped()
         result["page_url"] = ""
         result["success"] = True
         logger.info(f"Page '{page_name}' wizard inputs & media completed. Ready for finalization.")
 
     except Exception as e:
+        from modules.module_04_page_creator.routes import CreatorStopRequested, stop_task_requested
+        if isinstance(e, CreatorStopRequested) or stop_task_requested:
+            result["error"] = "Đã dừng khẩn cấp"
+            result["success"] = False
+            return result
         logger.exception(f"Page creation failed for '{page_name}': {e}")
         result["error"] = str(e)
 
@@ -580,6 +655,7 @@ def finalize_page(driver: webdriver.Chrome) -> str:
     """
     real_page_url = ""
     try:
+        _raise_if_creator_stopped()
         # Bước 1: Click Tiếp sau khi upload media
         try:
             next_btn = wait_and_find(driver, PAGE_CREATION["next_button"], timeout=8)

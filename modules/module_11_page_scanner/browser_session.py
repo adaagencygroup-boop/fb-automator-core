@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,12 @@ logger = logging.getLogger(__name__)
 _ACCOUNT_JOB_LOCK = threading.Lock()
 _ACCOUNT_ACTIVE_JOBS: Dict[str, Dict[str, Any]] = {}
 
-STALE_RUNNING_MINUTES = 180  # 3h không heartbeat → đánh FAILED khi startup
+# Phiên có heartbeat_at: quá 120s không heartbeat (engine ghi mỗi 30s) → mồ côi.
+STALE_HEARTBEAT_SECONDS = 120
+# Phiên cũ chưa có heartbeat_at (tạo bởi engine bản cũ, có thể vẫn đang chạy ở máy khác
+# dùng chung DB) → giữ quy tắc cũ: quá 3h tính từ lúc bắt đầu.
+STALE_RUNNING_MINUTES = 180
+ORPHAN_ERROR_MESSAGE = "Phiên bị gián đoạn (app đã tắt hoặc mất kết nối) — không còn tiến trình chạy"
 
 
 class AccountBusyError(RuntimeError):
@@ -72,6 +77,36 @@ def get_active_job_for_account(account_uid: str) -> Optional[Dict[str, Any]]:
         return dict(cur) if cur else None
 
 
+def get_busy_account_uids() -> Set[str]:
+    """UID các acc đang có job Selenium chạy (không được đóng Chrome của chúng)."""
+    with _ACCOUNT_JOB_LOCK:
+        return set(_ACCOUNT_ACTIVE_JOBS.keys())
+
+
+def close_browsers_for_stopped_sessions(
+    account_uids: Iterable[str],
+    stopped_session_ids: Iterable[int],
+) -> List[str]:
+    """
+    Dừng khẩn cấp: chỉ đóng Chrome page_scanner của acc thuộc các phiên bị dừng.
+    Bỏ qua acc đang chạy job của phiên KHÁC (vd bấm dừng phiên cũ khi acc đã sang job mới).
+    """
+    from core.browser import close_scoped_active_drivers
+
+    stopped = {int(s) for s in stopped_session_ids}
+    targets: Set[str] = set()
+    for raw in account_uids:
+        uid = str(raw or "").strip()
+        if not uid:
+            continue
+        active = get_active_job_for_account(uid)
+        if active is None or int(active.get("session_id") or 0) in stopped:
+            targets.add(uid)
+    if not targets:
+        return []
+    return close_scoped_active_drivers(scope="page_scanner", force=True, uids=targets)
+
+
 def acquire_browser(
     target_uid: str,
     owner: str,
@@ -98,6 +133,7 @@ def release_browser(
     keep_browser: bool,
     acquired_lock: bool,
     lock: Any,
+    target_uid: str,
 ) -> None:
     from .scanner import _release_page_scanner_browser
 
@@ -106,6 +142,7 @@ def release_browser(
         keep_browser=keep_browser,
         acquired_lock=acquired_lock,
         lock=lock,
+        target_uid=target_uid,
     )
 
 
@@ -160,57 +197,63 @@ def get_account_usage_today(account_uid: str, action: str) -> int:
         return 0
 
 
-def mark_stale_running_sessions(max_age_minutes: int = STALE_RUNNING_MINUTES) -> int:
+def mark_stale_running_sessions(
+    owner_key: Optional[str] = None,
+    exclude_session_ids: Optional[Iterable[int]] = None,
+    heartbeat_timeout_s: int = STALE_HEARTBEAT_SECONDS,
+    legacy_max_age_minutes: int = STALE_RUNNING_MINUTES,
+) -> List[int]:
     """
-    Startup: phiên RUNNING/PAUSED quá lâu (daemon chết) → FAILED + ERROR.
-    Trả về số phiên đã đánh dấu.
+    Phiên RUNNING/PAUSED không còn engine nào chạy → FAILED + ERROR. Trả về id đã đánh dấu.
+    - Có heartbeat_at: quá heartbeat_timeout_s không heartbeat.
+    - Chưa có heartbeat_at (engine bản cũ): quá legacy_max_age_minutes từ lúc bắt đầu.
+    owner_key: chỉ xét phiên của owner này (gọi từ API); None = mọi owner (startup).
+    exclude_session_ids: phiên đang chạy trong chính tiến trình này — không bao giờ đánh dấu.
     """
     from core.database.connection import db
 
-    rows = None
-    minutes = max(30, int(max_age_minutes))
-    try:
-        if getattr(db, "_is_postgres", False):
-            rows = db.fetch_all(
-                """
-                SELECT id FROM page_scan_sessions
-                WHERE status IN ('RUNNING', 'PAUSED')
-                  AND COALESCE(finished_at, started_at, created_at)
-                      < (NOW() - (%s * INTERVAL '1 minute'))
-                """,
-                (minutes,),
-            )
-        else:
-            rows = db.fetch_all(
-                """
-                SELECT id FROM page_scan_sessions
-                WHERE status IN ('RUNNING', 'PAUSED')
-                  AND datetime(COALESCE(finished_at, started_at, created_at))
-                      < datetime('now', ?)
-                """,
-                (f"-{minutes} minutes",),
-            )
-    except Exception as exc:
-        logger.debug(f"[browser_session] mark_stale query: {exc}")
-        return 0
+    if not getattr(db, "_is_postgres", False):
+        return []
 
-    count = 0
-    for row in rows or []:
-        sid = int(row["id"])
-        try:
-            db.execute(
-                """
-                UPDATE page_scan_sessions
-                SET status = 'FAILED',
-                    stop_reason = 'ERROR',
-                    error_message = COALESCE(error_message, 'Stale session after restart'),
-                    finished_at = NOW()
-                WHERE id = %s AND status IN ('RUNNING', 'PAUSED')
-                """,
-                (sid,),
-            )
-            count += 1
-            logger.warning(f"[browser_session] Marked stale session #{sid} as FAILED")
-        except Exception as exc:
-            logger.debug(f"[browser_session] mark stale #{sid}: {exc}")
-    return count
+    conds = [
+        "status IN ('RUNNING', 'PAUSED')",
+        """(
+            (heartbeat_at IS NOT NULL AND heartbeat_at < NOW() - (%s * INTERVAL '1 second'))
+            OR (heartbeat_at IS NULL
+                AND COALESCE(started_at, created_at) < NOW() - (%s * INTERVAL '1 minute'))
+        )""",
+    ]
+    params: List[Any] = [
+        ORPHAN_ERROR_MESSAGE,
+        max(30, int(heartbeat_timeout_s)),
+        max(30, int(legacy_max_age_minutes)),
+    ]
+    if owner_key is not None:
+        conds.append("owner_key = %s")
+        params.append(owner_key)
+    exclude = [int(s) for s in (exclude_session_ids or [])]
+    if exclude:
+        conds.append("NOT (id = ANY(%s))")
+        params.append(exclude)
+
+    try:
+        rows = db.fetch_all(
+            f"""
+            UPDATE page_scan_sessions
+            SET status = 'FAILED',
+                stop_reason = 'ERROR',
+                error_message = COALESCE(error_message, %s),
+                finished_at = NOW()
+            WHERE {' AND '.join(conds)}
+            RETURNING id
+            """,
+            tuple(params),
+        )
+    except Exception as exc:
+        logger.debug(f"[browser_session] mark_stale: {exc}")
+        return []
+
+    ids = [int(r["id"]) for r in (rows or [])]
+    for sid in ids:
+        logger.warning(f"[browser_session] Phiên #{sid} mồ côi (không heartbeat) → FAILED")
+    return ids

@@ -177,11 +177,18 @@ export function LoginForm({
                     Đã kết nối phần cứng
                   </span>
                 </div>
-              ) : (
+              ) : hwidLoading ? (
                 <div className="flex items-center gap-1.5 text-amber-600 animate-pulse">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
                   <span className="text-[11px] font-medium">
                     Đang kết nối phần cứng...
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 text-rose-600">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                  <span className="text-[11px] font-medium">
+                    Không kết nối được Local Engine
                   </span>
                 </div>
               )}
@@ -192,10 +199,14 @@ export function LoginForm({
                 <span className="font-mono text-xs sm:text-[13px] font-semibold tracking-wider text-[#2563eb] truncate mr-2 select-all">
                   {hwid}
                 </span>
-              ) : (
+              ) : hwidLoading ? (
                 <div className="flex items-center gap-2 text-slate-500 text-xs italic">
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-[#2563eb]" />
                   <span>Đang nhận diện mã máy (HWID)...</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-rose-600 text-xs">
+                  <span>Chưa nhận diện được HWID — kiểm tra Local Engine</span>
                 </div>
               )}
               <button

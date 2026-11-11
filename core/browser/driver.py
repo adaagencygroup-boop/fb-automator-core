@@ -318,10 +318,27 @@ def close_driver_for_uid(uid: str, owner: Optional[str] = None):
     _cleanup_profile_lockfiles(profile_path)
 
 
-def close_scoped_active_drivers(scope: str, force: bool = False) -> List[str]:
-    """Đóng mọi driver thuộc scope (vd khi dừng khẩn cấp một tác vụ). Trả về danh sách UID bị đóng."""
+def close_scoped_active_drivers(
+    scope: str,
+    force: bool = False,
+    *,
+    uids: Optional[Iterable[str]] = None,
+    exclude_uids: Optional[Iterable[str]] = None,
+) -> List[str]:
+    """
+    Đóng driver thuộc scope (vd khi dừng khẩn cấp một tác vụ). Trả về danh sách UID bị đóng.
+    Mặc định đóng mọi driver của scope. uids: chỉ đóng các UID này;
+    exclude_uids: bỏ qua các UID này (vd acc đang có job khác chạy).
+    """
+    only = {str(u) for u in uids} if uids is not None else None
+    skip = {str(u) for u in exclude_uids} if exclude_uids is not None else set()
     with _active_drivers_lock:
-        to_close = [(d, info) for d, info in _active_drivers.items() if info["scope"] == scope]
+        to_close = [
+            (d, info) for d, info in _active_drivers.items()
+            if info["scope"] == scope
+            and (only is None or info["uid"] in only)
+            and info["uid"] not in skip
+        ]
         for d, _info in to_close:
             _active_drivers.pop(d, None)
 

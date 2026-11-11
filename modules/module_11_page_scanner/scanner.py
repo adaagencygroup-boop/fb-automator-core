@@ -72,6 +72,54 @@ _ACTIVE_PAUSE_EVENTS: Dict[int, threading.Event] = {}  # set = đang PAUSED
 _ACTIVE_SESSIONS_LOCK = threading.Lock()
 
 
+# Heartbeat: mỗi engine (mỗi máy) ghi heartbeat_at cho các phiên nó đang chạy.
+# Phiên RUNNING/PAUSED quá lâu không heartbeat = engine đã tắt → mồ côi (browser_session).
+HEARTBEAT_INTERVAL_SEC = 30
+_HEARTBEAT_THREAD: Optional[threading.Thread] = None
+_HEARTBEAT_GUARD = threading.Lock()
+
+
+def get_local_active_session_ids() -> List[int]:
+    """Phiên đang có worker chạy trong CHÍNH tiến trình này."""
+    with _ACTIVE_SESSIONS_LOCK:
+        return list(_ACTIVE_STOP_EVENTS.keys())
+
+
+def _heartbeat_once() -> int:
+    ids = get_local_active_session_ids()
+    if not ids:
+        return 0
+    db.execute(
+        """
+        UPDATE page_scan_sessions SET heartbeat_at = NOW()
+        WHERE id = ANY(%s) AND status IN ('RUNNING', 'PAUSED')
+        """,
+        (ids,),
+    )
+    return len(ids)
+
+
+def _heartbeat_loop() -> None:
+    while True:
+        time.sleep(HEARTBEAT_INTERVAL_SEC)
+        try:
+            _heartbeat_once()
+        except Exception as exc:
+            logger.debug(f"[Scanner] heartbeat: {exc}")
+
+
+def ensure_session_heartbeat() -> None:
+    """Khởi động (1 lần / tiến trình) luồng nền ghi heartbeat cho phiên đang chạy."""
+    global _HEARTBEAT_THREAD
+    with _HEARTBEAT_GUARD:
+        if _HEARTBEAT_THREAD is not None and _HEARTBEAT_THREAD.is_alive():
+            return
+        _HEARTBEAT_THREAD = threading.Thread(
+            target=_heartbeat_loop, daemon=True, name="page_scan_heartbeat"
+        )
+        _HEARTBEAT_THREAD.start()
+
+
 def request_stop_session(session_id: int) -> bool:
     """Dừng hẳn phiên (DỪNG KHẨN CẤP). Đồng thời gỡ pause nếu đang treo."""
     with _ACTIVE_SESSIONS_LOCK:
@@ -244,36 +292,66 @@ def _wait_dom_settle_after_scroll(
             return
 
 
+BLOCKED_ACCOUNT_STATUSES = ("DIE", "CHECKPOINT", "ERROR")
+
+
+def accounts_owner_for(owner_key: Optional[str]) -> Optional[str]:
+    """
+    owner_key của Module 11 → giá trị accounts.user_id (cùng quy ước Module 02):
+    'system' / rỗng = chưa đăng nhập = user_id NULL.
+    """
+    owner = str(owner_key or "").strip()
+    return None if not owner or owner == "system" else owner
+
+
 def get_scraping_account(
     account_uid: Optional[str] = None,
     owner_key: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Lấy tài khoản quét từ Module 02 theo tiêu chí preflight:
-    - Nếu có account_uid, ưu tiên kiểm tra đúng nick đó.
-    - Nếu không có, lấy nick LIVE, có cookie, ít được dùng nhất trong ngày.
+    Lấy tài khoản quét từ Module 02 — CHỈ trong số acc của đúng owner (như Module 02/07):
+    - Có account_uid: đúng nick đó của owner. Không thuộc owner hoặc đang
+      DIE/CHECKPOINT/ERROR → ValueError (API trả 422), không âm thầm đổi sang nick khác.
+    - Không có: nick đầu tiên của owner có cookie và không DIE/CHECKPOINT/ERROR.
+    Trả None khi không có nick phù hợp hoặc lỗi truy vấn DB.
     """
-    try:
-        if account_uid and str(account_uid).strip():
-            acc = db.fetch_one(
-                "SELECT id, uid, user_id, cookie, proxy, profile_name, status FROM accounts WHERE uid = %s LIMIT 1",
-                (str(account_uid).strip(),),
-            )
-            if acc:
-                return acc
+    owner = accounts_owner_for(owner_key)
+    uid = str(account_uid or "").strip()
 
-        # Vòng quay chọn acc đủ điều kiện, ưu tiên status LIVE / NEW và có cookie
-        acc = db.fetch_one(
-            """
-            SELECT id, uid, user_id, cookie, proxy, profile_name, status 
-            FROM accounts 
-            WHERE cookie IS NOT NULL 
-              AND status NOT IN ('DIE', 'CHECKPOINT', 'ERROR')
-            ORDER BY id ASC 
-            LIMIT 1
-            """
-        )
+    if uid:
+        try:
+            acc = db.fetch_one(
+                """
+                SELECT id, uid, user_id, cookie, proxy, profile_name, status
+                FROM accounts
+                WHERE uid = %s AND user_id IS NOT DISTINCT FROM %s
+                LIMIT 1
+                """,
+                (uid, owner),
+            )
+        except Exception as exc:
+            logger.warning(f"[Scanner] Lỗi truy vấn tài khoản cào {uid}: {exc}")
+            return None
+        if not acc:
+            raise ValueError(f"Tài khoản {uid} không tồn tại hoặc không thuộc về bạn")
+        status = str(acc.get("status") or "").strip().upper()
+        if status in BLOCKED_ACCOUNT_STATUSES:
+            raise ValueError(f"Tài khoản {uid} đang ở trạng thái {status} — không dùng để quét")
         return acc
+
+    try:
+        return db.fetch_one(
+            """
+            SELECT id, uid, user_id, cookie, proxy, profile_name, status
+            FROM accounts
+            WHERE user_id IS NOT DISTINCT FROM %s
+              AND cookie IS NOT NULL
+              AND UPPER(COALESCE(status, '')) NOT IN ('DIE', 'CHECKPOINT', 'ERROR')
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (owner,),
+        )
     except Exception as exc:
         logger.warning(f"[Scanner] Lỗi truy vấn tài khoản cào: {exc}")
         return None
@@ -296,15 +374,16 @@ def create_scan_session(
         max_results, total_seen, total_unique, total_duplicates,
         total_sponsored, batches_count, duration_seconds, settings,
         campaign_id, logs,
-        started_at, created_at
+        heartbeat_at, started_at, created_at
     ) VALUES (
         %s, %s, %s, %s, 'RUNNING',
         %s, 0, 0, 0,
         0, 0, 0, %s,
         %s, %s,
-        NOW(), NOW()
+        NOW(), NOW(), NOW()
     ) RETURNING id;
     """
+    ensure_session_heartbeat()
     row = db.fetch_one(
         query,
         (
@@ -895,6 +974,7 @@ def run_page_search_flow(
             keep_browser=keep_browser,
             acquired_lock=acquired_lock,
             lock=lock,
+            target_uid=target_uid,
         )
 
     return {
@@ -935,6 +1015,20 @@ def start_page_search_background(
 
     target_uid = str(account.get("uid") or "").strip()
 
+    # Khóa 1 job / 1 acc (chung với HASHTAG / FOLLOW / POST_SCAN) — BUSY trước khi tạo phiên
+    from .browser_session import (
+        AccountBusyError,
+        get_active_job_for_account,
+        release_account_job,
+        try_acquire_account_job,
+    )
+
+    busy = get_active_job_for_account(target_uid)
+    if busy:
+        raise AccountBusyError(
+            target_uid, int(busy["session_id"]), str(busy.get("job_type") or "")
+        )
+
     merged_settings = {
         "include_sponsored": include_sponsored,
         "headless": headless,
@@ -960,9 +1054,31 @@ def start_page_search_background(
         _ACTIVE_STOP_EVENTS[session_id] = threading.Event()
         _ACTIVE_PAUSE_EVENTS[session_id] = threading.Event()
 
+    # 2b. Giữ slot acc ngay (trước khi thread chạy) để race không double-start
+    try:
+        try_acquire_account_job(target_uid, session_id, "SEARCH")
+    except AccountBusyError:
+        try:
+            finalize_scan_session(
+                session_id, "FAILED", "ERROR", 0, 0, 0, 0, 0, 0,
+                "BUSY race — acc vừa bị chiếm",
+            )
+        except Exception:
+            pass
+        with _ACTIVE_SESSIONS_LOCK:
+            _ACTIVE_STOP_EVENTS.pop(session_id, None)
+            _ACTIVE_PAUSE_EVENTS.pop(session_id, None)
+        raise
+
+    def _search_runner(**kwargs):
+        try:
+            run_page_search_flow(**kwargs)
+        finally:
+            release_account_job(target_uid, session_id)
+
     # 3. Kích hoạt worker trong daemon thread
     worker_thread = threading.Thread(
-        target=run_page_search_flow,
+        target=_search_runner,
         kwargs={
             "keyword": clean_keyword,
             "account_uid": target_uid,
@@ -2758,10 +2874,13 @@ def _acquire_page_scanner_browser(
     """
     1 browser / 1 acc trong scope page_scanner:
     - Có driver đúng uid → tái sử dụng (không mở thêm).
-    - Không có → đóng mọi driver page_scanner (acc cũ) rồi mở mới cho uid này.
+    - Không có → đóng Chrome page_scanner nhàn rỗi (giữ lại từ keep_browser của acc
+      không còn job) rồi mở mới cho uid này. Chrome của acc đang chạy job khác được giữ.
     Trả về (driver, created_new_driver, lock, acquired_lock).
     """
+    from .browser_session import get_busy_account_uids
     from core.browser import (
+        close_driver_for_uid,
         get_active_drivers,
         get_profile_lock,
         load_cookies,
@@ -2778,9 +2897,13 @@ def _acquire_page_scanner_browser(
             pass
         return active[0], False, None, False
 
-    # Đổi acc hoặc phiên đầu: dọn browser scope cũ rồi mở mới
+    # Đổi acc hoặc phiên đầu: chỉ dọn Chrome nhàn rỗi, không đụng acc đang chạy job khác
     try:
-        close_scoped_active_drivers(scope="page_scanner", force=True)
+        close_scoped_active_drivers(
+            scope="page_scanner",
+            force=True,
+            exclude_uids=get_busy_account_uids() - {str(target_uid)},
+        )
     except Exception:
         pass
 
@@ -2789,17 +2912,30 @@ def _acquire_page_scanner_browser(
     if not acquired_lock:
         raise RuntimeError(f"Profile của nick {target_uid} đang bị khóa bởi tiến trình khác")
 
-    driver = open_browser(
-        uid=target_uid,
-        owner=owner,
-        proxy=proxy,
-        scope="page_scanner",
-        headless=headless,
-        verify_egress=False,
-        allow_direct_fallback=allow_direct_fallback,
-    )
-    if cookie_str:
-        load_cookies(driver, cookie_str)
+    driver = None
+    try:
+        driver = open_browser(
+            uid=target_uid,
+            owner=owner,
+            proxy=proxy,
+            scope="page_scanner",
+            headless=headless,
+            verify_egress=False,
+            allow_direct_fallback=allow_direct_fallback,
+        )
+        if cookie_str:
+            load_cookies(driver, cookie_str)
+    except Exception:
+        # Nơi gọi không nhận được lock khi hàm này ném lỗi → phải tự nhả ở đây,
+        # nếu không profile bị khóa vĩnh viễn (kể cả Module 02) tới khi restart app.
+        if driver is not None:
+            try:
+                close_driver_for_uid(target_uid, owner=owner)
+            except Exception:
+                pass
+        lock.release()
+        raise
+
     try:
         _ensure_scanner_page_load_timeout(driver)
     except Exception:
@@ -2812,24 +2948,27 @@ def _release_page_scanner_browser(
     keep_browser: bool,
     acquired_lock: bool,
     lock: Any,
+    target_uid: str,
 ) -> None:
     """
     Giữ Chrome nếu phiên kết thúc bình thường và keep_browser=True (job kế cùng acc).
-    Đóng scope khi dừng khẩn cấp / lỗi / hết đợt (keep_browser=False).
+    Đóng Chrome của ĐÚNG acc phiên này khi dừng khẩn cấp / lỗi / hết đợt
+    (keep_browser=False) — không đụng Chrome của job khác đang chạy song song.
     """
     force_close = stop_reason in ("USER_STOPPED", "CHECKPOINT", "ERROR")
     should_close = force_close or not keep_browser
 
-    if acquired_lock and lock:
+    # Đóng Chrome trước rồi mới nhả khóa profile, để luồng khác không mở cùng profile giữa chừng
+    if should_close and target_uid:
         try:
-            lock.release()
+            from core.browser import close_scoped_active_drivers
+            close_scoped_active_drivers(scope="page_scanner", force=True, uids=[str(target_uid)])
         except Exception:
             pass
 
-    if should_close:
+    if acquired_lock and lock:
         try:
-            from core.browser import close_scoped_active_drivers
-            close_scoped_active_drivers(scope="page_scanner", force=True)
+            lock.release()
         except Exception:
             pass
 
@@ -3615,6 +3754,7 @@ def run_hashtag_search_flow(
             keep_browser=keep_browser,
             acquired_lock=acquired_lock,
             lock=lock,
+            target_uid=target_uid,
         )
 
     # Trả về bản sao an toàn JSON: matched_hashtags đang là set trong page_kho,

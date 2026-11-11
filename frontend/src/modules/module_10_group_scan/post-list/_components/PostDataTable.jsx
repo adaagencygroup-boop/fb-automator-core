@@ -1,6 +1,7 @@
 "use client";
 
-import { ExternalLink, Trash2, Eye } from "lucide-react";
+import { useState } from "react";
+import { ExternalLink, Trash2, Eye, X } from "lucide-react";
 import Pagination from "@/components/ui/pagination";
 import CustomSelect from "@/components/ui/custom-select";
 
@@ -32,6 +33,7 @@ const PAGE_SIZE_OPTIONS = [
   { value: 5, label: "5" },
   { value: 10, label: "10" },
   { value: 20, label: "20" },
+  { value: 50, label: "50" },
 ];
 
 export default function PostDataTable({
@@ -48,6 +50,8 @@ export default function PostDataTable({
   onPageChange,
   onPageSizeChange,
 }) {
+  const [previewPost, setPreviewPost] = useState(null);
+
   return (
     <>
       {/* Posts Data Table */}
@@ -83,6 +87,12 @@ export default function PostDataTable({
             ) : (
               posts.map((post) => {
                 const isChecked = selectedPostIds.has(post.id);
+                const safeUrl =
+                  post.postUrl ||
+                  (post.linkText?.startsWith("http")
+                    ? post.linkText
+                    : `https://${post.linkText}`);
+
                 return (
                   <tr
                     key={post.id}
@@ -107,7 +117,7 @@ export default function PostDataTable({
                           {post.title}
                         </p>
                         <a
-                          href={`https://${post.linkText}`}
+                          href={safeUrl}
                           target="_blank"
                           rel="noreferrer"
                           className="inline-flex items-center gap-1 font-mono text-[11px] text-[#2563EB] hover:underline"
@@ -124,22 +134,29 @@ export default function PostDataTable({
                         >
                           {post.authorTag}
                         </span>
-                        <span className="font-semibold text-xs text-[#0F172A] truncate">
-                          {post.authorName}
-                        </span>
+                        <div className="flex flex-col min-w-0">
+                          <span className="font-semibold text-xs text-[#0F172A] truncate">
+                            {post.authorName}
+                          </span>
+                          {post.authorUid && (
+                            <span className="font-mono text-[10px] text-slate-400 truncate">
+                              UID: {post.authorUid}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="py-2.5 px-3">
                       <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#EFF6FF] text-[#1D4ED8] text-xs font-semibold">
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#EFF6FF] text-[#1D4ED8] text-xs font-semibold" title={`Lượt thích: ${post.likes}`}>
                           <IconLike />
                           <span>{post.likes}</span>
                         </span>
-                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#ECFDF5] text-[#047857] text-xs font-semibold">
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#ECFDF5] text-[#047857] text-xs font-semibold" title={`Lượt bình luận: ${post.comments}`}>
                           <IconComment />
                           <span>{post.comments}</span>
                         </span>
-                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#F3E8FF] text-[#7E22CE] text-xs font-semibold">
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#F3E8FF] text-[#7E22CE] text-xs font-semibold" title={`Lượt chia sẻ: ${post.shares}`}>
                           <IconShare />
                           <span>{post.shares}</span>
                         </span>
@@ -152,17 +169,18 @@ export default function PostDataTable({
                       <div className="flex items-center justify-center gap-1">
                         <button
                           type="button"
-                          title="Xem trước"
-                          className="p-1 text-slate-400 hover:text-blue-600 rounded"
+                          onClick={() => setPreviewPost(post)}
+                          title="Xem trước nội dung"
+                          className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
                         >
                           <Eye className="size-3.5" />
                         </button>
                         <a
-                          href={`https://${post.linkText}`}
+                          href={safeUrl}
                           target="_blank"
                           rel="noreferrer"
-                          title="Mở bài viết"
-                          className="p-1 text-slate-400 hover:text-blue-600 rounded"
+                          title="Mở bài viết trực tiếp trên Facebook"
+                          className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
                         >
                           <ExternalLink className="size-3.5" />
                         </a>
@@ -170,7 +188,7 @@ export default function PostDataTable({
                           type="button"
                           onClick={() => onRemovePost(post.id)}
                           title="Xóa bài viết"
-                          className="p-1 text-slate-400 hover:text-rose-600 rounded"
+                          className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors"
                         >
                           <Trash2 className="size-3.5" />
                         </button>
@@ -211,7 +229,72 @@ export default function PostDataTable({
           onPageChange={onPageChange}
         />
       </div>
+
+      {/* Modal Xem Trước Bài Viết */}
+      {previewPost && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-in fade-in">
+          <div className="w-full max-w-xl bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[85vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 bg-slate-50/70">
+              <div className="flex items-center gap-2.5">
+                <span
+                  className={`size-7 rounded-full ${previewPost.authorTagBg} ${previewPost.authorTagText} font-bold text-xs flex items-center justify-center uppercase`}
+                >
+                  {previewPost.authorTag}
+                </span>
+                <div>
+                  <h4 className="text-xs font-bold text-slate-800">{previewPost.authorName}</h4>
+                  <p className="text-[11px] text-slate-400 font-mono">
+                    {previewPost.postedDate} • Post ID: {previewPost.postId}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewPost(null)}
+                className="size-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 overflow-y-auto space-y-4 text-xs text-slate-700 leading-relaxed whitespace-pre-wrap">
+              <p className="select-text">{previewPost.title}</p>
+            </div>
+
+            {/* Stats & Actions */}
+            <div className="flex items-center justify-between px-5 py-3 border-t border-slate-100 bg-slate-50/50">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold">
+                  <IconLike /> {previewPost.likes} Like
+                </span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-semibold">
+                  <IconComment /> {previewPost.comments} Cmt
+                </span>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-50 text-purple-700 text-xs font-semibold">
+                  <IconShare /> {previewPost.shares} Share
+                </span>
+              </div>
+
+              <a
+                href={
+                  previewPost.postUrl ||
+                  (previewPost.linkText?.startsWith("http")
+                    ? previewPost.linkText
+                    : `https://${previewPost.linkText}`)
+                }
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 transition-colors shadow-xs"
+              >
+                <span>Mở trên Facebook</span>
+                <ExternalLink className="size-3" />
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
-

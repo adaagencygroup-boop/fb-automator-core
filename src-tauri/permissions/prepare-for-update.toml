@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-prepare-for-update"
+description = "Stop local_engine before NSIS updater overwrites locked files"
+commands.allow = ["prepare_for_update"]

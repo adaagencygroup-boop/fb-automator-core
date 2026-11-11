@@ -188,3 +188,125 @@ export async function saveGroupsToCategory({ categoryName, groups, deduplicate =
 
 
 
+
+
+// =========================================================================
+// PHÂN HỆ 10.2: API QUÉT THÀNH VIÊN NHÓM
+// =========================================================================
+
+/** Khởi chạy phiên quét thành viên nhóm */
+export async function startMemberScan(payload) {
+  return api.post("/api/group-scan/members/start", payload);
+}
+
+/** Poll trạng thái, logs và kết quả thành viên thời gian thực */
+export async function getMemberScanStatus({ jobId }) {
+  return api.get("/api/group-scan/members/status", { params: { job_id: jobId } });
+}
+
+/** Điều khiển phiên quét: pause | resume | abort */
+export async function controlMemberScan({ jobId, action }) {
+  return api.post("/api/group-scan/members/control", { job_id: jobId, action });
+}
+
+/** Lấy danh sách thành viên nhóm đã quét từ Database */
+export async function getScannedMembers(params = {}) {
+  try {
+    return await api.get("/api/group-scan/members", { params });
+  } catch {
+    return { ok: false, members: [], total: 0 };
+  }
+}
+
+/** Lấy thống kê tổng quan (KPI) cho kho thành viên */
+export async function getMembersSummary() {
+  try {
+    return await api.get("/api/group-scan/members/summary");
+  } catch {
+    return { total_members: 0, total_groups: 0, total_admins: 0 };
+  }
+}
+
+/** Xóa 1 thành viên khỏi Database */
+export async function deleteScannedMember(id) {
+  try {
+    return await api.delete(`/api/group-scan/members/${id}`);
+  } catch {
+    return null;
+  }
+}
+
+/** Xóa nhiều thành viên khỏi Database */
+export async function deleteScannedMembersBulk(ids = []) {
+  try {
+    return await api.post("/api/group-scan/members/delete-bulk", { ids });
+  } catch {
+    return null;
+  }
+}
+
+
+// =========================================================================
+// PHÂN HỆ 10.3: API QUÉT BÀI VIẾT NHÓM
+// =========================================================================
+
+/** Khởi chạy phiên quét bài viết nhóm */
+export async function startPostScan(payload) {
+  return api.post("/api/group-scan/posts/start", payload);
+}
+
+/** Poll trạng thái, logs và kết quả bài viết thời gian thực */
+export async function getPostScanStatus({ jobId }) {
+  return api.get("/api/group-scan/posts/status", { params: { job_id: jobId } });
+}
+
+/** Điều khiển phiên quét: pause | resume | abort */
+export async function controlPostScan({ jobId, action }) {
+  return api.post("/api/group-scan/posts/control", { job_id: jobId, action });
+}
+
+/** Lấy danh sách bài viết nhóm đã quét từ Database */
+export async function getScannedPosts(params = {}) {
+  try {
+    return await api.get("/api/group-scan/posts", { params });
+  } catch {
+    return { ok: false, posts: [], total: 0 };
+  }
+}
+
+/** Lấy thống kê tổng quan (KPI) cho kho bài viết */
+export async function getPostsSummary() {
+  try {
+    return await api.get("/api/group-scan/posts/summary");
+  } catch {
+    return { total_posts: 0, total_groups: 0, total_likes: 0, total_comments: 0 };
+  }
+}
+
+/** Lấy danh sách nhóm đã có bài viết (cột trái UC-GPS-06) */
+export async function getPostsGroups() {
+  try {
+    const res = await api.get("/api/group-scan/posts/groups");
+    return res?.groups || [];
+  } catch {
+    return [];
+  }
+}
+
+/** Xóa 1 bài viết khỏi Database */
+export async function deleteScannedPost(id) {
+  try {
+    return await api.delete(`/api/group-scan/posts/${id}`);
+  } catch {
+    return null;
+  }
+}
+
+/** Xóa nhiều bài viết khỏi Database */
+export async function deleteScannedPostsBulk(ids = []) {
+  try {
+    return await api.post("/api/group-scan/posts/delete-bulk", { ids });
+  } catch {
+    return null;
+  }
+}

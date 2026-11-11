@@ -59,6 +59,7 @@ DDL_STATEMENTS = [
         campaign_id VARCHAR(64),
         logs TEXT,
         error_message TEXT,
+        heartbeat_at TIMESTAMP,
         started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         finished_at TIMESTAMP,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -287,6 +288,8 @@ MIGRATION_STATEMENTS = [
     # 7. Campaign + log + PAUSED (chỉ dẫn 1.1 / 1.3 / mục 2)
     "ALTER TABLE page_scan_sessions ADD COLUMN IF NOT EXISTS campaign_id VARCHAR(64);",
     "ALTER TABLE page_scan_sessions ADD COLUMN IF NOT EXISTS logs TEXT;",
+    # Heartbeat engine đang chạy phiên — phát hiện phiên mồ côi khi app tắt (mỗi máy 1 engine, chung DB)
+    "ALTER TABLE page_scan_sessions ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMP;",
     "ALTER TABLE page_scan_sessions DROP CONSTRAINT IF EXISTS ck_page_scan_session_status;",
     "ALTER TABLE page_scan_sessions ADD CONSTRAINT ck_page_scan_session_status CHECK (status IN ('RUNNING', 'PAUSED', 'COMPLETED', 'PARTIAL', 'STOPPED', 'FAILED'));",
     # 8. Bảng người theo dõi Page (khác page_follows)
@@ -320,9 +323,9 @@ def _mark_stale_on_init():
     try:
         from .browser_session import mark_stale_running_sessions
 
-        n = mark_stale_running_sessions()
-        if n:
-            logger.warning(f"[Module 11 DB] Marked {n} stale RUNNING/PAUSED session(s)")
+        ids = mark_stale_running_sessions()
+        if ids:
+            logger.warning(f"[Module 11 DB] Marked {len(ids)} stale RUNNING/PAUSED session(s): {ids}")
     except Exception as exc:
         logger.debug(f"[Module 11 DB] stale session cleanup: {exc}")
 

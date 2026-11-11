@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowRight, ShieldCheck, Zap } from "lucide-react";
+import { APP_VERSION } from "@/config/appVersion";
 import { LoginHeader } from "./LoginHeader";
 
 export function LoginHeroBanner() {
@@ -37,7 +38,7 @@ export function LoginHeroBanner() {
       </div>
       <div className="mt-10 flex items-center justify-between gap-2 text-[10px]">
         <div className="flex items-center gap-1.5 font-medium text-sky-700"><span className="h-2 w-1 rounded-full bg-sky-600" />Hệ thống trực tuyến</div>
-        <span className="text-slate-500">Phiên bản 2.0.0</span>
+        <span className="text-slate-500">Phiên bản {APP_VERSION}</span>
       </div>
     </section>
   );

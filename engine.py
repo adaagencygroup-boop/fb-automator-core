@@ -13,6 +13,10 @@ import sys
 from urllib.parse import unquote
 from contextlib import asynccontextmanager
 
+# PyInstaller + site-packages simplejson → stub thiếu JSONDecodeError.
+# Ép alias trước khi requests/webdriver_manager import.
+sys.modules["simplejson"] = json
+
 import anyio
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Depends
