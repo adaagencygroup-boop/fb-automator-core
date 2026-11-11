@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 import threading
 import time
@@ -236,6 +237,26 @@ def _wait_if_paused_timed(
         if stop_event.is_set():
             return True, time.time() - paused_since
         time.sleep(poll_sec)
+
+
+def pick_page_delay(
+    min_s: Optional[float],
+    max_s: Optional[float],
+    fallback_s: float = 2.0,
+) -> float:
+    """Giãn cách giữa 2 Page: ngẫu nhiên trong [min_s, max_s]; không có khoảng → fallback_s."""
+    if min_s is None and max_s is None:
+        return max(0.0, float(fallback_s or 0))
+    lo = max(0.0, float(min_s if min_s is not None else max_s))
+    hi = max(lo, float(max_s if max_s is not None else lo))
+    return random.uniform(lo, hi)
+
+
+def sleep_page_delay(delay_s: float, stop_event: threading.Event) -> bool:
+    """Chờ giãn cách giữa 2 Page; bấm dừng thì thoát ngay. Trả True nếu bị stop."""
+    if delay_s <= 0:
+        return stop_event.is_set()
+    return stop_event.wait(delay_s)
 
 
 def _wait_if_paused(session_id: int, stop_event: threading.Event) -> bool:

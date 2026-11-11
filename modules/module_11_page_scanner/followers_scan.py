@@ -31,7 +31,9 @@ from .scanner import (
     append_session_log,
     create_scan_session,
     finalize_scan_session,
+    pick_page_delay,
     resolve_scan_accounts,
+    sleep_page_delay,
 )
 
 logger = logging.getLogger(__name__)
@@ -829,6 +831,8 @@ def run_follower_scan_flow(
     account_uids: Optional[List[str]] = None,
     rotate_every: int = 0,
     rotate_on_checkpoint: bool = False,
+    page_delay_min_s: Optional[float] = None,
+    page_delay_max_s: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Quét followers các Page. Nhiều acc (account_uids) → xoay vòng:
@@ -995,8 +999,11 @@ def run_follower_scan_flow(
                     break
                 bump_account_usage(rotation.uid, "FOLLOW", 1)
                 pages_quota_left -= 1
-                if page_delay_s > 0 and idx < len(page_keys) - 1:
-                    time.sleep(page_delay_s)
+                if idx < len(page_keys) - 1 and sleep_page_delay(
+                    pick_page_delay(page_delay_min_s, page_delay_max_s, page_delay_s), stop_event
+                ):
+                    stop_reason = "USER_STOPPED"
+                    break
                 continue
 
             known = existing_follower_keys(owner_key, page_key) if skip_existing else set()
@@ -1192,8 +1199,11 @@ def run_follower_scan_flow(
                     break
                 driver = rotation.driver
 
-            if page_delay_s > 0 and has_next:
-                time.sleep(page_delay_s)
+            if has_next and sleep_page_delay(
+                pick_page_delay(page_delay_min_s, page_delay_max_s, page_delay_s), stop_event
+            ):
+                stop_reason = "USER_STOPPED"
+                break
 
         else:
             # for-loop exhausted without break
@@ -1270,6 +1280,8 @@ def start_follower_scan_background(
     account_uids: Optional[List[str]] = None,
     rotate_every: int = 0,
     rotate_on_checkpoint: bool = False,
+    page_delay_min_s: Optional[float] = None,
+    page_delay_max_s: Optional[float] = None,
 ) -> int:
     page_keys = [str(k).strip() for k in (page_keys or []) if str(k).strip()]
     if not page_keys:
@@ -1292,6 +1304,8 @@ def start_follower_scan_background(
         "idle_timeout_s": idle_timeout_s,
         "skip_existing": skip_existing,
         "page_delay_s": page_delay_s,
+        "page_delay_min_s": page_delay_min_s,
+        "page_delay_max_s": page_delay_max_s,
         "scroll_delay_s": scroll_delay_s,
         "keep_browser": keep_browser,
         "source_list_id": source_list_id,
@@ -1365,6 +1379,8 @@ def start_follower_scan_background(
                 account_uids=ordered_uids,
                 rotate_every=rotate_every,
                 rotate_on_checkpoint=rotate_on_checkpoint,
+                page_delay_min_s=page_delay_min_s,
+                page_delay_max_s=page_delay_max_s,
             )
         except Exception as exc:
             logger.exception(f"[FOLLOW] background #{session_id}: {exc}")

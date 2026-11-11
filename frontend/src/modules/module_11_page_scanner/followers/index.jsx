@@ -501,7 +501,9 @@ export default function PageScannerFollowers() {
         idle_timeout_s: 90,
         skip_existing: dedupAcrossPages,
         source_list_id: null,
-        page_delay_s: delayMin,
+        // "Khoảng cách giữa các lần quét" = giãn cách ngẫu nhiên giữa 2 Page
+        page_delay_min_s: delayMin,
+        page_delay_max_s: delayMax,
       });
 
       setSessionId(res.session_id);

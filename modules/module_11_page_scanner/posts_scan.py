@@ -33,7 +33,9 @@ from .scanner import (
     append_session_log,
     create_scan_session,
     finalize_scan_session,
+    pick_page_delay,
     resolve_scan_accounts,
+    sleep_page_delay,
 )
 
 logger = logging.getLogger(__name__)
@@ -499,6 +501,8 @@ def run_post_scan_flow(
     rotate_every: int = 0,
     rotate_on_checkpoint: bool = False,
     skip_pinned_posts: bool = False,
+    page_delay_min_s: Optional[float] = None,
+    page_delay_max_s: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Quét bài viết các Page. Nhiều acc (account_uids) → xoay vòng:
@@ -737,8 +741,11 @@ def run_post_scan_flow(
                     error_message = "Không mở lại được trình duyệt sau khi đổi tài khoản"
                     break
                 driver = rotation.driver
-            if page_delay_s > 0 and has_next:
-                time.sleep(page_delay_s)
+            if has_next and sleep_page_delay(
+                pick_page_delay(page_delay_min_s, page_delay_max_s, page_delay_s), stop_event
+            ):
+                stop_reason = "USER_STOPPED"
+                break
         else:
             if total_unique == 0:
                 stop_reason = "NO_NEW_RESULTS"
@@ -813,6 +820,8 @@ def start_post_scan_background(
     rotate_every: int = 0,
     rotate_on_checkpoint: bool = False,
     skip_pinned_posts: bool = False,
+    page_delay_min_s: Optional[float] = None,
+    page_delay_max_s: Optional[float] = None,
 ) -> int:
     page_keys = [str(k).strip() for k in (page_keys or []) if str(k).strip()]
     if not page_keys:
@@ -837,6 +846,8 @@ def start_post_scan_background(
         "idle_timeout_s": idle_timeout_s,
         "skip_existing": skip_existing,
         "page_delay_s": page_delay_s,
+        "page_delay_min_s": page_delay_min_s,
+        "page_delay_max_s": page_delay_max_s,
         "scroll_delay_s": scroll_delay_s,
         "keep_browser": keep_browser,
         "source_list_id": source_list_id,
@@ -913,6 +924,8 @@ def start_post_scan_background(
                 rotate_every=rotate_every,
                 rotate_on_checkpoint=rotate_on_checkpoint,
                 skip_pinned_posts=skip_pinned_posts,
+                page_delay_min_s=page_delay_min_s,
+                page_delay_max_s=page_delay_max_s,
             )
         except Exception as exc:
             logger.exception(f"[POST_SCAN] background #{session_id}: {exc}")

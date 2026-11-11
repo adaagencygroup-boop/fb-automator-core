@@ -171,7 +171,9 @@ class FollowerSessionInput(BaseModel):
     idle_timeout_s: float = Field(90, ge=5, le=600)
     skip_existing: bool = Field(True, description="Bỏ qua follower đã có trong kho")
     source_list_id: Optional[str] = Field(None, description="ID danh sách Page đã lưu (FE)")
-    page_delay_s: float = Field(2.0, ge=0, le=120, description="Delay giữa các Page")
+    page_delay_s: float = Field(2.0, ge=0, le=180, description="Delay giữa các Page (khi không có min/max)")
+    page_delay_min_s: Optional[float] = Field(None, ge=0, le=180, description="Giãn cách giữa 2 Page — từ (giây)")
+    page_delay_max_s: Optional[float] = Field(None, ge=0, le=180, description="Giãn cách giữa 2 Page — đến (giây)")
     scroll_delay_s: float = Field(1.5, ge=0.2, le=30, description="Delay giữa các lần scroll dialog")
     headless: bool = Field(False)
     allow_direct_fallback: bool = Field(True)
@@ -206,7 +208,9 @@ class PostSessionInput(BaseModel):
     idle_timeout_s: float = Field(90, ge=5, le=600)
     skip_existing: bool = Field(True)
     skip_pinned_posts: bool = Field(False)
-    page_delay_s: float = Field(2.0, ge=0, le=120)
+    page_delay_s: float = Field(2.0, ge=0, le=180)
+    page_delay_min_s: Optional[float] = Field(None, ge=0, le=180, description="Giãn cách giữa 2 Page — từ (giây)")
+    page_delay_max_s: Optional[float] = Field(None, ge=0, le=180, description="Giãn cách giữa 2 Page — đến (giây)")
     scroll_delay_s: float = Field(1.5, ge=0.2, le=30)
     source_list_id: Optional[str] = None
     headless: bool = Field(False)
@@ -1032,6 +1036,8 @@ async def create_follower_scan_session(item: FollowerSessionInput):
             idle_timeout_s=item.idle_timeout_s,
             skip_existing=item.skip_existing,
             page_delay_s=item.page_delay_s,
+            page_delay_min_s=item.page_delay_min_s,
+            page_delay_max_s=item.page_delay_max_s,
             scroll_delay_s=item.scroll_delay_s,
             keep_browser=item.keep_browser,
             headless=item.headless,
@@ -1236,6 +1242,8 @@ async def create_post_scan_session(item: PostSessionInput):
             idle_timeout_s=item.idle_timeout_s,
             skip_existing=item.skip_existing,
             page_delay_s=item.page_delay_s,
+            page_delay_min_s=item.page_delay_min_s,
+            page_delay_max_s=item.page_delay_max_s,
             scroll_delay_s=item.scroll_delay_s,
             keep_browser=item.keep_browser,
             headless=item.headless,

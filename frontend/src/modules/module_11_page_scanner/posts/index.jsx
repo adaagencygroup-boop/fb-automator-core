@@ -393,8 +393,9 @@ export default function PageScannerPosts() {
         idle_timeout_s: 90,
         skip_existing: deduplicatePosts,
         skip_pinned_posts: skipPinnedPosts,
-        page_delay_s: delayMin,
-        scroll_delay_s: delayMax,
+        // "Khoảng cách giữa các lần quét" = giãn cách ngẫu nhiên giữa 2 Page (không phải mỗi lần cuộn)
+        page_delay_min_s: delayMin,
+        page_delay_max_s: delayMax,
       });
 
       setSessionId(res.session_id);
