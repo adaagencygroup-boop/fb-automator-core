@@ -1349,10 +1349,46 @@ def _get_control(job_id: str) -> str:
         return str(job.get("control") or "run")
 
 
+def _handle_pause_if_requested(job_id: str, context_label: str = "") -> bool:
+    """
+    Nếu job đang có cờ pause/pause_after/paused, tạm dừng tại chỗ và chờ đến khi resume hoặc abort.
+    Trả về True nếu bị abort trong lúc tạm dừng, False nếu resume bình thường.
+    """
+    if _get_control(job_id) not in {"pause", "pause_after", "paused"}:
+        return False
+
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            return False
+        job["control"] = "paused"
+        job["status"] = "paused"
+
+    lbl = f" tại «{context_label}»" if context_label else ""
+    _append_log(job_id, f"⏸️ Đã tạm dừng quét{lbl}. Bấm 'Tiếp tục' để chạy tiếp.", "warn")
+
+    max_pause_sec = 7200  # 2 giờ tối đa
+    start_pause = time.time()
+    while _get_control(job_id) in {"pause", "pause_after", "paused"}:
+        if _get_control(job_id) == "abort":
+            _append_log(job_id, "🛑 Đã dừng khẩn cấp trong lúc tạm dừng.", "warn")
+            _set_job(job_id, status="aborted", error="Dừng khẩn cấp")
+            return True
+        if time.time() - start_pause > max_pause_sec:
+            _append_log(job_id, "⚠️ Tạm dừng quá thời gian cho phép (2 giờ) — tự động kết thúc job.", "warn")
+            _set_job(job_id, status="aborted", error="Quá thời gian tạm dừng (2 giờ)")
+            return True
+        time.sleep(0.5)
+
+    _set_job(job_id, status="running", control="run")
+    _append_log(job_id, f"▶️ Tiếp tục quét{lbl}…", "info")
+    return False
+
+
 def set_job_control(job_id: str, action: str) -> dict[str, Any]:
     """
-    pause  = tạm dừng sau khi xong từ khóa hiện tại
-    resume = tiếp tục (nếu đang paused — chưa support resume mid-job; chỉ clear flag)
+    pause  = tạm dừng quét (ở nhóm hoặc từ khóa tiếp theo)
+    resume = tiếp tục quét lại từ chỗ tạm dừng
     abort  = dừng khẩn cấp ngay
     """
     action = str(action or "").strip().lower()
@@ -1364,13 +1400,15 @@ def set_job_control(job_id: str, action: str) -> dict[str, Any]:
             raise ValueError("Không tìm thấy job")
         if action == "pause":
             job["control"] = "pause_after"
-            msg = "Sẽ tạm dừng sau khi xong từ khóa hiện tại."
+            msg = "Đã gửi lệnh tạm dừng."
         elif action == "abort":
             job["control"] = "abort"
             msg = "Đang dừng khẩn cấp…"
         else:
             job["control"] = "run"
-            msg = "Đã bỏ tạm dừng."
+            if job.get("status") == "paused":
+                job["status"] = "running"
+            msg = "Đang tiếp tục quét…"
         return {"job_id": job_id, "control": job["control"], "status": job.get("status"), "message": msg}
 
 
@@ -1463,20 +1501,23 @@ def start_keyword_check(
                     old_status = (_jobs.get(old_job_id) or {}).get("status")
 
             stale = age >= STALE_PENDING_SEC
-            finished = old_status in {"done", "error"}
+            finished = old_status in {"done", "error", "aborted"}
             if force or stale or finished or old_status is None:
                 _pending.pop(key, None)
-                if old_job_id and not finished:
+                if old_job_id:
                     with _jobs_lock:
                         old = _jobs.get(old_job_id)
-                        if old and old.get("status") == "running":
-                            old["status"] = "error"
-                            old["error"] = "Job bị thay bằng lần Kiểm tra mới (browser cũ có thể đã tắt)"
-                    _append_log(
-                        old_job_id,
-                        "⏹️ Job cũ bị thay — browser đã tắt / mất kết nối / bấm Kiểm tra lại.",
-                        "warn",
-                    )
+                        if old and old.get("status") in {"running", "paused"}:
+                            old["control"] = "abort"
+                            if old.get("status") == "running":
+                                old["status"] = "error"
+                                old["error"] = "Job bị thay bằng lần Kiểm tra mới"
+                    if old_status == "running":
+                        _append_log(
+                            old_job_id,
+                            "⏹️ Đã bắt đầu phiên quét mới (thay thế job cũ).",
+                            "info",
+                        )
             else:
                 raise RuntimeError("Nick đang chạy Kiểm tra — chờ xong rồi thử lại (hoặc đợi ~45s)")
 
@@ -2223,6 +2264,8 @@ def _scrape_groups_from_results(
         for row in rows:
             if _aborted():
                 break
+            if _handle_pause_if_requested(job_id, context_label=keyword):
+                return found
             url = _normalize_group_url(row.get("href") or "")
             if not _is_group_profile_url(url) or url in seen:
                 continue
@@ -2338,10 +2381,20 @@ def _scrape_groups_from_results(
                 while time.time() < end_time:
                     if _aborted():
                         break
+                    if _get_control(job_id) in {"pause", "pause_after", "paused"}:
+                        if _handle_pause_if_requested(job_id, context_label=name):
+                            return found
+                        break
                     time.sleep(min(0.5, max(0.0, end_time - time.time())))
+            else:
+                if _handle_pause_if_requested(job_id, context_label=name):
+                    return found
 
         if len(found) >= limit:
             break
+
+        if _handle_pause_if_requested(job_id, context_label=keyword):
+            return found
 
         try:
             roots = []
@@ -2610,6 +2663,8 @@ def _check_keywords_on_account(
                 _append_log(job_id, "🛑 Dừng khẩn cấp — không chạy từ khóa còn lại.", "warn")
                 _set_job(job_id, groups=list(all_groups), status="aborted", error="Dừng khẩn cấp")
                 return
+            if _handle_pause_if_requested(job_id, context_label=item.get("keyword") or ""):
+                return
 
             keyword = item["keyword"]
             limit = _clamp_limit(item.get("limit"))
@@ -2708,14 +2763,8 @@ def _check_keywords_on_account(
                 if idx >= len(items) - 1:
                     raise
 
-            # Tạm dừng: xong từ khóa hiện tại → dừng, không chạy từ khóa tiếp
-            if _get_control(job_id) == "pause_after":
-                _append_log(
-                    job_id,
-                    f"⏸️ Tạm dừng sau «{keyword}». Các từ khóa còn lại chờ Bắt đầu lại.",
-                    "warn",
-                )
-                _set_job(job_id, groups=list(all_groups), status="paused", control="pause_after")
+            # Tạm dừng: xong từ khóa hiện tại → chờ Tiếp tục hoặc Dừng khẩn cấp
+            if _handle_pause_if_requested(job_id, context_label=f"Xong «{keyword}»"):
                 return
 
             # Xoay vòng tài khoản nếu đạt ngưỡng rotate_after (BR-GIS-01.3 & BR-GIS-05)
@@ -2779,10 +2828,10 @@ def _check_keywords_on_account(
                         _append_log(job_id, "🛑 Dừng khẩn cấp trong lúc nghỉ giữa từ khóa.", "warn")
                         _set_job(job_id, groups=list(all_groups), status="aborted", error="Dừng khẩn cấp")
                         return
-                    if _get_control(job_id) == "pause_after":
-                        _append_log(job_id, "⏸️ Tạm dừng (không chạy từ khóa tiếp).", "warn")
-                        _set_job(job_id, groups=list(all_groups), status="paused")
-                        return
+                    if _get_control(job_id) in {"pause", "pause_after", "paused"}:
+                        if _handle_pause_if_requested(job_id, context_label=f"Nghỉ trước «{next_kw}»"):
+                            return
+                        break
                     time.sleep(min(0.5, max(0.0, end_at - time.time())))
 
         _set_job(job_id, groups=list(all_groups), status="done")
