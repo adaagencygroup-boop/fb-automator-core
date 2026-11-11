@@ -155,6 +155,7 @@ export const getSyncJob = (id) => api.get(`/api/pages/sync-jobs/${id}`);
 export const confirmSyncJob = (id, accept) => api.post(`/api/pages/sync-jobs/${id}/confirm`, { accept });
 export const cancelWebOAuth = (id) => api.post(`/api/pages/web-oauth/${id}/cancel`);
 export const syncWebConnection = () => api.post("/api/pages/web-connection/sync");
+export const disconnectWebConnection = () => api.delete("/api/pages/web-connection");
 export async function startTikTokDownloadJob(payload) {
   try {
     return await api.post("/api/pages/tiktok-download", payload);

@@ -98,11 +98,20 @@ class TestUidEdit(unittest.TestCase):
         driver = Mock(window_handles=["window"])
         browsers.register_active_driver(driver, "1234")
         try:
-            with self.assertRaises(HTTPException):
-                self.edit()
+            result = self.edit()
+            self.assertEqual(result.uid, "5678")
+            self.assertTrue(driver.quit.called)
         finally:
             browsers.unregister_active_driver(driver)
-        self.assert_original()
+
+    def test_disconnected_driver_cleaned_up_on_edit(self):
+        type(driver := Mock()).window_handles = unittest.mock.PropertyMock(side_effect=Exception("chrome not reachable"))
+        browsers.register_active_driver(driver, "1234")
+        try:
+            result = self.edit()
+            self.assertEqual(result.uid, "5678")
+        finally:
+            browsers.unregister_active_driver(driver)
 
     def test_rollback_failures(self):
         with patch.object(Path, "rename", side_effect=OSError("rename failed")):

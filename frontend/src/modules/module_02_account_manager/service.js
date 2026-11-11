@@ -38,6 +38,27 @@ export function translateErrorMessage(msg) {
   if (/Profile đang được sử dụng/i.test(trimmed)) {
     return "Trình duyệt của tài khoản này đang mở. Vui lòng đóng cửa sổ Chrome trước khi xóa.";
   }
+  if (/Cannot confirm Chrome is closed/i.test(trimmed)) {
+    return "Không thể xác nhận Chrome đã đóng. Hệ thống đang tự động dọn dẹp tiến trình Chrome.";
+  }
+  if (/Close Chrome before changing UID/i.test(trimmed)) {
+    return "Vui lòng đóng trình duyệt Chrome trước khi thay đổi UID.";
+  }
+  if (/UID already exists/i.test(trimmed)) {
+    return "Tài khoản với UID này đã tồn tại trong hệ thống.";
+  }
+  if (/Destination profile already exists/i.test(trimmed)) {
+    return "Thư mục dữ liệu hồ sơ đích đã tồn tại trên đĩa.";
+  }
+  if (/Profile is busy or queued/i.test(trimmed)) {
+    return "Hồ sơ tài khoản đang bận hoặc đang trong hàng đợi xử lý.";
+  }
+  if (/Account not found/i.test(trimmed)) {
+    return "Không tìm thấy tài khoản trong hệ thống.";
+  }
+  if (/Save failed and restoring/i.test(trimmed)) {
+    return "Lưu thất bại và khôi phục thư mục hồ sơ cũ không thành công.";
+  }
   return trimmed;
 }
 

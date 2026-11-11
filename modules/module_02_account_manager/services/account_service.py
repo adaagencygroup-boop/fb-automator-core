@@ -50,6 +50,10 @@ def save_single_account(db, item):
     from ..utils.paths import account_key
     from .browser_service import _open_browser_pending, _open_browser_pending_lock
     from .login_service import _login_pending, _login_pending_lock
+    from core.browser import safe_close_driver, force_kill_driver, unregister_active_driver, close_driver_for_uid
+    from core.browser.driver import _release_profile_chrome, _cleanup_profile_lockfiles
+    import time
+
     original = item.original_uid
     if original is None:
         if item.create_only and Repo.get_by_uid(db, item.uid) is not None:
@@ -67,21 +71,46 @@ def save_single_account(db, item):
         if original != item.uid:
             if Repo.get_by_uid(db, item.uid) is not None:
                 raise HTTPException(409, "UID already exists")
+
+            # Tự động dọn dẹp driver cũ (kể cả khi Chrome đã đóng thủ công hoặc còn mở)
             with _active_drivers_lock:
                 drivers = [d for d, info in _active_drivers.items() if info.get("owner") == owner_context.get() and info.get("uid") in (original, item.uid)]
             for driver in drivers:
                 try:
-                    handles = driver.window_handles
-                except Exception as exc:
-                    raise HTTPException(409, "Cannot confirm Chrome is closed") from exc
-                if handles:
-                    raise HTTPException(409, "Close Chrome before changing UID")
+                    safe_close_driver(driver)
+                except Exception:
+                    try:
+                        force_kill_driver(driver)
+                    except Exception:
+                        pass
+                try:
+                    unregister_active_driver(driver)
+                except Exception:
+                    pass
+
+            try:
+                close_driver_for_uid(original, owner=owner_context.get())
+            except Exception:
+                pass
+
             old_path, new_path = profile_path(original), profile_path(item.uid)
             if new_path.exists():
                 raise HTTPException(409, "Destination profile already exists")
             if old_path.exists():
-                old_path.rename(new_path)
-                moved = True
+                # Retry rename để tránh lỗi file locking (PermissionError WinError 32) trên Windows
+                last_err = None
+                for _ in range(4):
+                    try:
+                        old_path.rename(new_path)
+                        moved = True
+                        break
+                    except OSError as err:
+                        last_err = err
+                        time.sleep(0.2)
+                else:
+                    if last_err:
+                        raise last_err
+
         data = item.model_dump(exclude_unset=True, exclude={"owner_username", "original_uid"})
         from ..database.category_repository import CategoryRepository
         CategoryRepository.validate_assignment(db, data)

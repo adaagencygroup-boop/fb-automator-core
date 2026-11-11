@@ -219,6 +219,11 @@ def web_connection_sync(request: Request):
     return _web_call(meta_web.resync, require_owner(request))
 
 
+@router.delete("/web-connection")
+def web_connection_disconnect(request: Request):
+    return _web_call(meta_web.disconnect, require_owner(request))
+
+
 def start_sync(owner, uid, token):
     try:
         meta_sync.account(owner, uid)
