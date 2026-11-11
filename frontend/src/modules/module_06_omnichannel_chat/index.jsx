@@ -768,7 +768,33 @@ export default function OmnichannelChatModule() {
 
   const openNotification = (id) => {
     const target = notifications.find((n) => n.id === id) || null;
-    setNotifications((list) => list.map((n) => (n.id === id ? { ...n, unread: false } : n)));
+    if (target && target.unread) {
+      setNotifications((list) => list.map((n) => (n.id === id ? { ...n, unread: false } : n)));
+      // Giảm ngay số đếm chưa đọc trên tab con và badge của Page tương ứng
+      setNotifMeta((prev) => {
+        const typeKey = target.type === "interaction" ? "interaction" : "comment";
+        const oldTypeUnread = prev.unreadCounts?.[typeKey] || 0;
+        const pageKey = String(target.pageId);
+        const oldPageUnread = prev.pageUnread?.[pageKey] || 0;
+
+        return {
+          ...prev,
+          total: Math.max(0, (prev.total || 0) - 1),
+          typeCounts: {
+            ...prev.typeCounts,
+            [typeKey]: Math.max(0, (prev.typeCounts?.[typeKey] || 0) - 1),
+          },
+          unreadCounts: {
+            ...prev.unreadCounts,
+            [typeKey]: Math.max(0, oldTypeUnread - 1),
+          },
+          pageUnread: {
+            ...prev.pageUnread,
+            [pageKey]: Math.max(0, oldPageUnread - 1),
+          },
+        };
+      });
+    }
     if (!isMock) markNotificationRead(target?.rawId || id).catch(() => {});
     setActiveConversationId(null); // mở chi tiết thông báo thì đóng khung chat
     setOpenedNotificationId(id);
