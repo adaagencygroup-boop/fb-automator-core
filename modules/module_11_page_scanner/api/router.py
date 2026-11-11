@@ -162,6 +162,9 @@ class ParseInput(BaseModel):
 class FollowerSessionInput(BaseModel):
     page_keys: List[str] = Field(..., min_length=1, description="Danh sách page_key cần quét followers")
     account_uid: Optional[str] = Field(None, description="UID acc cào")
+    account_uids: Optional[List[str]] = Field(None, description="Nhiều acc theo thứ tự xoay vòng")
+    rotate_every: int = Field(0, ge=0, le=5000, description="Đổi acc sau N Page / tài khoản (0 = không)")
+    rotate_on_checkpoint: bool = Field(False, description="Gặp checkpoint → đổi acc và quét lại Page")
     keep_browser: bool = Field(False, description="Giữ Chrome sau phiên (Selenium sau)")
     target_followers: int = Field(500, ge=1, le=50000, description="Tổng followers mục tiêu")
     max_per_page: int = Field(200, ge=1, le=5000, description="Tối đa followers / Page")
@@ -192,6 +195,9 @@ class FollowerImportInput(BaseModel):
 class PostSessionInput(BaseModel):
     page_keys: List[str] = Field(..., min_length=1)
     account_uid: Optional[str] = None
+    account_uids: Optional[List[str]] = Field(None, description="Nhiều acc theo thứ tự xoay vòng")
+    rotate_every: int = Field(0, ge=0, le=50000, description="Đổi acc sau N bài / nick (0 = không)")
+    rotate_on_checkpoint: bool = Field(False, description="Gặp checkpoint → đổi acc và quét lại Page")
     keep_browser: bool = Field(False)
     max_posts_per_page: int = Field(50, ge=1, le=500)
     date_from: Optional[str] = Field(None, description="YYYY-MM-DD")
@@ -1031,6 +1037,9 @@ async def create_follower_scan_session(item: FollowerSessionInput):
             headless=item.headless,
             allow_direct_fallback=item.allow_direct_fallback,
             source_list_id=item.source_list_id,
+            account_uids=item.account_uids,
+            rotate_every=item.rotate_every,
+            rotate_on_checkpoint=item.rotate_on_checkpoint,
         )
         return {
             "session_id": session_id,
@@ -1232,6 +1241,10 @@ async def create_post_scan_session(item: PostSessionInput):
             headless=item.headless,
             allow_direct_fallback=item.allow_direct_fallback,
             source_list_id=item.source_list_id,
+            account_uids=item.account_uids,
+            rotate_every=item.rotate_every,
+            rotate_on_checkpoint=item.rotate_on_checkpoint,
+            skip_pinned_posts=item.skip_pinned_posts,
         )
         return {
             "session_id": session_id,

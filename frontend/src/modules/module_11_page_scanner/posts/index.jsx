@@ -360,7 +360,9 @@ export default function PageScannerPosts() {
       const live = accounts.filter(
         (a) => selectedUids.includes(a.uid) && LIVE_STATUSES.has(String(a.status)),
       );
-      const accountUid = live[0]?.uid || selectedUids[0] || null;
+      // Thứ tự xoay vòng = thứ tự acc Live đã chọn (không có acc Live → gửi acc đã chọn, BE kiểm tra)
+      const accountUids = live.length ? live.map((a) => a.uid) : [...selectedUids];
+      const accountUid = accountUids[0] || null;
       if (!accountUid) throw new Error("Chọn ít nhất 1 tài khoản Live.");
 
       const pageKeys = selectedPages.map((p) => p.page_key).filter(Boolean);
@@ -380,6 +382,9 @@ export default function PageScannerPosts() {
       const res = await createPostScanSession({
         page_keys: pageKeys,
         account_uid: accountUid,
+        account_uids: accountUids,
+        rotate_every: postsPerAccountSwitch,
+        rotate_on_checkpoint: autoRotateOnCheckpoint,
         keep_browser: keepBrowser,
         max_posts_per_page: maxPostsPerPage,
         date_from: computeDateFrom(),
@@ -394,10 +399,14 @@ export default function PageScannerPosts() {
 
       setSessionId(res.session_id);
       pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
-      if (autoRotateOnCheckpoint) {
-        pushLog(`Đảo acc khi checkpoint · đổi sau ${postsPerAccountSwitch} bài/nick`, "info");
+      if (accountUids.length > 1) {
+        pushLog(
+          `Xoay vòng ${accountUids.length} tài khoản · đổi sau ${postsPerAccountSwitch} bài/nick` +
+            (autoRotateOnCheckpoint ? " · tự đảo khi checkpoint" : ""),
+          "info",
+        );
       }
-      if (skipPinnedPosts) pushLog("Đã bật lọc bỏ bài viết ghim của Quản trị viên.", "info");
+      if (skipPinnedPosts) pushLog("Bỏ qua bài viết ghim của Quản trị viên.", "info");
       toast.success(`Đã khởi động POST_SCAN #${res.session_id}`);
       startPoll(res.session_id);
     } catch (err) {

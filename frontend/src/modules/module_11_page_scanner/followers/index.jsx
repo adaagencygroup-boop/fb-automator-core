@@ -455,7 +455,9 @@ export default function PageScannerFollowers() {
       const live = accounts.filter(
         (a) => selectedUids.includes(a.uid) && LIVE_STATUSES.has(String(a.status)),
       );
-      const accountUid = live[0]?.uid || selectedUids[0] || null;
+      // Thứ tự xoay vòng = thứ tự acc Live đã chọn (không có acc Live → gửi acc đã chọn, BE kiểm tra)
+      const accountUids = live.length ? live.map((a) => a.uid) : [...selectedUids];
+      const accountUid = accountUids[0] || null;
       if (!accountUid) throw new Error("Chọn ít nhất 1 tài khoản Live.");
 
       const targetFollowers = Math.max(pageKeys.length * maxPerPage, maxPerPage);
@@ -490,6 +492,9 @@ export default function PageScannerFollowers() {
       const res = await createFollowerSession({
         page_keys: pageKeys,
         account_uid: accountUid,
+        account_uids: accountUids,
+        rotate_every: rotateEvery,
+        rotate_on_checkpoint: true,
         keep_browser: keepBrowser,
         target_followers: targetFollowers,
         max_per_page: maxPerPage,
@@ -501,8 +506,12 @@ export default function PageScannerFollowers() {
 
       setSessionId(res.session_id);
       pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
-      if (prioritizeRecent) pushLog("Ưu tiên người theo dõi gần đây (UI flag).", "info");
-      if (rotateEvery) pushLog(`Đổi acc sau ~${rotateEvery} page / tài khoản (UI flag).`, "info");
+      if (prioritizeRecent) {
+        pushLog("Ưu tiên người theo dõi gần đây: Facebook liệt kê người theo dõi mới nhất trước.", "info");
+      }
+      if (accountUids.length > 1) {
+        pushLog(`Xoay vòng ${accountUids.length} tài khoản · đổi sau ${rotateEvery} page / tài khoản`, "info");
+      }
       toast.success(`Đã khởi động FOLLOW #${res.session_id}`);
       startPoll(res.session_id);
     } catch (err) {

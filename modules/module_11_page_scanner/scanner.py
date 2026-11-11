@@ -378,6 +378,43 @@ def get_scraping_account(
         return None
 
 
+def resolve_scan_accounts(
+    account_uids: Optional[List[str]] = None,
+    account_uid: Optional[str] = None,
+    owner_key: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Danh sách acc dùng cho 1 phiên (xoay vòng), theo đúng thứ tự người dùng chọn.
+    - account_uids rỗng → dùng account_uid; cả hai rỗng → tự chọn 1 acc của owner.
+    - Acc không thuộc owner / DIE / CHECKPOINT bị loại; nếu không còn acc nào → ValueError
+      (lỗi đầu tiên, API trả 422).
+    """
+    raw = [str(u or "").strip() for u in (account_uids or [])]
+    if not any(raw) and account_uid:
+        raw = [str(account_uid).strip()]
+    uids: List[str] = []
+    for u in raw:
+        if u and u not in uids:
+            uids.append(u)
+    if not uids:
+        acc = get_scraping_account(None, owner_key=owner_key)
+        return [acc] if acc else []
+
+    accounts: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    for u in uids:
+        try:
+            acc = get_scraping_account(u, owner_key=owner_key)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        if acc:
+            accounts.append(acc)
+    if not accounts and errors:
+        raise ValueError(errors[0])
+    return accounts
+
+
 def create_scan_session(
     owner_key: str,
     keyword: Optional[str],

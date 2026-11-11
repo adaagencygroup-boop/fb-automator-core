@@ -6,7 +6,7 @@ import unittest
 from contextlib import ExitStack
 from unittest import mock
 
-from modules.module_11_page_scanner import posts_scan, scanner
+from modules.module_11_page_scanner import browser_session, posts_scan, scanner
 
 
 class FakeClock:
@@ -104,11 +104,11 @@ class TestPostScanPauseDoesNotTriggerIdle(_PauseBase):
 
         self._patch(posts_scan, "time", self.clock)
         self._patch(posts_scan, "append_session_log", side_effect=self._log)
-        self._patch(posts_scan, "get_scraping_account", return_value=dict(ACC))
+        self._patch(posts_scan, "resolve_scan_accounts", return_value=[dict(ACC)])
         self._patch(posts_scan, "try_acquire_account_job")
-        self._patch(posts_scan, "release_account_job")
-        self._patch(posts_scan, "acquire_browser", return_value=(driver, False, None, False))
-        self._patch(posts_scan, "release_browser")
+        self._patch(browser_session, "release_account_job")
+        self._patch(browser_session, "acquire_browser", return_value=(driver, False, None, False))
+        self._patch(browser_session, "release_browser")
         self._patch(posts_scan, "get_account_usage_today", return_value=0)
         self._patch(posts_scan, "bump_account_usage")
         self._patch(posts_scan, "resolve_page_url", return_value=("https://www.facebook.com/p", "P"))

@@ -14,11 +14,11 @@ from urllib.parse import urlparse
 from core.database.connection import db
 from .browser_session import (
     AccountBusyError,
-    acquire_browser,
+    AccountRotation,
     bump_account_usage,
     get_account_usage_today,
+    order_accounts_free_first,
     release_account_job,
-    release_browser,
     try_acquire_account_job,
 )
 from .page_source import extract_page_identifier
@@ -31,7 +31,7 @@ from .scanner import (
     append_session_log,
     create_scan_session,
     finalize_scan_session,
-    get_scraping_account,
+    resolve_scan_accounts,
 )
 
 logger = logging.getLogger(__name__)
@@ -826,19 +826,23 @@ def run_follower_scan_flow(
     headless: bool = False,
     allow_direct_fallback: bool = True,
     max_pages_per_acc: int = DEFAULT_PAGES_PER_ACC_DAY,
+    account_uids: Optional[List[str]] = None,
+    rotate_every: int = 0,
+    rotate_on_checkpoint: bool = False,
 ) -> Dict[str, Any]:
+    """
+    Quét followers các Page. Nhiều acc (account_uids) → xoay vòng:
+    - rotate_every > 0: đổi acc sau mỗi N Page đã quét trên acc hiện tại.
+    - rotate_on_checkpoint: gặp checkpoint/login → đổi acc và mở lại Page đó.
+    """
     page_keys = [str(k).strip() for k in (page_keys or []) if str(k).strip()]
     if not page_keys:
         raise ValueError("Cần ít nhất 1 page_key")
 
-    account = get_scraping_account(account_uid, owner_key=owner_key)
-    if not account:
+    accounts = resolve_scan_accounts(account_uids, account_uid, owner_key=owner_key)
+    if not accounts:
         raise RuntimeError("Không tìm thấy tài khoản Facebook hợp lệ")
-
-    target_uid = str(account.get("uid") or "").strip()
-    owner = account.get("user_id") or owner_key
-    cookie_str = account.get("cookie") or ""
-    proxy = account.get("proxy")
+    target_uid = str(accounts[0].get("uid") or "").strip()
 
     if session_id is None:
         session_id = create_scan_session(
@@ -881,21 +885,25 @@ def run_follower_scan_flow(
     final_status = "COMPLETED"
 
     driver = None
-    lock = None
-    acquired_lock = False
+    rotate_every = max(0, int(rotate_every or 0))
+    rotation = AccountRotation(
+        session_id,
+        "FOLLOW",
+        accounts,
+        owner_key,
+        headless=headless,
+        allow_direct_fallback=allow_direct_fallback,
+        log=lambda message, level="info": append_session_log(session_id, message, level),
+    )
+
+    def _quota_left() -> int:
+        return max(0, int(max_pages_per_acc) - get_account_usage_today(rotation.uid, "FOLLOW"))
 
     try:
         from core.browser import human_sleep
 
         try:
-            driver, _created, lock, acquired_lock = acquire_browser(
-                target_uid=target_uid,
-                owner=owner,
-                proxy=proxy,
-                cookie_str=cookie_str,
-                headless=headless,
-                allow_direct_fallback=allow_direct_fallback,
-            )
+            driver = rotation.open()
         except RuntimeError as lock_err:
             stop_reason = "CHECKPOINT"
             error_message = str(lock_err)
@@ -906,12 +914,15 @@ def run_follower_scan_flow(
 
         append_session_log(
             session_id,
-            f"FOLLOW · pages={len(page_keys)} · target={target_followers} · max/page={max_per_page} · acc={target_uid}",
+            (
+                f"FOLLOW · pages={len(page_keys)} · target={target_followers} · max/page={max_per_page}"
+                f" · acc={rotation.uid} ({len(rotation.accounts)} acc)"
+                f"{f' · đổi acc sau {rotate_every} page' if rotate_every and rotation.can_rotate else ''}"
+            ),
             "warn",
         )
 
-        used_today = get_account_usage_today(target_uid, "FOLLOW")
-        pages_quota_left = max(0, int(max_pages_per_acc) - used_today)
+        pages_quota_left = _quota_left()
 
         for idx, page_key in enumerate(page_keys):
             if stop_event.is_set():
@@ -922,13 +933,17 @@ def run_follower_scan_flow(
                 break
 
             if pages_quota_left <= 0:
-                append_session_log(
-                    session_id,
-                    f"Quota FOLLOW đạt {max_pages_per_acc} Page/acc hôm nay — dừng",
-                    "warn",
-                )
-                stop_reason = "TIMEOUT"
-                break
+                if rotation.rotate("hết quota FOLLOW hôm nay"):
+                    pages_quota_left = _quota_left()
+                if pages_quota_left <= 0:
+                    append_session_log(
+                        session_id,
+                        f"Quota FOLLOW đạt {max_pages_per_acc} Page/acc hôm nay — dừng",
+                        "warn",
+                    )
+                    stop_reason = "TIMEOUT"
+                    break
+                driver = rotation.driver
 
             if total_unique >= target_followers:
                 stop_reason = "TARGET_REACHED"
@@ -937,11 +952,20 @@ def run_follower_scan_flow(
             page_url, page_name = resolve_page_url(owner_key, page_key)
             append_session_log(
                 session_id,
-                f"[{idx + 1}/{len(page_keys)}] Mở Page {page_name or page_key}",
+                f"[{idx + 1}/{len(page_keys)}] Mở Page {page_name or page_key} · acc {rotation.uid}",
                 "info",
             )
 
-            opened = open_followers_list(driver, page_url, page_key)
+            # Mở danh sách followers; checkpoint → đảo acc và mở lại (tối đa số acc)
+            for _attempt in range(len(rotation.accounts)):
+                opened = open_followers_list(driver, page_url, page_key)
+                if opened.get("reason") != REASON_CHECKPOINT or not rotate_on_checkpoint:
+                    break
+                append_session_log(session_id, f"{page_key}: checkpoint/login — thử đổi tài khoản", "warn")
+                if not rotation.rotate("checkpoint/login", mark_dead=True):
+                    break
+                driver = rotation.driver
+                pages_quota_left = _quota_left()
             if not opened.get("ok"):
                 reason = opened.get("reason") or REASON_DIALOG_NOT_FOUND
                 attempts = opened.get("attempts") or []
@@ -969,7 +993,7 @@ def run_follower_scan_flow(
                     stop_reason = "CHECKPOINT"
                     error_message = "Checkpoint/login khi mở followers"
                     break
-                bump_account_usage(target_uid, "FOLLOW", 1)
+                bump_account_usage(rotation.uid, "FOLLOW", 1)
                 pages_quota_left -= 1
                 if page_delay_s > 0 and idx < len(page_keys) - 1:
                     time.sleep(page_delay_s)
@@ -1148,8 +1172,9 @@ def run_follower_scan_flow(
                 except Exception:
                     pass
 
-            bump_account_usage(target_uid, "FOLLOW", 1)
+            bump_account_usage(rotation.uid, "FOLLOW", 1)
             pages_quota_left -= 1
+            rotation.count += 1  # đơn vị xoay vòng FOLLOW = Page / tài khoản
 
             if stop_reason in ("USER_STOPPED", "CHECKPOINT"):
                 break
@@ -1157,7 +1182,17 @@ def run_follower_scan_flow(
                 stop_reason = "TARGET_REACHED"
                 break
 
-            if page_delay_s > 0 and idx < len(page_keys) - 1:
+            has_next = idx < len(page_keys) - 1
+            if has_next and rotate_every and rotation.can_rotate and rotation.count >= rotate_every:
+                if rotation.rotate(f"đủ {rotation.count} page / tài khoản"):
+                    pages_quota_left = _quota_left()
+                if rotation.driver is None:
+                    stop_reason = "ERROR"
+                    error_message = "Không mở lại được trình duyệt sau khi đổi tài khoản"
+                    break
+                driver = rotation.driver
+
+            if page_delay_s > 0 and has_next:
                 time.sleep(page_delay_s)
 
         else:
@@ -1204,8 +1239,7 @@ def run_follower_scan_flow(
             f"Kết thúc FOLLOW · {final_status}/{stop_reason} · unique={total_unique}",
             "success" if final_status == "COMPLETED" else "warn",
         )
-        release_browser(stop_reason, keep_browser, acquired_lock, lock, target_uid)
-        release_account_job(target_uid, session_id)
+        rotation.release(stop_reason, keep_browser)
         with _ACTIVE_SESSIONS_LOCK:
             _ACTIVE_STOP_EVENTS.pop(session_id, None)
             _ACTIVE_PAUSE_EVENTS.pop(session_id, None)
@@ -1233,24 +1267,22 @@ def start_follower_scan_background(
     allow_direct_fallback: bool = True,
     source_list_id: Optional[str] = None,
     max_pages_per_acc: int = DEFAULT_PAGES_PER_ACC_DAY,
+    account_uids: Optional[List[str]] = None,
+    rotate_every: int = 0,
+    rotate_on_checkpoint: bool = False,
 ) -> int:
     page_keys = [str(k).strip() for k in (page_keys or []) if str(k).strip()]
     if not page_keys:
         raise ValueError("Cần ít nhất 1 page_key")
 
-    account = get_scraping_account(account_uid, owner_key=owner_key)
-    if not account:
+    # Nhiều acc: bắt đầu từ acc rảnh đầu tiên (409 BUSY nếu tất cả đang bận) — trước khi tạo phiên
+    accounts = order_accounts_free_first(
+        resolve_scan_accounts(account_uids, account_uid, owner_key=owner_key)
+    )
+    if not accounts:
         raise RuntimeError("Không tìm thấy tài khoản Facebook hợp lệ")
-    target_uid = str(account.get("uid") or "").strip()
-
-    # BUSY trước khi tạo session
-    from .browser_session import get_active_job_for_account
-
-    busy = get_active_job_for_account(target_uid)
-    if busy:
-        raise AccountBusyError(
-            target_uid, int(busy["session_id"]), str(busy.get("job_type") or "")
-        )
+    ordered_uids = [str(a.get("uid") or "").strip() for a in accounts]
+    target_uid = ordered_uids[0]
 
     settings = {
         "job": "FOLLOW",
@@ -1265,6 +1297,9 @@ def start_follower_scan_background(
         "source_list_id": source_list_id,
         "automation": True,
         "max_pages_per_acc": max_pages_per_acc,
+        "account_uids": ordered_uids,
+        "rotate_every": rotate_every,
+        "rotate_on_checkpoint": rotate_on_checkpoint,
     }
     session_id = create_scan_session(
         owner_key=owner_key,
@@ -1327,6 +1362,9 @@ def start_follower_scan_background(
                 headless=headless,
                 allow_direct_fallback=allow_direct_fallback,
                 max_pages_per_acc=max_pages_per_acc,
+                account_uids=ordered_uids,
+                rotate_every=rotate_every,
+                rotate_on_checkpoint=rotate_on_checkpoint,
             )
         except Exception as exc:
             logger.exception(f"[FOLLOW] background #{session_id}: {exc}")
