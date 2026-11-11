@@ -520,7 +520,7 @@ def _update_env_media_url(public_url: str):
     frontend_env = root_dir / "frontend" / ".env"
 
     _update_env_file(root_env, "PUBLIC_MEDIA_BASE_URL", public_url)
-    _update_env_file(root_env, "FACEBOOK_OAUTH_CALLBACK_URL", f"{public_url}/oauth/meta/callback")
+    # KHÔNG tự ý ghi đè FACEBOOK_OAUTH_CALLBACK_URL vì OAuth cần domain cố định đã được whitelist trên Meta App (ví dụ Render)
     _update_env_file(frontend_env, "NEXT_PUBLIC_MEDIA_BASE_URL", public_url)
     os.environ["PUBLIC_MEDIA_BASE_URL"] = public_url
 
