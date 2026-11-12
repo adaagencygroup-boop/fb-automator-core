@@ -39,6 +39,16 @@ function Workspace({ session, children }) {
   const pathname = usePathname();
   const router = useRouter();
   const { requestNavigation } = useUnsavedChanges();
+
+  useEffect(() => {
+    const warnBeforeClose = (event) => {
+      if (!window.localStorage.getItem("fb-group-campaign-active")) return;
+      event.preventDefault();
+      event.returnValue = "Chiến dịch Module 7 đang chờ hoặc đang chạy. Đóng ứng dụng sẽ ngắt tiến trình.";
+    };
+    window.addEventListener("beforeunload", warnBeforeClose);
+    return () => window.removeEventListener("beforeunload", warnBeforeClose);
+  }, []);
   const activeTab = findNavItemByPath(pathname)?.id ?? null;
 
   const [engineOnline, setEngineOnline] = useState(false);

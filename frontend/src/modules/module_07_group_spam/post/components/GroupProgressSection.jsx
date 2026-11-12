@@ -42,7 +42,7 @@ export default function GroupProgressSection({
   campaignProgress = null,
   onClearLogs,
 }) {
-  const status = campaignProgress?.status || (runState === "starting" ? "STARTING" : runState === "running" ? "RUNNING" : "IDLE");
+  const status = campaignProgress?.status || (runState === "pending" ? "SCHEDULED" : runState === "starting" ? "STARTING" : runState === "running" ? "RUNNING" : "IDLE");
   const logs = campaignProgress?.logs || [];
   const logContainerRef = useRef(null);
   const [expanded, setExpanded] = useState(false);
@@ -133,6 +133,11 @@ export default function GroupProgressSection({
             <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-primary">
               <span className="size-2 rounded-full bg-primary animate-pulse" />
               Đang thực thi
+            </span>
+          ) : status === "SCHEDULED" || runState === "pending" ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+              <span className="size-2 rounded-full bg-amber-500 animate-pulse" />
+              Đang chờ đến giờ hẹn
             </span>
           ) : status === "STARTING" || runState === "starting" ? (
             <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">

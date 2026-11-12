@@ -298,7 +298,7 @@ class FacebookGroupPoster:
             pass
 
     def _dismiss_group_join_overlays(self) -> bool:
-        """Close Facebook welcome/questions overlays left after joining a group."""
+        """Advance and dismiss Facebook welcome overlays left after joining a group."""
         if self.driver is None:
             return False
         try:
@@ -310,19 +310,29 @@ class FacebookGroupPoster:
                 "welcome to", "chào mừng", "group rules", "quy tắc nhóm",
                 "answer questions", "membership questions", "câu hỏi thành viên",
             )
-            dialogs = [
-                item for item in driver.find_elements(By.XPATH, "//*[@role='dialog']")
-                if self._is_displayed(item)
-            ]
             dismissed = False
-            for dialog in dialogs:
-                try:
-                    dialog_text = (dialog.text or "").lower()
-                except Exception:
-                    dialog_text = ""
-                if not any(marker in dialog_text for marker in markers):
-                    continue
+            welcome_flow_active = False
+            for _ in range(6):
+                dialogs = [
+                    item for item in driver.find_elements(By.XPATH, "//*[@role='dialog']")
+                    if self._is_displayed(item)
+                ]
+                matching = []
+                for dialog in dialogs:
+                    try:
+                        dialog_text = (dialog.text or "").lower()
+                    except Exception:
+                        dialog_text = ""
+                    if any(marker in dialog_text for marker in markers):
+                        matching.append((dialog, dialog_text))
+                if not matching:
+                    if welcome_flow_active and dialogs:
+                        matching = [(dialogs[-1], (dialogs[-1].text or "").lower())]
+                    else:
+                        return dismissed
 
+                dismissed = True
+                dialog, dialog_text = matching[0]
                 close_xpath = (
                     ".//*[@role='button' and (contains(@aria-label,'Đóng') or "
                     "contains(@aria-label,'Close') or contains(@aria-label,'Dismiss'))] | "
@@ -334,22 +344,48 @@ class FacebookGroupPoster:
                 )
                 if close_button is not None:
                     driver.execute_script("arguments[0].click()", close_button)
-                else:
-                    driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-                dismissed = True
+                    if self.cancel.wait(0.4):
+                        self._raise_if_cancelled()
+                    continue
 
-            if dismissed:
-                self._wait_until(
-                    lambda: not any(
-                        self._is_displayed(item)
-                        and any(marker in ((item.text or "").lower()) for marker in markers)
-                        for item in driver.find_elements(By.XPATH, "//*[@role='dialog']")
-                    ),
-                    5,
-                    "Không thể đóng popup chào mừng của nhóm",
-                )
+                if "welcome to" in dialog_text or "chào mừng" in dialog_text:
+                    welcome_flow_active = True
+                if welcome_flow_active:
+                    # Facebook's post-join welcome flow is a short wizard. Escape
+                    # does not close it; advance its pages until Facebook removes it.
+                    next_xpath = (
+                        ".//*[@role='button' and (normalize-space(.)='Next' or "
+                        "normalize-space(.)='Tiếp' or normalize-space(.)='Tiếp theo' or "
+                        "normalize-space(.)='Continue' or normalize-space(.)='Hoàn tất' or "
+                        "normalize-space(.)='Xong' or normalize-space(.)='Done' or "
+                        "normalize-space(.)='Finish')]"
+                    )
+                    next_button = next(
+                        (button for button in dialog.find_elements(By.XPATH, next_xpath) if self._is_visible(button)),
+                        None,
+                    )
+                    if next_button is not None:
+                        driver.execute_script("arguments[0].click()", next_button)
+                        if self.cancel.wait(0.4):
+                            self._raise_if_cancelled()
+                        continue
+
+                driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                if self.cancel.wait(0.4):
+                    self._raise_if_cancelled()
+
+            # Do not let the poster continue behind a blocking welcome/questions modal.
+            still_open = any(
+                self._is_displayed(item)
+                and any(marker in ((item.text or "").lower()) for marker in markers)
+                for item in driver.find_elements(By.XPATH, "//*[@role='dialog']")
+            )
+            if still_open:
+                raise RuntimeError("Facebook vẫn còn popup chào mừng/câu hỏi nhóm sau khi thử đóng")
             return dismissed
         except InterruptedError:
+            raise
+        except RuntimeError:
             raise
         except Exception:
             return False
@@ -470,7 +506,10 @@ class FacebookGroupPoster:
                     "trả lời câu hỏi", "answer questions", "câu hỏi thành viên", "membership questions",
                 )
                 if any(marker in dialog_text for marker in question_markers):
-                    self._dismiss_group_join_overlays()
+                    try:
+                        self._dismiss_group_join_overlays()
+                    except RuntimeError:
+                        pass
                     return {"status": "REQUIRES_ANSWERS", "message": "Nhóm yêu cầu trả lời câu hỏi tham gia"}
 
             if visible(pending_xpath):
@@ -555,6 +594,13 @@ class FacebookGroupPoster:
                                 if self._is_visible(element)), None)
                 if textbox is None:
                     return False
+                current_text = driver.execute_script(
+                    "return arguments[0].innerText || arguments[0].textContent || '';",
+                    textbox,
+                )
+                normalize = lambda value: " ".join(str(value or "").split())
+                if normalize(current_text) == normalize(content):
+                    return True
                 textbox.click()
                 self._raise_if_cancelled()
                 driver.execute_script(
@@ -571,9 +617,6 @@ class FacebookGroupPoster:
                     selection.removeAllRanges();
                     selection.addRange(range);
                     document.execCommand('insertText', false, arguments[1]);
-                    arguments[0].dispatchEvent(new InputEvent('input', {
-                        bubbles: true, inputType: 'insertText', data: arguments[1]
-                    }));
                     """,
                     textbox, content,
                 )
