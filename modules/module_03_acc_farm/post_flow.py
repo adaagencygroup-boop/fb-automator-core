@@ -4352,6 +4352,146 @@ def _canonical_reel_url(reel_id: str) -> str:
     return f"https://www.facebook.com/reel/{reel_id}"
 
 
+def _reels_page_is_unavailable(driver) -> bool:
+    """
+    Facebook hiện trang lỗi kỹ thuật (wrench) trên create/draft /reel/{id}.
+    Ưu tiên text nhìn thấy được — tránh false positive từ chuỗi trong JS bundle.
+    """
+    try:
+        visible = driver.execute_script(
+            """
+            const needles = [
+              "this page isn't available",
+              "trang này không khả dụng",
+              "the link may be broken",
+              "liên kết có thể bị hỏng",
+              "we're working to get fixed",
+              "chúng tôi đang khắc phục",
+            ];
+            const nodes = Array.from(document.querySelectorAll("h1,h2,h3,span,div,p"));
+            for (const el of nodes) {
+              try {
+                if (!el || el.offsetParent === null) continue;
+                const t = (el.innerText || el.textContent || "").trim().toLowerCase();
+                if (!t || t.length > 280) continue;
+                if (needles.some((n) => t.includes(n))) return true;
+              } catch (e) {}
+            }
+            return false;
+            """
+        )
+        if visible:
+            return True
+    except Exception:
+        pass
+    try:
+        src = (driver.page_source or "").lower()
+    except Exception:
+        return False
+    # Fallback: chỉ tin page_source khi có cả tiêu đề lỗi + nút Reload
+    has_title = (
+        "this page isn't available" in src or "trang này không khả dụng" in src
+    )
+    has_reload = "reload page" in src or "tải lại trang" in src
+    return bool(has_title and has_reload)
+
+
+def _reels_wait_unavailable_clear(driver, timeout: float = 20.0, log_fn=None) -> bool:
+    """Sau Next FB có thể flash trang lỗi khi SPA load — chờ hết hoặc reload 1 lần."""
+    deadline = time.time() + max(3.0, timeout)
+    saw_bad = False
+    while time.time() < deadline:
+        if not _reels_page_is_unavailable(driver):
+            return True
+        saw_bad = True
+        time.sleep(1.0)
+    if not saw_bad:
+        return True
+    # Thử reload draft /reel/{id} một lần
+    try:
+        url = getattr(driver, "current_url", "") or ""
+    except Exception:
+        url = ""
+    if log_fn:
+        try:
+            log_fn(f"Trang Reels vẫn báo lỗi — thử Reload một lần ({url})...")
+        except Exception:
+            pass
+    try:
+        driver.refresh()
+        time.sleep(4.0)
+    except Exception:
+        return False
+    clear_deadline = time.time() + 12.0
+    while time.time() < clear_deadline:
+        if not _reels_page_is_unavailable(driver):
+            if log_fn:
+                try:
+                    log_fn("Reload xong — trang Reels đã khả dụng trở lại.")
+                except Exception:
+                    pass
+            return True
+        time.sleep(1.0)
+    return False
+
+
+def _reels_raise_if_unavailable(driver, log_fn=None, context: str = "", wait_clear: bool = False) -> None:
+    if wait_clear and _reels_page_is_unavailable(driver):
+        if _reels_wait_unavailable_clear(driver, timeout=18.0, log_fn=log_fn):
+            return
+    if not _reels_page_is_unavailable(driver):
+        return
+    try:
+        url = getattr(driver, "current_url", "") or ""
+    except Exception:
+        url = ""
+    where = f" ({context})" if context else ""
+    msg = (
+        f"Facebook báo trang Reels không khả dụng{where}. "
+        f"URL: {url or 'N/A'}. Thường xảy ra khi bấm Next quá sớm sau Upload — "
+        f"thử lại với file khác hoặc mở lại /reels/create/."
+    )
+    if log_fn:
+        try:
+            log_fn(msg)
+        except Exception:
+            pass
+    raise RuntimeError(msg)
+
+
+def _reels_upload_looks_ready(driver) -> bool:
+    """Có dấu hiệu video đã vào composer (preview / file input có files)."""
+    try:
+        return bool(
+            driver.execute_script(
+                """
+                const inputs = Array.from(document.querySelectorAll("input[type='file']"));
+                if (inputs.some((i) => i.files && i.files.length > 0)) return true;
+                if (document.querySelector("video")) return true;
+                const imgs = Array.from(document.querySelectorAll("img"));
+                if (imgs.some((img) => {
+                  const s = (img.currentSrc || img.src || "");
+                  return s.startsWith("blob:") || s.includes("scontent") || s.includes("fbcdn");
+                })) return true;
+                return false;
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
+# Nút Next trong wizard Reels — tránh khớp "Tiếp tục" / Continue
+_REELS_NEXT_BTN_XPATH = (
+    "//*[self::button or @role='button']"
+    "[@aria-label='Tiếp' or @aria-label='Next' "
+    "or .//span[normalize-space(text())='Tiếp' or normalize-space(text())='Next'] "
+    "or normalize-space(text())='Tiếp' or normalize-space(text())='Next']"
+    "[not(contains(@aria-label,'Tiếp tục')) and not(contains(@aria-label,'Continue')) "
+    "and not(.//span[contains(normalize-space(.),'Tiếp tục') or contains(normalize-space(.),'Continue')])]"
+)
+
+
 def _snapshot_profile_reel_ids(driver, uid: Optional[str] = None) -> list:
     """Lấy danh sách ID Reels trên tab profile (mới → cũ). Không navigate nếu đang ở create."""
     js_collect = """
@@ -5660,13 +5800,7 @@ def publish_reels_post(
     _chk()
 
     # Kiểm tra xem có bị lỗi 'This Page Isn't Available' / 'Trang này không khả dụng' không
-    page_source = driver.page_source.lower()
-    is_page_broken = (
-        "this page isn't available" in page_source
-        or "trang này không khả dụng" in page_source
-        or "the link may be broken" in page_source
-        or "liên kết có thể bị hỏng" in page_source
-    )
+    is_page_broken = _reels_page_is_unavailable(driver)
 
     if is_page_broken:
         log("Trang /reels/create/ báo lỗi không khả dụng, mở trình tạo Reels từ Bảng tin Facebook...")
@@ -5738,6 +5872,26 @@ def publish_reels_post(
     except Exception:
         pass
 
+    next_btn_xpath = _REELS_NEXT_BTN_XPATH
+
+    def _find_active_btn(d, xpath):
+        for btn in d.find_elements(By.XPATH, xpath):
+            try:
+                if not btn.is_displayed():
+                    continue
+                if btn.get_attribute("aria-disabled") == "true" or btn.get_attribute("disabled") is not None:
+                    continue
+                label = (btn.get_attribute("aria-label") or btn.text or "").strip().lower()
+                # Chặn nhầm "Tiếp tục" / Continue dù xpath đã lọc
+                if "tiếp tục" in label or label.startswith("continue"):
+                    continue
+                return btn
+            except Exception:
+                continue
+        return False
+
+    next_before_upload = bool(_find_active_btn(driver, next_btn_xpath))
+
     try:
         file_input = WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.XPATH, "//input[@type='file' and (contains(@accept, 'video') or @accept='*' or contains(@accept, 'mp4'))]"))
@@ -5747,50 +5901,119 @@ def publish_reels_post(
         check_account_health(driver)
         raise RuntimeError(f"Không tìm thấy cổng nạp file video Reels: {e}")
 
-    log("Đang tải video lên Facebook, chờ video tải xong...")
-    next_btn_xpath = (
-        "//*[self::button or @role='button']"
-        "[@aria-label='Tiếp' or @aria-label='Next' or contains(., 'Tiếp') or contains(., 'Next')]"
+    upload_started = time.time()
+    log(
+        "Đang tải video lên Facebook — chờ preview/upload xong trước khi Next "
+        f"(không bấm ngay; Next sẵn trước upload={next_before_upload})..."
     )
 
-    def _find_active_btn(d, xpath):
-        for btn in d.find_elements(By.XPATH, xpath):
-            try:
-                if not btn.is_displayed():
-                    continue
-                if btn.get_attribute("aria-disabled") == "true" or btn.get_attribute("disabled") is not None:
-                    continue
-                return btn
-            except Exception:
-                continue
-        return False
-
-    # Chờ nút 'Tiếp' bật sáng (không bị disabled)
-    try:
-        next_btn = WebDriverWait(driver, 45).until(lambda d: _find_active_btn(d, next_btn_xpath))
+    def _click_reels_next(step_label: str) -> bool:
+        btn = _find_active_btn(driver, next_btn_xpath)
+        if not btn:
+            return False
         _chk()
-        log("Di chuột click nút 'Tiếp' (Bước 1)...")
+        log(f"Di chuột click nút 'Tiếp' ({step_label})...")
+        try:
+            human.click(btn)
+        except Exception:
+            driver.execute_script("arguments[0].click();", btn)
+        time.sleep(random.uniform(2.5, 4.0))
+        try:
+            cur = getattr(driver, "current_url", "") or ""
+            log(f"Sau Next ({step_label}): URL = {cur}")
+        except Exception:
+            pass
+        _reels_raise_if_unavailable(
+            driver, log, f"sau Next {step_label}", wait_clear=True
+        )
+        return True
+
+    def _wait_upload_then_next(min_wait: float = 8.0, timeout: float = 120.0):
+        """
+        Chờ tối thiểu min_wait + có dấu hiệu file/preview.
+        Nếu Next đã sáng trước upload: đợi nó tắt rồi sáng lại, hoặc hết min_wait + preview.
+        """
+        deadline = time.time() + timeout
+        last_progress_log = 0.0
+        saw_disabled_after = False
+        while time.time() < deadline:
+            _chk()
+            _reels_raise_if_unavailable(driver, log, "đang chờ upload Reels")
+            elapsed = time.time() - upload_started
+            ready_media = _reels_upload_looks_ready(driver)
+            next_btn = _find_active_btn(driver, next_btn_xpath)
+            next_on = bool(next_btn)
+
+            if next_before_upload and not next_on:
+                saw_disabled_after = True
+
+            if time.time() - last_progress_log >= 8.0:
+                log(
+                    f"Chờ upload Reels... {int(elapsed)}s "
+                    f"(preview/file={ready_media}, nút Tiếp={next_on})"
+                )
+                last_progress_log = time.time()
+
+            # Đủ điều kiện bấm Next
+            min_ok = elapsed >= min_wait
+            if next_before_upload:
+                # Tránh bấm ngay Next cũ: cần đã thấy disable lại HOẶC đã có preview + đủ min_wait
+                can_click = min_ok and next_on and (saw_disabled_after or ready_media)
+            else:
+                can_click = min_ok and next_on and ready_media
+
+            # Fallback cuối: Next sáng + đã chờ khá lâu dù chưa bắt được preview
+            if not can_click and next_on and elapsed >= max(min_wait, 25.0):
+                can_click = True
+                log("Fallback: nút Tiếp đã sáng đủ lâu — tiến hành Next.")
+
+            if can_click and next_btn:
+                return next_btn
+            time.sleep(0.6)
+        return None
+
+    # Chờ upload xong rồi mới Next — Next sớm (~1s) hay tạo /reel/{id} unavailable
+    try:
+        next_btn = _wait_upload_then_next(min_wait=8.0, timeout=120.0)
+        if not next_btn:
+            _reels_raise_if_unavailable(driver, log, "sau upload (timeout chờ Tiếp)")
+            raise TimeoutError("Hết thời gian chờ nút Tiếp sau upload Reels.")
+        _chk()
+        _reels_raise_if_unavailable(driver, log, "trước khi Next (đang upload)")
+        log(
+            f"Video sẵn sàng sau {int(time.time() - upload_started)}s — "
+            "di chuột click nút 'Tiếp' (Bước 1)..."
+        )
         try:
             human.click(next_btn)
         except Exception:
             driver.execute_script("arguments[0].click();", next_btn)
-        time.sleep(random.uniform(1.8, 2.8))
-    except Exception:
-        log("Cảnh báo: Bỏ qua bước 'Tiếp' đầu tiên...")
+        time.sleep(random.uniform(2.5, 4.0))
+        try:
+            log(f"Sau Next (Bước 1): URL = {getattr(driver, 'current_url', '') or ''}")
+        except Exception:
+            pass
+        _reels_raise_if_unavailable(
+            driver, log, "sau Next Bước 1", wait_clear=True
+        )
+    except RuntimeError:
+        raise
+    except Exception as e:
+        _reels_raise_if_unavailable(driver, log, "sau upload (không thấy nút Tiếp)")
+        log(f"Cảnh báo: Bỏ qua bước 'Tiếp' đầu tiên ({e})...")
 
-    # Bước tiếp theo (nếu có thêm nút Tiếp)
+    # Bước tiếp theo (nếu còn nút Tiếp trên wizard)
     try:
-        second_next = _find_active_btn(driver, next_btn_xpath)
-        if second_next:
-            _chk()
-            log("Di chuột click nút 'Tiếp' (Bước 2)...")
-            try:
-                human.click(second_next)
-            except Exception:
-                driver.execute_script("arguments[0].click();", second_next)
-            time.sleep(random.uniform(1.8, 2.8))
+        if _find_active_btn(driver, next_btn_xpath):
+            time.sleep(random.uniform(1.2, 2.0))
+            _reels_raise_if_unavailable(driver, log, "trước Next Bước 2", wait_clear=True)
+            _click_reels_next("Bước 2")
+    except RuntimeError:
+        raise
     except Exception:
         pass
+
+    _reels_raise_if_unavailable(driver, log, "trước bước privacy/caption", wait_clear=True)
 
     # 2. Thiết lập quyền riêng tư Reels sang 'Công khai' (Public)
     _mark("REELS_PRIVACY", "Thiết lập quyền riêng tư Reels sang Công khai...")
@@ -5872,10 +6095,23 @@ def publish_reels_post(
     deadline = start_wait_reels + reels_timeout
     while time.time() < deadline:
         _chk()
+        # Fail sớm nếu FB đã nhảy sang trang lỗi (tránh treo chờ Đăng đến 15 phút)
+        if _reels_page_is_unavailable(driver):
+            _reels_raise_if_unavailable(
+                driver, log, "khi chờ nút Đăng Reels", wait_clear=True
+            )
+
         now = time.time()
         if now - last_log_reels >= 15:
             elapsed = int(now - start_wait_reels)
-            log(f"Đang chờ Facebook render/xử lý video Reels (đã chờ {elapsed}s/{reels_timeout}s - kiên nhẫn đợi render xong)...")
+            try:
+                cur_u = getattr(driver, "current_url", "") or ""
+            except Exception:
+                cur_u = ""
+            log(
+                f"Đang chờ Facebook render/xử lý video Reels "
+                f"(đã chờ {elapsed}s/{reels_timeout}s - URL: {cur_u})..."
+            )
             last_log_reels = now
 
         # Cuộn cột bên trái xuống dưới cùng nếu bị che khuất

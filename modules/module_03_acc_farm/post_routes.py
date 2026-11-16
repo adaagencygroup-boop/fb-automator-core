@@ -11,6 +11,7 @@ Cung cấp các API:
 """
 import os
 import re
+import random
 import logging
 import mimetypes
 from config.constants import UPLOADS_DIR
@@ -123,6 +124,16 @@ def save_settings(payload: SettingsPayload):
 # ==============================================================================
 # 2. FOLDER MAPPING ENDPOINTS
 # ==============================================================================
+
+@router.get("/folders/mappings")
+def list_folder_mappings(post_type: str = Query("reels", description="reels | story")):
+    """Lấy mapping thư mục đã lưu theo post_type (dùng khi reload danh sách nick)."""
+    pt = (post_type or "reels").strip().lower()
+    if pt not in ("reels", "story"):
+        raise HTTPException(status_code=400, detail="post_type phải là reels hoặc story")
+    rows = post_repository.get_folder_mappings(pt)
+    return {"success": True, "data": rows or []}
+
 
 @router.post("/folders/scan")
 def scan_and_map_folders(payload: ScanFolderPayload):
@@ -575,30 +586,33 @@ def start_posting(payload: StartPostPayload):
                 logger.warning(f"Tài khoản {name} ({uid}) đã đăng hết toàn bộ {len(clips)} video trong thư mục, không còn video mới chưa đăng.")
                 continue
 
-            logger.info(f"Tài khoản {name} ({uid}): tìm thấy {len(target_clips)}/{len(clips)} video sẵn sàng để đưa vào hàng đợi đăng.")
-            for clip in target_clips:
-                c_path = clip['path']
-                c_hash = clip.get('hash')
+            # Ticket #70: mỗi lần thực thi, mỗi nick chỉ chọn ngẫu nhiên 1 file chưa đăng
+            clip = random.choice(target_clips)
+            c_path = clip['path']
+            c_hash = clip.get('hash')
+            logger.info(
+                f"Tài khoản {name} ({uid}): chọn ngẫu nhiên 1/{len(target_clips)} "
+                f"file chưa đăng từ {len(clips)} file trong thư mục → {os.path.basename(c_path)}"
+            )
 
-                if payload.post_type == 'reels':
-                    c_caption = generate_caption_from_filename(c_path, post_type='reels')
-                elif payload.post_type == 'story':
-                    c_caption = generate_caption_from_filename(c_path, post_type='story')
-                else:
-                    c_caption = ""
+            # Ticket #66: Story không dùng caption — chỉ Reels sinh caption từ tên file
+            if payload.post_type == 'reels':
+                c_caption = generate_caption_from_filename(c_path, post_type='reels')
+            else:
+                c_caption = ""
 
-                post_repository.create_post(
-                    session_id=session_id,
-                    post_type=payload.post_type,
-                    account_uid=uid,
-                    account_name=name,
-                    content=c_caption,
-                    media_path=c_path,
-                    media_hash=c_hash,
-                    schedule_time=schedule_time_val,
-                    status='PENDING'
-                )
-                inserted_count += 1
+            post_repository.create_post(
+                session_id=session_id,
+                post_type=payload.post_type,
+                account_uid=uid,
+                account_name=name,
+                content=c_caption,
+                media_path=c_path,
+                media_hash=c_hash,
+                schedule_time=schedule_time_val,
+                status='PENDING'
+            )
+            inserted_count += 1
         else:
             # Status Post: xác định nội dung & ảnh đính kèm (tối đa 3)
             img_paths = post_repository.normalize_image_paths(
