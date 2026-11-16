@@ -119,7 +119,7 @@ const RULES = [
   [/\/api\/creator\//, KHONG_CHAN],
   [/\/api\/facebook\/pages/, KHONG_CHAN],
   [/\/api\/facebook\/status/, KHONG_CHAN],
-  [/\/api\/facebook\/posts\//, KHONG_CHAN],
+  [/\/api\/facebook\/posts\//, 0],
 
   // Hội thoại và thông báo: hard = KHONG_CHAN, tức không bao giờ chặn.
   //

@@ -13,12 +13,11 @@ import {
   Trash2,
   UserPlus,
   Key,
+  KeyRound,
   ExternalLink,
   ShieldCheck,
   ShieldAlert,
-  Sparkles,
   Layers,
-  Zap,
   Globe,
   Monitor,
   Loader2,
@@ -852,9 +851,6 @@ function OwnedFanpageList({ owner }) {
                 Thêm & Nạp Fanpage vào hệ thống
               </DialogTitle>
             </div>
-            <DialogDescription className="text-xs text-slate-500 pt-0.5">
-              Cấp Token và quét Fanpage tự động qua danh sách tài khoản (cột bên trái) hoặc Đăng nhập trực tiếp trên trình duyệt (cột bên phải).
-            </DialogDescription>
           </DialogHeader>
 
           <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,7fr)_minmax(0,3fr)] gap-5 pt-2 flex-1 min-h-0 overflow-y-auto pr-1">
@@ -1065,37 +1061,20 @@ function OwnedFanpageList({ owner }) {
                               </td>
                               <td data-label="Hành động" className="py-2 px-2.5 text-right">
                                 <div className="flex min-w-0 flex-nowrap items-center justify-end gap-1">
-                                  {isExpiredToken ? (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleProfileOAuth(acc.uid)}
-                                      disabled={isActionDisabled}
-                                      className="h-7 px-2.5 rounded-md bg-amber-600 hover:bg-amber-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
-                                      title="Token đã hết hạn. Mở Chrome Profile để cấp lại Token mới!"
-                                    >
-                                      {accountJobs[acc.uid]?.kind === "oauth" ? (
-                                        <Loader2 className="w-3 h-3 animate-spin" />
-                                      ) : (
-                                        <Zap className="w-3 h-3 text-amber-200 fill-amber-200" />
-                                      )}
-                                      Cấp lại
-                                    </button>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleProfileOAuth(acc.uid)}
-                                      disabled={isActionDisabled}
-                                      className="h-7 px-2 rounded-md bg-blue-600 hover:bg-blue-700 font-bold text-[10.5px] text-white flex items-center gap-1 shadow-2xs transition-all disabled:opacity-50"
-                                      title="Mở Chrome Profile của nick này để tự động cấp Token và nạp Fanpage"
-                                    >
-                                      {accountJobs[acc.uid]?.kind === "oauth" ? (
-                                        <Loader2 className="w-3 h-3 animate-spin" />
-                                      ) : (
-                                        <Zap className="w-3 h-3 text-amber-300 fill-amber-300" />
-                                      )}
-                                      {rawHasToken ? "Cấp lại" : "Cấp Token"}
-                                    </button>
-                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleProfileOAuth(acc.uid)}
+                                    disabled={isActionDisabled}
+                                    className="h-7 px-2.5 rounded-md bg-blue-600 hover:bg-blue-700 font-medium text-[10.5px] text-white flex items-center gap-1.5 shadow-2xs transition-all disabled:opacity-50"
+                                    title={isExpiredToken ? "Token đã hết hạn. Mở Chrome Profile để cấp lại Token mới!" : "Mở Chrome Profile của nick này để tự động cấp Token và nạp Fanpage"}
+                                  >
+                                    {accountJobs[acc.uid]?.kind === "oauth" ? (
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                    ) : (
+                                      <KeyRound className="w-3 h-3 text-blue-100" />
+                                    )}
+                                    Cấp Token
+                                  </button>
 
                                   {/* Token chết/hết hạn thì không quét. Chỉ quét khi token LIVE hoặc có token chưa check */}
                                   {rawHasToken && !isExpiredToken ? (
@@ -1103,14 +1082,10 @@ function OwnedFanpageList({ owner }) {
                                       type="button"
                                       onClick={() => handleSyncPages(acc.uid)}
                                       disabled={isActionDisabled}
-                                      className="h-7 px-2.5 rounded-md border border-slate-200 bg-white hover:bg-slate-50 font-medium text-[10.5px] text-slate-700 flex items-center gap-1 transition-all disabled:opacity-50"
-                                      title="Quét bằng token đã lưu; hệ thống xác thực trước khi đồng bộ"
+                                      className="h-7 px-2.5 rounded-md border border-slate-200 bg-white hover:bg-slate-50 font-medium text-[10.5px] text-slate-700 flex items-center gap-1.5 transition-all disabled:opacity-50"
+                                      title="Quét lại các Fanpage do tài khoản này quản lý"
                                     >
-                                      {accountJobs[acc.uid]?.kind === "sync" ? (
-                                        <RefreshCw className="w-3 h-3 animate-spin text-slate-400" />
-                                      ) : (
-                                        <Sparkles className="w-3 h-3 text-blue-500" />
-                                      )}
+                                      <RefreshCw className={`w-3 h-3 ${accountJobs[acc.uid]?.kind === "sync" ? "animate-spin text-blue-500" : "text-slate-500"}`} />
                                       Quét
                                     </button>
                                   ) : null}
@@ -1149,17 +1124,6 @@ function OwnedFanpageList({ owner }) {
                 <p className="text-xs text-slate-600 leading-relaxed">
                   Thời hạn và quyền truy cập token được cập nhật từ Meta.
                 </p>
-                {Object.keys(accountJobs).length > 0 && (
-                  <div className="space-y-1.5 border-t border-slate-100 pt-2.5 text-xs text-slate-600 max-h-24 overflow-y-auto pr-1">
-                    {Object.entries(accountJobs).map(([uid, job]) => (
-                      <div key={uid} role="status" className="flex items-center gap-1.5 bg-blue-50/70 px-2 py-1.5 rounded-lg border border-blue-100">
-                        <Loader2 className="w-3 h-3 animate-spin text-blue-600 shrink-0" />
-                        <span className="font-mono font-semibold text-[11px] text-blue-900 shrink-0">{uid}:</span>
-                        <span className="text-[11px] text-slate-700 truncate">{job.message}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
 
               {/* KHỐI THÊM NICK MỚI */}

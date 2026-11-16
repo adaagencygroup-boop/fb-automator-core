@@ -59,19 +59,22 @@ RESULTS_ROOT_LOCATORS = [
 
 CLICK_JOIN_BUTTON_JS = """
 return ((targetUrl, targetName) => {
-  const cleanUrl = (targetUrl || '').split('?')[0].replace(/\/+$/, '').toLowerCase();
-  const root =
-    document.querySelector('[aria-label="Search results"][role="main"]') ||
-    document.querySelector('[aria-label="Search results"]') ||
-    document.querySelector('[role="main"]') ||
-    document.body;
-
-  const isAlreadyJoined = (text) => {
-    return /^(đã tham gia|joined|đang chờ|requested|hủy yêu cầu|hủy lời mời|chờ phê duyệt|đang chờ duyệt)$/i.test((text || '').trim());
+  const isAlreadyJoined = (rawText) => {
+    const text = (rawText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!text) return false;
+    return (
+      /^(đã tham gia|joined|joined group|đang chờ|requested|hủy yêu cầu|hủy lời mời|chờ phê duyệt|đang chờ duyệt|pending|cancel request|truy cập|truy cập nhóm|visit|visit group|xem nhóm|view group)$/i.test(text) ||
+      /(đã tham gia|bạn đã tham gia|truy cập nhóm|visit group|đang chờ duyệt|yêu cầu tham gia đã gửi)/i.test(text)
+    );
   };
 
-  const isJoinText = (text) => {
-    return /^(tham gia|tham gia nhóm|join|join group)$/i.test((text || '').trim());
+  const isJoinText = (rawText) => {
+    const text = (rawText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!text) return false;
+    return (
+      /^(join group|join|tham gia|tham gia nhóm)$/i.test(text) ||
+      /(tham gia nhóm|join group)/i.test(text)
+    );
   };
 
   const clickElement = (el) => {
@@ -81,14 +84,60 @@ return ((targetUrl, targetName) => {
       btn.scrollIntoView({ behavior: 'instant', block: 'center' });
     } catch (e) {}
     try {
+      btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
       btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      btn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
       btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
     } catch (e) {}
     btn.click();
     return true;
   };
 
-  // 1. Thử tìm trên thẻ card tương ứng với targetUrl trong Search results
+  // 1. Kiểm tra trên trang Group trực tiếp (khi quét theo Nhập link hoặc Tải tệp):
+  // Ưu tiên tìm đúng element chỉ định: <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft">Join group</span>
+  const isDirectGroupPage = !location.pathname.includes('/search') && location.pathname.includes('/groups/');
+  if (isDirectGroupPage) {
+    // 1.1 Tìm span với class cụ thể x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft
+    const specificSpans = document.querySelectorAll(
+      'span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft, span.x1lliihq, span.xuxw1ft'
+    );
+    for (const sp of specificSpans) {
+      const spText = (sp.textContent || '').trim();
+      if (isAlreadyJoined(spText)) {
+        return { status: 'already_joined', label: spText };
+      }
+    }
+    for (const sp of specificSpans) {
+      const spText = (sp.textContent || '').trim();
+      if (isJoinText(spText)) {
+        clickElement(sp);
+        return { status: 'clicked_join', label: spText };
+      }
+    }
+
+    // 1.2 Fallback tìm trong các button role="button"
+    const buttons = document.querySelectorAll('div[role="button"], button');
+    for (const btn of buttons) {
+      const btnText = (btn.getAttribute('aria-label') || btn.innerText || '').trim();
+      if (isAlreadyJoined(btnText)) {
+        return { status: 'already_joined', label: btnText };
+      }
+      if (isJoinText(btnText)) {
+        clickElement(btn);
+        return { status: 'clicked_join', label: btnText };
+      }
+    }
+    return { status: 'not_found' };
+  }
+
+  // 2. Nếu ở trang Search results (/search/groups/?q=...)
+  const cleanUrl = (targetUrl || '').split('?')[0].replace(/\/+$/, '').toLowerCase();
+  const root =
+    document.querySelector('[aria-label="Search results"][role="main"]') ||
+    document.querySelector('[aria-label="Search results"]') ||
+    document.querySelector('[role="main"]') ||
+    document.body;
+
   if (cleanUrl) {
     const anchors = root.querySelectorAll('a[href*="/groups/"]');
     for (const a of anchors) {
@@ -109,7 +158,6 @@ return ((targetUrl, targetName) => {
           card = card.parentElement;
           if (!card) break;
 
-          // Kiểm tra xem trên card đã ở trạng thái đã tham gia chưa
           const spans = card.querySelectorAll('span');
           for (const sp of spans) {
             const spText = (sp.textContent || '').trim();
@@ -118,7 +166,7 @@ return ((targetUrl, targetName) => {
             }
           }
 
-          // Ưu tiên tìm đúng element: <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft">Tham gia</span>
+          // Ưu tiên tìm đúng element: <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft">Join group / Tham gia</span>
           for (const sp of spans) {
             const spText = (sp.textContent || '').trim();
             if (isJoinText(spText)) {
@@ -127,7 +175,6 @@ return ((targetUrl, targetName) => {
             }
           }
 
-          // Fallback tìm button trên card
           const btns = card.querySelectorAll('div[role="button"], button');
           for (const btn of btns) {
             const text = (btn.innerText || btn.getAttribute('aria-label') || '').trim();
@@ -144,8 +191,7 @@ return ((targetUrl, targetName) => {
     }
   }
 
-  // 2. Nếu ở trang nhóm trực tiếp (Group page) hoặc fallback trên toàn trang
-  // Ưu tiên tìm span có class x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft
+  // Fallback toàn trang
   const allSpans = document.querySelectorAll('span.x1lliihq, span');
   for (const sp of allSpans) {
     const spText = (sp.textContent || '').trim();
@@ -245,6 +291,140 @@ return (() => {
     checkboxCount: checkboxes.length,
     title: (root.querySelector('h1, h2, h3, [role="heading"]')?.textContent || '').trim(),
   };
+})();
+"""
+
+ENSURE_ALL_QUESTIONS_ANSWERED_JS = """
+return (() => {
+  const allDialogs = Array.from(document.querySelectorAll('div[role="dialog"], [aria-modal="true"]'));
+  const visibleDialogs = allDialogs.filter(d => {
+    const rect = d.getBoundingClientRect();
+    return rect.width > 80 && rect.height > 80;
+  });
+  const dialog = visibleDialogs[visibleDialogs.length - 1] || allDialogs[0] || document.body;
+
+  const result = {
+    textFilled: 0,
+    radiosChecked: 0,
+    checkboxesChecked: 0,
+  };
+
+  const isFilterSwitch = (el) => {
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+    if (role === 'switch') return true;
+    if (/near me|gần tôi|gan toi|nearby|public groups|nhóm công khai|my groups/.test(aria)) return true;
+    return false;
+  };
+
+  const triggerInputEvents = (el, val) => {
+    try {
+      el.focus();
+      const tag = (el.tagName || '').toLowerCase();
+      const proto = tag === 'textarea' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (setter) setter.call(el, val);
+      else el.value = val;
+      try { if (el._valueTracker) el._valueTracker.setValue(''); } catch (e) {}
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, data: val, inputType: 'insertText' }));
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+    } catch (e) {}
+  };
+
+  // 1. Điền textareas & inputs
+  const textInputs = dialog.querySelectorAll(
+    'textarea, input[type="text"]:not([type="hidden"]), div[role="textbox"], div[contenteditable="true"]'
+  );
+  textInputs.forEach(el => {
+    if (isFilterSwitch(el)) return;
+    const currentVal = (el.value || el.textContent || '').trim();
+    if (currentVal.length > 0) return;
+
+    const defaultAnswer = 'Tôi đồng ý và cam kết tuân thủ đầy đủ mọi quy tắc của nhóm.';
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag === 'textarea' || tag === 'input') {
+      triggerInputEvents(el, defaultAnswer);
+      if (!(el.value || '').trim()) {
+        try {
+          el.focus();
+          document.execCommand('selectAll', false, null);
+          document.execCommand('insertText', false, defaultAnswer);
+        } catch (e) {}
+      }
+    } else {
+      el.focus();
+      el.textContent = defaultAnswer;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    result.textFilled++;
+  });
+
+  // 2. Chọn Radios
+  const radioInputs = Array.from(dialog.querySelectorAll('input[type="radio"], div[role="radio"]'))
+    .filter(r => !isFilterSwitch(r));
+  const radioGroups = new Map();
+  radioInputs.forEach((r, idx) => {
+    const gName = r.getAttribute('name') || (r.closest('[role="radiogroup"]') && ('rg_' + idx)) || ('radio_' + idx);
+    if (!radioGroups.has(gName)) radioGroups.set(gName, []);
+    radioGroups.get(gName).push(r);
+  });
+
+  radioGroups.forEach(radios => {
+    const already = radios.some(r => r.checked === true || r.getAttribute('aria-checked') === 'true');
+    if (already) return;
+    let chosen = radios.find(r => {
+      const txt = (r.innerText || r.getAttribute('aria-label') || r.parentElement?.innerText || '').toLowerCase();
+      return /đồng ý|có|yes|tuân thủ|chấp nhận|agree|ok/i.test(txt);
+    }) || radios[0];
+
+    if (chosen) {
+      try {
+        chosen.scrollIntoView({ behavior: 'instant', block: 'center' });
+        chosen.click();
+        if (chosen.tagName && chosen.tagName.toLowerCase() === 'input') {
+          chosen.checked = true;
+        }
+        chosen.setAttribute('aria-checked', 'true');
+        chosen.dispatchEvent(new Event('input', { bubbles: true }));
+        chosen.dispatchEvent(new Event('change', { bubbles: true }));
+        result.radiosChecked++;
+      } catch (e) {}
+    }
+  });
+
+  // 3. Tích tất cả Checkboxes (Quy tắc nhóm / Điều khoản)
+  const checkboxes = Array.from(dialog.querySelectorAll(
+    'input[type="checkbox"], div[role="checkbox"], div[aria-checked]'
+  )).filter(cb => !isFilterSwitch(cb));
+
+  checkboxes.forEach(cb => {
+    const isChecked = cb.checked === true || cb.getAttribute('aria-checked') === 'true';
+    if (isChecked) return;
+
+    try {
+      cb.scrollIntoView({ behavior: 'instant', block: 'center' });
+      const container = cb.closest('label, div[role="checkbox"]') || cb;
+      try {
+        container.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+        container.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        container.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+        container.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      } catch (e) {}
+      container.click();
+      if (cb.tagName && cb.tagName.toLowerCase() === 'input') {
+        cb.checked = true;
+      }
+      cb.setAttribute('aria-checked', 'true');
+      cb.dispatchEvent(new Event('input', { bubbles: true }));
+      cb.dispatchEvent(new Event('change', { bubbles: true }));
+      result.checkboxesChecked++;
+    } catch (e) {}
+  });
+
+  return result;
 })();
 """
 
@@ -527,16 +707,43 @@ return (() => {
 
 SUBMIT_GROUP_QUESTIONS_JS = """
 return (() => {
-  const dialog =
-    document.querySelector('div[role="dialog"]') ||
-    document.querySelector('[aria-modal="true"]');
-  if (!dialog) return { clicked: false, reason: 'no_dialog' };
+  const allDialogs = Array.from(document.querySelectorAll('div[role="dialog"], [aria-modal="true"]'));
+  const visibleDialogs = allDialogs.filter(d => {
+    const rect = d.getBoundingClientRect();
+    return rect.width > 80 && rect.height > 80;
+  });
+  const dialog = visibleDialogs[visibleDialogs.length - 1] || allDialogs[0] || document.body;
 
-  const isSubmitText = (text) => {
-    return /^(submit|gửi|gửi câu trả lời|hoàn tất|xong|done|gửi cho quản trị viên|submit answers)$/i.test((text || '').trim());
+  // Cuộn xuống cuối dialog để nút Submit hiển thị hoàn toàn
+  try {
+    dialog.scrollTo({ top: dialog.scrollHeight, behavior: 'instant' });
+    const scrollables = dialog.querySelectorAll('div');
+    scrollables.forEach(s => {
+      if (s.scrollHeight > s.clientHeight && s.clientHeight > 100) {
+        s.scrollTo({ top: s.scrollHeight, behavior: 'instant' });
+      }
+    });
+  } catch (e) {}
+
+  const isSubmitWord = (text) => {
+    const t = (text || '').trim().toLowerCase();
+    return (
+      t === 'gửi' ||
+      t === 'submit' ||
+      t === 'gửi câu trả lời' ||
+      t === 'submit answers' ||
+      t === 'hoàn tất' ||
+      t === 'xác nhận' ||
+      t === 'confirm' ||
+      t === 'done' ||
+      t === 'gửi cho quản trị viên' ||
+      t === 'tiếp' ||
+      t === 'tiếp tục' ||
+      t === 'next'
+    );
   };
 
-  const clickSubmit = (el) => {
+  const clickTarget = (el) => {
     const btn = el.closest('div[role="button"], button') || el;
     try {
       btn.removeAttribute('disabled');
@@ -544,46 +751,52 @@ return (() => {
       if (btn.disabled) btn.disabled = false;
     } catch (e) {}
     try { btn.scrollIntoView({ behavior: 'instant', block: 'center' }); } catch (e) {}
-    try {
-      btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-      btn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
-      btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-    } catch (e) {
-      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-      btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-    }
+
+    const rect = btn.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+
+    try { btn.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch (e) {}
+    try { btn.dispatchEvent(new MouseEvent('mousedown', opts)); } catch (e) {}
+    try { btn.dispatchEvent(new PointerEvent('pointerup', opts)); } catch (e) {}
+    try { btn.dispatchEvent(new MouseEvent('mouseup', opts)); } catch (e) {}
     btn.click();
     try { el.click(); } catch (e) {}
     return true;
   };
 
-  // 1) <span ...>Submit</span> / Gửi trong dialog
-  const spans = dialog.querySelectorAll('span.x1lliihq, span.xuxw1ft, span');
+  // 1. Tìm span có text submit/gửi (ưu tiên class x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft)
+  const spans = dialog.querySelectorAll(
+    'span.x1lliihq.x6ikm8r.x10wlt62.x1n2onr6.xlyipyv.xuxw1ft, span.x1lliihq, span.xuxw1ft, span'
+  );
   for (const sp of spans) {
     const text = (sp.textContent || '').trim();
-    if (isSubmitText(text)) {
-      clickSubmit(sp);
+    if (isSubmitWord(text)) {
+      clickTarget(sp);
       return { clicked: true, text, method: 'span' };
     }
   }
 
-  // 2) button / role=button
-  const allButtons = dialog.querySelectorAll('div[role="button"], button');
-  for (const btn of allButtons) {
-    const btnText = (btn.innerText || btn.getAttribute('aria-label') || '').trim();
-    if (isSubmitText(btnText)) {
-      clickSubmit(btn);
-      return { clicked: true, text: btnText, method: 'button' };
+  // 2. Tìm div[role="button"] hoặc button có text submit/gửi hoặc aria-label
+  const buttons = dialog.querySelectorAll('div[role="button"], button');
+  for (const btn of buttons) {
+    const text = (btn.getAttribute('aria-label') || btn.innerText || btn.textContent || '').trim();
+    if (isSubmitWord(text)) {
+      clickTarget(btn);
+      return { clicked: true, text, method: 'button' };
     }
   }
 
-  // 3) fallback Next / Continue
-  for (const btn of allButtons) {
-    const btnText = (btn.innerText || btn.getAttribute('aria-label') || '').trim();
-    if (/^(tiếp|tiếp tục|next|xác nhận|confirm)$/i.test(btnText)) {
-      clickSubmit(btn);
-      return { clicked: true, text: btnText, method: 'next' };
+  // 3. Fallback: Nút chính ở footer dialog
+  for (const btn of buttons) {
+    const text = (btn.innerText || '').trim().toLowerCase();
+    if (/hủy|cancel|đóng|close|thoát|back|quay lại/.test(text)) continue;
+    const rect = btn.getBoundingClientRect();
+    const dRect = dialog.getBoundingClientRect();
+    if (rect.top > dRect.top + dRect.height * 0.55 && rect.width > 40) {
+      clickTarget(btn);
+      return { clicked: true, text: text || 'primary_action', method: 'footer_primary' };
     }
   }
 
@@ -815,31 +1028,36 @@ def _tick_agree_to_group_rules(driver, job_id: Optional[str], name: str) -> bool
 
 
 def _click_submit_span(driver, job_id: Optional[str], name: str) -> dict[str, Any]:
-    """Bấm <span ...>Submit</span> / Gửi trong dialog."""
+    """Bấm nút Submit / Gửi trong dialog câu hỏi của nhóm riêng tư."""
     from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.action_chains import ActionChains
 
-    # Ưu tiên JS đã tối ưu trong dialog
+    # 1. Ưu tiên JS đã tối ưu tìm trong visible dialog
     try:
         res = driver.execute_script(SUBMIT_GROUP_QUESTIONS_JS) or {}
         if res.get("clicked"):
-            _append_log(job_id, f"✅ «{name}»: Đã bấm [{res.get('text') or 'Submit'}].", "success")
+            _append_log(job_id, f"✅ «{name}»: Đã bấm [{res.get('text') or 'Gửi/Submit'}].", "success")
             return res
     except Exception:
         pass
 
+    # 2. Fallback: Selenium ActionChains tìm span/button
     try:
         dialogs = driver.find_elements(By.CSS_SELECTOR, 'div[role="dialog"], [aria-modal="true"]')
+        visible_dialogs = [d for d in dialogs if d.is_displayed()]
+        root = visible_dialogs[-1] if visible_dialogs else (dialogs[-1] if dialogs else driver)
     except Exception:
-        dialogs = []
-    root = dialogs[0] if dialogs else driver
+        root = driver
+
     try:
         spans = root.find_elements(By.CSS_SELECTOR, "span.x1lliihq, span.xuxw1ft, span")
     except Exception:
         spans = []
+
     for sp in spans:
         try:
             text = (sp.text or "").strip()
-            if not re.match(r"^(Submit|Gửi|Gửi câu trả lời|Submit answers)$", text, re.I):
+            if not re.match(r"^(Submit|Gửi|Gửi câu trả lời|Submit answers|Hoàn tất|Xác nhận|Tiếp|Tiếp tục|Next)$", text, re.I):
                 continue
             btn = sp
             try:
@@ -849,30 +1067,27 @@ def _click_submit_span(driver, job_id: Optional[str], name: str) -> dict[str, An
                     btn = sp.find_element(By.XPATH, "./ancestor::button[1]")
                 except Exception:
                     btn = sp
+
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
-            driver.execute_script(
-                """
-                const el = arguments[0];
-                el.removeAttribute('disabled');
-                el.setAttribute('aria-disabled', 'false');
-                el.click();
-                """,
-                btn,
-            )
-            _append_log(job_id, f"✅ «{name}»: Đã bấm [{text}].", "success")
-            return {"clicked": True, "text": text, "method": "selenium_span"}
+            try:
+                ActionChains(driver).move_to_element(btn).pause(0.1).click().perform()
+                _append_log(job_id, f"✅ «{name}»: Đã bấm [{text}] (ActionChains).", "success")
+                return {"clicked": True, "text": text, "method": "action_chains"}
+            except Exception:
+                driver.execute_script("arguments[0].removeAttribute('disabled'); arguments[0].setAttribute('aria-disabled', 'false'); arguments[0].click();", btn)
+                _append_log(job_id, f"✅ «{name}»: Đã bấm [{text}] (JS fallback).", "success")
+                return {"clicked": True, "text": text, "method": "js_click"}
         except Exception:
             continue
+
     return {"clicked": False}
 
 
 def _auto_join_group(driver, item: dict[str, Any], job_id: Optional[str] = None) -> str:
     """
-    Join nhóm private khi có popup:
-    1) Bấm Tham gia → đợi popup
-    2) Nếu có ô text → nhập
-    3) Tích agree-to-group-rules
-    4) Bấm Submit → đợi đóng rồi mới sang nhóm khác
+    Xử lý tham gia nhóm:
+    1. Nhóm PUBLIC: Chỉ bấm Tham gia là hoàn thành (không cần trả lời câu hỏi gì cả).
+    2. Nhóm PRIVATE: Bấm Tham gia -> Chờ popup câu hỏi -> Điền text, radio, tích checkbox -> Bấm Gửi/Submit.
     """
     if not driver:
         return item.get("note") or "—"
@@ -882,24 +1097,17 @@ def _auto_join_group(driver, item: dict[str, Any], job_id: Optional[str] = None)
     privacy = (item.get("type") or "").lower()
     is_private = privacy in {"private", "riêng tư", "rieng tu"}
 
+    from modules.module_02_account_manager.automation import human_sleep
+
     try:
-        from modules.module_02_account_manager.automation import human_sleep
-
-        try:
-            filt = driver.execute_script(ENSURE_SEARCH_FILTERS_OFF_JS) or {}
-            if int(filt.get("turnedOff") or 0) > 0:
-                labels = ", ".join(filt.get("labels") or []) or "search filters"
-                _append_log(job_id, f"🔕 Đã tắt filter [{labels}] trước khi join.", "info")
-        except Exception:
-            pass
-
+        # Bấm nút Tham gia nhóm
         res = driver.execute_script(CLICK_JOIN_BUTTON_JS, url, name) or {}
         st = res.get("status")
 
         if st == "already_joined":
             label = res.get("label", "Đã tham gia")
             _append_log(job_id, f"ℹ️ «{name}»: Tài khoản đã ở trạng thái [{label}].", "info")
-            if "chờ" in label.lower() or "request" in label.lower() or "pending" in label.lower():
+            if any(k in label.lower() for k in ["chờ", "request", "pending", "hủy"]):
                 return "pending"
             return "joined"
 
@@ -907,17 +1115,25 @@ def _auto_join_group(driver, item: dict[str, Any], job_id: Optional[str] = None)
             _append_log(job_id, f"ℹ️ «{name}»: Không tìm thấy nút [Tham gia] khả dụng.", "info")
             return item.get("note") or "—"
 
-        _append_log(job_id, f"👉 «{name}»: Đã bấm [{res.get('label', 'Tham gia')}] — chờ popup...", "info")
-        try:
-            driver.execute_script(ENSURE_SEARCH_FILTERS_OFF_JS)
-        except Exception:
-            pass
+        _append_log(job_id, f"👉 «{name}»: Đã bấm [{res.get('label', 'Tham gia')}].", "info")
 
-        wait_rounds = 14 if is_private else 7
+        # =========================================================================
+        # YÊU CẦU 1: NHÓM PUBLIC -> BẤM THAM GIA XONG LÀ HOÀN TẤT (KHÔNG TRẢ LỜI CÂU HỎI)
+        # =========================================================================
+        if not is_private:
+            human_sleep(1.0, 1.8)
+            _append_log(job_id, f"✅ «{name}»: Nhóm công khai — tham gia thành công.", "success")
+            return "joined"
+
+        # =========================================================================
+        # YÊU CẦU 2: NHÓM PRIVATE -> CHỜ POPUP CÂU HỎI VÀ XỬ LÝ SUBMIT TRIỆT ĐỂ
+        # =========================================================================
+        _append_log(job_id, f"⏳ «{name}»: Nhóm riêng tư — đang kiểm tra popup câu hỏi / nội quy...", "info")
         has_dialog = False
         dialog_info: dict[str, Any] = {}
-        for _ in range(wait_rounds):
-            human_sleep(0.7, 1.0)
+
+        for _ in range(10):
+            human_sleep(0.6, 1.0)
             try:
                 dialog_info = driver.execute_script(CHECK_GROUP_QUESTIONS_DIALOG_JS) or {}
                 if dialog_info.get("hasDialog") or dialog_info.get("hasFields"):
@@ -927,92 +1143,60 @@ def _auto_join_group(driver, item: dict[str, Any], job_id: Optional[str] = None)
                 pass
 
         if not has_dialog:
-            _append_log(job_id, f"ℹ️ «{name}»: Không có popup — sang nhóm tiếp theo.", "info")
-            return "pending" if is_private else "joined"
+            _append_log(job_id, f"ℹ️ «{name}»: Không có popup câu hỏi — yêu cầu tham gia đã gửi.", "info")
+            return "pending"
 
         _append_log(
             job_id,
-            (
-                f"📝 «{name}»: Popup hiện "
-                f"(text={dialog_info.get('textareaCount', 0)}, "
-                f"checkbox={dialog_info.get('checkboxCount', 0)}). "
-                f"Nhập text (nếu có) → tích agree-to-group-rules → Submit."
-            ),
+            f"📝 «{name}»: Popup câu hỏi xuất hiện (text={dialog_info.get('textareaCount', 0)}, checkbox={dialog_info.get('checkboxCount', 0)}) — đang hoàn thành nội quy & câu trả lời...",
             "info",
         )
         human_sleep(0.8, 1.2)
 
-        # 1) Có ô text thì nhập
-        text_filled = 0
+        # 1. Điền text + chọn radio + tích tất cả checkbox quy tắc nhóm
         for _ in range(3):
-            sel = _fill_membership_fields_selenium(driver, job_id, name)
-            js = driver.execute_script(ANSWER_GROUP_QUESTIONS_JS) or {}
-            text_filled = max(int(sel.get("textarea") or 0), int(js.get("answeredCount") or 0))
-            if text_filled > 0 or int(dialog_info.get("textareaCount") or 0) == 0:
-                break
-            human_sleep(0.7, 1.0)
-        if text_filled:
-            _append_log(job_id, f"⌨️ «{name}»: Đã nhập {text_filled} ô text.", "info")
-        elif int(dialog_info.get("textareaCount") or 0) > 0:
-            _append_log(job_id, f"⚠️ «{name}»: Có ô text nhưng chưa nhập được — vẫn thử tích rules + Submit.", "warn")
+            driver.execute_script(ENSURE_ALL_QUESTIONS_ANSWERED_JS)
+            _fill_membership_fields_selenium(driver, job_id, name)
+            _tick_agree_to_group_rules(driver, job_id, name)
+            human_sleep(0.5, 0.8)
 
-        # 2) Tích agree-to-group-rules (bắt buộc theo popup FB)
-        agreed = False
-        for _ in range(4):
-            agreed = _tick_agree_to_group_rules(driver, job_id, name)
-            if agreed:
-                break
-            # fallback: JS tick mọi checkbox hợp lệ trong dialog
-            driver.execute_script(ANSWER_GROUP_QUESTIONS_JS)
-            human_sleep(0.45, 0.7)
-        if not agreed:
-            _append_log(job_id, f"⚠️ «{name}»: Chưa thấy/tick được agree-to-group-rules.", "warn")
-
-        human_sleep(0.5, 0.8)
-
-        # 3) Bấm Submit — lặp đến khi bấm được hoặc dialog đóng
+        # 2. Bấm nút Submit / Gửi — thử tối đa 14 lần kết hợp cuộn và ActionChains
         sub_res: dict[str, Any] = {"clicked": False}
-        for attempt in range(16):
-            human_sleep(0.35, 0.55)
-            try:
-                driver.execute_script(ENSURE_SEARCH_FILTERS_OFF_JS)
-            except Exception:
-                pass
-            if attempt in {2, 5, 8, 11}:
-                if int(dialog_info.get("textareaCount") or 0) > 0:
-                    _fill_membership_fields_selenium(driver, job_id, name)
-                _tick_agree_to_group_rules(driver, job_id, name)
+        for attempt in range(14):
+            # Luôn kích hoạt lại việc tích chọn và điền câu hỏi để React enable nút
+            driver.execute_script(ENSURE_ALL_QUESTIONS_ANSWERED_JS)
+            human_sleep(0.3, 0.5)
+
+            sub_res = driver.execute_script(SUBMIT_GROUP_QUESTIONS_JS) or {}
+            if sub_res.get("clicked"):
+                _append_log(job_id, f"✅ «{name}»: Đã bấm Submit/Gửi [{sub_res.get('text', 'Gửi')}].", "success")
+                break
+
             sub_res = _click_submit_span(driver, job_id, name)
             if sub_res.get("clicked"):
+                _append_log(job_id, f"✅ «{name}»: Đã bấm Submit/Gửi qua ActionChains [{sub_res.get('text', 'Gửi')}].", "success")
                 break
-            # Submit chưa hiện/enable → tick rules lại
-            _tick_agree_to_group_rules(driver, job_id, name)
 
-        if sub_res.get("clicked"):
-            _append_log(job_id, f"⏳ «{name}»: Đã Submit — chờ popup đóng rồi mới join nhóm khác.", "info")
-        else:
-            _append_log(job_id, f"⚠️ «{name}»: Chưa bấm được Submit.", "warn")
+            human_sleep(0.4, 0.6)
 
-        closed = _wait_membership_dialog_closed(driver, timeout_s=14.0 if is_private else 8.0)
-        if not closed:
-            _tick_agree_to_group_rules(driver, job_id, name)
-            _fill_membership_fields_selenium(driver, job_id, name)
-            more = _click_submit_span(driver, job_id, name)
-            if more.get("clicked"):
-                sub_res = more
-            closed = _wait_membership_dialog_closed(driver, timeout_s=8.0)
+        if not sub_res.get("clicked"):
+            _append_log(job_id, f"⚠️ «{name}»: Chưa kích hoạt được nút Submit — thử bấm trực tiếp footer.", "warn")
+            driver.execute_script(SUBMIT_GROUP_QUESTIONS_JS)
 
+        # 3. Chờ popup đóng
+        closed = _wait_membership_dialog_closed(driver, timeout_s=10.0)
         if closed:
-            _append_log(job_id, f"➡️ «{name}»: Popup xong — sang nhóm tiếp theo.", "info")
+            _append_log(job_id, f"➡️ «{name}»: Hoàn tất gửi yêu cầu vào nhóm riêng tư.", "success")
         else:
-            _append_log(job_id, f"⚠️ «{name}»: Popup còn mở — Escape rồi sang nhóm khác.", "warn")
-            try:
-                from selenium.webdriver.common.keys import Keys
-
-                driver.find_element("tag name", "body").send_keys(Keys.ESCAPE)
-                human_sleep(0.5, 0.9)
-            except Exception:
-                pass
+            driver.execute_script(SUBMIT_GROUP_QUESTIONS_JS)
+            closed = _wait_membership_dialog_closed(driver, timeout_s=5.0)
+            if not closed:
+                try:
+                    from selenium.webdriver.common.keys import Keys
+                    driver.find_element("tag name", "body").send_keys(Keys.ESCAPE)
+                except Exception:
+                    pass
+            _append_log(job_id, f"➡️ «{name}»: Đã xử lý xong popup nhóm riêng tư.", "info")
 
         return "pending"
 
@@ -1165,10 +1349,46 @@ def _get_control(job_id: str) -> str:
         return str(job.get("control") or "run")
 
 
+def _handle_pause_if_requested(job_id: str, context_label: str = "") -> bool:
+    """
+    Nếu job đang có cờ pause/pause_after/paused, tạm dừng tại chỗ và chờ đến khi resume hoặc abort.
+    Trả về True nếu bị abort trong lúc tạm dừng, False nếu resume bình thường.
+    """
+    if _get_control(job_id) not in {"pause", "pause_after", "paused"}:
+        return False
+
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            return False
+        job["control"] = "paused"
+        job["status"] = "paused"
+
+    lbl = f" tại «{context_label}»" if context_label else ""
+    _append_log(job_id, f"⏸️ Đã tạm dừng quét{lbl}. Bấm 'Tiếp tục' để chạy tiếp.", "warn")
+
+    max_pause_sec = 7200  # 2 giờ tối đa
+    start_pause = time.time()
+    while _get_control(job_id) in {"pause", "pause_after", "paused"}:
+        if _get_control(job_id) == "abort":
+            _append_log(job_id, "🛑 Đã dừng khẩn cấp trong lúc tạm dừng.", "warn")
+            _set_job(job_id, status="aborted", error="Dừng khẩn cấp")
+            return True
+        if time.time() - start_pause > max_pause_sec:
+            _append_log(job_id, "⚠️ Tạm dừng quá thời gian cho phép (2 giờ) — tự động kết thúc job.", "warn")
+            _set_job(job_id, status="aborted", error="Quá thời gian tạm dừng (2 giờ)")
+            return True
+        time.sleep(0.5)
+
+    _set_job(job_id, status="running", control="run")
+    _append_log(job_id, f"▶️ Tiếp tục quét{lbl}…", "info")
+    return False
+
+
 def set_job_control(job_id: str, action: str) -> dict[str, Any]:
     """
-    pause  = tạm dừng sau khi xong từ khóa hiện tại
-    resume = tiếp tục (nếu đang paused — chưa support resume mid-job; chỉ clear flag)
+    pause  = tạm dừng quét (ở nhóm hoặc từ khóa tiếp theo)
+    resume = tiếp tục quét lại từ chỗ tạm dừng
     abort  = dừng khẩn cấp ngay
     """
     action = str(action or "").strip().lower()
@@ -1180,13 +1400,15 @@ def set_job_control(job_id: str, action: str) -> dict[str, Any]:
             raise ValueError("Không tìm thấy job")
         if action == "pause":
             job["control"] = "pause_after"
-            msg = "Sẽ tạm dừng sau khi xong từ khóa hiện tại."
+            msg = "Đã gửi lệnh tạm dừng."
         elif action == "abort":
             job["control"] = "abort"
             msg = "Đang dừng khẩn cấp…"
         else:
             job["control"] = "run"
-            msg = "Đã bỏ tạm dừng."
+            if job.get("status") == "paused":
+                job["status"] = "running"
+            msg = "Đang tiếp tục quét…"
         return {"job_id": job_id, "control": job["control"], "status": job.get("status"), "message": msg}
 
 
@@ -1279,20 +1501,23 @@ def start_keyword_check(
                     old_status = (_jobs.get(old_job_id) or {}).get("status")
 
             stale = age >= STALE_PENDING_SEC
-            finished = old_status in {"done", "error"}
+            finished = old_status in {"done", "error", "aborted"}
             if force or stale or finished or old_status is None:
                 _pending.pop(key, None)
-                if old_job_id and not finished:
+                if old_job_id:
                     with _jobs_lock:
                         old = _jobs.get(old_job_id)
-                        if old and old.get("status") == "running":
-                            old["status"] = "error"
-                            old["error"] = "Job bị thay bằng lần Kiểm tra mới (browser cũ có thể đã tắt)"
-                    _append_log(
-                        old_job_id,
-                        "⏹️ Job cũ bị thay — browser đã tắt / mất kết nối / bấm Kiểm tra lại.",
-                        "warn",
-                    )
+                        if old and old.get("status") in {"running", "paused"}:
+                            old["control"] = "abort"
+                            if old.get("status") == "running":
+                                old["status"] = "error"
+                                old["error"] = "Job bị thay bằng lần Kiểm tra mới"
+                    if old_status == "running":
+                        _append_log(
+                            old_job_id,
+                            "⏹️ Đã bắt đầu phiên quét mới (thay thế job cũ).",
+                            "info",
+                        )
             else:
                 raise RuntimeError("Nick đang chạy Kiểm tra — chờ xong rồi thử lại (hoặc đợi ~45s)")
 
@@ -1495,7 +1720,7 @@ def _is_group_profile_url(url: str) -> bool:
 
 
 def _parse_member_count(raw: Any) -> Optional[int]:
-    """'463K' / '26K members' / '1.2M' / '1.234 thành viên' → int."""
+    """'463K' / '26N' / '1.2M' / '1,2 tr' / '1.234 thành viên' → int."""
     if raw is None:
         return None
     if isinstance(raw, (int, float)):
@@ -1504,29 +1729,52 @@ def _parse_member_count(raw: Any) -> Optional[int]:
     if not text or text == "—":
         return None
     m = re.search(
-        r"([\d.,]+)\s*([KkMmBb])?\s*(?:members?|thành viên|thanh vien)?",
+        r"([\d.,]+)\s*([KkMmBbNn]|tr|triệu|trieu|tỷ|ty)?\s*(?:members?|thành viên|thanh vien|người theo dõi)?",
         text,
         re.I,
     )
     if not m:
         digits = re.sub(r"[^\d]", "", text)
         return int(digits) if digits else None
-    num_s = m.group(1).replace(",", "").replace(" ", "")
-    # EU style 1.234.567 or 1,2
-    if num_s.count(".") > 1:
-        num_s = num_s.replace(".", "")
-    elif num_s.count(",") > 1:
-        num_s = num_s.replace(",", "")
-    elif "," in num_s and "." not in num_s:
-        # 1,2 → 1.2 (thập phân) hoặc 1,234 → bỏ phẩy nghìn
+
+    num_s = m.group(1).strip().replace(" ", "")
+    suffix = (m.group(2) or "").upper()
+
+    # Xử lý chuẩn xác dấu phân cách thập phân / hàng nghìn
+    if "." in num_s and "," in num_s:
+        if num_s.rfind(",") > num_s.rfind("."):
+            num_s = num_s.replace(".", "").replace(",", ".")
+        else:
+            num_s = num_s.replace(",", "")
+    elif "," in num_s:
         parts = num_s.split(",")
-        num_s = parts[0] + "." + parts[1] if len(parts) == 2 and len(parts[1]) <= 2 else num_s.replace(",", "")
+        if len(parts) == 2 and len(parts[1]) <= 2:
+            num_s = parts[0] + "." + parts[1]
+        else:
+            num_s = num_s.replace(",", "")
+    elif "." in num_s:
+        parts = num_s.split(".")
+        if len(parts) > 2:
+            num_s = num_s.replace(".", "")
+        elif len(parts) == 2 and len(parts[1]) == 3 and not suffix:
+            num_s = num_s.replace(".", "")
+
     try:
         value = float(num_s)
     except ValueError:
         return None
-    suffix = (m.group(2) or "").upper()
-    mult = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000}.get(suffix, 1)
+
+    mult = {
+        "K": 1_000,
+        "N": 1_000,
+        "M": 1_000_000,
+        "TR": 1_000_000,
+        "TRIỆU": 1_000_000,
+        "TRIEU": 1_000_000,
+        "B": 1_000_000_000,
+        "TỶ": 1_000_000_000,
+        "TY": 1_000_000_000,
+    }.get(suffix, 1)
     return int(value * mult)
 
 
@@ -1547,7 +1795,7 @@ def _parse_group_meta(meta: str) -> dict[str, Any]:
     members_label = "—"
     members_count: Optional[int] = None
     m = re.search(
-        r"([\d.,]+\s*[KkMmBb]?)\s*(?:members?|thành viên|thanh vien)",
+        r"([\d.,]+\s*(?:[KkMmBbNn]|tr|triệu|trieu|tỷ|ty)?)\s*(?:members?|thành viên|thanh vien|người theo dõi)",
         text,
         re.I,
     )
@@ -1587,6 +1835,8 @@ def _passes_filters(
     if min_members is not None and min_members > 0:
         count = meta.get("members_count")
         if count is None:
+            count = _parse_member_count(meta.get("members"))
+        if count is None:
             return False, "bỏ (không đọc được số thành viên)"
         if count < min_members:
             return False, f"bỏ ({count} < {min_members} thành viên)"
@@ -1596,17 +1846,25 @@ def _passes_filters(
 def _clean_group_name(raw: str, url: str = "") -> str:
     name = re.sub(r"\s+", " ", str(raw or "").strip())
     name = name.split("\n")[0].strip()
+    # 1. Bỏ tiền tố thông báo Facebook dạng (20+), (99+), (1), [5+], v.v.
+    name = re.sub(r"^[\(\[]\d+\+?[\)\]]\s*", "", name).strip()
+    # 2. Bỏ tiền tố ảnh đại diện
     name = re.sub(
         r"^(Profile photo of|Ảnh đại diện của|Anh dai dien cua)\s*",
         "",
         name,
         flags=re.I,
     ).strip()
-    if not name or re.match(r"^(join|tham gia|joined)$", name, re.I):
+    # 3. Bỏ hậu tố | Facebook
+    name = re.sub(r"\s*\|\s*Facebook$", "", name, flags=re.I).strip()
+    # 4. Lặp lại việc bỏ tiền tố thông báo nếu còn sót
+    name = re.sub(r"^[\(\[]\d+\+?[\)\]]\s*", "", name).strip()
+
+    if not name or re.match(r"^(join|tham gia|joined|notifications|facebook|search)$", name, re.I):
         slug = ""
         if "/groups/" in (url or ""):
-            slug = url.split("/groups/")[-1].split("/")[0].strip()
-        name = slug or "—"
+            slug = url.split("/groups/")[-1].split("/")[0].split("?")[0].strip()
+        name = slug or "Nhóm Facebook"
     return name
 
 
@@ -1675,8 +1933,14 @@ def _scrape_group_direct(
     source_uid: Optional[str] = None,
     known_group_ids: Optional[set[str]] = None,
     auto_join: bool = True,
+    delay_min: float = 0.0,
+    delay_max: float = 0.0,
 ) -> Optional[dict[str, Any]]:
-    """Quét trực tiếp thông tin nhóm khi người dùng cung cấp link / file link."""
+    """Quét trực tiếp thông tin nhóm khi người dùng cung cấp link / file link.
+    - Privacy: <div class="x9f619 x1n2onr6 x1ja2u2z x78zum5 xdt5ytf x2lah0s x193iq5w xeuugli x14vy60q xyiysdx x1120s5i x1nn3v0j">Public group</div>
+    - Members: <a class="x1i10hfl ... href="/groups/.../members/" role="link">257.6K members</a>
+    - Join button: <span class="x1lliihq x6ikm8r x10wlt62 x1n2onr6 xlyipyv xuxw1ft">Join group</span>
+    """
     from modules.module_10_group_scan.models import (
         normalize_group_id,
         upsert_scanned_group,
@@ -1697,48 +1961,132 @@ def _scrape_group_direct(
         _append_log(job_id, f"⚠️ Không tải được link {clean_url}: {exc}", "warn")
         return None
 
-    js = """
-    const res = {
+    SCRAPE_DIRECT_GROUP_JS = """
+    return (() => {
+      const res = {
         title: document.title || '',
-        h1: document.querySelector('h1')?.innerText || '',
-        subTitle: '',
-    };
-    const h1 = document.querySelector('h1');
-    if (h1) {
-        let parent = h1.parentElement;
-        for (let i = 0; i < 5 && parent; i++) {
-            const text = (parent.innerText || '').replace(/\\s+/g, ' ');
-            const m = text.match(/(Public group|Private group|Nhóm công khai|Nhóm riêng tư|Bí mật)[^\\n·•]*[·•\\s]*([\\d.,]+[KkMmBb]?\\s*(members|thành viên))/i);
-            if (m) {
-                res.subTitle = m[0];
-                break;
-            }
-            parent = parent.parentElement;
+        name: '',
+        privacy: '',
+        privacyRaw: '',
+        membersText: '',
+      };
+
+      // 1. Tên nhóm (ưu tiên h1)
+      const h1 = document.querySelector('h1');
+      if (h1) {
+        res.name = (h1.innerText || h1.textContent || '').trim();
+      }
+
+      // 2. Xem nhóm là private hay public qua element:
+      // <div class="x9f619 x1n2onr6 x1ja2u2z x78zum5 xdt5ytf x2lah0s x193iq5w xeuugli x14vy60q xyiysdx x1120s5i x1nn3v0j">Public group</div>
+      const privacySelector = 'div.x9f619.x1n2onr6.x1ja2u2z.x78zum5.xdt5ytf.x2lah0s.x193iq5w.xeuugli.x14vy60q.xyiysdx.x1120s5i.x1nn3v0j';
+      const privacyNodes = document.querySelectorAll(privacySelector);
+      for (const node of privacyNodes) {
+        const txt = (node.innerText || node.textContent || '').trim();
+        if (!txt) continue;
+        res.privacyRaw = txt;
+        if (/public group|nhóm công khai|public|công khai/i.test(txt)) {
+          res.privacy = 'public';
+          break;
         }
-    }
-    if (!res.subTitle) {
-        const bodyText = (document.body.innerText || '').replace(/\\s+/g, ' ');
-        const m = bodyText.match(/(Public group|Private group|Nhóm công khai|Nhóm riêng tư|Bí mật)[·•\\s]*([\\d.,]+[KkMmBb]?\\s*(members|thành viên))/i);
-        if (m) res.subTitle = m[0];
-    }
-    return res;
+        if (/private group|nhóm riêng tư|private|riêng tư|bí mật/i.test(txt)) {
+          res.privacy = 'private';
+          break;
+        }
+      }
+
+      // Fallback nếu class trên div có biến thể nhẹ
+      if (!res.privacy) {
+        const leafDivs = document.querySelectorAll('div, span');
+        for (const el of leafDivs) {
+          if (el.children.length > 0) continue;
+          const txt = (el.innerText || el.textContent || '').trim();
+          if (/^(public group|nhóm công khai)$/i.test(txt)) {
+            res.privacy = 'public';
+            res.privacyRaw = txt;
+            break;
+          }
+          if (/^(private group|nhóm riêng tư)$/i.test(txt)) {
+            res.privacy = 'private';
+            res.privacyRaw = txt;
+            break;
+          }
+        }
+      }
+
+      // 3. Xem nhóm có bao nhiêu thành viên qua element:
+      // <a class="x1i10hfl ... href="/groups/.../members/" role="link">257.6K members</a>
+      const memberAnchors = document.querySelectorAll(
+        'a.x1i10hfl[href*="/members/"], a[href*="/members/"], a[href*="/members"]'
+      );
+      for (const a of memberAnchors) {
+        const txt = (a.innerText || a.textContent || '').trim();
+        if (/[\d.,]+\s*[KkMmBb]?\s*(members|thành viên)/i.test(txt) || /^[\d.,]+\s*[KkMmBb]?$/i.test(txt)) {
+          res.membersText = txt;
+          break;
+        }
+      }
+
+      // Fallback thẻ a có class x1i10hfl hoặc role="link"
+      if (!res.membersText) {
+        const possibleAnchors = document.querySelectorAll('a.x1i10hfl, a[role="link"]');
+        for (const a of possibleAnchors) {
+          const txt = (a.innerText || a.textContent || '').trim();
+          if (/[\d.,]+\s*[KkMmBb]?\s*(members|thành viên)/i.test(txt)) {
+            res.membersText = txt;
+            break;
+          }
+        }
+      }
+
+      // Fallback toàn trang nếu Facebook không render liên kết /members/
+      if (!res.membersText) {
+        const bodyText = (document.body.innerText || '').replace(/\s+/g, ' ');
+        const m = bodyText.match(/[\d.,]+\s*[KkMmBb]?\s*(members|thành viên)/i);
+        if (m) {
+          res.membersText = m[0];
+        }
+      }
+
+      return res;
+    })();
     """
-    try:
-        data = driver.execute_script(js) or {}
-    except Exception as exc:
-        _append_log(job_id, f"⚠️ Lỗi đọc DOM trang nhóm: {exc}", "warn")
-        data = {}
 
-    raw_title = data.get("title") or ""
-    cleaned_name = re.sub(r"^\(\d+\)\s*", "", raw_title)
-    cleaned_name = re.sub(r"\s*\|\s*Facebook$", "", cleaned_name).strip()
-    if not cleaned_name:
-        cleaned_name = data.get("h1") or "Nhóm Facebook"
-    if cleaned_name.lower() in {"notifications", "facebook", "search"}:
-        cleaned_name = clean_url.split("/groups/")[-1].replace("/", "")
+    data: dict[str, Any] = {}
+    for _ in range(4):
+        try:
+            data = driver.execute_script(SCRAPE_DIRECT_GROUP_JS) or {}
+            if data.get("privacy") or data.get("membersText"):
+                break
+        except Exception:
+            pass
+        human_sleep(0.8, 1.2)
 
-    sub_title = data.get("subTitle") or ""
-    meta_info = _parse_group_meta(sub_title)
+    # Ưu tiên h1 (tên nhóm trực tiếp trên trang, không dính thông báo Facebook)
+    candidate_name = data.get("name") or data.get("h1") or ""
+    if not candidate_name or candidate_name.lower() in {"notifications", "facebook", "search"}:
+        candidate_name = data.get("title") or ""
+
+    cleaned_name = _clean_group_name(candidate_name, clean_url)
+
+    # Privacy: Ưu tiên giá trị đọc từ element div.x9f619...
+    privacy = data.get("privacy") or "unknown"
+    if privacy == "unknown":
+        raw_p = (data.get("privacyRaw") or "").lower()
+        if "public" in raw_p or "công khai" in raw_p:
+            privacy = "public"
+        elif "private" in raw_p or "riêng tư" in raw_p:
+            privacy = "private"
+
+    # Members: Ưu tiên giá trị đọc từ element a.x1i10hfl... /members/
+    members_text = data.get("membersText") or ""
+    members_count = _parse_member_count(members_text)
+    meta_info = {
+        "type": privacy,
+        "members": members_text,
+        "members_count": members_count,
+    }
+
     ok, reason = _passes_filters(
         meta_info,
         public_only=public_only,
@@ -1746,11 +2094,10 @@ def _scrape_group_direct(
         min_members=min_members,
     )
     if not ok:
-        _append_log(job_id, f"⏭️ {cleaned_name}: {reason} ({sub_title})", "info")
+        _append_log(job_id, f"⏭️ {cleaned_name}: {reason} ({privacy.upper()} · {members_text})", "info")
         return None
 
     members_label = _format_members_label(meta_info)
-    privacy = meta_info.get("type") or "unknown"
     note = "not_joined" if privacy == "private" else "—"
     item = {
         "id": clean_url,
@@ -1760,7 +2107,7 @@ def _scrape_group_direct(
         "href": clean_url,
         "type": privacy,
         "members": members_label,
-        "members_count": meta_info.get("members_count"),
+        "members_count": members_count,
         "note": note,
     }
 
@@ -1795,6 +2142,8 @@ def _scrape_groups_from_results(
     source_uid: Optional[str] = None,
     known_group_ids: Optional[set[str]] = None,
     auto_join: bool = True,
+    delay_min: float = 0.0,
+    delay_max: float = 0.0,
 ) -> list[dict[str, Any]]:
     from selenium.webdriver.common.by import By
 
@@ -1823,8 +2172,8 @@ def _scrape_groups_from_results(
       document.querySelector('[role="main"]');
     if (!root) return [];
     const byHref = new Map();
-    const metaRe = /(Public|Private|Công khai|Cong khai|Riêng tư|Rieng tu|Bí mật)\\s*[·•|]\\s*[\\d.,]+\\s*[KkMmBb]?\\s*(members?|thành viên|thanh vien)/i;
-    const softMetaRe = /[\\d.,]+\\s*[KkMmBb]?\\s*(members?|thành viên|thanh vien)/i;
+    const metaRe = /(Public|Private|Công khai|Cong khai|Riêng tư|Rieng tu|Bí mật)\\s*[·•|]\\s*[\\d.,]+\\s*(?:[KkMmBbNn]|tr|triệu|trieu)?\\s*(members?|thành viên|thanh vien|người theo dõi)/i;
+    const softMetaRe = /[\\d.,]+\\s*(?:[KkMmBbNn]|tr|triệu|trieu)?\\s*(members?|thành viên|thanh vien|người theo dõi)/i;
 
     const cleanName = (raw) => {
       let n = (raw || '').replace(/\\s+/g, ' ').trim();
@@ -1866,10 +2215,35 @@ def _scrape_groups_from_results(
       let name = cleanName(a.getAttribute('aria-label') || '');
       if (!name) name = cleanName(a.innerText || a.textContent || '');
       const meta = findMeta(a);
-      const prev = byHref.get(href) || { href, name: '', meta: '' };
-      // Ưu tiên tên thật (không rỗng), meta có members
+
+      // Nhận diện trạng thái nút trên card ngay lúc duyệt DOM
+      let cardState = '';
+      let card = a;
+      for (let depth = 0; depth < 10 && card && card !== root; depth++) {
+        const textElements = card.querySelectorAll ? card.querySelectorAll('div[role="button"], button, span') : [];
+        for (const el of textElements) {
+          const t = (el.innerText || el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+          if (/^(truy cập|truy cập nhóm|visit|visit group|đã tham gia|joined|view group)$/i.test(t) || /(đã tham gia|bạn đã tham gia|truy cập nhóm)/i.test(t)) {
+            cardState = 'joined';
+            break;
+          }
+          if (/^(đang chờ|đang chờ duyệt|hủy yêu cầu|pending|requested)$/i.test(t) || /(đang chờ|hủy yêu cầu)/i.test(t)) {
+            cardState = 'pending';
+            break;
+          }
+          if (/^(tham gia|tham gia nhóm|join|join group)$/i.test(t)) {
+            cardState = 'can_join';
+            break;
+          }
+        }
+        if (cardState) break;
+        card = card.parentElement;
+      }
+
+      const prev = byHref.get(href) || { href, name: '', meta: '', state: '' };
       if (name && (!prev.name || prev.name.length < name.length)) prev.name = name;
       if (meta && (!prev.meta || meta.length > prev.meta.length)) prev.meta = meta;
+      if (cardState && !prev.state) prev.state = cardState;
       byHref.set(href, prev);
     }
     return Array.from(byHref.values());
@@ -1890,6 +2264,8 @@ def _scrape_groups_from_results(
         for row in rows:
             if _aborted():
                 break
+            if _handle_pause_if_requested(job_id, context_label=keyword):
+                return found
             url = _normalize_group_url(row.get("href") or "")
             if not _is_group_profile_url(url) or url in seen:
                 continue
@@ -1927,8 +2303,14 @@ def _scrape_groups_from_results(
 
             members_label = _format_members_label(meta_info)
             privacy = meta_info.get("type") or "unknown"
-            # Private chưa join → ghi chú; Public không cần ghi chú đặc biệt
-            note = "not_joined" if privacy == "private" else "—"
+            state = row.get("state")
+            if state == "joined":
+                note = "joined"
+            elif state == "pending":
+                note = "pending"
+            else:
+                note = "not_joined" if privacy == "private" else "—"
+
             item = {
                 "id": url,
                 "keyword": keyword,
@@ -1943,9 +2325,16 @@ def _scrape_groups_from_results(
 
             # Tự động tham gia nhóm và trả lời câu hỏi nếu được kích hoạt
             if auto_join:
-                join_note = _auto_join_group(driver, item, job_id=job_id)
-                if join_note:
-                    item["note"] = join_note
+                if note == "joined":
+                    _append_log(job_id, f"ℹ️ «{name}»: Bạn đã là thành viên (Truy cập).", "info")
+                    item["note"] = "joined"
+                elif note == "pending":
+                    _append_log(job_id, f"ℹ️ «{name}»: Yêu cầu đang chờ QTV duyệt.", "info")
+                    item["note"] = "pending"
+                else:
+                    join_note = _auto_join_group(driver, item, job_id=job_id)
+                    if join_note:
+                        item["note"] = join_note
 
             # Lưu Supabase ngay — tránh mất khi tắt browser
             try:
@@ -1984,8 +2373,28 @@ def _scrape_groups_from_results(
             if len(found) >= limit:
                 break
 
+            # Khoảng cách giữa các lần quét: delay_min đến delay_max giây
+            if delay_max > 0:
+                wait_sec = random.uniform(delay_min, delay_max)
+                _append_log(job_id, f"⏳ Nghỉ {wait_sec:.1f}s trước khi quét nhóm tiếp theo…", "info")
+                end_time = time.time() + wait_sec
+                while time.time() < end_time:
+                    if _aborted():
+                        break
+                    if _get_control(job_id) in {"pause", "pause_after", "paused"}:
+                        if _handle_pause_if_requested(job_id, context_label=name):
+                            return found
+                        break
+                    time.sleep(min(0.5, max(0.0, end_time - time.time())))
+            else:
+                if _handle_pause_if_requested(job_id, context_label=name):
+                    return found
+
         if len(found) >= limit:
             break
+
+        if _handle_pause_if_requested(job_id, context_label=keyword):
+            return found
 
         try:
             roots = []
@@ -2184,6 +2593,21 @@ def _check_keywords_on_account(
         finally:
             db.close()
 
+        def _safe_login(d, target_uid, pwd, tfa, ck):
+            try:
+                res = ensure_logged_in(d, uid=target_uid, password=pwd, two_fa=tfa, cookie=ck)
+                if res.get("success"):
+                    return res
+            except Exception as exc:
+                _append_log(job_id, f"⚠️ [{target_uid}] Phản hồi khi xác thực: {exc}. Đang kiểm tra lại trạng thái phiên...", "warn")
+            try:
+                from modules.module_02_account_manager.automation.login_flow import _check_logged_in
+                if _check_logged_in(d):
+                    return {"success": True}
+            except Exception:
+                pass
+            return {"success": False, "error": "Không thể xác thực phiên đăng nhập Facebook"}
+
         _append_log(job_id, f"🌐 [{uid}] Đang mở Chrome (session Module 2)…", "info")
         driver = create_driver(
             uid,
@@ -2194,13 +2618,7 @@ def _check_keywords_on_account(
             verify_egress=False,
         )
 
-        login = ensure_logged_in(
-            driver,
-            uid=uid,
-            password=password,
-            two_fa=two_fa,
-            cookie=cookie,
-        )
+        login = _safe_login(driver, uid, password, two_fa, cookie)
         if not login.get("success"):
             msg = login.get("error") or "Không đăng nhập được Facebook"
             _append_log(job_id, f"❌ [{uid}] {msg}", "error")
@@ -2245,6 +2663,8 @@ def _check_keywords_on_account(
                 _append_log(job_id, "🛑 Dừng khẩn cấp — không chạy từ khóa còn lại.", "warn")
                 _set_job(job_id, groups=list(all_groups), status="aborted", error="Dừng khẩn cấp")
                 return
+            if _handle_pause_if_requested(job_id, context_label=item.get("keyword") or ""):
+                return
 
             keyword = item["keyword"]
             limit = _clamp_limit(item.get("limit"))
@@ -2276,6 +2696,8 @@ def _check_keywords_on_account(
                         source_uid=uid,
                         known_group_ids=known_ids,
                         auto_join=auto_join,
+                        delay_min=delay_min,
+                        delay_max=delay_max,
                     )
                     groups = [group_item] if group_item else []
                 else:
@@ -2307,6 +2729,8 @@ def _check_keywords_on_account(
                         source_uid=uid,
                         known_group_ids=known_ids,
                         auto_join=auto_join,
+                        delay_min=delay_min,
+                        delay_max=delay_max,
                     )
                 from modules.module_10_group_scan.models import normalize_group_id as _ngid
 
@@ -2339,14 +2763,8 @@ def _check_keywords_on_account(
                 if idx >= len(items) - 1:
                     raise
 
-            # Tạm dừng: xong từ khóa hiện tại → dừng, không chạy từ khóa tiếp
-            if _get_control(job_id) == "pause_after":
-                _append_log(
-                    job_id,
-                    f"⏸️ Tạm dừng sau «{keyword}». Các từ khóa còn lại chờ Bắt đầu lại.",
-                    "warn",
-                )
-                _set_job(job_id, groups=list(all_groups), status="paused", control="pause_after")
+            # Tạm dừng: xong từ khóa hiện tại → chờ Tiếp tục hoặc Dừng khẩn cấp
+            if _handle_pause_if_requested(job_id, context_label=f"Xong «{keyword}»"):
                 return
 
             # Xoay vòng tài khoản nếu đạt ngưỡng rotate_after (BR-GIS-01.3 & BR-GIS-05)
@@ -2388,7 +2806,7 @@ def _check_keywords_on_account(
                                 acc_two_fa = decrypt_data(acc_obj.two_fa or "")
                                 _append_log(job_id, f"🌐 [{uid}] Mở Chrome cho tài khoản mới trong Bot Pool...", "info")
                                 driver = create_driver(uid, headless=False, detach=True, proxy=acc_proxy, scope="group-scan", verify_egress=False)
-                                login_res = ensure_logged_in(driver, uid=uid, password=acc_password, two_fa=acc_two_fa, cookie=acc_cookie)
+                                login_res = _safe_login(driver, uid, acc_password, acc_two_fa, acc_cookie)
                                 if login_res.get("success"):
                                     _append_log(job_id, f"✅ [{uid}] Đăng nhập thành công, tiếp tục thực thi các mục tiêu tiếp theo.", "success")
                                     last_switched_count = len(all_groups)
@@ -2410,10 +2828,10 @@ def _check_keywords_on_account(
                         _append_log(job_id, "🛑 Dừng khẩn cấp trong lúc nghỉ giữa từ khóa.", "warn")
                         _set_job(job_id, groups=list(all_groups), status="aborted", error="Dừng khẩn cấp")
                         return
-                    if _get_control(job_id) == "pause_after":
-                        _append_log(job_id, "⏸️ Tạm dừng (không chạy từ khóa tiếp).", "warn")
-                        _set_job(job_id, groups=list(all_groups), status="paused")
-                        return
+                    if _get_control(job_id) in {"pause", "pause_after", "paused"}:
+                        if _handle_pause_if_requested(job_id, context_label=f"Nghỉ trước «{next_kw}»"):
+                            return
+                        break
                     time.sleep(min(0.5, max(0.0, end_at - time.time())))
 
         _set_job(job_id, groups=list(all_groups), status="done")

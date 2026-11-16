@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSession } from "@/components/SessionContext";
 import { getSessionUserId } from "@/services/sessionIdentity.mjs";
 import { toast } from "@/lib/toast";
-import { cancelWebOAuth, getSyncJob, getWebConnection, startWebPopupOAuth, syncWebConnection } from "./service";
+import { cancelWebOAuth, disconnectWebConnection, getSyncJob, getWebConnection, startWebPopupOAuth, syncWebConnection } from "./service";
 import { openOAuthPopup, terminalJob } from "./webOAuth.mjs";
 
 export default function useWebFacebookConnection(onConnected) {
@@ -159,5 +159,23 @@ export default function useWebFacebookConnection(onConnected) {
     } catch (failure) { setError(failure.message); }
     finally { setActionBusy(false); }
   }
-  return { connection, job, starting, actionBusy, error, loadingConnection, connect, resync, cancel };
+
+  async function disconnect() {
+    if (actionBusy || startingRef.current) return;
+    setActionBusy(true);
+    setError("");
+    try {
+      const res = await disconnectWebConnection();
+      setConnection({ connected: false, identity: null, token_state: "unknown", active_job: null });
+      toast.success(res?.message || "Đã đăng xuất tài khoản Facebook thành công.");
+      callback.current?.();
+    } catch (failure) {
+      setError(failure.message);
+      toast.error(failure.message || "Không thể đăng xuất kết nối Facebook.");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  return { connection, job, starting, actionBusy, error, loadingConnection, connect, resync, cancel, disconnect };
 }

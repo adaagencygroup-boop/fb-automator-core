@@ -46,14 +46,14 @@ export function TypeBadge({ type }) {
 }
 
 export function NoteBadge({ note }) {
-  if (note === "joined") {
+  if (note === "joined" || note === "Đã tham gia") {
     return (
       <span className="inline-flex whitespace-nowrap rounded-full bg-[#DBEAFE] px-2 py-0.5 text-[10px] font-semibold text-[#1D4ED8]">
         Đã tham gia
       </span>
     );
   }
-  if (note === "pending") {
+  if (note === "pending" || note === "Đang chờ QTV duyệt" || (typeof note === "string" && note.includes("Đang chờ"))) {
     return (
       <span className="inline-flex whitespace-nowrap rounded-full bg-[#FFEDD5] px-2 py-0.5 text-[10px] font-semibold text-[#C2410C]">
         Đang chờ QTV duyệt

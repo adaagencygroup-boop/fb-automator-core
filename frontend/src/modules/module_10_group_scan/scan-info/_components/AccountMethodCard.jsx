@@ -11,7 +11,7 @@ import {
 const METHOD_TABS = [
   { id: "keyword", label: "Theo từ khóa", Icon: IconTags },
   { id: "link", label: "Nhập Link", Icon: IconLink },
-  { id: "file", label: "Tải tệp (.txt / .csv / .excel)", Icon: IconUpload },
+  { id: "file", label: "Tải tệp Link nhóm (.txt / .csv / .xlsx)", Icon: IconUpload },
 ];
 
 export function KeywordStatusBadge({ status }) {
@@ -81,6 +81,7 @@ export default function AccountMethodCard({
   onFileFilterChange,
   validFileRowsCount = 0,
   duplicateFileRowsCount = 0,
+  invalidFileRowsCount = 0,
   displayedFileRows = [],
   skipInvalidRows = true,
   onSkipInvalidRowsChange,
@@ -371,7 +372,7 @@ export default function AccountMethodCard({
       {method === "file" && (
         <div className="space-y-4">
           <div className="flex items-center justify-between pb-1">
-            <span className="text-xs font-bold text-[#0F172A]">Tải tệp danh sách nhóm (.txt / .csv / .xlsx)</span>
+            <span className="text-xs font-bold text-[#0F172A]">Tải tệp danh sách liên kết nhóm (.txt / .csv / .xlsx)</span>
             <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-medium text-slate-600 hover:text-slate-900">
               <input
                 type="checkbox"
@@ -379,7 +380,7 @@ export default function AccountMethodCard({
                 onChange={(e) => onSkipInvalidRowsChange?.(e.target.checked)}
                 className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
               />
-              <span>Bỏ qua các dòng trống và định dạng sai</span>
+              <span>Bỏ qua các dòng không phải link nhóm hoặc trùng lặp</span>
             </label>
           </div>
           <label className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-[#CBD5E1] rounded-2xl bg-white hover:bg-[#F8FAFC] transition-colors cursor-pointer group">
@@ -396,7 +397,7 @@ export default function AccountMethodCard({
               <p className="text-xs text-[#0F172A] font-semibold">
                 Kéo thả file vào đây hoặc <span className="text-[#2563EB] hover:underline">Duyệt tìm tệp</span>
               </p>
-              <p className="text-[11px] text-[#64748B]">Hỗ trợ .txt, .csv, .xlsx, .xls (mỗi dòng 1 từ khóa hoặc link)</p>
+              <p className="text-[11px] text-[#64748B]">Hỗ trợ .txt, .csv, .xlsx, .xls (chỉ chấp nhận liên kết nhóm Facebook, mỗi dòng 1 link https://www.facebook.com/groups/...)</p>
             </div>
           </label>
 
@@ -455,6 +456,19 @@ export default function AccountMethodCard({
                 >
                   Trùng lặp ({duplicateFileRowsCount})
                 </button>
+                {invalidFileRowsCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => onFileFilterChange("invalid")}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                      fileFilter === "invalid"
+                        ? "bg-[#DC2626] text-white"
+                        : "bg-[#FEF2F2] text-[#DC2626] border border-[#FECACA] hover:bg-rose-100"
+                    }`}
+                  >
+                    Sai định dạng ({invalidFileRowsCount})
+                  </button>
+                )}
               </div>
 
               <div className="max-h-[220px] overflow-y-auto rounded-lg border border-[#E2E8F0] bg-white shadow-2xs">
@@ -462,7 +476,7 @@ export default function AccountMethodCard({
                   <thead className="sticky top-0 z-10 bg-[#F8FAFC] border-b border-[#E2E8F0] text-[10px] font-bold uppercase tracking-wide text-[#64748B]">
                     <tr>
                       <th className="w-16 px-4 py-2.5 text-center bg-[#F8FAFC]">Dòng</th>
-                      <th className="px-3 py-2.5 bg-[#F8FAFC]">Dữ liệu tệp</th>
+                      <th className="px-3 py-2.5 bg-[#F8FAFC]">Đường dẫn Group Facebook</th>
                       <th className="w-24 px-3 py-2.5 text-center bg-[#F8FAFC]">Trạng thái</th>
                     </tr>
                   </thead>
@@ -470,15 +484,24 @@ export default function AccountMethodCard({
                     {displayedFileRows.slice(0, 10).map((r, idx) => (
                       <tr key={r.id || idx} className="border-t border-[#F1F5F9] hover:bg-[#F8FAFC]/60">
                         <td className="px-4 py-2 text-center text-[#64748B] font-mono">{r.line}</td>
-                        <td className="px-3 py-2 font-mono text-xs text-[#0F172A]">{r.raw}</td>
+                        <td className="px-3 py-2 font-mono text-xs text-[#0F172A] truncate max-w-[280px]" title={r.url || r.raw}>
+                          {r.url || r.raw}
+                        </td>
                         <td className="px-3 py-2 text-center">
                           {r.status === "valid" ? (
                             <span className="inline-flex items-center rounded-full bg-[#ECFDF5] border border-[#A7F3D0] px-2.5 py-0.5 text-[10px] font-semibold text-[#059669]">
                               Hợp lệ
                             </span>
-                          ) : (
+                          ) : r.status === "duplicate" ? (
                             <span className="inline-flex items-center rounded-full bg-[#FEF3C7] border border-[#FDE68A] px-2.5 py-0.5 text-[10px] font-semibold text-[#D97706]">
                               Trùng lặp
+                            </span>
+                          ) : (
+                            <span
+                              className="inline-flex items-center rounded-full bg-[#FEF2F2] border border-[#FECACA] px-2.5 py-0.5 text-[10px] font-semibold text-[#DC2626]"
+                              title={r.reason || "Không phải link nhóm Facebook"}
+                            >
+                              Sai định dạng
                             </span>
                           )}
                         </td>
@@ -489,7 +512,7 @@ export default function AccountMethodCard({
               </div>
 
               <p className="text-right text-[11px] text-[#64748B]">
-                Hiển thị {Math.min(displayedFileRows.length, 5)} trên {fileData.totalCount} dòng được phân tích
+                Hiển thị {Math.min(displayedFileRows.length, 10)} trên {fileData.totalCount} dòng được phân tích
               </p>
             </div>
           )}

@@ -42,6 +42,16 @@ class ConversationRepository:
                 conv.is_read = is_read
                 conv.is_replied = is_replied
         else:
+            # Nếu chưa có hội thoại, thử kiểm tra Customer xem có nhãn (tags) được lưu trước đó không
+            customer_tags = None
+            try:
+                from modules.module_06_omnichannel_chat.models import Customer
+                cust = self.db.query(Customer).filter(Customer.psid == customer_psid).first()
+                if cust and cust.tags:
+                    customer_tags = cust.tags
+            except Exception:
+                pass
+
             conv = Conversation(
                 page_id=page_id,
                 customer_psid=customer_psid,
@@ -50,7 +60,8 @@ class ConversationRepository:
                 last_message=last_message,
                 last_message_at=msg_time,
                 is_read=is_read,
-                is_replied=is_replied
+                is_replied=is_replied,
+                tags=customer_tags,
             )
             self.db.add(conv)
         self.db.commit()

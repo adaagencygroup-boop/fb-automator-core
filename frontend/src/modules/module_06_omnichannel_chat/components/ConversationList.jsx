@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { useIncrementalList } from "@/lib/use-incremental-list";
 import NotificationList from "./NotificationList";
@@ -18,10 +19,20 @@ const formatTime = (iso) =>
 /** "KH: 29224347..." — rút gọn mã khách hàng như Figma */
 const shortCustomer = (id) => (String(id).length > 8 ? `${String(id).slice(0, 8)}...` : id);
 
-function Tabs({ tab, onTabChange, notificationCount, onBack }) {
+function Tabs({ tab, onTabChange, conversationCount, notificationCount, onBack }) {
   const tabs = [
-    { id: "conversations", label: "Hội thoại" },
-    { id: "notifications", label: `Thông báo (${notificationCount ?? 0})` },
+    {
+      id: "conversations",
+      label: conversationCount != null && conversationCount > 0
+        ? `Hội thoại (${conversationCount})`
+        : "Hội thoại",
+    },
+    {
+      id: "notifications",
+      label: notificationCount != null && notificationCount > 0
+        ? `Thông báo (${notificationCount})`
+        : "Thông báo",
+    },
   ];
   return (
     <div role="tablist" aria-label="Hội thoại và thông báo" className="flex border-b border-slate-200 shrink-0">
@@ -205,6 +216,10 @@ export default function ConversationList({
   // Đếm từ Backend chứ không từ danh sách: danh sách giờ chỉ là một trang.
   // Mọi con số hiển thị đều là SỐ CHƯA ĐỌC — badge trên Page, tab Thông báo và
   // hai sub-tab cùng một đơn vị, không lệch nhau nữa.
+  const unreadConversations = useMemo(
+    () => (conversations || []).filter((c) => Boolean(c.unread)).length,
+    [conversations],
+  );
   const unreadNotifications = Object.values(notificationCounts || {}).reduce((a, b) => a + b, 0);
   const typeTotalNotifications = Object.values(notificationTypeCounts || {}).reduce((a, b) => a + b, 0);
   const displayNotificationCount = typeTotalNotifications > 0
@@ -222,6 +237,7 @@ export default function ConversationList({
       <Tabs
         tab={tab}
         onTabChange={onTabChange}
+        conversationCount={unreadConversations}
         notificationCount={displayNotificationCount}
         onBack={onBack}
       />
@@ -273,7 +289,7 @@ export default function ConversationList({
         <NotificationList
           loading={notificationsLoading ?? loading}
           notifications={notifications}
-          counts={notificationTypeCounts || notificationCounts}
+          counts={notificationCounts || notificationTypeCounts}
           onLoadMore={onLoadMoreNotifications}
           hasMore={hasMoreNotifications}
           loadingMore={loadingMoreNotifications}

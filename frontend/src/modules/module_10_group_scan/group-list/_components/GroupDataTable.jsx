@@ -155,16 +155,20 @@ export default function GroupDataTable({
 
                     {/* GHI CHÚ */}
                     <td className="px-3 py-4 text-xs">
-                      {g.note === "Đã tham gia" ? (
+                      {g.note === "joined" || g.note === "Đã tham gia" ? (
                         <span className="inline-flex items-center px-2.5 py-1 rounded-[10px] text-[11px] font-medium bg-[#EFF6FF] border border-[#BFDBFE] text-[#1D4ED8]">
                           Đã tham gia
                         </span>
-                      ) : g.note === "Đang chờ QTV duyệt" ? (
+                      ) : g.note === "pending" || g.note === "Đang chờ QTV duyệt" || (typeof g.note === "string" && g.note.includes("Đang chờ")) ? (
                         <span className="inline-flex items-center px-2.5 py-1 rounded-[10px] text-[11px] font-medium bg-[#FFFBEB] border border-[#FDE68A] text-[#B45309]">
                           Đang chờ QTV duyệt
                         </span>
+                      ) : g.note === "not_joined" || g.note === "Chưa vào nhóm" ? (
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-[10px] text-[11px] font-medium bg-[#FEF2F2] border border-[#FECACA] text-[#DC2626]">
+                          Chưa vào nhóm
+                        </span>
                       ) : (
-                        <span className="text-[#94A3B8]">—</span>
+                        <span className="text-[#94A3B8]">{g.note || "—"}</span>
                       )}
                     </td>
 

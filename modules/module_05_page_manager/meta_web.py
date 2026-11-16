@@ -18,7 +18,12 @@ def _current(owner, *, token=False):
     fields = "id, app_id, app_scoped_user_id, facebook_name, token_metadata, updated_at"
     if token:
         fields += ", user_access_token"
-    return db.fetch_one(f"SELECT {fields} FROM meta_web_connections WHERE user_id = %s AND app_id = %s ORDER BY updated_at DESC, id DESC LIMIT 1", (owner, app_id))
+    return db.fetch_one(
+        f"SELECT {fields} FROM meta_web_connections "
+        "WHERE user_id = %s AND app_id = %s AND user_access_token IS NOT NULL AND user_access_token != '' "
+        "ORDER BY updated_at DESC, id DESC LIMIT 1",
+        (owner, app_id),
+    )
 
 
 def connection_status(owner):
@@ -183,6 +188,10 @@ def _save(owner, prepared, job):
                     category = EXCLUDED.category, account_uid = NULL, web_connection_id = EXCLUDED.web_connection_id,
                     token_metadata = EXCLUDED.token_metadata, status = 'ACTIVE', updated_at = NOW()""",
                 (owner, page["id"], page["name"], page["access_token"], page.get("category"), connection_id, json.dumps(page["token_metadata"])))
+
+    # Kích hoạt kiểm tra ngầm đa luồng cho các Page Token (8 workers)
+    sync.start_background_page_verification(owner, prepared["pages"], identity["id"])
+
     return {"success": True, "count": len(prepared["pages"]), "identity": identity,
             "connection_id": connection_id, "message": f"Đã kết nối {identity['name']} và đồng bộ {len(prepared['pages'])} Page."}
 
@@ -201,11 +210,6 @@ def confirm_web(owner, job_id, accept):
         if str(latest.get("user_id")) != prepared["identity"]["id"] or str(latest.get("app_id")) != str(prepared["metadata"]["app_id"]):
             raise ValueError("Danh tính token đã thay đổi trước khi lưu.")
         prepared["metadata"] = latest
-        for page in prepared["pages"]:
-            latest_page = sync.fb_client.inspect_token(page["access_token"], user=False)
-            if latest_page.get("user_id") and str(latest_page["user_id"]) != prepared["identity"]["id"]:
-                raise ValueError("Page Token không thuộc danh tính đã xác nhận.")
-            page["token_metadata"] = latest_page
         return _save(owner, prepared, current_job)
     sync._executor.submit(sync._run, job, task)
     return {"job_id": job_id, "status": "QUEUED"}
@@ -236,3 +240,23 @@ def resync(owner):
         return _save(owner, prepared, current_job)
     sync._executor.submit(sync._run, job, task)
     return {"job_id": job["job_id"], "status": "QUEUED"}
+
+
+def disconnect(owner):
+    if not owner:
+        raise ValueError("Phiên đăng nhập không hợp lệ.")
+    row = _current(owner)
+    if not row:
+        return {"success": True, "message": "Không có kết nối nào để đăng xuất."}
+    conn_id = row["id"]
+    with db.session() as cur:
+        # Chỉ xóa token phiên đăng nhập web, bảo lưu record danh tính để các Fanpage vẫn giữ nguyên tên Facebook quản trị
+        cur.execute("""
+            UPDATE meta_web_connections
+            SET user_access_token = '',
+                token_metadata = jsonb_set(COALESCE(token_metadata, '{}'::jsonb), '{is_valid}', 'false'::jsonb),
+                updated_at = NOW()
+            WHERE user_id = %s AND id = %s
+        """, (owner, conn_id))
+    return {"success": True, "message": "Đã đăng xuất tài khoản Facebook thành công."}
+

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,7 @@ import {
   Sticker,
   Tag,
   TriangleAlert,
+  X,
 } from "lucide-react";
 import { MaskIcon } from "@/components/icons/MaskIcon";
 import { CONVERSATION_TAGS, REACTIONS, REPLY_WINDOW_MS } from "../constants";
@@ -97,6 +98,43 @@ const useNow = () => useSyncExternalStore(subscribeClock, getClock, getServerClo
 
 const GROUP_GAP_MS = 5 * 60 * 1000; // tin cách nhau < 5 phút -> chung một cụm (bo góc liền nhau)
 const SEPARATOR_GAP_MS = 60 * 60 * 1000; // cách nhau > 1 giờ hoặc sang ngày mới -> hiện dải thời gian
+
+/**
+ * Gom các tin nhắn trong một cụm thành các sub-item:
+ * - Cụm các ảnh liên tiếp (không có text, không replyTo) sẽ được gom thành một gallery dạng lưới (`kind: "image-grid"`).
+ * - Các tin nhắn đơn khác (tin có chữ, video, audio, file hoặc ảnh đơn lẻ) giữ nguyên dạng (`kind: "single"`).
+ */
+function groupConsecutiveImages(messages) {
+  const items = [];
+  let imageBatch = [];
+
+  const flushBatch = () => {
+    if (imageBatch.length === 0) return;
+    if (imageBatch.length === 1) {
+      items.push({ kind: "single", message: imageBatch[0] });
+    } else {
+      items.push({
+        kind: "image-grid",
+        id: `grid-${imageBatch[0].id}`,
+        messages: imageBatch,
+        createdAt: imageBatch[imageBatch.length - 1].createdAt,
+      });
+    }
+    imageBatch = [];
+  };
+
+  for (const m of messages) {
+    const isPureImage = m.attachment?.type === "image" && !m.text && !m.replyTo;
+    if (isPureImage) {
+      imageBatch.push(m);
+    } else {
+      flushBatch();
+      items.push({ kind: "single", message: m });
+    }
+  }
+  flushBatch();
+  return items;
+}
 
 function buildRows(messages) {
   const rows = [];
@@ -608,29 +646,181 @@ function MessageRow({ message, outgoing, radius, showAvatar, avatar, customerNam
   );
 }
 
+function ImageGridRow({
+  item,
+  outgoing,
+  radius,
+  showAvatar,
+  avatar,
+  customerName,
+  onReply,
+  onReact,
+  onRetry,
+  isLastOutgoing,
+}) {
+  const { messages } = item;
+  const count = messages.length;
+  // Kiểm tra trạng thái sending / failed
+  const isSending = messages.some((m) => m.status === "sending");
+  const failedMessage = messages.find((m) => m.status === "failed");
+  const lastMsg = messages[count - 1];
+
+  // Quyết định số cột dạng lưới theo số lượng ảnh:
+  // 2 ảnh: 2 cột (1 hàng)
+  // 3 ảnh: 3 cột hoặc 1 lớn 2 nhỏ (dùng 3 cột)
+  // 4 ảnh: 2 cột (2 hàng)
+  // 5+ ảnh: 3 cột
+  const gridColsClass =
+    count === 2
+      ? "grid-cols-2 max-w-[340px]"
+      : count === 4
+        ? "grid-cols-2 max-w-[340px]"
+        : "grid-cols-3 max-w-[420px]";
+
+  return (
+    <div className={cn("group/msg flex items-center w-full", outgoing ? "justify-end" : "justify-start")}>
+      {outgoing && <MessageActions message={lastMsg} outgoing onReply={onReply} onReact={onReact} />}
+
+      {!outgoing && (
+        <span className="self-end shrink-0 w-7 mr-2">
+          {showAvatar && <Avatar src={avatar} name={customerName} size={28} />}
+        </span>
+      )}
+
+      <div
+        className={cn(
+          "relative min-w-0 max-w-[70%] flex flex-col",
+          outgoing ? "items-end" : "items-start",
+          isSending && "opacity-70",
+        )}
+        title={formatTime(lastMsg.createdAt)}
+      >
+        <div
+          className={cn(
+            "grid gap-1 overflow-hidden p-1 bg-slate-100/60 border border-slate-200/80 shadow-sm",
+            gridColsClass,
+            radius,
+          )}
+        >
+          {messages.map((m) => {
+            const mediaUrl = displayMediaUrl(m.attachment?.url);
+            return (
+              <a
+                key={m.id}
+                href={mediaUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="group/img relative aspect-square block overflow-hidden rounded-lg bg-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={mediaUrl}
+                  alt={m.attachment?.name || "Hình ảnh"}
+                  className="h-full w-full object-cover transition-transform duration-200 group-hover/img:scale-105"
+                  loading="lazy"
+                />
+              </a>
+            );
+          })}
+        </div>
+
+        {failedMessage && (
+          <button
+            type="button"
+            onClick={() => onRetry(failedMessage)}
+            className={cn("mt-1 text-[11px] leading-4 text-red-600 hover:underline", FOCUS)}
+          >
+            Gửi lỗi · Thử lại
+          </button>
+        )}
+
+        {/* Trạng thái tin nhắn outbound cuối */}
+        {outgoing && isLastOutgoing && !failedMessage && (
+          <div className="mt-1 flex justify-end">
+            {isSending ? (
+              <span className="text-[11px] leading-4 text-slate-400 pr-0.5">Đang gửi…</span>
+            ) : lastMsg.status === "seen" || lastMsg.isRead ? (
+              <div title="Đã xem" className="pr-0.5 pt-0.5 flex justify-end">
+                {avatar ? (
+                  <img
+                    src={avatar}
+                    alt="Đã xem"
+                    className="size-3.5 rounded-full object-cover ring-1 ring-white shrink-0"
+                  />
+                ) : (
+                  <span className="size-3.5 rounded-full bg-slate-200 text-[9px] text-slate-600 font-bold flex items-center justify-center ring-1 ring-white shrink-0">
+                    {String(customerName || "KH").slice(0, 1).toUpperCase()}
+                  </span>
+                )}
+              </div>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-[11px] leading-4 text-slate-400 pr-0.5">
+                <svg viewBox="0 0 16 16" width="11" height="11" className="shrink-0" aria-hidden="true">
+                  <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                  <path d="M5 8.2l2 2 4-4.4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Đã gửi
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {!outgoing && <MessageActions message={lastMsg} onReply={onReply} onReact={onReact} />}
+    </div>
+  );
+}
+
 function MessageGroup({ group, conversation, onReply, onReact, onRetry, lastOutgoingId }) {
   const outgoing = group.direction === "out";
-  const count = group.messages.length;
+  const items = useMemo(() => groupConsecutiveImages(group.messages), [group.messages]);
+  const count = items.length;
+
   return (
     <div className={cn("flex flex-col gap-1", "mt-3", outgoing ? "items-end" : "items-start")}>
       {!outgoing && (
         <span className="pl-10 pb-0.5 text-xs leading-[18px] text-[#65676B]">{conversation.customerName || "Khách hàng"}</span>
       )}
-      {group.messages.map((m, i) => (
-        <MessageRow
-          key={m.id}
-          message={m}
-          outgoing={outgoing}
-          radius={bubbleRadius(group.direction, i, count)}
-          showAvatar={i === count - 1}
-          avatar={conversation.avatar}
-          customerName={conversation.customerName}
-          onReply={() => onReply(m)}
-          onReact={(r) => onReact(m.id, r)}
-          onRetry={() => onRetry(m)}
-          isLastOutgoing={outgoing && m.id === lastOutgoingId}
-        />
-      ))}
+      {items.map((item, i) => {
+        const radius = bubbleRadius(group.direction, i, count);
+        const isLastItem = i === count - 1;
+
+        if (item.kind === "image-grid") {
+          const containsLastOutgoing = outgoing && item.messages.some((m) => m.id === lastOutgoingId);
+          return (
+            <ImageGridRow
+              key={item.id}
+              item={item}
+              outgoing={outgoing}
+              radius={radius}
+              showAvatar={isLastItem}
+              avatar={conversation.avatar}
+              customerName={conversation.customerName}
+              onReply={() => onReply(item.messages[item.messages.length - 1])}
+              onReact={(r) => onReact(item.messages[item.messages.length - 1].id, r)}
+              onRetry={onRetry}
+              isLastOutgoing={containsLastOutgoing}
+            />
+          );
+        }
+
+        const m = item.message;
+        return (
+          <MessageRow
+            key={m.id}
+            message={m}
+            outgoing={outgoing}
+            radius={radius}
+            showAvatar={isLastItem}
+            avatar={conversation.avatar}
+            customerName={conversation.customerName}
+            onReply={() => onReply(m)}
+            onReact={(r) => onReact(m.id, r)}
+            onRetry={() => onRetry(m)}
+            isLastOutgoing={outgoing && m.id === lastOutgoingId}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -679,6 +869,7 @@ const COMPOSER_MAX_ROWS = 6;
 
 function Composer({ onSend, replyTo, onCancelReply, bordered }) {
   const [draft, setDraft] = useState("");
+  const [pendingAttachments, setPendingAttachments] = useState([]); // [{ id, type, url, name, file }]
   const inputRef = useRef(null);
   const attachInputRef = useRef(null);
 
@@ -698,12 +889,16 @@ function Composer({ onSend, replyTo, onCancelReply, bordered }) {
 
   const submit = () => {
     const text = draft.trim();
-    if (!text) {
+    if (!text && pendingAttachments.length === 0) {
       inputRef.current?.focus();
       return;
     }
-    onSend({ text });
+    onSend({
+      text,
+      attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined,
+    });
     setDraft("");
+    setPendingAttachments([]);
   };
 
   /** Chèn chữ vào vị trí con trỏ */
@@ -719,21 +914,42 @@ function Composer({ onSend, replyTo, onCancelReply, bordered }) {
     });
   };
 
-  /** Một nút chung cho ảnh và tệp: kiểu đính kèm suy ra từ MIME của file */
+  /** Chọn ảnh, video và tệp: hỗ trợ chọn nhiều file cùng lúc để xem preview trước khi gửi */
   const pickAttachment = (e) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files || []);
     e.target.value = "";
-    if (!file) return;
-    const mime = file.type || "";
-    const type = mime.startsWith("image/")
-      ? "image"
-      : mime.startsWith("video/")
-        ? "video"
-        : mime.startsWith("audio/")
-          ? "audio"
-          : "file";
-    // url (blob:) chỉ để xem trước tại chỗ; `file` mới là thứ được upload lên server
-    onSend({ text: "", attachment: { type, url: URL.createObjectURL(file), name: file.name, file } });
+    if (files.length === 0) return;
+
+    const newItems = files.map((file, idx) => {
+      const mime = file.type || "";
+      const type = mime.startsWith("image/")
+        ? "image"
+        : mime.startsWith("video/")
+          ? "video"
+          : mime.startsWith("audio/")
+            ? "audio"
+            : "file";
+      return {
+        id: `${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
+        type,
+        url: URL.createObjectURL(file),
+        name: file.name,
+        file,
+      };
+    });
+
+    setPendingAttachments((prev) => [...prev, ...newItems]);
+    inputRef.current?.focus();
+  };
+
+  const removeAttachment = (idToRemove) => {
+    setPendingAttachments((prev) => {
+      const target = prev.find((item) => item.id === idToRemove);
+      if (target?.url && target.url.startsWith("blob:")) {
+        URL.revokeObjectURL(target.url);
+      }
+      return prev.filter((item) => item.id !== idToRemove);
+    });
   };
 
   const voice = useVoiceRecorder();
@@ -772,6 +988,52 @@ function Composer({ onSend, replyTo, onCancelReply, bordered }) {
       )}
 
       {voice.error && <p className="px-4 pb-1 text-[11px] leading-4 text-red-600">{voice.error}</p>}
+
+      {/* Xem trước danh sách ảnh / video / tệp đính kèm trước khi bấm gửi */}
+      {pendingAttachments.length > 0 && (
+        <div className="px-4 pt-2 pb-1">
+          <div className="flex flex-wrap items-center gap-2">
+            {pendingAttachments.map((att) => (
+              <div
+                key={att.id}
+                className="relative inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-1.5 shadow-sm"
+              >
+                {att.type === "image" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={att.url}
+                    alt={att.name || "Xem trước"}
+                    className="h-16 w-16 rounded-lg object-cover"
+                  />
+                ) : att.type === "video" ? (
+                  <video
+                    src={att.url}
+                    className="h-16 w-16 rounded-lg object-cover bg-black"
+                    muted
+                    autoPlay
+                    loop
+                    playsInline
+                  />
+                ) : (
+                  <div className="flex h-16 max-w-[200px] items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-700">
+                    <Paperclip className="size-4 shrink-0 text-slate-500" />
+                    <span className="truncate font-medium">{att.name || "Tệp đính kèm"}</span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(att.id)}
+                  title={`Xoá ${att.name || "tệp đính kèm"}`}
+                  aria-label={`Xoá ${att.name || "tệp đính kèm"}`}
+                  className="absolute -top-2 -right-2 flex size-5 items-center justify-center rounded-full bg-slate-700 text-white shadow hover:bg-slate-900 transition-colors"
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex items-end gap-2 p-3">
         {voice.recording ? (
@@ -857,8 +1119,8 @@ function Composer({ onSend, replyTo, onCancelReply, bordered }) {
             )}
           </Dropdown>
 
-          {/* Một input dùng chung: ảnh, video, audio hay tệp thường đều qua đây */}
-          <input ref={attachInputRef} type="file" hidden onChange={pickAttachment} />
+          {/* Một input dùng chung: ảnh, video, audio hay tệp thường đều qua đây, hỗ trợ multiple */}
+          <input ref={attachInputRef} type="file" multiple hidden onChange={pickAttachment} />
         </div>
 
         <div className="flex-1 min-w-0 flex items-end bg-slate-50 border border-slate-200 rounded-2xl px-4 py-1.5 transition-colors focus-within:border-blue-300 focus-within:bg-white">
@@ -897,8 +1159,8 @@ function Composer({ onSend, replyTo, onCancelReply, bordered }) {
           </Dropdown>
         </div>
 
-        {/* Ô trống thì hiện nút thích gửi nhanh; có chữ thì đổi thành nút gửi — như Messenger */}
-        {draft.trim() ? (
+        {/* Ô trống và không có đính kèm thì hiện nút thích gửi nhanh; có chữ hoặc có tệp thì đổi thành nút gửi — như Messenger */}
+        {draft.trim() || pendingAttachments.length > 0 ? (
           <IconButton
             label="Gửi"
             onClick={submit}
