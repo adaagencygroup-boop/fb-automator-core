@@ -8,10 +8,20 @@ import {
   deleteScanHistory,
   deleteScanHistoryBulk,
 } from "../service";
-import HistoryStatsOverview from "./_components/HistoryStatsOverview";
 import HistoryFilterToolbar from "./_components/HistoryFilterToolbar";
 import HistoryDataTable from "./_components/HistoryDataTable";
 import SessionDetailModal from "./_components/SessionDetailModal";
+
+function parseSessionDate(startTime) {
+  if (!startTime) return null;
+  // Format DD/MM/YYYY
+  const m = startTime.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) {
+    return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+  }
+  const d = new Date(startTime);
+  return isNaN(d.getTime()) ? null : d;
+}
 
 export default function GroupScanHistoryPage() {
   const [mounted, setMounted] = useState(false);
@@ -21,9 +31,8 @@ export default function GroupScanHistoryPage() {
 
   const [historyList, setHistoryList] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedIds, setSelectedIds] = useState(new Set());
   const [selectedSession, setSelectedSession] = useState(null);
-  const [detailModalTab, setDetailModalTab] = useState("overview"); // overview | results | logs
+  const [detailModalTab, setDetailModalTab] = useState("overview");
 
   // Filter States
   const [searchQuery, setSearchQuery] = useState("");
@@ -31,9 +40,9 @@ export default function GroupScanHistoryPage() {
   const [filterStatus, setFilterStatus] = useState("ALL");
   const [filterDateRange, setFilterDateRange] = useState("ALL");
 
-  // Pagination
+  // Pagination (Default 5 to match mockup image)
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
 
   // Nạp dữ liệu lịch sử phiên quét từ Database
   const fetchHistory = useCallback(async (isRefresh = false) => {
@@ -63,25 +72,6 @@ export default function GroupScanHistoryPage() {
     fetchHistory();
   }, [fetchHistory]);
 
-  // Stats calculation
-  const stats = useMemo(() => {
-    const total = historyList.length;
-    const success = historyList.filter((s) => s.status === "SUCCESS").length;
-    const running = historyList.filter((s) => s.status === "RUNNING").length;
-    const totalItemsCollected = historyList.reduce(
-      (sum, s) => sum + (s.progress?.collected || 0),
-      0
-    );
-    const successRate = total > 0 ? ((success / total) * 100).toFixed(1) : "0.0";
-    return {
-      total,
-      success,
-      running,
-      successRate,
-      totalItemsCollected,
-    };
-  }, [historyList]);
-
   // Filtered List
   const filteredList = useMemo(() => {
     return historyList.filter((item) => {
@@ -98,19 +88,50 @@ export default function GroupScanHistoryPage() {
       }
 
       // 2. Type Filter
-      if (filterType !== "ALL" && item.type !== filterType) return false;
+      if (filterType !== "ALL") {
+        const t = (item.type || "").toUpperCase();
+        if (filterType === "MEMBERS") {
+          if (!t.includes("MEMBER") && !t.includes("FOLLOWER")) return false;
+        } else if (filterType === "POSTS") {
+          if (!t.includes("POST")) return false;
+        } else if (filterType === "GROUP_INFO") {
+          if (!t.includes("INFO") && (t.includes("POST") || t.includes("MEMBER"))) return false;
+        } else if (t !== filterType) {
+          return false;
+        }
+      }
 
       // 3. Status Filter
-      if (filterStatus !== "ALL" && item.status !== filterStatus) return false;
+      if (filterStatus !== "ALL") {
+        const s = (item.status || "").toUpperCase();
+        if (filterStatus === "SUCCESS") {
+          if (s !== "SUCCESS" && s !== "COMPLETED" && s !== "DONE") return false;
+        } else if (filterStatus === "FAILED") {
+          if (s !== "FAILED" && s !== "ERROR" && s !== "ABORTED") return false;
+        } else if (s !== filterStatus) {
+          return false;
+        }
+      }
 
       // 4. Date Range Filter
-      if (filterDateRange === "TODAY") {
-        const today = new Date();
-        const day = String(today.getDate()).padStart(2, "0");
-        const month = String(today.getMonth() + 1).padStart(2, "0");
-        const year = today.getFullYear();
-        const todayStr = `${day}/${month}/${year}`;
-        if (!item.startTime?.includes(todayStr)) return false;
+      if (filterDateRange !== "ALL") {
+        const itemDate = parseSessionDate(item.startTime);
+        if (itemDate) {
+          const now = new Date();
+          const itemDay = new Date(itemDate.getFullYear(), itemDate.getMonth(), itemDate.getDate()).getTime();
+          const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+          const oneDay = 24 * 60 * 60 * 1000;
+
+          if (filterDateRange === "TODAY") {
+            if (itemDay !== today) return false;
+          } else if (filterDateRange === "YESTERDAY") {
+            if (itemDay !== today - oneDay) return false;
+          } else if (filterDateRange === "LAST_7_DAYS") {
+            if (itemDay < today - 7 * oneDay) return false;
+          } else if (filterDateRange === "LAST_30_DAYS") {
+            if (itemDay < today - 30 * oneDay) return false;
+          }
+        }
       }
 
       return true;
@@ -130,66 +151,6 @@ export default function GroupScanHistoryPage() {
     return filteredList.slice(start, start + pageSize);
   }, [filteredList, currentPage, pageSize]);
 
-  // Selection handlers
-  const handleSelectAll = (checked) => {
-    if (checked) {
-      setSelectedIds(new Set(paginatedList.map((item) => item.id)));
-    } else {
-      setSelectedIds(new Set());
-    }
-  };
-
-  const handleSelectOne = (id, checked) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  };
-
-  // Actions
-  const handleRefresh = () => {
-    fetchHistory(true);
-  };
-
-  const handleDeleteOne = async (id) => {
-    try {
-      await deleteScanHistory(id);
-      setHistoryList((prev) => prev.filter((item) => item.id !== id));
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      if (selectedSession?.id === id) {
-        setSelectedSession(null);
-      }
-      toast.success(`Đã xóa phiên #${id} khỏi Database!`);
-    } catch (err) {
-      console.error(err);
-      toast.error(`Lỗi khi xóa phiên #${id}`);
-    }
-  };
-
-  const handleBulkDelete = async () => {
-    if (selectedIds.size === 0) return;
-    const count = selectedIds.size;
-    const ids = Array.from(selectedIds);
-    try {
-      await deleteScanHistoryBulk(ids);
-      setHistoryList((prev) => prev.filter((item) => !selectedIds.has(item.id)));
-      setSelectedIds(new Set());
-      if (selectedSession && selectedIds.has(selectedSession.id)) {
-        setSelectedSession(null);
-      }
-      toast.success(`Đã xóa ${count} bản ghi lịch sử khỏi Database!`);
-    } catch (err) {
-      console.error(err);
-      toast.error("Lỗi khi xóa nhiều phiên lịch sử!");
-    }
-  };
-
   const handleRerun = (session) => {
     toast.info(
       `Phiên quét: ${session.title} (${session.target}). Hãy mở tab Quét thông tin nhóm để tiếp tục!`
@@ -199,43 +160,46 @@ export default function GroupScanHistoryPage() {
   // Export to Excel
   const handleExportExcel = () => {
     try {
-      const dataToExport = (
-        selectedIds.size > 0
-          ? historyList.filter((item) => selectedIds.has(item.id))
-          : filteredList
-      ).map((item) => ({
-        "Mã phiên": item.id,
-        "Loại quét":
-          item.type === "GROUP_INFO"
-            ? "Quét thông tin nhóm"
-            : item.type === "MEMBERS"
-            ? "Quét thành viên nhóm"
-            : "Quét bài viết nhóm",
-        "Mục tiêu / Từ khóa": item.target,
-        "Tài khoản UID": item.account?.uid || "",
-        "Tên tài khoản": item.account?.name || "",
-        "Đã thu thập": `${item.progress?.collected || 0} ${item.progress?.unit || "nhóm"}`,
-        "Mục tiêu đặt ra": `${item.progress?.target || 0} ${item.progress?.unit || "nhóm"}`,
-        "Tiến độ %": `${item.progress?.percentage || 0}%`,
-        "Bắt đầu": item.startTime || "",
-        "Kết thúc": item.endTime || "",
-        "Thời lượng": item.duration || "",
-        "Trạng thái":
-          item.status === "SUCCESS"
+      const dataToExport = filteredList.map((item, index) => {
+        const type = (item.type || "").toUpperCase();
+        let taskType = "Quét thông tin nhóm";
+        let unit = "Nhóm";
+        if (type.includes("MEMBER") || type.includes("FOLLOWER")) {
+          taskType = "Quét thành viên nhóm";
+          unit = "UID";
+        } else if (type.includes("POST")) {
+          taskType = "Quét bài viết nhóm";
+          unit = "bài viết";
+        }
+
+        const status = (item.status || "").toUpperCase();
+        const statusLabel =
+          status === "SUCCESS" || status === "COMPLETED"
             ? "Hoàn thành"
-            : item.status === "RUNNING"
-            ? "Đang quét"
-            : item.status === "PAUSED"
+            : status === "RUNNING"
+            ? "Đang chạy"
+            : status === "PAUSED"
             ? "Tạm dừng"
-            : "Thất bại",
-      }));
+            : "Lỗi";
+
+        return {
+          "STT": String(index + 1).padStart(2, "0"),
+          "Mã phiên": item.id,
+          "Loại tác vụ": taskType,
+          "Mục tiêu quét": item.target,
+          "Kết quả thu thập": `${item.progress?.collected || 0} ${unit}`,
+          "Thời gian bắt đầu": item.startTime || "",
+          "Thời lượng": item.duration || "",
+          "Trạng thái": statusLabel,
+        };
+      });
 
       const worksheet = XLSX.utils.json_to_sheet(dataToExport);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "LichSuQuetNhom");
       XLSX.writeFile(
         workbook,
-        `Lich_Su_Quet_Nhom_Module10_${new Date().toISOString().slice(0, 10)}.xlsx`
+        `Bao_Cao_Lich_Su_Quet_Nhom_${new Date().toISOString().slice(0, 10)}.xlsx`
       );
       toast.success(
         `Xuất thành công ${dataToExport.length} phiên quét ra file Excel!`
@@ -248,10 +212,7 @@ export default function GroupScanHistoryPage() {
 
   return (
     <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
-      {/* 1. TOP STATS CARDS */}
-      <HistoryStatsOverview stats={stats} />
-
-      {/* 2. FILTER & TOOLBAR WORKSPACE CARD */}
+      {/* 1. TOP FILTER BAR */}
       <HistoryFilterToolbar
         searchQuery={searchQuery}
         onSearchQueryChange={(val) => {
@@ -273,27 +234,18 @@ export default function GroupScanHistoryPage() {
           setFilterDateRange(val);
           setCurrentPage(1);
         }}
-        onRefresh={handleRefresh}
-        loading={loading}
         onExportExcel={handleExportExcel}
-        selectedCount={selectedIds.size}
-        onBulkDelete={handleBulkDelete}
       />
 
-      {/* 3. MASTER DATA TABLE CARD */}
+      {/* 2. MAIN DATA TABLE */}
       <HistoryDataTable
         loading={loading}
         paginatedList={paginatedList}
         totalFilteredCount={filteredList.length}
-        selectedIds={selectedIds}
-        onSelectAll={handleSelectAll}
-        onSelectOne={handleSelectOne}
         onViewDetail={(item) => {
           setSelectedSession(item);
           setDetailModalTab("overview");
         }}
-        onRerun={handleRerun}
-        onDeleteOne={handleDeleteOne}
         currentPage={currentPage}
         pageSize={pageSize}
         totalPages={totalPages}
@@ -304,7 +256,7 @@ export default function GroupScanHistoryPage() {
         }}
       />
 
-      {/* 4. DETAIL MODAL: XEM CHI TIẾT PHIÊN QUÉT */}
+      {/* 3. DETAIL MODAL */}
       <SessionDetailModal
         isOpen={Boolean(selectedSession)}
         onClose={() => setSelectedSession(null)}

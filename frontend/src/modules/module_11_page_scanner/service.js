@@ -19,13 +19,9 @@ export async function parsePageLinks(payload) {
   return api.post("/api/page-scanner/source/parse", payload);
 }
 
-// ── SOURCE: SCAN BY LINKS (quét thông tin Fanpage theo danh sách link) ──
-export async function scanPageLinks(payload) {
-  return api.post("/api/page-scanner/source/scan-links", payload);
-}
-
 // ── SOURCE: UPLOAD FILE .txt/.csv ──
-export async function uploadPageFile(formData, params = { save_to_db: true, filter_existing: true }) {
+// Mặc định CHỈ xem trước / kiểm tra; truyền save_to_db: true khi người dùng bấm "Bắt đầu".
+export async function uploadPageFile(formData, params = { save_to_db: false, filter_existing: true }) {
   return api.post("/api/page-scanner/source/upload", formData, {
     headers: { "Content-Type": "multipart/form-data" },
     params,
@@ -77,9 +73,12 @@ export async function resumeScanSession(sessionId) {
   return api.post(`/api/page-scanner/sessions/${sessionId}/resume`);
 }
 
-/** Đợt đang chạy (RUNNING/PAUSED) + toàn bộ phiên con cùng campaign_id. */
-export async function getActiveCampaign() {
-  return api.get("/api/page-scanner/campaigns/active");
+/**
+ * Đợt đang chạy (RUNNING/PAUSED) + toàn bộ phiên con cùng campaign_id — theo đúng loại job
+ * của trang: DISCOVERY (Quét thông tin page) | FOLLOW (followers) | POST_SCAN (bài viết).
+ */
+export async function getActiveCampaign(jobType = "DISCOVERY") {
+  return api.get("/api/page-scanner/campaigns/active", { params: { job_type: jobType } });
 }
 
 /** @deprecated dùng getActiveCampaign */
@@ -172,6 +171,16 @@ export async function getScannedPosts(params = {}) {
       return usp.toString();
     },
   });
+}
+
+/** Số bài theo từng Page của 1 phiên POST_SCAN: { items: [{page_key, post_count}], total_posts }. */
+export async function getSessionPostPages(sessionId) {
+  return api.get("/api/page-scanner/posts/session-pages", { params: { session_id: sessionId } });
+}
+
+/** Số UID theo từng Page của 1 phiên FOLLOW: { items: [{page_key, uid_count}], total_uids }. */
+export async function getSessionFollowerPages(sessionId) {
+  return api.get("/api/page-scanner/followers/session-pages", { params: { session_id: sessionId } });
 }
 
 /** Sidebar DS bài viết: page có bài + post_count. */
