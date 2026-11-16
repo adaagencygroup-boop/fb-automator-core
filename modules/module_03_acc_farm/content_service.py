@@ -22,73 +22,105 @@ logger = logging.getLogger(__name__)
 # 1. GEMINI AI GENERATOR
 # ==============================================================================
 
-def load_gemini_keys(key_source: Optional[str] = None) -> List[str]:
-    """Đọc danh sách API key từ file text, đường dẫn file, hoặc chuỗi phân tách bởi dấu phẩy/xuống dòng."""
-    keys = []
+def _looks_like_key_file_path(value: str) -> bool:
+    """Chỉ coi là đường dẫn file khi giống path / tồn tại trên đĩa — không nuốt key dán tay."""
+    if not value:
+        return False
+    # Key Gemini thường là 1 token (AIza... / AQ....), không có separator path
+    if ("\n" not in value) and ("/" not in value) and ("\\" not in value):
+        lower = value.lower()
+        if lower.endswith((".txt", ".key", ".keys")):
+            return True
+        # Không có phần mở rộng file và không tồn tại → coi là raw key
+        return os.path.isfile(value)
+    # Có path separator hoặc nhiều dòng: thử file trước (path), còn lại parse text
+    if os.path.isfile(value):
+        return True
+    joined = os.path.join(os.getcwd(), value)
+    return os.path.isfile(joined)
 
-    # 1. Thử đọc nếu key_source là đường dẫn file
+
+def _read_keys_from_file(path: str) -> List[str]:
+    keys: List[str] = []
+    try:
+        if not path or not os.path.isfile(path):
+            return keys
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                k = line.strip()
+                if k and not k.startswith("#") and len(k) >= 15:
+                    keys.append(k)
+    except Exception:
+        return []
+    return keys
+
+
+def _parse_keys_from_text(text: str) -> List[str]:
+    keys: List[str] = []
+    normalized = (text or "").replace("\r\n", "\n").replace(",", "\n")
+    for k in normalized.split("\n"):
+        k_clean = k.strip()
+        if (
+            k_clean
+            and not k_clean.startswith("#")
+            and len(k_clean) >= 15
+            and not k_clean.lower().endswith((".txt", ".key", ".keys"))
+        ):
+            keys.append(k_clean)
+    return keys
+
+
+def load_gemini_keys(key_source: Optional[str] = None) -> List[str]:
+    """Đọc danh sách API key từ file text, đường dẫn file, hoặc chuỗi key dán trực tiếp.
+
+    Quan trọng: khi user dán key thô, KHÔNG được ưu tiên/ghi đè bằng keys.txt cứng trên máy.
+    """
+    keys: List[str] = []
+    fallback_paths = [
+        r"D:\ADA\fb-automator-core\keys.txt",
+        r"D:\ADA\post_page_facebook_tool_api\keys.txt",
+        r"D:\ADA\keys.txt",
+    ]
+
     if key_source:
         clean_source = key_source.strip()
-        candidate_files = [
-            clean_source,
-            os.path.join(os.getcwd(), clean_source),
-            r"D:\ADA\fb-automator-core\keys.txt",
-            r"D:\ADA\post_page_facebook_tool_api\keys.txt",
-            r"D:\ADA\keys.txt",
-        ]
 
-        file_found = False
-        for path in candidate_files:
-            try:
-                if path and os.path.isfile(path):
-                    with open(path, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            k = line.strip()
-                            if k and not k.startswith('#') and len(k) >= 15:
-                                keys.append(k)
-                    if keys:
-                        file_found = True
-                        logger.info(f"Đã nạp {len(keys)} Gemini keys từ {path}")
-                        break
-            except Exception:
-                pass
-
-        # 2. Nếu không phải file, kiểm tra xem key_source có phải là chuỗi chứa các keys trực tiếp không
-        if not file_found:
-            for k in clean_source.replace('\r\n', '\n').split('\n'):
-                k_clean = k.strip()
-                if k_clean and not k_clean.startswith('#') and len(k_clean) >= 15 and not k_clean.endswith('.txt'):
-                    keys.append(k_clean)
-
-    # 3. Fallback: Nếu vẫn chưa có key, quét các file keys.txt mặc định trong toàn bộ project
-    if not keys:
-        fallback_paths = [
-            r"D:\ADA\fb-automator-core\keys.txt",
-            r"D:\ADA\post_page_facebook_tool_api\keys.txt",
-            r"D:\ADA\keys.txt",
-        ]
-        for fp in fallback_paths:
-            if os.path.isfile(fp):
-                try:
-                    with open(fp, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            k = line.strip()
-                            if k and not k.startswith('#') and len(k) >= 15 and k not in keys:
-                                keys.append(k)
-                except Exception:
-                    pass
+        # 1) Đường dẫn file tường minh (tồn tại / có \\ / kết thúc .txt)
+        if _looks_like_key_file_path(clean_source):
+            candidate_files = [clean_source, os.path.join(os.getcwd(), clean_source)]
+            for path in candidate_files:
+                keys = _read_keys_from_file(path)
                 if keys:
+                    logger.info(f"Đã nạp {len(keys)} Gemini keys từ {path}")
                     break
 
-    # 4. Kiểm tra biến môi trường
-    env_key = os.environ.get("GEMINI_API_KEY")
-    if env_key:
-        for k in env_key.split(','):
-            clean_k = k.strip()
-            if clean_k and clean_k not in keys:
-                keys.append(clean_k)
+        # 2) Chuỗi key dán trực tiếp (1 key hoặc nhiều dòng/phẩy)
+        if not keys:
+            keys = _parse_keys_from_text(clean_source)
+            if keys:
+                logger.info(f"Đã nạp {len(keys)} Gemini keys từ chuỗi dán trực tiếp")
 
-    return keys
+    # 3) Fallback file mặc định / env — chỉ khi chưa có key nào
+    if not keys:
+        for fp in fallback_paths:
+            keys = _read_keys_from_file(fp)
+            if keys:
+                logger.info(f"Đã nạp {len(keys)} Gemini keys từ fallback {fp}")
+                break
+
+    if not keys:
+        env_key = os.environ.get("GEMINI_API_KEY")
+        if env_key:
+            keys = _parse_keys_from_text(env_key)
+
+    # Dedup giữ thứ tự
+    seen = set()
+    unique: List[str] = []
+    for k in keys:
+        if k not in seen:
+            seen.add(k)
+            unique.append(k)
+    return unique
 
 
 def list_available_gemini_models(api_key: Optional[str] = None, key_source: Optional[str] = None) -> List[Dict[str, str]]:
@@ -203,11 +235,12 @@ def generate_status_content(
 
     candidate_models = [clean_model]
     if "pro" in clean_model:
-        fallbacks = ["gemini-2.5-pro", "gemini-pro-latest", "gemini-3.8-flash", "gemini-2.5-flash"]
+        fallbacks = ["gemini-pro-latest", "gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-flash-latest"]
     elif "lite" in clean_model:
-        fallbacks = ["gemini-3.5-flash-lite", "gemini-2.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.8-flash"]
+        fallbacks = ["gemini-flash-lite-latest", "gemini-2.5-flash-lite", "gemini-3.8-flash", "gemini-flash-latest"]
     else:
-        fallbacks = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-flash-latest"]
+        # Ưu tiên model còn mở cho user mới; tránh 2.5-flash (thường 404)
+        fallbacks = ["gemini-flash-latest", "gemini-3.8-flash", "gemini-3-flash-preview", "gemini-2.5-flash"]
 
     for fb in fallbacks:
         if fb not in candidate_models:

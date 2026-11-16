@@ -71,14 +71,13 @@ export const RUN_STATUS = {
   },
 };
 
-// Thứ tự thẻ đếm ở Giám sát tiến trình
+// Thứ tự thẻ đếm ở Giám sát tiến trình (Ticket #68: không hiện thẻ Acc chết / DIE)
 export const MONITOR_STATUSES = [
   "RUNNING",
   "PAUSED",
   "PENDING",
   "COMPLETED",
   "FAILED",
-  "DIE",
   "STOPPED",
 ];
 

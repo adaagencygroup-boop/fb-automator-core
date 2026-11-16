@@ -38,6 +38,20 @@ EXTERNAL_REDIRECT_MARKERS = (
     "facebook.com/l.php",
 )
 
+# Host FB hợp lệ cho link tác giả (nick hay bị redirect sang web.facebook.com)
+ALLOWED_FACEBOOK_HOSTS = frozenset(
+    {
+        "facebook.com",
+        "www.facebook.com",
+        "m.facebook.com",
+        "web.facebook.com",
+        "mbasic.facebook.com",
+        "touch.facebook.com",
+        "fb.com",
+        "www.fb.com",
+    }
+)
+
 # Tên hiển thị trông như URL/domain (bit.ly, shopee.vn, …)
 _AUTHOR_NAME_URL_RE = re.compile(
     r"(?i)(?:https?://|www\.)|"
@@ -94,7 +108,9 @@ def clean_page_url(raw_url: str) -> str:
     # Thêm protocol nếu thiếu
     if not re.match(r"^https?://", text, flags=re.IGNORECASE):
         # Kiểm tra xem có bắt đầu bằng domain không
-        if text.startswith("facebook.com") or text.startswith("fb.com") or text.startswith("m.facebook.com"):
+        if text.startswith(
+            ("facebook.com", "fb.com", "m.facebook.com", "web.facebook.com", "www.facebook.com")
+        ):
             text = "https://" + text
         else:
             # Nếu chỉ là path /username hoặc username
@@ -191,10 +207,10 @@ def is_external_or_redirect_url(url: str) -> bool:
         return False
     if not host:
         return False
-    if host in ("facebook.com", "www.facebook.com", "m.facebook.com", "fb.com", "www.fb.com"):
+    if host in ALLOWED_FACEBOOK_HOSTS:
         return False
     if host.endswith(".facebook.com") or host.endswith(".fb.com"):
-        # l.facebook.com / lm.facebook.com đã bắt ở trên; subdomain khác cũng không phải profile
+        # l.facebook.com / lm.facebook.com đã bắt ở trên; subdomain lạ không phải profile
         return True
     return True
 
