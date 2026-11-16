@@ -711,7 +711,7 @@ class StartPostScanRequest(BaseModel):
     delay_max: float = Field(10.0, ge=1.0, le=3600.0)
     switch_acc_threshold: int = Field(50, ge=1, le=100)
     posts_limit: int = Field(50, ge=1, le=100)
-    days_limit: int = Field(7, ge=1, le=365)
+    days_limit: int = Field(7, ge=0, le=365, description="0 = không lọc theo ngày")
     skip_pinned_posts: bool = Field(True)
     auto_dedupe_posts: bool = Field(True)
 
