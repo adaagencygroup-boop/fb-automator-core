@@ -1,9 +1,7 @@
 """AI provider adapters used by the local Module 7 API."""
 from __future__ import annotations
-
-import json
 import re
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -13,7 +11,6 @@ from ..core.settings import model_spec
 
 class AIProviderError(RuntimeError):
     pass
-
 
 def _request_error(response: requests.Response) -> AIProviderError:
     message = "Nhà cung cấp AI từ chối yêu cầu"
@@ -29,6 +26,35 @@ def _request_error(response: requests.Response) -> AIProviderError:
     return AIProviderError(f"{message} (HTTP {response.status_code})")
 
 
+
+def _request_json(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    json: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+    timeout: int = 90,
+    timeout_message: str = "Kết nối AI quá thời gian chờ",
+    connect_message: str = "Không thể kết nối tới nhà cung cấp AI",
+) -> dict[str, Any]:
+    try:
+        if method.upper() == "GET":
+            response = requests.get(url, headers=headers, params=params, timeout=timeout)
+        else:
+            response = requests.post(url, headers=headers, json=json, params=params, timeout=timeout)
+    except requests.Timeout as exc:
+        raise AIProviderError(timeout_message) from exc
+    except requests.RequestException as exc:
+        raise AIProviderError(connect_message) from exc
+
+    if response.status_code != 200:
+        raise _request_error(response)
+    return response.json()
+
+
+
+
 def _openai_text(data: dict[str, Any]) -> str:
     for item in data.get("output", []):
         if item.get("type") != "message":
@@ -36,6 +62,13 @@ def _openai_text(data: dict[str, Any]) -> str:
         for part in item.get("content", []):
             if part.get("type") == "output_text" and part.get("text"):
                 return str(part["text"]).strip()
+    return ""
+
+
+def _deepseek_text(data: dict[str, Any]) -> str:
+    choices = data.get("choices", [])
+    if choices and choices[0].get("message", {}).get("content"):
+        return str(choices[0]["message"]["content"]).strip()
     return ""
 
 
@@ -48,26 +81,39 @@ def _gemini_text(data: dict[str, Any]) -> str:
     return "\n".join(chunks).strip()
 
 
-def _call_openai(api_model: str, api_key: str, prompt: str, timeout: int = 90) -> str:
-    response = requests.post(
-        OPENAI_RESPONSES_URL,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={"model": api_model, "input": prompt, "max_output_tokens": 4096, "store": False},
-        timeout=timeout,
-    )
-    if response.status_code != 200:
-        raise _request_error(response)
-    text = _openai_text(response.json())
+def _post_and_extract(
+    provider_label: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    extractor: Callable[[dict[str, Any]], str],
+    timeout: int = 90,
+) -> str:
+    data = _request_json("POST", url, headers=headers, json=payload, timeout=timeout)
+    text = extractor(data)
     if not text:
-        raise AIProviderError("OpenAI không trả về nội dung văn bản")
+        raise AIProviderError(f"{provider_label} không trả về nội dung văn bản")
     return text
 
 
+def _call_openai(api_model: str, api_key: str, prompt: str, timeout: int = 90) -> str:
+    return _post_and_extract(
+        "OpenAI",
+        OPENAI_RESPONSES_URL,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        payload={"model": api_model, "input": prompt, "max_output_tokens": 4096, "store": False},
+        extractor=_openai_text,
+        timeout=timeout,
+    )
+
+
 def _call_deepseek(api_model: str, api_key: str, prompt: str, timeout: int = 90) -> str:
-    response = requests.post(
+    return _post_and_extract(
+        "DeepSeek",
         DEEPSEEK_API_URL,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={
+        payload={
             "model": api_model,
             "messages": [
                 {"role": "system", "content": "You are a helpful assistant."},
@@ -76,78 +122,58 @@ def _call_deepseek(api_model: str, api_key: str, prompt: str, timeout: int = 90)
             "temperature": 0.8,
             "max_tokens": 4096,
         },
+        extractor=_deepseek_text,
         timeout=timeout,
     )
-    if response.status_code != 200:
-        raise _request_error(response)
-    data = response.json()
-    choices = data.get("choices", [])
-    if not choices or not choices[0].get("message", {}).get("content"):
-        raise AIProviderError("DeepSeek không trả về nội dung văn bản")
-    return str(choices[0]["message"]["content"]).strip()
 
 
 def _call_gemini(api_model: str, api_key: str, prompt: str, timeout: int = 90) -> str:
-    response = requests.post(
+    return _post_and_extract(
+        "Gemini",
         f"{GEMINI_API_BASE}/{api_model}:generateContent",
         headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-        json={
+        payload={
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.8, "maxOutputTokens": 4096},
         },
+        extractor=_gemini_text,
         timeout=timeout,
     )
-    if response.status_code != 200:
-        raise _request_error(response)
-    text = _gemini_text(response.json())
-    if not text:
-        raise AIProviderError("Gemini không trả về nội dung văn bản")
-    return text
 
 
 def call_model(model: str, api_key: str, prompt: str, timeout: int = 90) -> str:
     if not api_key:
         raise AIProviderError("Chưa cấu hình API Key cho model đã chọn")
     spec = model_spec(model)
-    try:
-        if spec["provider"] == "openai":
-            return _call_openai(spec["api_model"], api_key, prompt, timeout)
-        elif spec["provider"] == "deepseek":
-            return _call_deepseek(spec["api_model"], api_key, prompt, timeout)
-        return _call_gemini(spec["api_model"], api_key, prompt, timeout)
-    except requests.Timeout as exc:
-        raise AIProviderError("Kết nối AI quá thời gian chờ") from exc
-    except requests.RequestException as exc:
-        raise AIProviderError("Không thể kết nối tới nhà cung cấp AI") from exc
+    provider = spec["provider"]
+    callers = {
+        "openai": _call_openai,
+        "deepseek": _call_deepseek,
+        "gemini": _call_gemini,
+    }
+    caller = callers.get(provider, _call_gemini)
+    return caller(spec["api_model"], api_key, prompt, timeout)
 
 
 def test_connection(model: str, api_key: str) -> None:
     spec = model_spec(model)
-    try:
-        if spec["provider"] == "openai":
-            response = requests.get(
-                f"https://api.openai.com/v1/models/{spec['api_model']}",
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=20,
-            )
-        elif spec["provider"] == "deepseek":
-            response = requests.get(
-                "https://api.deepseek.com/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=20,
-            )
-        else:
-            response = requests.get(
-                f"{GEMINI_API_BASE}/{spec['api_model']}",
-                headers={"x-goog-api-key": api_key},
-                timeout=20,
-            )
-    except requests.Timeout as exc:
-        raise AIProviderError("Kiểm tra API quá thời gian chờ") from exc
-    except requests.RequestException as exc:
-        raise AIProviderError("Không thể kết nối tới nhà cung cấp AI") from exc
-    if response.status_code != 200:
-        raise _request_error(response)
+    provider = spec["provider"]
+    if provider == "openai":
+        url = f"https://api.openai.com/v1/models/{spec['api_model']}"
+        headers = {"Authorization": f"Bearer {api_key}"}
+    elif provider == "deepseek":
+        url = "https://api.deepseek.com/models"
+        headers = {"Authorization": f"Bearer {api_key}"}
+    else:
+        url = f"{GEMINI_API_BASE}/{spec['api_model']}"
+        headers = {"x-goog-api-key": api_key}
+    _request_json(
+        "GET",
+        url,
+        headers=headers,
+        timeout=20,
+        timeout_message="Kiểm tra API quá thời gian chờ",
+    )
 
 
 def list_gemini_models(api_key: str) -> list[dict[str, str]]:
@@ -156,41 +182,36 @@ def list_gemini_models(api_key: str) -> list[dict[str, str]]:
         raise AIProviderError("Chưa cấu hình Google AI Studio API Key")
     models: list[dict[str, str]] = []
     page_token = None
-    try:
-        while True:
-            params = {"pageSize": 1000}
-            if page_token:
-                params["pageToken"] = page_token
-            response = requests.get(
-                GEMINI_API_BASE,
-                headers={"x-goog-api-key": api_key},
-                params=params,
-                timeout=30,
-            )
-            if response.status_code != 200:
-                raise _request_error(response)
-            body = response.json()
-            for item in body.get("models", []):
-                methods = item.get("supportedGenerationMethods") or []
-                model_id = str(item.get("name") or "").removeprefix("models/")
-                lowered = model_id.lower()
-                excluded = ("embedding", "imagen", "veo", "lyria", "tts", "live", "robotics", "computer-use")
-                if (
-                    model_id.startswith("gemini-")
-                    and "generateContent" in methods
-                    and not any(part in lowered for part in excluded)
-                ):
-                    models.append({
-                        "id": model_id,
-                        "name": str(item.get("displayName") or model_id),
-                    })
-            page_token = body.get("nextPageToken")
-            if not page_token:
-                break
-    except requests.Timeout as exc:
-        raise AIProviderError("Tải danh sách model Google quá thời gian chờ") from exc
-    except requests.RequestException as exc:
-        raise AIProviderError("Không thể kết nối tới Google AI") from exc
+    while True:
+        params: dict[str, Any] = {"pageSize": 1000}
+        if page_token:
+            params["pageToken"] = page_token
+        body = _request_json(
+            "GET",
+            GEMINI_API_BASE,
+            headers={"x-goog-api-key": api_key},
+            params=params,
+            timeout=30,
+            timeout_message="Tải danh sách model Google quá thời gian chờ",
+            connect_message="Không thể kết nối tới Google AI",
+        )
+        for item in body.get("models", []):
+            methods = item.get("supportedGenerationMethods") or []
+            model_id = str(item.get("name") or "").removeprefix("models/")
+            lowered = model_id.lower()
+            excluded = ("embedding", "imagen", "veo", "lyria", "tts", "live", "robotics", "computer-use")
+            if (
+                model_id.startswith("gemini-")
+                and "generateContent" in methods
+                and not any(part in lowered for part in excluded)
+            ):
+                models.append({
+                    "id": model_id,
+                    "name": str(item.get("displayName") or model_id),
+                })
+        page_token = body.get("nextPageToken")
+        if not page_token:
+            break
     unique = {item["id"]: item for item in models}
     return sorted(unique.values(), key=lambda item: item["id"], reverse=True)
 

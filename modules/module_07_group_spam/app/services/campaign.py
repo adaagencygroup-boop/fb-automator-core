@@ -841,8 +841,58 @@ class FacebookGroupPoster:
             "contains(@aria-label,'Comment') or normalize-space(.)='Bình luận' or "
             "normalize-space(.)='Comment')]"
         )
+        public_comment_xpaths = (
+            "//*[@aria-label='Write a public comment…']",
+            "//*[starts-with(translate(normalize-space(@aria-label), "
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
+            "'write a public comment')]",
+        )
+
+        def find_public_comment_editor():
+            for xpath in public_comment_xpaths:
+                try:
+                    editor = next(
+                        (
+                            item
+                            for item in driver.find_elements(By.XPATH, xpath)
+                            if self._is_visible(item)
+                        ),
+                        None,
+                    )
+                    if editor is not None:
+                        return editor
+                except Exception:
+                    continue
+            return None
 
         def find_first_article():
+            public_comment_editor = find_public_comment_editor()
+            if public_comment_editor is not None:
+                container = driver.execute_script(
+                    "return arguments[0].closest('[role=article], article') || arguments[0];",
+                    public_comment_editor,
+                )
+                if container is not None:
+                    return container
+
+            # Ưu tiên bài nằm trong feed. Facebook có thể bỏ permalink/nút
+            # Bình luận khỏi DOM accessibility dù bài và ô comment vẫn hiển thị.
+            feed_articles = [
+                item
+                for item in driver.find_elements(
+                    By.XPATH, "//div[@role='feed']//div[@role='article']"
+                )
+                if self._is_displayed(item)
+            ]
+            for item in feed_articles:
+                try:
+                    if item.find_elements(By.XPATH, post_marker_xpath):
+                        return item
+                except Exception:
+                    continue
+            if feed_articles:
+                return feed_articles[0]
+
             visible = [item for item in driver.find_elements(By.XPATH, article_xpath) if self._is_displayed(item)]
             # role=article còn được Facebook dùng cho thẻ giới thiệu và một số khối
             # phụ. Chỉ lấy article có permalink hoặc điều khiển bình luận để lấy
@@ -853,6 +903,31 @@ class FacebookGroupPoster:
                         return item
                 except Exception:
                     continue
+
+            # Một số layout mới không gắn role=article/feed. Nếu ô public
+            # comment đã render, dùng nó làm điểm neo để tiếp tục thao tác.
+            try:
+                editors = driver.find_elements(
+                    By.XPATH,
+                    "//*[@contenteditable='true' or @role='textbox' or self::textarea]",
+                )
+                for editor in editors:
+                    if not self._is_visible(editor):
+                        continue
+                    labels = " ".join(
+                        str(editor.get_attribute(attr) or "")
+                        for attr in ("aria-label", "aria-placeholder", "placeholder", "data-placeholder")
+                    ).lower()
+                    if "comment" not in labels and "bình luận" not in labels:
+                        continue
+                    container = driver.execute_script(
+                        "return arguments[0].closest('[role=article], article') || arguments[0];",
+                        editor,
+                    )
+                    if container is not None:
+                        return container
+            except Exception:
+                pass
             return None
 
         article = self._wait_until(
@@ -920,9 +995,26 @@ class FacebookGroupPoster:
             return find_first_article()
 
         def find_textbox():
+            public_comment_editor = find_public_comment_editor()
+            if public_comment_editor is not None:
+                return public_comment_editor
             current_article = resolve_article()
             if current_article is None:
                 return None
+            try:
+                is_editor = (
+                    current_article.get_attribute("contenteditable") == "true"
+                    or current_article.get_attribute("role") == "textbox"
+                )
+                if is_editor and self._is_visible(current_article):
+                    labels = " ".join(
+                        str(current_article.get_attribute(attr) or "")
+                        for attr in ("aria-label", "aria-placeholder", "placeholder", "data-placeholder")
+                    ).lower()
+                    if "comment" in labels or "bình luận" in labels:
+                        return current_article
+            except Exception:
+                pass
             for textbox_xpath in textbox_xpaths:
                 try:
                     textbox = next(
@@ -939,8 +1031,9 @@ class FacebookGroupPoster:
             global_comment_xpath = (
                 "//*[@role='textbox' and (contains(@aria-label,'Viết bình luận') or "
                 "contains(@aria-label,'Bình luận dưới tên') or contains(@aria-label,'Write a comment') or "
+            "contains(@aria-label,'public comment') or contains(@aria-label,'Public comment') or "
                 "contains(@aria-label,'Comment as') or contains(@aria-placeholder,'Bình luận') or "
-                "contains(@aria-placeholder,'Comment'))] | "
+            "contains(@aria-placeholder,'Comment') or contains(@aria-placeholder,'comment'))] | "
                 "//div[@role='dialog']//*[@data-lexical-editor='true' and (@role='textbox' or @contenteditable='true')] | "
                 "//textarea[contains(@placeholder,'Bình luận') or contains(@placeholder,'comment')]"
             )
@@ -1319,8 +1412,6 @@ class CampaignManager:
             # Keep each account's work together so its browser completes every
             # selected group before the next account is opened.
             tasks = [(uid, group) for uid in uids for group in groups]
-            max_posts = max(1, int(settings.get("max_posts") or len(tasks)))
-            tasks = tasks[:max_posts]
             per_account: dict[str, list[dict[str, Any]]] = {uid: [] for uid in uids}
             for uid, group in tasks:
                 per_account[uid].append(group)
@@ -1450,7 +1541,12 @@ class CampaignManager:
                     if not choices:
                         used.clear()
                         choices = list(range(len(posts)))
-                    post_index = random.choice(choices) if settings.get("shuffle_content", True) else choices[0]
+                    if settings.get("shuffle_content", True):
+                        post_index = random.choice(choices)
+                    else:
+                        # Keep content assignment in order and wrap around when
+                        # there are more groups than generated post variants.
+                        post_index = index % len(posts)
                     if settings.get("avoid_duplicate"):
                         used.append(post_index)
                     media_count = min(len(media_pool), random.randint(min_media, max_media)) if media_pool else 0

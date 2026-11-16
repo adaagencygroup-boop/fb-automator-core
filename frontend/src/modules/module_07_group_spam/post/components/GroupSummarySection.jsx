@@ -20,7 +20,6 @@ export default function GroupSummarySection({
   campaignName,
   selectedAccountsCount = 0,
   liveAccountsCount = 0,
-  maxPosts = 0,
   totalPlanned = 0,
   hasApiKey = false,
   modelDisplayName = "",
@@ -61,8 +60,8 @@ export default function GroupSummarySection({
     ],
     [
       <ListFilter key="b" className="size-3.5" />,
-      `Hạn ${itemLabel}`,
-      `${maxPosts} ${itemLabel} (kế hoạch ${totalPlanned} ${itemLabel})`,
+      `Lượt ${itemLabel}`,
+      `${totalPlanned} ${itemLabel} theo số tài khoản và nhóm đã chọn`,
     ],
     [
       <Sparkles key="c" className="size-3.5" />,

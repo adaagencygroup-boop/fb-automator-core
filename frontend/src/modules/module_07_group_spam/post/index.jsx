@@ -550,7 +550,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const selectedGroups = currentGroupPool.filter((group) => selectedGroupKeys.includes(group.key));
   const activeGroupsCount = groupSource === "file" ? (groupFile?.validGroupsCount || selectedGroups.length) : selectedGroups.length;
   const generatedCount = posts.filter((post) => post.trim()).length;
-  const totalPlanned = Math.min(Number(maxPosts) || 0, activeGroupsCount * Math.max(selectedAccounts.length, 1));
+  const totalPlanned = activeGroupsCount * selectedAccounts.length;
   const hasApiKey = Boolean(apiSource.selected) && !apiSource.loading;
 
   const liveAccountsCount = useMemo(() => {
@@ -808,13 +808,12 @@ export default function GroupPostModule({ actionType = "POST" }) {
           credential_id: apiSource.selectedId,
           threads: Number(threads),
           rest_minutes: Number(restMinutes),
-          max_posts: Number(maxPosts),
           delay_min: Math.round(Number(delayMin) * (delayUnit === "minutes" ? 60 : 1)),
           delay_max: Math.round(Number(delayMax) * (delayUnit === "minutes" ? 60 : 1)),
           min_media: totalMediaCount > 0 ? (Number(minMedia) || 0) : 0,
           max_media: totalMediaCount > 0 ? (Number(maxMedia) || 0) : 0,
           avoid_duplicate: false,
-          shuffle_content: true,
+          shuffle_content: false,
           auto_like: isComment,
           schedule_at: scheduleEnabled && scheduleDate ? `${scheduleDate}T${scheduleTime}` : null,
         },
@@ -854,11 +853,16 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const canStart = runState === "idle";
   const markDraftUserEdit = () => {
     draftUserEditedRef.current = true;
+    setUnsavedChanges(true, async () => {
+      await clearGroupPostDraft(draftScope);
+      await writeGroupPostDraftMedia([], draftScope);
+    });
   };
 
   return (
     <div
       className="space-y-6"
+      onClickCapture={markDraftUserEdit}
       onChangeCapture={markDraftUserEdit}
       onInputCapture={markDraftUserEdit}
     >
@@ -1005,7 +1009,6 @@ export default function GroupPostModule({ actionType = "POST" }) {
           campaignName={campaignName}
           selectedAccountsCount={selectedAccounts.length}
           liveAccountsCount={liveAccountsCount}
-          maxPosts={maxPosts}
           totalPlanned={totalPlanned}
           hasApiKey={hasApiKey}
           modelDisplayName={modelDisplayName}
