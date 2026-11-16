@@ -173,6 +173,16 @@ export async function getScannedPosts(params = {}) {
   });
 }
 
+/** Số bài theo từng Page của 1 phiên POST_SCAN: { items: [{page_key, post_count}], total_posts }. */
+export async function getSessionPostPages(sessionId) {
+  return api.get("/api/page-scanner/posts/session-pages", { params: { session_id: sessionId } });
+}
+
+/** Số UID theo từng Page của 1 phiên FOLLOW: { items: [{page_key, uid_count}], total_uids }. */
+export async function getSessionFollowerPages(sessionId) {
+  return api.get("/api/page-scanner/followers/session-pages", { params: { session_id: sessionId } });
+}
+
 /** Sidebar DS bài viết: page có bài + post_count. */
 export async function getPagesWithPosts() {
   return api.get("/api/page-scanner/posts/pages");

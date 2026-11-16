@@ -1311,7 +1311,7 @@ export default function PageScannerFollowers() {
       ) : null}
 
       {(runPhase !== "idle" || logs.length > 0) && (
-        <LiveLogConsole title="Live Log · Quét followers page" logs={logs} phase={runPhase} />
+        <LiveLogConsole task="Quét Followers" logs={logs} phase={runPhase} />
       )}
 
       <SelectAccountsModal

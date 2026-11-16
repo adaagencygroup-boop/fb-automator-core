@@ -1381,6 +1381,40 @@ async def import_scanned_posts(item: PostImportInput):
     return {"inserted": inserted, "updated": updated, "total": inserted + updated}
 
 
+@router.get("/posts/session-pages")
+async def list_session_post_pages(session_id: int = Query(..., ge=1)):
+    """Số bài viết theo từng Page của 1 phiên POST_SCAN (cột trái kết quả quét)."""
+    owner = _get_owner()
+    rows = db.fetch_all(
+        """
+        SELECT page_key, COUNT(*)::int AS post_count, MAX(updated_at) AS last_post_at
+        FROM scanned_posts
+        WHERE owner_key = %s AND last_session_id = %s
+        GROUP BY page_key
+        """,
+        (owner, session_id),
+    )
+    items = rows or []
+    return {"items": items, "total_posts": sum(int(r.get("post_count") or 0) for r in items)}
+
+
+@router.get("/followers/session-pages")
+async def list_session_follower_pages(session_id: int = Query(..., ge=1)):
+    """Số UID theo từng Page của 1 phiên FOLLOW (cột trái kết quả quét)."""
+    owner = _get_owner()
+    rows = db.fetch_all(
+        """
+        SELECT page_key, COUNT(*)::int AS uid_count, MAX(updated_at) AS last_follower_at
+        FROM scanned_page_followers
+        WHERE owner_key = %s AND last_session_id = %s
+        GROUP BY page_key
+        """,
+        (owner, session_id),
+    )
+    items = rows or []
+    return {"items": items, "total_uids": sum(int(r.get("uid_count") or 0) for r in items)}
+
+
 @router.get("/posts/pages")
 async def list_pages_with_posts():
     """
@@ -1435,9 +1469,14 @@ async def list_scanned_posts(
     min_reactions: Optional[int] = Query(None, ge=0),
     min_comments: Optional[int] = Query(None, ge=0),
     min_shares: Optional[int] = Query(None, ge=0),
+    sort_by: str = Query("newest", description="newest | likes | comments"),
 ):
     """Danh sách bài viết đã lưu (DS bài viết page)."""
     owner = _get_owner()
+    order_sql = {
+        "likes": "COALESCE(p.reaction_count, 0) DESC, p.id DESC",
+        "comments": "COALESCE(p.comment_count, 0) DESC, p.id DESC",
+    }.get(str(sort_by or "").lower(), "COALESCE(p.published_at, p.created_at) DESC NULLS LAST, p.id DESC")
     offset = (page - 1) * page_size
     params: List[Any] = [owner]
     where = ["p.owner_key = %s"]
@@ -1480,7 +1519,7 @@ async def list_scanned_posts(
         FROM scanned_posts p
         LEFT JOIN scanned_pages sp ON sp.owner_key = p.owner_key AND sp.page_key = p.page_key
         WHERE {cond}
-        ORDER BY COALESCE(p.published_at, p.created_at) DESC NULLS LAST, p.id DESC
+        ORDER BY {order_sql}
         LIMIT %s OFFSET %s
         """,
         tuple(params + [page_size, offset]),

@@ -53,58 +53,64 @@ export function copyLogsToClipboard(logs = []) {
     .catch(() => toast.error("Không thể sao chép log"));
 }
 
-export function LiveLogConsole({ title, logs, phase }) {
+/**
+ * Khung log theo thiết kế: "Live Automation Log Console [Thread-01 - <tác vụ>]", chip trạng thái,
+ * nút copy dạng icon, nền tối, timestamp + [Thread-01] trước mỗi dòng.
+ */
+export function LiveLogConsole({ title, task, thread = "Thread-01", logs, phase }) {
   const label = phase === "paused" ? "PAUSED" : phase === "running" ? "RUNNING" : phase === "done" ? "DONE" : "IDLE";
   const color =
     phase === "paused"
-      ? "border-amber-500/20 bg-amber-500/10 text-amber-400"
+      ? "border-amber-500/30 bg-amber-500/10 text-amber-400"
       : phase === "running"
-        ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
-        : "border-slate-500/20 bg-slate-500/10 text-slate-400";
+        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+        : "border-slate-500/30 bg-slate-500/10 text-slate-400";
+  const heading = title || `Live Automation Log Console [${thread}${task ? ` - ${task}` : ""}]`;
 
   const handleCopy = useCallback(() => copyLogsToClipboard(logs), [logs]);
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#1e293b] shadow-md">
-      <div className="flex items-center justify-between border-b border-slate-800 bg-[#0f172a] px-4 py-2.5">
-        <div className="flex items-center gap-2.5">
-          <div className="flex gap-1.5">
-            <span className="size-2.5 rounded-full bg-rose-500" />
-            <span className="size-2.5 rounded-full bg-amber-500" />
-            <span className="size-2.5 rounded-full bg-emerald-500" />
+    <div className="overflow-hidden rounded-2xl border border-slate-800 bg-[#0B1220] shadow-md">
+      <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex shrink-0 gap-1.5">
+            <span className="size-3 rounded-full bg-[#EF4444]" />
+            <span className="size-3 rounded-full bg-[#F59E0B]" />
+            <span className="size-3 rounded-full bg-[#10B981]" />
           </div>
-          <span className="font-mono text-xs font-semibold text-slate-300">{title}</span>
+          <span className="truncate font-mono text-xs font-semibold text-slate-300">{heading}</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2.5">
+          <span className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-0.5 font-mono text-[10px] font-bold ${color}`}>
+            <span className={`size-1.5 rounded-full ${phase === "running" ? "animate-pulse bg-emerald-400" : phase === "paused" ? "bg-amber-400" : "bg-slate-400"}`} />
+            {label}
+          </span>
           <button
             type="button"
             onClick={handleCopy}
             disabled={!logs?.length}
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-600 bg-slate-800/80 px-2.5 py-1 font-mono text-[10px] font-semibold text-slate-300 transition hover:border-slate-500 hover:bg-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-md p-1 text-slate-400 transition hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
             title="Sao chép toàn bộ log"
+            aria-label="Sao chép toàn bộ log"
           >
-            <Copy className="size-3.5" />
-            Copy log
+            <Copy className="size-4" />
           </button>
-          <span className={`inline-flex items-center gap-1.5 rounded px-2.5 py-0.5 font-mono text-[10px] font-semibold ${color}`}>
-            <span className={`size-1.5 rounded-full ${phase === "running" ? "bg-emerald-400 animate-pulse" : "bg-slate-400"}`} />
-            {label}
-          </span>
         </div>
       </div>
-      <div className="max-h-56 space-y-1.5 overflow-y-auto p-4 font-mono text-[11px] leading-relaxed">
+      <div className="max-h-64 space-y-2 overflow-y-auto px-4 py-4 font-mono text-[11px] leading-relaxed">
         {logs.length === 0 ? (
           <p className="text-slate-500">Chờ log phiên…</p>
         ) : (
           logs.map((log) => (
             <div key={log.id} className="flex items-start gap-2 text-slate-300">
               <span className="shrink-0 text-slate-500">[{log.timestamp}]</span>
+              <span className="shrink-0 text-[#60A5FA]">[{log.thread || thread}]</span>
               <span
                 className={
                   log.type === "success"
                     ? "text-emerald-400"
                     : log.type === "warn"
-                      ? "text-amber-400"
+                      ? "text-amber-300"
                       : log.type === "error"
                         ? "text-rose-400"
                         : "text-slate-200"
