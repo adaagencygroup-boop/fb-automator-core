@@ -236,6 +236,7 @@ export function HistoryView() {
 
         const opts = [{ value: "all", label: "Tất cả tài khoản" }];
         const seen = new Set();
+        const named = [];
         raw.forEach((acc) => {
           const uid = String(acc.uid || acc.fb_uid || acc.account_uid || "").trim();
           if (!uid || seen.has(uid)) return;
@@ -243,10 +244,24 @@ export function HistoryView() {
           const status = String(acc.status || "").toLowerCase();
           if (status && status !== "live") return;
           seen.add(uid);
-          const name = acc.name || acc.fb_name || acc.account_name || uid;
+          // Module 02 serialize dùng profile_name (Ticket #71)
+          const name = String(
+            acc.profile_name || acc.name || acc.fb_name || acc.account_name || ""
+          ).trim();
+          named.push({ uid, name });
+        });
+        const nameCounts = {};
+        named.forEach((a) => {
+          if (a.name) nameCounts[a.name] = (nameCounts[a.name] || 0) + 1;
+        });
+        named.forEach((a) => {
           opts.push({
-            value: uid,
-            label: `${name} (${uid})`,
+            value: a.uid,
+            label: !a.name
+              ? a.uid
+              : nameCounts[a.name] > 1
+                ? `${a.name} (${a.uid})`
+                : a.name,
           });
         });
         setAccountOptions(opts);

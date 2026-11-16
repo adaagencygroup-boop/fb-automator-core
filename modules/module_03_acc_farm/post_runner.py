@@ -70,6 +70,19 @@ def humanize_post_error(exc_or_msg: Any) -> str:
             msg = msg.split(":", 1)[-1].strip()
         return msg or "Không xác nhận được bài đã đăng lên Facebook (hết thời gian chờ)."
 
+    # Cửa sổ/tab Chrome đã bị đóng (user đóng tay, stop, hoặc crash tab)
+    if (
+        "no such window" in low
+        or "target window already closed" in low
+        or "web view not found" in low
+        or exc_name == "NoSuchWindowException"
+    ):
+        return (
+            "Cửa sổ Chrome đã bị đóng trong lúc đăng bài "
+            "(tab/window không còn tồn tại). "
+            "Không đóng cửa sổ Chrome khi đang chạy; hãy chạy lại bài này."
+        )
+
     # Mất kết nối ChromeDriver / trình duyệt đã đóng
     if any(
         k in low
@@ -1165,15 +1178,23 @@ class PostRunner:
                     proxy = creds.get("proxy") or None
                     owner = creds.get("user_id")
 
-                    import importlib
+                    # Không importlib.reload(post_flow) trong worker — race khi ≥2 luồng.
                     import modules.module_03_acc_farm.post_flow as _post_flow_mod
 
-                    try:
-                        importlib.reload(_post_flow_mod)
-                    except Exception:
-                        pass
-
                     if not reuse_browser:
+                        # Thread-01 → slot 0, Thread-02 → slot 1: lệch giờ + tách màn (đôi màn không focus war)
+                        try:
+                            window_slot = max(0, int(str(thread_name).split("-")[-1]) - 1)
+                        except Exception:
+                            window_slot = 0
+                        if window_slot > 0:
+                            stagger = 4.0 + window_slot * 2.0
+                            on_progress(
+                                f"Đợi lệch {stagger:.0f}s trước khi mở Chrome "
+                                f"(slot={window_slot}, tránh 2 luồng đụng audience cùng lúc)..."
+                            )
+                            time.sleep(stagger)
+
                         on_progress("Đang mở Chrome Profile (hiển thị trực tiếp)...")
                         from modules.module_02_account_manager.context import owner_scope
 
@@ -1184,7 +1205,11 @@ class PostRunner:
                                 )
 
                                 driver = farm_create_driver(
-                                    uid, headless=False, proxy=proxy, scope="post"
+                                    uid,
+                                    headless=False,
+                                    proxy=proxy,
+                                    scope="post",
+                                    window_slot=window_slot,
                                 )
                             except Exception as b_err:
                                 self.log(
@@ -1201,18 +1226,23 @@ class PostRunner:
                                 profile_dir = creds.get("profile_path") or get_profile_path(uid)
                                 opts.add_argument(f"--user-data-dir={profile_dir}")
                                 opts.add_argument("--disable-blink-features=AutomationControlled")
-                                opts.add_argument("--start-maximized")
                                 opts.add_argument("--disable-infobars")
                                 opts.add_argument("--no-first-run")
                                 driver = webdriver.Chrome(options=opts)
+                                try:
+                                    from core.browser.driver import place_chrome_window_for_slot
+                                    place_chrome_window_for_slot(driver, slot=window_slot)
+                                except Exception:
+                                    pass
 
                         held_uid = uid
                         held_owner = owner
                         self._active_drivers[thread_name] = driver
                         try:
-                            from core.browser.driver import bring_chrome_to_front
+                            from core.browser.driver import bring_chrome_to_front, place_chrome_window_for_slot
 
-                            bring_chrome_to_front(driver)
+                            place_chrome_window_for_slot(driver, slot=window_slot)
+                            bring_chrome_to_front(driver)  # CDP-only, không cướp OS focus
                         except Exception:
                             pass
 
@@ -1451,7 +1481,7 @@ class PostRunner:
                     else:
                         status, err_msg = classify_error(e)
 
-                    # Mất ChromeDriver → đóng slot để bài sau mở lại profile sạch
+                    # Mất ChromeDriver / cửa sổ đã đóng → đóng slot để bài sau mở lại profile sạch
                     err_low = f"{type(e).__name__} {e}".lower()
                     if any(
                         k in err_low
@@ -1464,10 +1494,14 @@ class PostRunner:
                             "invalid session id",
                             "chrome not reachable",
                             "remotedisconnected",
+                            "no such window",
+                            "target window already closed",
+                            "web view not found",
+                            "nosuchwindowexception",
                         )
                     ):
                         try:
-                            _close_held_driver("mất kết nối ChromeDriver")
+                            _close_held_driver("mất kết nối / cửa sổ Chrome đã đóng")
                         except Exception:
                             driver = None
                             held_uid = None

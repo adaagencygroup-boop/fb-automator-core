@@ -786,12 +786,19 @@ export default function PageScannerSearch() {
             keywordTargets[job.rootKeyword] ||
             keywordTargets[job.query] ||
             applyAllTarget;
+          const orderedUids = selectedUids.length
+            ? [
+                ...selectedUids.slice(accState.cursor % selectedUids.length),
+                ...selectedUids.slice(0, accState.cursor % selectedUids.length),
+              ]
+            : [];
           const res = await searchPagesByHashtag({
             hashtags: [job.query],
             context_keywords: plainKeywords,
             min_posts: minPosts,
             max_posts_per_hashtag: maxPostsPerHashtag,
             account_uid: uid,
+            account_uids: orderedUids.length ? orderedUids : undefined,
             headless: false,
             allow_direct_fallback: true,
             campaign_id: campId,
@@ -799,6 +806,10 @@ export default function PageScannerSearch() {
             target_pages: targetPages,
             min_followers: minFollowersEnabled ? minFollowers : 0,
             idle_timeout_s: 90,
+            delay_min_seconds: delayMin,
+            delay_max_seconds: delayMax,
+            rotate_every: selectedUids.length > 1 ? rotateEvery : 0,
+            pages_on_acc_start: accState.pagesOnAcc || 0,
           });
           sid = res.session_id;
         }
@@ -821,20 +832,61 @@ export default function PageScannerSearch() {
             row.keyword === job.label ? { ...row, count, status: "done" } : row,
           ),
         );
+        const stopReason = session.stop_reason || session.status || "";
+        const targetHint =
+          job.kind === "hashtag"
+            ? keywordTargets[job.label?.startsWith("#") ? job.label : `#${job.query}`] ||
+              keywordTargets[job.rootKeyword] ||
+              keywordTargets[job.query] ||
+              applyAllTarget
+            : null;
+        const partialShort =
+          targetHint != null &&
+          count < Number(targetHint) &&
+          ["NO_NEW_RESULTS", "CYCLE_DETECTED", "PARTIAL", "COMPLETED"].includes(String(stopReason));
         pushLog(
-          `Xong ${job.label}: +${count} · ${session.stop_reason || session.status}`,
-          session.status === "FAILED" ? "error" : "success",
+          partialShort
+            ? `Xong ${job.label}: ${count}/${targetHint} page · ${stopReason} (thiếu hạn mức)`
+            : `Xong ${job.label}: +${count} · ${stopReason}`,
+          session.status === "FAILED" ? "error" : partialShort ? "warn" : "success",
         );
 
-        const nextAcc = advanceAccountAfterJob(accState, count, rotateEvery);
-        if (nextAcc.rotated) {
-          pushLog(
-            `Đủ ~${rotateEvery} Page/acc → đổi nick → ${selectedUids[nextAcc.cursor] || "?"} (đã ${nextAcc.prevPages})`,
-            "warn",
-          );
+        // Đồng bộ cursor với rotate trong BE (theo số page đạt lọc của job)
+        const limit = Math.max(1, Number(rotateEvery) || 50);
+        if (selectedUids.length > 1 && limit > 0) {
+          const total = (accState.pagesOnAcc || 0) + count;
+          const rotations = Math.floor(total / limit);
+          const rem = total % limit;
+          if (rotations > 0) {
+            pushLog(
+              `Đồng bộ rotate: +${rotations} lần đổi nick trong/sau job (mỗi ${limit} page) → ${selectedUids[(accState.cursor + rotations) % selectedUids.length] || "?"}`,
+              "warn",
+            );
+          }
+          accState = {
+            cursor: (accState.cursor + rotations) % selectedUids.length,
+            pagesOnAcc: rem,
+          };
+        } else {
+          const nextAcc = advanceAccountAfterJob(accState, count, rotateEvery);
+          if (nextAcc.rotated) {
+            pushLog(
+              `Đủ ~${rotateEvery} Page/acc → đổi nick → ${selectedUids[nextAcc.cursor] || "?"} (đã ${nextAcc.prevPages})`,
+              "warn",
+            );
+          }
+          accState = { cursor: nextAcc.cursor, pagesOnAcc: nextAcc.pagesOnAcc };
         }
-        accState = { cursor: nextAcc.cursor, pagesOnAcc: nextAcc.pagesOnAcc };
         campaignRef.current.accIndex = accState.cursor;
+
+        // Nghỉ theo cấu hình giữa các job (hashtag/kênh)
+        if (i < jobs.length - 1 && !campaignRef.current.abort) {
+          const lo = Math.min(delayMin, delayMax);
+          const hi = Math.max(delayMin, delayMax);
+          const gapSec = lo + Math.random() * Math.max(0, hi - lo);
+          pushLog(`Nghỉ ${gapSec.toFixed(1)}s trước phiên tiếp theo...`, "info");
+          await new Promise((r) => setTimeout(r, gapSec * 1000));
+        }
 
         await loadResults(sid, 1, [...collectedIds]);
       } catch (err) {
