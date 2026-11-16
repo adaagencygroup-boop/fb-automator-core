@@ -38,6 +38,7 @@ import {
   searchPagesByHashtag,
   parsePageLinks,
   uploadPageFile,
+  createDetailSession,
   downloadPageTemplate,
   stopScanSession,
   pauseScanSession,
@@ -365,7 +366,8 @@ export default function PageScannerSearch() {
   filtersRef.current = {
     pageSize,
     resultSearch,
-    minFollowersEnabled,
+    // Link / tệp: BE đã bỏ page dưới ngưỡng followers; page chưa đọc được followers vẫn phải hiện
+    minFollowersEnabled: sourceMode === "keyword" ? minFollowersEnabled : false,
     minFollowers,
     maxFollowers,
     topN,
@@ -523,10 +525,13 @@ export default function PageScannerSearch() {
     let ignore = false;
     (async () => {
       try {
-        const data = await getActiveCampaign("DISCOVERY");
+        let data = await getActiveCampaign("DISCOVERY");
+        // Không có đợt hashtag → thử phiên quét thông tin theo link / tệp (DETAIL)
+        if (!data?.active) data = await getActiveCampaign("DETAIL").catch(() => null);
         if (ignore || !data?.active || !(data.sessions || []).length) return;
         const sessions = data.sessions;
         const top = sessions.find((s) => s.id === data.primary_session_id) || sessions[sessions.length - 1];
+        if (data.job_type === "DETAIL") setSourceMode(top.source_type === "UPLOAD" ? "upload" : "paste");
         setCampaignId(data.campaign_id || null);
         setSessionId(top.id);
         setActiveSessionIds(sessions.map((s) => s.id));
@@ -872,49 +877,66 @@ export default function PageScannerSearch() {
       await runMixedCampaign();
           return;
         }
-    if (sourceMode === "paste") {
-      setRunPhase("running");
-      pushLog("Đang chuẩn hoá danh sách link…", "info");
-      try {
-        const res = await parsePageLinks({
-          content: pasteContent.trim(),
-          filter_existing: true,
-          save_to_db: true,
-        });
-        setSessionId(res.session_id);
-        setActiveSessionIds(res.session_id ? [res.session_id] : []);
-        setKeywordProgress([{ keyword: "Nhập link", count: res.valid_count || 0, status: "done" }]);
-        if (res.session_id) await loadResults(res.session_id, 1, [res.session_id]);
-        setRunPhase("done");
-        pushLog(`Parse xong: ${res.valid_count} hợp lệ / trùng ${res.dedup_count} / lỗi ${res.invalid_count}`, "success");
-        toast.success(`Đã nhập ${res.valid_count} Page hợp lệ.`);
-      } catch (err) {
-        setRunPhase("done");
-        toast.error(err.message);
-      }
-          return;
-        }
-    if (sourceMode === "upload") {
-      setRunPhase("running");
-      pushLog(`Đang lưu danh sách page từ file "${uploadFile?.name || "file"}"…`, "info");
-      try {
+    if (sourceMode === "paste" || sourceMode === "upload") {
+      await runDetailScan();
+    }
+  };
+
+  /**
+   * Nhập link / Tải tệp: chuẩn hoá link (không lưu) → tạo phiên DETAIL chạy Chrome nền
+   * (mở từng Page + About, lấy SĐT / Email / Website / Địa chỉ) → poll tiến độ như chế độ hashtag.
+   */
+  const runDetailScan = async () => {
+    const isUpload = sourceMode === "upload";
+    const label = isUpload ? `File ${uploadFile?.name || ""}`.trim() : "Nhập link";
+    setRunPhase("running");
+    campaignRef.current = { paused: false, abort: false, queue: [], accIndex: 0, active: false };
+    pushLog(isUpload ? `Đang đọc file "${uploadFile?.name || "file"}"…` : "Đang chuẩn hoá danh sách link…", "info");
+    try {
+      let parsed = isUpload ? uploadResult : null;
+      if (isUpload && !parsed?.pages) {
         const formData = new FormData();
         formData.append("file", uploadFile);
-        const saved = await uploadPageFile(formData, { save_to_db: true, filter_existing: true });
-        setUploadResult(saved);
-        setSessionId(saved.session_id || null);
-        setActiveSessionIds(saved.session_id ? [saved.session_id] : []);
-        setKeywordProgress([{ keyword: "Upload file", count: saved.valid_count || 0, status: "done" }]);
-        if (saved.session_id) {
-          await loadResults(saved.session_id, 1, [saved.session_id]);
-        }
-        setRunPhase("done");
-        pushLog(`Upload: ${saved.valid_count} page đã lưu.`, "success");
-        toast.success(`Đã lưu ${saved.valid_count} Page từ file.`);
-      } catch (err) {
-        setRunPhase("done");
-        toast.error(err.message);
+        parsed = await uploadPageFile(formData, { save_to_db: false, filter_existing: true });
+        setUploadResult(parsed);
+      } else if (!isUpload) {
+        parsed = await parsePageLinks({ content: pasteContent.trim(), filter_existing: true, save_to_db: false });
       }
+      const targets = (parsed?.pages || []).filter((p) => p.page_key);
+      if (!targets.length) throw new Error("Không có link Page hợp lệ để quét.");
+      pushLog(
+        `Hợp lệ ${targets.length} page · trùng ${parsed.dedup_count || 0} · lỗi ${parsed.invalid_count || 0}` +
+          (parsed.already_existing_count ? ` · ${parsed.already_existing_count} page đã có trong kho (sẽ cập nhật)` : ""),
+        "info",
+      );
+
+      const live = accounts.filter((a) => selectedUids.includes(a.uid) && LIVE_STATUSES.has(String(a.status)));
+      const accountUids = live.length ? live.map((a) => a.uid) : [...selectedUids];
+      const target = Math.min(targetPagesCount, targets.length);
+      const res = await createDetailSession({
+        pages: targets.map((p) => ({ page_key: p.page_key, page_url: p.page_url })),
+        source_type: isUpload ? "UPLOAD" : "PARSE",
+        source_label: label,
+        account_uids: accountUids.length ? accountUids : null,
+        rotate_every: rotateEvery,
+        rotate_on_checkpoint: true,
+        target_pages: target,
+        min_followers: minFollowersEnabled ? minFollowers : 0,
+        page_delay_min_s: delayMin,
+        page_delay_max_s: delayMax,
+      });
+      const sid = res.session_id;
+      sessionMetaRef.current[sid] = { channel: isUpload ? "FILE" : "LINK", label, kind: "detail" };
+      setSessionId(sid);
+      setActiveSessionIds([sid]);
+      setKeywordProgress([{ keyword: label, count: 0, status: "scanning", target }]);
+      pushLog(res.message || `Đã khởi động phiên #${sid}`, "success");
+      toast.success(`Bắt đầu quét thông tin ${target} page.`);
+      startPoll(sid);
+    } catch (err) {
+      setRunPhase("idle");
+      pushLog(err.message || "Lỗi khởi động phiên", "error");
+      toast.error(err.message || "Lỗi khởi động phiên");
     }
   };
 
@@ -1692,7 +1714,7 @@ export default function PageScannerSearch() {
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 <span className="text-[11px] text-[#64748B]">Đã quét được:</span>
                 {keywordProgress.map((row) => {
-                  const target = keywordTargets[row.keyword] || applyAllTarget;
+                  const target = row.target || keywordTargets[row.keyword] || applyAllTarget;
                   const count = Number(row.count) || 0;
                   const done = row.status === "done" || (target > 0 && count >= target);
                   return (

@@ -112,6 +112,71 @@ class TestAccountRotation(_JobsBase):
         self.release.assert_called_once()
 
 
+class TestRequireLogin(_JobsBase):
+    """require_login=True: Chrome mở xong phải đăng nhập được, không thì đóng + đổi acc."""
+
+    def setUp(self):
+        super().setUp()
+        import modules.module_02_account_manager.automation as m02
+
+        self.login_ok = {A: True, B: True}
+        self.login_calls = []
+
+        def fake_login(driver, uid, password="", two_fa=None, cookie=None):
+            self.login_calls.append((uid, password, two_fa))
+            ok = self.login_ok.get(uid, True)
+            return {"success": ok, "error": "" if ok else "Cookie hết hạn", "reloaded": False}
+
+        self.stack.enter_context(mock.patch.object(m02, "ensure_logged_in", side_effect=fake_login))
+        self.stack.enter_context(
+            mock.patch.object(AccountRotation, "_login_credentials", return_value=("pw", "2FA"))
+        )
+
+    def _login_rotation(self, uids, session_id=701):
+        try_acquire_account_job(uids[0], session_id, "DETAIL")
+        return AccountRotation(
+            session_id, "DETAIL", [acc(u) for u in uids], "owner_r",
+            log=lambda m, level="info": self.logs.append(m), require_login=True,
+        )
+
+    def test_logged_in_account_opens(self):
+        rot = self._login_rotation([A])
+        self.assertIsNotNone(rot.open())
+        self.assertEqual(self.login_calls, [(A, "pw", "2FA")])
+        self.release.assert_not_called()
+
+    def test_not_logged_in_closes_browser_and_raises(self):
+        self.login_ok[A] = False
+        rot = self._login_rotation([A])
+        with self.assertRaises(browser_session.AccountLoginError):
+            rot.open()
+        self.assertIsNone(rot.driver)
+        self.release.assert_called_once()
+        self.assertTrue(any("chưa đăng nhập được" in m for m in self.logs))
+
+    def test_rotation_skips_account_that_cannot_log_in(self):
+        self.login_ok = {A: True, B: False, C: True}
+        rot = self._login_rotation([A, B, C])
+        rot.open()
+        self.assertTrue(rot.rotate("checkpoint", mark_dead=True))
+        self.assertEqual(rot.uid, C)
+        self.assertIn(B, rot.dead)
+        self.assertIsNone(get_active_job_for_account(B))
+
+    def test_default_rotation_does_not_check_login(self):
+        rot = self._rotation([A])  # require_login mặc định False (FOLLOW / POST_SCAN)
+        self.assertIsNotNone(rot.driver)
+        self.assertEqual(self.login_calls, [])
+
+    def test_relogin(self):
+        rot = self._login_rotation([A])
+        rot.open()
+        self.login_ok[A] = False
+        self.assertFalse(rot.relogin())
+        self.login_ok[A] = True
+        self.assertTrue(rot.relogin())
+
+
 class TestOrderAndResolveAccounts(_JobsBase):
     def test_starts_from_first_free_account(self):
         try_acquire_account_job(A, 999, "FOLLOW")
