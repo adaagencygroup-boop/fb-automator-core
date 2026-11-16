@@ -6,6 +6,11 @@ import secrets
 import time
 from urllib.parse import urlencode
 
+try:
+    from psycopg2.extras import execute_values
+except ImportError:
+    execute_values = None
+
 from core.database.connection import db
 from . import meta_sync as sync
 from .meta_config import GRAPH_API_VERSION, ALL_SCOPES, callback_url, credentials
@@ -179,21 +184,56 @@ def _save(owner, prepared, job):
                 token_metadata = EXCLUDED.token_metadata, updated_at = NOW() RETURNING id""",
             (owner, metadata["app_id"], identity["id"], identity["name"], prepared["token"], json.dumps(metadata)))
         connection_id = cur.fetchone()["id"]
-        for page in sorted(prepared["pages"], key=lambda item: item["id"]):
-            cur.execute("""INSERT INTO pages
-                (user_id, page_id, page_name, access_token, category, account_uid, web_connection_id, status, token_metadata)
-                VALUES (%s, %s, %s, %s, %s, NULL, %s, 'ACTIVE', %s::jsonb)
-                ON CONFLICT (user_id, page_id) DO UPDATE SET
-                    page_name = EXCLUDED.page_name, access_token = EXCLUDED.access_token,
-                    category = EXCLUDED.category, account_uid = NULL, web_connection_id = EXCLUDED.web_connection_id,
-                    token_metadata = EXCLUDED.token_metadata, status = 'ACTIVE', updated_at = NOW()""",
-                (owner, page["id"], page["name"], page["access_token"], page.get("category"), connection_id, json.dumps(page["token_metadata"])))
+        pages = prepared.get("pages") or []
+        if pages:
+            sorted_pages = sorted(pages, key=lambda item: item["id"])
+            rows = []
+            for page in sorted_pages:
+                raw_meta = page.get("token_metadata")
+                meta_json = raw_meta if isinstance(raw_meta, str) else json.dumps(raw_meta or {})
+                rows.append((
+                    owner,
+                    page["id"],
+                    page["name"],
+                    page["access_token"],
+                    page.get("category"),
+                    None,
+                    connection_id,
+                    "ACTIVE",
+                    meta_json,
+                ))
+            template = "(%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)"
+            if hasattr(cur, "connection") and getattr(cur.connection, "encoding", None) and execute_values:
+                sql = """INSERT INTO pages
+                    (user_id, page_id, page_name, access_token, category, account_uid, web_connection_id, status, token_metadata)
+                    VALUES %s
+                    ON CONFLICT (user_id, page_id) DO UPDATE SET
+                        page_name = EXCLUDED.page_name, access_token = EXCLUDED.access_token,
+                        category = EXCLUDED.category, account_uid = NULL,
+                        web_connection_id = EXCLUDED.web_connection_id,
+                        token_metadata = EXCLUDED.token_metadata, status = 'ACTIVE', updated_at = NOW()"""
+                execute_values(cur, sql, rows, template=template)
+            else:
+                placeholders = ", ".join([template] * len(rows))
+                sql = f"""INSERT INTO pages
+                    (user_id, page_id, page_name, access_token, category, account_uid, web_connection_id, status, token_metadata)
+                    VALUES {placeholders}
+                    ON CONFLICT (user_id, page_id) DO UPDATE SET
+                        page_name = EXCLUDED.page_name, access_token = EXCLUDED.access_token,
+                        category = EXCLUDED.category, account_uid = NULL,
+                        web_connection_id = EXCLUDED.web_connection_id,
+                        token_metadata = EXCLUDED.token_metadata, status = 'ACTIVE', updated_at = NOW()"""
+                flat = [val for row in rows for val in row]
+                cur.execute(sql, flat)
 
     # Kích hoạt kiểm tra ngầm đa luồng cho các Page Token (8 workers)
-    sync.start_background_page_verification(owner, prepared["pages"], identity["id"])
+    sync.start_background_page_verification(owner, pages, identity["id"])
 
-    return {"success": True, "count": len(prepared["pages"]), "identity": identity,
-            "connection_id": connection_id, "message": f"Đã kết nối {identity['name']} và đồng bộ {len(prepared['pages'])} Page."}
+    return {"success": True, "count": len(pages), "identity": identity,
+            "connection_id": connection_id, "message": f"Đã kết nối {identity['name']} và đồng bộ {len(pages)} Page."}
+
+
+_sync_web = _save
 
 
 def confirm_web(owner, job_id, accept):
