@@ -3,7 +3,14 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import { RotateCcw, Download } from "lucide-react";
 import { toast } from "@/lib/toast";
-import { getScanCategories, createScanCategory } from "../service";
+import {
+  getScanCategories,
+  createScanCategory,
+  getScannedMembers,
+  deleteScannedMember,
+  deleteScannedMembersBulk,
+  getMembersSummary,
+} from "../service";
 import MemberCategorySidebar from "./_components/MemberCategorySidebar";
 import MemberTableToolbar from "./_components/MemberTableToolbar";
 import MemberDataTable from "./_components/MemberDataTable";
@@ -26,10 +33,13 @@ export default function GroupScanMemberListPage() {
 
   // Members state
   const [members, setMembers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
   const [memberSearch, setMemberSearch] = useState("");
   const [friendFilter, setFriendFilter] = useState("all");
   const [selectedMemberIds, setSelectedMemberIds] = useState(new Set());
   const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 15;
 
   const loadCategories = useCallback(async () => {
     try {
@@ -57,9 +67,47 @@ export default function GroupScanMemberListPage() {
     }
   }, []);
 
+  const loadMembers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await getScannedMembers({
+        category_id: selectedCatId,
+        search: memberSearch,
+        friend_filter: friendFilter,
+        page: currentPage,
+        page_size: pageSize,
+      });
+      if (res?.members && Array.isArray(res.members)) {
+        setMembers(
+          res.members.map((m, idx) => ({
+            ...m,
+            id: m.id,
+            stt: String((currentPage - 1) * pageSize + idx + 1).padStart(2, "0"),
+            shortUid: m.uid ? (m.uid.length > 15 ? `${m.uid.slice(0, 6)}...${m.uid.slice(-4)}` : m.uid) : "—",
+            friends: (m.friend_count || m.friendCount) ? `${(m.friend_count || m.friendCount).toLocaleString("vi-VN")} bạn` : "—",
+            time: m.scanned_at || "Vừa xong",
+          }))
+        );
+        setTotalCount(res.total || 0);
+      } else {
+        setMembers([]);
+        setTotalCount(0);
+      }
+    } catch {
+      setMembers([]);
+      setTotalCount(0);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedCatId, memberSearch, friendFilter, currentPage, pageSize]);
+
   useEffect(() => {
     loadCategories();
   }, [loadCategories]);
+
+  useEffect(() => {
+    loadMembers();
+  }, [loadMembers]);
 
   // Selected Category Object
   const currentCategory = useMemo(() => {
@@ -74,39 +122,18 @@ export default function GroupScanMemberListPage() {
     );
   }, [categories, categorySearch]);
 
-  // Filter Members
-  const filteredMembers = useMemo(() => {
-    return members.filter((m) => {
-      const matchQuery =
-        !memberSearch.trim() ||
-        m.name.toLowerCase().includes(memberSearch.toLowerCase()) ||
-        m.uid.includes(memberSearch.trim());
-      const matchFriend =
-        friendFilter === "all" ||
-        (friendFilter === "under500" && m.friendCount <= 500) ||
-        (friendFilter === "500to2000" && m.friendCount > 500 && m.friendCount <= 2000) ||
-        (friendFilter === "over2000" && m.friendCount > 2000);
-      return matchQuery && matchFriend;
-    });
-  }, [members, memberSearch, friendFilter]);
-
-  const pageSize = 15;
-  const totalPages = Math.max(1, Math.ceil(filteredMembers.length / pageSize));
-  const paginatedMembers = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredMembers.slice(start, start + pageSize);
-  }, [filteredMembers, currentPage, pageSize]);
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   // Toggle selection
   const allFilteredSelected =
-    filteredMembers.length > 0 &&
-    filteredMembers.every((m) => selectedMemberIds.has(m.id));
+    members.length > 0 &&
+    members.every((m) => selectedMemberIds.has(m.id));
 
   const handleToggleSelectAll = () => {
     if (allFilteredSelected) {
       setSelectedMemberIds(new Set());
     } else {
-      setSelectedMemberIds(new Set(filteredMembers.map((m) => m.id)));
+      setSelectedMemberIds(new Set(members.map((m) => m.id)));
     }
   };
 
@@ -120,44 +147,90 @@ export default function GroupScanMemberListPage() {
   };
 
   // Remove Single Member
-  const handleRemoveMember = (id) => {
-    setMembers((prev) => prev.filter((m) => m.id !== id));
-    setSelectedMemberIds((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-    toast.success("Đã xóa thành viên khỏi danh sách!");
+  const handleRemoveMember = async (id) => {
+    try {
+      await deleteScannedMember(id);
+      toast.success("Đã xóa thành viên khỏi danh sách!");
+      setSelectedMemberIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      loadMembers();
+    } catch {
+      toast.error("Không thể xóa thành viên!");
+    }
   };
 
   // Bulk Delete
-  const handleBulkDelete = () => {
+  const handleBulkDelete = async () => {
     if (selectedMemberIds.size === 0) return;
-    setMembers((prev) => prev.filter((m) => !selectedMemberIds.has(m.id)));
-    toast.success(`Đã xóa ${selectedMemberIds.size} thành viên được chọn!`);
-    setSelectedMemberIds(new Set());
+    try {
+      const ids = Array.from(selectedMemberIds);
+      const res = await deleteScannedMembersBulk(ids);
+      toast.success(`Đã xóa ${res?.deleted_count || ids.length} thành viên được chọn!`);
+      setSelectedMemberIds(new Set());
+      loadMembers();
+    } catch {
+      toast.error("Không thể xóa các thành viên đã chọn!");
+    }
   };
 
-  // Actions & Exports
-  const handleRefresh = async () => {
-    await loadCategories();
-    toast.info("Đã làm mới danh mục và danh sách thành viên.");
-  };
-
-  const handleExportAll = () => {
-    if (members.length === 0) {
+  // Actions & Exports (UC-GMS-06)
+  const exportMembersCsv = (memberList, title = "MemberScraping") => {
+    if (!memberList || memberList.length === 0) {
       toast.warning("Chưa có thành viên nào để xuất!");
       return;
     }
-    toast.success(`Đang xuất toàn bộ ${members.length} UID ra file...`);
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+    const filename = `${title}_${ts}.csv`;
+
+    const headers = ["STT", "Họ tên", "UID Facebook", "Nhóm", "Link cá nhân", "Số bạn bè", "Vai trò", "Thời gian quét"];
+    const rows = memberList.map((m, idx) => [
+      idx + 1,
+      `"${(m.name || "").replace(/"/g, '""')}"`,
+      `\t${m.uid}`, // Tab prefix to preserve text in Excel
+      `"${(m.group_name || m.group_id || "").replace(/"/g, '""')}"`,
+      `"${(m.profile_url || `https://www.facebook.com/${m.uid}`).replace(/"/g, '""')}"`,
+      m.friend_count ?? m.friendCount ?? 0,
+      m.role === "admin" ? "Quản trị viên" : m.role === "moderator" ? "Kiểm duyệt viên" : "Thành viên",
+      `"${m.scanned_at || ""}"`,
+    ]);
+
+    const csvContent = "\uFEFF" + [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    toast.success(`Đã xuất ${memberList.length} thành viên ra tệp: ${filename}`);
+  };
+
+  const handleRefresh = async () => {
+    await loadCategories();
+    await loadMembers();
+    toast.info("Đã làm mới danh mục và danh sách thành viên.");
+  };
+
+  const handleExportAll = async () => {
+    try {
+      const res = await getScannedMembers({ page_size: 5000 });
+      const allMembers = res?.members || [];
+      exportMembersCsv(allMembers, "MemberScraping_All");
+    } catch {
+      toast.error("Không thể tải toàn bộ danh sách để xuất file!");
+    }
   };
 
   const handleExportGroup = () => {
-    if (!currentCategory) {
-      toast.warning("Vui lòng chọn một danh mục!");
-      return;
-    }
-    toast.success(`Đang xuất file nhóm ${currentCategory.fullName || currentCategory.name}...`);
+    const catName = currentCategory?.fullName || currentCategory?.name || "Category";
+    exportMembersCsv(members, `MemberScraping_${catName.replace(/[^a-zA-Z0-9]/g, "_")}`);
   };
 
   const handleExportSelected = () => {
@@ -165,7 +238,8 @@ export default function GroupScanMemberListPage() {
       toast.warning("Chưa chọn thành viên nào để xuất!");
       return;
     }
-    toast.success(`Đang xuất file ${selectedMemberIds.size} thành viên đã chọn...`);
+    const selectedList = members.filter((m) => selectedMemberIds.has(m.id));
+    exportMembersCsv(selectedList, "MemberScraping_Selected");
   };
 
   // Create Category
@@ -198,7 +272,7 @@ export default function GroupScanMemberListPage() {
               DANH SÁCH THÀNH VIÊN ĐÃ QUÉT
             </h2>
             <span className="rounded-full bg-[#EFF6FF] border border-[#BFDBFE] px-2.5 py-0.5 text-[11px] font-semibold text-[#1D4ED8]">
-              {members.length.toLocaleString("vi-VN")} UID
+              {totalCount.toLocaleString("vi-VN")} UID
             </span>
           </div>
 
@@ -229,7 +303,10 @@ export default function GroupScanMemberListPage() {
           <MemberCategorySidebar
             categories={filteredCategories}
             selectedCatId={selectedCatId}
-            onSelectCat={setSelectedCatId}
+            onSelectCat={(id) => {
+              setSelectedCatId(id);
+              setCurrentPage(1);
+            }}
             categorySearch={categorySearch}
             onSearchChange={setCategorySearch}
             onOpenCreateModal={() => setCreateCategoryModalOpen(true)}
@@ -240,7 +317,10 @@ export default function GroupScanMemberListPage() {
             <MemberTableToolbar
               currentCategory={currentCategory}
               memberSearch={memberSearch}
-              onMemberSearchChange={setMemberSearch}
+              onMemberSearchChange={(val) => {
+                setMemberSearch(val);
+                setCurrentPage(1);
+              }}
               friendFilter={friendFilter}
               onFriendFilterChange={(val) => {
                 setFriendFilter(val);
@@ -254,14 +334,14 @@ export default function GroupScanMemberListPage() {
             />
 
             <MemberDataTable
-              members={paginatedMembers}
-              loading={false}
+              members={members}
+              loading={loading}
               selectedMemberIds={selectedMemberIds}
               onToggleSelectRow={handleToggleSelect}
               onToggleSelectAll={handleToggleSelectAll}
               allFilteredSelected={allFilteredSelected}
               onRemoveMember={handleRemoveMember}
-              totalFilteredCount={filteredMembers.length}
+              totalFilteredCount={totalCount}
               totalUidCount={currentCategory?.totalUidCount}
               currentPage={currentPage}
               totalPages={totalPages}

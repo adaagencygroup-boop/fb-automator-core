@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { Clock, Download, RefreshCw } from "lucide-react";
 import * as XLSX from "xlsx";
 import { toast } from "@/components/ui/toast";
@@ -22,21 +22,14 @@ export default function SeedingHistoryPage() {
   const [loading, setLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
-  // Draft filters (chỉ thay đổi khi user nhập liệu, KHÔNG kích hoạt gọi API ngay)
-  const [draftSearch, setDraftSearch] = useState("");
-  const [draftType, setDraftType] = useState("ALL");
-  const [draftStatus, setDraftStatus] = useState("ALL");
-  const [draftFromDate, setDraftFromDate] = useState("");
-  const [draftToDate, setDraftToDate] = useState("");
-
-  // Applied filters (chỉ cập nhật khi user BẤM NÚT LỌC hoặc ĐẶT LẠI)
-  const [appliedFilters, setAppliedFilters] = useState({
-    search: "",
-    type: "ALL",
-    status: "ALL",
-    fromDate: "",
-    toDate: "",
-  });
+  // Bộ lọc tìm kiếm
+  const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("ALL");
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [timePreset, setTimePreset] = useState("ALL");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -46,7 +39,39 @@ export default function SeedingHistoryPage() {
   // Detail Modal
   const [selectedCampaign, setSelectedCampaign] = useState(null);
 
-  // Fetch real data from Local Engine Backend (chỉ phụ thuộc vào appliedFilters và phân trang)
+  const todayStr = useMemo(() => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }, []);
+
+  // Debounce tìm kiếm 300ms
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // Chỉ khi chọn đủ cả 2 ngày (Từ ngày và Đến ngày) và hợp lệ thì mới áp dụng lọc theo ngày
+  const isDateRangeComplete = Boolean(
+    fromDate &&
+    toDate &&
+    fromDate <= toDate &&
+    fromDate <= todayStr &&
+    toDate <= todayStr
+  );
+
+  const activeDateKey = isDateRangeComplete ? `${fromDate}_${toDate}` : "";
+
+  // Reset trang về 1 khi bất kỳ tiêu chí lọc nào thay đổi
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearch, typeFilter, statusFilter, activeDateKey]);
+
+  // Fetch real data from Local Engine Backend
   useEffect(() => {
     let ignore = false;
     seedingApi
@@ -62,11 +87,13 @@ export default function SeedingHistoryPage() {
       page: currentPage,
       page_size: pageSize,
     };
-    if (appliedFilters.type !== "ALL") params.campaign_type = appliedFilters.type;
-    if (appliedFilters.status !== "ALL") params.status = appliedFilters.status;
-    if (appliedFilters.search.trim()) params.search = appliedFilters.search.trim();
-    if (appliedFilters.fromDate) params.from_date = appliedFilters.fromDate;
-    if (appliedFilters.toDate) params.to_date = appliedFilters.toDate;
+    if (typeFilter !== "ALL") params.campaign_type = typeFilter;
+    if (statusFilter !== "ALL") params.status = statusFilter;
+    if (debouncedSearch) params.search = debouncedSearch;
+    if (isDateRangeComplete) {
+      params.from_date = fromDate;
+      params.to_date = toDate;
+    }
 
     seedingApi
       .getSeedingCampaigns(params)
@@ -88,87 +115,52 @@ export default function SeedingHistoryPage() {
     return () => {
       ignore = true;
     };
-  }, [currentPage, pageSize, appliedFilters]);
+  }, [currentPage, pageSize, debouncedSearch, typeFilter, statusFilter, activeDateKey]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "instant" });
   }, []);
 
-  // Chỉ khi bấm nút LỌC mới cập nhật appliedFilters
-  const handleApplyFilter = () => {
-    const now = new Date();
-    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-
-    if (draftFromDate && draftFromDate > todayStr) {
-      toast.warning("Từ ngày không thể chọn ngày trong tương lai!", "KHOẢNG THỜI GIAN KHÔNG HỢP LỆ");
-      return;
-    }
-
-    if (draftToDate && draftToDate > todayStr) {
-      toast.warning("Đến ngày không thể chọn ngày trong tương lai!", "KHOẢNG THỜI GIAN KHÔNG HỢP LỆ");
-      return;
-    }
-
-    if (draftFromDate && draftToDate && draftFromDate > draftToDate) {
-      toast.warning("Từ ngày không được lớn hơn Đến ngày!", "KHOẢNG THỜI GIAN KHÔNG HỢP LỆ");
-      return;
-    }
-
-    setAppliedFilters({
-      search: draftSearch.trim(),
-      type: draftType,
-      status: draftStatus,
-      fromDate: draftFromDate,
-      toDate: draftToDate,
-    });
-    setCurrentPage(1);
-  };
-
   // Nút đặt lại đưa về trạng thái mặc định
   const handleResetFilter = () => {
-    setDraftSearch("");
-    setDraftType("ALL");
-    setDraftStatus("ALL");
-    setDraftFromDate("");
-    setDraftToDate("");
-    setAppliedFilters({
-      search: "",
-      type: "ALL",
-      status: "ALL",
-      fromDate: "",
-      toDate: "",
-    });
+    setSearchTerm("");
+    setDebouncedSearch("");
+    setTypeFilter("ALL");
+    setStatusFilter("ALL");
+    setTimePreset("ALL");
+    setFromDate("");
+    setToDate("");
     setCurrentPage(1);
   };
 
   // Chuỗi tóm tắt bộ lọc đang thực sự áp dụng
   const getAppliedSummary = () => {
     const parts = [];
-    if (appliedFilters.type !== "ALL") {
+    if (typeFilter !== "ALL") {
       parts.push(
-        appliedFilters.type === "PAGE"
+        typeFilter === "PAGE"
           ? "Page"
-          : appliedFilters.type === "PROFILE"
+          : typeFilter === "PROFILE"
           ? "Trang cá nhân"
           : "Bài viết"
       );
     }
-    if (appliedFilters.status !== "ALL") {
+    if (statusFilter !== "ALL") {
       parts.push(
-        appliedFilters.status === "COMPLETED"
+        statusFilter === "COMPLETED"
           ? "Hoàn thành"
-          : appliedFilters.status === "FAILED"
+          : statusFilter === "FAILED"
           ? "Không hoàn thành"
-          : appliedFilters.status === "RUNNING"
+          : statusFilter === "RUNNING"
           ? "Đang chạy"
-          : appliedFilters.status
+          : statusFilter
       );
     }
-    if (appliedFilters.search) {
-      parts.push(`"${appliedFilters.search}"`);
+    if (debouncedSearch) {
+      parts.push(`"${debouncedSearch}"`);
     }
-    if (appliedFilters.fromDate || appliedFilters.toDate) {
-      parts.push(`${appliedFilters.fromDate || "..."} đến ${appliedFilters.toDate || "..."}`);
+    if (isDateRangeComplete) {
+      parts.push(`${fromDate} đến ${toDate}`);
     }
     return parts.length > 0 ? parts.join(", ") : "Tất cả";
   };
@@ -178,23 +170,6 @@ export default function SeedingHistoryPage() {
     try {
       setIsExporting(true);
 
-      // Lấy bộ lọc thực tế (đồng bộ với các giá trị đang chọn trên form bộ lọc)
-      const activeSearch = draftSearch.trim();
-      const activeType = draftType;
-      const activeStatus = draftStatus;
-      const activeFromDate = draftFromDate;
-      const activeToDate = draftToDate;
-
-      // Đồng bộ appliedFilters để giao diện bảng bên dưới khớp 100% với dữ liệu xuất
-      setAppliedFilters({
-        search: activeSearch,
-        type: activeType,
-        status: activeStatus,
-        fromDate: activeFromDate,
-        toDate: activeToDate,
-      });
-
-      // Tham số gửi Backend: all_records = true để lấy toàn bộ dữ liệu (không bị phân trang 10 dòng)
       const exportParams = {
         all_records: true,
         page: 1,
@@ -202,18 +177,19 @@ export default function SeedingHistoryPage() {
       };
 
       const isFiltered = Boolean(
-        (activeType && activeType !== "ALL") ||
-        (activeStatus && activeStatus !== "ALL") ||
-        activeSearch ||
-        activeFromDate ||
-        activeToDate
+        (typeFilter && typeFilter !== "ALL") ||
+        (statusFilter && statusFilter !== "ALL") ||
+        debouncedSearch ||
+        isDateRangeComplete
       );
 
-      if (activeType && activeType !== "ALL") exportParams.campaign_type = activeType;
-      if (activeStatus && activeStatus !== "ALL") exportParams.status = activeStatus;
-      if (activeSearch) exportParams.search = activeSearch;
-      if (activeFromDate) exportParams.from_date = activeFromDate;
-      if (activeToDate) exportParams.to_date = activeToDate;
+      if (typeFilter && typeFilter !== "ALL") exportParams.campaign_type = typeFilter;
+      if (statusFilter && statusFilter !== "ALL") exportParams.status = statusFilter;
+      if (debouncedSearch) exportParams.search = debouncedSearch;
+      if (isDateRangeComplete) {
+        exportParams.from_date = fromDate;
+        exportParams.to_date = toDate;
+      }
 
       const res = await seedingApi.getSeedingCampaigns(exportParams);
       const allCampaigns = res && Array.isArray(res.items) ? res.items : [];
@@ -258,44 +234,56 @@ export default function SeedingHistoryPage() {
                   if (up === "FOLLOW") return "Theo dõi";
                   if (up === "REACT") return "Like bài viết";
                   if (up === "COMMENT") return "Bình luận";
-                  if (up === "SHARE") return "Chia sẻ";
                   return a;
                 })
                 .join(", ")
-            : "";
+            : "—";
 
-        const reactionsStr =
-          c.reactions && c.reactions.length > 0 ? c.reactions.join(", ") : "";
+        const typeStr =
+          c.campaign_type === "PAGE"
+            ? "Page"
+            : c.campaign_type === "PROFILE"
+            ? "Trang cá nhân"
+            : "Bài viết";
+
+        const statusStr =
+          c.status === "COMPLETED"
+            ? "Hoàn thành"
+            : c.status === "FAILED"
+            ? "Thất bại"
+            : c.status === "RUNNING"
+            ? "Đang chạy"
+            : c.status || "—";
 
         return [
           index + 1,
-          `#${c.id}`,
-          c.created_at_display || c.created_at || "",
-          c.campaign_type_display || c.campaign_type || "",
-          c.target_summary || c.name || "",
+          c.id || "—",
+          c.created_at ? new Date(c.created_at).toLocaleString("vi-VN") : "—",
+          typeStr,
+          c.target_url || "—",
           actionsStr,
-          reactionsStr,
-          c.account_count || 0,
+          c.reaction_type || "—",
+          c.account_count || (c.account_ids ? c.account_ids.length : 0),
           c.total_planned || 0,
           c.total_success || 0,
           c.total_failed || 0,
           successRate,
-          c.status_display || c.status || "",
+          statusStr,
         ];
       });
 
       const worksheetData = [headers, ...rows];
-      const ws = XLSX.utils.aoa_to_sheet(worksheetData);
+      const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
 
-      // Thiết lập độ rộng cột chuẩn chỉ cho Excel
-      ws["!cols"] = [
+      // Định dạng độ rộng cột (Column Widths)
+      worksheet["!cols"] = [
         { wch: 6 },  // STT
-        { wch: 14 }, // Mã chiến dịch
-        { wch: 24 }, // Thời gian tạo
+        { wch: 18 }, // Mã chiến dịch
+        { wch: 22 }, // Thời gian tạo
         { wch: 16 }, // Loại chiến dịch
         { wch: 45 }, // Mục tiêu seeding
-        { wch: 26 }, // Hành động thực hiện
-        { wch: 16 }, // Cảm xúc
+        { wch: 30 }, // Hành động thực hiện
+        { wch: 12 }, // Cảm xúc
         { wch: 22 }, // Số tài khoản tham gia
         { wch: 18 }, // Số lượng kế hoạch
         { wch: 14 }, // Thành công
@@ -304,17 +292,14 @@ export default function SeedingHistoryPage() {
         { wch: 18 }, // Trạng thái
       ];
 
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Lich_Su_Seeding");
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Lịch sử seeding");
 
       const now = new Date();
-      const pad = (n) => String(n).padStart(2, "0");
-      const dateFormatted = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(
-        now.getDate()
-      )}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+      const dateSuffix = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+      const fileName = `Lich_su_seeding_${isFiltered ? "da_loc_" : "tat_ca_"}${dateSuffix}.xlsx`;
 
-      const filePrefix = isFiltered ? "lich_su_seeding_da_loc" : "lich_su_seeding_tat_ca";
-      XLSX.writeFile(wb, `${filePrefix}_${dateFormatted}.xlsx`);
+      XLSX.writeFile(workbook, fileName);
 
       toast.success(
         `Đã xuất thành công ${allCampaigns.length} chiến dịch (${isFiltered ? "theo bộ lọc" : "tất cả lịch sử"}) ra file Excel!`,
@@ -371,18 +356,19 @@ export default function SeedingHistoryPage() {
 
       {/* Filter Panel */}
       <HistoryFilters
-        searchTerm={draftSearch}
-        onSearchTermChange={setDraftSearch}
-        typeFilter={draftType}
-        onTypeFilterChange={setDraftType}
-        statusFilter={draftStatus}
-        onStatusFilterChange={setDraftStatus}
-        fromDate={draftFromDate}
-        onFromDateChange={setDraftFromDate}
-        toDate={draftToDate}
-        onToDateChange={setDraftToDate}
+        searchTerm={searchTerm}
+        onSearchTermChange={setSearchTerm}
+        typeFilter={typeFilter}
+        onTypeFilterChange={setTypeFilter}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
+        timePreset={timePreset}
+        onTimePresetChange={setTimePreset}
+        fromDate={fromDate}
+        onFromDateChange={setFromDate}
+        toDate={toDate}
+        onToDateChange={setToDate}
         onReset={handleResetFilter}
-        onApply={handleApplyFilter}
         appliedSummary={getAppliedSummary()}
       />
 

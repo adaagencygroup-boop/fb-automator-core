@@ -14,11 +14,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from core.database.connection import db
 from .browser_session import (
     AccountBusyError,
-    acquire_browser,
+    AccountRotation,
     bump_account_usage,
     get_account_usage_today,
+    order_accounts_free_first,
     release_account_job,
-    release_browser,
     try_acquire_account_job,
 )
 from .facebook_time import parse_facebook_published_at, try_parse_published_at
@@ -29,10 +29,13 @@ from .scanner import (
     _ACTIVE_SESSIONS_LOCK,
     _ACTIVE_STOP_EVENTS,
     _wait_if_paused,
+    _wait_if_paused_timed,
     append_session_log,
     create_scan_session,
     finalize_scan_session,
-    get_scraping_account,
+    pick_page_delay,
+    resolve_scan_accounts,
+    sleep_page_delay,
 )
 
 logger = logging.getLogger(__name__)
@@ -469,6 +472,14 @@ def update_session_progress(session_id: int, total_seen: int, total_unique: int,
         pass
 
 
+def _is_checkpoint_url(driver) -> bool:
+    try:
+        cur = (driver.current_url or "").lower()
+    except Exception:
+        return False
+    return "/checkpoint/" in cur or "/login" in cur
+
+
 def run_post_scan_flow(
     page_keys: List[str],
     account_uid: Optional[str] = None,
@@ -486,20 +497,28 @@ def run_post_scan_flow(
     headless: bool = False,
     allow_direct_fallback: bool = True,
     max_pages_per_acc: int = DEFAULT_PAGES_PER_ACC_DAY,
+    account_uids: Optional[List[str]] = None,
+    rotate_every: int = 0,
+    rotate_on_checkpoint: bool = False,
+    skip_pinned_posts: bool = False,
+    page_delay_min_s: Optional[float] = None,
+    page_delay_max_s: Optional[float] = None,
 ) -> Dict[str, Any]:
+    """
+    Quét bài viết các Page. Nhiều acc (account_uids) → xoay vòng:
+    - rotate_every > 0: đổi acc khi acc hiện tại đã quét đủ N bài (xét sau mỗi Page).
+    - rotate_on_checkpoint: gặp checkpoint/login → đổi acc và quét lại Page đó.
+    skip_pinned_posts: bỏ bài ghim của Quản trị viên.
+    """
     page_keys = [str(k).strip() for k in (page_keys or []) if str(k).strip()]
     if not page_keys:
         raise ValueError("Cần ít nhất 1 page_key")
     allowed_types = post_types or ["all"]
 
-    account = get_scraping_account(account_uid, owner_key=owner_key)
-    if not account:
+    accounts = resolve_scan_accounts(account_uids, account_uid, owner_key=owner_key)
+    if not accounts:
         raise RuntimeError("Không tìm thấy tài khoản Facebook hợp lệ")
-
-    target_uid = str(account.get("uid") or "").strip()
-    owner = account.get("user_id") or owner_key
-    cookie_str = account.get("cookie") or ""
-    proxy = account.get("proxy")
+    target_uid = str(accounts[0].get("uid") or "").strip()
 
     if session_id is None:
         session_id = create_scan_session(
@@ -529,22 +548,27 @@ def run_post_scan_flow(
     start_time = time.time()
     session_keys: Set[str] = set()
     final_status = "COMPLETED"
+    pinned_skipped = 0
+    rotate_every = max(0, int(rotate_every or 0))
 
-    lock = None
-    acquired_lock = False
+    rotation = AccountRotation(
+        session_id,
+        "POST_SCAN",
+        accounts,
+        owner_key,
+        headless=headless,
+        allow_direct_fallback=allow_direct_fallback,
+        log=lambda message, level="info": append_session_log(session_id, message, level),
+    )
+
+    def _quota_left() -> int:
+        return max(0, int(max_pages_per_acc) - get_account_usage_today(rotation.uid, "POST_SCAN"))
 
     try:
         from core.browser import human_sleep
 
         try:
-            driver, _c, lock, acquired_lock = acquire_browser(
-                target_uid=target_uid,
-                owner=owner,
-                proxy=proxy,
-                cookie_str=cookie_str,
-                headless=headless,
-                allow_direct_fallback=allow_direct_fallback,
-            )
+            driver = rotation.open()
         except RuntimeError as lock_err:
             stop_reason = "CHECKPOINT"
             error_message = str(lock_err)
@@ -555,12 +579,17 @@ def run_post_scan_flow(
 
         append_session_log(
             session_id,
-            f"POST_SCAN · pages={len(page_keys)} · max/page={max_posts_per_page} · types={allowed_types}",
+            (
+                f"POST_SCAN · pages={len(page_keys)} · max/page={max_posts_per_page} · types={allowed_types}"
+                f" · acc={len(rotation.accounts)}"
+                f"{f' · đổi acc sau {rotate_every} bài' if rotate_every and rotation.can_rotate else ''}"
+                f"{' · đảo acc khi checkpoint' if rotate_on_checkpoint and rotation.can_rotate else ''}"
+                f"{' · bỏ bài ghim' if skip_pinned_posts else ''}"
+            ),
             "warn",
         )
 
-        used_today = get_account_usage_today(target_uid, "POST_SCAN")
-        pages_quota_left = max(0, int(max_pages_per_acc) - used_today)
+        pages_quota_left = _quota_left()
         idle_timeout_s = max(5.0, float(idle_timeout_s))
 
         for idx, page_key in enumerate(page_keys):
@@ -571,36 +600,53 @@ def run_post_scan_flow(
                 stop_reason = "USER_STOPPED"
                 break
             if pages_quota_left <= 0:
-                append_session_log(session_id, "Quota POST_SCAN Page/acc hôm nay đã hết", "warn")
-                stop_reason = "TIMEOUT"
-                break
+                if rotation.rotate("hết quota POST_SCAN hôm nay"):
+                    driver = rotation.driver
+                    pages_quota_left = _quota_left()
+                if pages_quota_left <= 0:
+                    append_session_log(session_id, "Quota POST_SCAN Page/acc hôm nay đã hết", "warn")
+                    stop_reason = "TIMEOUT"
+                    break
+                driver = rotation.driver
 
             page_url, page_name = resolve_page_url(owner_key, page_key)
             append_session_log(
                 session_id,
-                f"[{idx + 1}/{len(page_keys)}] Feed Page {page_name or page_key}",
+                f"[{idx + 1}/{len(page_keys)}] Feed Page {page_name or page_key} · acc {rotation.uid}",
                 "info",
             )
-            try:
-                driver.get(page_url)
-                time.sleep(2.0)
-            except Exception as exc:
-                append_session_log(session_id, f"Soft-fail open {page_key}: {exc}", "warn")
-                bump_account_usage(target_uid, "POST_SCAN", 1)
+
+            # Mở Page; gặp checkpoint → đảo acc và mở lại (tối đa số acc)
+            soft_failed = False
+            for _attempt in range(len(rotation.accounts)):
+                try:
+                    driver.get(page_url)
+                    time.sleep(2.0)
+                except Exception as exc:
+                    append_session_log(session_id, f"Soft-fail open {page_key}: {exc}", "warn")
+                    soft_failed = True
+                    break
+                if not _is_checkpoint_url(driver):
+                    break
+                if rotate_on_checkpoint and rotation.rotate("checkpoint/login", mark_dead=True):
+                    driver = rotation.driver
+                    pages_quota_left = _quota_left()
+                    continue
+                stop_reason = "CHECKPOINT"
+                error_message = "Checkpoint/login"
+                break
+            if stop_reason == "CHECKPOINT":
+                break
+            if soft_failed:
+                bump_account_usage(rotation.uid, "POST_SCAN", 1)
                 pages_quota_left -= 1
                 continue
 
-            # Checkpoint?
-            try:
-                cur = (driver.current_url or "").lower()
-                if "/checkpoint/" in cur or "/login" in cur:
-                    stop_reason = "CHECKPOINT"
-                    error_message = "Checkpoint/login"
-                    break
-            except Exception:
-                pass
-
             known = existing_post_keys(owner_key, page_key) if skip_existing else set()
+            pinned_seen: Set[str] = set()
+            page_seen: Set[str] = set()
+            known_passed = 0
+            known_logged = 0
             page_got = 0
             last_new_at = time.time()
             stagnant = 0
@@ -609,17 +655,34 @@ def run_post_scan_flow(
                 if stop_event.is_set():
                     stop_reason = "USER_STOPPED"
                     break
-                if _wait_if_paused(session_id, stop_event):
+                stopped_in_pause, paused_s = _wait_if_paused_timed(session_id, stop_event)
+                # Thời gian tạm dừng không tính là idle của Page đang quét
+                last_new_at += paused_s
+                if stopped_in_pause:
                     stop_reason = "USER_STOPPED"
                     break
 
                 batch = extract_posts_batch(driver)
                 new_items = []
+                fresh_known = 0  # bài đã có trong kho, LẦN ĐẦU hiện ra ở lượt quét Page này, trong khoảng ngày
                 for item in batch:
                     total_seen += 1
                     pk = item["post_key"]
+                    first_seen_on_page = pk not in page_seen
+                    page_seen.add(pk)
                     if pk in session_keys or pk in known:
                         total_dup += 1
+                        in_range = not item.get("published_at") or date_in_range(
+                            item["published_at"], date_from, date_to
+                        )
+                        if first_seen_on_page and in_range:
+                            fresh_known += 1
+                        continue
+                    if skip_pinned_posts and item.get("is_pinned"):
+                        if pk not in pinned_seen:
+                            pinned_seen.add(pk)
+                            pinned_skipped += 1
+                            append_session_log(session_id, f"{page_key}: bỏ bài ghim {pk}", "info")
                         continue
                     if not post_type_matches(item.get("post_type"), allowed_types):
                         continue
@@ -654,6 +717,20 @@ def run_post_scan_flow(
                         f"{page_key}: +{len(new_items)} posts (ins={ins}/upd={upd}) · page={page_got}",
                         "success",
                     )
+                elif fresh_known:
+                    # Quét lại (skip_existing): feed vẫn đang cuộn qua bài đã có trong kho
+                    # → coi là tiến triển để đi tiếp tới bài cũ hơn chưa quét.
+                    # Bài ngoài khoảng ngày KHÔNG tính → vẫn dừng sớm khi đã qua mốc ngày.
+                    known_passed += fresh_known
+                    last_new_at = time.time()
+                    stagnant = 0
+                    if known_passed - known_logged >= 50:
+                        known_logged = known_passed
+                        append_session_log(
+                            session_id,
+                            f"{page_key}: đã đi qua {known_passed} bài có sẵn trong kho — tiếp tục tìm bài mới",
+                            "info",
+                        )
                 else:
                     stagnant += 1
 
@@ -674,22 +751,40 @@ def run_post_scan_flow(
                 except Exception:
                     pass
 
-            bump_account_usage(target_uid, "POST_SCAN", 1)
+            bump_account_usage(rotation.uid, "POST_SCAN", 1)
             pages_quota_left -= 1
+            rotation.count += page_got
 
             if stop_reason in ("USER_STOPPED", "CHECKPOINT"):
                 break
-            if page_delay_s > 0 and idx < len(page_keys) - 1:
-                time.sleep(page_delay_s)
+            has_next = idx < len(page_keys) - 1
+            if has_next and rotate_every and rotation.can_rotate and rotation.count >= rotate_every:
+                if rotation.rotate(f"đủ {rotation.count} bài / nick"):
+                    pages_quota_left = _quota_left()
+                if rotation.driver is None:
+                    stop_reason = "ERROR"
+                    error_message = "Không mở lại được trình duyệt sau khi đổi tài khoản"
+                    break
+                driver = rotation.driver
+            if has_next and sleep_page_delay(
+                pick_page_delay(page_delay_min_s, page_delay_max_s, page_delay_s), stop_event
+            ):
+                stop_reason = "USER_STOPPED"
+                break
         else:
             if total_unique == 0:
                 stop_reason = "NO_NEW_RESULTS"
 
     except Exception as exc:
-        logger.exception(f"[POST_SCAN] #{session_id}: {exc}")
-        stop_reason = "ERROR"
-        error_message = str(exc)[:500]
-        append_session_log(session_id, f"Lỗi: {error_message}", "error")
+        if stop_event.is_set():
+            # Dừng khẩn cấp đóng Chrome giữa chừng → lỗi WebDriver là hệ quả của việc dừng
+            logger.info(f"[POST_SCAN] #{session_id} dừng giữa thao tác trình duyệt: {exc}")
+            stop_reason = "USER_STOPPED"
+        else:
+            logger.exception(f"[POST_SCAN] #{session_id}: {exc}")
+            stop_reason = "ERROR"
+            error_message = str(exc)[:500]
+            append_session_log(session_id, f"Lỗi: {error_message}", "error")
     finally:
         duration = int(time.time() - start_time)
         final_status = {
@@ -715,11 +810,13 @@ def run_post_scan_flow(
         )
         append_session_log(
             session_id,
-            f"Kết thúc POST_SCAN · {final_status}/{stop_reason} · posts={total_unique}",
+            (
+                f"Kết thúc POST_SCAN · {final_status}/{stop_reason} · posts={total_unique}"
+                f"{f' · bỏ {pinned_skipped} bài ghim' if pinned_skipped else ''}"
+            ),
             "success" if final_status == "COMPLETED" else "warn",
         )
-        release_browser(stop_reason, keep_browser, acquired_lock, lock)
-        release_account_job(target_uid, session_id)
+        rotation.release(stop_reason, keep_browser)
         with _ACTIVE_SESSIONS_LOCK:
             _ACTIVE_STOP_EVENTS.pop(session_id, None)
             _ACTIVE_PAUSE_EVENTS.pop(session_id, None)
@@ -749,23 +846,25 @@ def start_post_scan_background(
     allow_direct_fallback: bool = True,
     source_list_id: Optional[str] = None,
     max_pages_per_acc: int = DEFAULT_PAGES_PER_ACC_DAY,
+    account_uids: Optional[List[str]] = None,
+    rotate_every: int = 0,
+    rotate_on_checkpoint: bool = False,
+    skip_pinned_posts: bool = False,
+    page_delay_min_s: Optional[float] = None,
+    page_delay_max_s: Optional[float] = None,
 ) -> int:
-    from .browser_session import get_active_job_for_account
-
     page_keys = [str(k).strip() for k in (page_keys or []) if str(k).strip()]
     if not page_keys:
         raise ValueError("Cần ít nhất 1 page_key")
 
-    account = get_scraping_account(account_uid, owner_key=owner_key)
-    if not account:
+    # Nhiều acc: bắt đầu từ acc rảnh đầu tiên (409 BUSY nếu tất cả đang bận)
+    accounts = order_accounts_free_first(
+        resolve_scan_accounts(account_uids, account_uid, owner_key=owner_key)
+    )
+    if not accounts:
         raise RuntimeError("Không tìm thấy tài khoản Facebook hợp lệ")
-    target_uid = str(account.get("uid") or "").strip()
-
-    busy = get_active_job_for_account(target_uid)
-    if busy:
-        raise AccountBusyError(
-            target_uid, int(busy["session_id"]), str(busy.get("job_type") or "")
-        )
+    ordered_uids = [str(a.get("uid") or "").strip() for a in accounts]
+    target_uid = ordered_uids[0]
 
     settings = {
         "job": "POST_SCAN",
@@ -777,11 +876,17 @@ def start_post_scan_background(
         "idle_timeout_s": idle_timeout_s,
         "skip_existing": skip_existing,
         "page_delay_s": page_delay_s,
+        "page_delay_min_s": page_delay_min_s,
+        "page_delay_max_s": page_delay_max_s,
         "scroll_delay_s": scroll_delay_s,
         "keep_browser": keep_browser,
         "source_list_id": source_list_id,
         "automation": True,
         "max_pages_per_acc": max_pages_per_acc,
+        "account_uids": ordered_uids,
+        "rotate_every": rotate_every,
+        "rotate_on_checkpoint": rotate_on_checkpoint,
+        "skip_pinned_posts": skip_pinned_posts,
     }
     session_id = create_scan_session(
         owner_key=owner_key,
@@ -845,6 +950,12 @@ def start_post_scan_background(
                 headless=headless,
                 allow_direct_fallback=allow_direct_fallback,
                 max_pages_per_acc=max_pages_per_acc,
+                account_uids=ordered_uids,
+                rotate_every=rotate_every,
+                rotate_on_checkpoint=rotate_on_checkpoint,
+                skip_pinned_posts=skip_pinned_posts,
+                page_delay_min_s=page_delay_min_s,
+                page_delay_max_s=page_delay_max_s,
             )
         except Exception as exc:
             logger.exception(f"[POST_SCAN] background #{session_id}: {exc}")

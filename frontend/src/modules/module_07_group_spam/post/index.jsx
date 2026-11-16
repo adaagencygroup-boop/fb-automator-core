@@ -1034,6 +1034,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
           runState={runState}
           campaignProgress={campaignProgress}
           onClearLogs={() => setCampaignProgress((current) => current ? { ...current, logs: [] } : current)}
+          onClearLogs={() => setCampaignProgress((current) => current ? { ...current, logs: [] } : current)}
         />
       </div>
 

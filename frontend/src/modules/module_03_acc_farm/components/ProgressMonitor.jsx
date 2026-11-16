@@ -32,7 +32,10 @@ function useNow(active) {
 
 function elapsed(acc, now) {
   if (!acc.started_at) return "—";
-  return formatDuration((acc.finished_at || now) - acc.started_at);
+  const end = acc.finished_at || now;
+  // Không tính lúc tạm dừng: đã dừng xong (paused_seconds) + đang dừng dở (paused_at -> giờ), nên tạm dừng thì đồng hồ đứng yên
+  const paused = (acc.paused_seconds || 0) + (acc.paused_at ? Math.max(0, end - acc.paused_at) : 0);
+  return formatDuration(Math.max(0, end - acc.started_at - paused));
 }
 
 export default function ProgressMonitor({ status }) {

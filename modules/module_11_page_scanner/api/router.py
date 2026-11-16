@@ -19,17 +19,23 @@ from core.database.connection import db
 from modules.module_02_account_manager.api.router import scoped_owner
 from modules.module_02_account_manager.context import owner_context
 from ..page_source import (
+    decode_page_upload,
     get_sample_template,
     normalize_post_key,
     parse_page_file_content,
 )
-from ..browser_session import AccountBusyError
+from ..browser_session import (
+    AccountBusyError,
+    close_browsers_for_stopped_sessions,
+    mark_stale_running_sessions,
+)
 from ..followers_scan import start_follower_scan_background
 from ..posts_scan import start_post_scan_background
 from ..scanner import (
     append_session_log,
     create_scan_session,
     finalize_scan_session,
+    get_local_active_session_ids,
     request_stop_session,
     request_pause_session,
     request_resume_session,
@@ -90,6 +96,28 @@ def _get_owner() -> str:
     return current if current and str(current).strip() else "system"
 
 
+def _sweep_orphan_sessions(owner: str) -> List[int]:
+    """
+    Phiên RUNNING/PAUSED của owner không còn engine nào chạy (vd app vừa tắt/mở lại)
+    → FAILED, để UI không treo ở trạng thái "đang chạy". Bỏ qua phiên đang chạy ở tiến trình này.
+    """
+    try:
+        return mark_stale_running_sessions(
+            owner_key=owner,
+            exclude_session_ids=get_local_active_session_ids(),
+        )
+    except Exception as exc:
+        logger.debug(f"[Module 11 API] sweep orphan sessions: {exc}")
+        return []
+
+
+ACTIVE_JOB_TYPES = ("DISCOVERY", "FOLLOW", "POST_SCAN")
+
+
+def _is_orphan_candidate(session_id: int, status: Optional[str]) -> bool:
+    return status in ("RUNNING", "PAUSED") and int(session_id) not in get_local_active_session_ids()
+
+
 # ==================== SCHEMAS ====================
 
 
@@ -135,13 +163,18 @@ class ParseInput(BaseModel):
 class FollowerSessionInput(BaseModel):
     page_keys: List[str] = Field(..., min_length=1, description="Danh sách page_key cần quét followers")
     account_uid: Optional[str] = Field(None, description="UID acc cào")
+    account_uids: Optional[List[str]] = Field(None, description="Nhiều acc theo thứ tự xoay vòng")
+    rotate_every: int = Field(0, ge=0, le=5000, description="Đổi acc sau N Page / tài khoản (0 = không)")
+    rotate_on_checkpoint: bool = Field(False, description="Gặp checkpoint → đổi acc và quét lại Page")
     keep_browser: bool = Field(False, description="Giữ Chrome sau phiên (Selenium sau)")
     target_followers: int = Field(500, ge=1, le=50000, description="Tổng followers mục tiêu")
     max_per_page: int = Field(200, ge=1, le=5000, description="Tối đa followers / Page")
     idle_timeout_s: float = Field(90, ge=5, le=600)
     skip_existing: bool = Field(True, description="Bỏ qua follower đã có trong kho")
     source_list_id: Optional[str] = Field(None, description="ID danh sách Page đã lưu (FE)")
-    page_delay_s: float = Field(2.0, ge=0, le=120, description="Delay giữa các Page")
+    page_delay_s: float = Field(2.0, ge=0, le=180, description="Delay giữa các Page (khi không có min/max)")
+    page_delay_min_s: Optional[float] = Field(None, ge=0, le=180, description="Giãn cách giữa 2 Page — từ (giây)")
+    page_delay_max_s: Optional[float] = Field(None, ge=0, le=180, description="Giãn cách giữa 2 Page — đến (giây)")
     scroll_delay_s: float = Field(1.5, ge=0.2, le=30, description="Delay giữa các lần scroll dialog")
     headless: bool = Field(False)
     allow_direct_fallback: bool = Field(True)
@@ -165,6 +198,9 @@ class FollowerImportInput(BaseModel):
 class PostSessionInput(BaseModel):
     page_keys: List[str] = Field(..., min_length=1)
     account_uid: Optional[str] = None
+    account_uids: Optional[List[str]] = Field(None, description="Nhiều acc theo thứ tự xoay vòng")
+    rotate_every: int = Field(0, ge=0, le=50000, description="Đổi acc sau N bài / nick (0 = không)")
+    rotate_on_checkpoint: bool = Field(False, description="Gặp checkpoint → đổi acc và quét lại Page")
     keep_browser: bool = Field(False)
     max_posts_per_page: int = Field(50, ge=1, le=500)
     date_from: Optional[str] = Field(None, description="YYYY-MM-DD")
@@ -173,7 +209,9 @@ class PostSessionInput(BaseModel):
     idle_timeout_s: float = Field(90, ge=5, le=600)
     skip_existing: bool = Field(True)
     skip_pinned_posts: bool = Field(False)
-    page_delay_s: float = Field(2.0, ge=0, le=120)
+    page_delay_s: float = Field(2.0, ge=0, le=180)
+    page_delay_min_s: Optional[float] = Field(None, ge=0, le=180, description="Giãn cách giữa 2 Page — từ (giây)")
+    page_delay_max_s: Optional[float] = Field(None, ge=0, le=180, description="Giãn cách giữa 2 Page — đến (giây)")
     scroll_delay_s: float = Field(1.5, ge=0.2, le=30)
     source_list_id: Optional[str] = None
     headless: bool = Field(False)
@@ -296,6 +334,17 @@ async def search_pages(item: SearchPageInput):
             "status": "RUNNING",
             "message": f"Phiên quét #{session_id} đã được khởi động thành công",
         }
+    except AccountBusyError as busy:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "BUSY",
+                "message": str(busy),
+                "active_session_id": busy.active_session_id,
+                "job_type": busy.job_type,
+                "account_uid": busy.account_uid,
+            },
+        )
     except ValueError as val_err:
         raise HTTPException(status_code=422, detail=str(val_err))
     except Exception as exc:
@@ -373,7 +422,8 @@ async def upload_pages_file(
     owner = _get_owner()
     try:
         content_bytes = await file.read()
-        content = content_bytes.decode("utf-8", errors="replace")
+        # .txt / .csv (utf-8, bỏ BOM) hoặc .xlsx (sheet đầu tiên) → văn bản
+        content = await asyncio.to_thread(decode_page_upload, file.filename, content_bytes)
         parsed = await asyncio.to_thread(
             parse_page_file_content,
             content,
@@ -444,6 +494,7 @@ async def list_scan_sessions(
     Lấy danh sách lịch sử các phiên quét của user đăng nhập.
     """
     owner = _get_owner()
+    _sweep_orphan_sessions(owner)
     offset = (page - 1) * page_size
     params: List[Any] = [owner]
     conditions = ["owner_key = %s"]
@@ -492,12 +543,13 @@ async def get_scan_session_detail(session_id: int):
     Xem chi tiết thông số và thống kê của 1 phiên quét cụ thể.
     """
     owner = _get_owner()
-    row = db.fetch_one(
-        "SELECT * FROM page_scan_sessions WHERE id = %s AND owner_key = %s",
-        (session_id, owner),
-    )
+    detail_sql = "SELECT * FROM page_scan_sessions WHERE id = %s AND owner_key = %s"
+    row = db.fetch_one(detail_sql, (session_id, owner))
     if not row:
         raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét yêu cầu")
+    # UI poll phiên RUNNING mà engine đã tắt → chuyển FAILED để UI dừng chờ
+    if _is_orphan_candidate(session_id, row.get("status")) and session_id in _sweep_orphan_sessions(owner):
+        row = db.fetch_one(detail_sql, (session_id, owner)) or row
 
     # Đếm số page đã thu hoạch trong phiên
     pages_count_row = db.fetch_one(
@@ -785,21 +837,31 @@ async def list_scanned_pages(
 
 
 @router.get("/campaigns/active")
-async def get_active_campaign():
+async def get_active_campaign(
+    job_type: str = Query(
+        "DISCOVERY",
+        description="DISCOVERY (Quét thông tin page) | FOLLOW (Quét followers) | POST_SCAN (Quét bài viết)",
+    ),
+):
     """
-    GET /api/page-scanner/campaigns/active
-    Phiên RUNNING/PAUSED mới nhất của owner + toàn bộ phiên cùng campaign_id.
-    Dùng để khôi phục state sau reload (chỉ dẫn 1.3).
+    GET /api/page-scanner/campaigns/active?job_type=...
+    Phiên RUNNING/PAUSED mới nhất của owner CHO ĐÚNG LOẠI JOB + toàn bộ phiên cùng campaign_id.
+    Mỗi trang chỉ khôi phục job của mình — trang Quét page không nhận nhầm job FOLLOW/POST_SCAN.
     """
     owner = _get_owner()
+    jt = str(job_type or "DISCOVERY").strip().upper()
+    if jt not in ACTIVE_JOB_TYPES:
+        raise HTTPException(status_code=422, detail=f"job_type không hợp lệ: {job_type}")
+    _sweep_orphan_sessions(owner)
     top = db.fetch_one(
         """
         SELECT * FROM page_scan_sessions
         WHERE owner_key = %s AND status IN ('RUNNING', 'PAUSED')
+          AND COALESCE(job_type, 'DISCOVERY') = %s
         ORDER BY id DESC
         LIMIT 1
         """,
-        (owner,),
+        (owner, jt),
     )
     if not top:
         return {"active": False, "campaign_id": None, "sessions": []}
@@ -810,15 +872,17 @@ async def get_active_campaign():
             """
             SELECT * FROM page_scan_sessions
             WHERE owner_key = %s AND campaign_id = %s
+              AND COALESCE(job_type, 'DISCOVERY') = %s
             ORDER BY id ASC
             """,
-            (owner, campaign_id),
+            (owner, campaign_id, jt),
         )
     else:
         sessions = [top]
 
     return {
         "active": True,
+        "job_type": jt,
         "campaign_id": campaign_id,
         "primary_session_id": top.get("id"),
         "status": top.get("status"),
@@ -837,8 +901,11 @@ async def pause_scan_session(session_id: int):
     )
     if not session:
         raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét")
-    if session.get("status") not in ("RUNNING", "PAUSED"):
-        raise HTTPException(status_code=400, detail=f"Phiên không thể tạm dừng (status={session.get('status')})")
+    status = session.get("status")
+    if _is_orphan_candidate(session_id, status) and session_id in _sweep_orphan_sessions(owner):
+        status = "FAILED"
+    if status not in ("RUNNING", "PAUSED"):
+        raise HTTPException(status_code=400, detail=f"Phiên không thể tạm dừng (status={status})")
 
     ok = request_pause_session(session_id)
     return {
@@ -859,8 +926,11 @@ async def resume_scan_session(session_id: int):
     )
     if not session:
         raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét")
-    if session.get("status") not in ("PAUSED", "RUNNING"):
-        raise HTTPException(status_code=400, detail=f"Phiên không thể tiếp tục (status={session.get('status')})")
+    status = session.get("status")
+    if _is_orphan_candidate(session_id, status) and session_id in _sweep_orphan_sessions(owner):
+        status = "FAILED"
+    if status not in ("PAUSED", "RUNNING"):
+        raise HTTPException(status_code=400, detail=f"Phiên không thể tiếp tục (status={status})")
 
     ok = request_resume_session(session_id)
     return {
@@ -879,25 +949,29 @@ async def stop_scan_session(session_id: int):
     """
     owner = _get_owner()
     session = db.fetch_one(
-        "SELECT id, status, campaign_id FROM page_scan_sessions WHERE id = %s AND owner_key = %s",
+        "SELECT id, status, campaign_id, account_uid FROM page_scan_sessions WHERE id = %s AND owner_key = %s",
         (session_id, owner),
     )
     if not session:
         raise HTTPException(status_code=404, detail="Không tìm thấy phiên quét")
 
     stopped = request_stop_session(session_id)
+    stopped_ids = {int(session_id)}
+    stopped_uids = {session.get("account_uid")}
     # Dừng cả các phiên cùng campaign còn RUNNING/PAUSED
     campaign_id = session.get("campaign_id")
     if campaign_id:
         siblings = db.fetch_all(
             """
-            SELECT id FROM page_scan_sessions
+            SELECT id, account_uid FROM page_scan_sessions
             WHERE owner_key = %s AND campaign_id = %s AND status IN ('RUNNING', 'PAUSED')
             """,
             (owner, campaign_id),
         )
         for row in siblings or []:
             sid = int(row["id"])
+            stopped_ids.add(sid)
+            stopped_uids.add(row.get("account_uid"))
             request_stop_session(sid)
             db.execute(
                 """
@@ -913,12 +987,12 @@ async def stop_scan_session(session_id: int):
             (session_id,),
         )
 
-    # Dừng khẩn cấp → đóng Chrome page_scanner (kể cả đang keep_browser giữa các job)
+    # Dừng khẩn cấp → đóng Chrome page_scanner của acc thuộc các phiên bị dừng
+    # (kể cả đang keep_browser giữa các job); không đụng job của acc khác.
     try:
-        from core.browser import close_scoped_active_drivers
-        close_scoped_active_drivers(scope="page_scanner", force=True)
-    except Exception:
-        pass
+        close_browsers_for_stopped_sessions(stopped_uids, stopped_ids)
+    except Exception as exc:
+        logger.warning(f"[Module 11 API] Đóng Chrome khi dừng phiên #{session_id}: {exc}")
 
     return {
         "session_id": session_id,
@@ -964,11 +1038,16 @@ async def create_follower_scan_session(item: FollowerSessionInput):
             idle_timeout_s=item.idle_timeout_s,
             skip_existing=item.skip_existing,
             page_delay_s=item.page_delay_s,
+            page_delay_min_s=item.page_delay_min_s,
+            page_delay_max_s=item.page_delay_max_s,
             scroll_delay_s=item.scroll_delay_s,
             keep_browser=item.keep_browser,
             headless=item.headless,
             allow_direct_fallback=item.allow_direct_fallback,
             source_list_id=item.source_list_id,
+            account_uids=item.account_uids,
+            rotate_every=item.rotate_every,
+            rotate_on_checkpoint=item.rotate_on_checkpoint,
         )
         return {
             "session_id": session_id,
@@ -1165,11 +1244,17 @@ async def create_post_scan_session(item: PostSessionInput):
             idle_timeout_s=item.idle_timeout_s,
             skip_existing=item.skip_existing,
             page_delay_s=item.page_delay_s,
+            page_delay_min_s=item.page_delay_min_s,
+            page_delay_max_s=item.page_delay_max_s,
             scroll_delay_s=item.scroll_delay_s,
             keep_browser=item.keep_browser,
             headless=item.headless,
             allow_direct_fallback=item.allow_direct_fallback,
             source_list_id=item.source_list_id,
+            account_uids=item.account_uids,
+            rotate_every=item.rotate_every,
+            rotate_on_checkpoint=item.rotate_on_checkpoint,
+            skip_pinned_posts=item.skip_pinned_posts,
         )
         return {
             "session_id": session_id,
@@ -1296,6 +1381,40 @@ async def import_scanned_posts(item: PostImportInput):
     return {"inserted": inserted, "updated": updated, "total": inserted + updated}
 
 
+@router.get("/posts/session-pages")
+async def list_session_post_pages(session_id: int = Query(..., ge=1)):
+    """Số bài viết theo từng Page của 1 phiên POST_SCAN (cột trái kết quả quét)."""
+    owner = _get_owner()
+    rows = db.fetch_all(
+        """
+        SELECT page_key, COUNT(*)::int AS post_count, MAX(updated_at) AS last_post_at
+        FROM scanned_posts
+        WHERE owner_key = %s AND last_session_id = %s
+        GROUP BY page_key
+        """,
+        (owner, session_id),
+    )
+    items = rows or []
+    return {"items": items, "total_posts": sum(int(r.get("post_count") or 0) for r in items)}
+
+
+@router.get("/followers/session-pages")
+async def list_session_follower_pages(session_id: int = Query(..., ge=1)):
+    """Số UID theo từng Page của 1 phiên FOLLOW (cột trái kết quả quét)."""
+    owner = _get_owner()
+    rows = db.fetch_all(
+        """
+        SELECT page_key, COUNT(*)::int AS uid_count, MAX(updated_at) AS last_follower_at
+        FROM scanned_page_followers
+        WHERE owner_key = %s AND last_session_id = %s
+        GROUP BY page_key
+        """,
+        (owner, session_id),
+    )
+    items = rows or []
+    return {"items": items, "total_uids": sum(int(r.get("uid_count") or 0) for r in items)}
+
+
 @router.get("/posts/pages")
 async def list_pages_with_posts():
     """
@@ -1350,9 +1469,14 @@ async def list_scanned_posts(
     min_reactions: Optional[int] = Query(None, ge=0),
     min_comments: Optional[int] = Query(None, ge=0),
     min_shares: Optional[int] = Query(None, ge=0),
+    sort_by: str = Query("newest", description="newest | likes | comments"),
 ):
     """Danh sách bài viết đã lưu (DS bài viết page)."""
     owner = _get_owner()
+    order_sql = {
+        "likes": "COALESCE(p.reaction_count, 0) DESC, p.id DESC",
+        "comments": "COALESCE(p.comment_count, 0) DESC, p.id DESC",
+    }.get(str(sort_by or "").lower(), "COALESCE(p.published_at, p.created_at) DESC NULLS LAST, p.id DESC")
     offset = (page - 1) * page_size
     params: List[Any] = [owner]
     where = ["p.owner_key = %s"]
@@ -1395,7 +1519,7 @@ async def list_scanned_posts(
         FROM scanned_posts p
         LEFT JOIN scanned_pages sp ON sp.owner_key = p.owner_key AND sp.page_key = p.page_key
         WHERE {cond}
-        ORDER BY COALESCE(p.published_at, p.created_at) DESC NULLS LAST, p.id DESC
+        ORDER BY {order_sql}
         LIMIT %s OFFSET %s
         """,
         tuple(params + [page_size, offset]),
@@ -1474,59 +1598,62 @@ async def list_pages_with_followers():
     return {"items": items, "total": len(items), "total_uids": total_uids}
 
 
+def _delete_returning(sql: str, params: tuple, what: str) -> int:
+    """Xóa theo lô; trả số dòng THỰC SỰ bị xóa. Lỗi DB → 500 (không báo thành công giả)."""
+    try:
+        rows = db.fetch_all(sql, params)
+    except Exception as exc:
+        logger.error(f"[PageScanner] delete {what} fail: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Không xóa được {what}: {exc}")
+    return len(rows or [])
+
+
 @router.delete("/pages")
 async def delete_scanned_pages(item: DeletePagesInput):
-    """Xóa hàng loạt page khỏi kho scanned_pages."""
+    """Xóa hàng loạt page khỏi kho scanned_pages (đúng owner)."""
     owner = _get_owner()
-    keys = [str(k).strip() for k in (item.page_keys or []) if str(k).strip()]
-    deleted = 0
-    for k in keys:
-        try:
-            db.execute(
-                "DELETE FROM scanned_pages WHERE owner_key = %s AND page_key = %s",
-                (owner, k),
-            )
-            deleted += 1
-        except Exception as exc:
-            logger.warning(f"[PageScanner] delete page {k} fail: {exc}")
-    return {"deleted": deleted}
+    keys = list(dict.fromkeys(str(k).strip() for k in (item.page_keys or []) if str(k).strip()))
+    if not keys:
+        return {"deleted": 0, "requested": 0}
+    deleted = _delete_returning(
+        "DELETE FROM scanned_pages WHERE owner_key = %s AND page_key = ANY(%s) RETURNING page_key",
+        (owner, keys),
+        "page",
+    )
+    return {"deleted": deleted, "requested": len(keys)}
 
 
 @router.delete("/posts")
 async def delete_scanned_posts(item: DeletePostsInput):
-    """Xóa bài viết đã quét theo id hoặc post_key."""
+    """Xóa bài viết đã quét theo id (số) hoặc post_key."""
     owner = _get_owner()
-    deleted = 0
-    for raw_id in item.post_ids or []:
-        try:
-            if str(raw_id).isdigit():
-                db.execute(
-                    "DELETE FROM scanned_posts WHERE owner_key = %s AND id = %s",
-                    (owner, int(raw_id)),
-                )
-            else:
-                db.execute(
-                    "DELETE FROM scanned_posts WHERE owner_key = %s AND post_key = %s",
-                    (owner, str(raw_id)),
-                )
-            deleted += 1
-        except Exception as exc:
-            logger.warning(f"[PageScanner] delete post {raw_id} fail: {exc}")
-    return {"deleted": deleted}
+    raw = [str(x).strip() for x in (item.post_ids or []) if str(x).strip()]
+    ids = sorted({int(x) for x in raw if x.isdigit()})
+    keys = sorted({x for x in raw if not x.isdigit()})
+    if not ids and not keys:
+        return {"deleted": 0, "requested": 0}
+    deleted = _delete_returning(
+        """
+        DELETE FROM scanned_posts
+        WHERE owner_key = %s AND (id = ANY(%s) OR post_key = ANY(%s))
+        RETURNING id
+        """,
+        (owner, ids, keys),
+        "bài viết",
+    )
+    return {"deleted": deleted, "requested": len(raw)}
 
 
 @router.delete("/followers")
 async def delete_scanned_followers(item: DeleteFollowersInput):
-    """Xóa followers đã quét theo id."""
+    """Xóa followers đã quét theo id (đúng owner)."""
     owner = _get_owner()
-    deleted = 0
-    for fid in item.follower_ids or []:
-        try:
-            db.execute(
-                "DELETE FROM scanned_page_followers WHERE owner_key = %s AND id = %s",
-                (owner, int(fid)),
-            )
-            deleted += 1
-        except Exception as exc:
-            logger.warning(f"[PageScanner] delete follower {fid} fail: {exc}")
-    return {"deleted": deleted}
+    ids = sorted({int(f) for f in (item.follower_ids or [])})
+    if not ids:
+        return {"deleted": 0, "requested": 0}
+    deleted = _delete_returning(
+        "DELETE FROM scanned_page_followers WHERE owner_key = %s AND id = ANY(%s) RETURNING id",
+        (owner, ids),
+        "followers",
+    )
+    return {"deleted": deleted, "requested": len(ids)}

@@ -417,8 +417,36 @@ export default function OmnichannelChatModule() {
             } else if (payload.type === "comment_reaction" && payload.data) {
               // Bắn CustomEvent lên window để NotificationDetail / CommentThread bắt được realtime
               window.dispatchEvent(new CustomEvent("fb_comment_reaction", { detail: payload.data }));
+            } else if (payload.type === "notification_remove" && payload.data) {
+              const { id, page_id: pid, was_unread, notification_type } = payload.data;
+              setNotifications((prev) => prev.filter((n) => String(n.id) !== String(id) && String(n.rawId) !== String(id)));
+              if (was_unread) {
+                const typeKey = notification_type || "reaction";
+                setNotifMeta((m) => {
+                  const currentTotal = typeof m.total === "number" ? m.total : 0;
+                  const currentUnread = (m.unreadCounts && m.unreadCounts[typeKey]) || 0;
+                  const currentPageUnread = (m.pageUnread && m.pageUnread[String(pid)]) || 0;
+                  return {
+                    ...m,
+                    total: Math.max(0, currentTotal - 1),
+                    unreadCounts: {
+                      ...m.unreadCounts,
+                      [typeKey]: Math.max(0, currentUnread - 1),
+                    },
+                    pageUnread: pid
+                      ? {
+                          ...m.pageUnread,
+                          [String(pid)]: Math.max(0, currentPageUnread - 1),
+                        }
+                      : m.pageUnread,
+                  };
+                });
+              }
             } else if (payload.type === "notification" && payload.data) {
               const incomingNotif = mapNotification(payload.data);
+
+              // Phát CustomEvent fb_new_notification để NotificationDetail tự động tải lại nếu đang mở bài viết này
+              window.dispatchEvent(new CustomEvent("fb_new_notification", { detail: payload.data }));
 
               // Danh sách giờ là kết quả lọc của Backend, nên chỉ chèn vào khi cái
               // vừa tới đúng là thứ đang xem — không thì thông báo của Page khác
@@ -737,19 +765,54 @@ export default function OmnichannelChatModule() {
       .catch(() => patchMessage(conversationId, message.id, { status: "failed" }));
   };
 
-  const handleSend = (conversationId, { text, attachment, replyTo }) => {
+  const handleSend = (conversationId, { text, attachment, attachments, replyTo }) => {
+    // Nếu có danh sách nhiều đính kèm
+    const attList = attachments && attachments.length > 0 ? attachments : attachment ? [attachment] : [];
+
+    if (attList.length > 0) {
+      attList.forEach((att, index) => {
+        // Chỉ đính kèm nội dung văn bản ở tin nhắn đầu tiên (nếu có nhập text)
+        const msgText = index === 0 ? text || "" : "";
+        const message = {
+          id: `local-${Date.now()}-${index}`,
+          direction: "out",
+          text: msgText,
+          attachment: att,
+          replyTo: index === 0 ? replyTo : undefined,
+          createdAt: new Date(Date.now() + index * 50).toISOString(),
+          status: isMock ? undefined : "sending",
+        };
+        setThread(conversationId, (list) => [...list, message]);
+        const preview = msgText || attachmentLabel(att?.type);
+        updateConversation(conversationId, {
+          replied: true,
+          unread: false,
+          lastMessage: `Bạn: ${preview}`,
+          updatedAt: message.createdAt,
+        });
+        deliver(conversationId, message);
+      });
+      return;
+    }
+
+    // Trường hợp chỉ có văn bản (không đính kèm)
     const message = {
       id: `local-${Date.now()}`,
       direction: "out",
       text,
-      attachment,
+      attachment: undefined,
       replyTo,
       createdAt: new Date().toISOString(),
       status: isMock ? undefined : "sending",
     };
     setThread(conversationId, (list) => [...list, message]);
-    const preview = text || attachmentLabel(attachment?.type);
-    updateConversation(conversationId, { replied: true, unread: false, lastMessage: `Bạn: ${preview}`, updatedAt: message.createdAt });
+    const preview = text || "";
+    updateConversation(conversationId, {
+      replied: true,
+      unread: false,
+      lastMessage: `Bạn: ${preview}`,
+      updatedAt: message.createdAt,
+    });
     deliver(conversationId, message);
   };
 
@@ -768,7 +831,33 @@ export default function OmnichannelChatModule() {
 
   const openNotification = (id) => {
     const target = notifications.find((n) => n.id === id) || null;
-    setNotifications((list) => list.map((n) => (n.id === id ? { ...n, unread: false } : n)));
+    if (target && target.unread) {
+      setNotifications((list) => list.map((n) => (n.id === id ? { ...n, unread: false } : n)));
+      // Giảm ngay số đếm chưa đọc trên tab con và badge của Page tương ứng
+      setNotifMeta((prev) => {
+        const typeKey = target.type === "interaction" ? "interaction" : "comment";
+        const oldTypeUnread = prev.unreadCounts?.[typeKey] || 0;
+        const pageKey = String(target.pageId);
+        const oldPageUnread = prev.pageUnread?.[pageKey] || 0;
+
+        return {
+          ...prev,
+          total: Math.max(0, (prev.total || 0) - 1),
+          typeCounts: {
+            ...prev.typeCounts,
+            [typeKey]: Math.max(0, (prev.typeCounts?.[typeKey] || 0) - 1),
+          },
+          unreadCounts: {
+            ...prev.unreadCounts,
+            [typeKey]: Math.max(0, oldTypeUnread - 1),
+          },
+          pageUnread: {
+            ...prev.pageUnread,
+            [pageKey]: Math.max(0, oldPageUnread - 1),
+          },
+        };
+      });
+    }
     if (!isMock) markNotificationRead(target?.rawId || id).catch(() => {});
     setActiveConversationId(null); // mở chi tiết thông báo thì đóng khung chat
     setOpenedNotificationId(id);

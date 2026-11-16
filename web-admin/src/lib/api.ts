@@ -7,6 +7,17 @@ export function getVpsBase(): string {
   return "http://127.0.0.1:28129";
 }
 
+export interface FeatureLicense {
+  key: string;
+  name: string;
+  order_index: number;
+  is_enabled: boolean;
+  is_active: boolean;
+  days_granted: number;
+  days_remaining: number;
+  expired_at: string | null;
+}
+
 export interface User {
   id: number;
   username: string;
@@ -20,10 +31,14 @@ export interface User {
   // Login session info
   last_login_at: string | null;
   last_login_ip: string | null;
+  client_version?: string;
   is_online?: boolean;
   last_active_at?: string | null;
   // HWID reset tracking
   last_hwid_reset_at?: string | null;
+  // Feature-level licenses
+  features?: FeatureLicense[];
+  permissions?: string[];
 }
 
 export interface UserSession {
@@ -308,19 +323,19 @@ export const api = {
   getAdmins: (status?: string): Promise<User[]> =>
     fetchApi(`/api/v1/admin/admins${status ? `?status_filter=${status}` : ""}`),
 
-  approveUser: (id: number, days: number) =>
-    fetchApi(`/api/v1/admin/users/${id}/approve`, { method: "PUT", body: JSON.stringify({ days }) }),
+  approveUser: (id: number, days: number, features?: { key: string; days: number; enabled: boolean }[]) =>
+    fetchApi(`/api/v1/admin/users/${id}/approve`, { method: "PUT", body: JSON.stringify({ days, features }) }),
 
-  extendUser: (id: number, days: number) =>
-    fetchApi(`/api/v1/admin/users/${id}/extend`, { method: "PUT", body: JSON.stringify({ days }) }),
+  extendUser: (id: number, days: number, features?: { key: string; days: number; enabled: boolean }[]) =>
+    fetchApi(`/api/v1/admin/users/${id}/extend`, { method: "PUT", body: JSON.stringify({ days, features }) }),
 
   banUser: (id: number) =>
     fetchApi(`/api/v1/admin/users/${id}/ban`, { method: "PUT" }),
 
-  createUser: (payload: { username: string; password: string; contact_info?: string; days: number; status: string; role?: string; hwid?: string }) =>
+  createUser: (payload: { username: string; password: string; contact_info?: string; days: number; status: string; role?: string; hwid?: string; features?: { key: string; days: number; enabled: boolean }[] }) =>
     fetchApi("/api/v1/admin/users", { method: "POST", body: JSON.stringify(payload) }),
 
-  editUser: (id: number, payload: { username?: string; contact_info?: string; days?: number; password?: string; status?: string; role?: string; hwid?: string }) =>
+  editUser: (id: number, payload: { username?: string; contact_info?: string; days?: number; password?: string; status?: string; role?: string; hwid?: string; features?: { key: string; days: number; enabled: boolean }[] }) =>
     fetchApi(`/api/v1/admin/users/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
 
   unbanUser: (id: number) =>

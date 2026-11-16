@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "@/lib/toast";
+import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
 import AccountSelectModal, { isScanReady } from "../components/AccountSelectModal";
 import SaveSharedGroupModal from "../components/SaveSharedGroupModal";
 import {
@@ -100,7 +101,10 @@ function mapGroupRow(g) {
     }
   }
   let name = String(g?.name || "")
-    .replace(/^(Profile photo of|Ảnh đại diện của)\s*/i, "")
+    .replace(/^[\(\[]\d+\+?[\)\]]\s*/, "")
+    .replace(/^(Profile photo of|Ảnh đại diện của|Anh dai dien cua)\s*/i, "")
+    .replace(/\s*\|\s*Facebook$/i, "")
+    .replace(/^[\(\[]\d+\+?[\)\]]\s*/, "")
     .trim();
   return {
     id: g.id || g.href || g.url,
@@ -121,6 +125,8 @@ export default function GroupScanInfoPage() {
   const [selectedUids, setSelectedUids] = useState([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const { setUnsavedChanges } = useUnsavedChanges();
+  const [hasSavedShared, setHasSavedShared] = useState(false);
 
   const [method, setMethod] = useState("keyword");
   const [keywordInput, setKeywordInput] = useState("");
@@ -136,6 +142,7 @@ export default function GroupScanInfoPage() {
   const [fileData, setFileData] = useState(null);
   const [fileQuotas, setFileQuotas] = useState({});
   const [fileFilter, setFileFilter] = useState("all"); // all | valid | duplicate
+  const [skipInvalidRows, setSkipInvalidRows] = useState(true);
 
   const [rotateAfter, setRotateAfter] = useState(50);
   const [delayMin, setDelayMin] = useState(5);
@@ -148,6 +155,9 @@ export default function GroupScanInfoPage() {
   const [runState, setRunState] = useState("idle"); // idle | running | paused
   const [checkJobId, setCheckJobId] = useState("");
   const running = runState === "running" || runState === "paused";
+  const [pausing, setPausing] = useState(false);
+  const [aborting, setAborting] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const [resultQuery, setResultQuery] = useState("");
   const [filterType, setFilterType] = useState("all");
   const [filterMembers, setFilterMembers] = useState("all");
@@ -164,6 +174,41 @@ export default function GroupScanInfoPage() {
       tone: "info",
     },
   ]);
+
+  // Cảnh báo chưa lưu kết quả quét khi dùng phương thức Nhập link hoặc Tải tệp
+  useEffect(() => {
+    const hasUnsaved = method !== "keyword" && results.length > 0 && !hasSavedShared;
+    if (hasUnsaved) {
+      setUnsavedChanges(
+        true,
+        null,
+        "Bạn có kết quả quét nhóm chưa bấm 'Lưu vào danh sách chung'. Rời khỏi màn hình bây giờ sẽ làm mất các kết quả này. Bạn có chắc chắn muốn rời đi?"
+      );
+    } else {
+      setUnsavedChanges(false);
+    }
+    return () => {
+      setUnsavedChanges(false);
+    };
+  }, [results, method, hasSavedShared, setUnsavedChanges]);
+
+  const handleMethodChange = useCallback(
+    (newMethod) => {
+      if (newMethod === method) return;
+      if (results.length > 0 && !hasSavedShared && method !== "keyword") {
+        const confirmChange = window.confirm(
+          "Bạn có kết quả quét nhóm chưa bấm 'Lưu vào danh sách chung'. Đổi sang phương thức quét khác sẽ làm mới phiên làm việc và xóa kết quả hiện tại. Bạn có chắc chắn muốn chuyển không?"
+        );
+        if (!confirmChange) return;
+      }
+      setMethod(newMethod);
+      setResults([]);
+      setSelectedRows(new Set());
+      setHasSavedShared(false);
+      setUnsavedChanges(false);
+    },
+    [method, results, hasSavedShared, setUnsavedChanges]
+  );
 
   // Dọn dẹp cache cũ khi mở trang để luôn phản ánh dữ liệu thực từ CSDL
   useEffect(() => {
@@ -268,6 +313,35 @@ export default function GroupScanInfoPage() {
     setKeywords((current) => current.filter((item) => item !== word));
   };
 
+  // Helper kiểm tra & chuẩn hóa liên kết Facebook Group cho Tải tệp & Nhập link
+  const isFbGroupLink = (raw) => {
+    let clean = String(raw || "").trim();
+    if (!clean) return false;
+    if (/^[0-9]{5,}$/.test(clean)) return true;
+    if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+      clean = `https://${clean}`;
+    }
+    return /(facebook\.com|fb\.com)\/(groups\/[0-9a-zA-Z._-]+|[0-9]{5,})/i.test(clean);
+  };
+
+  const normalizeFbGroupLink = (raw) => {
+    let clean = String(raw || "").trim();
+    if (/^[0-9]{5,}$/.test(clean)) {
+      return `https://www.facebook.com/groups/${clean}`;
+    }
+    if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+      clean = `https://${clean}`;
+    }
+    try {
+      const url = new URL(clean);
+      url.search = "";
+      url.hash = "";
+      return url.toString().replace(/\/+$/, "");
+    } catch {
+      return clean.replace(/\/+$/, "");
+    }
+  };
+
   // Handler Phương thức Nhập Link
   const handleClearAllLinks = () => {
     setLinkText("");
@@ -287,10 +361,8 @@ export default function GroupScanInfoPage() {
     const seen = new Set();
     const list = [];
     lines.forEach((line) => {
-      let clean = line;
-      if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
-        clean = `https://${clean}`;
-      }
+      const isFbGroup = isFbGroupLink(line);
+      const clean = isFbGroup ? normalizeFbGroupLink(line) : (line.startsWith("http") ? line : `https://${line}`);
       const key = clean.toLowerCase().replace(/\/+$/, "");
       if (seen.has(key)) return;
       seen.add(key);
@@ -299,7 +371,7 @@ export default function GroupScanInfoPage() {
         stt: list.length + 1,
         url: clean,
         raw: line,
-        status: "valid",
+        status: isFbGroup ? "valid" : "invalid",
       });
     });
     setParsedLinks(list);
@@ -321,7 +393,7 @@ export default function GroupScanInfoPage() {
     });
   };
 
-  // Handler Phương thức Tải tệp
+  // Handler Phương thức Tải tệp (CHỈ chấp nhận link nhóm Facebook, loại bỏ hoàn toàn từ khóa)
   const handleFileUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -340,7 +412,7 @@ export default function GroupScanInfoPage() {
           if (Array.isArray(row)) {
             row.forEach((cell) => {
               const text = String(cell || "").trim();
-              if (text && !text.startsWith("#") && !/^(stt|tên|link|nhóm|keyword|group)/i.test(text)) {
+              if (text && !text.startsWith("#") && !/^(stt|tên|link|nhóm|group|url|đường dẫn)/i.test(text)) {
                 rawLines.push(text);
               }
             });
@@ -354,28 +426,51 @@ export default function GroupScanInfoPage() {
           .filter((l) => l && !l.startsWith("#"));
       }
 
+      if (rawLines.length > 1000) {
+        toast.warning("Tệp vượt quá 1.000 dòng. Hệ thống đã tự động giới hạn ở 1.000 dòng đầu tiên theo quy định an toàn.");
+        rawLines = rawLines.slice(0, 1000);
+      }
+
       const seen = new Set();
       const rows = [];
       let validCount = 0;
       let dupCount = 0;
+      let invalidCount = 0;
 
       rawLines.forEach((line, idx) => {
-        const norm = line.toLowerCase().replace(/\/+$/, "");
-        if (seen.has(norm)) {
+        const isGroup = isFbGroupLink(line);
+        if (!isGroup) {
+          invalidCount += 1;
+          rows.push({
+            id: `f-${idx + 1}`,
+            line: idx + 1,
+            raw: line,
+            url: line,
+            status: "invalid",
+            reason: "Không phải liên kết nhóm Facebook hợp lệ",
+          });
+          return;
+        }
+
+        const normalizedUrl = normalizeFbGroupLink(line);
+        const normKey = normalizedUrl.toLowerCase().replace(/\/+$/, "");
+        if (seen.has(normKey)) {
           dupCount += 1;
           rows.push({
             id: `f-${idx + 1}`,
             line: idx + 1,
             raw: line,
+            url: normalizedUrl,
             status: "duplicate",
           });
         } else {
-          seen.add(norm);
+          seen.add(normKey);
           validCount += 1;
           rows.push({
             id: `f-${idx + 1}`,
             line: idx + 1,
             raw: line,
+            url: normalizedUrl,
             status: "valid",
           });
         }
@@ -388,16 +483,25 @@ export default function GroupScanInfoPage() {
         totalCount: rows.length,
         validCount,
         dupCount,
+        invalidCount,
         rows,
       });
       setFileQuotas((current) => {
         const next = { ...current };
         rows.forEach((item) => {
-          if (item.status === "valid" && next[item.raw] == null) next[item.raw] = 30;
+          const targetKey = item.url || item.raw;
+          if (item.status === "valid" && next[targetKey] == null) next[targetKey] = 30;
         });
         return next;
       });
-      toast.success(`Đã nhận diện tệp ${name}: ${validCount} dòng hợp lệ, ${dupCount} trùng lặp.`);
+
+      if (validCount === 0) {
+        toast.error(`Tệp «${name}» không chứa liên kết nhóm Facebook nào (${invalidCount} dòng sai định dạng). Vui lòng kiểm tra lại!`);
+      } else {
+        toast.success(
+          `Đã nhận diện tệp ${name}: ${validCount} link nhóm hợp lệ${dupCount > 0 ? `, ${dupCount} trùng lặp` : ""}${invalidCount > 0 ? `, ${invalidCount} không phải link nhóm (loại trừ)` : ""}.`
+        );
+      }
     } catch (err) {
       console.error(err);
       toast.error("Lỗi đọc tệp: " + (err.message || "Định dạng không hỗ trợ"));
@@ -410,6 +514,7 @@ export default function GroupScanInfoPage() {
     if (!fileData?.rows) return [];
     if (fileFilter === "valid") return fileData.rows.filter((r) => r.status === "valid");
     if (fileFilter === "duplicate") return fileData.rows.filter((r) => r.status === "duplicate");
+    if (fileFilter === "invalid") return fileData.rows.filter((r) => r.status === "invalid");
     return fileData.rows;
   }, [fileData, fileFilter]);
 
@@ -475,15 +580,20 @@ export default function GroupScanInfoPage() {
       }));
     } else if (method === "file") {
       const validRows = (fileData?.rows || []).filter((r) => r.status === "valid");
-      payloadKeywords = validRows.map((r) => ({
-        keyword: r.raw,
-        limit: Math.max(1, Math.min(200, Number(fileQuotas[r.raw]) || 30)),
-      }));
+      payloadKeywords = validRows.map((r) => {
+        const target = r.url || r.raw;
+        return {
+          keyword: target,
+          limit: Math.max(1, Math.min(200, Number(fileQuotas[target] ?? fileQuotas[r.raw]) || 30)),
+        };
+      });
     }
 
     const firstWord = payloadKeywords[0]?.keyword || "";
     return {
       uid: selectedUids[0],
+      uids: selectedUids,
+      rotate_after: Math.max(1, Number(rotateAfter) || 50),
       keyword: firstWord,
       keywords: payloadKeywords,
       delay_min: Math.max(0, Number(delayMin) || 0),
@@ -491,6 +601,7 @@ export default function GroupScanInfoPage() {
       public_only: Boolean(publicOnly),
       private_only: Boolean(privateOnly),
       min_members: minMembersEnabled ? Math.max(0, Number(minMembers) || 0) : null,
+      auto_join: true,
       force: true,
     };
   };
@@ -546,12 +657,19 @@ export default function GroupScanInfoPage() {
 
         if (status.status === "paused") {
           setRunState("paused");
+          setPausing(false);
+          setResuming(false);
           if (!finishedNotified) {
             finishedNotified = true;
-            toast.info("Đã tạm dừng sau từ khóa hiện tại.");
+            toast.info("Đã tạm dừng.");
           }
-          if (timer) clearInterval(timer);
           return;
+        }
+
+        if (status.status === "running") {
+          finishedNotified = false;
+          setRunState("running");
+          setResuming(false);
         }
 
         if (status.status === "done" || status.status === "error" || status.status === "aborted") {
@@ -566,6 +684,9 @@ export default function GroupScanInfoPage() {
             }
           }
           setRunState("idle");
+          setPausing(false);
+          setAborting(false);
+          setResuming(false);
           if (timer) clearInterval(timer);
         }
       } catch {
@@ -604,13 +725,14 @@ export default function GroupScanInfoPage() {
     if (method === "file") {
       const validRows = (fileData?.rows || []).filter((r) => r.status === "valid");
       if (!validRows.length) {
-        toast.warning("Vui lòng tải tệp danh sách nhóm trước khi bắt đầu.");
+        toast.warning("Tệp không chứa liên kết nhóm Facebook hợp lệ nào. Vui lòng kiểm tra lại tệp!");
         return;
       }
     }
 
     setResults([]);
     setSelectedRows(new Set());
+    setHasSavedShared(false);
     try {
       localStorage.removeItem("fb_scan_info_active_results");
     } catch {}
@@ -618,6 +740,8 @@ export default function GroupScanInfoPage() {
     const uid = selectedUids[0];
     const body = buildScanBody(wordList);
     setRunState("running");
+    setPausing(false);
+    setAborting(false);
     if (method === "keyword") {
       try {
         await Promise.all(
@@ -648,7 +772,7 @@ export default function GroupScanInfoPage() {
     } else {
       const validCnt = (fileData?.rows || []).filter((r) => r.status === "valid").length;
       pushLog(
-        `Bắt đầu thực thi quét theo tệp: nick ${uid}, ${validCnt} mục từ ${fileData?.name || "tệp"}…`,
+        `Bắt đầu thực thi quét theo tệp: nick ${uid}, ${validCnt} liên kết nhóm Facebook từ ${fileData?.name || "tệp"}…`,
         "info",
       );
     }
@@ -698,25 +822,54 @@ export default function GroupScanInfoPage() {
   };
 
   const pauseRun = async () => {
-    if (!checkJobId || runState !== "running") return;
+    if (!checkJobId || runState !== "running" || pausing) return;
+    setPausing(true);
     try {
       const res = await controlScanJob({ jobId: checkJobId, action: "pause" });
       setRunState("paused");
-      toast.info(res?.message || "Sẽ tạm dừng sau khi xong từ khóa hiện tại.");
+      toast.info(res?.message || "Đã gửi lệnh tạm dừng.");
       pushLog(res?.message || "Đã gửi lệnh tạm dừng.", "warn");
     } catch (error) {
       toast.error(error.message || "Không tạm dừng được.");
+    } finally {
+      setPausing(false);
+    }
+  };
+
+  const resumeRun = async () => {
+    if (!checkJobId || runState !== "paused" || resuming) return;
+    setResuming(true);
+    try {
+      const res = await controlScanJob({ jobId: checkJobId, action: "resume" });
+      setRunState("running");
+      toast.success(res?.message || "Đang tiếp tục quét…");
+      pushLog(res?.message || "▶️ Đã gửi lệnh tiếp tục quét.", "info");
+    } catch (error) {
+      toast.error(error.message || "Không tiếp tục được phiên quét.");
+    } finally {
+      setResuming(false);
     }
   };
 
   const abortRun = async () => {
-    if (!checkJobId || (runState !== "running" && runState !== "paused")) return;
+    if (!checkJobId || (runState !== "running" && runState !== "paused") || aborting) return;
+    setAborting(true);
     try {
       const res = await controlScanJob({ jobId: checkJobId, action: "abort" });
       toast.warning(res?.message || "Đang dừng khẩn cấp…");
       pushLog(res?.message || "Đã gửi dừng khẩn cấp.", "warn");
     } catch (error) {
       toast.error(error.message || "Không dừng được.");
+    } finally {
+      setAborting(false);
+    }
+  };
+
+  const handlePrimaryAction = async () => {
+    if (runState === "paused" && checkJobId) {
+      await resumeRun();
+    } else {
+      await startRun();
     }
   };
 
@@ -753,13 +906,24 @@ export default function GroupScanInfoPage() {
         const kw = String(row.keyword || "").trim().toLowerCase();
         if (kw !== filterKeyword.trim().toLowerCase()) return false;
       }
-      if (filterNote !== "all" && row.note !== filterNote) return false;
+      if (filterNote !== "all") {
+        const n = String(row.note || "—").toLowerCase();
+        if (filterNote === "joined") {
+          if (n !== "joined" && !n.includes("đã tham gia")) return false;
+        } else if (filterNote === "pending") {
+          if (n !== "pending" && !n.includes("đang chờ")) return false;
+        } else if (filterNote === "not_joined") {
+          if (n !== "not_joined" && !n.includes("chưa vào")) return false;
+        } else if (filterNote === "none") {
+          if (n !== "—" && n !== "") return false;
+        }
+      }
       if (!q) return true;
       return `${row.name || ""} ${row.url || ""} ${row.keyword || ""}`.toLowerCase().includes(q);
     });
   }, [results, resultQuery, filterType, filterMembers, filterKeyword, filterNote]);
 
-  const exportExcel = async () => {
+  const exportFile = async (format = "xlsx") => {
     const rows = selectedRows.size
       ? filteredResults.filter((row) => selectedRows.has(row.id))
       : filteredResults;
@@ -768,44 +932,70 @@ export default function GroupScanInfoPage() {
       return;
     }
     try {
-      const XLSX = await import("xlsx");
       const typeLabel = (t) => (t === "private" ? "Riêng tư" : "Công khai");
       const noteLabel = (n) => {
         if (n === "not_joined" || n === "Chưa vào nhóm") return "Chưa vào nhóm";
-        if (n === "joined") return "Đã tham gia";
-        if (n === "pending") return "Đang chờ QTV duyệt";
+        if (n === "joined" || n === "Đã tham gia") return "Đã tham gia";
+        if (n === "pending" || String(n).includes("Đang chờ")) return "Đang chờ QTV duyệt";
         return n && n !== "—" ? n : "";
       };
-      const data = [
-        ["STT", "Từ khóa", "Tên nhóm", "Loại nhóm", "Thành viên", "URL nhóm", "Ghi chú"],
-        ...rows.map((row, index) => [
-          index + 1,
-          row.keyword || "",
-          row.name || "",
-          typeLabel(row.type),
-          row.members || "",
-          row.href || (row.url ? `https://${String(row.url).replace(/^https?:\/\//, "")}` : ""),
-          noteLabel(row.note),
-        ]),
-      ];
-      const sheet = XLSX.utils.aoa_to_sheet(data);
-      sheet["!cols"] = [
-        { wch: 6 },
-        { wch: 22 },
-        { wch: 36 },
-        { wch: 12 },
-        { wch: 12 },
-        { wch: 48 },
-        { wch: 16 },
-      ];
-      const book = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(book, sheet, "Ket qua quet");
-      const stamp = new Date().toISOString().slice(0, 10);
-      XLSX.writeFile(book, `quet_nhom_${stamp}.xlsx`);
-      toast.success(`Đã xuất Excel ${rows.length} nhóm.`);
-      pushLog(`Xuất Excel: ${rows.length} nhóm → quet_nhom_${stamp}.xlsx`, "success");
+      const headers = ["STT", "Từ khóa", "Tên nhóm", "Loại nhóm", "Thành viên", "URL nhóm", "Ghi chú"];
+      const dataRows = rows.map((row, index) => [
+        index + 1,
+        row.keyword || "",
+        row.name || "",
+        typeLabel(row.type),
+        row.members || "",
+        row.href || (row.url ? `https://${String(row.url).replace(/^https?:\/\//, "")}` : ""),
+        noteLabel(row.note),
+      ]);
+
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+      const fileName = `GroupInfo_${stamp}.${format}`;
+
+      if (format === "csv") {
+        const escapeCsv = (val) => {
+          const str = String(val == null ? "" : val);
+          if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+            return `"${str.replace(/"/g, '""')}"`;
+          }
+          return str;
+        };
+        const csvContent = "\uFEFF" + [
+          headers.map(escapeCsv).join(","),
+          ...dataRows.map((r) => r.map(escapeCsv).join(",")),
+        ].join("\r\n");
+        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } else {
+        const XLSX = await import("xlsx");
+        const sheet = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
+        sheet["!cols"] = [
+          { wch: 6 },
+          { wch: 22 },
+          { wch: 36 },
+          { wch: 14 },
+          { wch: 14 },
+          { wch: 48 },
+          { wch: 20 },
+        ];
+        const book = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(book, sheet, "Kho nhom");
+        XLSX.writeFile(book, fileName);
+      }
+      toast.success(`Đã xuất thành công file báo cáo: ${fileName}`);
+      pushLog(`Xuất file thành công: ${rows.length} nhóm → ${fileName}`, "success");
     } catch (error) {
-      toast.error(error.message || "Xuất Excel thất bại.");
+      toast.error(error.message || "Xuất file thất bại.");
     }
   };
 
@@ -845,7 +1035,7 @@ export default function GroupScanInfoPage() {
             selectedUidsCount={selectedAccounts.length}
             totalAccountsCount={accounts.length}
             method={method}
-            onMethodChange={setMethod}
+            onMethodChange={handleMethodChange}
             keywordInput={keywordInput}
             onKeywordInputChange={setKeywordInput}
             onAddKeywords={addKeywords}
@@ -868,7 +1058,10 @@ export default function GroupScanInfoPage() {
             onFileFilterChange={setFileFilter}
             validFileRowsCount={validFileRows.length}
             duplicateFileRowsCount={(fileData?.rows || []).filter((r) => r.status === "duplicate").length}
+            invalidFileRowsCount={(fileData?.rows || []).filter((r) => r.status === "invalid").length}
             displayedFileRows={displayedFileRows}
+            skipInvalidRows={skipInvalidRows}
+            onSkipInvalidRowsChange={setSkipInvalidRows}
           />
 
           {/* Card 2: Thiết lập cấu hình quét mục tiêu */}
@@ -943,31 +1136,41 @@ export default function GroupScanInfoPage() {
         <div className="space-y-3">
           <button
             type="button"
-            onClick={startRun}
-            disabled={runState === "running"}
+            onClick={handlePrimaryAction}
+            disabled={runState === "running" || pausing || aborting || resuming}
             className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#2563EB] text-sm font-bold tracking-wide text-white hover:bg-blue-600 disabled:opacity-60"
           >
-            {runState === "running" ? <Loader2 className="size-4 animate-spin" /> : <IconPlay color="#fff" />}
-            {runState === "running" ? "ĐANG QUÉT…" : runState === "paused" ? "TIẾP TỤC / BẮT ĐẦU LẠI" : "BẮT ĐẦU THỰC THI"}
+            {runState === "running" || resuming ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <IconPlay color="#fff" />
+            )}
+            {runState === "running"
+              ? "ĐANG QUÉT…"
+              : resuming
+              ? "ĐANG TIẾP TỤC…"
+              : runState === "paused"
+              ? "TIẾP TỤC QUÉT"
+              : "BẮT ĐẦU THỰC THI"}
           </button>
           <div className="grid gap-3 sm:grid-cols-2">
             <button
               type="button"
-              disabled={runState !== "running"}
+              disabled={runState !== "running" || pausing || aborting}
               onClick={pauseRun}
               className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-[#FECACA] bg-white text-sm font-bold tracking-wide text-[#DC2626] disabled:opacity-40"
             >
-              <IconPause color="#DC2626" />
-              TẠM DỪNG
+              {pausing ? <Loader2 className="size-4 animate-spin text-[#DC2626]" /> : <IconPause color="#DC2626" />}
+              {pausing ? "ĐANG TẠM DỪNG…" : "TẠM DỪNG"}
             </button>
             <button
               type="button"
-              disabled={runState !== "running" && runState !== "paused"}
+              disabled={(runState !== "running" && runState !== "paused") || aborting || pausing}
               onClick={abortRun}
               className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#EF4444] text-sm font-bold tracking-wide text-white disabled:opacity-40"
             >
-              <IconStop color="#fff" />
-              DỪNG KHẨN CẤP
+              {aborting ? <Loader2 className="size-4 animate-spin text-white" /> : <IconStop color="#fff" />}
+              {aborting ? "ĐANG DỪNG KHẨN CẤP…" : "DỪNG KHẨN CẤP"}
             </button>
           </div>
         </div>
@@ -976,7 +1179,8 @@ export default function GroupScanInfoPage() {
         <ScanResultSection
           results={results}
           filteredResults={filteredResults}
-          onExportExcel={exportExcel}
+          onExportExcel={() => exportFile("xlsx")}
+          onExportFile={exportFile}
           method={method}
           onOpenSaveModal={() => {
             const toSave =
@@ -1044,6 +1248,8 @@ export default function GroupScanInfoPage() {
               : results
           }
           onSaved={(catName) => {
+            setHasSavedShared(true);
+            setUnsavedChanges(false);
             pushLog(`Đã lưu các nhóm vào danh mục «${catName}»`, "success");
           }}
         />

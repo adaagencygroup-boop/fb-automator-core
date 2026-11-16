@@ -8,12 +8,12 @@ import { AuthLayout } from "./components/AuthLayout";
 import { LoginHeroBanner } from "./components/LoginHeroBanner";
 import { LoginForm } from "./components/LoginForm";
 import { ForgotPasswordModal } from "./components/ForgotPasswordModal";
+import { useMachineHwid } from "./useMachineHwid";
 
 export default function LoginScreen({ onAuthenticated, onStatus, onRegister, sessionNotice }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [hwid, setHwid] = useState("");
-  const [hwidLoading, setHwidLoading] = useState(true);
+  const { hwid, hwidLoading, hwidError, setHwid, reloadHwid } = useMachineHwid();
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -27,15 +27,21 @@ export default function LoginScreen({ onAuthenticated, onStatus, onRegister, ses
   useEffect(() => {
     alive.current = true;
     const saved = localStorage.getItem("remembered_username");
-    Promise.resolve().then(() => {
-      if (alive.current && saved) { setUsername(saved); setRememberMe(true); }
-    });
-    api.get("/api/v1/auth/hwid")
-      .then((data) => { if (alive.current) setHwid(data.hwid || ""); })
-      .catch(() => { if (alive.current) setFeedback({ title: "KẾT NỐI PHẦN CỨNG", message: "Chưa nhận diện được mã máy. Vui lòng kiểm tra Local Engine rồi thử lại." }); })
-      .finally(() => { if (alive.current) setHwidLoading(false); });
-    return () => { alive.current = false; clearTimeout(copyTimer.current); };
+    if (saved) {
+      setUsername(saved);
+      setRememberMe(true);
+    }
+    return () => {
+      alive.current = false;
+      clearTimeout(copyTimer.current);
+    };
   }, []);
+
+  useEffect(() => {
+    if (hwidError) {
+      setFeedback({ title: "KẾT NỐI PHẦN CỨNG", message: hwidError });
+    }
+  }, [hwidError]);
 
   function clearFieldError(field) {
     setFieldErrors((prev) => ({ ...prev, [field]: undefined }));
@@ -62,13 +68,15 @@ export default function LoginScreen({ onAuthenticated, onStatus, onRegister, ses
     if (!password) errors.password = "Vui lòng nhập mật khẩu.";
     setFieldErrors(errors);
     if (Object.keys(errors).length) return;
+    if (hwidLoading) {
+      setFeedback({ title: "KẾT NỐI PHẦN CỨNG", message: "Đang nhận diện mã máy. Vui lòng đợi HWID hiện lên rồi đăng nhập." });
+      return;
+    }
     setLoading(true);
     try {
       let currentHwid = hwid;
       if (!currentHwid) {
-        setHwidLoading(true);
-        const data = await api.get("/api/v1/auth/hwid");
-        currentHwid = data.hwid;
+        currentHwid = await reloadHwid();
         setHwid(currentHwid || "");
         if (!currentHwid) throw new Error("Không nhận diện được mã máy (HWID). Vui lòng thử lại.");
       }
@@ -104,7 +112,7 @@ export default function LoginScreen({ onAuthenticated, onStatus, onRegister, ses
         : message === "LICENSE_EXPIRED" ? loginFeedback.license
         : { title: "ĐĂNG NHẬP THẤT BẠI", message: translated });
     } finally {
-      if (alive.current) { setLoading(false); setHwidLoading(false); }
+      if (alive.current) setLoading(false);
     }
   }
 

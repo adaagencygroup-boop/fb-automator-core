@@ -155,6 +155,33 @@ class TestActiveDrivers(unittest.TestCase):
         other.quit.assert_not_called()
         self.assertEqual(core_driver.get_active_drivers(), [other])
 
+    def test_close_scoped_default_closes_whole_scope(self):
+        a, b, c = MagicMock(), MagicMock(), MagicMock()
+        for d in (a, b, c):
+            d.window_handles = []
+        core_driver.register_active_driver(a, "1", scope="scan")
+        core_driver.register_active_driver(b, "2", scope="scan")
+        core_driver.register_active_driver(c, "3", scope="farm")
+        closed = core_driver.close_scoped_active_drivers(scope="scan")
+        self.assertEqual(sorted(closed), ["1", "2"])
+        self.assertEqual(core_driver.get_active_drivers(), [c])
+
+    def test_close_scoped_filters_by_uids_and_exclude_uids(self):
+        a, b, c = MagicMock(), MagicMock(), MagicMock()
+        for d in (a, b, c):
+            d.window_handles = []
+        core_driver.register_active_driver(a, "1", scope="scan")
+        core_driver.register_active_driver(b, "2", scope="scan")
+        core_driver.register_active_driver(c, "3", scope="scan")
+
+        self.assertEqual(core_driver.close_scoped_active_drivers(scope="scan", uids=["2"]), ["2"])
+        b.quit.assert_called_once()
+        self.assertEqual(set(core_driver.get_active_drivers(scope="scan")), {a, c})
+
+        self.assertEqual(core_driver.close_scoped_active_drivers(scope="scan", exclude_uids={"1"}), ["3"])
+        a.quit.assert_not_called()
+        self.assertEqual(core_driver.get_active_drivers(scope="scan"), [a])
+
 
 class TestProxyFailure(unittest.TestCase):
     """Proxy chết: mặc định chạy IP máy (như hiện tại); allow_direct_fallback=False thì không mở Chrome."""

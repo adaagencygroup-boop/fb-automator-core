@@ -98,7 +98,9 @@ CHECKPOINT_ALERT_HOURS = 72
 COUNTER_FIELDS = {"ADD_FRIEND": "friends_sent", "JOIN_GROUP": "groups_joined"}
 
 SETTING_KEYS = {
-    "farm_daily_limit_enabled": ("bool", None),
+    "farm_daily_limit_enabled": ("bool", None),   # bản cũ: 1 công tắc chung, giữ để đọc lần đầu sau khi cập nhật
+    "farm_daily_friend_limit_enabled": ("bool", None),
+    "farm_daily_group_limit_enabled": ("bool", None),
     "farm_daily_friend_limit": ("int", (1, 100)),
     "farm_daily_group_limit": ("int", (1, 100)),
 }
@@ -151,7 +153,8 @@ class FarmScenarioConfig(BaseModel):
     groups_delay_min: int = 10       # giây nghỉ giữa 2 lần tham gia nhóm
     groups_delay_max: int = 20
     group_keyword: str = ""
-    group_source: Literal["keyword", "list"] = "keyword"
+    # keyword: tìm nhóm theo từ khóa (bắt buộc nhập); suggested: nhóm Facebook đề xuất; list: danh sách link
+    group_source: Literal["keyword", "suggested", "list"] = "keyword"
     group_links: str = ""            # Chế độ list: mỗi dòng 1 link nhóm
     group_list_limit: int = 10       # Chế độ list: số nhóm tối đa mỗi nick mỗi phiên
     groups_split_enabled: bool = True    # Mỗi nhóm chỉ 1 nick trong dàn vào (chia link / từ khóa, bỏ nhóm đã có chủ)
@@ -168,7 +171,10 @@ class FarmScenarioConfig(BaseModel):
 
     enabled_check_notif: bool = False
 
+    # Bật khi 1 trong 2 giới hạn bật (bản cũ chỉ có 1 công tắc chung: giao diện cũ gửi riêng trường này)
     daily_limit_enabled: bool = False
+    daily_friend_limit_enabled: Optional[bool] = None   # None = theo daily_limit_enabled (giao diện cũ)
+    daily_group_limit_enabled: Optional[bool] = None
     daily_friend_limit: int = 20
     daily_group_limit: int = 5
 
@@ -210,6 +216,17 @@ _assignments: Dict[str, Dict] = {}
 # UID mọi nick trong dàn (cùng owner, đọc 1 lần lúc Kích hoạt) để kết bạn không mời trúng nick nhà.
 # None = đọc lỗi: kết bạn báo lỗi chứ không chạy mà không kiểm.
 _own_uids: Optional[frozenset] = frozenset()
+
+
+GROUP_KEYWORD_REQUIRED = "Vui lòng nhập từ khóa tham gia nhóm, hoặc chọn Theo đề xuất để tham gia nhóm Facebook đề xuất."
+
+
+def _paused_seconds(acc: Dict) -> float:
+    """Tổng thời gian nick bị tạm dừng (kể cả đang dừng dở lúc kết thúc, vd bấm Dừng khi đang tạm dừng)."""
+    total = acc.get("paused_seconds") or 0.0
+    if acc.get("paused_at"):
+        total += max(0.0, time.time() - acc["paused_at"])
+    return total
 
 
 def _snapshot() -> Dict:
@@ -316,6 +333,10 @@ def _normalize_config(cfg: FarmScenarioConfig) -> FarmScenarioConfig:
     for prefix, floor in DELAY_FLOORS.items():
         low, high = _normalize_pair(data[f"{prefix}_min"], data[f"{prefix}_max"], MAX_TIME_VALUE)
         data[f"{prefix}_min"], data[f"{prefix}_max"] = max(low, floor), max(high, floor)
+    for key in ("daily_friend_limit_enabled", "daily_group_limit_enabled"):
+        if data[key] is None:
+            data[key] = bool(data["daily_limit_enabled"])
+    data["daily_limit_enabled"] = data["daily_friend_limit_enabled"] or data["daily_group_limit_enabled"]
     data["daily_friend_limit"] = min(100, max(1, int(data["daily_friend_limit"] or 1)))
     data["daily_group_limit"] = min(100, max(1, int(data["daily_group_limit"] or 1)))
     for key in ("friend_list_limit", "group_list_limit"):
@@ -324,7 +345,7 @@ def _normalize_config(cfg: FarmScenarioConfig) -> FarmScenarioConfig:
     group_list = data["enabled_join_groups"] and data["group_source"] == "list"
     friend_list = data["enabled_add_friends"] and data["friend_source"] == "list"
     data["group_keyword"] = (data.get("group_keyword") or "").strip() \
-        if data["enabled_join_groups"] and not group_list else ""
+        if data["enabled_join_groups"] and data["group_source"] == "keyword" else ""
     data["group_links"] = (data.get("group_links") or "").strip() if group_list else ""
     data["friend_links"] = (data.get("friend_links") or "").strip() if friend_list else ""
     if friend_list:
@@ -625,7 +646,7 @@ def _assign_targets(cfg: "FarmScenarioConfig", uids: List[str], scope: str) -> t
             assigned[uid][field] = links
         dropped_text = f", bỏ {dropped} link đã thuộc nick khác trong dàn" if dropped else ""
         notes.append(f"Chia danh sách {unit}: {len(items)} link cho {len(uids)} nick, mỗi link 1 nick{dropped_text}")
-    if cfg.enabled_join_groups and cfg.groups_split_enabled and cfg.group_source == "keyword":
+    if cfg.enabled_join_groups and cfg.groups_split_enabled and cfg.group_source != "list":
         keywords = split_group_keywords(cfg.group_keyword)
         if keywords:
             for uid, words in split_keywords(keywords, uids).items():
@@ -897,7 +918,10 @@ def _uid_has_other_browser(uid: str, owner: Optional[str]) -> bool:
 
 def _apply_daily_limit(uid: str, action: str, target: int, cfg: FarmScenarioConfig) -> tuple:
     """Trả (target_thực_tế, đã_làm_hôm_nay, giới_hạn) sau khi trừ phần đã làm trong ngày."""
-    if not cfg.daily_limit_enabled:
+    enabled = cfg.daily_friend_limit_enabled if action == "ADD_FRIEND" else cfg.daily_group_limit_enabled
+    if enabled is None:  # cấu hình chưa qua _normalize_config: theo công tắc chung của bản cũ
+        enabled = cfg.daily_limit_enabled
+    if not enabled:
         return target, 0, 0
     limit = cfg.daily_friend_limit if action == "ADD_FRIEND" else cfg.daily_group_limit
     try:
@@ -1152,7 +1176,7 @@ def _finalize(uid: str, cfg: FarmScenarioConfig, owner: Optional[str]):
         "cookie_saved": bool(data.get("cookie_saved")),
         "started_at": started,
         "finished_at": now,
-        "duration_seconds": max(0, int((now - started).total_seconds())),
+        "duration_seconds": max(0, int((now - started).total_seconds() - _paused_seconds(acc_copy))),
         "config_snapshot": json.dumps(cfg.model_dump(), ensure_ascii=False),
         "created_at": now,
         **repository.summarize_actions(data.get("actions") or []),
@@ -1547,6 +1571,8 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
     if len(cfg.group_keyword) > GROUP_KEYWORD_MAX_LEN:
         raise HTTPException(status_code=400,
                             detail=f"Từ khóa tham gia nhóm không được quá {GROUP_KEYWORD_MAX_LEN} ký tự.")
+    if cfg.enabled_join_groups and cfg.group_source == "keyword" and not split_group_keywords(cfg.group_keyword):
+        raise HTTPException(status_code=400, detail=GROUP_KEYWORD_REQUIRED)
     for enabled, source, raw, kind in ((cfg.enabled_join_groups, cfg.group_source, cfg.group_links, "group"),
                                        (cfg.enabled_add_friends, cfg.friend_source, cfg.friend_links, "friend")):
         error = _link_list_error(raw, kind) if enabled and source == "list" else None
@@ -1634,6 +1660,9 @@ async def start_farm_interactions(req: FarmStartRequest, request: Request):
                     "groups_joined": 0,
                     "started_at": None,
                     "finished_at": None,
+                    # Thời gian tạm dừng của nick (giây) + lúc bắt đầu tạm dừng: không tính vào thời gian thực thi
+                    "paused_seconds": 0.0,
+                    "paused_at": None,
                 }
                 for acc in eligible
             },
@@ -1705,8 +1734,11 @@ async def pause_farm():
     if not _control or not _state["running"]:
         raise HTTPException(status_code=409, detail="Không có phiên Tương tác nào đang chạy.")
     _control.pause()
+    now = time.time()
     with _state_lock:
         running_uids = [u for u, a in _state["accounts"].items() if a["status"] == "RUNNING"]
+        for uid in running_uids:
+            _state["accounts"][uid]["paused_at"] = now
     for uid in running_uids:
         _set_account(uid, status="PAUSED")
     _emit("warning", "Tiến trình tạm ngưng bởi người dùng")
@@ -1718,8 +1750,13 @@ async def resume_farm():
     if not _control or not _state["running"]:
         raise HTTPException(status_code=409, detail="Không có phiên Tương tác nào đang chạy.")
     _control.resume()
+    now = time.time()
     with _state_lock:
         paused_uids = [u for u, a in _state["accounts"].items() if a["status"] == "PAUSED"]
+        for acc in _state["accounts"].values():
+            if acc.get("paused_at"):
+                acc["paused_seconds"] = (acc.get("paused_seconds") or 0) + max(0.0, now - acc["paused_at"])
+                acc["paused_at"] = None
     for uid in paused_uids:
         _set_account(uid, status="RUNNING")
     _emit("info", "Tiếp tục chạy Tương tác tài khoản")

@@ -13,15 +13,33 @@ interface Props {
   onSuccess: () => void;
 }
 
+interface ModuleOption {
+  id: number;
+  key: string;
+  name: string;
+  enabled: boolean;
+  days: number;
+}
+
+const DEFAULT_MODULES: Omit<ModuleOption, "enabled" | "days">[] = [
+  { id: 1, key: "fb_account", name: "1. Quản lý tài khoản Facebook" },
+  { id: 2, key: "post_interact", name: "2. Đăng bài và tương tác tài khoản" },
+  { id: 3, key: "create_fanpage", name: "3. Tạo Fanpage hàng loạt" },
+  { id: 4, key: "manage_fanpage", name: "4. Quản lý Fanpage" },
+  { id: 5, key: "chat_fanpage", name: "5. Quản lý Chat Page" },
+  { id: 6, key: "spam_group", name: "6. Spam Group Hội Nhóm" },
+  { id: 7, key: "seeding", name: "7. Seeding Bài & Page" },
+  { id: 8, key: "scan_group", name: "8. Quét nhóm" },
+  { id: 9, key: "scan_page", name: "9. Quét page" },
+  { id: 10, key: "scan_post", name: "10. Quét bài viết" },
+  { id: 11, key: "scan_profile", name: "11. Quét profile" },
+];
+
 export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Props) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [contactInfo, setContactInfo] = useState("");
   const [hwid, setHwid] = useState("");
-  const [days, setDays] = useState(30);
-  const [isCustomDays, setIsCustomDays] = useState(false);
-  const [customDaysInput, setCustomDaysInput] = useState("30");
-  const [status, setStatus] = useState<"approved" | "pending">("approved");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -29,15 +47,11 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
     username?: boolean;
     contactInfo?: boolean;
     password?: boolean;
-    customDays?: boolean;
   }>({});
 
-  const PRESET_DURATIONS = [
-    { label: "7 ngày", sub: "Dùng thử", days: 7 },
-    { label: "30 ngày", sub: "1 tháng", days: 30 },
-    { label: "90 ngày", sub: "3 tháng", days: 90 },
-    { label: "365 ngày", sub: "1 năm", days: 365 },
-  ];
+  // Module state list
+  const [modules, setModules] = useState<ModuleOption[]>([]);
+  const [bulkDaysInput, setBulkDaysInput] = useState<string>("30");
 
   const generateRandomPassword = () => {
     const randomNum = Math.floor(1000 + Math.random() * 9000);
@@ -55,58 +69,101 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
       setError("");
       setFieldErrors({});
       setShowPassword(false);
+      setBulkDaysInput("30");
+
+      // Default checked modules matching the Figma design screenshot:
+      // Active: 1, 2, 4, 6, 8, 9, 11 (all 30 days)
+      // Inactive: 3, 5, 7, 10 (0 days)
+      const defaultActiveIds = [1, 2, 4, 6, 8, 9, 11];
+
       if (user) {
         setUsername(user.username);
         setPassword("");
         setContactInfo(user.contact_info || "");
         setHwid(user.hwid || "");
         const userDays = user.days_remaining && user.days_remaining > 0 ? user.days_remaining : 30;
-        setDays(userDays);
-        const isPreset = PRESET_DURATIONS.some((p) => p.days === userDays);
-        setIsCustomDays(!isPreset);
-        setCustomDaysInput(String(userDays));
-        setStatus(user.status === "pending" ? "pending" : "approved");
+
+        setModules(
+          DEFAULT_MODULES.map((m) => ({
+            ...m,
+            enabled: true,
+            days: userDays,
+          }))
+        );
       } else {
         setUsername("");
-        setPassword("");
+        setPassword("FbTool#9821@");
         setContactInfo("");
         setHwid("");
-        setDays(30);
-        setIsCustomDays(false);
-        setCustomDaysInput("30");
-        setStatus("approved");
+
+        setModules(
+          DEFAULT_MODULES.map((m) => {
+            const isChecked = defaultActiveIds.includes(m.id);
+            return {
+              ...m,
+              enabled: isChecked,
+              days: isChecked ? 30 : 0,
+            };
+          })
+        );
       }
     }
   }, [isOpen, user]);
 
   if (!isOpen) return null;
 
-  const handleSelectPresetDays = (selectedDays: number) => {
-    setIsCustomDays(false);
-    setDays(selectedDays);
-    setCustomDaysInput(String(selectedDays));
-    if (fieldErrors.customDays) {
-      setFieldErrors((prev) => ({ ...prev, customDays: false }));
-    }
+  const toggleModule = (id: number) => {
+    const parsedBulk = parseInt(bulkDaysInput, 10);
+    const fallbackDays = !isNaN(parsedBulk) && parsedBulk > 0 ? parsedBulk : 30;
+    setModules((prev) =>
+      prev.map((m) => {
+        if (m.id === id) {
+          const nextEnabled = !m.enabled;
+          return {
+            ...m,
+            enabled: nextEnabled,
+            days: nextEnabled ? (m.days > 0 ? m.days : fallbackDays) : 0,
+          };
+        }
+        return m;
+      })
+    );
   };
 
-  const handleSelectCustomDays = () => {
-    setIsCustomDays(true);
-    const parsed = parseInt(customDaysInput, 10);
-    if (!isNaN(parsed) && parsed > 0) {
-      setDays(parsed);
-    }
+  const handleModuleDaysChange = (id: number, val: string) => {
+    const num = parseInt(val, 10);
+    setModules((prev) =>
+      prev.map((m) => {
+        if (m.id === id) {
+          return {
+            ...m,
+            days: isNaN(num) ? 0 : Math.max(0, num),
+          };
+        }
+        return m;
+      })
+    );
   };
 
-  const handleCustomDaysChange = (val: string) => {
-    setCustomDaysInput(val);
-    const parsed = parseInt(val, 10);
-    if (!isNaN(parsed) && parsed > 0) {
-      setDays(parsed);
-      if (fieldErrors.customDays) {
-        setFieldErrors((prev) => ({ ...prev, customDays: false }));
-      }
-    }
+  const handleApplyBulkDays = () => {
+    const parsed = parseInt(bulkDaysInput, 10);
+    const targetDays = !isNaN(parsed) && parsed > 0 ? parsed : 30;
+    setModules((prev) =>
+      prev.map((m) => (m.enabled ? { ...m, days: targetDays } : m))
+    );
+  };
+
+  const handleSelectAll = () => {
+    const parsedBulk = parseInt(bulkDaysInput, 10);
+    const targetDays = !isNaN(parsedBulk) && parsedBulk > 0 ? parsedBulk : 30;
+    const allChecked = modules.every((m) => m.enabled);
+    setModules((prev) =>
+      prev.map((m) => ({
+        ...m,
+        enabled: !allChecked,
+        days: !allChecked ? targetDays : 0,
+      }))
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -118,8 +175,8 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
       return;
     }
 
-    // Custom Validation
-    const errors: { username?: boolean; contactInfo?: boolean; password?: boolean; customDays?: boolean } = {};
+    // Validation
+    const errors: { username?: boolean; contactInfo?: boolean; password?: boolean } = {};
 
     if (!username.trim()) {
       errors.username = true;
@@ -136,12 +193,6 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
         errors.password = true;
       }
     }
-    if (isCustomDays) {
-      const parsedDays = parseInt(customDaysInput, 10);
-      if (isNaN(parsedDays) || parsedDays <= 0) {
-        errors.customDays = true;
-      }
-    }
 
     setFieldErrors(errors);
 
@@ -152,7 +203,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
         if (!contactInfo.trim()) {
           setError("Vui lòng nhập Số điện thoại!");
         } else {
-          setError("Số điện thoại không đúng định dạng. Vui lòng nhập SĐT hợp lệ (ví dụ: 0988123456 hoặc +84988123456)");
+          setError("Số điện thoại không đúng định dạng. Vui lòng nhập SĐT hợp lệ (ví dụ: 0988.123.456 hoặc 0988123456)");
         }
       } else if (errors.password) {
         if (!password.trim() && !user) {
@@ -161,13 +212,19 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
           const passRes = validatePassword(password);
           setError(passRes.message || "Mật khẩu không thỏa mãn các yêu cầu bảo mật!");
         }
-      } else if (errors.customDays) {
-        setError("Số ngày hết hạn bản quyền phải là số nguyên dương lớn hơn 0 (ví dụ: 1, 30, 90...)!");
-      } else {
-        setError("Vui lòng điền đầy đủ các thông tin bắt buộc (*)");
       }
       return;
     }
+
+    // Determine max active days from modules
+    const activeModules = modules.filter((m) => m.enabled && m.days > 0);
+    const maxDays = activeModules.length > 0 ? Math.max(...activeModules.map((m) => m.days)) : 30;
+
+    const featurePayload = modules.map((m) => ({
+      key: m.key,
+      days: m.days,
+      enabled: m.enabled,
+    }));
 
     setLoading(true);
 
@@ -176,10 +233,11 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
         // Edit mode
         await api.editUser(user.id, {
           contact_info: contactInfo.trim(),
-          status,
-          ...(status === "pending" ? {} : { days }),
+          status: "approved",
+          days: maxDays,
           ...(password.trim() ? { password: password.trim() } : {}),
           hwid: hwid.trim(),
+          features: featurePayload,
         });
       } else {
         // Add mode
@@ -187,10 +245,11 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
           username: username.trim(),
           password: password.trim(),
           contact_info: contactInfo.trim(),
-          days,
-          status,
+          days: maxDays,
+          status: "approved",
           role: "user",
           ...(hwid.trim() ? { hwid: hwid.trim() } : {}),
+          features: featurePayload,
         });
       }
       onSuccess();
@@ -209,14 +268,8 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
         <div className="aum-header">
           <div className="aum-header-left">
             <div className="aum-icon-box">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path
-                  d="M18 9V12M18 12V15M18 12H21M18 12H15M13 7C13 9.20766 11.2077 11 9 11C6.79234 11 5 9.20766 5 7C5 4.79234 6.79234 3 9 3C11.2077 3 13 4.79234 13 7L18 9M3 20C3 16.6885 5.68851 14 9 14C12.3115 14 15 16.6885 15 20V21H3V20V20"
-                  stroke="#2563EB"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M16 7V10M16 10V13M16 10H19M16 10H13M11 5C11 7.20766 9.20766 9 7 9C4.79234 9 3 7.20766 3 5C3 2.79234 4.79234 1 7 1C9.20766 1 11 2.79234 11 5L16 7M1 18C1 14.6885 3.68851 12 7 12C10.3115 12 13 14.6885 13 18V19H1V18V18" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" stroke="#2563EB"/>
               </svg>
             </div>
             <div className="aum-header-info">
@@ -225,7 +278,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
               </h2>
               <p className="aum-subtitle">
                 {user
-                  ? "Cập nhật thông tin tài khoản, gia hạn bản quyền và trạng thái."
+                  ? "Cập nhật thông tin tài khoản, phân bổ tính năng và quản lý HWID thiết bị."
                   : "Tạo tài khoản người dùng, cấp bản quyền (license) và phân bổ HWID thiết bị."}
               </p>
             </div>
@@ -237,7 +290,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
             className="aum-close-btn"
             title="Đóng popup"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="18" y1="6" x2="6" y2="18"></line>
               <line x1="6" y1="6" x2="18" y2="18"></line>
             </svg>
@@ -246,7 +299,6 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
 
         {/* Modal Form */}
         <form noValidate onSubmit={handleSubmit} className="aum-form" autoComplete="off">
-          {/* Prevent Chromium aggressive autofill */}
           <input type="text" name="fake_username_remember" className="hidden" tabIndex={-1} autoComplete="off" />
           <input type="password" name="fake_password_remember" className="hidden" tabIndex={-1} autoComplete="new-password" />
 
@@ -314,13 +366,6 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
                     className={`aum-input ${fieldErrors.contactInfo ? "aum-input-error" : ""}`}
                   />
                 </div>
-                {fieldErrors.contactInfo && (
-                  <span className="text-[11px] text-red-500 mt-1 block font-medium">
-                    {!contactInfo.trim()
-                      ? "Vui lòng nhập số điện thoại!"
-                      : "SĐT không đúng định dạng (VD: 0988123456 hoặc +84988123456)"}
-                  </span>
-                )}
               </div>
             </div>
 
@@ -352,7 +397,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
                       setFieldErrors((prev) => ({ ...prev, password: false }));
                     }
                   }}
-                  placeholder={user ? "Nhập mật khẩu mới nếu muốn đổi" : "Nhập mật khẩu khởi tạo"}
+                  placeholder={user ? "Nhập mật khẩu mới nếu muốn đổi" : "FbTool#9821@"}
                   className={`aum-pass-input ${
                     fieldErrors.password || (password.trim() !== "" && !isValidPassword(password))
                       ? "aum-input-error"
@@ -378,94 +423,99 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
             </div>
           </div>
 
-          {/* SECTION 2: LICENSE & HWID BINDING */}
+          {/* SECTION 2: MODULE FEATURES & HWID */}
           <div className="aum-section-2">
             <div className="aum-section-header">
               <div className="aum-pill-bar" />
-              <h4 className="aum-section-title">2. CẤP BẢN QUYỀN (LICENSE) & THIẾT BỊ HWID</h4>
+              <h4 className="aum-section-title">2. CẤP PHÁT TÍNH NĂNG & MÃ PHẦN CỨNG (HWID)</h4>
             </div>
 
-            <div className="aum-form-group">
-              <label className="aum-label">
-                Thời hạn bản quyền <span className="aum-required">*</span>
-              </label>
-
-              <div className="aum-durations-grid">
-                {PRESET_DURATIONS.map((preset) => {
-                  const isSelected = !isCustomDays && days === preset.days;
-                  return (
-                    <div
-                      key={preset.days}
-                      onClick={() => handleSelectPresetDays(preset.days)}
-                      className={`aum-duration-card ${isSelected ? "aum-duration-card--active" : ""}`}
-                    >
-                      {isSelected && (
-                        <div className="aum-duration-badge">
-                          <Check className="w-2.5 h-2.5 text-white stroke-[3]" />
-                        </div>
-                      )}
-                      <div className="aum-duration-title">{preset.label}</div>
-                      <div className="aum-duration-sub">{preset.sub}</div>
-                    </div>
-                  );
-                })}
-
-                {/* Custom days */}
-                <div
-                  onClick={handleSelectCustomDays}
-                  className={`aum-duration-card aum-duration-card--custom ${
-                    isCustomDays ? "aum-duration-card--active" : ""
-                  }`}
-                >
-                  {isCustomDays && (
-                    <div className="aum-duration-badge">
-                      <Check className="w-2.5 h-2.5 text-white stroke-[3]" />
-                    </div>
-                  )}
-                  <div className="aum-duration-title">Tùy chỉnh</div>
-                  <div className="aum-duration-sub">
-                    {isCustomDays
-                      ? !isNaN(parseInt(customDaysInput, 10)) && parseInt(customDaysInput, 10) > 0
-                        ? `${parseInt(customDaysInput, 10)} ngày`
-                        : "Không hợp lệ"
-                      : "Chọn ngày..."}
-                  </div>
-                </div>
+            {/* Action Bar */}
+            <div className="aum-module-control-bar">
+              <div className="aum-module-control-left">
+                <div className="aum-module-control-dot" />
+                <span className="aum-module-control-text">
+                  Tick chọn tính năng muốn cấp quyền và nhập số ngày sử dụng riêng cho từng tính năng
+                </span>
               </div>
 
-              {isCustomDays && (
-                <div>
-                  <div className="aum-custom-input-row">
-                    <span className="aum-label" style={{ fontSize: "11px" }}>Nhập số ngày:</span>
+              <div className="aum-module-control-right">
+                <div className="aum-bulk-days-wrap">
+                  <span className="aum-bulk-days-label">Số ngày:</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={bulkDaysInput}
+                    onChange={(e) => setBulkDaysInput(e.target.value)}
+                    onBlur={() => {
+                      if (!bulkDaysInput || parseInt(bulkDaysInput, 10) <= 0 || isNaN(parseInt(bulkDaysInput, 10))) {
+                        setBulkDaysInput("30");
+                      }
+                    }}
+                    className="aum-bulk-days-input"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleApplyBulkDays}
+                    className="aum-bulk-apply-btn"
+                  >
+                    Áp dụng cho tất cả
+                  </button>
+                </div>
+
+                <div className="aum-control-divider" />
+
+                <button
+                  type="button"
+                  onClick={handleSelectAll}
+                  className="aum-select-all-btn"
+                >
+                  {modules.every((m) => m.enabled) ? "Bỏ chọn tất cả" : "Chọn tất cả"}
+                </button>
+              </div>
+            </div>
+
+            {/* Modules 2-column Grid */}
+            <div className="aum-modules-grid">
+              {modules.map((m) => (
+                <div
+                  key={m.id}
+                  className={`aum-module-card ${
+                    m.enabled ? "aum-module-card--active" : "aum-module-card--inactive"
+                  }`}
+                >
+                  <div
+                    className="aum-module-left"
+                    onClick={() => toggleModule(m.id)}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={m.enabled}
+                      onChange={() => {}}
+                      className="aum-module-checkbox"
+                    />
+                    <span className="aum-module-name">{m.name}</span>
+                  </div>
+
+                  <div className="aum-module-right">
                     <input
                       type="number"
-                      min={1}
-                      value={customDaysInput}
-                      onChange={(e) => handleCustomDaysChange(e.target.value)}
-                      className={`aum-custom-days-input ${
-                        fieldErrors.customDays ||
-                        (customDaysInput !== "" &&
-                          (isNaN(parseInt(customDaysInput, 10)) || parseInt(customDaysInput, 10) <= 0))
-                          ? "aum-input-error"
-                          : ""
+                      min={0}
+                      disabled={!m.enabled}
+                      value={m.days}
+                      onChange={(e) => handleModuleDaysChange(m.id, e.target.value)}
+                      className={`aum-module-days-input ${
+                        m.enabled ? "aum-module-days-input--active" : "aum-module-days-input--disabled"
                       }`}
-                      placeholder="Số ngày"
                     />
-                    <span className="aum-label" style={{ fontSize: "11px" }}>ngày</span>
+                    <span className="aum-module-unit">ngày</span>
                   </div>
-                  {(fieldErrors.customDays ||
-                    (customDaysInput !== "" &&
-                      (isNaN(parseInt(customDaysInput, 10)) || parseInt(customDaysInput, 10) <= 0))) && (
-                    <span className="text-[11px] text-red-500 mt-1 block font-medium">
-                      Số ngày hết hạn phải là số nguyên dương lớn hơn 0 (ví dụ: 1, 30, 90...)
-                    </span>
-                  )}
                 </div>
-              )}
+              ))}
             </div>
 
             {/* HWID Field */}
-            <div className="aum-form-group">
+            <div className="aum-form-group w-full">
               <div className="aum-hwid-header">
                 <label className="aum-label">Mã phần cứng máy tính (HWID)</label>
                 <span className="aum-hwid-optional">Không bắt buộc khi tạo mới</span>
@@ -490,7 +540,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
           {/* FOOTER ACTIONS */}
           <div className="aum-footer">
             <div className="aum-footer-left">
-              <Clock className="w-3.5 h-3.5 text-[#94A3B8]" />
+              <Clock className="w-4 h-4 text-slate-400" />
               <span className="aum-footer-text">Dữ liệu sẽ được ghi nhận vào nhật ký hệ thống</span>
             </div>
 
@@ -511,10 +561,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
                 {loading ? (
                   <span>Đang xử lý...</span>
                 ) : (
-                  <>
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>{user ? "Lưu thông tin" : "Tạo người dùng mới"}</span>
-                  </>
+                  <span>{user ? "Lưu thông tin" : "Tạo người dùng mới"}</span>
                 )}
               </button>
             </div>
@@ -524,3 +571,4 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
     </div>
   );
 }
+

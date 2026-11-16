@@ -15,7 +15,8 @@ import { cn } from "@/lib/utils";
  *  - onPick(url): trả về URL ảnh đã chọn để gửi đi
  */
 
-const GIPHY_KEY = process.env.NEXT_PUBLIC_GIPHY_KEY || "";
+const DEFAULT_GIPHY_KEY = "Buzga2KS4vdI4PyaGh2NWs4PxwZZyyYc";
+const GIPHY_KEY = process.env.NEXT_PUBLIC_GIPHY_KEY || DEFAULT_GIPHY_KEY;
 const PAGE_SIZE = 24;
 const FOCUS = "outline-none focus-visible:ring-2 focus-visible:ring-sky-500";
 

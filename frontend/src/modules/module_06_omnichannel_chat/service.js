@@ -509,11 +509,11 @@ export function postIdFromNotification(notification) {
  *
  * `order` là thứ tự bình luận, chuyển thẳng cho Graph.
  */
-export async function getPostDetails(postId, pageId, order) {
+export async function getPostDetails(postId, pageId, order, { fresh = false } = {}) {
   const params = { page_id: pageId };
   if (order) params.order = order;
 
-  const res = await api.get(`/api/facebook/posts/${encodeURIComponent(postId)}`, { params });
+  const res = await api.get(`/api/facebook/posts/${encodeURIComponent(postId)}`, { params, fresh });
   return res || {};
 }
 

@@ -396,7 +396,44 @@ async def process_webhook_event(event: Dict[str, Any]):
 
                         prefix = "👥 [Nhóm]" if is_group_post else "📌 [Trang]"
 
-                        if item == "comment":
+                        # Xử lý trường hợp BỎ THÍCH / BỎ TƯƠNG TÁC (verb == "remove"):
+                        # Tuyệt đối không tạo thông báo mới và không tăng số lượng thông báo chưa đọc.
+                        # Nếu trước đó người này đã từng like và tạo notification, ta xoá thông báo đó đi.
+                        if item in ("like", "reaction") and verb == "remove":
+                            # Tìm thông báo tương tác đã tạo trước đó của người này với bài viết hoặc bình luận
+                            existing_react_notif = db.query(Notification).filter(
+                                Notification.page_id == page_id,
+                                or_(
+                                    Notification.facebook_notification_id == f"{comment_id or post_id}_{item}_add_{sender_id}",
+                                    Notification.facebook_notification_id == f"{comment_id or post_id}_like_add_{sender_id}",
+                                    Notification.facebook_notification_id == f"{comment_id or post_id}_reaction_add_{sender_id}",
+                                    Notification.facebook_notification_id == f"react_{comment_id or post_id}_{sender_id}",
+                                    Notification.facebook_notification_id == f"{comment_id or post_id}_{sender_id}",
+                                )
+                            ).first()
+
+                            if existing_react_notif:
+                                removed_notif_id = existing_react_notif.id
+                                was_unread = existing_react_notif.unread
+                                notif_type = existing_react_notif.notification_type or "reaction"
+                                db.delete(existing_react_notif)
+                                db.commit()
+
+                                # Phát sự kiện xóa thông báo realtime tới Frontend để giảm badge và xóa khỏi danh sách
+                                await manager.broadcast({
+                                    "type": "notification_remove",
+                                    "page_id": str(page_id),
+                                    "data": {
+                                        "id": removed_notif_id,
+                                        "page_id": str(page_id),
+                                        "was_unread": was_unread,
+                                        "notification_type": notif_type,
+                                    }
+                                })
+                            # Không tạo thông báo mới khi bỏ tương tác
+                            title = None
+                            notif_id = None
+                        elif item == "comment":
                             title = f"{prefix} {sender_name} đã bình luận: \"{message_text}\""
                         elif item in ("like", "reaction"):
                             reaction_type = value.get("reaction_type") or "like"
@@ -423,7 +460,9 @@ async def process_webhook_event(event: Dict[str, Any]):
 
                         # Với reaction (cảm xúc), ID thông báo notification cần gắn với sender_id và verb
                         # để không bị trùng với chính comment_id của bình luận đã tạo trước đó
-                        if item in ("like", "reaction"):
+                        if not title:
+                            pass
+                        elif item in ("like", "reaction"):
                             notif_id = f"{comment_id or post_id}_{item}_{verb}_{sender_id}"
                         else:
                             notif_id = comment_id if comment_id else f"{post_id}_{item}_{verb}_{sender_id}"

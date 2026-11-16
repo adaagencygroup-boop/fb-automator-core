@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { createPortal } from "react-dom";
 import {
   FolderPlus,
@@ -11,6 +12,7 @@ import {
 import CustomSelect from "@/components/ui/custom-select";
 
 export default function GroupListModals({
+  groups = [],
   mounted = true,
   showAddCatModal,
   onCloseAddCatModal,
@@ -35,6 +37,8 @@ export default function GroupListModals({
   onCloseMenu,
   onOpenEditFromMenu,
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
   if (!mounted) return null;
 
   return createPortal(
@@ -130,19 +134,43 @@ export default function GroupListModals({
                 onKeyDown={(e) => e.key === "Enter" && onEditCategory()}
               />
             </div>
+            {confirmDelete ? (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 p-2.5 text-xs text-amber-800 space-y-1 animate-in fade-in">
+                <p className="font-semibold flex items-center gap-1">
+                  <span>⚠️ Cảnh báo an toàn (BR-GIS-09.1)</span>
+                </p>
+                <p className="text-[11px] leading-relaxed">
+                  Xóa danh mục sẽ chuyển các nhóm con về mục "Tất cả nhóm đã quét". Bấm xác nhận để xóa vĩnh viễn danh mục này.
+                </p>
+              </div>
+            ) : null}
             <div className="flex items-center justify-between pt-2">
               <button
                 type="button"
-                onClick={() => onDeleteCategory(activeCategoryId)}
-                className="px-3 py-1.5 rounded-lg border border-red-200 text-xs font-medium text-red-600 hover:bg-red-50 flex items-center gap-1.5"
+                onClick={() => {
+                  if (!confirmDelete) {
+                    setConfirmDelete(true);
+                  } else {
+                    onDeleteCategory(activeCategoryId);
+                    setConfirmDelete(false);
+                  }
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                  confirmDelete
+                    ? "bg-red-600 text-white hover:bg-red-700 shadow-sm"
+                    : "border border-red-200 text-red-600 hover:bg-red-50"
+                }`}
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Xóa danh mục</span>
+                <span>{confirmDelete ? "Xác nhận xóa vĩnh viễn" : "Xóa danh mục"}</span>
               </button>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={onCloseEditCatModal}
+                  onClick={() => {
+                    setConfirmDelete(false);
+                    onCloseEditCatModal();
+                  }}
                   className="px-3.5 py-1.5 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50"
                 >
                   Hủy

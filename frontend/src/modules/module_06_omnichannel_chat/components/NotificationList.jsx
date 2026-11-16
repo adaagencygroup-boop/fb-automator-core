@@ -70,7 +70,7 @@ function SubTabs({ type, onTypeChange, counts }) {
             )}
           >
             <span>{t.label}</span>
-            {count > 0 && <span className="text-xs">({count})</span>}
+            <span className="text-xs">({count})</span>
           </button>
         );
       })}

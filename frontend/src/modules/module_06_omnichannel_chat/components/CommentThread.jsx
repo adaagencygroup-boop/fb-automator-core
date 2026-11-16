@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Avatar, relativeTime } from "./atoms";
 import PrivateReplyDialog from "./PrivateReplyDialog";
@@ -102,6 +102,8 @@ function CommentAttachment({ attachment, depth = 0 }) {
   const href = attachment.url || attachment.target?.url || null;
   const subs = attachment.subattachments?.data;
 
+  const [videoError, setVideoError] = useState(false);
+
   // Nhiều ảnh trong một bình luận -> vẽ từng cái
   if (Array.isArray(subs) && subs.length > 0) {
     return (
@@ -113,14 +115,77 @@ function CommentAttachment({ attachment, depth = 0 }) {
     );
   }
 
-  if (media.source) {
+  // Đính kèm là video (media.source hoặc type video_inline)
+  const isVideo = Boolean(media.source || kind === "video_inline");
+  if (isVideo) {
+    const videoSrc = media.source || null;
+    const fbVideoLink = href || attachment.target?.url || (attachment.target?.id ? `https://www.facebook.com/watch/?v=${attachment.target.id}` : null);
+
+    if (videoSrc && !videoError) {
+      return (
+        <div className="mt-1.5 flex flex-col items-start gap-1">
+          <video
+            src={videoSrc}
+            poster={img.src || undefined}
+            controls
+            preload="metadata"
+            playsInline
+            onError={() => setVideoError(true)}
+            className="w-full max-w-[260px] rounded-lg bg-black object-contain shadow-sm"
+          />
+          {fbVideoLink && (
+            <a
+              href={fbVideoLink}
+              target="_blank"
+              rel="noreferrer"
+              className={cn("inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-blue-600 hover:underline", FOCUS)}
+            >
+              <span>Xem trên Facebook</span>
+              <ExternalLink className="size-3" />
+            </a>
+          )}
+        </div>
+      );
+    }
+
+    // Khi video đang được Facebook xử lý hoặc gặp lỗi link
+    const isProcessing = !videoSrc;
     return (
-      <video
-        src={media.source}
-        poster={img.src || undefined}
-        controls
-        className="mt-1.5 w-full max-w-[260px] rounded-lg bg-black"
-      />
+      <div className="mt-1.5 flex flex-col items-start gap-1.5">
+        <div className="relative flex flex-col items-center justify-center overflow-hidden rounded-lg bg-slate-900 w-[240px] aspect-[4/3] text-white">
+          {img.src ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={img.src}
+              alt="Video preview"
+              loading="lazy"
+              className="absolute inset-0 h-full w-full object-cover opacity-60"
+            />
+          ) : null}
+          {isProcessing ? (
+            <div className="relative z-10 flex flex-col items-center gap-1.5 p-3 text-center">
+              <Loader2 className="size-6 animate-spin text-white/90" />
+              <span className="text-xs font-medium text-white/90">Facebook đang xử lý video…</span>
+              <span className="text-[10px] text-white/70">Video sẽ sớm sẵn sàng để phát</span>
+            </div>
+          ) : (
+            <div className="relative z-10 flex flex-col items-center gap-1 p-2 text-center">
+              <span className="text-xs font-medium text-white/90">Không thể phát trực tiếp video</span>
+            </div>
+          )}
+        </div>
+        {fbVideoLink && (
+          <a
+            href={fbVideoLink}
+            target="_blank"
+            rel="noreferrer"
+            className={cn("inline-flex items-center gap-1.5 rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 hover:underline", FOCUS)}
+          >
+            <span>Mở xem video trên Facebook</span>
+            <ExternalLink className="size-3.5" />
+          </a>
+        )}
+      </div>
     );
   }
 
@@ -228,9 +293,20 @@ function CommentCard({
     };
   }, [comment.id]);
 
+  const name = comment?.from?.name || "Người dùng";
+  if (removed) return null;
+
   const hasText = Boolean(comment?.message);
   const reactions = Math.max(0, reactionCountOf(comment) + likeDelta);
   const canLike = comment?.can_like !== false;
+  // Bình luận của chính Page: kiểm tra ID người gửi có trùng ID Page hoặc tên trùng tên Page
+  const isSelf = Boolean(
+    (comment?.from?.id && pageId && String(comment.from.id) === String(pageId)) ||
+    (pageName && comment?.from?.name && comment.from.name.trim().toLowerCase() === pageName.trim().toLowerCase())
+  );
+  // Không cho gửi tin nhắn cho chính mình
+  const canSendPrivateMessage = !isSelf;
+
   // Thiếu `summary` thì vẫn còn `paging.next` để biết còn nữa hay không
   const remainingReplies = Math.max(0, countOf(seeded) - replies.length);
   const canLoadReplies = moreReplies || remainingReplies > 0;
@@ -428,13 +504,15 @@ function CommentCard({
           >
             Trả lời
           </button>
-          <button
-            type="button"
-            onClick={() => setMessaging(true)}
-            className={cn("font-semibold text-blue-600 hover:underline", FOCUS)}
-          >
-            Gửi tin nhắn
-          </button>
+          {canSendPrivateMessage && (
+            <button
+              type="button"
+              onClick={() => setMessaging(true)}
+              className={cn("font-semibold text-blue-600 hover:underline", FOCUS)}
+            >
+              Gửi tin nhắn
+            </button>
+          )}
           <button
             type="button"
             onClick={toggleHide}

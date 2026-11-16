@@ -39,7 +39,8 @@ COMMENT_FIELDS = (
     # nhan nguoi binh luan (truong `link` cua User bi gat im lang, va `from.id`
     # la app-scoped ID khong phai dia chi cong khai), nen day la duong vong:
     # mo binh luan roi bam vao ten, de Facebook tu phan giai danh tinh.
-    "id,message,created_time,like_count,is_hidden,user_likes,can_like,permalink_url,"
+    # can_reply_privately -> kiem tra quyen gui tin nhan rieng tu Facebook
+    "id,message,created_time,like_count,is_hidden,user_likes,can_like,can_reply_privately,permalink_url,"
     "from{id,name,picture.width(100).height(100){url}},"
     "reactions.summary(total_count),"
     "attachment{media,target,type,url,subattachments},parent{id}"

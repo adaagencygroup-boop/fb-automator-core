@@ -8,7 +8,15 @@ import {
 import { toast } from "@/lib/toast";
 import AccountSelectModal, { isScanReady } from "../components/AccountSelectModal";
 import GroupPickerModal from "../components/GroupPickerModal";
-import { getScanAccounts, getScanCategories, getScannedGroups } from "../service";
+import {
+  controlMemberScan,
+  getMemberScanStatus,
+  getScanAccounts,
+  getScanCategories,
+  getScannedGroups,
+  getScannedMembers,
+  startMemberScan,
+} from "../service";
 import AccountGroupPickerCard from "./_components/AccountGroupPickerCard";
 import AdvancedScanFilterCard from "./_components/AdvancedScanFilterCard";
 import GroupPreviewSection from "./_components/GroupPreviewSection";
@@ -85,18 +93,44 @@ export default function GroupScanMembersPage() {
   // Load available groups & categories from Database
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState("");
-  const [members, ] = useState([]);
+  const [members, setMembers] = useState([]);
 
-  useEffect(() => {
-    getScannedGroups()
-      .then((res) => {
-        const list = res?.groups || [];
-        setAvailableGroups(
-          list.map((g, idx) => ({
-            id: g.id || g.group_id,
+  const loadCategoriesAndGroups = useCallback(async () => {
+    try {
+      const res = await getScannedGroups();
+      const list = res?.groups || [];
+      setAvailableGroups(
+        list.map((g, idx) => {
+          const rawGid = String(g.group_id || g.uid || "");
+          const dbId = g.id;
+          let realGid = "";
+          let rawUrl = String(g.url || g.href || "");
+          if (rawUrl.includes("/groups/")) {
+            const parts = rawUrl.split("/groups/")[1].split("/")[0].split("?")[0].trim();
+            if (parts && !/^\d{1,7}$/.test(parts)) {
+              realGid = parts;
+            }
+          }
+          if (!realGid) {
+            if (rawGid && !/^\d{1,7}$/.test(rawGid)) {
+              realGid = rawGid;
+            }
+          }
+          let realUrl = "";
+          if (rawUrl && !/\/groups\/\d{1,7}(?:[/?#]|$)/.test(rawUrl)) {
+            realUrl = rawUrl;
+          } else if (realGid && !/^\d{1,7}$/.test(realGid)) {
+            realUrl = `https://www.facebook.com/groups/${realGid}`;
+          }
+
+          return {
+            id: realGid || String(dbId || idx),
+            groupId: realGid,
+            group_id: realGid,
+            dbId: dbId,
             stt: String(idx + 1).padStart(2, "0"),
-            name: g.name || g.group_id,
-            uid: g.group_id || g.id,
+            name: g.name || g.group_name || realGid || `Nhóm #${dbId}`,
+            uid: realGid,
             tag: (g.name || "FB").slice(0, 2).toUpperCase(),
             tagBg: "bg-[#DBEAFE]",
             tagText: "text-[#2563EB]",
@@ -104,35 +138,61 @@ export default function GroupScanMembersPage() {
             typeLabel: g.type === "private" ? "Riêng tư" : "Công khai",
             members: g.members || "—",
             memberCount: g.membersCount || 0,
-          }))
-        );
-      })
-      .catch(() => setAvailableGroups([]));
+            url: realUrl,
+          };
+        })
+      );
+    } catch {
+      setAvailableGroups([]);
+    }
 
-    getScanCategories()
-      .then((data) => {
-        const cats = Array.isArray(data) ? data : [];
-        setCategories(
-          cats.map((c) => ({
-            id: c.id,
-            name: c.name,
-            stats: `${c.count || 0} nhóm FB`,
-            membersTotal: 0,
-            memberSizeStr: "0",
-          }))
-        );
-        if (cats.length > 0) {
-          setSelectedCategory(cats[0].id);
-        } else {
-          setSelectedCategory("");
-        }
-      })
-      .catch(() => setCategories([]));
+    try {
+      const data = await getScanCategories();
+      const cats = Array.isArray(data) ? data : [];
+      setCategories(
+        cats.map((c) => ({
+          id: c.id,
+          name: c.name,
+          stats: `${c.count || 0} nhóm FB`,
+          membersTotal: 0,
+          memberSizeStr: "0",
+        }))
+      );
+      if (cats.length > 0) {
+        setSelectedCategory((prev) => (prev && cats.some((c) => c.id === prev) ? prev : cats[0].id));
+      } else {
+        setSelectedCategory("");
+      }
+    } catch {
+      setCategories([]);
+    }
   }, []);
+
+  useEffect(() => {
+    loadCategoriesAndGroups();
+  }, [loadCategoriesAndGroups]);
+
+  // Nạp thành viên đã quét từ CSDL
+  const loadDatabaseMembers = useCallback(async (catId) => {
+    try {
+      const res = await getScannedMembers({ category_id: catId, page_size: 100 });
+      if (res?.members && Array.isArray(res.members)) {
+        setMembers(res.members);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedCategory) {
+      loadDatabaseMembers(selectedCategory);
+    }
+  }, [selectedCategory, loadDatabaseMembers]);
 
   // --- Section 2: Config Steppers & Checkboxes ---
   const [minDelay, setMinDelay] = useState(5);
-  const [maxDelay, setMaxDelay] = useState(5);
+  const [maxDelay, setMaxDelay] = useState(10);
   const [switchAccThreshold, setSwitchAccThreshold] = useState(50);
   const [membersLimit, setMembersLimit] = useState(50);
 
@@ -148,9 +208,55 @@ export default function GroupScanMembersPage() {
   const [currentPage, setCurrentPage] = useState(1);
 
   // --- Section 5: Logs & Execution ---
-  const [logs, setLogs] = useState([]);
+  const [logs, setLogs] = useState([
+    {
+      time: "—",
+      thread: "System",
+      message: "Module 10.2 sẵn sàng. Chọn tài khoản & nhóm cần quét thành viên, sau đó bấm Bắt đầu thực thi.",
+      color: "text-slate-300",
+    },
+  ]);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [activeJobId, setActiveJobId] = useState(null);
   const [copiedLog, setCopiedLog] = useState(false);
+
+  // Polling Live Status
+  useEffect(() => {
+    if (!isExecuting || !activeJobId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await getMemberScanStatus({ jobId: activeJobId });
+        const job = res?.job;
+        if (!job) return;
+
+        if (Array.isArray(job.logs) && job.logs.length > 0) {
+          setLogs(job.logs);
+        }
+
+        if (Array.isArray(job.members) && job.members.length > 0) {
+          setMembers(job.members);
+        }
+
+        if (job.status === "done" || job.status === "aborted" || job.status === "error") {
+          setIsExecuting(false);
+          setActiveJobId(null);
+          if (job.status === "done") {
+            toast.success(`Đã hoàn thành phiên quét! Thu thập được ${job.total_members_scanned || 0} thành viên.`);
+            if (selectedCategory) loadDatabaseMembers(selectedCategory);
+          } else if (job.status === "aborted") {
+            toast.info("Phiên quét đã dừng lại.");
+          } else if (job.status === "error") {
+            toast.error(job.error || "Phiên quét gặp sự cố!");
+          }
+        }
+      } catch {
+        // Polling error ignored
+      }
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [isExecuting, activeJobId, selectedCategory, loadDatabaseMembers]);
 
   // Handle Remove Group from Preview Table
   const handleRemoveGroup = (groupId) => {
@@ -159,19 +265,17 @@ export default function GroupScanMembersPage() {
   };
 
   // Handle Execute Toggle
-  const handleToggleExecution = () => {
+  const handleToggleExecution = async () => {
     if (isExecuting) {
+      if (activeJobId) {
+        try {
+          await controlMemberScan({ jobId: activeJobId, action: "abort" });
+        } catch {
+          // ignore
+        }
+      }
       setIsExecuting(false);
       toast.info("Đã dừng tiến trình quét thành viên nhóm.");
-      setLogs((prev) => [
-        ...prev,
-        {
-          time: new Date().toLocaleTimeString("vi-VN", { hour12: false }),
-          thread: "Thread-01",
-          color: "text-rose-400",
-          message: "Người dùng đã tạm dừng tiến trình quét.",
-        },
-      ]);
     } else {
       if (selectedUids.length === 0) {
         toast.error("Vui lòng chọn ít nhất một tài khoản thực thi!");
@@ -181,23 +285,60 @@ export default function GroupScanMembersPage() {
         toast.error("Vui lòng chọn ít nhất một nhóm để quét!");
         return;
       }
-      setIsExecuting(true);
-      toast.success("Bắt đầu tiến trình quét thành viên nhóm...");
-      setLogs((prev) => [
-        ...prev,
-        {
-          time: new Date().toLocaleTimeString("vi-VN", { hour12: false }),
-          thread: "Thread-01",
-          color: "text-emerald-400",
-          message: `[Bắt đầu quét] Kích hoạt ${selectedUids.length} tài khoản thực thi cho ${selectedGroups.length} nhóm...`,
-        },
-        {
-          time: new Date().toLocaleTimeString("vi-VN", { hour12: false }),
-          thread: "Thread-01",
-          color: "text-slate-300",
-          message: `Cấu hình: Delay ${minDelay}-${maxDelay}s, Đổi nick sau ${switchAccThreshold} nhóm, Giới hạn ${membersLimit} TV/nhóm.`,
-        },
-      ]);
+      if (selectedGroups.length > 20) {
+        toast.warning("Số lượng nhóm mục tiêu trong một phiên quét không được vượt quá 20 nhóm để bảo đảm an toàn tài khoản!");
+        return;
+      }
+      if (minDelay > maxDelay) {
+        toast.error("Thời gian trễ tối đa phải lớn hơn hoặc bằng thời gian tối thiểu!");
+        return;
+      }
+      if (maxDelay > 3600) {
+        toast.error("Thời gian trễ tối đa không được vượt quá 3600 giây!");
+        return;
+      }
+
+      try {
+        setIsExecuting(true);
+        setLogs([
+          {
+            time: new Date().toLocaleTimeString("vi-VN", { hour12: false }),
+            thread: "Thread-01",
+            color: "text-emerald-400",
+            message: `[Bắt đầu quét] Kích hoạt ${selectedUids.length} tài khoản thực thi cho ${selectedGroups.length} nhóm...`,
+          },
+          {
+            time: new Date().toLocaleTimeString("vi-VN", { hour12: false }),
+            thread: "Thread-01",
+            color: "text-slate-300",
+            message: `Cấu hình: Delay ${minDelay}-${maxDelay}s, Đổi nick sau ${switchAccThreshold} nhóm, Giới hạn ${membersLimit} TV/nhóm.`,
+          },
+        ]);
+
+        const res = await startMemberScan({
+          uids: selectedUids,
+          groups: selectedGroups,
+          delay_min: minDelay,
+          delay_max: maxDelay,
+          switch_acc_threshold: switchAccThreshold,
+          members_limit: membersLimit,
+          skip_admin: skipAdmin,
+          auto_dedupe: autoDedupe,
+          new_members_only: newMembersOnly,
+        });
+
+        if (res?.job_id) {
+          setActiveJobId(res.job_id);
+          toast.success("Bắt đầu tiến trình quét thành viên nhóm...");
+        } else {
+          setIsExecuting(false);
+          toast.error("Không thể khởi động phiên quét!");
+        }
+      } catch (err) {
+        setIsExecuting(false);
+        const errMsg = err?.response?.data?.detail || err?.message || "Đã xảy ra lỗi";
+        toast.error(`Khởi chạy thất bại: ${errMsg}`);
+      }
     }
   };
 
@@ -223,12 +364,13 @@ export default function GroupScanMembersPage() {
     return members.filter((m) => {
       const matchQuery =
         !memberSearch.trim() ||
-        m.name.toLowerCase().includes(memberSearch.toLowerCase()) ||
-        m.uid.includes(memberSearch.trim());
+        (m.name || "").toLowerCase().includes(memberSearch.toLowerCase()) ||
+        String(m.uid || "").includes(memberSearch.trim());
+      const fCount = Number(m.friendCount || m.friend_count || 0);
       const matchFriend =
         friendFilter === "all" ||
-        (friendFilter === "under500" && m.friendCount <= 500) ||
-        (friendFilter === "over500" && m.friendCount > 500);
+        (friendFilter === "under500" && fCount <= 500) ||
+        (friendFilter === "over500" && fCount > 500);
       return matchQuery && matchFriend;
     });
   }, [members, memberSearch, friendFilter]);
@@ -237,19 +379,26 @@ export default function GroupScanMembersPage() {
   const totalPages = Math.max(1, Math.ceil(filteredMembers.length / pageSize));
   const paginatedMembers = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
-    return filteredMembers.slice(start, start + pageSize);
+    return filteredMembers.slice(start, start + pageSize).map((m, idx) => ({
+      ...m,
+      id: m.id || m.uid || `mem-${idx}`,
+      stt: String(start + idx + 1).padStart(2, "0"),
+      shortUid: m.uid ? (m.uid.length > 15 ? `${m.uid.slice(0, 6)}...${m.uid.slice(-4)}` : m.uid) : "—",
+      friends: (m.friendCount || m.friend_count) ? `${(m.friendCount || m.friend_count).toLocaleString("vi-VN")} bạn` : "—",
+      time: m.scanned_at || m.time || "Vừa xong",
+    }));
   }, [filteredMembers, currentPage, pageSize]);
 
   // Select all members toggle
   const allFilteredSelected =
-    filteredMembers.length > 0 &&
-    filteredMembers.every((m) => selectedMembers.has(m.id));
+    paginatedMembers.length > 0 &&
+    paginatedMembers.every((m) => selectedMembers.has(m.id));
 
   const handleToggleSelectAllMembers = () => {
     if (allFilteredSelected) {
       setSelectedMembers(new Set());
     } else {
-      setSelectedMembers(new Set(filteredMembers.map((m) => m.id)));
+      setSelectedMembers(new Set(paginatedMembers.map((m) => m.id)));
     }
   };
 
@@ -265,26 +414,61 @@ export default function GroupScanMembersPage() {
   const currentCategoryData =
     categories.find((c) => c.id === selectedCategory) || categories[0] || null;
 
-  // Export handlers
-  const handleExportAll = () => {
-    if (members.length === 0) {
+  // Export CSV Helper (UC-GMS-06)
+  const exportMembersCsv = (memberList, title = "MemberScraping") => {
+    if (!memberList || memberList.length === 0) {
       toast.warning("Chưa có thành viên nào để xuất!");
       return;
     }
-    toast.success(`Đang trích xuất toàn bộ ${members.length} thành viên ra file Excel / CSV...`);
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+    const filename = `${title}_${ts}.csv`;
+
+    const headers = ["STT", "Họ tên", "UID Facebook", "Nhóm", "Link cá nhân", "Số bạn bè", "Vai trò", "Thời gian quét"];
+    const rows = memberList.map((m, idx) => [
+      idx + 1,
+      `"${(m.name || "").replace(/"/g, '""')}"`,
+      `\t${m.uid}`, // Prefix tab to guarantee text interpretation in Excel
+      `"${(m.group_name || m.group_id || "").replace(/"/g, '""')}"`,
+      `"${(m.profile_url || `https://www.facebook.com/${m.uid}`).replace(/"/g, '""')}"`,
+      m.friendCount ?? m.friend_count ?? 0,
+      m.role === "admin" ? "Quản trị viên" : m.role === "moderator" ? "Kiểm duyệt viên" : "Thành viên",
+      `"${m.scanned_at || ""}"`,
+    ]);
+
+    const csvContent = "\uFEFF" + [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    toast.success(`Đã xuất ${memberList.length} thành viên ra tệp: ${filename}`);
+  };
+
+  const handleExportAll = () => {
+    if (isExecuting) {
+      toast.warning("Đang quét thành viên, vui lòng đợi hoàn tất hoặc dừng tiến trình trước khi xuất file!");
+      return;
+    }
+    exportMembersCsv(members, "MemberScraping_All");
   };
 
   const handleExportGroup = () => {
-    if (!currentCategoryData) {
-      toast.warning("Vui lòng chọn một danh mục nhóm!");
+    if (isExecuting) {
+      toast.warning("Đang quét thành viên, vui lòng đợi hoàn tất hoặc dừng tiến trình trước khi xuất file!");
       return;
     }
-    toast.success(`Đang xuất file thành viên của nhóm: ${currentCategoryData.name}...`);
+    const catName = currentCategoryData?.name || "Group";
+    exportMembersCsv(filteredMembers, `MemberScraping_${catName.replace(/[^a-zA-Z0-9]/g, "_")}`);
   };
 
   return (
     <>
-      {/* Ẩn nút mũi tên tăng giảm số chỉ cho riêng Module 10 */}
       <style>{`
         input[type="number"]::-webkit-inner-spin-button,
         input[type="number"]::-webkit-outer-spin-button {

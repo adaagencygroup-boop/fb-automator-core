@@ -10,8 +10,6 @@ import {
   Square,
   Pause,
   Check,
-  ChevronLeft,
-  ChevronRight,
   ExternalLink,
   Loader2,
   X,
@@ -60,6 +58,8 @@ import {
   normalizeHashtag,
   newCampaignId,
 } from "./campaignUtils";
+import { filterScanResults, toCsv } from "../utils.mjs";
+import { Pager } from "../_shared";
 
 /* ─── Figma tokens (khớp scan-info / node 2889-27377) ─── */
 const FIGMA = {
@@ -181,6 +181,17 @@ function parseRawLinesToPreview(rawText) {
   });
 }
 
+/** line_items của /source/upload (VALID / DUPLICATE / INVALID) → dòng bảng xem trước. */
+function previewRowsFromLineItems(lineItems) {
+  const STATUS = { VALID: "valid", DUPLICATE: "duplicate", INVALID: "invalid" };
+  return (lineItems || []).map((it, idx) => ({
+    id: `srv_${it.line_no ?? idx}_${it.raw_input}`,
+    lineNo: it.line_no ?? idx + 1,
+    raw: it.raw_input || it.page_url || "",
+    status: STATUS[it.status] || "invalid",
+  }));
+}
+
 /* ════════════════════════════════════════════════════════════
    MAIN — Quét thông tin page (layout theo ảnh + tab Hashtag)
    ════════════════════════════════════════════════════════════ */
@@ -202,6 +213,7 @@ export default function PageScannerSearch() {
   const [topN, setTopN] = useState(""); // Top N sau lọc — khác max_results
   const [pasteContent, setPasteContent] = useState("");
   const [uploadResult, setUploadResult] = useState(null);
+  const [uploadFile, setUploadFile] = useState(null); // File gốc — chỉ lưu DB khi bấm Bắt đầu
   const [uploadFileMeta, setUploadFileMeta] = useState(null);
   const [uploadPreviewRows, setUploadPreviewRows] = useState([]);
   const [uploadFilterTab, setUploadFilterTab] = useState("ALL");
@@ -261,9 +273,11 @@ export default function PageScannerSearch() {
   const lastLoadedRef = useRef(0);
   const [poolStats, setPoolStats] = useState({ pool: 0, aboveMin: 0, showing: 0 });
 
-  useEffect(() => {
-    sessionIdsRef.current = sessionIds;
-  }, [sessionIds]);
+  /** Đặt phiên của đợt đang xem — cập nhật ref ngay để loadResults không đọc phiên của đợt trước. */
+  const setActiveSessionIds = useCallback((ids) => {
+    sessionIdsRef.current = ids;
+    setSessionIds(ids);
+  }, []);
 
   const showResults = runPhase !== "idle";
   const isRunning = runPhase === "running";
@@ -346,100 +360,77 @@ export default function PageScannerSearch() {
     };
   }, [isBusy, pushLog]);
 
+  /* Bộ lọc mới nhất cho các vòng poll (tránh closure cũ khi lọc / phân trang trong lúc quét) */
+  const filtersRef = useRef({});
+  filtersRef.current = {
+    pageSize,
+    resultSearch,
+    minFollowersEnabled,
+    minFollowers,
+    maxFollowers,
+    topN,
+    sortDir,
+    filterKeyword,
+    searchMode,
+    terms: [...plainKeywords, ...manualHashtags],
+  };
+  const mergedRef = useRef([]); // pool đã gộp của các phiên đang xem
+  const filteredAllRef = useRef([]); // toàn bộ kết quả sau lọc (chưa phân trang)
+  const currentPageRef = useRef(1);
+  const loadSeqRef = useRef(0);
+
+  /** Lọc + phân trang trên pool đã tải (không gọi lại API). */
+  const applyResultFilters = useCallback((page = 1) => {
+    const f = filtersRef.current;
+    const { pool, aboveMin, filtered } = filterScanResults(mergedRef.current, f);
+    filteredAllRef.current = filtered;
+    const lastPage = Math.max(1, Math.ceil(filtered.length / f.pageSize));
+    const p = Math.min(Math.max(1, page), lastPage);
+    const slice = filtered.slice((p - 1) * f.pageSize, p * f.pageSize);
+    currentPageRef.current = p;
+    setCurrentPage(p);
+    setPages(slice);
+    setTotalCount(filtered.length);
+    setPoolStats({ pool, aboveMin, showing: slice.length });
+  }, []);
+
+  /** Mọi page của 1 phiên (API trả tối đa 200 / lần → tải nối tiếp đến hết). */
+  const fetchAllSessionPages = useCallback(async (id) => {
+    const items = [];
+    for (let p = 1; p <= 50; p += 1) {
+      const data = await getScannedPages({ session_id: id, page: p, page_size: 200, sort_by: "default" });
+      const batch = data.items || [];
+      items.push(...batch);
+      if (!batch.length || items.length >= (Number(data.total) || 0)) break;
+    }
+    return { sessionId: id, items };
+  }, []);
+
+  /**
+   * Tải lại pool kết quả của các phiên (mặc định: phiên của đợt hiện tại) rồi lọc + phân trang.
+   * Đọc phiên / bộ lọc từ ref nên gọi từ vòng poll cũ vẫn đúng; kết quả về muộn bị bỏ qua.
+   */
   const loadResults = useCallback(
     async (sid, page = 1, idsOverride = null) => {
       const ids = (
-        idsOverride ||
-        (sessionIds.length ? sessionIds : sid ? [sid] : [])
+        idsOverride || (sessionIdsRef.current.length ? sessionIdsRef.current : sid ? [sid] : [])
       ).filter(Boolean);
       if (!ids.length) return;
-    setLoadingResults(true);
-    try {
-        const lists = await Promise.all(
-          ids.map(async (id) => {
-      const data = await getScannedPages({
-              session_id: id,
-              page: 1,
-              page_size: 200,
-              sort_by: "default",
-            });
-            return { sessionId: id, items: data.items || [] };
-          }),
-        );
-        let merged = mergePagesByKey(lists, sessionMetaRef.current);
-        const terms = [...plainKeywords, ...manualHashtags];
-        merged = sortPagesForMode(merged, searchMode, terms);
-
-        const pool = merged.length;
-        const maxFl = maxFollowers === "" || maxFollowers == null ? null : Number(maxFollowers);
-        const aboveMin = minFollowersEnabled
-          ? merged.filter((p) => {
-              const fl = p.follower_count || 0;
-              if (fl < minFollowers) return false;
-              if (maxFl != null && Number.isFinite(maxFl) && fl > maxFl) return false;
-              return true;
-            }).length
-          : pool;
-        let filtered = minFollowersEnabled
-          ? merged.filter((p) => {
-              const fl = p.follower_count || 0;
-              if (fl < minFollowers) return false;
-              if (maxFl != null && Number.isFinite(maxFl) && fl > maxFl) return false;
-              return true;
-            })
-          : merged;
-
-        if (resultSearch.trim()) {
-          const q = resultSearch.trim().toLowerCase();
-          filtered = filtered.filter((p) =>
-            `${p.page_name || ""} ${p.page_url || ""} ${p.phone || ""} ${p.email || ""} ${p.website || ""} ${p.address || ""}`
-              .toLowerCase()
-              .includes(q),
-          );
-        }
-        if (filterKeyword !== "ALL") {
-          const needle = filterKeyword.toLowerCase().replace(/^#/, "");
-          filtered = filtered.filter((p) => {
-            const hay = `${p.source_keyword || ""} ${p.matched_hashtags || ""} ${(p.channels || []).join(" ")}`.toLowerCase();
-            return hay.includes(needle);
-          });
-        }
-
-        if (sortDir === "asc") {
-          filtered = [...filtered].reverse();
-        }
-
-        const limitN = topN === "" || topN == null ? null : Number(topN);
-        if (limitN != null && Number.isFinite(limitN) && limitN > 0) {
-          filtered = filtered.slice(0, limitN);
-        }
-
-        const total = filtered.length;
-        const start = (page - 1) * pageSize;
-        const slice = filtered.slice(start, start + pageSize);
-        setPages(slice);
-        setTotalCount(total);
-        setPoolStats({ pool, aboveMin, showing: slice.length });
-    } catch (err) {
-      toast.error(`Lỗi tải kết quả: ${err.message}`);
-    } finally {
-      setLoadingResults(false);
-    }
+      const seq = ++loadSeqRef.current;
+      setLoadingResults(true);
+      try {
+        const lists = await Promise.all(ids.map(fetchAllSessionPages));
+        if (seq !== loadSeqRef.current) return;
+        const f = filtersRef.current;
+        mergedRef.current = sortPagesForMode(mergePagesByKey(lists, sessionMetaRef.current), f.searchMode, f.terms);
+        applyResultFilters(page);
+      } catch (err) {
+        toast.error(`Lỗi tải kết quả: ${err.message}`);
+      } finally {
+        if (seq === loadSeqRef.current) setLoadingResults(false);
+      }
     },
-    [
-      sessionIds,
-      pageSize,
-      resultSearch,
-      minFollowersEnabled,
-      minFollowers,
-      maxFollowers,
-      topN,
-      sortDir,
-      filterKeyword,
-      searchMode,
-      plainKeywords,
-      manualHashtags,
-    ],
+    [applyResultFilters, fetchAllSessionPages],
   );
 
   const startPoll = useCallback(
@@ -455,16 +446,20 @@ export default function PageScannerSearch() {
 
           setKeywordProgress((prev) =>
             prev.map((row) =>
-              row.status === "scanning"
+              row.status === "scanning" || row.status === "paused"
                 ? {
                     ...row,
                     count,
                     status:
                       session.status === "PAUSED"
                         ? "paused"
-                        : DONE_STATUSES.includes(session.status)
-                          ? "done"
-                          : row.status,
+                        : session.status === "FAILED"
+                          ? "error"
+                          : DONE_STATUSES.includes(session.status)
+                            ? "done"
+                            : session.status === "RUNNING"
+                              ? "scanning"
+                              : row.status,
                   }
                 : row,
             ),
@@ -504,14 +499,23 @@ export default function PageScannerSearch() {
             loadResults(sid, 1, ids);
           }
           if (DONE_STATUSES.includes(session.status)) {
-    stopPolling();
+            stopPolling();
+            // Đợt khôi phục sau reload không có vòng runMixedCampaign → tự kết thúc UI,
+            // kể cả khi backend đánh FAILED phiên mồ côi (app đã tắt giữa chừng).
+            if (!campaignRef.current.active) {
+              setRunPhase("done");
+              pushLog(
+                `Phiên #${sid} đã kết thúc · ${session.status}${session.error_message ? ` · ${session.error_message}` : ""}`,
+                session.status === "FAILED" ? "error" : "info",
+              );
+            }
           }
         } catch (e) {
           console.error(e);
         }
       }, 1500);
     },
-    [loadResults, stopPolling],
+    [loadResults, stopPolling, pushLog],
   );
 
   /* Restore đợt đang chạy theo campaign_id (chỉ dẫn 1.3) */
@@ -519,13 +523,13 @@ export default function PageScannerSearch() {
     let ignore = false;
     (async () => {
       try {
-        const data = await getActiveCampaign();
+        const data = await getActiveCampaign("DISCOVERY");
         if (ignore || !data?.active || !(data.sessions || []).length) return;
         const sessions = data.sessions;
         const top = sessions.find((s) => s.id === data.primary_session_id) || sessions[sessions.length - 1];
         setCampaignId(data.campaign_id || null);
         setSessionId(top.id);
-        setSessionIds(sessions.map((s) => s.id));
+        setActiveSessionIds(sessions.map((s) => s.id));
         setRunPhase(top.status === "PAUSED" || data.status === "PAUSED" ? "paused" : "running");
 
         let settings = {};
@@ -616,7 +620,7 @@ export default function PageScannerSearch() {
           const count = session.pages_count || session.total_unique || 0;
           if (count > lastLoadedRef.current) {
             lastLoadedRef.current = count;
-            loadResults(sid, currentPage);
+            loadResults(sid, currentPageRef.current);
           }
           setKeywordProgress((prev) =>
             prev.map((row, idx) => {
@@ -678,7 +682,8 @@ export default function PageScannerSearch() {
     } else if (sourceMode === "paste") {
       if (!pasteContent.trim()) errors.push("Chưa dán link Page.");
     } else if (sourceMode === "upload") {
-      if (!uploadResult) errors.push("Chưa tải file lên.");
+      if (!uploadFile) errors.push("Chưa tải file lên.");
+      else if (uploadResult && !uploadResult.valid_count) errors.push("File không có link Page hợp lệ.");
     }
 
     if (selectedUids.length) {
@@ -702,9 +707,10 @@ export default function PageScannerSearch() {
     const jobs = buildCampaignJobs({ searchMode, keywords: plainKeywords, manualHashtags });
     const campId = newCampaignId();
     setCampaignId(campId);
-    campaignRef.current = { paused: false, abort: false, queue: jobs, accIndex: 0 };
+    campaignRef.current = { paused: false, abort: false, queue: jobs, accIndex: 0, active: true };
     sessionMetaRef.current = {};
-    setSessionIds([]);
+    mergedRef.current = [];
+    setActiveSessionIds([]);
     setKeywordProgress(jobs.map((j) => ({ keyword: j.label, count: 0, status: "pending", channel: j.channel })));
     setRunPhase("running");
 
@@ -800,7 +806,7 @@ export default function PageScannerSearch() {
         };
         setSessionId(sid);
         collectedIds.push(sid);
-        setSessionIds([...collectedIds]);
+        setActiveSessionIds([...collectedIds]);
         startPoll(sid);
         const session = await waitForSession(sid);
         stopPolling();
@@ -835,6 +841,7 @@ export default function PageScannerSearch() {
       }
     }
 
+    campaignRef.current.active = false;
     stopPolling();
     setRunPhase("done");
     if (campaignRef.current.abort) {
@@ -858,6 +865,8 @@ export default function PageScannerSearch() {
     setPoolStats({ pool: 0, aboveMin: 0, showing: 0 });
     lastLoadedRef.current = 0;
     sessionMetaRef.current = {};
+    mergedRef.current = [];
+    filteredAllRef.current = [];
 
     if (sourceMode === "keyword") {
       await runMixedCampaign();
@@ -873,9 +882,9 @@ export default function PageScannerSearch() {
           save_to_db: true,
         });
         setSessionId(res.session_id);
-        setSessionIds(res.session_id ? [res.session_id] : []);
+        setActiveSessionIds(res.session_id ? [res.session_id] : []);
         setKeywordProgress([{ keyword: "Nhập link", count: res.valid_count || 0, status: "done" }]);
-        if (res.session_id) await loadResults(res.session_id, 1);
+        if (res.session_id) await loadResults(res.session_id, 1, [res.session_id]);
         setRunPhase("done");
         pushLog(`Parse xong: ${res.valid_count} hợp lệ / trùng ${res.dedup_count} / lỗi ${res.invalid_count}`, "success");
         toast.success(`Đã nhập ${res.valid_count} Page hợp lệ.`);
@@ -887,15 +896,22 @@ export default function PageScannerSearch() {
         }
     if (sourceMode === "upload") {
       setRunPhase("running");
+      pushLog(`Đang lưu danh sách page từ file "${uploadFile?.name || "file"}"…`, "info");
       try {
-        setSessionId(uploadResult.session_id);
-        setSessionIds(uploadResult.session_id ? [uploadResult.session_id] : []);
-        setKeywordProgress([{ keyword: "Upload file", count: uploadResult.valid_count || 0, status: "done" }]);
-        if (uploadResult.session_id) await loadResults(uploadResult.session_id, 1);
+        const formData = new FormData();
+        formData.append("file", uploadFile);
+        const saved = await uploadPageFile(formData, { save_to_db: true, filter_existing: true });
+        setUploadResult(saved);
+        setSessionId(saved.session_id || null);
+        setActiveSessionIds(saved.session_id ? [saved.session_id] : []);
+        setKeywordProgress([{ keyword: "Upload file", count: saved.valid_count || 0, status: "done" }]);
+        if (saved.session_id) {
+          await loadResults(saved.session_id, 1, [saved.session_id]);
+        }
         setRunPhase("done");
-        pushLog(`Upload: ${uploadResult.valid_count} page đã lưu.`, "success");
-        toast.success(`Đã lưu ${uploadResult.valid_count} Page từ file.`);
-    } catch (err) {
+        pushLog(`Upload: ${saved.valid_count} page đã lưu.`, "success");
+        toast.success(`Đã lưu ${saved.valid_count} Page từ file.`);
+      } catch (err) {
         setRunPhase("done");
         toast.error(err.message);
       }
@@ -947,10 +963,14 @@ export default function PageScannerSearch() {
     toast.warning("Đã dừng khẩn cấp.");
   };
 
+  /* Chọn file = CHỈ xem trước / kiểm tra (không lưu DB). Lưu khi bấm "Bắt đầu thực thi". */
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const rawText = await file.text().catch(() => "");
+    e.target.value = "";
+    const isExcel = /\.xlsx$/i.test(file.name);
+    // .xlsx là file nhị phân → bảng xem trước lấy từ kết quả kiểm tra của server bên dưới
+    const rawText = isExcel ? "" : await file.text().catch(() => "");
     const parsedRows = parseRawLinesToPreview(rawText);
     setUploadPreviewRows(parsedRows);
     setUploadFileMeta({
@@ -958,83 +978,88 @@ export default function PageScannerSearch() {
       sizeKb: Math.max(0.1, Number((file.size / 1024).toFixed(1))),
       totalRows: parsedRows.length,
     });
+    setUploadFile(file);
+    setUploadResult(null);
     const formData = new FormData();
     formData.append("file", file);
     try {
-      const res = await uploadPageFile(formData);
+      const res = await uploadPageFile(formData, { save_to_db: false, filter_existing: true });
       setUploadResult(res);
-      toast.success(`Đã nhận diện ${parsedRows.length || res.valid_count} dòng dữ liệu từ "${file.name}"`);
+      // Bảng xem trước theo đúng kết quả kiểm tra của server (giống lúc lưu)
+      const serverRows = previewRowsFromLineItems(res.line_items);
+      if (serverRows.length) {
+        setUploadPreviewRows(serverRows);
+        setUploadFileMeta((m) => (m ? { ...m, totalRows: serverRows.length } : m));
+      }
+      toast.success(
+        `Đã nhận diện ${serverRows.length || parsedRows.length || res.valid_count} dòng dữ liệu từ "${file.name}"`,
+      );
     } catch (err) {
       toast.error(`Lỗi đọc file: ${err.message}`);
     }
-    e.target.value = "";
   };
 
+  /* "Xuất toàn bộ file" = TOÀN BỘ kết quả đang lọc của đợt (mọi phiên, mọi trang), không chỉ trang đang xem */
   const handleExportCSV = () => {
-    if (!pages.length) return;
-    const headers = ["STT", "Từ khóa", "Tên Page", "Link Page", "SĐT", "Email", "Website", "Vị trí / Địa chỉ", "Tích xanh"];
-    const rows = pages.map((p, i) => [
-      (currentPage - 1) * pageSize + i + 1,
+    const rowsSrc = filteredAllRef.current;
+    if (!rowsSrc.length) {
+      toast.warning("Chưa có page để xuất.");
+      return;
+    }
+    const headers = [
+      "STT", "Từ khóa", "Tên Page", "Link Page", "Followers", "SĐT", "Email", "Website", "Vị trí / Địa chỉ", "Tích xanh",
+    ];
+    const rows = rowsSrc.map((p, i) => [
+      i + 1,
       pageKeywordLabel(p) === "—" ? (filterKeyword !== "ALL" ? filterKeyword : "") : pageKeywordLabel(p),
       p.page_name || "",
       p.page_url || "",
+      p.follower_count ?? "",
       p.phone || "",
       p.email || "",
       p.website || "",
       p.address || "",
       p.is_verified === true ? "Có" : "",
     ]);
-    const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+    const blob = new Blob(["\uFEFF" + toCsv(headers, rows)], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `quet_page_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    toast.success("Đã xuất file CSV.");
+    toast.success(`Đã xuất ${rowsSrc.length.toLocaleString("vi-VN")} page ra file CSV.`);
   };
 
-  /* Q6 — tick → lưu tick; chưa tick → lưu toàn bộ đang lọc (trang hiện tại + nếu có thể lấy thêm) */
-  const handleSaveList = async () => {
-    let toSave = pages.filter((p) => selectedPageKeys.includes(p.page_key));
-    if (!toSave.length) {
-      toSave = [...pages];
-      if (sessionId && totalCount > pages.length) {
-        try {
-          const all = await getScannedPages({
-            session_id: sessionId,
-            page: 1,
-            page_size: Math.min(totalCount, 200),
-            keyword: resultSearch || undefined,
-            min_followers: minFollowersEnabled ? minFollowers : undefined,
-            sort_by: "followers",
-            sort_dir: sortDir,
-          });
-          toSave = all.items || toSave;
-        } catch {
-          /* dùng trang hiện tại */
-        }
-      }
-    }
-    if (!toSave.length) {
+  /* "Lưu danh sách": có tick → các page đã tick (ở mọi trang); không tick → toàn bộ kết quả đang lọc của đợt */
+  const handleSaveList = () => {
+    const all = filteredAllRef.current;
+    const picked = selectedPageKeys.length ? all.filter((p) => selectedPageKeys.includes(p.page_key)) : all;
+    if (!picked.length) {
       toast.warning("Không có page để lưu.");
       return;
     }
-    const entry = savePageList({ pages: toSave });
+    const entry = savePageList({ pages: picked });
     toast.success(`Đã lưu ${entry.count} page vào danh sách "${entry.name}".`);
     pushLog(`Lưu danh sách: ${entry.count} page.`, "success");
   };
 
-  /* Reload bảng khi đổi lọc / sort (sau khi đã có phiên) */
+  /* Đổi lọc / sắp xếp → lọc lại trên pool đã tải (không cần gọi lại API) */
   useEffect(() => {
-    if (!sessionId || runPhase === "idle") return undefined;
-    const t = setTimeout(() => {
-      setCurrentPage(1);
-      loadResults(sessionId, 1);
-    }, 300);
+    if (runPhase === "idle") return undefined;
+    const t = setTimeout(() => applyResultFilters(1), 200);
     return () => clearTimeout(t);
-  }, [resultSearch, filterKeyword, minFollowersEnabled, minFollowers, sortDir, sessionId, runPhase, loadResults]);
+  }, [
+    resultSearch,
+    filterKeyword,
+    minFollowersEnabled,
+    minFollowers,
+    maxFollowers,
+    topN,
+    sortDir,
+    runPhase,
+    applyResultFilters,
+  ]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const keywordOptions = useMemo(() => {
@@ -1298,14 +1323,15 @@ export default function PageScannerSearch() {
                   <FileUp className="size-5" />
                 </div>
                 <span className="text-xs font-semibold text-[#0F172A]">
-                  Kéo thả file <span className="text-[#1877F2]">.txt</span> hoặc{" "}
-                  <span className="text-[#1877F2]">.csv</span> vào đây hoặc{" "}
+                  Kéo thả file <span className="text-[#1877F2]">.txt</span>,{" "}
+                  <span className="text-[#1877F2]">.csv</span> hoặc{" "}
+                  <span className="text-[#1877F2]">.xlsx</span> vào đây hoặc{" "}
                   <span className="text-[#1877F2] underline">Bấm để tải lên</span>
                 </span>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".txt,.csv"
+                  accept=".txt,.csv,.xlsx"
                   className="hidden"
                   onChange={handleFileUpload}
                 />
@@ -1677,7 +1703,9 @@ export default function PageScannerSearch() {
                           ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                           : row.status === "scanning"
                             ? "border-amber-200 bg-amber-50 text-amber-700"
-                            : "border-[#E2E8F0] bg-[#F8FAFC] text-[#64748B]"
+                            : row.status === "error"
+                              ? "border-rose-200 bg-rose-50 text-rose-700"
+                              : "border-[#E2E8F0] bg-[#F8FAFC] text-[#64748B]"
                       }`}
                     >
                       {row.keyword}{" "}
@@ -1718,7 +1746,7 @@ export default function PageScannerSearch() {
             <input
               value={resultSearch}
               onChange={(e) => setResultSearch(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && sessionId && loadResults(sessionId, 1)}
+              onKeyDown={(e) => e.key === "Enter" && applyResultFilters(1)}
               placeholder="Tìm Tên, Link, SĐT, Email, Tỉnh thành..."
               className="h-8 w-full rounded-lg border border-[#E2E8F0] pl-8 pr-3 text-xs outline-none focus:border-[#2563EB]"
             />
@@ -1871,49 +1899,7 @@ export default function PageScannerSearch() {
             Hiển thị {totalCount === 0 ? 0 : (currentPage - 1) * pageSize + 1} -{" "}
             {Math.min(currentPage * pageSize, totalCount)} của {totalCount.toLocaleString("vi-VN")} Page
             </span>
-            <div className="flex items-center gap-1">
-            <button
-              type="button"
-              disabled={currentPage <= 1 || !sessionId}
-              onClick={() => {
-                setCurrentPage(currentPage - 1);
-                loadResults(sessionId, currentPage - 1);
-              }}
-              className="flex size-7 items-center justify-center rounded-md border border-[#E2E8F0] text-[#64748B] disabled:opacity-40"
-              >
-                <ChevronLeft className="size-3.5" />
-            </button>
-            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => i + 1).map((p) => (
-                  <button
-                    key={p}
-                type="button"
-                disabled={!sessionId}
-                onClick={() => {
-                  setCurrentPage(p);
-                  loadResults(sessionId, p);
-                }}
-                className={`flex size-7 items-center justify-center rounded-md text-[11px] font-semibold ${
-                      p === currentPage
-                    ? "bg-[#2563EB] text-white"
-                    : "text-[#64748B] hover:bg-slate-100"
-                    }`}
-                  >
-                    {p}
-                  </button>
-            ))}
-            {totalPages > 5 && <span className="px-1 text-[11px] text-[#94A3B8]">… {totalPages}</span>}
-            <button
-              type="button"
-              disabled={currentPage >= totalPages || !sessionId}
-              onClick={() => {
-                setCurrentPage(currentPage + 1);
-                loadResults(sessionId, currentPage + 1);
-              }}
-              className="flex size-7 items-center justify-center rounded-md border border-[#E2E8F0] text-[#64748B] disabled:opacity-40"
-              >
-                <ChevronRight className="size-3.5" />
-            </button>
-            </div>
+            <Pager page={currentPage} totalPages={totalPages} onChange={(p) => applyResultFilters(p)} />
           </div>
       </section>
 

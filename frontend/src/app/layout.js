@@ -30,6 +30,7 @@ export default function RootLayout({ children }) {
   return (
     <html
       lang="vi"
+      suppressHydrationWarning
       className={`${fontSans.variable} ${fontHeading.variable} h-full font-sans antialiased`}
       style={{
         "--font-display": "var(--font-heading)",

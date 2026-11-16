@@ -27,6 +27,8 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   createFollowerSession,
+  deletePageFollowers,
+  getActiveCampaign,
   getScannedPages,
   getPageFollowers,
   stopScanSession,
@@ -34,12 +36,8 @@ import {
   resumeScanSession,
   getScanSessionDetail,
 } from "../service";
-import { LiveLogConsole, nowStamp, LIVE_STATUSES } from "../_shared";
-import {
-  DEFAULT_SCANNED_PAGES,
-  SelectAccountsModal,
-  SelectPagesModal,
-} from "../shared/SelectPagesModal";
+import { LiveLogConsole, nowStamp, LIVE_STATUSES, parseJsonField, runDelete } from "../_shared";
+import { SelectAccountsModal, SelectPagesModal } from "../shared/SelectPagesModal";
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
 const PAGE_SIZE = 10;
@@ -161,7 +159,6 @@ export default function PageScannerFollowers() {
   const [selectedUids, setSelectedUids] = useState([]);
   const [showAccountModal, setShowAccountModal] = useState(false);
 
-  const [availablePages, setAvailablePages] = useState(DEFAULT_SCANNED_PAGES);
   const [selectedPages, setSelectedPages] = useState([]);
   const [showPageModal, setShowPageModal] = useState(false);
   const [khoPages, setKhoPages] = useState([]);
@@ -368,25 +365,71 @@ export default function PageScannerFollowers() {
     let cancelled = false;
     (async () => {
       try {
-        const data = await getScannedPages({ page: 1, page_size: 100, sort_by: "followers" });
-        if (cancelled) return;
-        const items = data.items || [];
-        setKhoPages(items);
-        if (items.length) {
-          const mapped = items.map(mapKhoToPage);
-          const combined = [...DEFAULT_SCANNED_PAGES];
-          for (const m of mapped) {
-            if (!combined.some((c) => c.page_key === m.page_key)) combined.push(m);
-          }
-          setAvailablePages(combined);
-        }
+        const data = await getScannedPages({ page: 1, page_size: 200, sort_by: "followers" });
+        if (!cancelled) setKhoPages(data.items || []);
       } catch {
-        /* keep defaults */
+        /* modal chọn page tự tải kho page của nó */
       }
     })();
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  /* Khôi phục phiên FOLLOW đang chạy / tạm dừng khi quay lại trang hoặc reload */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await getActiveCampaign("FOLLOW");
+        if (cancelled || !data?.active || !(data.sessions || []).length) return;
+        const top =
+          data.sessions.find((s) => s.id === data.primary_session_id) ||
+          data.sessions[data.sessions.length - 1];
+        const settings = parseJsonField(top.settings, {});
+        const pageKeys = (settings.page_keys || []).filter(Boolean);
+        let kho = [];
+        try {
+          kho = (await getScannedPages({ page: 1, page_size: 200, sort_by: "followers" })).items || [];
+        } catch {
+          kho = [];
+        }
+        if (cancelled) return;
+        const byKey = new Map(kho.map((p) => [p.page_key, p]));
+        const pages = pageKeys.map((pk, i) => mapKhoToPage(byKey.get(pk) || { page_key: pk }, i));
+
+        setSelectedPages(pages);
+        if (settings.max_per_page) setMaxPerPage(Number(settings.max_per_page));
+        if (typeof settings.skip_existing === "boolean") setDedupAcrossPages(settings.skip_existing);
+        scanPageKeysRef.current = pageKeys;
+        setResultPages(
+          pages.map((p) => ({
+            page_key: p.page_key,
+            page_name: p.page_name,
+            page_url: p.page_url || "",
+            follower_count: p.follower_count || 0,
+            category: p.category || "Fanpage",
+            scanned_uid_count: 0,
+            status: "QUEUE",
+            status_label: "Đang chờ hàng đợi",
+            avatar_initials: p.avatar_initials,
+          })),
+        );
+        setActivePageKey(pageKeys[0] || "");
+        setSessionId(top.id);
+        setResultCount(top.total_unique || 0);
+        setRunPhase(top.status === "PAUSED" ? "paused" : "running");
+        syncSessionLogs(top);
+        pushLog(`Khôi phục phiên FOLLOW #${top.id} · ${top.status}`, "warn");
+        startPoll(top.id);
+      } catch {
+        /* không có phiên đang chạy */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleStart = async () => {
@@ -398,7 +441,9 @@ export default function PageScannerFollowers() {
       const live = accounts.filter(
         (a) => selectedUids.includes(a.uid) && LIVE_STATUSES.has(String(a.status)),
       );
-      const accountUid = live[0]?.uid || selectedUids[0] || null;
+      // Thứ tự xoay vòng = thứ tự acc Live đã chọn (không có acc Live → gửi acc đã chọn, BE kiểm tra)
+      const accountUids = live.length ? live.map((a) => a.uid) : [...selectedUids];
+      const accountUid = accountUids[0] || null;
       if (!accountUid) throw new Error("Chọn ít nhất 1 tài khoản Live.");
 
       const targetFollowers = Math.max(pageKeys.length * maxPerPage, maxPerPage);
@@ -433,19 +478,28 @@ export default function PageScannerFollowers() {
       const res = await createFollowerSession({
         page_keys: pageKeys,
         account_uid: accountUid,
+        account_uids: accountUids,
+        rotate_every: rotateEvery,
+        rotate_on_checkpoint: true,
         keep_browser: keepBrowser,
         target_followers: targetFollowers,
         max_per_page: maxPerPage,
         idle_timeout_s: 90,
         skip_existing: dedupAcrossPages,
         source_list_id: null,
-        page_delay_s: delayMin,
+        // "Khoảng cách giữa các lần quét" = giãn cách ngẫu nhiên giữa 2 Page
+        page_delay_min_s: delayMin,
+        page_delay_max_s: delayMax,
       });
 
       setSessionId(res.session_id);
       pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
-      if (prioritizeRecent) pushLog("Ưu tiên người theo dõi gần đây (UI flag).", "info");
-      if (rotateEvery) pushLog(`Đổi acc sau ~${rotateEvery} page / tài khoản (UI flag).`, "info");
+      if (prioritizeRecent) {
+        pushLog("Ưu tiên người theo dõi gần đây: Facebook liệt kê người theo dõi mới nhất trước.", "info");
+      }
+      if (accountUids.length > 1) {
+        pushLog(`Xoay vòng ${accountUids.length} tài khoản · đổi sau ${rotateEvery} page / tài khoản`, "info");
+      }
       toast.success(`Đã khởi động FOLLOW #${res.session_id}`);
       startPoll(res.session_id);
     } catch (err) {
@@ -560,26 +614,20 @@ export default function PageScannerFollowers() {
     toast.success(`Đã xuất ${activeFollowers.length} UID của page.`);
   };
 
-  const handleDeleteSelected = () => {
-    if (!selectedRowIds.length || !activePage?.page_key) return;
-    const key = activePage.page_key;
-    setFollowersByPage((prev) => ({
-      ...prev,
-      [key]: (prev[key] || []).filter((u) => !selectedRowIds.includes(u.id)),
-    }));
-    setResultPages((prev) =>
-      prev.map((p) =>
-        p.page_key === key
-          ? {
-              ...p,
-              scanned_uid_count: Math.max(0, (p.scanned_uid_count || 0) - selectedRowIds.length),
-            }
-          : p,
-      ),
-    );
-    setSelectedRowIds([]);
-    toast.success("Đã xóa UID khỏi bảng xem trước (kho DB không đổi).");
+  /** Xóa UID khỏi kho followers (DB) rồi tải lại kết quả phiên. */
+  const deleteFollowerRows = async (rowIds) => {
+    const ids = rowIds.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+    const n = await runDelete({
+      count: ids.length,
+      noun: "UID",
+      request: () => deletePageFollowers({ follower_ids: ids }),
+    });
+    if (n == null) return;
+    setSelectedRowIds((prev) => prev.filter((id) => !rowIds.includes(id)));
+    await refreshResults(sessionId, scanPageKeysRef.current);
   };
+
+  const handleDeleteSelected = () => deleteFollowerRows(selectedRowIds);
 
   return (
     <div className="space-y-5 pb-10">
@@ -1184,16 +1232,7 @@ export default function PageScannerFollowers() {
                                 <button
                                   type="button"
                                   title="Xóa UID"
-                                  onClick={() => {
-                                    setFollowersByPage((prev) => ({
-                                      ...prev,
-                                      [activePageKey]: (prev[activePageKey] || []).filter(
-                                        (f) => f.id !== u.id,
-                                      ),
-                                    }));
-                                    setSelectedRowIds((prev) => prev.filter((id) => id !== u.id));
-                                    toast.success(`Đã xóa UID ${u.uid}`);
-                                  }}
+                                  onClick={() => deleteFollowerRows([u.id])}
                                   className="rounded p-1 text-[#94A3B8] hover:bg-red-50 hover:text-[#DC2626]"
                                 >
                                   <Trash2 className="size-3.5" />
@@ -1272,7 +1311,7 @@ export default function PageScannerFollowers() {
       ) : null}
 
       {(runPhase !== "idle" || logs.length > 0) && (
-        <LiveLogConsole title="Live Log · Quét followers page" logs={logs} phase={runPhase} />
+        <LiveLogConsole task="Quét Followers" logs={logs} phase={runPhase} />
       )}
 
       <SelectAccountsModal
@@ -1290,7 +1329,6 @@ export default function PageScannerFollowers() {
       <SelectPagesModal
         open={showPageModal}
         onClose={() => setShowPageModal(false)}
-        availablePages={availablePages}
         selectedPages={selectedPages}
         onConfirm={(pages) => {
           setSelectedPages(pages.map((p, i) => mapKhoToPage(p, i)));

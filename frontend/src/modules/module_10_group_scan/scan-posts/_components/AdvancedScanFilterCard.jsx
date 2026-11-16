@@ -1,5 +1,7 @@
 "use client";
 
+import { useMemo } from "react";
+
 export default function AdvancedScanFilterCard({
   minDelay,
   setMinDelay,
@@ -18,6 +20,16 @@ export default function AdvancedScanFilterCard({
   autoDedupePosts,
   setAutoDedupePosts,
 }) {
+  const delayError = useMemo(() => {
+    if (minDelay > maxDelay) {
+      return "Thời gian tối đa luôn phải lớn hơn hoặc bằng thời gian tối thiểu.";
+    }
+    if (maxDelay > 3600) {
+      return "Thời gian tối đa không được vượt quá 3600 giây.";
+    }
+    return "";
+  }, [minDelay, maxDelay]);
+
   return (
     <section className="flex flex-col h-full rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] space-y-4">
       <div className="flex items-center gap-2.5 pb-3 border-b border-[#F1F5F9]">
@@ -31,63 +43,76 @@ export default function AdvancedScanFilterCard({
 
       <div className="space-y-3.5">
         {/* Cài đặt khoảng cách quét */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs font-medium text-[#334155]">
-            Khoảng cách giữa các lần quét:
-          </span>
-          <div className="flex items-center gap-2">
-            {/* Min delay stepper */}
-            <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
-              <button
-                type="button"
-                onClick={() => setMinDelay((v) => Math.max(1, v - 1))}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                value={minDelay}
-                onChange={(e) => setMinDelay(Number(e.target.value) || 1)}
-                className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-              />
-              <button
-                type="button"
-                onClick={() => setMinDelay((v) => v + 1)}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
-              >
-                +
-              </button>
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-medium text-[#334155]">
+              Khoảng cách giữa các lần quét:
+            </span>
+            <div className="flex items-center gap-2">
+              {/* Min delay stepper */}
+              <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
+                <button
+                  type="button"
+                  onClick={() => setMinDelay((v) => Math.max(1, v - 1))}
+                  className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  value={minDelay}
+                  onChange={(e) => {
+                    const val = Number(e.target.value) || 1;
+                    setMinDelay(Math.min(3600, Math.max(1, val)));
+                  }}
+                  className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setMinDelay((v) => Math.min(3600, v + 1))}
+                  className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
+                >
+                  +
+                </button>
+              </div>
+
+              <span className="text-xs text-[#94A3B8]">-</span>
+
+              {/* Max delay stepper */}
+              <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
+                <button
+                  type="button"
+                  onClick={() => setMaxDelay((v) => Math.max(1, v - 1))}
+                  className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
+                >
+                  -
+                </button>
+                <input
+                  type="number"
+                  value={maxDelay}
+                  onChange={(e) => {
+                    const val = Number(e.target.value) || 1;
+                    setMaxDelay(Math.min(3600, Math.max(1, val)));
+                  }}
+                  className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setMaxDelay((v) => Math.min(3600, v + 1))}
+                  className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
+                >
+                  +
+                </button>
+              </div>
+
+              <span className="text-xs text-[#64748B]">giây</span>
             </div>
-
-            <span className="text-xs text-[#94A3B8]">-</span>
-
-            {/* Max delay stepper */}
-            <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
-              <button
-                type="button"
-                onClick={() => setMaxDelay((v) => Math.max(minDelay, v - 1))}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                value={maxDelay}
-                onChange={(e) => setMaxDelay(Math.max(minDelay, Number(e.target.value) || minDelay))}
-                className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-              />
-              <button
-                type="button"
-                onClick={() => setMaxDelay((v) => v + 1)}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
-              >
-                +
-              </button>
-            </div>
-
-            <span className="text-xs text-[#64748B]">giây</span>
           </div>
+          {delayError && (
+            <p className="text-[11px] font-medium text-rose-500">
+              * {delayError}
+            </p>
+          )}
         </div>
 
         {/* Giới hạn đổi tài khoản */}
@@ -107,12 +132,15 @@ export default function AdvancedScanFilterCard({
               <input
                 type="number"
                 value={switchAccThreshold}
-                onChange={(e) => setSwitchAccThreshold(Number(e.target.value) || 10)}
+                onChange={(e) => {
+                  const val = Number(e.target.value) || 1;
+                  setSwitchAccThreshold(Math.min(100, Math.max(1, val)));
+                }}
                 className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
               <button
                 type="button"
-                onClick={() => setSwitchAccThreshold((v) => v + 5)}
+                onClick={() => setSwitchAccThreshold((v) => Math.min(100, v + 5))}
                 className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
               >
                 +
@@ -139,12 +167,15 @@ export default function AdvancedScanFilterCard({
               <input
                 type="number"
                 value={postsPerGroupLimit}
-                onChange={(e) => setPostsPerGroupLimit(Number(e.target.value) || 10)}
+                onChange={(e) => {
+                  const val = Number(e.target.value) || 10;
+                  setPostsPerGroupLimit(Math.min(100, Math.max(1, val)));
+                }}
                 className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
               <button
                 type="button"
-                onClick={() => setPostsPerGroupLimit((v) => v + 10)}
+                onClick={() => setPostsPerGroupLimit((v) => Math.min(100, v + 10))}
                 className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
               >
                 +
@@ -182,13 +213,16 @@ export default function AdvancedScanFilterCard({
                   type="number"
                   disabled={!filterDaysEnabled}
                   value={filterDays}
-                  onChange={(e) => setFilterDays(Number(e.target.value) || 1)}
-                  className="w-8 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  onChange={(e) => {
+                    const val = Number(e.target.value) || 1;
+                    setFilterDays(Math.min(365, Math.max(1, val)));
+                  }}
+                  className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                 />
                 <button
                   type="button"
                   disabled={!filterDaysEnabled}
-                  onClick={() => setFilterDays((v) => v + 1)}
+                  onClick={() => setFilterDays((v) => Math.min(365, v + 1))}
                   className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
                 >
                   +
@@ -226,4 +260,3 @@ export default function AdvancedScanFilterCard({
     </section>
   );
 }
-

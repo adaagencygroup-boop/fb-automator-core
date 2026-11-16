@@ -284,11 +284,18 @@ export function RegisterForm({
                       Đã kết nối phần cứng
                     </span>
                   </>
-                ) : (
+                ) : hwidLoading ? (
                   <>
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
                     <span className="text-amber-600 font-mono text-[11px] tracking-wider animate-pulse">
                       Đang kết nối phần cứng...
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                    <span className="text-rose-600 font-mono text-[11px] tracking-wider">
+                      Không kết nối được Local Engine
                     </span>
                   </>
                 )}
@@ -301,10 +308,14 @@ export function RegisterForm({
                   <span className="font-mono text-xs sm:text-[13px] text-[#1e293b] tracking-wide truncate select-all">
                     {hwid}
                   </span>
-                ) : (
+                ) : hwidLoading ? (
                   <div className="flex items-center gap-2 text-slate-500 text-xs italic">
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-[#2563eb]" />
                     <span>Đang nhận diện mã máy (HWID)...</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-rose-600 text-xs">
+                    <span>Chưa nhận diện được HWID — kiểm tra Local Engine</span>
                   </div>
                 )}
               </div>
