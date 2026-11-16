@@ -227,14 +227,14 @@ class CloudHistoryStore:
             else:
                 self._ensure_cloud_run(metadata)
 
-    def record_task(self, run_id: str, item: dict[str, Any]) -> None:
+    def record_task(self, run_id: str, item: dict[str, Any]) -> bool:
         with self._lock:
             metadata = self._runs.get(run_id)
             cloud_ready = run_id in self._cloud_ready
         if not metadata:
-            return
+            return False
         if not cloud_ready and not self._ensure_cloud_run(metadata):
-            return
+            return False
         try:
             self._db().execute(
                 """
@@ -263,8 +263,10 @@ class CloudHistoryStore:
                     item.get("finished_at") or datetime.now().isoformat(timespec="seconds"),
                 ),
             )
+            return True
         except Exception:
             logger.warning("Cannot write Module 7 task outcome to cloud", exc_info=True)
+            return False
 
     def record_group_membership(
         self,

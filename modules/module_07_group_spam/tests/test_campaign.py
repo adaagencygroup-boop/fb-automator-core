@@ -547,6 +547,67 @@ class CampaignTests(unittest.TestCase):
         self.assertIsNotNone(m)
         self.assertEqual(m.group(1), "2139698156722731")
 
+    def test_extract_comment_share_link_captures_copied_url(self):
+        expected_url = "https://www.facebook.com/groups/159341141325119/posts/2144249519500928/?comment_id=998877"
+
+        class Button:
+            def __init__(self, label):
+                self.label = label
+                self.clicked = False
+
+            def is_displayed(self):
+                return True
+
+        share_btn = Button("Share")
+        copy_btn = Button("Copy link")
+
+        class CommentNode:
+            text = "Văn Văn Trinh\nDemo thôi nhé.\n6m Like Reply Share"
+
+            def is_displayed(self):
+                return True
+
+            def find_elements(self, _by, xpath):
+                if "Share" in xpath:
+                    return [share_btn]
+                return []
+
+        class RootArticle:
+            def find_elements(self, _by, xpath):
+                if "role='article'" in xpath:
+                    return [CommentNode()]
+                return []
+
+        class Driver:
+            def __init__(self):
+                self.copied = None
+                self.menu_open = False
+
+            def find_elements(self, _by, xpath):
+                if "Copy link" in xpath and self.menu_open:
+                    return [copy_btn]
+                return []
+
+            def execute_script(self, script, *args):
+                if "arguments[0].click()" in script and args:
+                    if args[0] is share_btn:
+                        share_btn.clicked = True
+                        self.menu_open = True
+                    elif args[0] is copy_btn:
+                        copy_btn.clicked = True
+                        self.copied = expected_url
+                if "return window.__fbCopiedCommentLink;" in script:
+                    return self.copied
+                return None
+
+        poster = FacebookGroupPoster({"uid": "100"}, threading.Event(), lambda *_: None)
+        poster.driver = Driver()
+
+        copied_link = poster._extract_comment_share_link(RootArticle(), "Demo thôi nhé.")
+        self.assertTrue(share_btn.clicked)
+        self.assertTrue(copy_btn.clicked)
+        self.assertEqual(copied_link, expected_url)
+
 
 if __name__ == "__main__":
     unittest.main()

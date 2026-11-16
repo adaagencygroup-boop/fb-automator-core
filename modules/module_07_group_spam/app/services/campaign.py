@@ -798,12 +798,177 @@ class FacebookGroupPoster:
                 raise RuntimeError("Facebook đang giới hạn thao tác đăng bài của tài khoản")
         except Exception:
             pass
+        copied_link = self._extract_post_share_link(content)
         return {
             "status": "SUCCESS",
             "message": "Đăng bài thành công",
             "group_url": url,
-            "result_url": result_url,
+            "result_url": copied_link or result_url,
+            "share_link_copied": bool(copied_link),
         }
+
+    def _extract_post_share_link(self, content: str) -> str | None:
+        """Click Share -> Sao chép liên kết for the post just published."""
+        from selenium.webdriver.common.by import By
+
+        driver = self.driver
+        content_marker = " ".join(content.split())[:80].lower()
+        article_xpath = "//div[@role='feed']//div[@role='article'] | //div[@role='article']"
+
+        def find_post_article():
+            try:
+                for article in driver.find_elements(By.XPATH, article_xpath):
+                    if not self._is_visible(article):
+                        continue
+                    article_text = " ".join((article.text or "").split()).lower()
+                    if content_marker and content_marker in article_text:
+                        return article
+            except Exception:
+                pass
+            return None
+
+        try:
+            # Ưu tiên nút Share trong bài có nội dung vừa đăng. Nếu Facebook
+            # không expose role=article hoặc text bài trong DOM, dùng phần tử
+            # data-ad-rendering-role mà giao diện hiện tại cung cấp.
+            article = find_post_article()
+            share_marker_xpath = ".//*[@data-ad-rendering-role='share_button']"
+            share_marker = None
+            if article is not None:
+                share_marker = next(
+                    (node for node in article.find_elements(By.XPATH, share_marker_xpath) if self._is_visible(node)),
+                    None,
+                )
+            if share_marker is None:
+                share_marker_xpath = "//*[@data-ad-rendering-role='share_button']"
+                share_marker = self._wait_until(
+                    lambda: next(
+                        (node for node in driver.find_elements(By.XPATH, share_marker_xpath) if self._is_visible(node)),
+                        None,
+                    ),
+                    12,
+                    "Không tìm thấy phần tử share_button của bài vừa đăng",
+                )
+            share_xpath = (
+                ".//*[@role='button' and (normalize-space(.)='Share' or "
+                "normalize-space(.)='Chia sẻ' or "
+                "contains(translate(@aria-label,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'share') or "
+                "contains(translate(@aria-label,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'chia sẻ') or "
+                "contains(translate(@aria-label,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'send this') or "
+                "contains(@aria-label,'Gửi') or contains(@aria-label,'Chia sẻ'))]"
+            )
+            share_button = None
+            if share_marker is not None:
+                share_button = driver.execute_script(
+                    "return arguments[0].closest('[role=button]') || arguments[0];",
+                    share_marker,
+                )
+            if share_button is None:
+                if article is not None:
+                    share_button = next(
+                        (button for button in article.find_elements(By.XPATH, share_xpath) if self._is_visible(button)),
+                        None,
+                    )
+            if share_button is None:
+                self.log("WARNING", f"[{self.account['uid']}] Không tìm thấy nút Share của bài vừa đăng")
+                return None
+
+            # Capture the link passed to the browser clipboard when Facebook
+            # handles the Copy link menu action.
+            driver.execute_script(
+                """
+                window.__fbCopiedPostLink = null;
+                if (navigator.clipboard && navigator.clipboard.writeText && !window.__fbPostCopyHooked) {
+                  const originalWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
+                  navigator.clipboard.writeText = async function(text) {
+                    window.__fbCopiedPostLink = String(text || '');
+                    try { return await originalWriteText(text); } catch (e) { return; }
+                  };
+                  window.__fbPostCopyHooked = true;
+                }
+                if (document.execCommand && !window.__fbPostCopyExecHooked) {
+                  const originalExecCommand = document.execCommand.bind(document);
+                  document.execCommand = function(command, ...args) {
+                    if (String(command).toLowerCase() === 'copy') {
+                      const selection = (window.getSelection && window.getSelection().toString()) || '';
+                      const active = document.activeElement;
+                      const value = (active && typeof active.value === 'string') ? active.value : '';
+                      window.__fbCopiedPostLink = selection || value || window.__fbCopiedPostLink;
+                    }
+                    return originalExecCommand(command, ...args);
+                  };
+                  window.__fbPostCopyExecHooked = true;
+                }
+                """
+            )
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", share_button)
+            driver.execute_script("arguments[0].click();", share_button)
+
+            copy_labels = ("Sao ch\u00e9p li\u00ean k\u1ebft", "Copy link")
+            copy_label_predicate = " or ".join(
+                f"normalize-space(.)='{label}'" for label in copy_labels
+            )
+            copy_action_xpath = (
+                ".//*[@role='button' or @role='menuitem' or self::button or self::a]"
+                f"[{copy_label_predicate} or .//span[{copy_label_predicate}]]"
+            )
+            popup_xpath = "//*[@role='dialog' or @role='menu' or @aria-modal='true']"
+
+            def find_share_popup():
+                try:
+                    for popup in reversed(driver.find_elements(By.XPATH, popup_xpath)):
+                        if not self._is_visible(popup):
+                            continue
+                        copy_actions = popup.find_elements(By.XPATH, copy_action_xpath)
+                        if any(self._is_visible(action) for action in copy_actions):
+                            return popup
+                except Exception:
+                    pass
+                return None
+
+            share_popup = self._wait_until(
+                find_share_popup,
+                7,
+                "Popup Chia sẻ không hiển thị mục Sao chép liên kết",
+            )
+
+            def find_copy_action():
+                try:
+                    return next(
+                        (
+                            action
+                            for action in share_popup.find_elements(By.XPATH, copy_action_xpath)
+                            if self._is_visible(action)
+                        ),
+                        None,
+                    )
+                except Exception:
+                    return None
+
+            copy_action = self._wait_until(
+                find_copy_action,
+                5,
+                "Popup Chia sẻ không có mục Sao chép liên kết",
+            )
+            copy_action = driver.execute_script(
+                "return arguments[0].closest('[role=menuitem], [role=button], button, a') || arguments[0];",
+                copy_action,
+            )
+            driver.execute_script("arguments[0].click();", copy_action)
+
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                self._raise_if_cancelled()
+                copied = driver.execute_script("return window.__fbCopiedPostLink;")
+                if isinstance(copied, str) and copied.strip().startswith(("http://", "https://")):
+                    return copied.strip()
+                if self.cancel.wait(0.15):
+                    self._raise_if_cancelled()
+        except InterruptedError:
+            raise
+        except Exception as exc:
+            self.log("WARNING", f"[{self.account['uid']}] Không lấy được link đã sao chép của bài đăng: {exc}")
+        return None
 
 
     def comment(
@@ -1269,11 +1434,127 @@ class FacebookGroupPoster:
         blocked = ("tạm thời bị chặn", "temporarily blocked", "giới hạn tần suất", "try again later")
         if any(message in page_text for message in blocked):
             raise RuntimeError("Facebook đang giới hạn thao tác bình luận của tài khoản")
+
+        copied_link = self._extract_comment_share_link(resolve_article() or article, content)
         return {
             "status": "SUCCESS",
             "message": "Bình luận bài viết đầu tiên thành công",
-            "result_url": str(permalink),
+            "result_url": copied_link or str(permalink),
         }
+
+    def _extract_comment_share_link(self, root_article, content: str) -> str | None:
+        """Click Share -> Copy link on the newly posted comment and capture the copied URL."""
+        from selenium.webdriver.common.by import By
+
+        driver = self.driver
+        content_marker = " ".join(content.split())[:60].lower()
+        share_xpath = (
+            ".//*[@role='button' and ("
+            "normalize-space(.)='Share' or normalize-space(.)='Chia sẻ' or "
+            "@aria-label='Share' or @aria-label='Chia sẻ')]"
+        )
+        copy_link_xpath = (
+            "//*[@role='menuitem' or @role='button']["
+            "normalize-space(.)='Copy link' or normalize-space(.)='Sao chép liên kết' or "
+            ".//*[normalize-space(.)='Copy link' or normalize-space(.)='Sao chép liên kết']]"
+        )
+
+        def find_comment_share_button():
+            try:
+                comment_nodes = root_article.find_elements(By.XPATH, ".//div[@role='article']")
+            except Exception:
+                comment_nodes = []
+            # Duyệt ngược để ưu tiên bình luận mới nhất nằm ở cuối danh sách
+            for node in reversed(comment_nodes):
+                try:
+                    if not self._is_displayed(node):
+                        continue
+                    node_text = " ".join((node.text or "").split()).lower()
+                    if content_marker and content_marker not in node_text:
+                        continue
+                    buttons = node.find_elements(By.XPATH, share_xpath)
+                    for btn in buttons:
+                        if self._is_displayed(btn):
+                            return btn
+                except Exception:
+                    continue
+            return None
+
+        try:
+            share_btn = None
+            deadline = time.monotonic() + 4.0
+            while time.monotonic() < deadline:
+                self._raise_if_cancelled()
+                share_btn = find_comment_share_button()
+                if share_btn is not None:
+                    break
+                if self.cancel.wait(0.35):
+                    self._raise_if_cancelled()
+
+            if share_btn is None:
+                return None
+
+            # Cài hook JS bắt dữ liệu clipboard ngay trước khi ấn Copy link (an toàn đa luồng)
+            driver.execute_script(
+                """
+                window.__fbCopiedCommentLink = null;
+                if (!window.__fbCopyHooked) {
+                  if (navigator.clipboard && navigator.clipboard.writeText) {
+                    const origWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
+                    navigator.clipboard.writeText = async function(text) {
+                      window.__fbCopiedCommentLink = String(text || '');
+                      try { return await origWriteText(text); } catch (e) { return; }
+                    };
+                  }
+                  if (document.execCommand) {
+                    const origExec = document.execCommand.bind(document);
+                    document.execCommand = function(cmd, ...args) {
+                      if (String(cmd).toLowerCase() === 'copy') {
+                        const active = document.activeElement;
+                        const sel = (window.getSelection && window.getSelection().toString()) || '';
+                        const val = (active && typeof active.value === 'string') ? active.value : '';
+                        if (sel || val) window.__fbCopiedCommentLink = sel || val;
+                      }
+                      return origExec(cmd, ...args);
+                    };
+                  }
+                  window.__fbCopyHooked = true;
+                }
+                """
+            )
+
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", share_btn)
+            driver.execute_script("arguments[0].click();", share_btn)
+
+            copy_btn = None
+            menu_deadline = time.monotonic() + 4.0
+            while time.monotonic() < menu_deadline:
+                self._raise_if_cancelled()
+                candidates = driver.find_elements(By.XPATH, copy_link_xpath)
+                copy_btn = next((item for item in candidates if self._is_displayed(item)), None)
+                if copy_btn is not None:
+                    break
+                if self.cancel.wait(0.25):
+                    self._raise_if_cancelled()
+
+            if copy_btn is None:
+                return None
+
+            driver.execute_script("arguments[0].click();", copy_btn)
+
+            copy_deadline = time.monotonic() + 2.0
+            while time.monotonic() < copy_deadline:
+                self._raise_if_cancelled()
+                copied = driver.execute_script("return window.__fbCopiedCommentLink;")
+                if isinstance(copied, str) and copied.strip().startswith(("http://", "https://")):
+                    return copied.strip()
+                if self.cancel.wait(0.15):
+                    self._raise_if_cancelled()
+        except InterruptedError:
+            raise
+        except Exception:
+            return None
+        return None
 
 
 class CampaignManager:
@@ -1713,13 +1994,18 @@ class CampaignManager:
                 job.skipped += 1
             else:
                 job.failed += 1
-        self.persistence.record_task(job.id, item)
+        persisted = self.persistence.record_task(job.id, item)
         self._sync_run(job)
         level = "SUCCESS" if item["status"] == "SUCCESS" else "WARNING" if item["status"] in {"SKIPPED", "PENDING_APPROVAL"} else "ERROR"
         target_url = item.get("result_url") or item.get("group_url") or _group_url(group)
         group_display = item["group_name"] or item["group_key"]
         url_part = f" ({target_url})" if target_url else ""
         job.log(level, f"[{uid}] {group_display}{url_part}: {item['message']}")
+        if result.get("share_link_copied"):
+            if persisted is False:
+                job.log("WARNING", f"[{uid}] Đã lấy link bài đăng nhưng database chưa lưu được: {target_url}")
+            else:
+                job.log("SUCCESS", f"[{uid}] Đã lưu link bài đăng vào database: {target_url}")
 
     def _persist_final_results(self, job: CampaignJob) -> None:
         """Finalize the PostgreSQL run summary and ensure campaign media is stored in Supabase Storage."""

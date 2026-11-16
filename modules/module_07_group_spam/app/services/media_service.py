@@ -3,11 +3,20 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Callable, Protocol
 import uuid
 
 from fastapi import UploadFile
 
-from config.constants import DATA_DIR
+from ..constants.media_constant import (
+    ALLOWED_EXTENSIONS,
+    ALLOWED_MIME_PREFIXES,
+    CHUNK_SIZE,
+    MAX_FILE_COUNT,
+    MAX_FILE_SIZE,
+    MAX_TOTAL_SIZE,
+    UPLOAD_MEDIA_DIR,
+)
 from .supabase_storage import (
     is_supabase_storage_available,
     upload_to_supabase,
@@ -18,19 +27,23 @@ from .supabase_storage import (
 
 logger = logging.getLogger("module_07.media_service")
 
-UPLOAD_MEDIA_DIR = (DATA_DIR / "module_07_group_spam" / "uploads").resolve()
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4", ".mov", ".avi", ".mkv"}
-ALLOWED_MIME_PREFIXES = ("image/", "video/")
-MAX_FILE_COUNT = 20
-MAX_FILE_SIZE = 25 * 1024 * 1024
-MAX_TOTAL_SIZE = 100 * 1024 * 1024
-CHUNK_SIZE = 1024 * 1024
 
 
 class MediaStorageError(RuntimeError):
     """Raised when uploaded media is invalid or cannot be persisted."""
 
 
+class MediaDownloader(Protocol):
+    def __call__(self, token: str, campaign_id: str | None = None) -> Path:
+        ...
+
+
+# xử lý token media, xác định xem nó là đường dẫn cục bộ hay URL từ xa
+def _is_remote_token(raw: str) -> bool:
+    return raw.startswith(("http://", "https://", "campaign/"))
+
+
+# xử lí đường dẫn media, đảm bảo nó hợp lệ và có định dạng được hỗ trợ
 def _safe_path(token: str) -> Path:
     raw = str(token or "").strip().replace("\\", "/")
     if not raw:
@@ -44,30 +57,43 @@ def _safe_path(token: str) -> Path:
     return candidate
 
 
-def resolve_media_paths(tokens: list[str], campaign_id: str | None = None) -> list[str]:
+#  xử lý token media, xác định xem nó là đường dẫn cục bộ hay URL từ xa, và tải xuống nếu cần
+def _resolve_local_or_cached(
+    raw: str,
+    campaign_id: str | None,
+    downloader: MediaDownloader,
+) -> Path:
+    path = _safe_path(raw)
+    if path.is_file():
+        return path
+    cached_candidate = downloader(raw, campaign_id)
+    if cached_candidate.is_file():
+        return cached_candidate
+    raise MediaStorageError(f"Không tìm thấy media: {path.name}")
+
+
+# xử lý danh sách token media, tải xuống các tệp từ xa nếu cần và trả về danh sách đường dẫn cục bộ hợp lệ
+def resolve_media_paths(
+    tokens: list[str],
+    campaign_id: str | None = None,
+    *,
+    downloader: MediaDownloader | None = None,
+) -> list[str]:
     """Resolve client-facing media tokens to trusted local paths on disk for Selenium."""
+    fetch_media = downloader or download_or_cache_media
     resolved: list[str] = []
     for token in dict.fromkeys(tokens):
         raw = str(token or "").strip()
         if not raw:
             continue
-        if raw.startswith("http://") or raw.startswith("https://") or raw.startswith("campaign/"):
+        if _is_remote_token(raw):
             try:
-                local_path = download_or_cache_media(raw, campaign_id)
-                resolved.append(str(local_path))
+                resolved.append(str(fetch_media(raw, campaign_id)))
                 continue
             except Exception as exc:
                 raise MediaStorageError(f"Không thể tải media từ cloud ({raw}): {exc}") from exc
-
         try:
-            path = _safe_path(raw)
-            if not path.is_file():
-                cached_candidate = download_or_cache_media(raw, campaign_id)
-                if cached_candidate.is_file():
-                    resolved.append(str(cached_candidate))
-                    continue
-                raise MediaStorageError(f"Không tìm thấy media: {path.name}")
-            resolved.append(str(path))
+            resolved.append(str(_resolve_local_or_cached(raw, campaign_id, fetch_media)))
         except MediaStorageError:
             raise
         except Exception as exc:
@@ -76,29 +102,75 @@ def resolve_media_paths(tokens: list[str], campaign_id: str | None = None) -> li
     return resolved
 
 
-def resolve_media_tokens_for_config(tokens: list[str], campaign_id: str | None = None) -> list[str]:
+# xử lý danh sách token media, xác thực và giữ nguyên các URL / đường dẫn lưu trữ để lưu vào cấu hình chiến dịch
+def resolve_media_tokens_for_config(
+    tokens: list[str],
+    campaign_id: str | None = None,
+    *,
+    downloader: MediaDownloader | None = None,
+) -> list[str]:
     """
     Validate media tokens and preserve cloud URLs / storage paths for saving to campaign config.
     """
+    fetch_media = downloader or download_or_cache_media
     validated: list[str] = []
     for token in dict.fromkeys(tokens):
         raw = str(token or "").strip()
         if not raw:
             continue
-        if raw.startswith("http://") or raw.startswith("https://") or raw.startswith("campaign/"):
+        if _is_remote_token(raw):
             validated.append(raw)
             continue
-        path = _safe_path(raw)
-        if not path.is_file():
-            cached_candidate = download_or_cache_media(raw, campaign_id)
-            if cached_candidate.is_file():
-                validated.append(raw)
-                continue
-            raise MediaStorageError(f"Không tìm thấy media: {path.name}")
+        _resolve_local_or_cached(raw, campaign_id, fetch_media)
         validated.append(raw)
     return validated
 
+# validate file upload lên server, đảm bảo rằng tệp là ảnh/video được hỗ trợ và không vượt quá giới hạn kích thước
+def _validate_upload_metadata(file: UploadFile) -> str:
+    extension = Path(file.filename or "").suffix.lower()
+    content_type = (file.content_type or "").lower()
+    if extension not in ALLOWED_EXTENSIONS or not content_type.startswith(ALLOWED_MIME_PREFIXES):
+        raise MediaStorageError(f"Tệp {file.filename or '(không tên)'} không phải ảnh/video được hỗ trợ")
+    return extension
 
+
+# xử lí nội dung tệp upload, kiểm tra kích thước tệp và tổng kích thước tải lên, trả về nội dung tệp, kích thước tệp và tổng kích thước mới
+def _read_validated_content(file: UploadFile, current_total_size: int) -> tuple[bytes, int, int]:
+    content = file.file.read()
+    size = len(content)
+    new_total_size = current_total_size + size
+    if size > MAX_FILE_SIZE:
+        raise MediaStorageError(f"Tệp {file.filename} vượt quá 25 MB")
+    if new_total_size > MAX_TOTAL_SIZE:
+        raise MediaStorageError("Tổng dung lượng tải lên vượt quá 100 MB")
+    return content, size, new_total_size
+
+
+# lưu trữ tệp media upload vào thư mục cache chiến dịch và thư mục upload chính, thêm các đường dẫn tệp đã tạo vào danh sách created_local_files
+def _persist_media_file(
+    camp_cache_dir: Path,
+    saved_name: str,
+    content: bytes,
+    created_local_files: list[Path],
+) -> None:
+    cached_path = camp_cache_dir / saved_name
+    cached_path.write_bytes(content)
+    created_local_files.append(cached_path)
+
+    local_backup = UPLOAD_MEDIA_DIR / saved_name
+    try:
+        local_backup.write_bytes(content)
+        created_local_files.append(local_backup)
+    except Exception:
+        pass
+
+# xóa các tệp đã tạo trong trường hợp xảy ra lỗi, đảm bảo rằng không còn tệp tạm thời nào còn lại trên đĩa
+def _cleanup_files(paths: list[Path]) -> None:
+    for path in paths:
+        path.unlink(missing_ok=True)
+
+
+# lưu trữ các tệp media upload, xác thực và xử lý nội dung, trả về danh sách thông tin tệp đã lưu
 def save_uploaded_media(
     files: list[UploadFile],
     campaign_id: str | None = None,
@@ -119,38 +191,10 @@ def save_uploaded_media(
 
     try:
         for file in files:
-            extension = Path(file.filename or "").suffix.lower()
-            content_type = (file.content_type or "").lower()
-            if extension not in ALLOWED_EXTENSIONS or not content_type.startswith(ALLOWED_MIME_PREFIXES):
-                raise MediaStorageError(f"Tệp {file.filename or '(không tên)'} không phải ảnh/video được hỗ trợ")
-
+            extension = _validate_upload_metadata(file)
+            content, size, total_size = _read_validated_content(file, total_size)
             saved_name = f"{uuid.uuid4().hex}{extension}"
-
-            content = file.file.read()
-            size = len(content)
-            total_size += size
-
-            if size > MAX_FILE_SIZE:
-                raise MediaStorageError(f"Tệp {file.filename} vượt quá 25 MB")
-            if total_size > MAX_TOTAL_SIZE:
-                raise MediaStorageError("Tổng dung lượng tải lên vượt quá 100 MB")
-
-            # Lưu vào local cache để phục vụ tác vụ chạy ngay
-            cached_path = camp_cache_dir / saved_name
-            with cached_path.open("wb") as f:
-                f.write(content)
-            created_local_files.append(cached_path)
-
-            # Sao lưu vào UPLOAD_MEDIA_DIR
-            local_backup = UPLOAD_MEDIA_DIR / saved_name
-            try:
-                with local_backup.open("wb") as f:
-                    f.write(content)
-                created_local_files.append(local_backup)
-            except Exception:
-                pass
-
-            # Lưu vào local để runner Selenium sử dụng ngay
+            _persist_media_file(camp_cache_dir, saved_name, content, created_local_files)
             uploaded.append({
                 "original_name": file.filename,
                 "saved_name": saved_name,
@@ -160,21 +204,23 @@ def save_uploaded_media(
                 "size": size,
                 "campaign_id": active_campaign_id,
             })
-    except MediaStorageError:
-        for path in created_local_files:
-            path.unlink(missing_ok=True)
-        raise
     except Exception as exc:
-        for path in created_local_files:
-            path.unlink(missing_ok=True)
+        _cleanup_files(created_local_files)
+        if isinstance(exc, MediaStorageError):
+            raise
         raise MediaStorageError(f"Không thể lưu media: {exc}") from exc
 
     return uploaded
 
 
-def list_stored_media(campaign_id: str | None = None) -> list[dict[str, str | int]]:
+def list_stored_media(
+    campaign_id: str | None = None,
+    *,
+    remote_lister: Callable[[str], list[dict[str, str | int]]] | None = None,
+) -> list[dict[str, str | int]]:
     if campaign_id and is_supabase_storage_available():
-        remote_items = list_campaign_media(campaign_id)
+        fetch_remote = remote_lister or list_campaign_media
+        remote_items = fetch_remote(campaign_id)
         if remote_items:
             return remote_items
 
