@@ -117,14 +117,16 @@ export default function GroupSourceSection({
 
       // Lọc theo loại nhóm (công khai / riêng tư)
       let matchType = true;
-      if (groupTypeFilter === "public") matchType = group.privacy === "public";
-      else if (groupTypeFilter === "private") matchType = group.privacy === "private";
+      const privacy = String(group.privacy || "").trim().toLowerCase();
+      if (groupTypeFilter === "public") matchType = ["public", "công khai", "cong khai"].includes(privacy);
+      else if (groupTypeFilter === "private") matchType = ["private", "closed", "riêng tư", "rieng tu", "kiểm duyệt", "kiem duyet"].includes(privacy);
 
       let matchMembership = true;
+      const membershipStatus = String(group.membership_status || "").trim().toLowerCase();
       if (membershipFilter === "joined") {
-        matchMembership = group.membership_status === "joined";
+        matchMembership = ["joined", "member", "đã tham gia", "da tham gia"].includes(membershipStatus);
       } else if (membershipFilter === "not_joined") {
-        matchMembership = group.membership_status === "not_joined";
+        matchMembership = ["not_joined", "not joined", "not a member", "chưa tham gia", "chua tham gia"].includes(membershipStatus);
       }
 
       // Lọc theo tần suất bài viết / ngày (ví dụ: "10+ bài viết/ngày", "25 bài/ngày")
@@ -141,6 +143,14 @@ export default function GroupSourceSection({
       return matchQuery && matchMember && matchType && matchMembership && matchFrequency;
     });
   }, [baseGroups, groupFilter, memberFilter, groupTypeFilter, membershipFilter, frequencyFilter]);
+
+  // A filter must affect the groups sent to the campaign as well as the visible rows.
+  useEffect(() => {
+    const filtersActive = Boolean(groupFilter.trim()) || activeResultFilterCount > 0;
+    if (!filtersActive || !baseGroups.length) return;
+    const visibleKeys = new Set(filteredGroups.map((group) => group.key));
+    setSelectedGroupKeys((current) => current.filter((key) => visibleKeys.has(key)));
+  }, [groupFilter, activeResultFilterCount, baseGroups.length, filteredGroups, setSelectedGroupKeys]);
 
   // Chỉ hiện bảng khi đã có nhóm, đang xử lý, hoặc vừa hoàn tất một lượt tìm kiếm.
   // Ở chế độ file, chưa tải/gắn link nhóm thì ẩn toàn bộ khung bảng trống.
