@@ -312,7 +312,8 @@ export function PostSessionDetailView({ sessionId }) {
           <span className="text-sm font-bold text-slate-900">Giám sát tiến trình đăng bài</span>
         </div>
 
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 md:grid-cols-7">
+        {/* Ticket #68: bỏ thẻ Acc chết khỏi tổng quan */}
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-6">
           <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
             <div className="flex w-full items-center justify-between">
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ĐANG CHẠY</span>
@@ -350,15 +351,9 @@ export function PostSessionDetailView({ sessionId }) {
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">LỖI HỆ THỐNG</span>
               <span className="h-2 w-2 rounded-full bg-rose-500" />
             </div>
-            <span className="mt-1 text-2xl font-black text-rose-600">{metrics.systemError}</span>
-          </div>
-
-          <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
-            <div className="flex w-full items-center justify-between">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ACC CHẾT</span>
-              <span className="h-2 w-2 rounded-full bg-red-700" />
-            </div>
-            <span className="mt-1 text-2xl font-black text-red-700">{metrics.deadAccount}</span>
+            <span className="mt-1 text-2xl font-black text-rose-600">
+              {metrics.systemError + metrics.deadAccount}
+            </span>
           </div>
 
           <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
@@ -438,6 +433,10 @@ export function PostSessionDetailView({ sessionId }) {
                             ? "bg-amber-500"
                             : row.status === "Hoàn thành"
                             ? "bg-emerald-500"
+                            : row.status === "Lỗi hệ thống"
+                            ? "bg-rose-600"
+                            : row.status === "Acc chết"
+                            ? "bg-red-700"
                             : "bg-slate-600"
                         }`} />
                         {row.status}

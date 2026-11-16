@@ -61,7 +61,10 @@ export default function GroupPreviewSection({
                         {group.tag}
                       </div>
                       <div className="flex flex-col">
-                        <span className="font-semibold text-xs text-[#0F172A] line-clamp-1">
+                        <span
+                          className="font-semibold text-xs text-[#0F172A] line-clamp-1"
+                          title={group.name || ""}
+                        >
                           {group.name}
                         </span>
                         <span className="font-mono text-[11px] text-[#94A3B8]">

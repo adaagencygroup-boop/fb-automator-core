@@ -56,6 +56,18 @@ class TestExternalAuthorReject(unittest.TestCase):
         )
         self.assertTrue(ok2, r2)
 
+    def test_web_facebook_host_accepted(self):
+        """Nick redirect web.facebook.com — không được coi external."""
+        ok, q, reason = is_valid_author_candidate_url(
+            "https://web.facebook.com/tuyets.anhs.3139"
+        )
+        self.assertTrue(ok, reason)
+        self.assertEqual(q, "high")
+        ok2, _, r2 = is_valid_author_candidate_url(
+            "https://web.facebook.com/profile.php?id=100078396304282"
+        )
+        self.assertTrue(ok2, r2)
+
 
 class TestAddFriendProfileGate(unittest.TestCase):
     @classmethod

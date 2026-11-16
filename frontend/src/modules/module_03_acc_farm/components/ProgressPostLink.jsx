@@ -10,15 +10,23 @@ import {
 import { openPostInAccountBrowser } from "@/modules/module_03_acc_farm/openAccountPost";
 
 /**
- * Cột hoạt động + nút Xem bài viết / Xem trang cá nhân trên bảng tiến trình.
+ * Cột hoạt động + nút Xem bài viết / Xem Story / Xem trang cá nhân trên bảng tiến trình.
  * Mở Chrome profile của nick (không dùng trình duyệt mặc định).
  */
+function progressViewButtonLabel(row, permalink) {
+  if (!permalink) return "Xem trang cá nhân";
+  const ptype = String(row?.postType || row?.post_type || "").toLowerCase();
+  if (ptype === "story") return "Xem Story";
+  return "Xem bài viết";
+}
+
 export function ProgressActivityCell({ row }) {
   const [opening, setOpening] = useState(false);
   const url = resolveProgressPostUrl(row);
   const label = progressActivityLabel(row);
   const permalink = isProgressPermalink(row, url);
   const uid = row?.accountUid || row?.account_uid || "";
+  const viewLabel = progressViewButtonLabel(row, permalink);
 
   const handleOpen = async (e) => {
     e?.stopPropagation?.();
@@ -26,7 +34,7 @@ export function ProgressActivityCell({ row }) {
     setOpening(true);
     try {
       await openPostInAccountBrowser(uid, url, {
-        title: permalink ? "Xem bài viết" : "Xem trang cá nhân",
+        title: viewLabel,
       });
     } finally {
       setOpening(false);
@@ -60,7 +68,7 @@ export function ProgressActivityCell({ row }) {
           ) : (
             <ExternalLink size={12} className="shrink-0" />
           )}
-          {permalink ? "Xem bài viết" : "Xem trang cá nhân"}
+          {viewLabel}
         </button>
       ) : null}
     </div>

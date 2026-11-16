@@ -367,48 +367,256 @@ def close_all_active_drivers():
     close_all_active_bridges()
 
 
-def bring_chrome_to_front(driver=None):
-    """
-    Kích hoạt cửa sổ Chrome lên tiền cảnh (foreground) trên Windows.
-    Sử dụng kỹ thuật SetWindowPos HWND_TOPMOST -> HWND_NOTOPMOST để ép hiển thị
-    trên tất cả các cửa sổ ứng dụng khác (kể cả IDE / terminal đang active).
-    Không phóng to / đổi kích thước: cửa sổ giữ kích thước theo dấu vân tay của nick; cửa sổ đang thu nhỏ thì
-    khôi phục về kích thước thường, cửa sổ Chrome khác của người dùng không bị đổi kích thước.
-    """
-    if driver:
-        try:
-            driver.switch_to.window(driver.current_window_handle)
-        except Exception:
-            pass
+def _chrome_hwnds_for_pids(pids) -> list:
+    """Tìm HWND cửa sổ Chrome thuộc đúng tập PID (chromedriver + chrome con) của 1 driver."""
+    if os.name != "nt" or not pids:
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return []
 
-    if os.name == "nt":
-        try:
-            import ctypes
-            from ctypes import wintypes
+    pid_set = {int(p) for p in pids if isinstance(p, int) and p > 0}
+    if not pid_set:
+        return []
 
-            user32 = ctypes.windll.user32
-            SW_RESTORE = 9
-            HWND_TOPMOST = -1
-            HWND_NOTOPMOST = -2
-            SWP_SHOWWINDOW = 0x0040
-            SWP_NOSIZE = 0x0001
-            SWP_NOMOVE = 0x0002
+    user32 = ctypes.windll.user32
+    found = []
 
-            def _enum_windows_cb(hwnd, _):
-                if user32.IsWindowVisible(hwnd):
-                    class_buf = ctypes.create_unicode_buffer(256)
-                    user32.GetClassNameW(hwnd, class_buf, 256)
-                    if class_buf.value == "Chrome_WidgetWin_1":
-                        if user32.IsIconic(hwnd):
-                            user32.ShowWindow(hwnd, SW_RESTORE)
-                        user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
-                        user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
-                        user32.BringWindowToTop(hwnd)
-                        user32.SetForegroundWindow(hwnd)
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    def _enum_cb(hwnd, _):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        class_buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, class_buf, 256)
+        if class_buf.value != "Chrome_WidgetWin_1":
+            return True
+        proc_id = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
+        if int(proc_id.value) not in pid_set:
+            return True
+        # Bỏ qua cửa sổ quá nhỏ (popup/devtools tip) — lấy khung chính
+        rect = wintypes.RECT()
+        if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            w = int(rect.right - rect.left)
+            h = int(rect.bottom - rect.top)
+            if w < 200 or h < 200:
                 return True
+            area = w * h
+        else:
+            area = 0
+        found.append((area, int(hwnd)))
+        return True
 
-            WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
-            user32.EnumWindows(WNDPROC(_enum_windows_cb), 0)
+    try:
+        user32.EnumWindows(_enum_cb, 0)
+    except Exception:
+        return []
+    found.sort(key=lambda x: x[0], reverse=True)
+    return [hwnd for _area, hwnd in found]
+
+
+def _foreground_hwnd(hwnd: int) -> None:
+    """Restore + đưa đúng 1 HWND lên foreground (không đụng cửa sổ khác)."""
+    if os.name != "nt" or not hwnd:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        SW_RESTORE = 9
+        HWND_TOPMOST = -1
+        HWND_NOTOPMOST = -2
+        SWP_SHOWWINDOW = 0x0040
+        SWP_NOSIZE = 0x0001
+        SWP_NOMOVE = 0x0002
+
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, SW_RESTORE)
+
+        # Attach thread input để vượt giới hạn SetForegroundWindow của Windows
+        fg = user32.GetForegroundWindow()
+        fg_pid = wintypes.DWORD(0)
+        target_pid = wintypes.DWORD(0)
+        fg_tid = user32.GetWindowThreadProcessId(fg, ctypes.byref(fg_pid)) if fg else 0
+        cur_tid = kernel32.GetCurrentThreadId()
+        target_tid = user32.GetWindowThreadProcessId(hwnd, ctypes.byref(target_pid))
+        attached_fg = False
+        attached_target = False
+        try:
+            if fg_tid and fg_tid != cur_tid:
+                attached_fg = bool(user32.AttachThreadInput(cur_tid, fg_tid, True))
+            if target_tid and target_tid != cur_tid:
+                attached_target = bool(user32.AttachThreadInput(cur_tid, target_tid, True))
+
+            user32.SetWindowPos(
+                hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+            )
+            user32.SetWindowPos(
+                hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+            )
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+        finally:
+            if attached_target and target_tid:
+                try:
+                    user32.AttachThreadInput(cur_tid, target_tid, False)
+                except Exception:
+                    pass
+            if attached_fg and fg_tid:
+                try:
+                    user32.AttachThreadInput(cur_tid, fg_tid, False)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def bring_chrome_to_front(driver=None, os_focus: bool = False):
+    """
+    Kích hoạt tab/page của đúng `driver`.
+
+    Mặc định CHỈ dùng Selenium + CDP Page.bringToFront (an toàn khi ≥2 Chrome cạnh nhau).
+    Không gọi SetForegroundWindow — tránh cướp OS focus làm browser kia bị throttle /
+    Lexical không nhận phím / NoSuchWindow.
+
+    os_focus=True: thêm Win32 restore đúng HWND theo PID (chỉ dùng khi chắc 1 luồng).
+    """
+    if not driver:
+        return
+
+    try:
+        driver.switch_to.window(driver.current_window_handle)
+    except Exception:
+        pass
+
+    try:
+        driver.execute_cdp_cmd("Page.bringToFront", {})
+    except Exception:
+        pass
+
+    if not os_focus or os.name != "nt":
+        return
+
+    try:
+        pids = _driver_pids(driver)
+        hwnds = _chrome_hwnds_for_pids(pids)
+        if not hwnds:
+            logger.debug("bring_chrome_to_front: không tìm thấy HWND theo PID — bỏ qua OS focus")
+            return
+        _foreground_hwnd(hwnds[0])
+    except Exception as e:
+        logger.debug(f"bring_chrome_to_front PID focus lỗi: {e}")
+
+
+def _list_display_monitors() -> List[tuple]:
+    """
+    Danh sách màn hình (left, top, width, height), sắp theo left rồi top.
+    Dùng để đặt Chrome slot 0 / 1 lên hai màn khi đăng đa luồng.
+    """
+    if os.name != "nt":
+        return [(0, 0, 1920, 1080)]
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", ctypes.c_long),
+                ("top", ctypes.c_long),
+                ("right", ctypes.c_long),
+                ("bottom", ctypes.c_long),
+            ]
+
+        monitors: List[tuple] = []
+
+        def _cb(hmon, hdc, lprect, lparam):
+            r = lprect.contents
+            monitors.append((int(r.left), int(r.top), int(r.right - r.left), int(r.bottom - r.top)))
+            return 1
+
+        MonitorEnumProc = ctypes.WINFUNCTYPE(
+            ctypes.c_int,
+            wintypes.HMONITOR,
+            wintypes.HDC,
+            ctypes.POINTER(RECT),
+            wintypes.LPARAM,
+        )
+        ctypes.windll.user32.EnumDisplayMonitors(0, 0, MonitorEnumProc(_cb), 0)
+        if monitors:
+            monitors.sort(key=lambda m: (m[0], m[1]))
+            return monitors
+    except Exception as e:
+        logger.debug(f"_list_display_monitors EnumDisplayMonitors: {e}")
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        cx = int(user32.GetSystemMetrics(0) or 1920)
+        cy = int(user32.GetSystemMetrics(1) or 1080)
+        vx = int(user32.GetSystemMetrics(76) or 0)
+        vy = int(user32.GetSystemMetrics(77) or 0)
+        vw = int(user32.GetSystemMetrics(78) or cx)
+        vh = int(user32.GetSystemMetrics(79) or cy)
+        if vw > cx + 200:
+            # Hai vùng ngang: primary + phần còn lại của virtual screen
+            return [(0, 0, cx, cy), (vx + cx if vx <= 0 else vx, vy, max(800, vw - cx), vh)]
+        return [(0, 0, cx, cy)]
+    except Exception:
+        return [(0, 0, 1920, 1080)]
+
+
+def place_chrome_window_for_slot(
+    driver,
+    slot: int = 0,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+) -> None:
+    """
+    Đặt cửa sổ Chrome theo slot luồng:
+    - ≥2 màn: mỗi slot một màn (tránh 2 Chrome chồng góc primary → focus war đôi màn).
+    - 1 màn: chia đôi trái/phải.
+    Không SetForegroundWindow.
+    """
+    if not driver:
+        return
+    try:
+        slot = max(0, int(slot))
+    except Exception:
+        slot = 0
+    try:
+        size = driver.get_window_size() or {}
+        w = int(width or size.get("width") or 1100)
+        h = int(height or size.get("height") or 800)
+    except Exception:
+        w, h = 1100, 800
+    w = max(800, min(w, 1600))
+    h = max(600, min(h, 1200))
+
+    monitors = _list_display_monitors()
+    if len(monitors) >= 2:
+        mon = monitors[slot % len(monitors)]
+        ml, mt, mw, mh = mon
+        x = ml + max(20, (mw - w) // 8)
+        y = mt + max(20, (mh - h) // 10)
+    else:
+        ml, mt, mw, mh = monitors[0]
+        if slot % 2 == 0:
+            x = ml + 20
+        else:
+            x = ml + max(20, mw // 2 + 10)
+            w = min(w, max(800, mw // 2 - 40))
+        y = mt + 40
+
+    try:
+        driver.set_window_rect(x=int(x), y=int(y), width=int(w), height=int(h))
+        logger.info(f"place_chrome_window_for_slot: slot={slot} -> ({x},{y}) {w}x{h} monitors={len(monitors)}")
+    except Exception as e:
+        logger.debug(f"place_chrome_window_for_slot lỗi: {e}")
+        try:
+            driver.set_window_position(int(x), int(y))
         except Exception:
             pass
 
@@ -428,6 +636,7 @@ def open_browser(
     extra_init_scripts: Optional[Iterable[str]] = None,
     on_log: Optional[LogCallback] = None,
     on_before_close: Optional[Callable] = None,
+    window_slot: Optional[int] = None,
 ) -> webdriver.Chrome:
     """
     Mở Chrome với profile chung của nick (owner/uid), dấu vân tay theo nick và proxy.
@@ -467,9 +676,17 @@ def open_browser(
     options = Options()
     options.add_argument(f"--user-data-dir={profile_path}")
     options.add_argument("--profile-directory=Default")
-    # Module 11 page scanner: không chờ document complete (FB feed/video load mãi)
-    if scope == "page_scanner":
-        options.page_load_strategy = "eager"
+    # Page scanner / đăng bài đa luồng: không throttle khi cửa sổ bị che / không foreground
+    if scope in ("page_scanner", "post"):
+        if scope == "page_scanner":
+            options.page_load_strategy = "eager"
+        for _arg in (
+            "--disable-background-timer-throttling",
+            "--disable-renderer-backgrounding",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-features=CalculateNativeWinOcclusion",
+        ):
+            options.add_argument(_arg)
     if detach:
         options.add_experimental_option("detach", True)
 
@@ -489,7 +706,12 @@ def open_browser(
     # mọi nick cùng 1 khung bằng màn hình máy, đã kiểm 2026-10-23)
     options.add_argument(f"--window-size={w},{h}")
     if not headless:
-        options.add_argument("--window-position=50,50")
+        # Vị trí tạm lúc launch; sau khi mở sẽ place_chrome_window_for_slot (đôi màn / chia đôi)
+        if scope == "post":
+            slot0 = int(window_slot) if window_slot is not None else (abs(hash(f"{owner or ''}:{uid}")) % 2)
+            options.add_argument(f"--window-position={40 + slot0 * 120},{40 + slot0 * 40}")
+        else:
+            options.add_argument("--window-position=50,50")
     # WebRTC chỉ đi qua proxy: STUN gửi UDP thẳng ra mạng, để lộ IP thật của máy (chung cho mọi nick trên máy)
     # dù nick có proxy riêng (đã kiểm 2026-10-23: lộ IPv4 + IPv6 của máy)
     options.add_argument(f"--force-webrtc-ip-handling-policy={WEBRTC_IP_POLICY}")
@@ -611,7 +833,8 @@ def open_browser(
         if scope == "page_scanner":
             try:
                 # Eager + timeout: không kẹt 300s mặc định khi FB load video/feed mãi
-                driver.set_page_load_timeout(18)
+                # Khớp VERIFY_PAGE_LOAD_TIMEOUT_SEC trong module_11 scanner
+                driver.set_page_load_timeout(30)
             except Exception:
                 pass
         logger.info(f"[{uid}] Fingerprint mode={config.mode}, window={w}x{h}, lang={config.lang_flag}")
@@ -625,7 +848,11 @@ def open_browser(
         driver.owner = owner
 
         if not headless:
-            bring_chrome_to_front(driver)
+            # Đa luồng post: tách cửa sổ theo slot/màn — không OS focus war
+            if scope == "post":
+                slot = int(window_slot) if window_slot is not None else (abs(hash(f"{owner or ''}:{uid}")) % 2)
+                place_chrome_window_for_slot(driver, slot=slot, width=w, height=h)
+            bring_chrome_to_front(driver)  # CDP-only (os_focus=False)
 
         # Proxy chỉ cho phép Facebook chặn trang đọc IP nên không kiểm tra được
         if proxy_applied and verify_egress and proxy_mode != "facebook_only":

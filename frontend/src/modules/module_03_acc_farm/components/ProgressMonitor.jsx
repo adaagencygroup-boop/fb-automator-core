@@ -42,6 +42,11 @@ export default function ProgressMonitor({ status }) {
   const accounts = status?.accounts || [];
   const now = useNow(Boolean(status?.running));
   const counts = accounts.reduce((acc, a) => ({ ...acc, [a.status]: (acc[a.status] || 0) + 1 }), {});
+  // Ticket #68: không hiện thẻ Acc chết — gộp DIE vào Lỗi hệ thống (FAILED)
+  const displayCounts = {
+    ...counts,
+    FAILED: (counts.FAILED || 0) + (counts.DIE || 0),
+  };
   const [targetsOf, setTargetsOf] = useState(null);
 
   return (
@@ -72,14 +77,14 @@ export default function ProgressMonitor({ status }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
         {MONITOR_STATUSES.map((key) => (
           <div key={key} className="rounded-xl border border-border bg-white px-3.5 py-3 shadow-subtle">
             <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wide text-slate-500">
               {RUN_STATUS[key].label}
               <span className={`h-2 w-2 rounded-full ${RUN_STATUS[key].dot}`} />
             </div>
-            <div className={`mt-1 text-2xl font-bold ${COUNT_COLORS[key]}`}>{counts[key] || 0}</div>
+            <div className={`mt-1 text-2xl font-bold ${COUNT_COLORS[key]}`}>{displayCounts[key] || 0}</div>
           </div>
         ))}
       </div>

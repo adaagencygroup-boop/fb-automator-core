@@ -201,8 +201,10 @@ export async function getAccountsStats() {
   catch (error) { throw new Error(formatApiError(error)); }
 }
 
-export async function getCategories() {
-  try { return parseCategoriesResponse(await api.get("/api/accounts/categories")); }
+// fresh: bỏ qua cache FE. Danh mục là bảng tra cứu — phục vụ bản cache cũ sẽ
+// làm mọi badge rơi về "Danh mục #<id>" và bộ lọc danh mục trống trơn.
+export async function getCategories({ fresh = false } = {}) {
+  try { return parseCategoriesResponse(await api.get("/api/accounts/categories", { fresh })); }
   catch (error) { throw new Error(formatApiError(error)); }
 }
 

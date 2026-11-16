@@ -154,5 +154,29 @@ class TestDateFilter(unittest.TestCase):
         self.assertTrue(date_in_range(None, "2025-10-01", "2025-10-31"))
 
 
+
+class TestVietnamDate(unittest.TestCase):
+    """Ngày đăng theo giờ Việt Nam (UTC+7): bài đăng 0h–7h sáng không bị lùi 1 ngày."""
+
+    def test_utime_early_morning_vn_is_same_day(self):
+        # 2025-10-20 17:30 UTC = 2025-10-21 00:30 giờ VN
+        self.assertEqual(parse_facebook_published_at(None, utime=1760981400)[0], "2025-10-21")
+
+    def test_utime_in_ms(self):
+        self.assertEqual(parse_facebook_published_at(None, utime=1760981400_000)[0], "2025-10-21")
+
+    def test_iso_with_utc_offset_converted_to_vn(self):
+        self.assertEqual(parse_facebook_published_at(None, iso_attr="2025-10-20T20:00:00Z")[0], "2025-10-21")
+        self.assertEqual(parse_facebook_published_at(None, iso_attr="2025-10-21T07:39:00+07:00")[0], "2025-10-21")
+        self.assertEqual(parse_facebook_published_at(None, iso_attr="2025-10-21")[0], "2025-10-21")
+
+    def test_no_deprecated_utcfromtimestamp(self):
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            parse_facebook_published_at(None, utime=1761004800)
+
+
 if __name__ == "__main__":
     unittest.main()

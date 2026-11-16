@@ -20,6 +20,9 @@ async function flush(times = 30) {
 
 let calls;
 
+/** Khớp với REFRESH_FLOOR trong api-cache.mjs */
+const REFRESH_FLOOR = 1_000;
+
 /** Số lần GET thật sự ra mạng — lệnh ghi luôn ra mạng nên không tính vào đây */
 function gets(url) {
   return calls.filter((c) => c.method === "get" && (!url || c.url === url)).length;
@@ -462,4 +465,56 @@ test("sàn chống bão: gọi lại trong cùng giây thì không kích lượt
   await flush();
 
   assert.equal(gets(), 1, "không được bơm thêm request");
+});
+
+/**
+ * LỖI ĐÃ TỪNG XẢY RA, ĐỪNG ĐỂ QUAY LẠI.
+ *
+ * Lượt làm mới nền trước đây chạy bằng `fresh: true`, tức `cache: override`.
+ * Thư viện xử lý override bằng cách đặt entry về `loading` ngay lúc khởi hành,
+ * nên suốt thời gian request bay thì KHÔNG CÒN GÌ ĐỂ PHỤC VỤ: mọi lượt đọc
+ * chen vào giữa đều đứng chờ. Với DB ở Tokyo, cửa sổ đó đủ dài để người dùng
+ * chỉ cần đổi trang rồi quay lại là phải chờ như chưa hề có cache.
+ *
+ * Phép đếm số request KHÔNG bắt được lỗi này — không có request mới nào được
+ * tạo ra, lượt đọc chỉ đứng chờ lượt đang bay. Nên test này chặn bằng THỨ TỰ
+ * HOÀN TẤT: lượt đọc phải xong TRƯỚC khi lượt nền kịp trả lời.
+ */
+test("đọc trong lúc đang làm mới nền vẫn được phục vụ ngay, không phải chờ", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"] });
+
+  let releaseBackground;
+  const backgroundSent = new Promise((resolve) => { releaseBackground = resolve; });
+  let served = 0;
+
+  const api = axios.create({ baseURL: "http://engine.test" });
+  api.defaults.adapter = async (config) => {
+    served += 1;
+    const payload = { n: served };
+    // Lượt nền bị giữ lại, mô phỏng một vòng sang Tokyo
+    if (config.__bg) await backgroundSent;
+    return { data: payload, status: 200, statusText: "OK", headers: {}, config };
+  };
+  installApiCache(api);
+  api.interceptors.response.use((response) => response.data);
+
+  const first = await api.get("/api/accounts/page");
+  assert.equal(first.n, 1, "lần đầu lấy từ mạng");
+
+  // Vượt sàn chống bão để lượt đọc sau kích một lượt làm mới nền
+  t.mock.timers.tick(REFRESH_FLOOR + 1);
+
+  const second = await api.get("/api/accounts/page");
+  assert.equal(second.n, 1, "phải trả ngay bản cũ, KHÔNG đứng chờ lượt nền");
+
+  const third = await api.get("/api/accounts/page");
+  assert.equal(third.n, 1, "lượt đọc kế tiếp cũng không được chờ");
+
+  // Giờ mới thả lượt nền ra
+  releaseBackground();
+  await flush();
+
+  t.mock.timers.tick(REFRESH_FLOOR + 1);
+  const fourth = await api.get("/api/accounts/page");
+  assert.equal(fourth.n, 2, "làm mới nền xong thì lượt đọc sau nhận bản mới");
 });

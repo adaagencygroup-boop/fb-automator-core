@@ -9,8 +9,6 @@ import {
   FolderInput,
   Zap,
   Search,
-  RotateCw,
-  FolderSync,
   Play,
   Pause,
   Square,
@@ -24,6 +22,8 @@ import {
   Info,
   ShieldCheck,
   Copy,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import { api } from "@/services/api";
 import { openFolderPicker } from "@/lib/file-bridge";
@@ -37,6 +37,8 @@ import {
   shouldRestoreProgressView,
 } from "@/modules/module_03_acc_farm/postSessionUi";
 import { ProgressActivityCell } from "./ProgressPostLink";
+import { useAccountCategories } from "@/modules/module_02_account_manager/hooks/useAccountCategories";
+import { categoryLabelStyle } from "@/modules/module_02_account_manager/components/CategorySelect";
 
 export function ReelsPostView({ mode, initialState = "config" }) {
   const router = useRouter();
@@ -53,16 +55,14 @@ export function ReelsPostView({ mode, initialState = "config" }) {
       : "D:\\video_tiktok\\story_export"
   );
 
-  const handleSelectFolder = async () => {
-    const selected = await openFolderPicker();
-    if (selected) {
-      setMasterFolder(selected);
-    }
-  };
-
   const [searchAccount, setSearchAccount] = useState("");
   const [accounts, setAccounts] = useState([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
+  const categoryList = useAccountCategories(true);
+  const categoriesById = useMemo(
+    () => new Map((categoryList.categories || []).map((item) => [item.id, item])),
+    [categoryList.categories]
+  );
 
   // Cấu hình hẹn giờ & tiến trình
   const [checkDuplicate, setCheckDuplicate] = useState(true);
@@ -185,12 +185,13 @@ export function ReelsPostView({ mode, initialState = "config" }) {
     }
   };
 
-  const handleSaveSettingsToDb = async (overrideCheckDup = null) => {
+  const handleSaveSettingsToDb = async (overrideCheckDup = null, overrideFolder = null) => {
     try {
       const dup = overrideCheckDup !== null ? overrideCheckDup : checkDuplicate;
+      const folder = overrideFolder !== null ? overrideFolder : masterFolder;
       await api.post("/api/post/settings", {
         post_type: mode,
-        master_folder_path: masterFolder,
+        master_folder_path: folder,
         check_duplicate: dup,
         schedule_enabled: scheduleEnabled,
         schedule_time: scheduleTime,
@@ -199,7 +200,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
         thread_count: threadCount,
       });
       settingsBaselineRef.current = snapshotSettings({
-        masterFolder,
+        masterFolder: folder,
         checkDuplicate: dup,
         scheduleEnabled,
         scheduleTime,
@@ -212,11 +213,34 @@ export function ReelsPostView({ mode, initialState = "config" }) {
     }
   };
 
-  // Tải danh sách tài khoản từ Module 02
+  const handleSelectFolder = async () => {
+    if (viewState !== "config") return;
+    const selected = await openFolderPicker();
+    if (selected) {
+      setMasterFolder(selected);
+      // Ticket #57: nhớ thư mục nguồn ngay sau khi chọn thành công
+      await handleSaveSettingsToDb(null, selected);
+    }
+  };
+
+  // Tải danh sách tài khoản từ Module 02 + khôi phục mapping thư mục đã lưu
   const loadAccountsFromDb = async () => {
     try {
       setIsLoadingAccounts(true);
-      const res = await api.get("/api/accounts");
+      const prevByUid = new Map(
+        (accounts || []).map((a) => [String(a.uid || a.id), a])
+      );
+
+      const [res, mapRes] = await Promise.all([
+        api.get("/api/accounts"),
+        api
+          .get(`/api/post/folders/mappings?post_type=${mode}`)
+          .catch((err) => {
+            console.warn("Không tải được folder mappings:", err);
+            return null;
+          }),
+      ]);
+
       let rawAccounts = [];
       if (Array.isArray(res)) {
         rawAccounts = res;
@@ -227,6 +251,18 @@ export function ReelsPostView({ mode, initialState = "config" }) {
       } else if (Array.isArray(res?.items)) {
         rawAccounts = res.items;
       }
+
+      const mapRaw = mapRes?.data ?? mapRes;
+      const mapList = Array.isArray(mapRaw)
+        ? mapRaw
+        : Array.isArray(mapRaw?.data)
+          ? mapRaw.data
+          : [];
+      const mappingsMap = new Map(
+        mapList
+          .filter((m) => m && m.account_uid)
+          .map((m) => [String(m.account_uid), m])
+      );
 
       const formatted = rawAccounts.map((a, idx) => {
         const uidStr = String(a.uid || a.id);
@@ -242,6 +278,29 @@ export function ReelsPostView({ mode, initialState = "config" }) {
         if (rawLoginStatus === "logged_in") connectionStatusLabel = "Đã đăng nhập";
         else if (rawLoginStatus === "failed" || rawLoginStatus === "error") connectionStatusLabel = "Đăng nhập lỗi";
 
+        const prev = prevByUid.get(uidStr);
+        const m = mappingsMap.get(uidStr);
+        let subfolder = "";
+        let availableClips = 0;
+        let mappingStatus = "Chưa gán";
+        let totalClips = 0;
+        let allPosted = false;
+        if (m?.subfolder_path) {
+          // Ưu tiên mapping đã lưu DB (sau Gán tự động / chọn thư mục riêng)
+          subfolder = String(m.subfolder_path);
+          availableClips = Number(m.available_media_count) || 0;
+          mappingStatus = m.mapping_status === "MAPPED" ? "Đã gán" : "Chưa gán";
+          totalClips = prev?.totalClips || availableClips;
+          allPosted = !!prev?.allPosted;
+        } else if (prev?.subfolder) {
+          // Fallback: giữ state UI nếu API mappings lỗi / chưa kịp ghi DB
+          subfolder = prev.subfolder;
+          availableClips = prev.availableClips || 0;
+          mappingStatus = prev.mappingStatus || "Đã gán";
+          totalClips = prev.totalClips || availableClips;
+          allPosted = !!prev.allPosted;
+        }
+
         return {
           id: String(a.id || a.uid),
           stt: String(idx + 1).padStart(2, "0"),
@@ -254,21 +313,17 @@ export function ReelsPostView({ mode, initialState = "config" }) {
           connectionStatusCode: rawLoginStatus,
           accountStatus: accountStatusLabel,
           accountStatusCode: rawStatus,
+          category_id: a.category_id ?? null,
+          // Đổi tab Reels ↔ Story: luôn bỏ chọn; phiên đang chạy sẽ được gắn lại bởi applySessionAccountSelection
           selected: false,
-          subfolder: "",
-          mappingStatus: "Chưa gán",
-          availableClips: 0,
+          subfolder,
+          mappingStatus,
+          availableClips,
+          totalClips,
+          allPosted,
         };
       });
-      setAccounts(
-        formatted.map((a) => ({
-          ...a,
-          selected:
-            !!a.selected &&
-            a.accountStatusCode === "live" &&
-            a.connectionStatusCode === "logged_in",
-        }))
-      );
+      setAccounts(formatted);
       await applySessionAccountSelection(formatted);
     } catch (err) {
       console.error("Lỗi khi tải tài khoản:", err);
@@ -359,27 +414,133 @@ export function ReelsPostView({ mode, initialState = "config" }) {
     checkActiveSessionOnMount();
   }, [mode]);
 
+  // Ticket #61: refs kéo chọn / Shift+Click (khai báo trước effect đổi mode)
+  const isDraggingRef = useRef(false);
+  const dragModeRef = useRef(true);
+  const dragVisitedIdsRef = useRef(new Set());
+  const lastClickedIndexRef = useRef(null);
+
   useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      isDraggingRef.current = false;
+      dragVisitedIdsRef.current.clear();
+    };
+    window.addEventListener("mouseup", handleGlobalMouseUp);
+    return () => window.removeEventListener("mouseup", handleGlobalMouseUp);
+  }, []);
+
+  useEffect(() => {
+    // Đổi Reels ↔ Story: bỏ acc đã chọn + reset neo Shift+Click
+    lastClickedIndexRef.current = null;
+    isDraggingRef.current = false;
+    dragVisitedIdsRef.current.clear();
+    setAccounts((prev) => prev.map((a) => ({ ...a, selected: false })));
     loadAccountsFromDb();
     loadSettingsFromDb();
   }, [mode]);
 
-  // Bug 1: chỉ Live + Đã đăng nhập mới được chọn / hiển thị trong danh sách thực thi
+  // Hiển thị: Live + Đã đăng nhập. Chọn được: thêm điều kiện đã có media sẵn sàng (> 0)
   const isAccountEligible = (acc) =>
     acc.accountStatusCode === "live" && acc.connectionStatusCode === "logged_in";
+
+  const hasReadyMedia = (acc) => (Number(acc.availableClips) || 0) > 0;
+
+  const canSelectAccount = (acc) => isAccountEligible(acc) && hasReadyMedia(acc);
 
   const eligibleAccounts = useMemo(
     () => accounts.filter(isAccountEligible),
     [accounts]
   );
 
+  const selectableAccounts = useMemo(
+    () => accounts.filter(canSelectAccount),
+    [accounts]
+  );
+
+  // Bỏ chọn các nick hết / chưa có video (sau map, đổi chống trùng, v.v.)
+  useEffect(() => {
+    if (viewState !== "config") return;
+    setAccounts((prev) => {
+      let changed = false;
+      const next = prev.map((a) => {
+        if (a.selected && !canSelectAccount(a)) {
+          changed = true;
+          return { ...a, selected: false };
+        }
+        return a;
+      });
+      return changed ? next : prev;
+    });
+  }, [accounts, viewState]);
+
+  // Ticket #61: danh sách đang hiển thị (dùng cho Shift+Click / kéo chọn)
+  const filteredAccounts = useMemo(() => {
+    return accounts
+      .filter((a) => (viewState === "running" ? a.selected : isAccountEligible(a)))
+      .filter((a) => {
+        if (!searchAccount) return true;
+        const q = searchAccount.toLowerCase();
+        const cat = a.category_id == null ? null : categoriesById.get(a.category_id);
+        const catName =
+          cat?.name || (a.category_id != null ? `Danh mục #${a.category_id}` : "");
+        return (
+          (a.name && a.name.toLowerCase().includes(q)) ||
+          (a.uid && a.uid.includes(searchAccount)) ||
+          (catName && catName.toLowerCase().includes(q))
+        );
+      });
+  }, [accounts, viewState, searchAccount, categoriesById]);
+
   const toggleSelectAccount = (id) => {
     setAccounts((prev) =>
       prev.map((acc) => {
         if (acc.id !== id) return acc;
-        if (!isAccountEligible(acc)) return { ...acc, selected: false };
+        if (!canSelectAccount(acc)) return { ...acc, selected: false };
         return { ...acc, selected: !acc.selected };
       })
+    );
+  };
+
+  // Ticket #61: kéo thả bôi đen / Shift+Click chọn dải / click toggle (Ctrl+Click cũng toggle không xóa nick khác)
+  const handleRowMouseDown = (acc, index, e) => {
+    if (viewState !== "config") return;
+    if (e.button !== 0) return;
+    if (e.target.closest("button") || e.target.closest("a") || e.target.closest("input")) return;
+    if (!canSelectAccount(acc)) return;
+
+    if (e.shiftKey && lastClickedIndexRef.current !== null) {
+      e.preventDefault();
+      const start = Math.min(lastClickedIndexRef.current, index);
+      const end = Math.max(lastClickedIndexRef.current, index);
+      const inRangeSelectableIds = new Set(
+        filteredAccounts.slice(start, end + 1).filter(canSelectAccount).map((a) => a.id)
+      );
+      setAccounts((prev) =>
+        prev.map((a) => (inRangeSelectableIds.has(a.id) ? { ...a, selected: true } : a))
+      );
+      return;
+    }
+
+    isDraggingRef.current = true;
+    lastClickedIndexRef.current = index;
+    const nextSelected = !acc.selected;
+    dragModeRef.current = nextSelected;
+    dragVisitedIdsRef.current = new Set([acc.id]);
+
+    setAccounts((prev) =>
+      prev.map((a) => (a.id === acc.id ? { ...a, selected: nextSelected } : a))
+    );
+  };
+
+  const handleRowMouseEnter = (acc) => {
+    if (!isDraggingRef.current) return;
+    if (viewState !== "config") return;
+    if (!canSelectAccount(acc)) return;
+    if (dragVisitedIdsRef.current.has(acc.id)) return;
+
+    dragVisitedIdsRef.current.add(acc.id);
+    setAccounts((prev) =>
+      prev.map((a) => (a.id === acc.id ? { ...a, selected: dragModeRef.current } : a))
     );
   };
 
@@ -387,24 +548,25 @@ export function ReelsPostView({ mode, initialState = "config" }) {
     setAccounts((prev) =>
       prev.map((a) => ({
         ...a,
-        selected: isAccountEligible(a),
+        selected: canSelectAccount(a),
       }))
     );
   };
 
   const toggleSelectAll = () => {
     const allSelected =
-      eligibleAccounts.length > 0 && eligibleAccounts.every((a) => a.selected);
-    const eligibleIds = new Set(eligibleAccounts.map((a) => a.id));
+      selectableAccounts.length > 0 && selectableAccounts.every((a) => a.selected);
+    const selectableIds = new Set(selectableAccounts.map((a) => a.id));
     setAccounts((prev) =>
       prev.map((a) =>
-        eligibleIds.has(a.id) ? { ...a, selected: !allSelected } : { ...a, selected: false }
+        selectableIds.has(a.id) ? { ...a, selected: !allSelected } : { ...a, selected: false }
       )
     );
   };
 
   // Tự động quét và ánh xạ thư mục
   const handleAutoMap = async () => {
+    if (viewState !== "config") return;
     if (!masterFolder) {
       toast.warning("Vui lòng chọn hoặc nhập Thư Mục Gốc trước!", "CHƯA CHỌN THƯ MỤC");
       return;
@@ -419,13 +581,17 @@ export function ReelsPostView({ mode, initialState = "config" }) {
       const raw = res?.data ?? res;
       const data = Array.isArray(raw) ? raw : (raw?.data || []);
       if (Array.isArray(data)) {
-        const mappingsMap = new Map(data.map((m) => [m.account_uid, m]));
-        let allPostedCount = 0;
+        const mappingsMap = new Map(
+          data.map((m) => [String(m.account_uid), m])
+        );
+        const allPostedCount = data.filter((m) => m?.subfolder_path && m.all_posted).length;
+        const mappedCount = data.filter((m) => m?.subfolder_path).length;
+        const missingCount = data.filter((m) => !m?.subfolder_path).length;
+
         setAccounts((prev) =>
           prev.map((acc) => {
-            const m = mappingsMap.get(acc.uid);
+            const m = mappingsMap.get(String(acc.uid));
             if (m && m.subfolder_path) {
-              if (m.all_posted) allPostedCount++;
               return {
                 ...acc,
                 subfolder: m.subfolder_path,
@@ -435,9 +601,10 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                 allPosted: !!m.all_posted,
               };
             }
+            // Ticket #62: không tìm thấy thư mục → để trống, không tự gắn UID
             return {
               ...acc,
-              subfolder: `${masterFolder}\\${acc.uid}`,
+              subfolder: "",
               mappingStatus: "Chưa gán",
               availableClips: 0,
               totalClips: 0,
@@ -450,8 +617,20 @@ export function ReelsPostView({ mode, initialState = "config" }) {
             `Có ${allPostedCount} tài khoản đã đăng hết toàn bộ video trong thư mục. Vui lòng thêm video mới hoặc tắt "Chống trùng lặp" để đăng lại.`,
             "VIDEO ĐÃ ĐĂNG HẾT"
           );
-        } else {
-          toast.success(`Đã quét xong thư mục gốc! Đã map dữ liệu cho ${data.length} tài khoản.`, "QUÉT THƯ MỤC THÀNH CÔNG");
+        }
+        if (missingCount > 0) {
+          toast.warning(
+            `Không tìm thấy thư mục ${isReels ? "Reels" : "Story"} tương ứng cho ${missingCount} tài khoản. Cột Bộ nội dung Map đã để trống — hãy tạo thư mục trùng tên/UID hoặc chọn thư mục riêng.`,
+            "KHÔNG TÌM THẤY THƯ MỤC"
+          );
+        }
+        if (mappedCount > 0) {
+          toast.success(
+            `Đã quét xong! Map thành công ${mappedCount} tài khoản.`,
+            "QUÉT THƯ MỤC THÀNH CÔNG"
+          );
+        } else if (missingCount === 0) {
+          toast.info("Không có tài khoản nào để map.", "QUÉT THƯ MỤC");
         }
       }
     } catch (err) {
@@ -464,6 +643,8 @@ export function ReelsPostView({ mode, initialState = "config" }) {
 
   // Chọn thư mục riêng cho một tài khoản
   const handlePickFolderForAccount = async (acc) => {
+    // Ticket #65: khóa chỉnh sửa khi đang chạy tiến trình
+    if (viewState !== "config") return;
     try {
       const selected = await openFolderPicker();
       if (!selected) return;
@@ -509,57 +690,6 @@ export function ReelsPostView({ mode, initialState = "config" }) {
     } catch (err) {
       console.error("Lỗi chọn thư mục cho tài khoản:", err);
       toast.error(err.message || "Lỗi khi gán thư mục.", "LỖI");
-    }
-  };
-
-  // Quét lại media cho một tài khoản
-  const handleRescanAccount = async (acc) => {
-    if (!acc.subfolder) {
-      toast.warning("Tài khoản chưa được gán thư mục!", "CHƯA GÁN THƯ MỤC");
-      return;
-    }
-
-    try {
-      const res = await api.post("/api/post/folders/scan-single", {
-        subfolder: acc.subfolder,
-        post_type: isReels ? "reels" : "story",
-        account_uid: acc.uid,
-      });
-
-      const resData = res?.data ?? res;
-      const count = resData?.count ?? 0;
-      const totalCount = resData?.total_count ?? count;
-      const allPosted = !!resData?.all_posted;
-      const status = resData?.status === "MAPPED" ? "Đã gán" : "Chưa gán";
-
-      setAccounts((prev) =>
-        prev.map((a) =>
-          a.id === acc.id
-            ? {
-              ...a,
-              availableClips: count,
-              totalClips: totalCount,
-              allPosted: allPosted,
-              mappingStatus: status,
-            }
-            : a
-        )
-      );
-
-      if (allPosted && checkDuplicate) {
-        toast.warning(
-          `Nick ${acc.name}: Tổng ${totalCount} ${unitLabel} đều đã từng đăng thành công. Cần thêm video mới hoặc tắt chống trùng.`,
-          "ĐÃ ĐĂNG HẾT MEDIA"
-        );
-      } else {
-        toast.info(
-          `Quét lại thư mục cho ${acc.name}: ${count}/${totalCount} ${unitLabel} khả dụng.`,
-          "CẬP NHẬT MEDIA"
-        );
-      }
-    } catch (err) {
-      console.error("Lỗi quét lại tài khoản:", err);
-      toast.error(err.message || "Lỗi khi quét thư mục.", "LỖI");
     }
   };
 
@@ -649,10 +779,11 @@ export function ReelsPostView({ mode, initialState = "config" }) {
       };
     }
     const threads = parseInt(threadCount, 10) || 0;
-    if (threads > selectedAccs.length) {
+    const maxThreads = Math.min(10, selectedAccs.length);
+    if (threads > maxThreads) {
       return {
         ready: false,
-        reason: `Số luồng chạy (${threads}) không được vượt quá số tài khoản đã chọn (${selectedAccs.length}).`,
+        reason: `Số luồng chạy (${threads}) không được vượt quá số tài khoản đã chọn (${selectedAccs.length}), tối đa 10.`,
       };
     }
     const missingAccounts = selectedAccs.filter((acc) => {
@@ -935,15 +1066,52 @@ export function ReelsPostView({ mode, initialState = "config" }) {
   };
 
   const selectedCount = accounts.filter((a) => a.selected).length;
+  // Ticket #63: max = số acc đã chọn, không vượt 10; chưa chọn acc → max 1
+  const maxThreadCount = selectedCount > 0 ? Math.min(10, selectedCount) : 1;
   const threadCountNum = parseInt(threadCount, 10) || 0;
-  const threadExceedsAccounts =
-    selectedCount > 0 && threadCountNum > selectedCount;
+  const threadExceedsAccounts = threadCountNum > maxThreadCount;
+
+  const clampThreadCount = (raw) => {
+    let val = parseInt(raw, 10);
+    if (!val || val <= 0) val = 1;
+    if (val > maxThreadCount) val = maxThreadCount;
+    return val;
+  };
+
+  // Ticket #64: mũi tên delay ±10s; auto-swap nếu min > max
+  const DELAY_STEP = 10;
+  const normalizeDelayPair = (minRaw, maxRaw) => {
+    let curMin = parseInt(minRaw, 10);
+    let curMax = parseInt(maxRaw, 10);
+    if (isNaN(curMin) || curMin <= 0) curMin = 1;
+    if (isNaN(curMax) || curMax <= 0) curMax = 1;
+    if (curMin > curMax) return { min: curMax, max: curMin };
+    return { min: curMin, max: curMax };
+  };
+  const applyDelayPair = (minRaw, maxRaw) => {
+    const pair = normalizeDelayPair(minRaw, maxRaw);
+    setMinDelay(pair.min);
+    setMaxDelay(pair.max);
+  };
+  const stepMinDelay = (delta) => {
+    const next = Math.max(1, (parseInt(minDelay, 10) || 0) + delta);
+    applyDelayPair(next, maxDelay);
+  };
+  const stepMaxDelay = (delta) => {
+    const next = Math.max(1, (parseInt(maxDelay, 10) || 0) + delta);
+    applyDelayPair(minDelay, next);
+  };
+  const minDelayNum = parseInt(minDelay, 10) || 0;
+  const maxDelayNum = parseInt(maxDelay, 10) || 0;
 
   useEffect(() => {
-    if (selectedCount <= 0) return;
     const val = parseInt(threadCount, 10);
-    if (val > selectedCount) setThreadCount(selectedCount);
-  }, [selectedCount, threadCount]);
+    if (!val || val <= 0) {
+      setThreadCount(1);
+      return;
+    }
+    if (val > maxThreadCount) setThreadCount(maxThreadCount);
+  }, [selectedCount, maxThreadCount, threadCount]);
 
   return (
     <div className="space-y-6 pb-20">
@@ -969,9 +1137,11 @@ export function ReelsPostView({ mode, initialState = "config" }) {
             <input
               type="text"
               value={masterFolder}
-              onChange={(e) => setMasterFolder(e.target.value)}
-              placeholder="Chọn hoặc nhập đường dẫn thư mục..."
-              className="flex-1 min-w-[240px] h-11 px-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl text-xs sm:text-sm text-[#0F172A] font-mono focus:outline-none focus:bg-white focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-all"
+              readOnly
+              onClick={handleSelectFolder}
+              placeholder="Chọn thư mục nguồn..."
+              title="Bấm Đổi Thư Mục để chọn đường dẫn"
+              className="flex-1 min-w-[240px] h-11 px-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl text-xs sm:text-sm text-[#0F172A] font-mono cursor-pointer focus:outline-none focus:bg-white focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-all"
             />
             <button
               type="button"
@@ -1021,7 +1191,8 @@ export function ReelsPostView({ mode, initialState = "config" }) {
       </div>
       )}
 
-      {/* ── BƯỚC 2: CHỌN DANH SÁCH THỰC THI ── */}
+      {/* ── BƯỚC 2: CHỌN DANH SÁCH THỰC THI — ẩn khi đang tiến trình (Ticket #65) ── */}
+      {viewState === "config" && (
       <div className="space-y-3">
         <div className="flex items-center gap-2.5">
           <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
@@ -1044,23 +1215,10 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                   {viewState === "config" ? "Danh Sách Thực Thi" : "Danh Sách Thực Thi Đã chọn"}
                 </span>
                 <span className="text-xs font-semibold text-[#2563EB] mt-0.5">
-                  Đã chọn {selectedCount} / {eligibleAccounts.length} tài khoản (Live & Đã đăng nhập)
+                  Đã chọn {selectedCount} / {selectableAccounts.length} tài khoản (có {unitLabel} sẵn sàng)
                 </span>
               </div>
             </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                setSearchAccount("");
-                loadAccountsFromDb();
-              }}
-              disabled={isLoadingAccounts}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer"
-              title="Tải lại danh sách"
-            >
-              <RotateCw size={16} className={isLoadingAccounts ? "animate-spin text-[#2563EB]" : ""} />
-            </button>
           </div>
 
           {/* Search bar chuẩn Figma */}
@@ -1081,15 +1239,16 @@ export function ReelsPostView({ mode, initialState = "config" }) {
 
           {/* Bảng Danh Sách Thực Thi chuẩn Figma */}
           <div className="w-full overflow-x-auto max-h-[520px] overflow-y-auto [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-[#3B82F6] [&::-webkit-scrollbar-thumb]:rounded-full">
-            <table className="w-full border-collapse min-w-[760px] table-fixed">
+            <table className="w-full border-collapse min-w-[920px] table-fixed">
               <colgroup>
                 {viewState === "config" && <col className="w-12" />}
                 <col className="w-16" />
-                <col className="w-60" />
+                <col className="w-48" />
+                <col className="w-40" />
                 <col className="w-auto" />
                 <col className="w-44" />
                 <col className="w-36" />
-                <col className="w-28" />
+                {viewState === "config" && <col className="w-28" />}
               </colgroup>
 
               <thead className="sticky top-0 z-10 bg-[#F0F5FF]">
@@ -1099,16 +1258,16 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                       <input
                         type="checkbox"
                         checked={
-                          eligibleAccounts.length > 0 &&
-                          eligibleAccounts.every((a) => a.selected)
+                          selectableAccounts.length > 0 &&
+                          selectableAccounts.every((a) => a.selected)
                         }
                         onChange={toggleSelectAll}
-                        disabled={eligibleAccounts.length === 0}
+                        disabled={selectableAccounts.length === 0}
                         className="w-4 h-4 rounded border-[#CBD5E1] accent-[#2563EB] cursor-pointer align-middle"
                         title={
-                          eligibleAccounts.length === 0
-                            ? "Không có tài khoản Live & Đã đăng nhập"
-                            : "Chọn tất cả tài khoản Live & Đã đăng nhập"
+                          selectableAccounts.length === 0
+                            ? `Không có tài khoản nào còn ${unitLabel} sẵn sàng để chọn`
+                            : `Chọn tất cả tài khoản đã có ${unitLabel}`
                         }
                       />
                     </th>
@@ -1119,6 +1278,9 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                   <th className="px-4 py-2 font-bold text-xs uppercase tracking-wider text-[#334155] text-left">
                     TÊN TÀI KHOẢN
                   </th>
+                  <th className="px-3 py-2 font-bold text-xs uppercase tracking-wider text-[#334155] text-left">
+                    DANH MỤC
+                  </th>
                   <th className="px-4 py-2 font-bold text-xs uppercase tracking-wider text-[#334155] text-left">
                     BỘ NỘI DUNG MAP (THƯ MỤC CON)
                   </th>
@@ -1128,16 +1290,18 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                   <th className="px-3 py-2 font-bold text-xs uppercase tracking-wider text-[#334155] text-center">
                     TRẠNG THÁI GÁN
                   </th>
-                  <th className="px-3 py-2 font-bold text-xs uppercase tracking-wider text-[#334155] text-center">
-                    THAO TÁC
-                  </th>
+                  {viewState === "config" && (
+                    <th className="px-3 py-2 font-bold text-xs uppercase tracking-wider text-[#334155] text-center">
+                      THAO TÁC
+                    </th>
+                  )}
                 </tr>
               </thead>
 
               <tbody className="divide-y divide-[#F1F5F9] text-xs">
                 {isLoadingAccounts && accounts.length === 0 ? (
                   <tr>
-                    <td colSpan={viewState === "config" ? 7 : 6} className="py-12 text-center text-slate-500">
+                    <td colSpan={viewState === "config" ? 8 : 6} className="py-12 text-center text-slate-500">
                       <div className="flex items-center justify-center gap-2">
                         <Loader2 size={16} className="animate-spin text-[#2563EB]" />
                         <span className="text-sm font-medium">Đang đồng bộ dữ liệu tài khoản...</span>
@@ -1146,46 +1310,52 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                   </tr>
                 ) : accounts.length === 0 ? (
                   <tr>
-                    <td colSpan={viewState === "config" ? 7 : 6} className="py-12 text-center text-slate-400">
+                    <td colSpan={viewState === "config" ? 8 : 6} className="py-12 text-center text-slate-400">
                       Chưa có tài khoản nào. Vui lòng thêm nick ở Module 02 Quản lý tài khoản.
                     </td>
                   </tr>
                 ) : eligibleAccounts.length === 0 && viewState === "config" ? (
                   <tr>
-                    <td colSpan={7} className="py-12 text-center text-slate-400">
+                    <td colSpan={8} className="py-12 text-center text-slate-400">
                       Không có tài khoản Live & Đã đăng nhập. Chỉ hiển thị nick đủ điều kiện — kiểm tra Module 02.
                     </td>
                   </tr>
                 ) : (
-                  accounts
-                    .filter((a) =>
-                      viewState === "running" ? a.selected : isAccountEligible(a)
-                    )
-                    .filter(
-                      (a) =>
-                        !searchAccount ||
-                        a.name.toLowerCase().includes(searchAccount.toLowerCase()) ||
-                        a.uid.includes(searchAccount)
-                    )
-                    .map((acc, index) => {
+                  filteredAccounts.map((acc, index) => {
+                      const accCategory =
+                        acc.category_id == null ? null : categoriesById.get(acc.category_id);
+                      const selectable = canSelectAccount(acc);
                       return (
                         <tr
                           key={acc.id}
-                          onClick={() => toggleSelectAccount(acc.id)}
-                          className={`h-13 transition-colors select-none border-b border-[#F1F5F9] cursor-pointer ${acc.selected ? "bg-[#EFF6FF]/60 hover:bg-[#EFF6FF]" : "bg-white hover:bg-slate-50/80"
-                            }`}
+                          onMouseDown={(e) => handleRowMouseDown(acc, index, e)}
+                          onMouseEnter={() => handleRowMouseEnter(acc)}
+                          className={`h-13 transition-colors select-none border-b border-[#F1F5F9] ${
+                            !selectable
+                              ? "bg-[#F8FAFC]/90 text-[#94A3B8] opacity-60 cursor-not-allowed"
+                              : acc.selected
+                                ? "bg-[#EFF6FF]/60 hover:bg-[#EFF6FF] cursor-pointer"
+                                : "bg-white hover:bg-slate-50/80 cursor-pointer"
+                          }`}
+                          title={
+                            !selectable
+                              ? `Không chọn được: chưa có ${unitLabel} sẵn sàng (gán thư mục / thêm media trước)`
+                              : undefined
+                          }
                         >
                           {/* 1. Checkbox */}
                           {viewState === "config" && (
                             <td
                               className="px-2 py-3 text-center"
+                              onMouseDown={(e) => e.stopPropagation()}
                               onClick={(e) => e.stopPropagation()}
                             >
                               <input
                                 type="checkbox"
                                 checked={acc.selected}
                                 onChange={() => toggleSelectAccount(acc.id)}
-                                className="w-4 h-4 rounded border-[#CBD5E1] accent-[#2563EB] cursor-pointer align-middle"
+                                disabled={!selectable}
+                                className="w-4 h-4 rounded border-[#CBD5E1] accent-[#2563EB] cursor-pointer align-middle disabled:cursor-not-allowed disabled:opacity-50"
                               />
                             </td>
                           )}
@@ -1205,7 +1375,22 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                             </div>
                           </td>
 
-                          {/* 4. BỘ NỘI DUNG MAP (THƯ MỤC CON) */}
+                          {/* 4. Danh mục (khớp Module 02 / Status) */}
+                          <td className="px-3 py-3 text-left">
+                            {acc.category_id == null ? (
+                              <span className="text-[#94A3B8]">—</span>
+                            ) : (
+                              <span
+                                style={categoryLabelStyle(accCategory)}
+                                title={accCategory?.name || `Danh mục #${acc.category_id}`}
+                                className="inline-block max-w-[160px] truncate whitespace-nowrap rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold"
+                              >
+                                {accCategory?.name || `Danh mục #${acc.category_id}`}
+                              </span>
+                            )}
+                          </td>
+
+                          {/* 5. BỘ NỘI DUNG MAP (THƯ MỤC CON) */}
                           <td className="px-4 py-3">
                             {acc.subfolder ? (
                               <div
@@ -1225,7 +1410,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                             )}
                           </td>
 
-                          {/* 5. SỐ VIDEO SẴN SÀNG */}
+                          {/* 6. SỐ VIDEO SẴN SÀNG */}
                           <td className="px-3 py-3 text-center">
                             {acc.allPosted && checkDuplicate ? (
                               <div className="inline-flex flex-col items-center">
@@ -1250,7 +1435,7 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                             )}
                           </td>
 
-                          {/* 6. TRẠNG THÁI GÁN */}
+                          {/* 7. TRẠNG THÁI GÁN */}
                           <td className="px-3 py-3 text-center">
                             {acc.allPosted && checkDuplicate ? (
                               <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-300">
@@ -1268,30 +1453,25 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                             )}
                           </td>
 
-                          {/* 7. THAO TÁC */}
-                          <td
-                            className="px-3 py-3 text-center"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <div className="flex items-center justify-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => handlePickFolderForAccount(acc)}
-                                className="w-7 h-7 rounded-lg text-slate-500 hover:text-[#2563EB] hover:bg-blue-50 flex items-center justify-center transition-colors cursor-pointer"
-                                title="Chọn thư mục riêng cho nick này"
-                              >
-                                <FolderOpen size={16} />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleRescanAccount(acc)}
-                                className="w-7 h-7 rounded-lg text-slate-500 hover:text-[#2563EB] hover:bg-blue-50 flex items-center justify-center transition-colors cursor-pointer"
-                                title="Quét lại số media của nick này"
-                              >
-                                <RotateCw size={15} />
-                              </button>
-                            </div>
-                          </td>
+                          {/* 8. THAO TÁC — chỉ khi cấu hình (Ticket #65 khóa khi running) */}
+                          {viewState === "config" && (
+                            <td
+                              className="px-3 py-3 text-center"
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handlePickFolderForAccount(acc)}
+                                  className="w-7 h-7 rounded-lg text-slate-500 hover:text-[#2563EB] hover:bg-blue-50 flex items-center justify-center transition-colors cursor-pointer"
+                                  title="Chọn thư mục riêng cho nick này"
+                                >
+                                  <FolderOpen size={16} />
+                                </button>
+                              </div>
+                            </td>
+                          )}
                         </tr>
                       );
                     })
@@ -1301,8 +1481,10 @@ export function ReelsPostView({ mode, initialState = "config" }) {
           </div>
         </div>
       </div>
+      )}
 
-      {/* ── BƯỚC 3: KÍCH HOẠT ĐĂNG BÀI ── */}
+      {/* ── BƯỚC 3: KÍCH HOẠT ĐĂNG BÀI — ẩn khi đang tiến trình (Ticket #65) ── */}
+      {viewState === "config" && (
       <div className="space-y-3">
         <div className="flex items-center gap-2.5">
           <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
@@ -1363,130 +1545,187 @@ export function ReelsPostView({ mode, initialState = "config" }) {
               )}
             </div>
 
-            {/* Số lượng chạy (VR-M03-CFG-01, BR-M03-CFG-02): ≤ số acc đã chọn */}
+            {/* Số lượng chạy: min 1, max = min(10, số acc đã chọn) + mũi tên ↑↓ */}
             <div className="flex flex-col items-start sm:items-center gap-1">
               <div className="flex items-center justify-start sm:justify-center gap-3">
                 <span className="text-xs font-bold text-slate-700 whitespace-nowrap">
                   SỐ LUỒNG CHẠY
                 </span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={threadCount}
-                  onChange={(e) => {
-                    const cleaned = e.target.value.replace(/\D/g, "");
-                    setThreadCount(cleaned);
-                  }}
-                  onBlur={() => {
-                    let val = parseInt(threadCount, 10);
-                    if (!val || val <= 0) val = 1;
-                    if (selectedCount > 0 && val > selectedCount) {
-                      toast.warning(
-                        `Số luồng tối đa bằng số tài khoản đã chọn (${selectedCount}).`,
-                        "GIỚI HẠN LUỒNG",
-                      );
-                      val = selectedCount;
-                    }
-                    setThreadCount(val);
-                  }}
-                  className={`w-16 h-8 text-center bg-slate-50 border rounded-lg text-xs font-semibold focus:bg-white focus:outline-none font-mono ${
+                <div
+                  className={`flex items-stretch h-8 rounded-lg border bg-slate-50 overflow-hidden ${
                     threadExceedsAccounts
-                      ? "border-red-400 focus:border-red-500"
-                      : "border-slate-200 focus:border-blue-500"
+                      ? "border-red-400"
+                      : "border-slate-200 focus-within:border-blue-500"
                   }`}
-                />
+                >
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={threadCount}
+                    onChange={(e) => {
+                      const cleaned = e.target.value.replace(/\D/g, "");
+                      if (cleaned === "") {
+                        setThreadCount("");
+                        return;
+                      }
+                      const n = parseInt(cleaned, 10);
+                      if (n > maxThreadCount) {
+                        toast.warning(
+                          `Số luồng tối đa ${maxThreadCount} (≤ số acc đã chọn, tối đa 10).`,
+                          "GIỚI HẠN LUỒNG",
+                        );
+                        setThreadCount(maxThreadCount);
+                        return;
+                      }
+                      setThreadCount(cleaned);
+                    }}
+                    onBlur={() => setThreadCount(clampThreadCount(threadCount))}
+                    className="w-12 h-full text-center bg-transparent text-xs font-semibold focus:outline-none font-mono"
+                    aria-label="Số luồng chạy"
+                  />
+                  <div className="flex flex-col border-l border-slate-200 w-6 shrink-0">
+                    <button
+                      type="button"
+                      disabled={threadCountNum >= maxThreadCount}
+                      onClick={() =>
+                        setThreadCount(clampThreadCount(threadCountNum + 1))
+                      }
+                      className="flex-1 flex items-center justify-center text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      title={`Tăng (tối đa ${maxThreadCount})`}
+                      aria-label="Tăng số luồng"
+                    >
+                      <ChevronUp size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={threadCountNum <= 1}
+                      onClick={() =>
+                        setThreadCount(clampThreadCount(threadCountNum - 1))
+                      }
+                      className="flex-1 flex items-center justify-center border-t border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      title="Giảm (tối thiểu 1)"
+                      aria-label="Giảm số luồng"
+                    >
+                      <ChevronDown size={12} />
+                    </button>
+                  </div>
+                </div>
                 <span className="text-xs text-slate-500 font-medium">Luồng</span>
               </div>
-              {threadExceedsAccounts && (
-                <span className="text-[10px] font-medium text-red-500">
-                  Tối đa {selectedCount} (theo số acc đã chọn)
-                </span>
-              )}
+              <span className="text-[10px] font-medium text-slate-400">
+                Tối đa {maxThreadCount}
+                {selectedCount > 0
+                  ? ` (theo ${selectedCount} acc đã chọn)`
+                  : " (chọn acc trước)"}
+              </span>
             </div>
 
-            {/* Giãn cách (VR-M03-PUB-01: Auto-swap khi Min > Max) */}
-            <div className="flex items-center justify-start sm:justify-end gap-2 text-xs">
-              <span className="font-bold text-slate-700">GIÃN CÁCH TỪ</span>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={minDelay}
-                onChange={(e) => {
-                  const cleaned = e.target.value.replace(/\D/g, "");
-                  setMinDelay(cleaned);
-                }}
-                onBlur={() => {
-                  let curMin = parseInt(minDelay, 10);
-                  let curMax = parseInt(maxDelay, 10);
-                  if (isNaN(curMin) || curMin <= 0) curMin = 1;
-                  if (isNaN(curMax) || curMax <= 0) curMax = 1;
-
-                  if (curMin > curMax) {
-                    // Tự động hoán đổi Auto-swap (VR-M03-PUB-01)
-                    setMinDelay(curMax);
-                    setMaxDelay(curMin);
-                  } else {
-                    setMinDelay(curMin);
-                    setMaxDelay(curMax);
-                  }
-                }}
-                className="w-16 h-8 text-center bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold font-mono focus:bg-white focus:border-blue-500 focus:outline-none"
-              />
-              <span className="text-slate-400">giây</span>
-              <span className="font-bold text-slate-700">ĐẾN</span>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={maxDelay}
-                onChange={(e) => {
-                  const cleaned = e.target.value.replace(/\D/g, "");
-                  setMaxDelay(cleaned);
-                }}
-                onBlur={() => {
-                  let curMin = parseInt(minDelay, 10);
-                  let curMax = parseInt(maxDelay, 10);
-                  if (isNaN(curMin) || curMin <= 0) curMin = 1;
-                  if (isNaN(curMax) || curMax <= 0) curMax = 1;
-
-                  if (curMin > curMax) {
-                    // Tự động hoán đổi Auto-swap (VR-M03-PUB-01)
-                    setMinDelay(curMax);
-                    setMaxDelay(curMin);
-                  } else {
-                    setMinDelay(curMin);
-                    setMaxDelay(curMax);
-                  }
-                }}
-                className="w-16 h-8 text-center bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold font-mono focus:bg-white focus:border-blue-500 focus:outline-none"
-              />
-              <span className="text-slate-400">giây</span>
+            {/* Giãn cách + mũi tên ±10s (Ticket #64); auto-swap khi Min > Max */}
+            <div className="flex items-center justify-start sm:justify-end gap-1.5 text-xs whitespace-nowrap">
+              <span className="font-bold text-slate-700 shrink-0">GIÃN CÁCH TỪ</span>
+              <div className="inline-flex items-center gap-1 shrink-0">
+                <div className="flex items-stretch h-8 rounded-lg border border-slate-200 bg-slate-50 overflow-hidden focus-within:border-blue-500">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={minDelay}
+                    onChange={(e) => {
+                      const cleaned = e.target.value.replace(/\D/g, "");
+                      setMinDelay(cleaned);
+                    }}
+                    onBlur={() => applyDelayPair(minDelay, maxDelay)}
+                    className="w-12 h-full text-center bg-transparent text-xs font-semibold font-mono focus:outline-none"
+                    aria-label="Giãn cách tối thiểu (giây)"
+                  />
+                  <div className="flex flex-col border-l border-slate-200 w-5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => stepMinDelay(DELAY_STEP)}
+                      className="flex-1 flex items-center justify-center text-slate-500 hover:bg-slate-100 hover:text-slate-800 cursor-pointer"
+                      title={`Tăng ${DELAY_STEP}s`}
+                      aria-label="Tăng giãn cách tối thiểu"
+                    >
+                      <ChevronUp size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={minDelayNum <= 1}
+                      onClick={() => stepMinDelay(-DELAY_STEP)}
+                      className="flex-1 flex items-center justify-center border-t border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      title={`Giảm ${DELAY_STEP}s`}
+                      aria-label="Giảm giãn cách tối thiểu"
+                    >
+                      <ChevronDown size={12} />
+                    </button>
+                  </div>
+                </div>
+                <span className="text-slate-400 shrink-0">giây</span>
+              </div>
+              <span className="font-bold text-slate-700 shrink-0">ĐẾN</span>
+              <div className="inline-flex items-center gap-1 shrink-0">
+                <div className="flex items-stretch h-8 rounded-lg border border-slate-200 bg-slate-50 overflow-hidden focus-within:border-blue-500">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={maxDelay}
+                    onChange={(e) => {
+                      const cleaned = e.target.value.replace(/\D/g, "");
+                      setMaxDelay(cleaned);
+                    }}
+                    onBlur={() => applyDelayPair(minDelay, maxDelay)}
+                    className="w-12 h-full text-center bg-transparent text-xs font-semibold font-mono focus:outline-none"
+                    aria-label="Giãn cách tối đa (giây)"
+                  />
+                  <div className="flex flex-col border-l border-slate-200 w-5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => stepMaxDelay(DELAY_STEP)}
+                      className="flex-1 flex items-center justify-center text-slate-500 hover:bg-slate-100 hover:text-slate-800 cursor-pointer"
+                      title={`Tăng ${DELAY_STEP}s`}
+                      aria-label="Tăng giãn cách tối đa"
+                    >
+                      <ChevronUp size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={maxDelayNum <= 1}
+                      onClick={() => stepMaxDelay(-DELAY_STEP)}
+                      className="flex-1 flex items-center justify-center border-t border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      title={`Giảm ${DELAY_STEP}s`}
+                      aria-label="Giảm giãn cách tối đa"
+                    >
+                      <ChevronDown size={12} />
+                    </button>
+                  </div>
+                </div>
+                <span className="text-slate-400 shrink-0">giây</span>
+              </div>
             </div>
           </div>
 
-          {viewState === "config" && (
-            <div className="pt-2 space-y-2">
-              <button
-                type="button"
-                onClick={handleStartPost}
-                disabled={!validationStatus.ready}
-                className={`w-full py-3 rounded-xl font-bold text-xs shadow-sm flex items-center justify-center gap-2 transition-all ${validationStatus.ready
-                    ? "bg-blue-600 hover:bg-blue-700 text-white cursor-pointer active:scale-[0.99] shadow-blue-500/20"
-                    : "bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed opacity-80"
-                  }`}
-              >
-                <Play size={14} className={validationStatus.ready ? "fill-white" : "fill-slate-400"} />
-                <span>KÍCH HOẠT ĐĂNG {isReels ? "REELS" : "STORY"}</span>
-              </button>
-              {!validationStatus.ready && (
-                <p className="text-[11px] text-amber-600 font-medium text-center flex items-center justify-center gap-1.5 pt-0.5">
-                  <Info size={13} />
-                  <span>{validationStatus.reason}</span>
-                </p>
-              )}
-            </div>
-          )}
+          <div className="pt-2 space-y-2">
+            <button
+              type="button"
+              onClick={handleStartPost}
+              disabled={!validationStatus.ready}
+              className={`w-full py-3 rounded-xl font-bold text-xs shadow-sm flex items-center justify-center gap-2 transition-all ${validationStatus.ready
+                  ? "bg-blue-600 hover:bg-blue-700 text-white cursor-pointer active:scale-[0.99] shadow-blue-500/20"
+                  : "bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed opacity-80"
+                }`}
+            >
+              <Play size={14} className={validationStatus.ready ? "fill-white" : "fill-slate-400"} />
+              <span>KÍCH HOẠT ĐĂNG {isReels ? "REELS" : "STORY"}</span>
+            </button>
+            {!validationStatus.ready && (
+              <p className="text-[11px] text-amber-600 font-medium text-center flex items-center justify-center gap-1.5 pt-0.5">
+                <Info size={13} />
+                <span>{validationStatus.reason}</span>
+              </p>
+            )}
+          </div>
         </div>
       </div>
+      )}
 
       {/* ── RUNNING STATE ONLY (FIGMA NODE 1613:3170) ── */}
       {viewState === "running" && (
@@ -1554,8 +1793,8 @@ export function ReelsPostView({ mode, initialState = "config" }) {
               <span className="text-sm font-bold text-slate-900">Giám sát tiến trình {isReels ? "Reels" : "Story"}</span>
             </div>
 
-            {/* 7 Stat Badges — chỉ hiển thị tổng quan, không lọc */}
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 md:grid-cols-7">
+            {/* Stat Badges — chỉ hiển thị tổng quan, không lọc (Ticket #68: bỏ thẻ Acc chết) */}
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-6">
               <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
                 <div className="flex w-full items-center justify-between">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ĐANG CHẠY</span>
@@ -1593,15 +1832,9 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">LỖI HỆ THỐNG</span>
                   <span className="h-2 w-2 rounded-full bg-rose-500" />
                 </div>
-                <span className="mt-1 text-2xl font-black text-rose-500">{metrics.systemError}</span>
-              </div>
-
-              <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
-                <div className="flex w-full items-center justify-between">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ACC CHẾT</span>
-                  <span className="h-2 w-2 rounded-full bg-red-700" />
-                </div>
-                <span className="mt-1 text-2xl font-black text-red-700">{metrics.deadAccount}</span>
+                <span className="mt-1 text-2xl font-black text-rose-500">
+                  {metrics.systemError + metrics.deadAccount}
+                </span>
               </div>
 
               <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
@@ -1628,7 +1861,9 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                     <th className="py-2.5 px-4">LUỒNG</th>
                     <th className="py-2.5 px-4">TÀI KHOẢN</th>
                     <th className="py-2.5 px-4">TRẠNG THÁI</th>
-                    <th className="py-2.5 px-4">NỘI DUNG</th>
+                    {/* Ticket #66: Story không cột caption — Reels giữ NỘI DUNG */}
+                    {isReels && <th className="py-2.5 px-4">NỘI DUNG</th>}
+                    {!isReels && <th className="py-2.5 px-4">FILE MEDIA</th>}
                     <th className="py-2.5 px-4">HOẠT ĐỘNG HIỆN TẠI</th>
                     <th className="py-2.5 px-4">THỜI GIAN</th>
                   </tr>
@@ -1648,14 +1883,44 @@ export function ReelsPostView({ mode, initialState = "config" }) {
                         <p className="text-[10px] font-mono text-slate-400">{row.accountUid}</p>
                       </td>
                       <td className="py-2.5 px-4">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-blue-50 text-blue-700 border border-blue-200">
-                          <span className="w-1.5 h-1.5 rounded-full bg-blue-600 animate-ping" />
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium ${
+                          row.status === "Đang chạy"
+                            ? "bg-blue-50 text-blue-700 border border-blue-200"
+                            : row.status === "Tạm dừng"
+                              ? "bg-amber-50 text-amber-700 border border-amber-200"
+                              : row.status === "Hoàn thành"
+                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                : row.status === "Lỗi hệ thống"
+                                  ? "bg-rose-50 text-rose-700 border border-rose-200"
+                                  : row.status === "Acc chết"
+                                    ? "bg-red-100 text-red-800 border border-red-300"
+                                    : "bg-slate-100 text-slate-700 border border-slate-200"
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${
+                            row.status === "Đang chạy"
+                              ? "bg-blue-600 animate-ping"
+                              : row.status === "Tạm dừng"
+                                ? "bg-amber-500"
+                                : row.status === "Hoàn thành"
+                                  ? "bg-emerald-500"
+                                  : row.status === "Lỗi hệ thống"
+                                    ? "bg-rose-600"
+                                    : row.status === "Acc chết"
+                                      ? "bg-red-700"
+                                      : "bg-slate-600"
+                          }`} />
                           {row.status}
                         </span>
                       </td>
-                      <td className="py-2.5 px-4 max-w-[200px] truncate text-slate-700 font-mono text-[11px]" title={row.content || row.contentPreview}>
-                        {row.contentPreview}
-                      </td>
+                      {isReels ? (
+                        <td className="py-2.5 px-4 max-w-[200px] truncate text-slate-700 font-mono text-[11px]" title={row.content || row.contentPreview}>
+                          {row.contentPreview}
+                        </td>
+                      ) : (
+                        <td className="py-2.5 px-4 max-w-[200px] truncate text-slate-700 font-mono text-[11px]" title={row.mediaPath || row.mediaName}>
+                          {row.mediaName || row.mediaPath || "—"}
+                        </td>
+                      )}
                       <td className="py-2.5 px-4">
                         <ProgressActivityCell row={row} />
                       </td>

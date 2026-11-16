@@ -8,7 +8,6 @@ import {
   Eye,
   EyeOff,
   Search,
-  RotateCw,
   Copy,
   Check,
   Play,
@@ -18,6 +17,8 @@ import {
   Image as ImageIcon,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   Info,
   RefreshCw,
   Plus,
@@ -117,7 +118,7 @@ const loginFilterOptions = [
   { value: "failed", label: "Đăng nhập lỗi" },
 ];
 
-export function StatusPostView({ initialState = "config", onHasPostsChange }) {
+export function StatusPostView({ initialState = "config", onHasPostsChange, isActive = true }) {
   const router = useRouter();
   const [viewState, setViewState] = useState(initialState);
   const [viewingImageCard, setViewingImageCard] = useState(null);
@@ -308,10 +309,10 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
   // Có nhập Khung Prompt AI
   const hasPromptContent = Boolean(String(prompt || "").trim());
 
-  // Chỉ cảnh báo unsaved trên màn thiết lập. Khi đã vào giám sát (đang chạy / xong / dừng)
-  // nội dung đã khóa / đã gửi engine — không hiện modal "Thay đổi chưa lưu".
+  // Chỉ cảnh báo unsaved trên màn thiết lập Status đang hiện.
+  // Tab Story/Reels (Status ẩn) hoặc đã vào giám sát (nút Quay lại cấu hình) → không hiện modal.
   const needsLeaveConfirm =
-    viewState === "config" && (hasDisplayedPosts || hasPromptContent);
+    isActive && viewState === "config" && (hasDisplayedPosts || hasPromptContent);
 
   useEffect(() => {
     onHasPostsChange?.(needsLeaveConfirm);
@@ -319,6 +320,13 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
   }, [needsLeaveConfirm, onHasPostsChange]);
 
   const { setUnsavedChanges } = useUnsavedChanges();
+
+  // Màn giám sát / đăng xong (Quay lại cấu hình): tắt guard ngay, kể cả Status vẫn mounted ẩn
+  useEffect(() => {
+    if (viewState !== "running") return;
+    setUnsavedChanges(false);
+    onHasPostsChange?.(false);
+  }, [viewState, setUnsavedChanges, onHasPostsChange]);
 
   // Option A: bấm "Rời đi" → bỏ trạng thái Đã lưu, lần sau phải Lưu lại
   useEffect(() => {
@@ -598,6 +606,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
       if (d.post_type && d.post_type !== "status") return;
 
       setViewState("running");
+      setUnsavedChanges(false);
+      onHasPostsChange?.(false);
       setIsPaused(!!d.is_paused);
       setIsStopped(!!d.is_stopped);
       if (d.metrics) setMetrics(d.metrics);
@@ -818,8 +828,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
     setShowConfigErrors(true);
     if (!hasApiKeySource) {
       toast.warning(
-        "Vui lòng chọn hoặc nhập File Gemini API Keys trước khi thực thi!",
-        "THIẾU FILE API KEY",
+        "Vui lòng nhập Gemini API Key hoặc chọn file trước khi thực thi!",
+        "THIẾU GEMINI API KEY",
       );
       return false;
     }
@@ -1243,10 +1253,11 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
       };
     }
     const threads = parseInt(threadCount, 10) || 0;
-    if (threads > selectedAccs.length) {
+    const maxThreads = Math.min(10, selectedAccs.length);
+    if (threads > maxThreads) {
       return {
         ready: false,
-        reason: `Số luồng chạy (${threads}) không được vượt quá số tài khoản đã chọn (${selectedAccs.length}).`,
+        reason: `Số luồng chạy (${threads}) không được vượt quá số tài khoản đã chọn (${selectedAccs.length}), tối đa 10.`,
       };
     }
     const missingAccounts = selectedAccs.filter((acc) => {
@@ -1332,6 +1343,9 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
     handleSaveSettingsToDb();
     // Bước 5 UC-M03-07: Lập tức chuyển sang view running để khóa thao tác chỉnh sửa
     setViewState("running");
+    // Đang giám sát / sau đăng → tắt guard (nút Quay lại cấu hình)
+    setUnsavedChanges(false);
+    onHasPostsChange?.(false);
     setIsPaused(false);
     setIsStopped(false);
 
@@ -1546,16 +1560,53 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
   };
 
   const selectedCount = accounts.filter((a) => a.selected).length;
+  // Ticket #63: max = số acc đã chọn, không vượt 10; chưa chọn acc → max 1
+  const maxThreadCount = selectedCount > 0 ? Math.min(10, selectedCount) : 1;
   const threadCountNum = parseInt(threadCount, 10) || 0;
-  const threadExceedsAccounts =
-    selectedCount > 0 && threadCountNum > selectedCount;
+  const threadExceedsAccounts = threadCountNum > maxThreadCount;
 
-  // Tự hạ số luồng khi bỏ chọn acc khiến số luồng > số acc đã chọn
+  const clampThreadCount = (raw) => {
+    let val = parseInt(raw, 10);
+    if (!val || val <= 0) val = 1;
+    if (val > maxThreadCount) val = maxThreadCount;
+    return val;
+  };
+
+  // Ticket #64: mũi tên delay ±10s; auto-swap nếu min > max
+  const DELAY_STEP = 10;
+  const normalizeDelayPair = (minRaw, maxRaw) => {
+    let curMin = parseInt(minRaw, 10);
+    let curMax = parseInt(maxRaw, 10);
+    if (isNaN(curMin) || curMin <= 0) curMin = 1;
+    if (isNaN(curMax) || curMax <= 0) curMax = 1;
+    if (curMin > curMax) return { min: curMax, max: curMin };
+    return { min: curMin, max: curMax };
+  };
+  const applyDelayPair = (minRaw, maxRaw) => {
+    const pair = normalizeDelayPair(minRaw, maxRaw);
+    setMinDelay(pair.min);
+    setMaxDelay(pair.max);
+  };
+  const stepMinDelay = (delta) => {
+    const next = Math.max(1, (parseInt(minDelay, 10) || 0) + delta);
+    applyDelayPair(next, maxDelay);
+  };
+  const stepMaxDelay = (delta) => {
+    const next = Math.max(1, (parseInt(maxDelay, 10) || 0) + delta);
+    applyDelayPair(minDelay, next);
+  };
+  const minDelayNum = parseInt(minDelay, 10) || 0;
+  const maxDelayNum = parseInt(maxDelay, 10) || 0;
+
+  // Tự hạ số luồng khi bỏ chọn acc / vượt trần 10
   useEffect(() => {
-    if (selectedCount <= 0) return;
     const val = parseInt(threadCount, 10);
-    if (val > selectedCount) setThreadCount(selectedCount);
-  }, [selectedCount, threadCount]);
+    if (!val || val <= 0) {
+      setThreadCount(1);
+      return;
+    }
+    if (val > maxThreadCount) setThreadCount(maxThreadCount);
+  }, [selectedCount, maxThreadCount, threadCount]);
 
   return (
     <div className="space-y-6  pb-20">
@@ -1579,14 +1630,17 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
           </div>
 
           <div className="space-y-4 pt-1">
-            {/* File chứa danh sách Gemini API Keys */}
+            {/* Gemini API Key — dán text hoặc chọn file */}
             <div className="space-y-2">
               <label className="text-xs sm:text-sm font-bold text-[#0F172A] flex items-center">
                 <span>
-                  File chứa danh sách Gemini API Keys{" "}
+                  Gemini API Key{" "}
                   <span className="text-red-500" aria-hidden="true">*</span>
                 </span>
-                <span className="w-3.5 h-3.5 rounded-full border border-[#94A3B8] text-[#94A3B8] inline-flex items-center justify-center text-[10px] font-normal leading-none shrink-0 ml-1 cursor-help select-none" title="Chọn file text (.txt) chứa danh sách API Key của Gemini, hoặc nhập đường dẫn file">
+                <span
+                  className="w-3.5 h-3.5 rounded-full border border-[#94A3B8] text-[#94A3B8] inline-flex items-center justify-center text-[10px] font-normal leading-none shrink-0 ml-1 cursor-help select-none"
+                  title="Dán API Key Gemini trực tiếp (mỗi dòng 1 key), hoặc chọn file .txt chứa danh sách key"
+                >
                   ?
                 </span>
               </label>
@@ -1630,14 +1684,21 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                     data-1p-ignore="true"
                     value={keyFileName}
                     onChange={(e) => {
+                      const v = e.target.value;
                       setKeyFromFile(false);
-                      setApiKeyContent("");
-                      setKeyFileName(e.target.value);
+                      setKeyFileName(v);
+                      // Cho phép dán key / nhiều dòng key hoặc đường dẫn file
+                      setApiKeyContent(v.trim());
                     }}
-                    placeholder="Nhập đường dẫn file key hoặc chọn file..."
+                    onBlur={() => {
+                      if (String(apiKeyContent || keyFileName || "").trim()) {
+                        fetchGeminiModels(apiKeyContent || keyFileName);
+                      }
+                    }}
+                    placeholder="Dán Gemini API Key hoặc chọn file .txt..."
                     aria-required="true"
                     aria-invalid={showConfigErrors && !hasApiKeySource}
-                    className={`flex-1 h-11 px-4 bg-white border rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] outline-none focus:ring-1 transition-all ${
+                    className={`flex-1 h-11 px-4 bg-white border rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] outline-none focus:ring-1 transition-all font-mono ${
                       showConfigErrors && !hasApiKeySource
                         ? "border-red-400 focus:border-red-500 focus:ring-red-500"
                         : "border-[#E2E8F0] focus:border-[#2563EB] focus:ring-[#2563EB]"
@@ -1657,7 +1718,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                   className="h-11 px-6 bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#2563EB] text-xs sm:text-sm font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
                 >
                   <Upload size={14} />
-                  <span>{keyFromFile && keyFileName ? "Đổi File" : "Chọn File Key"}</span>
+                  <span>{keyFromFile && keyFileName ? "Đổi File" : "Chọn File"}</span>
                 </button>
               </div>
               {keyFromFile && keyFileName ? (
@@ -1666,12 +1727,12 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                 </p>
               ) : (
                 <p className="text-[11px] text-[#64748B]">
-                  Có thể chọn file .txt hoặc nhập đường dẫn file key thủ công.
+                  Có thể dán API Key trực tiếp (mỗi dòng 1 key) hoặc chọn file .txt.
                 </p>
               )}
               {showConfigErrors && !hasApiKeySource && (
                 <p className="text-[11px] font-medium text-red-500">
-                  Vui lòng chọn hoặc nhập File Gemini API Keys.
+                  Vui lòng nhập Gemini API Key hoặc chọn file.
                 </p>
               )}
             </div>
@@ -1774,7 +1835,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
       </div>
       )}
 
-      {/* ── BƯỚC 2: CHỌN DANH SÁCH THỰC THI ── */}
+      {/* ── BƯỚC 2: CHỌN DANH SÁCH THỰC THI — ẩn khi đang tiến trình (Ticket #65) ── */}
+      {viewState === "config" && (
       <div className="space-y-3">
         <div className="flex items-center gap-2.5">
           <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
@@ -1804,18 +1866,6 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                setSearchAccount("");
-                loadAccountsFromDb();
-              }}
-              disabled={isLoadingAccounts}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
-              title="Tải lại danh sách tài khoản"
-            >
-              <RotateCw size={17} className={isLoadingAccounts ? "animate-spin text-[#2563EB]" : ""} />
-            </button>
           </div>
 
           {/* Toolbar Tìm kiếm chuẩn Figma (Full width, placeholder, icon xám) */}
@@ -2088,7 +2138,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
               {!hasRequiredConfig && (
                 <p className="pt-0.5 text-center text-[11px] font-medium text-amber-600">
                   {!hasApiKeySource
-                    ? "Chọn File Gemini API Keys ở Bước 1 trước khi thực thi."
+                    ? "Nhập Gemini API Key hoặc chọn file ở Bước 1 trước khi thực thi."
                     : !hasModel
                       ? "Chọn Model Gemini ở Bước 1 trước khi thực thi."
                       : "Nhập Khung Prompt AI ở Bước 1 trước khi thực thi."}
@@ -2098,6 +2148,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
           )}
         </div>
       </div>
+      )}
 
       {/* ── KHU VỰC XEM TRƯỚC (CHUẨN 1:1 THEO FIGMA DESIGN) ── */}
       {viewState === "config" && (
@@ -2399,106 +2450,161 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                     )}
                   </div>
 
-                  {/* Số lượng chạy (VR-M03-CFG-01, BR-M03-CFG-02): ≤ số acc đã chọn */}
+                  {/* Số lượng chạy: min 1, max = min(10, số acc đã chọn) + mũi tên ↑↓ */}
                   <div className="flex flex-col items-start sm:items-center gap-1">
                     <div className="flex items-center justify-start sm:justify-center gap-3">
                       <span className="text-xs font-bold text-slate-700 whitespace-nowrap">
                         SỐ LUỒNG CHẠY
                       </span>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={threadCount}
-                        onChange={(e) => {
-                          // Chỉ cho phép nhập số (VR-M03-CFG-01)
-                          const cleaned = e.target.value.replace(/\D/g, "");
-                          setThreadCount(cleaned);
-                        }}
-                        onBlur={() => {
-                          // Nếu để trống hoặc = 0 -> mặc định = 1 (BR-M03-CFG-02)
-                          // Không vượt quá số tài khoản đã chọn
-                          let val = parseInt(threadCount, 10);
-                          if (!val || val <= 0) val = 1;
-                          if (selectedCount > 0 && val > selectedCount) {
-                            toast.warning(
-                              `Số luồng tối đa bằng số tài khoản đã chọn (${selectedCount}).`,
-                              "GIỚI HẠN LUỒNG",
-                            );
-                            val = selectedCount;
-                          }
-                          setThreadCount(val);
-                        }}
-                        className={`w-16 h-8 text-center bg-slate-50 border rounded-lg text-xs font-semibold focus:bg-white focus:outline-none font-mono ${
+                      <div
+                        className={`flex items-stretch h-8 rounded-lg border bg-slate-50 overflow-hidden ${
                           threadExceedsAccounts
-                            ? "border-red-400 focus:border-red-500"
-                            : "border-slate-200 focus:border-blue-500"
+                            ? "border-red-400"
+                            : "border-slate-200 focus-within:border-blue-500"
                         }`}
-                      />
+                      >
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={threadCount}
+                          onChange={(e) => {
+                            const cleaned = e.target.value.replace(/\D/g, "");
+                            if (cleaned === "") {
+                              setThreadCount("");
+                              return;
+                            }
+                            const n = parseInt(cleaned, 10);
+                            if (n > maxThreadCount) {
+                              toast.warning(
+                                `Số luồng tối đa ${maxThreadCount} (≤ số acc đã chọn, tối đa 10).`,
+                                "GIỚI HẠN LUỒNG",
+                              );
+                              setThreadCount(maxThreadCount);
+                              return;
+                            }
+                            setThreadCount(cleaned);
+                          }}
+                          onBlur={() => setThreadCount(clampThreadCount(threadCount))}
+                          className="w-12 h-full text-center bg-transparent text-xs font-semibold focus:outline-none font-mono"
+                          aria-label="Số luồng chạy"
+                        />
+                        <div className="flex flex-col border-l border-slate-200 w-6 shrink-0">
+                          <button
+                            type="button"
+                            disabled={threadCountNum >= maxThreadCount}
+                            onClick={() =>
+                              setThreadCount(clampThreadCount(threadCountNum + 1))
+                            }
+                            className="flex-1 flex items-center justify-center text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                            title={`Tăng (tối đa ${maxThreadCount})`}
+                            aria-label="Tăng số luồng"
+                          >
+                            <ChevronUp size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={threadCountNum <= 1}
+                            onClick={() =>
+                              setThreadCount(clampThreadCount(threadCountNum - 1))
+                            }
+                            className="flex-1 flex items-center justify-center border-t border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                            title="Giảm (tối thiểu 1)"
+                            aria-label="Giảm số luồng"
+                          >
+                            <ChevronDown size={12} />
+                          </button>
+                        </div>
+                      </div>
                       <span className="text-xs text-slate-500 font-medium">Luồng</span>
                     </div>
-                    {threadExceedsAccounts && (
-                      <span className="text-[10px] font-medium text-red-500">
-                        Tối đa {selectedCount} (theo số acc đã chọn)
-                      </span>
-                    )}
+                    <span className="text-[10px] font-medium text-slate-400">
+                      Tối đa {maxThreadCount}
+                      {selectedCount > 0
+                        ? ` (theo ${selectedCount} acc đã chọn)`
+                        : " (chọn acc trước)"}
+                    </span>
                   </div>
 
-                  {/* Giãn cách (VR-M03-PUB-01: Auto-swap khi Min > Max) */}
-                  <div className="flex items-center justify-start sm:justify-end gap-2 text-xs">
-                    <span className="font-bold text-slate-700">GIÃN CÁCH TỪ</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={minDelay}
-                      onChange={(e) => {
-                        const cleaned = e.target.value.replace(/\D/g, "");
-                        setMinDelay(cleaned);
-                      }}
-                      onBlur={() => {
-                        let curMin = parseInt(minDelay, 10);
-                        let curMax = parseInt(maxDelay, 10);
-                        if (isNaN(curMin) || curMin <= 0) curMin = 1;
-                        if (isNaN(curMax) || curMax <= 0) curMax = 1;
-
-                        if (curMin > curMax) {
-                          // Tự động hoán đổi Auto-swap (VR-M03-PUB-01)
-                          setMinDelay(curMax);
-                          setMaxDelay(curMin);
-                        } else {
-                          setMinDelay(curMin);
-                          setMaxDelay(curMax);
-                        }
-                      }}
-                      className="w-16 h-8 text-center bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold font-mono focus:bg-white focus:border-blue-500 focus:outline-none"
-                    />
-                    <span className="text-slate-400">giây</span>
-                    <span className="font-bold text-slate-700">ĐẾN</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={maxDelay}
-                      onChange={(e) => {
-                        const cleaned = e.target.value.replace(/\D/g, "");
-                        setMaxDelay(cleaned);
-                      }}
-                      onBlur={() => {
-                        let curMin = parseInt(minDelay, 10);
-                        let curMax = parseInt(maxDelay, 10);
-                        if (isNaN(curMin) || curMin <= 0) curMin = 1;
-                        if (isNaN(curMax) || curMax <= 0) curMax = 1;
-
-                        if (curMin > curMax) {
-                          // Tự động hoán đổi Auto-swap (VR-M03-PUB-01)
-                          setMinDelay(curMax);
-                          setMaxDelay(curMin);
-                        } else {
-                          setMinDelay(curMin);
-                          setMaxDelay(curMax);
-                        }
-                      }}
-                      className="w-16 h-8 text-center bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold font-mono focus:bg-white focus:border-blue-500 focus:outline-none"
-                    />
-                    <span className="text-slate-400">giây</span>
+                  {/* Giãn cách + mũi tên ±10s (Ticket #64); auto-swap khi Min > Max */}
+                  <div className="flex items-center justify-start sm:justify-end gap-1.5 text-xs whitespace-nowrap">
+                    <span className="font-bold text-slate-700 shrink-0">GIÃN CÁCH TỪ</span>
+                    <div className="inline-flex items-center gap-1 shrink-0">
+                      <div className="flex items-stretch h-8 rounded-lg border border-slate-200 bg-slate-50 overflow-hidden focus-within:border-blue-500">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={minDelay}
+                          onChange={(e) => {
+                            const cleaned = e.target.value.replace(/\D/g, "");
+                            setMinDelay(cleaned);
+                          }}
+                          onBlur={() => applyDelayPair(minDelay, maxDelay)}
+                          className="w-12 h-full text-center bg-transparent text-xs font-semibold font-mono focus:outline-none"
+                          aria-label="Giãn cách tối thiểu (giây)"
+                        />
+                        <div className="flex flex-col border-l border-slate-200 w-5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => stepMinDelay(DELAY_STEP)}
+                            className="flex-1 flex items-center justify-center text-slate-500 hover:bg-slate-100 hover:text-slate-800 cursor-pointer"
+                            title={`Tăng ${DELAY_STEP}s`}
+                            aria-label="Tăng giãn cách tối thiểu"
+                          >
+                            <ChevronUp size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={minDelayNum <= 1}
+                            onClick={() => stepMinDelay(-DELAY_STEP)}
+                            className="flex-1 flex items-center justify-center border-t border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                            title={`Giảm ${DELAY_STEP}s`}
+                            aria-label="Giảm giãn cách tối thiểu"
+                          >
+                            <ChevronDown size={12} />
+                          </button>
+                        </div>
+                      </div>
+                      <span className="text-slate-400 shrink-0">giây</span>
+                    </div>
+                    <span className="font-bold text-slate-700 shrink-0">ĐẾN</span>
+                    <div className="inline-flex items-center gap-1 shrink-0">
+                      <div className="flex items-stretch h-8 rounded-lg border border-slate-200 bg-slate-50 overflow-hidden focus-within:border-blue-500">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={maxDelay}
+                          onChange={(e) => {
+                            const cleaned = e.target.value.replace(/\D/g, "");
+                            setMaxDelay(cleaned);
+                          }}
+                          onBlur={() => applyDelayPair(minDelay, maxDelay)}
+                          className="w-12 h-full text-center bg-transparent text-xs font-semibold font-mono focus:outline-none"
+                          aria-label="Giãn cách tối đa (giây)"
+                        />
+                        <div className="flex flex-col border-l border-slate-200 w-5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => stepMaxDelay(DELAY_STEP)}
+                            className="flex-1 flex items-center justify-center text-slate-500 hover:bg-slate-100 hover:text-slate-800 cursor-pointer"
+                            title={`Tăng ${DELAY_STEP}s`}
+                            aria-label="Tăng giãn cách tối đa"
+                          >
+                            <ChevronUp size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={maxDelayNum <= 1}
+                            onClick={() => stepMaxDelay(-DELAY_STEP)}
+                            className="flex-1 flex items-center justify-center border-t border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                            title={`Giảm ${DELAY_STEP}s`}
+                            aria-label="Giảm giãn cách tối đa"
+                          >
+                            <ChevronDown size={12} />
+                          </button>
+                        </div>
+                      </div>
+                      <span className="text-slate-400 shrink-0">giây</span>
+                    </div>
                   </div>
                 </div>
 
@@ -2596,8 +2702,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
               <span className="text-sm font-bold text-slate-900">Giám sát tiến trình đăng bài</span>
             </div>
 
-            {/* 7 Stat Badges — chỉ hiển thị tổng quan, không lọc */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2.5">
+            {/* Stat Badges — chỉ hiển thị tổng quan, không lọc (Ticket #68: bỏ thẻ Acc chết) */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5">
               <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
                 <div className="flex w-full items-center justify-between">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ĐANG CHẠY</span>
@@ -2635,15 +2741,9 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">LỖI HỆ THỐNG</span>
                   <span className="h-2 w-2 rounded-full bg-rose-500" />
                 </div>
-                <span className="mt-1 text-2xl font-black text-rose-500">{metrics.systemError}</span>
-              </div>
-
-              <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
-                <div className="flex w-full items-center justify-between">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">ACC CHẾT</span>
-                  <span className="h-2 w-2 rounded-full bg-red-700" />
-                </div>
-                <span className="mt-1 text-2xl font-black text-red-700">{metrics.deadAccount}</span>
+                <span className="mt-1 text-2xl font-black text-rose-500">
+                  {metrics.systemError + metrics.deadAccount}
+                </span>
               </div>
 
               <div className="flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3 text-left">
@@ -2712,7 +2812,11 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                               ? "bg-amber-500"
                               : row.status === "Hoàn thành"
                                 ? "bg-emerald-500"
-                                : "bg-slate-600"
+                                : row.status === "Lỗi hệ thống"
+                                  ? "bg-rose-600"
+                                  : row.status === "Acc chết"
+                                    ? "bg-red-700"
+                                    : "bg-slate-600"
                             }`} />
                           {row.status}
                         </span>

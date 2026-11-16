@@ -999,6 +999,12 @@ function CreateView() {
   const [accountsError, setAccountsError] = useState("");
   // Danh mục Module 2: map id → { id, name, color } để hiện cột Danh mục
   const [categoriesById, setCategoriesById] = useState({});
+  // Nuốt lỗi ở đây thì hỏng danh mục trông y hệt "chưa có danh mục nào":
+  // badge rơi về "Danh mục #41" và ô lọc trống, không ai biết vì sao.
+  const [categoriesError, setCategoriesError] = useState("");
+  // Chưa tải xong thì CHƯA được kết luận "không tìm thấy danh mục". Thiếu cờ này
+  // thì trong lúc chờ, mọi badge hiện "Danh mục #41" — một cái tên bịa.
+  const [categoriesLoaded, setCategoriesLoaded] = useState(false);
   // Tải tài khoản theo trang khi cuộn (API /api/accounts/page, 10 dòng/lần, tìm kiếm phía server)
   const [pageInfo, setPageInfo] = useState({ nextCursor: null, hasMore: false });
   const [loadingMore, setLoadingMore] = useState(false);
@@ -1009,6 +1015,11 @@ function CreateView() {
   const sentinelRef = useRef(null);
   const [selected, setSelected] = useState([]);
   const [search, setSearch] = useState("");
+  // Bộ lọc danh mục: "all" | "none" (chưa gán) | id dạng chuỗi.
+  // Lọc ở phía server chứ không lọc mảng `accounts`: danh sách này phân trang
+  // theo con trỏ, lọc trên mảng chỉ lọc được 10 dòng đã tải nên người dùng sẽ
+  // tưởng danh mục đó không có nick nào.
+  const [categoryFilter, setCategoryFilter] = useState("all");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const debouncedSearchRef = useRef("");
   const [pageText, setPageText] = useState("");
@@ -1176,7 +1187,7 @@ function CreateView() {
   }, []);
 
   // cursor = null: tải lại từ đầu (lần đầu / đổi từ khóa); có cursor: tải thêm khi cuộn
-  const fetchAccountsPage = useCallback(async (cursor, query) => {
+  const fetchAccountsPage = useCallback(async (cursor, query, category = "all") => {
     const id = ++accountRequestId.current;
     const first = cursor == null;
     // Trang đầu: trạng thái "đang tải" do nơi gọi bật (bộ hẹn giờ tìm kiếm / nút Thử lại)
@@ -1190,6 +1201,10 @@ function CreateView() {
         search: query,
         status: "live",
         login_status: "logged_in",
+        // Chỉ gửi tham số đang dùng: gửi category_id=undefined kèm uncategorized=false
+        // vẫn là "không lọc", nhưng gửi thừa khóa làm khóa cache API khác nhau.
+        ...(category === "none" ? { uncategorized: true } : {}),
+        ...(category !== "all" && category !== "none" ? { category_id: Number(category) } : {}),
       });
       if (id !== accountRequestId.current) return; // đã có yêu cầu mới hơn (vd. gõ từ khóa khác)
       const rows = Array.isArray(result?.accounts) ? result.accounts : [];
@@ -1213,10 +1228,52 @@ function CreateView() {
     }
   }, []);
 
+  // Đọc tươi (fresh): danh mục là bảng tra cứu cho badge và ô lọc, phục vụ bản
+  // cache cũ sẽ làm cả hai sai cùng lúc mà không có dấu hiệu gì.
+  const categoryRequestId = useRef(0);
+  const loadCategories = useCallback(async ({ fresh = false } = {}) => {
+    const id = ++categoryRequestId.current;
+    try {
+      const rows = await getCategories({ fresh });
+      if (id !== categoryRequestId.current) return; // đã có lượt tải mới hơn
+      const list = Array.isArray(rows) ? rows : [];
+      setCategoriesById(Object.fromEntries(list.map((row) => [row.id, row])));
+      setCategoriesError("");
+    } catch (err) {
+      if (id !== categoryRequestId.current) return;
+      // KHÔNG xoá bảng tra cứu đang có: một lỗi thoáng qua không phải là bằng
+      // chứng rằng các danh mục đã biến mất.
+      setCategoriesError(err.message || "Không tải được danh mục");
+    } finally {
+      if (id === categoryRequestId.current) setCategoriesLoaded(true);
+    }
+  }, []);
+
+  // "Tất cả" trước, rồi danh mục theo bảng chữ cái tiếng Việt, "Chưa gán" cuối.
+  const categoryOptions = useMemo(() => {
+    const list = Object.values(categoriesById)
+      .slice()
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "vi"));
+    return [
+      { value: "all", label: "Tất cả danh mục" },
+      ...list.map((item) => ({ value: String(item.id), label: item.name || `Danh mục #${item.id}` })),
+      { value: "none", label: "Chưa gán danh mục" },
+    ];
+  }, [categoriesById]);
+
+  // Đổi danh mục phải hiện skeleton ngay: danh sách cũ còn trên màn trong lúc
+  // gọi lại API sẽ trông như bộ lọc không ăn.
+  const handleCategoryFilterChange = (value) => {
+    if (value === categoryFilter) return;
+    setAccountsLoading(true);
+    setAccountsError("");
+    setCategoryFilter(value);
+  };
+
   const loadAccounts = () => {
     setAccountsLoading(true);
     setAccountsError("");
-    fetchAccountsPage(null, debouncedSearch);
+    fetchAccountsPage(null, debouncedSearch, categoryFilter);
   };
 
   // Chờ 300ms sau khi gõ rồi mới tìm trên server
@@ -1233,10 +1290,10 @@ function CreateView() {
     return () => clearTimeout(timer);
   }, [search]);
 
-  // Tải trang đầu khi vào trang / đổi từ khóa
+  // Tải trang đầu khi vào trang / đổi từ khóa / đổi danh mục
   useEffect(() => {
-    fetchAccountsPage(null, debouncedSearch);
-  }, [debouncedSearch, fetchAccountsPage]);
+    fetchAccountsPage(null, debouncedSearch, categoryFilter);
+  }, [debouncedSearch, categoryFilter, fetchAccountsPage]);
 
   // Cuộn gần đáy bảng thì tải thêm
   useEffect(() => {
@@ -1244,11 +1301,11 @@ function CreateView() {
     const root = accountScrollRef.current;
     if (!node || !root || !pageInfo.hasMore || accountsLoading || loadingMore || moreError) return undefined;
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) fetchAccountsPage(pageInfo.nextCursor, debouncedSearch);
+      if (entries.some((entry) => entry.isIntersecting)) fetchAccountsPage(pageInfo.nextCursor, debouncedSearch, categoryFilter);
     }, { root, rootMargin: "160px" });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [pageInfo, accountsLoading, loadingMore, moreError, debouncedSearch, fetchAccountsPage]);
+  }, [pageInfo, accountsLoading, loadingMore, moreError, debouncedSearch, categoryFilter, fetchAccountsPage]);
 
   useEffect(() => {
     getCreatorSettings()
@@ -1257,14 +1314,9 @@ function CreateView() {
         if (settings?.gemini_model) setGeminiModel(settings.gemini_model);
       })
       .catch(() => {});
-    getCategories()
-      .then((rows) => {
-        const list = Array.isArray(rows) ? rows : [];
-        setCategoriesById(Object.fromEntries(list.map((row) => [row.id, row])));
-      })
-      .catch(() => setCategoriesById({}));
+    loadCategories();
     refreshStatus();
-  }, [refreshStatus]);
+  }, [refreshStatus, loadCategories]);
 
   useEffect(() => {
     if (!running) return undefined;
@@ -1585,6 +1637,26 @@ function CreateView() {
           />
           {/* Không dùng breakpoint: tự xuống dòng theo độ rộng khối (sidebar mở/đóng làm vùng nội dung đổi rộng) */}
           <div className="flex max-w-full min-w-0 items-center gap-3">
+            {categoriesError ? (
+              <button
+                type="button"
+                onClick={() => loadCategories({ fresh: true })}
+                title={categoriesError}
+                className="flex h-10 shrink-0 items-center gap-1.5 rounded-lg bg-[#FEF3C7] px-3 text-xs font-semibold text-[#92400E] hover:bg-[#FDE68A]"
+              >
+                <CreatorIcon name="warning" />
+                Lỗi tải danh mục — Thử lại
+              </button>
+            ) : (
+              <CustomSelect
+                value={categoryFilter}
+                onChange={handleCategoryFilterChange}
+                options={categoryOptions}
+                size="sm"
+                className="w-44 min-w-0 shrink"
+                buttonClassName="!h-10 !rounded-lg !border-0 !bg-[#EFF4FF] !px-3 !text-sm !text-[#0B1C30] !shadow-none"
+              />
+            )}
             <label className="relative block w-72 min-w-0 shrink">
               <span className="sr-only">Tìm tài khoản</span>
               <CreatorIcon name="search" className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-[#434655]" />
@@ -1653,8 +1725,8 @@ function CreateView() {
               ) : visibleAccounts.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-4 py-10 text-center text-sm text-[#434655]">
-                    {debouncedSearch
-                      ? "Không tìm thấy nick Live + đã đăng nhập khớp từ khóa."
+                    {debouncedSearch || categoryFilter !== "all"
+                      ? "Không có nick Live + đã đăng nhập nào khớp từ khóa và danh mục đang lọc."
                       : "Không có nick Live và đã đăng nhập. Đăng nhập / check Live ở Quản lý tài khoản rồi quay lại."}
                   </td>
                 </tr>
@@ -1699,7 +1771,11 @@ function CreateView() {
                         {account.profile_name || "Chưa cập nhật"}
                       </td>
                       <td className="px-4">
-                        <CategoryBadge category={categoriesById[account.category_id]} categoryId={account.category_id} />
+                        <CategoryBadge
+                          category={categoriesById[account.category_id]}
+                          categoryId={account.category_id}
+                          ready={categoriesLoaded}
+                        />
                       </td>
                       <td className="px-4">
                         <LoginBadge status={account.login_status} />
@@ -1734,7 +1810,7 @@ function CreateView() {
                     {moreError}
                     <button
                       type="button"
-                      onClick={() => fetchAccountsPage(pageInfo.nextCursor, debouncedSearch)}
+                      onClick={() => fetchAccountsPage(pageInfo.nextCursor, debouncedSearch, categoryFilter)}
                       className="ml-3 font-semibold text-[#2563EB] hover:underline"
                     >
                       Thử lại
@@ -2323,11 +2399,31 @@ const LOGIN_BADGE = {
   failed: { label: "Đăng nhập lỗi", box: "bg-[#FFF1F2] text-[#BE123C]", dot: "bg-[#F43F5E]" },
 };
 
-function CategoryBadge({ category, categoryId }) {
-  const name = category?.name || (categoryId == null ? "Chưa gán" : `Danh mục #${categoryId}`);
+/**
+ * Tên danh mục KHÔNG nằm trong payload tài khoản — API chỉ trả `category_id`.
+ * Tên phải tra từ /api/accounts/categories, nên có một quãng mà bảng tra cứu
+ * chưa về. Quãng đó tuyệt đối không được hiện "Danh mục #41": đó là chuỗi bịa,
+ * người dùng tưởng danh mục mất tên, còn QA thì báo lỗi hiển thị.
+ *
+ * ready = false  -> ô xám chờ
+ * ready, có tên  -> tên thật
+ * ready, mất tra -> "Không rõ" (hiếm: danh mục của chủ sở hữu khác)
+ */
+function CategoryBadge({ category, categoryId, ready = true }) {
+  if (categoryId == null) {
+    return (
+      <span className="inline-flex h-6 max-w-[140px] items-center truncate rounded border border-slate-200 bg-slate-50 px-2 text-xs font-semibold text-slate-700">
+        Chưa gán
+      </span>
+    );
+  }
+  if (!ready && !category) {
+    return <span aria-label="Đang tải danh mục" className="inline-block h-6 w-20 animate-pulse rounded bg-slate-200/70 align-middle" />;
+  }
+  const name = category?.name || "Không rõ";
   return (
     <span
-      title={name}
+      title={category?.name ? name : `Không tra được tên của danh mục #${categoryId}`}
       style={categoryLabelStyle(category)}
       className="inline-flex h-6 max-w-[140px] items-center truncate rounded border border-slate-200 bg-slate-50 px-2 text-xs font-semibold text-slate-700"
     >
