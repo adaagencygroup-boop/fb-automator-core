@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 import threading
 import time
@@ -207,19 +208,60 @@ def append_session_log(
         logger.debug(f"[Scanner] append_session_log #{session_id}: {exc}")
 
 
-def _wait_if_paused(session_id: int, stop_event: threading.Event) -> bool:
+def _wait_if_paused_timed(
+    session_id: int,
+    stop_event: threading.Event,
+    poll_sec: float = 0.4,
+) -> Tuple[bool, float]:
     """
-    Treo tại điểm an toàn khi pause. Trả True nếu bị stop trong lúc pause.
+    Treo tại điểm an toàn khi pause. Trả (bị_stop, số_giây_đã_treo).
+    Nơi gọi dùng số giây treo để lùi mốc idle / timeout — thời gian tạm dừng
+    không được tính là "không có kết quả mới" hay "chạy quá lâu".
     """
+    paused_since: Optional[float] = None
     while True:
         with _ACTIVE_SESSIONS_LOCK:
             pause_ev = _ACTIVE_PAUSE_EVENTS.get(session_id)
             paused = bool(pause_ev and pause_ev.is_set())
         if not paused:
-            return False
+            waited = (time.time() - paused_since) if paused_since is not None else 0.0
+            if waited >= 1:
+                append_session_log(
+                    session_id,
+                    f"Tiếp tục sau {waited:.0f}s tạm dừng (không tính vào idle / timeout)",
+                    "info",
+                )
+            return False, waited
+        if paused_since is None:
+            paused_since = time.time()
         if stop_event.is_set():
-            return True
-        time.sleep(0.4)
+            return True, time.time() - paused_since
+        time.sleep(poll_sec)
+
+
+def pick_page_delay(
+    min_s: Optional[float],
+    max_s: Optional[float],
+    fallback_s: float = 2.0,
+) -> float:
+    """Giãn cách giữa 2 Page: ngẫu nhiên trong [min_s, max_s]; không có khoảng → fallback_s."""
+    if min_s is None and max_s is None:
+        return max(0.0, float(fallback_s or 0))
+    lo = max(0.0, float(min_s if min_s is not None else max_s))
+    hi = max(lo, float(max_s if max_s is not None else lo))
+    return random.uniform(lo, hi)
+
+
+def sleep_page_delay(delay_s: float, stop_event: threading.Event) -> bool:
+    """Chờ giãn cách giữa 2 Page; bấm dừng thì thoát ngay. Trả True nếu bị stop."""
+    if delay_s <= 0:
+        return stop_event.is_set()
+    return stop_event.wait(delay_s)
+
+
+def _wait_if_paused(session_id: int, stop_event: threading.Event) -> bool:
+    """Như _wait_if_paused_timed nhưng chỉ trả True nếu bị stop trong lúc pause."""
+    return _wait_if_paused_timed(session_id, stop_event)[0]
 
 
 def _dom_scroll_metrics(driver) -> Tuple[frozenset, int, int]:
@@ -355,6 +397,43 @@ def get_scraping_account(
     except Exception as exc:
         logger.warning(f"[Scanner] Lỗi truy vấn tài khoản cào: {exc}")
         return None
+
+
+def resolve_scan_accounts(
+    account_uids: Optional[List[str]] = None,
+    account_uid: Optional[str] = None,
+    owner_key: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Danh sách acc dùng cho 1 phiên (xoay vòng), theo đúng thứ tự người dùng chọn.
+    - account_uids rỗng → dùng account_uid; cả hai rỗng → tự chọn 1 acc của owner.
+    - Acc không thuộc owner / DIE / CHECKPOINT bị loại; nếu không còn acc nào → ValueError
+      (lỗi đầu tiên, API trả 422).
+    """
+    raw = [str(u or "").strip() for u in (account_uids or [])]
+    if not any(raw) and account_uid:
+        raw = [str(account_uid).strip()]
+    uids: List[str] = []
+    for u in raw:
+        if u and u not in uids:
+            uids.append(u)
+    if not uids:
+        acc = get_scraping_account(None, owner_key=owner_key)
+        return [acc] if acc else []
+
+    accounts: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    for u in uids:
+        try:
+            acc = get_scraping_account(u, owner_key=owner_key)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        if acc:
+            accounts.append(acc)
+    if not accounts and errors:
+        raise ValueError(errors[0])
+    return accounts
 
 
 def create_scan_session(
@@ -765,6 +844,7 @@ def run_page_search_flow(
     stop_reason = "COMPLETED"
     error_message: Optional[str] = None
     start_time = time.time()
+    paused_total = 0.0  # giây tạm dừng — không tính vào MAX_DURATION_SEC
     stagnant_scroll_streak = 0
     use_container_scroll = False
 
@@ -817,7 +897,9 @@ def run_page_search_flow(
 
         # 5. Vòng scroll thu hoạch chống lặp (chỉ dẫn mục 3)
         while True:
-            if _wait_if_paused(session_id, stop_event):
+            stopped_in_pause, paused_s = _wait_if_paused_timed(session_id, stop_event)
+            paused_total += paused_s
+            if stopped_in_pause:
                 stop_reason = "USER_STOPPED"
                 break
 
@@ -826,7 +908,7 @@ def run_page_search_flow(
                 stop_reason = "USER_STOPPED"
                 break
 
-            elapsed = int(time.time() - start_time)
+            elapsed = int(time.time() - start_time - paused_total)
             if elapsed >= MAX_DURATION_SEC:
                 stop_reason = "TIMEOUT"
                 break
@@ -941,9 +1023,14 @@ def run_page_search_flow(
             )
 
     except Exception as exc:
-        logger.error(f"[Scanner] Lỗi thực thi phiên #{session_id}: {exc}", exc_info=True)
-        stop_reason = "ERROR"
-        error_message = str(exc)
+        if stop_event.is_set():
+            # Dừng khẩn cấp đóng Chrome giữa chừng → lỗi WebDriver là hệ quả của việc dừng
+            logger.info(f"[Scanner] Phiên #{session_id} dừng giữa thao tác trình duyệt: {exc}")
+            stop_reason = "USER_STOPPED"
+        else:
+            logger.error(f"[Scanner] Lỗi thực thi phiên #{session_id}: {exc}", exc_info=True)
+            stop_reason = "ERROR"
+            error_message = str(exc)
     finally:
         with _ACTIVE_SESSIONS_LOCK:
             _ACTIVE_STOP_EVENTS.pop(session_id, None)
@@ -3071,6 +3158,7 @@ def run_hashtag_search_flow(
     error_message: Optional[str] = None
     start_time = time.time()
     last_qualified_at = start_time
+    paused_total = 0.0  # giây tạm dừng — không tính vào MAX_DURATION_SEC
     stagnant_scroll_streak = 0
     use_container_scroll = False
 
@@ -3118,7 +3206,7 @@ def run_hashtag_search_flow(
                 stop_reason = "USER_STOPPED"
                 break
 
-            elapsed = int(time.time() - start_time)
+            elapsed = int(time.time() - start_time - paused_total)
             if elapsed >= MAX_DURATION_SEC:
                 stop_reason = "TIMEOUT"
                 break
@@ -3151,7 +3239,12 @@ def run_hashtag_search_flow(
             use_container_scroll = False
 
             while tag_posts_count < max_posts:
-                if _wait_if_paused(session_id, stop_event):
+                stopped_in_pause, paused_s = _wait_if_paused_timed(session_id, stop_event)
+                if paused_s:
+                    # Thời gian tạm dừng không tính là idle / chạy quá lâu
+                    paused_total += paused_s
+                    last_qualified_at += paused_s
+                if stopped_in_pause:
                     stop_reason = "USER_STOPPED"
                     break
                 batch_no += 1
@@ -3169,7 +3262,7 @@ def run_hashtag_search_flow(
                     )
                     break
 
-                elapsed = int(time.time() - start_time)
+                elapsed = int(time.time() - start_time - paused_total)
                 if elapsed >= MAX_DURATION_SEC:
                     stop_reason = "TIMEOUT"
                     break
@@ -3700,9 +3793,9 @@ def run_hashtag_search_flow(
             )
 
     except Exception as exc:
-        if _is_tab_closed_exc(exc):
+        if stop_event.is_set() or _is_tab_closed_exc(exc):
             logger.warning(
-                f"[Scanner] Cửa sổ đóng giữa phiên hashtag #{session_id}: {exc}"
+                f"[Scanner] Cửa sổ đóng / dừng giữa phiên hashtag #{session_id}: {exc}"
             )
             stop_reason = "USER_STOPPED"
             error_message = f"Browser/tab đóng: {exc}"

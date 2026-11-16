@@ -39,6 +39,7 @@ import {
   Checkbox,
 } from "../_listLayout";
 import { useSavedPageLists } from "../shared/useSavedPageLists";
+import { runDelete } from "../_shared";
 
 const ALL_ID = "__all__";
 const KW_PREFIX = "kw:";
@@ -309,16 +310,15 @@ export default function PageScannerListPages() {
   };
 
   const handleDeleteSelected = async () => {
-    if (!selectedKeys.length) return;
-    try {
-      await deleteScannedPages({ page_keys: selectedKeys }).catch(() => null);
-      setItems((prev) => prev.filter((r) => !selectedKeys.includes(r.page_key)));
-      setTotal((prev) => Math.max(0, prev - selectedKeys.length));
-      toast.success(`Đã xóa ${selectedKeys.length} page.`);
-      setSelectedKeys([]);
-    } catch (err) {
-      toast.error(`Lỗi xóa page: ${err.message}`);
-    }
+    const n = await runDelete({
+      count: selectedKeys.length,
+      noun: "page",
+      request: () => deleteScannedPages({ page_keys: selectedKeys }),
+    });
+    if (n == null) return;
+    setSelectedKeys([]);
+    await loadKeywords();
+    reload(page);
   };
 
   const handleDeleteCategory = () => {
