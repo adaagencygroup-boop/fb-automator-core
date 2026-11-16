@@ -16,6 +16,7 @@ import base64
 import hmac
 import hashlib
 import struct
+import threading
 from urllib.parse import urlparse, parse_qs, urlencode
 from typing import Optional, Any, List, Callable, NamedTuple
 import json
@@ -38,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 DEAD_TEXT = ("tài khoản của bạn đã bị khóa", "your account has been locked")
 BLOCK_TEXT = ("tạm thời bị chặn", "temporarily blocked")
+
+# 2 luồng Extract Share cùng Copy link → đụng 1 clipboard Windows → permalink lệch
+_CLIPBOARD_EXTRACT_LOCK = threading.Lock()
 
 
 class PostAccountDead(Exception):
@@ -673,33 +677,52 @@ def wait_dialog_closed(
 
 
 def is_audience_dialog_open(driver) -> bool:
-    """Kiểm tra xem hộp thoại chọn đối tượng (Post audience) có đang thực sự mở hay không."""
+    """True khi panel chọn đối tượng đang HIỂN THỊ (kể cả lồng trong Create post)."""
     js = """
+        function isVisible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 8 || r.height < 8) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+            return true;
+        }
         const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
-        if (dialogs.length === 0) return false;
-
         for (const d of dialogs) {
+            if (!isVisible(d)) continue;
             const label = (d.getAttribute('aria-label') || '').toLowerCase();
-            if (label.includes('đối tượng bài viết') || label.includes('post audience') || label.includes('select audience') || label.includes('chọn đối tượng')) {
-                const rect = d.getBoundingClientRect();
-                if (rect.width > 50 && rect.height > 50) return true;
+            if (label.includes('đối tượng bài viết') || label.includes('post audience')
+                || label.includes('select audience') || label.includes('chọn đối tượng')) {
+                return true;
             }
             const header = d.querySelector('h2, h1');
-            if (header) {
+            if (header && isVisible(header)) {
                 const ht = (header.innerText || header.textContent || '').trim().toLowerCase();
-                if (ht === 'đối tượng bài viết' || ht === 'post audience' || ht === 'select audience' || ht === 'chọn đối tượng') {
-                    const rect = d.getBoundingClientRect();
-                    if (rect.width > 50 && rect.height > 50) return true;
+                if (ht === 'đối tượng bài viết' || ht === 'post audience'
+                    || ht === 'select audience' || ht === 'chọn đối tượng'
+                    || ht.includes('who can see your post') || ht.includes('ai có thể xem')) {
+                    return true;
                 }
             }
-            const radios = d.querySelectorAll('div[role="radio"], div[role="radiogroup"]');
+            // Audience lồng trong Create post: Done + Back đang hiện
+            const btns = Array.from(d.querySelectorAll('div[role="button"], button')).filter(isVisible);
+            const hasDone = btns.some(b => {
+                const t = ((b.innerText || b.textContent || '') + '').trim().toLowerCase();
+                const a = ((b.getAttribute('aria-label') || '') + '').trim().toLowerCase();
+                return t === 'done' || t === 'xong' || a === 'done' || a === 'xong';
+            });
+            const hasBack = btns.some(b => {
+                const a = ((b.getAttribute('aria-label') || '') + '').trim().toLowerCase();
+                return a === 'back' || a.includes('cancel privacy');
+            });
+            if (hasDone && hasBack) return true;
+
+            const radios = Array.from(d.querySelectorAll('div[role="radio"]')).filter(isVisible);
             if (radios.length >= 2) {
-                const dText = (d.innerText || '').toLowerCase();
-                if ((dText.includes('công khai') || dText.includes('public')) && (dText.includes('bạn bè') || dText.includes('friends'))) {
-                    if (!label.includes('tạo bài viết') && !label.includes('create post')) {
-                        const rect = d.getBoundingClientRect();
-                        if (rect.width > 50 && rect.height > 50) return true;
-                    }
+                const joined = radios.map(r => ((r.innerText || '') + '').toLowerCase()).join(' | ');
+                if ((joined.includes('công khai') || joined.includes('public'))
+                    && (joined.includes('bạn bè') || joined.includes('friends'))) {
+                    return true;
                 }
             }
         }
@@ -740,6 +763,175 @@ def is_composer_dialog_open(driver) -> bool:
         return False
 
 
+def _status_dismiss_notifications_dialog(driver, log_cb=None) -> bool:
+    """Đóng hộp Notifications nếu đang đè Share/composer."""
+    def log(msg: str):
+        if log_cb:
+            log_cb(msg)
+        logger.info(msg)
+
+    try:
+        closed = driver.execute_script(
+            r"""
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                if (r.width < 20 || r.height < 20) return false;
+                const st = window.getComputedStyle(el);
+                return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0;
+            }
+            const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).filter(isVisible);
+            const notif = dialogs.find(d => {
+                const a = ((d.getAttribute('aria-label') || '') + '').toLowerCase();
+                const t = ((d.innerText || '') + '').toLowerCase();
+                return a.includes('notification') || t.startsWith('notifications')
+                    || t.includes('notification actions') || t.includes('see previous notifications');
+            });
+            if (!notif) return false;
+            const closeBtn = Array.from(notif.querySelectorAll('div[role="button"], button')).find(b => {
+                if (!isVisible(b)) return false;
+                const a = ((b.getAttribute('aria-label') || '') + '').toLowerCase();
+                const t = ((b.innerText || b.textContent || '') + '').trim().toLowerCase();
+                return a === 'close' || a === 'đóng' || t === 'close' || t === 'đóng' || a.includes('close');
+            });
+            if (closeBtn) { closeBtn.click(); return true; }
+            return 'esc';
+            """
+        )
+        if closed is True:
+            log("pre: đã đóng hộp Notifications")
+            time.sleep(0.35)
+            return True
+        if closed == "esc":
+            try:
+                from selenium.webdriver.common.action_chains import ActionChains
+                ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+                log("pre: ESC đóng Notifications")
+                time.sleep(0.35)
+                return True
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return False
+
+
+def _status_collapse_duplicate_create_posts(driver, log_cb=None) -> bool:
+    """
+    Gỡ Create post trùng — KHÔNG đóng composer vừa mở (chưa gõ vẫn 'trống').
+    - Shell không có textbox: đóng an toàn.
+    - ≥2 composer có editor: giữ cái lớn nhất (hoặc Public nếu đã có chữ), đóng phần còn lại.
+    - Chỉ còn 1 composer có editor → không đụng.
+    """
+    def log(msg: str):
+        if log_cb:
+            log_cb(msg)
+        logger.info(msg)
+
+    try:
+        res = driver.execute_script(
+            r"""
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                if (r.width < 80 || r.height < 80) return false;
+                const st = window.getComputedStyle(el);
+                return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0;
+            }
+            function hasEditor(d) {
+                return !!d.querySelector("div[role='textbox'], div[contenteditable='true'], div[data-lexical-editor='true']");
+            }
+            function looksCreate(d) {
+                if (!isVisible(d)) return false;
+                const text = (d.innerText || '').toLowerCase();
+                const aria = (d.getAttribute('aria-label') || '').toLowerCase();
+                return text.includes('create post') || text.includes('tạo bài viết')
+                    || aria.includes('create post') || aria.includes('tạo bài viết')
+                    || text.includes("what's on your mind") || text.includes('bạn đang nghĩ gì')
+                    || text.includes('add to your post') || text.includes('thêm vào bài viết');
+            }
+            function plainOf(d) {
+                const ed = d.querySelector("div[role='textbox'], div[contenteditable='true']");
+                return ((ed && (ed.innerText || ed.textContent)) || '').replace(/\s+/g, ' ').trim();
+            }
+            function privacyOf(d) {
+                const btn = Array.from(d.querySelectorAll('div[role="button"], button')).find(b => {
+                    const a = ((b.getAttribute('aria-label') || '') + '').toLowerCase();
+                    return a.includes('edit privacy') || a.includes('sharing with');
+                });
+                if (!btn) return '';
+                const t = ((btn.innerText || '') + ' ' + (btn.getAttribute('aria-label') || '')).toLowerCase();
+                if (t.includes('public') || t.includes('công khai')) return 'public';
+                if (t.includes('friends') || t.includes('bạn bè')) return 'friends';
+                return 'other';
+            }
+            function areaOf(d) {
+                const r = d.getBoundingClientRect();
+                return r.width * r.height;
+            }
+            function findClose(d) {
+                return Array.from(d.querySelectorAll('div[role="button"], button')).find(b => {
+                    const a = ((b.getAttribute('aria-label') || '') + '').toLowerCase();
+                    return a.includes('close composer') || a === 'close' || a === 'đóng';
+                });
+            }
+            const all = Array.from(document.querySelectorAll('div[role="dialog"]')).filter(looksCreate);
+            const withEd = all.filter(hasEditor);
+            const shells = all.filter(d => !hasEditor(d));
+
+            // 1) Đóng shell không có ô soạn (an toàn — không phải composer thật)
+            for (const d of shells) {
+                const c = findClose(d);
+                if (c) {
+                    c.click();
+                    return { action: 'closed_shell', count: all.length, editors: withEd.length };
+                }
+            }
+
+            if (withEd.length < 2) {
+                return { action: 'ok', count: all.length, editors: withEd.length };
+            }
+
+            // 2) ≥2 composer có editor: chọn KEEP
+            //    - ưu tiên đã có chữ + Public
+            //    - không thì cái diện tích lớn nhất (composer vừa mở thường lớn nhất)
+            let keep = null;
+            const withText = withEd.filter(d => plainOf(d).length >= 2);
+            if (withText.length) {
+                keep = withText.find(d => privacyOf(d) === 'public') || withText[0];
+            } else {
+                keep = withEd.slice().sort((a, b) => areaOf(b) - areaOf(a))[0];
+            }
+            for (const d of withEd) {
+                if (d === keep) continue;
+                const c = findClose(d);
+                if (c) {
+                    c.click();
+                    return {
+                        action: 'closed_duplicate_editor',
+                        count: withEd.length,
+                        keptPrivacy: privacyOf(keep),
+                        keptArea: Math.round(areaOf(keep)),
+                    };
+                }
+            }
+            return { action: 'keep', count: withEd.length, editors: withEd.length };
+            """
+        ) or {}
+    except Exception as e:
+        log(f"dual_composer_check lỗi: {e}")
+        return False
+    action = (res or {}).get("action")
+    if action in ("closed_shell", "closed_duplicate_editor"):
+        log(
+            f"dual_composer: {action} (dialogs={res.get('count')}, editors={res.get('editors')}, "
+            f"keptPrivacy={res.get('keptPrivacy')})"
+        )
+        time.sleep(0.55)
+        return True
+    return False
+
+
 def close_audience_dialog(driver, human: HumanInteraction, log_cb: Optional[Any] = None) -> bool:
     """
     Đóng hộp thoại Post audience CHỈ bằng nút Done / Xong trong bảng đó.
@@ -751,6 +943,13 @@ def close_audience_dialog(driver, human: HumanInteraction, log_cb: Optional[Any]
         logger.info(msg)
 
     js_click_done = """
+        function isVisible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 12 || r.height < 12) return false;
+            const st = window.getComputedStyle(el);
+            return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0;
+        }
         function triggerRealClick(el) {
             if (!el) return false;
             try {
@@ -763,35 +962,47 @@ def close_audience_dialog(driver, human: HumanInteraction, log_cb: Optional[Any]
                 return true;
             } catch (e) { return false; }
         }
-        // Chỉ trong dialog audience (không đụng dialog composer)
-        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
-        const audience = dialogs.find(d => {
-            const t = ((d.innerText || '') + ' ' + (d.getAttribute('aria-label') || '')).toLowerCase();
-            return t.includes('đối tượng') || t.includes('audience') || t.includes('ai có thể xem');
-        }) || null;
-        const root = audience || document;
-        const buttons = Array.from(root.querySelectorAll('div[role="button"], button'));
-        for (const btn of buttons) {
+        function isDone(btn) {
             const text = (btn.innerText || btn.textContent || '').trim().toLowerCase();
             const aria = (btn.getAttribute('aria-label') || '').trim().toLowerCase();
-            // Chỉ Done/Xong — KHÔNG Save/Lưu (tránh Lưu nháp), KHÔNG Back
-            if (text === 'done' || text === 'xong' || aria === 'done' || aria === 'xong') {
-                triggerRealClick(btn);
-                return true;
+            return text === 'done' || text === 'xong' || aria === 'done' || aria === 'xong';
+        }
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).filter(isVisible);
+        // Ưu tiên dialog có Done+Back (audience lồng Create post) hoặc aria audience
+        const roots = [];
+        for (const d of dialogs) {
+            const btns = Array.from(d.querySelectorAll('div[role="button"], button')).filter(isVisible);
+            const hasDone = btns.some(isDone);
+            const hasBack = btns.some(b => ((b.getAttribute('aria-label') || '') + '').toLowerCase() === 'back'
+                || ((b.getAttribute('aria-label') || '') + '').toLowerCase().includes('cancel privacy'));
+            const t = ((d.innerText || '') + ' ' + (d.getAttribute('aria-label') || '')).toLowerCase();
+            if ((hasDone && hasBack) || t.includes('đối tượng') || t.includes('post audience')
+                || t.includes('select audience') || t.includes('ai có thể xem')) {
+                roots.push(d);
             }
         }
-        for (const span of Array.from(root.querySelectorAll('span'))) {
-            const text = (span.innerText || span.textContent || '').trim().toLowerCase();
-            if (text === 'done' || text === 'xong') {
-                const btn = span.closest('div[role="button"]') || span.closest('button') || span;
-                triggerRealClick(btn);
-                return true;
+        if (!roots.length) roots.push(...dialogs);
+        for (const root of roots) {
+            const buttons = Array.from(root.querySelectorAll('div[role="button"], button')).filter(isVisible);
+            for (const btn of buttons) {
+                if (isDone(btn)) {
+                    triggerRealClick(btn);
+                    return true;
+                }
+            }
+            for (const span of Array.from(root.querySelectorAll('span')).filter(isVisible)) {
+                const text = (span.innerText || span.textContent || '').trim().toLowerCase();
+                if (text === 'done' || text === 'xong') {
+                    const btn = span.closest('div[role="button"]') || span.closest('button') || span;
+                    triggerRealClick(btn);
+                    return true;
+                }
             }
         }
         return false;
     """
 
-    for attempt in range(3):
+    for attempt in range(5):
         if not is_audience_dialog_open(driver):
             return True
         try:
@@ -3503,6 +3714,8 @@ def extract_status_post_url(
         }
 
         matched.setAttribute("data-ada-share-card", "1");
+        const matchedMsg = matched.querySelector("[data-ad-rendering-role='story_message']");
+        const msgPreview = matchedMsg ? readText(matchedMsg).slice(0, 100) : "";
 
         // Nút Share ở footer: sau Like/Comment — aria/text Share/Chia sẻ, không phải menu ...
         const isBad = (b) => {
@@ -3541,39 +3754,73 @@ def extract_status_post_url(
             scrollY: window.scrollY || 0,
             cards: cards.length,
             hasShareBtn: !!shareBtn,
-            preview: readText(matched).slice(0, 100),
+            preview: msgPreview || readText(matched).slice(0, 100),
         };
     """
 
     read_share_sheet_js = r"""
-        // Đọc link /share/p/ từ bảng Share đang mở + liệt kê nút
-        const roots = Array.from(document.querySelectorAll(
-            'div[role="dialog"], div[role="menu"], div[data-pagelet*="Share"], [aria-label*="Share"], [aria-label*="Chia sẻ"]'
-        ));
-        // fallback: mọi dialog/menu gần đây
-        const allRoots = roots.length ? roots : Array.from(document.querySelectorAll('div[role="dialog"], div[role="menu"]'));
+        // Chỉ đọc bảng Share thật — bỏ Notifications / Create post / audience
+        function isVisible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 20 || r.height < 20) return false;
+            const st = window.getComputedStyle(el);
+            return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0;
+        }
+        function rootBlob(root) {
+            return (((root.getAttribute('aria-label') || '') + ' ' + (root.innerText || '')).toLowerCase());
+        }
+        function isNoise(root) {
+            const t = rootBlob(root);
+            if (t.includes('notification') || t.startsWith('notifications')
+                || t.includes('see previous notifications') || t.includes('notification actions')) return true;
+            if (t.includes('create post') || t.includes('tạo bài viết')) return true;
+            if (t.includes('post audience') || t.includes('select audience') || t.includes('đối tượng bài viết')) return true;
+            return false;
+        }
+        function looksLikeShare(root) {
+            const t = rootBlob(root);
+            if (isNoise(root)) return false;
+            if (t.includes('copy link') || t.includes('sao chép liên kết')) return true;
+            if (t.includes('share now') || t.includes('chia sẻ ngay')) return true;
+            if (/facebook\.com\/share\/p\//i.test(t)) return true;
+            if ((t.includes('share') || t.includes('chia sẻ')) && (t.includes('send') || t.includes('gửi') || t.includes('copy'))) return true;
+            return false;
+        }
+        const candidates = Array.from(document.querySelectorAll(
+            'div[role="dialog"], div[role="menu"], div[data-pagelet*="Share"]'
+        )).filter(isVisible);
+        let allRoots = candidates.filter(looksLikeShare);
+        if (!allRoots.length) {
+            // fallback hẹp: dialog/menu có Copy link, vẫn loại Notifications
+            allRoots = candidates.filter(r => {
+                if (isNoise(r)) return false;
+                const t = rootBlob(r);
+                return t.includes('copy link') || t.includes('sao chép liên kết') || /share\/p\//i.test(t);
+            });
+        }
         const buttons = [];
         let shareHref = null;
         let hasCopy = false;
         for (const root of allRoots) {
             for (const a of Array.from(root.querySelectorAll('a[href]'))) {
                 const h = a.href || "";
-                if (/facebook\.com\/share\/p\//i.test(h)) {
-                    shareHref = h;
-                }
+                if (/facebook\.com\/share\/p\//i.test(h)) shareHref = h;
             }
             const blob = (root.innerText || root.textContent || "");
             const m = blob.match(/https?:\/\/(?:www\.|web\.)?facebook\.com\/share\/p\/[A-Za-z0-9_-]+\/?/i);
             if (m && !shareHref) shareHref = m[0];
 
             for (const b of Array.from(root.querySelectorAll('div[role="button"], button, span[role="button"], a[role="link"]'))) {
+                if (!isVisible(b)) continue;
                 const text = ((b.innerText || b.textContent || "") + "").replace(/\s+/g, " ").trim();
                 const aria = (b.getAttribute("aria-label") || "").trim();
                 const href = b.href || "";
                 buttons.push({ text: text.slice(0, 80), aria: aria.slice(0, 80), href: (href || "").slice(0, 160) });
                 const blob2 = (text + " " + aria).toLowerCase();
-                if (blob2.includes("copy link") || blob2.includes("sao chép liên kết") || blob2.includes("copy")) {
-                    if (!blob2.includes("copy text") && !blob2.includes("embed")) hasCopy = true;
+                if ((blob2.includes("copy link") || blob2.includes("sao chép liên kết"))
+                    && !blob2.includes("copy text") && !blob2.includes("embed")) {
+                    hasCopy = true;
                 }
                 if (/facebook\.com\/share\/p\//i.test(href) && !shareHref) shareHref = href;
             }
@@ -3582,6 +3829,13 @@ def extract_status_post_url(
     """
 
     click_copy_link_js = r"""
+        function isVisible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 8 || r.height < 8) return false;
+            const st = window.getComputedStyle(el);
+            return st.display !== 'none' && st.visibility !== 'hidden';
+        }
         function trigger(el) {
             if (!el) return false;
             try {
@@ -3592,16 +3846,20 @@ def extract_status_post_url(
                 return true;
             } catch (e) { return false; }
         }
-        const roots = Array.from(document.querySelectorAll('div[role="dialog"], div[role="menu"]'));
-        const re = /(sao chép liên kết|copy link|copy)/i;
-        const bad = /(share now|chia sẻ ngay|đăng|post|embed|nhúng|like|thích|comment|bình luận)/i;
+        function isNoiseRoot(root) {
+            const t = (((root.getAttribute('aria-label') || '') + ' ' + (root.innerText || '')).toLowerCase());
+            return t.includes('notification') || t.startsWith('notifications')
+                || t.includes('create post') || t.includes('tạo bài viết');
+        }
+        const roots = Array.from(document.querySelectorAll('div[role="dialog"], div[role="menu"]'))
+            .filter(isVisible).filter(r => !isNoiseRoot(r));
+        const re = /(sao chép liên kết|copy link)/i;
         for (const root of roots) {
             for (const b of Array.from(root.querySelectorAll('div[role="button"], button, span[role="button"], a'))) {
+                if (!isVisible(b)) continue;
                 const text = ((b.innerText || b.textContent || "") + " " + (b.getAttribute("aria-label") || "")).replace(/\s+/g, " ").trim();
                 if (!re.test(text)) continue;
-                if (bad.test(text) && !/copy link|sao chép liên kết/i.test(text)) continue;
-                // tránh Share Now
-                if (/share now|chia sẻ ngay/i.test(text)) continue;
+                if (/share now|chia sẻ ngay|embed|nhúng/i.test(text)) continue;
                 trigger(b);
                 return { clicked: true, label: text.slice(0, 80) };
             }
@@ -3801,6 +4059,12 @@ def extract_status_post_url(
         except Exception:
             pass
 
+        # Đóng Notifications trước khi tìm Share (tránh đọc nhầm dialog)
+        try:
+            _status_dismiss_notifications_dialog(driver, log_cb=_log)
+        except Exception:
+            pass
+
         # ── 1. Tìm card khớp (≤10s, scrollY=0) ──
         _log("Extract(share): tìm card khớp trên feed hiện tại (scrollY=0, không /me)...")
         matched_info = None
@@ -3830,146 +4094,162 @@ def extract_status_post_url(
             _log("Extract(share): không khớp card — Tier5, không thử timestamp/Embed/me.")
             return _fallback_profile()
 
-        # ── 2. Bấm Share trên card ──
-        share_clicked = False
-        try:
-            btn = driver.find_element(By.CSS_SELECTOR, "[data-ada-share-btn='1']")
-            try:
-                driver.execute_script(
-                    "arguments[0].scrollIntoView({block:'nearest', inline:'nearest'});", btn
-                )
-            except Exception:
-                pass
-            try:
-                btn.click()
-            except Exception:
-                driver.execute_script("arguments[0].click();", btn)
-            share_clicked = True
-            _log("Extract(share): đã bấm nút Share trên card khớp.")
-        except Exception as e:
-            _log(f"Extract(share): không bấm được nút Share — {e}")
+        # Mutex clipboard OS: 2 luồng Copy cùng lúc → permalink lệch / clipboard rỗng
+        _log("Extract(share): chờ khóa clipboard (tránh 2 luồng Copy đụng nhau)...")
+        _clip_locked = _CLIPBOARD_EXTRACT_LOCK.acquire(timeout=60)
+        if not _clip_locked:
+            _log("Extract(share): không lấy được khóa clipboard trong 60s — Tier5.")
             return _fallback_profile()
 
-        # Chờ bảng Share ≤5s
         share_url = None
         link_source = None
-        sheet_deadline = time.time() + 5.0
         sheet_seen = False
-        while time.time() < sheet_deadline:
-            try:
-                sheet = driver.execute_script(read_share_sheet_js)
-            except Exception as e:
-                _log(f"Extract(share): đọc bảng Share lỗi: {e}")
-                sheet = None
-            if isinstance(sheet, dict):
-                if int(sheet.get("rootCount") or 0) > 0 or sheet.get("buttons"):
-                    sheet_seen = True
-                href = _normalize_share_p(sheet.get("shareHref"))
-                if href:
-                    share_url = href
-                    link_source = "dom"
-                    _log(f"Extract(share): lấy /share/p/ từ DOM bảng Share: {share_url}")
-                    break
-                if sheet.get("hasCopy"):
-                    _grant_clipboard_permission()
-                    # Snapshot clipboard TRƯỚC Copy để biết khi nào FB ghi xong
-                    before_clip = _read_clipboard_os()
-                    _log(
-                        f"Extract(share): clipboard trước Copy "
-                        f"(len={len(before_clip or '')})={((before_clip or '')[:120])!r}"
-                    )
-                    try:
-                        clicked = driver.execute_script(click_copy_link_js)
-                        _log(f"Extract(share): bấm Copy link → {clicked}")
-                    except Exception as e:
-                        _log(f"Extract(share): lỗi bấm Copy link: {e}")
-                        clicked = None
-
-                    # Chờ clipboard đổi — KHÔNG Escape ngay (Escape dễ đọc nhầm clipboard cũ)
-                    clip = _wait_clipboard_after_copy(before_clip, timeout=4.0)
-                    _log(
-                        f"Extract(share): clipboard sau Copy "
-                        f"(len={len(clip or '')})={((clip or '')[:180])!r}"
-                    )
-                    href2 = _extract_any_post_link(clip)
-                    if href2 and _normalize_share_p(href2):
-                        share_url = _normalize_share_p(href2)
-                        link_source = "clipboard_os"
-                        _log(f"Extract(share): lấy /share/p/ từ clipboard OS: {share_url}")
-                        break
-                    if href2 and _accept_permalink(href2):
-                        # FB đôi khi copy thẳng permalink — nhận luôn, khỏi mở /share/p/
-                        accepted = _accept_permalink(href2)
-                        _close_share_sheet()
-                        _log(f"Permalink OK (source=clipboard_permalink): {accepted}")
-                        return StatusUrlResult(accepted, True)
-
-                    # Chỉ khi clipboard trống mới thử Escape bubble rồi đọc lại
-                    if not clip or clip == (before_clip or ""):
-                        _log("Extract(share): clipboard chưa đổi — thử Escape bubble quyền rồi đọc lại...")
-                        _dismiss_clipboard_permission_bubble()
-                        clip2 = _wait_clipboard_after_copy(before_clip, timeout=2.0)
-                        _log(
-                            f"Extract(share): clipboard sau Escape "
-                            f"(len={len(clip2 or '')})={((clip2 or '')[:180])!r}"
-                        )
-                        href2b = _extract_any_post_link(clip2)
-                        if href2b and _normalize_share_p(href2b):
-                            share_url = _normalize_share_p(href2b)
-                            link_source = "clipboard_os_retry"
-                            _log(f"Extract(share): lấy /share/p/ từ clipboard (retry): {share_url}")
-                            break
-                        if href2b and _accept_permalink(href2b):
-                            accepted = _accept_permalink(href2b)
-                            _close_share_sheet()
-                            _log(f"Permalink OK (source=clipboard_permalink_retry): {accepted}")
-                            return StatusUrlResult(accepted, True)
-
-                    _log(
-                        "Extract(share): Copy xong nhưng clipboard không chứa /share/p/ "
-                        "hay permalink — thử DOM lại."
-                    )
-                    try:
-                        sheet2 = driver.execute_script(read_share_sheet_js)
-                        href3 = _normalize_share_p((sheet2 or {}).get("shareHref")) if isinstance(sheet2, dict) else None
-                        if href3:
-                            share_url = href3
-                            link_source = "dom_after_copy"
-                            _log(f"Extract(share): lấy /share/p/ từ DOM sau Copy: {share_url}")
-                            break
-                    except Exception:
-                        pass
-                    # Đã Copy 1 lần — thoát vòng chờ sheet (menu thường đã đóng)
-                    break
-            time.sleep(0.5)
-
-        if not share_url:
-            # Log nút trong bảng rồi đóng → Tier5
-            try:
-                sheet = driver.execute_script(read_share_sheet_js)
-                if isinstance(sheet, dict):
-                    _log(
-                        f"Extract(share): không có /share/p/ — sheet_seen={sheet_seen} "
-                        f"hasCopy={sheet.get('hasCopy')} buttons={sheet.get('buttons')!r}"
-                    )
-            except Exception:
-                _log("Extract(share): không có /share/p/ và không đọc được nút bảng Share.")
-            _close_share_sheet()
-            _log("Extract(share): Share fail → Tier5 (không timestamp / Embed /me).")
-            return _fallback_profile()
-
-        _close_share_sheet()
-        time.sleep(0.4)
-        # Kiểm tra card còn trên feed
+        early_permalink = None
         try:
-            still = driver.execute_script(
-                "return !!document.querySelector(\"[data-ada-share-card='1']\");"
-            )
-            _log(f"Extract(share): sau đóng Share, card còn trên feed={bool(still)}")
-        except Exception:
-            pass
+            # ── 2. Bấm Share trên card (trong khóa) ──
+            try:
+                btn = driver.find_element(By.CSS_SELECTOR, "[data-ada-share-btn='1']")
+                try:
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'nearest', inline:'nearest'});", btn
+                    )
+                except Exception:
+                    pass
+                try:
+                    btn.click()
+                except Exception:
+                    driver.execute_script("arguments[0].click();", btn)
+                _log("Extract(share): đã bấm nút Share trên card khớp.")
+            except Exception as e:
+                _log(f"Extract(share): không bấm được nút Share — {e}")
+                return _fallback_profile()
 
-        # ── 3. Mở /share/p/ tab mới → chờ permalink ──
+            # Chờ bảng Share ≤5s
+            sheet_deadline = time.time() + 5.0
+            while time.time() < sheet_deadline:
+                try:
+                    sheet = driver.execute_script(read_share_sheet_js)
+                except Exception as e:
+                    _log(f"Extract(share): đọc bảng Share lỗi: {e}")
+                    sheet = None
+                if isinstance(sheet, dict):
+                    # Chỉ coi là Share sheet khi có Copy /share/p (không tính Notifications)
+                    if sheet.get("hasCopy") or sheet.get("shareHref") or int(sheet.get("rootCount") or 0) > 0:
+                        sheet_seen = True
+                    href = _normalize_share_p(sheet.get("shareHref"))
+                    if href:
+                        share_url = href
+                        link_source = "dom"
+                        _log(f"Extract(share): lấy /share/p/ từ DOM bảng Share: {share_url}")
+                        break
+                    if sheet.get("hasCopy"):
+                        _grant_clipboard_permission()
+                        before_clip = _read_clipboard_os()
+                        _log(
+                            f"Extract(share): clipboard trước Copy "
+                            f"(len={len(before_clip or '')})={((before_clip or '')[:120])!r}"
+                        )
+                        try:
+                            clicked = driver.execute_script(click_copy_link_js)
+                            _log(f"Extract(share): bấm Copy link → {clicked}")
+                        except Exception as e:
+                            _log(f"Extract(share): lỗi bấm Copy link: {e}")
+                            clicked = None
+
+                        clip = _wait_clipboard_after_copy(before_clip, timeout=4.0)
+                        _log(
+                            f"Extract(share): clipboard sau Copy "
+                            f"(len={len(clip or '')})={((clip or '')[:180])!r}"
+                        )
+                        href2 = _extract_any_post_link(clip)
+                        if href2 and _normalize_share_p(href2):
+                            share_url = _normalize_share_p(href2)
+                            link_source = "clipboard_os"
+                            _log(f"Extract(share): lấy /share/p/ từ clipboard OS: {share_url}")
+                            break
+                        if href2 and _accept_permalink(href2):
+                            early_permalink = _accept_permalink(href2)
+                            _close_share_sheet()
+                            _log(f"Permalink OK (source=clipboard_permalink): {early_permalink}")
+                            break
+
+                        if not clip or clip == (before_clip or ""):
+                            _log("Extract(share): clipboard chưa đổi — thử Escape bubble quyền rồi đọc lại...")
+                            _dismiss_clipboard_permission_bubble()
+                            clip2 = _wait_clipboard_after_copy(before_clip, timeout=2.0)
+                            _log(
+                                f"Extract(share): clipboard sau Escape "
+                                f"(len={len(clip2 or '')})={((clip2 or '')[:180])!r}"
+                            )
+                            href2b = _extract_any_post_link(clip2)
+                            if href2b and _normalize_share_p(href2b):
+                                share_url = _normalize_share_p(href2b)
+                                link_source = "clipboard_os_retry"
+                                _log(f"Extract(share): lấy /share/p/ từ clipboard (retry): {share_url}")
+                                break
+                            if href2b and _accept_permalink(href2b):
+                                early_permalink = _accept_permalink(href2b)
+                                _close_share_sheet()
+                                _log(f"Permalink OK (source=clipboard_permalink_retry): {early_permalink}")
+                                break
+
+                        _log(
+                            "Extract(share): Copy xong nhưng clipboard không chứa /share/p/ "
+                            "hay permalink — thử DOM lại."
+                        )
+                        try:
+                            sheet2 = driver.execute_script(read_share_sheet_js)
+                            href3 = (
+                                _normalize_share_p((sheet2 or {}).get("shareHref"))
+                                if isinstance(sheet2, dict)
+                                else None
+                            )
+                            if href3:
+                                share_url = href3
+                                link_source = "dom_after_copy"
+                                _log(f"Extract(share): lấy /share/p/ từ DOM sau Copy: {share_url}")
+                                break
+                        except Exception:
+                            pass
+                        break
+                time.sleep(0.5)
+
+            if early_permalink:
+                return StatusUrlResult(early_permalink, True)
+
+            if not share_url:
+                # Log nút trong bảng rồi đóng → Tier5
+                try:
+                    sheet = driver.execute_script(read_share_sheet_js)
+                    if isinstance(sheet, dict):
+                        _log(
+                            f"Extract(share): không có /share/p/ — sheet_seen={sheet_seen} "
+                            f"hasCopy={sheet.get('hasCopy')} buttons={sheet.get('buttons')!r}"
+                        )
+                except Exception:
+                    _log("Extract(share): không có /share/p/ và không đọc được nút bảng Share.")
+                _close_share_sheet()
+                _log("Extract(share): Share fail → Tier5 (không timestamp / Embed /me).")
+                return _fallback_profile()
+
+            _close_share_sheet()
+            time.sleep(0.4)
+            # Kiểm tra card còn trên feed
+            try:
+                still = driver.execute_script(
+                    "return !!document.querySelector(\"[data-ada-share-card='1']\");"
+                )
+                _log(f"Extract(share): sau đóng Share, card còn trên feed={bool(still)}")
+            except Exception:
+                pass
+        finally:
+            try:
+                _CLIPBOARD_EXTRACT_LOCK.release()
+                _log("Extract(share): đã nhả khóa clipboard.")
+            except Exception:
+                pass
+
+        # ── 3. Mở /share/p/ tab mới → chờ permalink (ngoài khóa clipboard) ──
         _log(f"Extract(share): mở tab mới resolve {share_url} (source={link_source})...")
         handles_before = list(driver.window_handles)
         try:
@@ -4716,23 +4996,23 @@ def publish_status_post(
     except Exception:
         pass
 
-    try:
-        human.click(status_box)
-    except Exception:
-        pass
-    time.sleep(random.uniform(1.2, 1.8))
-    check_account_health(driver)
-
-    # Đảm bảo dialog "Tạo bài viết" đã xuất hiện bằng is_composer_dialog_open
-    composer_opened = False
-    for _ in range(8):
-        if is_composer_dialog_open(driver):
-            composer_opened = True
-            break
-        time.sleep(0.5)
+    # Đã có Create post thì KHÔNG click lại — click đôi dễ mở 2 modal chồng
+    composer_opened = is_composer_dialog_open(driver)
+    if not composer_opened:
+        try:
+            human.click(status_box)
+        except Exception:
+            pass
+        time.sleep(random.uniform(1.2, 1.8))
+        check_account_health(driver)
+        for _ in range(8):
+            if is_composer_dialog_open(driver):
+                composer_opened = True
+                break
+            time.sleep(0.5)
 
     if not composer_opened:
-        log("Thử kích hoạt lại khung soạn thảo bằng click trực tiếp...")
+        log("Thử kích hoạt lại khung soạn thảo bằng click trực tiếp (composer chưa mở)...")
         try:
             driver.execute_script("""
                 const el = arguments[0];
@@ -4784,6 +5064,28 @@ def publish_status_post(
         check_account_health(driver)
         raise RuntimeError("Không thể mở hộp thoại tạo bài viết trên Facebook.")
 
+    # Gỡ Notifications + shell Create post trùng (KHÔNG đóng composer vừa mở / chưa gõ)
+    _status_dismiss_notifications_dialog(driver, log_cb=log)
+    for _ in range(3):
+        if not _status_collapse_duplicate_create_posts(driver, log_cb=log):
+            break
+    if not is_composer_dialog_open(driver):
+        log("Cảnh báo: composer mất sau khi dọn modal trùng — thử mở lại 1 lần...")
+        try:
+            human.click(status_box)
+        except Exception:
+            try:
+                driver.execute_script("arguments[0].click();", status_box)
+            except Exception:
+                pass
+        time.sleep(1.2)
+        if not is_composer_dialog_open(driver):
+            check_account_health(driver)
+            raise RuntimeError(
+                "composer_closed: hộp Create post bị đóng ngay sau khi mở (dọn modal trùng). "
+                "Chưa gõ / chưa bấm Đăng."
+            )
+
     # 2. Chờ và tìm ô nhập văn bản trong hộp thoại đăng bài (chờ tối đa 15s để modal render xong)
     log("Tìm ô nhập văn bản trong hộp thoại đăng bài...")
     input_selectors = [
@@ -4827,11 +5129,21 @@ def publish_status_post(
     except Exception as e:
         logger.warning(f"Lỗi khi kiểm tra đối tượng bài viết lúc mở hộp thoại: {e}")
 
-    # Nếu audience còn mở → chỉ Done/Xong (close_audience_dialog đã siết)
-    if is_audience_dialog_open(driver):
-        log("Bảng audience còn mở — chỉ bấm Done/Xong để đóng...")
+    # Audience còn mở = đè Create post → bắt buộc Done trước khi gõ
+    for _aud_try in range(3):
+        if not is_audience_dialog_open(driver):
+            break
+        log(f"Bảng audience còn mở (đè modal đăng) — bấm Done/Xong (lần {_aud_try + 1}/3)...")
         close_audience_dialog(driver, human, log_cb=log)
-        time.sleep(0.8)
+        time.sleep(0.6)
+    if is_audience_dialog_open(driver):
+        _log_open_dialogs_snapshot(driver, log_cb=log)
+        _save_status_fail_screenshot(driver, "audience_still_open_blocks_composer", log_cb=log)
+        check_account_health(driver)
+        raise RuntimeError(
+            "audience_still_open: bảng chọn đối tượng vẫn đè hộp Create post sau khi chọn Public. "
+            "Chưa gõ / chưa bấm Đăng — không chạy extract."
+        )
 
     # Sau đóng audience: composer phải còn mở; không đi tìm Đăng nếu đã mất
     if not is_composer_dialog_open(driver):
@@ -4848,12 +5160,12 @@ def publish_status_post(
             )
     try:
         plain_now = _status_composer_plain_text(driver)
-        log(f"Sau audience: composer còn mở, nội dung hiện có {len(plain_now)} ký tự.")
+        log(f"Sau audience: composer còn mở (audience đã đóng), nội dung hiện có {len(plain_now)} ký tự.")
     except Exception:
         pass
 
     _mark("TYPE_CONTENT", "Nhập nội dung bài viết...")
-    log("Nhập nội dung bài viết theo tốc độ gõ người thật...")
+    log("Nhập nội dung bài viết qua CDP (không cướp OS focus — an toàn 2 luồng)...")
     # Tắt gõ nhầm (mistake_rate=0.0) để tránh phím Backspace làm vỡ cấu trúc draft editor của Facebook
     human.human_type(input_box, content_text or content, mistake_rate=0.0)
     time.sleep(random.uniform(0.8, 1.4))
@@ -5177,6 +5489,17 @@ def publish_status_post(
 
     # Bấm Đăng — không ENSURE_CONTENT / settle trước đó
     _mark("CLICK_POST", "Đã sẵn sàng — nhấn nút Đăng (post_clicked)...")
+    # Đóng overlay trước khi bấm (Notifications / audience Done / composer trùng)
+    _status_dismiss_notifications_dialog(driver, log_cb=log)
+    if is_audience_dialog_open(driver):
+        log("pre_click: audience còn mở — Done trước khi Đăng...")
+        close_audience_dialog(driver, human, log_cb=log)
+        time.sleep(0.5)
+    for _ in range(2):
+        if not _status_collapse_duplicate_create_posts(driver, log_cb=log):
+            break
+    post_btn = _refind_post_button() or post_btn
+
     log("Di chuột quỹ đạo Bézier tự nhiên và nhấn nút 'Đăng'...")
     clicked = False
     for attempt in range(4):

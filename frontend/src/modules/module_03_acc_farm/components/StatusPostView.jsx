@@ -117,7 +117,7 @@ const loginFilterOptions = [
   { value: "failed", label: "Đăng nhập lỗi" },
 ];
 
-export function StatusPostView({ initialState = "config", onHasPostsChange }) {
+export function StatusPostView({ initialState = "config", onHasPostsChange, isActive = true }) {
   const router = useRouter();
   const [viewState, setViewState] = useState(initialState);
   const [viewingImageCard, setViewingImageCard] = useState(null);
@@ -308,10 +308,10 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
   // Có nhập Khung Prompt AI
   const hasPromptContent = Boolean(String(prompt || "").trim());
 
-  // Chỉ cảnh báo unsaved trên màn thiết lập. Khi đã vào giám sát (đang chạy / xong / dừng)
-  // nội dung đã khóa / đã gửi engine — không hiện modal "Thay đổi chưa lưu".
+  // Chỉ cảnh báo unsaved trên màn thiết lập Status đang hiện.
+  // Tab Story/Reels (Status ẩn) hoặc đã vào giám sát (nút Quay lại cấu hình) → không hiện modal.
   const needsLeaveConfirm =
-    viewState === "config" && (hasDisplayedPosts || hasPromptContent);
+    isActive && viewState === "config" && (hasDisplayedPosts || hasPromptContent);
 
   useEffect(() => {
     onHasPostsChange?.(needsLeaveConfirm);
@@ -319,6 +319,13 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
   }, [needsLeaveConfirm, onHasPostsChange]);
 
   const { setUnsavedChanges } = useUnsavedChanges();
+
+  // Màn giám sát / đăng xong (Quay lại cấu hình): tắt guard ngay, kể cả Status vẫn mounted ẩn
+  useEffect(() => {
+    if (viewState !== "running") return;
+    setUnsavedChanges(false);
+    onHasPostsChange?.(false);
+  }, [viewState, setUnsavedChanges, onHasPostsChange]);
 
   // Option A: bấm "Rời đi" → bỏ trạng thái Đã lưu, lần sau phải Lưu lại
   useEffect(() => {
@@ -598,6 +605,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
       if (d.post_type && d.post_type !== "status") return;
 
       setViewState("running");
+      setUnsavedChanges(false);
+      onHasPostsChange?.(false);
       setIsPaused(!!d.is_paused);
       setIsStopped(!!d.is_stopped);
       if (d.metrics) setMetrics(d.metrics);
@@ -818,8 +827,8 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
     setShowConfigErrors(true);
     if (!hasApiKeySource) {
       toast.warning(
-        "Vui lòng chọn hoặc nhập File Gemini API Keys trước khi thực thi!",
-        "THIẾU FILE API KEY",
+        "Vui lòng nhập Gemini API Key hoặc chọn file trước khi thực thi!",
+        "THIẾU GEMINI API KEY",
       );
       return false;
     }
@@ -1332,6 +1341,9 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
     handleSaveSettingsToDb();
     // Bước 5 UC-M03-07: Lập tức chuyển sang view running để khóa thao tác chỉnh sửa
     setViewState("running");
+    // Đang giám sát / sau đăng → tắt guard (nút Quay lại cấu hình)
+    setUnsavedChanges(false);
+    onHasPostsChange?.(false);
     setIsPaused(false);
     setIsStopped(false);
 
@@ -1579,14 +1591,17 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
           </div>
 
           <div className="space-y-4 pt-1">
-            {/* File chứa danh sách Gemini API Keys */}
+            {/* Gemini API Key — dán text hoặc chọn file */}
             <div className="space-y-2">
               <label className="text-xs sm:text-sm font-bold text-[#0F172A] flex items-center">
                 <span>
-                  File chứa danh sách Gemini API Keys{" "}
+                  Gemini API Key{" "}
                   <span className="text-red-500" aria-hidden="true">*</span>
                 </span>
-                <span className="w-3.5 h-3.5 rounded-full border border-[#94A3B8] text-[#94A3B8] inline-flex items-center justify-center text-[10px] font-normal leading-none shrink-0 ml-1 cursor-help select-none" title="Chọn file text (.txt) chứa danh sách API Key của Gemini, hoặc nhập đường dẫn file">
+                <span
+                  className="w-3.5 h-3.5 rounded-full border border-[#94A3B8] text-[#94A3B8] inline-flex items-center justify-center text-[10px] font-normal leading-none shrink-0 ml-1 cursor-help select-none"
+                  title="Dán API Key Gemini trực tiếp (mỗi dòng 1 key), hoặc chọn file .txt chứa danh sách key"
+                >
                   ?
                 </span>
               </label>
@@ -1630,14 +1645,21 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                     data-1p-ignore="true"
                     value={keyFileName}
                     onChange={(e) => {
+                      const v = e.target.value;
                       setKeyFromFile(false);
-                      setApiKeyContent("");
-                      setKeyFileName(e.target.value);
+                      setKeyFileName(v);
+                      // Cho phép dán key / nhiều dòng key hoặc đường dẫn file
+                      setApiKeyContent(v.trim());
                     }}
-                    placeholder="Nhập đường dẫn file key hoặc chọn file..."
+                    onBlur={() => {
+                      if (String(apiKeyContent || keyFileName || "").trim()) {
+                        fetchGeminiModels(apiKeyContent || keyFileName);
+                      }
+                    }}
+                    placeholder="Dán Gemini API Key hoặc chọn file .txt..."
                     aria-required="true"
                     aria-invalid={showConfigErrors && !hasApiKeySource}
-                    className={`flex-1 h-11 px-4 bg-white border rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] outline-none focus:ring-1 transition-all ${
+                    className={`flex-1 h-11 px-4 bg-white border rounded-xl text-xs sm:text-sm text-[#0F172A] placeholder:text-[#94A3B8] outline-none focus:ring-1 transition-all font-mono ${
                       showConfigErrors && !hasApiKeySource
                         ? "border-red-400 focus:border-red-500 focus:ring-red-500"
                         : "border-[#E2E8F0] focus:border-[#2563EB] focus:ring-[#2563EB]"
@@ -1657,7 +1679,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                   className="h-11 px-6 bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#2563EB] text-xs sm:text-sm font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
                 >
                   <Upload size={14} />
-                  <span>{keyFromFile && keyFileName ? "Đổi File" : "Chọn File Key"}</span>
+                  <span>{keyFromFile && keyFileName ? "Đổi File" : "Chọn File"}</span>
                 </button>
               </div>
               {keyFromFile && keyFileName ? (
@@ -1666,12 +1688,12 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
                 </p>
               ) : (
                 <p className="text-[11px] text-[#64748B]">
-                  Có thể chọn file .txt hoặc nhập đường dẫn file key thủ công.
+                  Có thể dán API Key trực tiếp (mỗi dòng 1 key) hoặc chọn file .txt.
                 </p>
               )}
               {showConfigErrors && !hasApiKeySource && (
                 <p className="text-[11px] font-medium text-red-500">
-                  Vui lòng chọn hoặc nhập File Gemini API Keys.
+                  Vui lòng nhập Gemini API Key hoặc chọn file.
                 </p>
               )}
             </div>
@@ -2088,7 +2110,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange }) {
               {!hasRequiredConfig && (
                 <p className="pt-0.5 text-center text-[11px] font-medium text-amber-600">
                   {!hasApiKeySource
-                    ? "Chọn File Gemini API Keys ở Bước 1 trước khi thực thi."
+                    ? "Nhập Gemini API Key hoặc chọn file ở Bước 1 trước khi thực thi."
                     : !hasModel
                       ? "Chọn Model Gemini ở Bước 1 trước khi thực thi."
                       : "Nhập Khung Prompt AI ở Bước 1 trước khi thực thi."}

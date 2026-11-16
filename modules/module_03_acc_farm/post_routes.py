@@ -260,6 +260,7 @@ def generate_drafts(payload: GenerateDraftsPayload):
     chosen_model = payload.model or (settings.get('gemini_model') if settings else None) or "gemini-3.8-flash"
 
     created_drafts = []
+    errors = []
     for acc in payload.accounts:
         uid = str(acc.get('uid', ''))
         name = str(acc.get('name', ''))
@@ -301,9 +302,28 @@ def generate_drafts(payload: GenerateDraftsPayload):
             )
             created_drafts.append(post)
         except Exception as e:
+            msg = str(e)
+            errors.append({"uid": uid, "error": msg})
             logger.error(f"Lỗi tạo bài nháp cho UID {uid}: {e}")
 
-    return {"success": True, "data": created_drafts}
+    if not created_drafts:
+        detail = errors[0]["error"] if errors else "Không tạo được bài viết."
+        # Rút gọn lỗi Gemini cho FE (401 key invalid / 429 / model…)
+        lower = detail.lower()
+        if "401" in detail or "api key not valid" in lower or "unauthenticated" in lower:
+            detail = (
+                "Gemini API Key không hợp lệ hoặc đã hết hạn (HTTP 401). "
+                "Hãy tạo key mới tại Google AI Studio rồi dán/chọn lại."
+            )
+        elif "429" in detail or "resource_exhausted" in lower:
+            detail = "Gemini bị giới hạn tốc độ (HTTP 429). Thử lại sau hoặc đổi API Key."
+        raise HTTPException(status_code=400, detail=detail)
+
+    return {
+        "success": True,
+        "data": created_drafts,
+        "partial_errors": errors or None,
+    }
 
 
 @router.get("/drafts")

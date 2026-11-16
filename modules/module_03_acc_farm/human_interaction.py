@@ -20,7 +20,6 @@ import time
 from typing import Optional, Tuple, Dict, Any
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
-from selenium.webdriver.common.action_chains import ActionChains
 
 
 class HumanInteraction:
@@ -191,30 +190,52 @@ class HumanInteraction:
 
     def click(self, element: WebElement, pre_delay_range: Tuple[float, float] = (0.12, 0.38)):
         """
-        Quy trình click chuột mô phỏng hành vi người:
-        1. Di chuyển chuột tới phần tử theo quỹ đạo Bézier.
-        2. Dừng quan sát (120ms - 380ms) trước khi nhấn.
-        3. Nhấn chuột xuống (MouseDown).
-        4. Giữ phím vật lý (MouseHold: 60ms - 140ms).
-        5. Nhả chuột (MouseUp) & kích hoạt sự kiện click.
+        Click mô phỏng người — CDP-only (không ActionChains).
+
+        ActionChains dễ kéo OS/Chrome focus khi ≥2 cửa sổ (đặc biệt đôi màn hình),
+        làm luồng kia bị throttle / audience đè / gõ lệch. CDP gắn đúng session driver.
         """
         try:
+            try:
+                self.driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center', inline:'nearest'});",
+                    element,
+                )
+            except Exception:
+                pass
             target_x, target_y = self.move_mouse_to(element)
             time.sleep(random.uniform(*pre_delay_range))
 
-            # Phát sự kiện qua CDP
             self._dispatch_mouse_event("mousePressed", target_x, target_y, button="left")
             time.sleep(random.uniform(0.06, 0.14))
             self._dispatch_mouse_event("mouseReleased", target_x, target_y, button="left")
 
-            # Click trực tiếp element qua Selenium như phương án chốt hạ
-            ActionChains(self.driver).click(element).perform()
-        except Exception:
+            # Chốt bằng JS trên đúng element — không ActionChains (tránh cướp focus OS)
             try:
-                element.click()
+                self.driver.execute_script(
+                    """
+                    const el = arguments[0];
+                    if (!el) return;
+                    try {
+                        ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(evt => {
+                            el.dispatchEvent(new MouseEvent(evt, {bubbles:true, cancelable:true, view:window}));
+                        });
+                    } catch (e) {}
+                    try { el.click(); } catch (e2) {}
+                    """,
+                    element,
+                )
             except Exception:
                 try:
-                    self.driver.execute_script("arguments[0].click();", element)
+                    element.click()
+                except Exception:
+                    pass
+        except Exception:
+            try:
+                self.driver.execute_script("arguments[0].click();", element)
+            except Exception:
+                try:
+                    element.click()
                 except Exception:
                     pass
 
@@ -259,30 +280,80 @@ class HumanInteraction:
 
     def human_type(self, element: WebElement, text: str, mistake_rate: float = 0.015):
         """
-        Gõ phím mô phỏng người:
-        - Tốc độ gõ không đều (Jitter 25ms - 75ms).
-        - Tỷ lệ gõ nhầm phím và bấm Backspace sửa lại ngẫu nhiên.
-        - Hỗ trợ Emoji an toàn qua CDP tránh crash ChromeDriver.
+        Gõ phím mô phỏng người — ưu tiên CDP Input.insertText (đa luồng an toàn).
+
+        Không phụ thuộc OS foreground: send_keys/ActionChains dễ lệch khi ≥2 Chrome
+        cạnh nhau (cửa sổ nền bị throttle / focus nhảy). CDP gắn vào đúng session driver.
         """
-        self.click(element)
+        # Focus trong đúng document của driver (không cần cửa sổ đang foreground)
+        try:
+            self.driver.execute_script(
+                """
+                const el = arguments[0];
+                if (!el) return;
+                el.scrollIntoView({block:'center', inline:'nearest'});
+                try { el.focus({preventScroll:true}); } catch (e) { try { el.focus(); } catch (e2) {} }
+                try { el.click(); } catch (e) {}
+                """,
+                element,
+            )
+        except Exception:
+            try:
+                self.click(element)
+            except Exception:
+                pass
         time.sleep(random.uniform(0.1, 0.25))
 
-        for ch in text:
-            # Thỉnh thoảng gõ nhầm 1 ký tự rồi bấm Backspace sửa lại
+        def _insert(chunk: str) -> bool:
+            if not chunk:
+                return True
+            try:
+                self.driver.execute_cdp_cmd("Input.insertText", {"text": chunk})
+                return True
+            except Exception:
+                try:
+                    element.send_keys(chunk)
+                    return True
+                except Exception:
+                    return False
+
+        # Gõ theo cụm nhỏ + delay — giống người, vẫn qua CDP
+        i = 0
+        n = len(text or "")
+        while i < n:
+            ch = text[i]
+            # Thỉnh thoảng gõ nhầm rồi xóa (chỉ khi bật mistake_rate)
             if mistake_rate > 0 and random.random() < mistake_rate and ch.isalnum():
                 wrong_ch = random.choice("asdfghjklqwerty")
-                element.send_keys(wrong_ch)
+                _insert(wrong_ch)
                 time.sleep(random.uniform(0.12, 0.25))
-                element.send_keys("\b")
+                try:
+                    element.send_keys("\b")
+                except Exception:
+                    try:
+                        self.driver.execute_cdp_cmd(
+                            "Input.dispatchKeyEvent",
+                            {"type": "keyDown", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8},
+                        )
+                        self.driver.execute_cdp_cmd(
+                            "Input.dispatchKeyEvent",
+                            {"type": "keyUp", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8},
+                        )
+                    except Exception:
+                        pass
                 time.sleep(random.uniform(0.08, 0.16))
 
-            # Xử lý Emoji ngoài chuẩn BMP (🔥, ❤️, ...)
+            # Cụm 1–3 ký tự BMP; emoji / non-BMP từng ký tự
             if ord(ch) > 0xFFFF:
-                try:
-                    self.driver.execute_cdp_cmd("Input.insertText", {"text": ch})
-                except Exception:
-                    element.send_keys(ch)
+                _insert(ch)
+                i += 1
             else:
-                element.send_keys(ch)
+                take = random.randint(1, 3)
+                end = i + 1
+                while end < n and end - i < take and ord(text[end]) <= 0xFFFF:
+                    end += 1
+                chunk = text[i:end]
+                _insert(chunk)
+                i = end
 
-            time.sleep(random.uniform(0.025, 0.075))
+            time.sleep(random.uniform(0.02, 0.07))

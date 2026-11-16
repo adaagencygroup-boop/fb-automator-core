@@ -99,10 +99,12 @@ def create_driver(
     scope: str = "creator",
     verify_egress: bool = True,
     on_log: Optional[Any] = None,
+    window_slot: Optional[int] = None,
 ) -> webdriver.Chrome:
     """
     Tạo Chrome WebDriver dùng chung từ core.browser (persistent profile, proxy bridge, stealth).
     Tự động broadcast log proxy và mở Chrome ra SSE Terminal của Module 02.
+    window_slot: chỉ số luồng (0,1,...) — đặt Chrome sang màn/nửa màn tương ứng khi scope=post.
     """
     owner = owner_context.get()
 
@@ -128,4 +130,5 @@ def create_driver(
         allow_direct_fallback=True,
         verify_egress=verify_egress,
         on_log=_default_on_log,
+        window_slot=window_slot,
     )

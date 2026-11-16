@@ -22,9 +22,44 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
+import { useAccountCategories } from "@/modules/module_02_account_manager/hooks/useAccountCategories";
+import { categoryLabelStyle } from "@/modules/module_02_account_manager/components/CategorySelect";
+import { farmingDays } from "@/modules/module_02_account_manager/utils/farming-days.mjs";
 import { getPageFollowers } from "../service";
 
 const LIVE_STATUSES = new Set(["LIVE", "live", "Live"]);
+const UNCATEGORIZED = "__uncategorized__";
+
+function accountCategoryLabel(acc, categoriesById) {
+  if (acc?.category_id != null && categoriesById.has(acc.category_id)) {
+    return categoriesById.get(acc.category_id)?.name || `Danh mục #${acc.category_id}`;
+  }
+  if (acc?.category || acc?.folder) return acc.category || acc.folder;
+  return null;
+}
+
+function accountFarmDays(acc, nowMs) {
+  if (typeof acc?.farm_days === "number" && Number.isFinite(acc.farm_days)) {
+    return Math.max(0, Math.floor(acc.farm_days));
+  }
+  return farmingDays(acc?.first_login_at, nowMs);
+}
+
+function formatFarmDays(days) {
+  if (days == null) return "—";
+  return `${days} ngày`;
+}
+
+function loginBadge(acc) {
+  const raw = String(acc?.login_status || "").toLowerCase();
+  if (raw === "logged_in") {
+    return { label: "Đã đăng nhập", cls: "bg-[#EFF6FF] text-[#1877F2]", dot: "bg-[#1877F2]" };
+  }
+  if (raw === "failed") {
+    return { label: "Đăng nhập lỗi", cls: "bg-[#FEF2F2] text-[#DC2626]", dot: "bg-[#EF4444]" };
+  }
+  return { label: "Chưa đăng nhập", cls: "bg-[#F1F5F9] text-[#475569]", dot: "bg-[#94A3B8]" };
+}
 
 export const DEFAULT_SCANNED_PAGES = [
   {
@@ -174,7 +209,9 @@ export function SelectAccountsModal({
   const [category, setCategory] = useState("ALL");
   const [farmTime, setFarmTime] = useState("ALL");
   const [page, setPage] = useState(1);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const pageSize = 5;
+  const categoryData = useAccountCategories(open);
 
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
@@ -182,40 +219,70 @@ export function SelectAccountsModal({
     if (open) {
       setDraftUids(selectedUids);
       setPage(1);
+      setNowMs(Date.now());
     }
   }
 
-  const categories = useMemo(() => {
-    const s = new Set();
+  const categoriesById = useMemo(
+    () => new Map((categoryData.categories || []).map((item) => [item.id, item])),
+    [categoryData.categories],
+  );
+
+  const categoryOptions = useMemo(() => {
+    const usedIds = new Set();
+    let hasUncategorized = false;
     accounts.forEach((a) => {
-      if (a.category || a.folder) s.add(a.category || a.folder);
+      if (a?.category_id != null && categoriesById.has(a.category_id)) {
+        usedIds.add(a.category_id);
+      } else if (!(a?.category || a?.folder)) {
+        hasUncategorized = true;
+      }
     });
-    return [...s];
-  }, [accounts]);
+    const options = (categoryData.categories || [])
+      .filter((c) => usedIds.has(c.id))
+      .map((c) => ({ value: String(c.id), label: c.name }));
+    // Fallback: legacy string category/folder still on some payloads
+    const legacy = new Set();
+    accounts.forEach((a) => {
+      if (a?.category_id != null) return;
+      const label = a?.category || a?.folder;
+      if (label) legacy.add(label);
+    });
+    legacy.forEach((label) => options.push({ value: `name:${label}`, label }));
+    if (hasUncategorized) {
+      options.push({ value: UNCATEGORIZED, label: "Chưa phân loại" });
+    }
+    return options;
+  }, [accounts, categoriesById, categoryData.categories]);
 
   const filtered = useMemo(() => {
     return accounts.filter((acc) => {
-      if (
-        category !== "ALL" &&
-        (acc.category || acc.folder || "Tài khoản Clone") !== category
-      ) {
-        return false;
+      if (category !== "ALL") {
+        if (category === UNCATEGORIZED) {
+          if (acc?.category_id != null || acc?.category || acc?.folder) return false;
+        } else if (category.startsWith("name:")) {
+          const label = category.slice(5);
+          if ((acc.category || acc.folder || "") !== label) return false;
+        } else if (String(acc?.category_id ?? "") !== category) {
+          return false;
+        }
       }
       if (farmTime !== "ALL") {
-        const ft = String(acc.farm_time || "").toLowerCase();
-        if (farmTime === "1Y" && !ft.includes("năm")) return false;
-        if (farmTime === "6M" && !ft.includes("tháng") && !ft.includes("năm"))
-          return false;
+        const days = accountFarmDays(acc, nowMs);
+        if (days == null) return false;
+        if (farmTime === "1Y" && days < 365) return false;
+        if (farmTime === "6M" && days < 180) return false;
       }
       if (search.trim()) {
         const q = search.trim().toLowerCase();
+        const catLabel = accountCategoryLabel(acc, categoriesById) || "";
         const hay =
-          `${acc.name || ""} ${acc.uid || ""} ${acc.proxy || ""} ${acc.category || ""}`.toLowerCase();
+          `${acc.name || ""} ${acc.uid || ""} ${acc.proxy || ""} ${catLabel}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
-  }, [accounts, category, farmTime, search]);
+  }, [accounts, category, farmTime, search, categoriesById, nowMs]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
@@ -228,7 +295,7 @@ export function SelectAccountsModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1px]">
-      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+      <div className="flex max-h-[92vh] w-full max-w-[1400px] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[#F1F5F9] px-6 py-4">
           <div className="flex items-center gap-3">
@@ -262,7 +329,7 @@ export function SelectAccountsModal({
 
         {/* Filter bar */}
         <div className="flex flex-wrap items-center gap-3 border-b border-[#F1F5F9] bg-[#F8FAFC] px-6 py-3">
-          <div className="relative min-w-[240px] flex-1">
+          <div className="relative min-w-[280px] flex-1">
             <Search className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-[#94A3B8]" />
             <input
               value={search}
@@ -270,7 +337,7 @@ export function SelectAccountsModal({
                 setSearch(e.target.value);
                 setPage(1);
               }}
-              placeholder="Tìm theo Tên tài khoản, UID, Proxy, Thư mục..."
+              placeholder="Tìm theo Tên tài khoản, UID, Proxy, Danh mục..."
               className="h-9 w-full rounded-xl border border-[#E2E8F0] bg-white pl-10 pr-4 text-xs text-[#0F172A] outline-none focus:border-[#1877F2]"
             />
           </div>
@@ -281,12 +348,12 @@ export function SelectAccountsModal({
               setCategory(e.target.value);
               setPage(1);
             }}
-            className="h-9 rounded-xl border border-[#E2E8F0] bg-white px-3 text-xs font-semibold text-[#334155] outline-none"
+            className="h-9 min-w-[180px] rounded-xl border border-[#E2E8F0] bg-white px-3 text-xs font-semibold text-[#334155] outline-none"
           >
             <option value="ALL">Tất cả danh mục</option>
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {c}
+            {categoryOptions.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
               </option>
             ))}
           </select>
@@ -297,7 +364,7 @@ export function SelectAccountsModal({
               setFarmTime(e.target.value);
               setPage(1);
             }}
-            className="h-9 rounded-xl border border-[#E2E8F0] bg-white px-3 text-xs font-semibold text-[#334155] outline-none"
+            className="h-9 min-w-[180px] rounded-xl border border-[#E2E8F0] bg-white px-3 text-xs font-semibold text-[#334155] outline-none"
           >
             <option value="ALL">Tất cả thời gian nuôi</option>
             <option value="6M">Trên 6 tháng</option>
@@ -313,7 +380,7 @@ export function SelectAccountsModal({
               Đang tải danh sách tài khoản...
             </div>
           ) : (
-            <table className="w-full min-w-[860px] text-left text-xs">
+            <table className="w-full min-w-[1100px] text-left text-xs">
               <thead className="sticky top-0 bg-[#F8FAFC] text-[11px] font-bold uppercase text-[#64748B]">
                 <tr className="border-b border-[#E2E8F0]">
                   <th className="w-10 px-3 py-3">
@@ -343,6 +410,11 @@ export function SelectAccountsModal({
                   const realIdx = (safePage - 1) * pageSize + idx;
                   const checked = draftUids.includes(acc.uid);
                   const isLive = LIVE_STATUSES.has(String(acc.status));
+                  const accCategory =
+                    acc?.category_id != null ? categoriesById.get(acc.category_id) : null;
+                  const categoryName = accountCategoryLabel(acc, categoriesById);
+                  const farmDaysValue = accountFarmDays(acc, nowMs);
+                  const login = loginBadge(acc);
                   return (
                     <tr
                       key={acc.uid}
@@ -391,7 +463,7 @@ export function SelectAccountsModal({
                               {acc.name}
                             </p>
                             <p className="text-[11px] text-[#64748B]">
-                              {acc.email || `${acc.uid}@fb.com`}
+                              {acc.email || "Chưa có email"}
                             </p>
                           </div>
                         </div>
@@ -413,9 +485,17 @@ export function SelectAccountsModal({
                         </div>
                       </td>
                       <td className="px-3 py-3">
-                        <span className="rounded-md bg-[#EFF6FF] px-2.5 py-1 text-[11px] font-semibold text-[#1D4ED8]">
-                          {acc.category || acc.folder || "Folder Nuôi 01"}
-                        </span>
+                        {categoryName ? (
+                          <span
+                            style={categoryLabelStyle(accCategory)}
+                            title={categoryName}
+                            className="inline-block max-w-[180px] truncate rounded-md border border-[#BFDBFE] bg-[#EFF6FF] px-2.5 py-1 text-[11px] font-semibold text-[#1D4ED8]"
+                          >
+                            {categoryName}
+                          </span>
+                        ) : (
+                          <span className="text-[#94A3B8]">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-3">
                         <span
@@ -434,16 +514,25 @@ export function SelectAccountsModal({
                         </span>
                       </td>
                       <td className="px-3 py-3">
-                        <span className="inline-flex items-center gap-1 rounded-full bg-[#EFF6FF] px-2.5 py-0.5 text-[11px] font-bold text-[#1877F2]">
-                          <span className="size-1.5 rounded-full bg-[#1877F2]" />
-                          Đã đăng nhập
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-bold ${login.cls}`}
+                        >
+                          <span className={`size-1.5 rounded-full ${login.dot}`} />
+                          {login.label}
                         </span>
                       </td>
                       <td className="px-3 py-3 font-mono text-[11px] text-[#475569]">
                         {acc.proxy || "Không dùng Proxy"}
                       </td>
-                      <td className="px-3 py-3 text-right font-semibold text-[#334155]">
-                        {acc.farm_time || "30 ngày"}
+                      <td
+                        className="px-3 py-3 text-right font-semibold text-[#334155]"
+                        title={
+                          farmDaysValue == null
+                            ? "Chưa ghi nhận ngày bắt đầu nuôi"
+                            : `Bắt đầu nuôi: ${acc.first_login_at}`
+                        }
+                      >
+                        {formatFarmDays(farmDaysValue)}
                       </td>
                     </tr>
                   );
