@@ -16,6 +16,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
+import { runDelete } from "../_shared";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
@@ -202,15 +203,17 @@ export default function PageScannerListFollowers() {
   };
 
   const handleDeleteSelected = async () => {
-    if (!selectedIds.length) return;
     const numericIds = items
       .filter((r) => selectedIds.includes(rowId(r)) && r.id != null)
       .map((r) => r.id);
-    await deletePageFollowers({ follower_ids: numericIds }).catch(() => null);
-    setItems((prev) => prev.filter((r) => !selectedIds.includes(rowId(r))));
-    setTotal((prev) => Math.max(0, prev - selectedIds.length));
-    toast.success(`Đã xóa ${selectedIds.length} followers.`);
+    const n = await runDelete({
+      count: numericIds.length,
+      noun: "followers",
+      request: () => deletePageFollowers({ follower_ids: numericIds }),
+    });
+    if (n == null) return;
     setSelectedIds([]);
+    reload(page);
   };
 
   const handleImportFile = async (e) => {

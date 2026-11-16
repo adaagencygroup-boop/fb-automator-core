@@ -1,166 +1,61 @@
 "use client";
 
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search,
   X,
   Check,
-  CheckCircle2,
-  Users,
   Copy,
   Loader2,
   ExternalLink,
   Download,
   Trash2,
-  FolderKanban,
+  FolderCog,
   SlidersHorizontal,
-  ChevronLeft,
-  ChevronRight,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "@/lib/toast";
+import { getCategories } from "@/modules/module_02_account_manager/service";
 import { initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
-import { getPageFollowers } from "../service";
+import {
+  deletePageFollowers,
+  getPageFollowers,
+  getPagesWithFollowers,
+  getScannedPages,
+} from "../service";
+import { Pager } from "../_shared";
 
-const LIVE_STATUSES = new Set(["LIVE", "live", "Live"]);
+const fmtNum = (n) => Number(n || 0).toLocaleString("vi-VN");
 
-export const DEFAULT_SCANNED_PAGES = [
-  {
-    id: "pg_1",
-    page_key: "user:hoimuasamthoitrangonline",
-    page_name: "Hội Mua Sắm & Thời Trang Online",
-    uid: "1800847291048",
-    page_url: "https://www.facebook.com/hoimuasamthoitrangonline",
-    category: "Thời trang & Phụ kiện",
-    follower_count: 520000,
-    scanned_uid_count: 3450,
-    scanned_post_count: 184,
-    phone: "0988 123 456",
-    email: "contact@lelegance.vn",
-    website: "lelegance.vn",
-    address: "Quận 1, TP. HCM",
-    is_verified: true,
-  },
-  {
-    id: "pg_2",
-    page_key: "user:genzcosmeticshub",
-    page_name: "GenZ Cosmetics Hub",
-    uid: "1800918237194",
-    page_url: "https://www.facebook.com/genzcosmeticshub",
-    category: "Mỹ phẩm & Làm đẹp",
-    follower_count: 184200,
-    scanned_uid_count: 1120,
-    scanned_post_count: 112,
-    phone: "0932 778 999",
-    email: "hello@genzcosmetics.vn",
-    website: "genzcosmetics.vn",
-    address: "Quận 3, TP. HCM",
-    is_verified: true,
-  },
-  {
-    id: "pg_3",
-    page_key: "user:dogiadungthongminhlockn",
-    page_name: "Đồ Gia Dụng Thông Minh Lockn",
-    uid: "1800628194451",
-    page_url: "https://www.facebook.com/dogiadungthongminhlockn",
-    category: "Gia dụng & Đời sống",
-    follower_count: 95400,
-    scanned_uid_count: 480,
-    scanned_post_count: 78,
-    phone: "028 3822 554",
-    email: "support@locknvn.com",
-    website: "locknvn.com",
-    address: "Đống Đa, Hà Nội",
-    is_verified: false,
-  },
-  {
-    id: "pg_4",
-    page_key: "user:beautygardenofficialstore",
-    page_name: "Beauty Garden Official Store",
-    uid: "1800371940128",
-    page_url: "https://www.facebook.com/beautygarden.vn",
-    category: "Mỹ phẩm chính hãng",
-    follower_count: 312000,
-    scanned_uid_count: 1890,
-    scanned_post_count: 145,
-    phone: "1900 8899",
-    email: "cskh@beautygarden.vn",
-    website: "beautygarden.vn",
-    address: "Đống Đa, Hà Nội",
-    is_verified: true,
-  },
-  {
-    id: "pg_5",
-    page_key: "user:apexfitnessyogacenter",
-    page_name: "Apex Fitness & Yoga Center",
-    uid: "1800109482719",
-    page_url: "https://www.facebook.com/apexfitness",
-    category: "Gym & Sức khỏe",
-    follower_count: 78500,
-    scanned_uid_count: 640,
-    scanned_post_count: 62,
-    phone: "0888 456 789",
-    email: "info@apexfit.vn",
-    website: "apexfit.vn",
-    address: "Hải Châu, Đà Nẵng",
-    is_verified: false,
-  },
-];
+/** Giờ:phút:giây của mốc thời gian (bảng UID theo thiết kế chỉ hiện giờ). */
+function clockOf(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleTimeString("vi-VN", { hour12: false });
+}
 
-const SAMPLE_PAGE_UIDS = [
-  {
-    id: "u1",
-    name: "Nguyễn Thu Thảo",
-    uid: "1800847291048",
-    location: "Hà Nội",
-    friends: "1.420 bạn bè",
-    time: "10:42:15",
-  },
-  {
-    id: "u2",
-    name: "Lê Hoàng Quân",
-    uid: "1800918237194",
-    location: "TP. Hồ Chí Minh",
-    friends: "530 bạn bè",
-    time: "10:42:11",
-  },
-  {
-    id: "u3",
-    name: "Trần Minh Hằng",
-    uid: "1800628194025",
-    location: "Đà Nẵng",
-    friends: "2.850 bạn bè",
-    time: "10:42:08",
-  },
-  {
-    id: "u4",
-    name: "Vũ Đức Duy",
-    uid: "1800371940128",
-    location: "Hà Nội",
-    friends: "920 bạn bè",
-    time: "10:41:59",
-  },
-  {
-    id: "u5",
-    name: "Bùi Yến Nhi",
-    uid: "1800109482937",
-    location: "Hải Phòng",
-    friends: "3.100 bạn bè",
-    time: "10:41:55",
-  },
-  {
-    id: "u6",
-    name: "Đỗ Tuấn Kiệt",
-    uid: "1800582919385",
-    location: "Cần Thơ",
-    friends: "180 bạn bè",
-    time: "10:41:50",
-  },
-];
+/** Số ngày nuôi tính từ lần đăng nhập đầu tiên (null nếu chưa từng đăng nhập). */
+function farmDays(acc) {
+  const t = Date.parse(acc?.first_login_at || "");
+  if (!Number.isFinite(t)) return null;
+  return Math.max(0, Math.floor((Date.now() - t) / 86400000));
+}
 
-/* ─── Modal 1: Chọn tài khoản Facebook thực thi quét (Chọn tài khoản.png) ─── */
+const LOGIN_META = {
+  logged_in: { label: "Đã đăng nhập", box: "border-[#BFDBFE] bg-[#EFF6FF] text-[#1D4ED8]", dot: "bg-[#2563EB]" },
+  failed: { label: "Lỗi đăng nhập", box: "border-[#FECACA] bg-[#FEF2F2] text-[#DC2626]", dot: "bg-[#EF4444]" },
+};
+const LOGIN_DEFAULT = { label: "Chưa đăng nhập", box: "border-[#E2E8F0] bg-[#F8FAFC] text-[#64748B]", dot: "bg-[#94A3B8]" };
+
+const STATUS_META = {
+  LIVE: { label: "Live", box: "border-[#A7F3D0] bg-[#ECFDF5] text-[#059669]", dot: "bg-[#10B981]" },
+  DIE: { label: "Die", box: "border-[#FECACA] bg-[#FEF2F2] text-[#DC2626]", dot: "bg-[#EF4444]" },
+};
+const STATUS_DEFAULT = { label: "Chưa kiểm tra", box: "border-[#E2E8F0] bg-[#F8FAFC] text-[#64748B]", dot: "bg-[#94A3B8]" };
+
+/* ─── Modal: Chọn tài khoản Facebook thực thi quét (ảnh 2) ─── */
 export function SelectAccountsModal({
   open,
   onClose,
@@ -174,6 +69,7 @@ export function SelectAccountsModal({
   const [category, setCategory] = useState("ALL");
   const [farmTime, setFarmTime] = useState("ALL");
   const [page, setPage] = useState(1);
+  const [categoriesById, setCategoriesById] = useState({});
   const pageSize = 5;
 
   const [prevOpen, setPrevOpen] = useState(open);
@@ -185,85 +81,88 @@ export function SelectAccountsModal({
     }
   }
 
-  const categories = useMemo(() => {
-    const s = new Set();
-    accounts.forEach((a) => {
-      if (a.category || a.folder) s.add(a.category || a.folder);
-    });
-    return [...s];
-  }, [accounts]);
+  useEffect(() => {
+    if (!open) return undefined;
+    let cancelled = false;
+    getCategories()
+      .then((rows) => {
+        if (!cancelled) setCategoriesById(Object.fromEntries((rows || []).map((r) => [String(r.id), r])));
+      })
+      .catch(() => {
+        if (!cancelled) setCategoriesById({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const categoryName = useCallback(
+    (acc) =>
+      acc.category_id == null
+        ? "Chưa gán"
+        : categoriesById[String(acc.category_id)]?.name || `Danh mục #${acc.category_id}`,
+    [categoriesById],
+  );
+
+  const categoryOptions = useMemo(() => {
+    const ids = new Set(accounts.map((a) => (a.category_id == null ? "NONE" : String(a.category_id))));
+    return [...ids].map((id) => ({
+      id,
+      name: id === "NONE" ? "Chưa gán" : categoriesById[id]?.name || `Danh mục #${id}`,
+    }));
+  }, [accounts, categoriesById]);
 
   const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
     return accounts.filter((acc) => {
-      if (
-        category !== "ALL" &&
-        (acc.category || acc.folder || "Tài khoản Clone") !== category
-      ) {
-        return false;
-      }
+      const cid = acc.category_id == null ? "NONE" : String(acc.category_id);
+      if (category !== "ALL" && cid !== category) return false;
       if (farmTime !== "ALL") {
-        const ft = String(acc.farm_time || "").toLowerCase();
-        if (farmTime === "1Y" && !ft.includes("năm")) return false;
-        if (farmTime === "6M" && !ft.includes("tháng") && !ft.includes("năm"))
-          return false;
+        const days = farmDays(acc);
+        if (days == null || days < (farmTime === "1Y" ? 365 : 180)) return false;
       }
-      if (search.trim()) {
-        const q = search.trim().toLowerCase();
-        const hay =
-          `${acc.name || ""} ${acc.uid || ""} ${acc.proxy || ""} ${acc.category || ""}`.toLowerCase();
+      if (q) {
+        const hay = `${acc.name || ""} ${acc.uid || ""} ${acc.proxy || ""} ${categoryName(acc)}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
-  }, [accounts, category, farmTime, search]);
+  }, [accounts, category, farmTime, search, categoryName]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
-  const pagedAccounts = filtered.slice(
-    (safePage - 1) * pageSize,
-    safePage * pageSize,
-  );
+  const pagedAccounts = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const allFilteredChecked = filtered.length > 0 && filtered.every((a) => draftUids.includes(a.uid));
 
   if (!open) return null;
+
+  const toggle = (uid, checked) =>
+    setDraftUids((prev) => (checked ? [...new Set([...prev, uid])] : prev.filter((u) => u !== uid)));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1px]">
       <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-[#F1F5F9] px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-xl bg-[#EFF6FF] text-[#1877F2]">
-              <Users className="size-5" />
+        <div className="flex items-start justify-between gap-4 border-b border-[#F1F5F9] px-6 py-5">
+          <div>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h2 className="font-heading text-lg font-bold text-[#0F172A]">Chọn tài khoản Facebook thực thi quét</h2>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-[#BFDBFE] bg-[#EFF6FF] px-3 py-0.5 text-xs font-semibold text-[#1D4ED8]">
+                <span className="size-1.5 rounded-full bg-[#2563EB]" />
+                Đã chọn: {draftUids.length} / {accounts.length} tài khoản khả dụng
+              </span>
             </div>
-            <div>
-              <div className="flex flex-wrap items-center gap-2.5">
-                <h2 className="text-base font-bold text-[#0F172A]">
-                  Chọn tài khoản Facebook thực thi quét
-                </h2>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-[#EFF6FF] px-3 py-0.5 text-xs font-bold text-[#1877F2]">
-                  <span className="size-1.5 rounded-full bg-[#1877F2]" />
-                  Đã chọn: {draftUids.length} / {accounts.length} tài khoản khả dụng
-                </span>
-              </div>
-              <p className="text-xs text-[#64748B]">
-                Chọn các tài khoản có trạng thái Live và sẵn sàng để chạy tác vụ
-                quét nhóm tự động
-              </p>
-            </div>
+            <p className="mt-1 text-xs text-[#64748B]">
+              Chọn các tài khoản có trạng thái Live và sẵn sàng để chạy tác vụ quét page tự động
+            </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg p-1.5 text-[#64748B] hover:bg-[#F1F5F9]"
-          >
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-[#64748B] hover:bg-[#F1F5F9]" aria-label="Đóng">
             <X className="size-5" />
           </button>
         </div>
 
-        {/* Filter bar */}
-        <div className="flex flex-wrap items-center gap-3 border-b border-[#F1F5F9] bg-[#F8FAFC] px-6 py-3">
+        <div className="flex flex-wrap items-center gap-3 px-6 py-4">
           <div className="relative min-w-[240px] flex-1">
-            <Search className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-[#94A3B8]" />
+            <Search className="absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-[#94A3B8]" />
             <input
               value={search}
               onChange={(e) => {
@@ -271,33 +170,31 @@ export function SelectAccountsModal({
                 setPage(1);
               }}
               placeholder="Tìm theo Tên tài khoản, UID, Proxy, Thư mục..."
-              className="h-9 w-full rounded-xl border border-[#E2E8F0] bg-white pl-10 pr-4 text-xs text-[#0F172A] outline-none focus:border-[#1877F2]"
+              className="h-10 w-full rounded-xl border border-[#E2E8F0] bg-white pr-4 pl-10 text-xs text-[#0F172A] outline-none focus:border-[#1877F2]"
             />
           </div>
-
           <select
             value={category}
             onChange={(e) => {
               setCategory(e.target.value);
               setPage(1);
             }}
-            className="h-9 rounded-xl border border-[#E2E8F0] bg-white px-3 text-xs font-semibold text-[#334155] outline-none"
+            className="h-10 min-w-[170px] rounded-xl border border-[#E2E8F0] bg-white px-3 text-xs font-medium text-[#334155] outline-none"
           >
             <option value="ALL">Tất cả danh mục</option>
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {c}
+            {categoryOptions.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
               </option>
             ))}
           </select>
-
           <select
             value={farmTime}
             onChange={(e) => {
               setFarmTime(e.target.value);
               setPage(1);
             }}
-            className="h-9 rounded-xl border border-[#E2E8F0] bg-white px-3 text-xs font-semibold text-[#334155] outline-none"
+            className="h-10 min-w-[170px] rounded-xl border border-[#E2E8F0] bg-white px-3 text-xs font-medium text-[#334155] outline-none"
           >
             <option value="ALL">Tất cả thời gian nuôi</option>
             <option value="6M">Trên 6 tháng</option>
@@ -305,555 +202,464 @@ export function SelectAccountsModal({
           </select>
         </div>
 
-        {/* Table */}
-        <div className="flex-1 overflow-auto px-6 py-3">
+        <div className="flex-1 overflow-auto border-t border-[#F1F5F9]">
           {loading ? (
             <div className="py-12 text-center text-xs text-[#64748B]">
               <Loader2 className="mx-auto mb-2 size-6 animate-spin text-[#1877F2]" />
               Đang tải danh sách tài khoản...
             </div>
           ) : (
-            <table className="w-full min-w-[860px] text-left text-xs">
-              <thead className="sticky top-0 bg-[#F8FAFC] text-[11px] font-bold uppercase text-[#64748B]">
+            <table className="w-full min-w-[900px] text-left text-xs">
+              <thead className="sticky top-0 z-10 bg-[#F8FAFC] text-[11px] font-bold text-[#475569] uppercase">
                 <tr className="border-b border-[#E2E8F0]">
-                  <th className="w-10 px-3 py-3">
+                  <th className="w-12 px-6 py-3.5">
                     <Checkbox
-                      checked={
-                        filtered.length > 0 &&
-                        draftUids.length >= filtered.length
-                      }
+                      checked={allFilteredChecked}
                       onCheckedChange={(c) => {
-                        if (c) setDraftUids(filtered.map((a) => a.uid));
-                        else setDraftUids([]);
+                        const ids = filtered.map((a) => a.uid);
+                        setDraftUids((prev) =>
+                          c ? [...new Set([...prev, ...ids])] : prev.filter((u) => !ids.includes(u)),
+                        );
                       }}
                     />
                   </th>
-                  <th className="w-12 px-2 py-3">STT</th>
-                  <th className="px-3 py-3">TÀI KHOẢN & HỌ TÊN</th>
-                  <th className="px-3 py-3">UID FACEBOOK</th>
-                  <th className="px-3 py-3">DANH MỤC</th>
-                  <th className="px-3 py-3">TRẠNG THÁI TK</th>
-                  <th className="px-3 py-3">ĐĂNG NHẬP</th>
-                  <th className="px-3 py-3">PROXY GÁN KÈM</th>
-                  <th className="px-3 py-3 text-right">THỜI GIAN NUÔI</th>
+                  <th className="w-12 px-2 py-3.5">STT</th>
+                  <th className="px-3 py-3.5">Tài khoản &amp; Họ tên</th>
+                  <th className="px-3 py-3.5">UID Facebook</th>
+                  <th className="px-3 py-3.5">Danh mục</th>
+                  <th className="px-3 py-3.5">Trạng thái TK</th>
+                  <th className="px-3 py-3.5">Đăng nhập</th>
+                  <th className="px-3 py-3.5">Proxy gán kèm</th>
+                  <th className="px-6 py-3.5 text-right">Thời gian nuôi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#F1F5F9]">
-                {pagedAccounts.map((acc, idx) => {
-                  const realIdx = (safePage - 1) * pageSize + idx;
-                  const checked = draftUids.includes(acc.uid);
-                  const isLive = LIVE_STATUSES.has(String(acc.status));
-                  return (
-                    <tr
-                      key={acc.uid}
-                      onClick={() =>
-                        setDraftUids((prev) =>
-                          checked
-                            ? prev.filter((u) => u !== acc.uid)
-                            : [...prev, acc.uid],
-                        )
-                      }
-                      className={`cursor-pointer transition ${
-                        checked ? "bg-[#EFF6FF]/70" : "hover:bg-[#F8FAFC]"
-                      }`}
-                    >
-                      <td
-                        className="px-3 py-3"
-                        onClick={(e) => e.stopPropagation()}
+                {pagedAccounts.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-6 py-10 text-center text-[#94A3B8]">
+                      Không có tài khoản phù hợp.
+                    </td>
+                  </tr>
+                ) : (
+                  pagedAccounts.map((acc, idx) => {
+                    const realIdx = (safePage - 1) * pageSize + idx;
+                    const checked = draftUids.includes(acc.uid);
+                    const status = STATUS_META[String(acc.status).toUpperCase()] || STATUS_DEFAULT;
+                    const login = LOGIN_META[acc.login_status] || LOGIN_DEFAULT;
+                    const days = farmDays(acc);
+                    return (
+                      <tr
+                        key={acc.uid}
+                        onClick={() => toggle(acc.uid, !checked)}
+                        className={`cursor-pointer transition ${checked ? "bg-[#EFF6FF]/60" : "hover:bg-[#F8FAFC]"}`}
                       >
-                        <Checkbox
-                          checked={checked}
-                          onCheckedChange={(c) =>
-                            setDraftUids((prev) =>
-                              c
-                                ? [...prev, acc.uid]
-                                : prev.filter((u) => u !== acc.uid),
-                            )
-                          }
-                        />
-                      </td>
-                      <td className="px-2 py-3 font-mono text-[#64748B]">
-                        {String(realIdx + 1).padStart(2, "0")}
-                      </td>
-                      <td className="px-3 py-3">
-                        <div className="flex items-center gap-2.5">
-                          <Avatar className="size-8">
-                            <AvatarFallback
-                              className={
-                                AVATAR_COLORS[realIdx % AVATAR_COLORS.length]
-                              }
-                            >
-                              {initialsOf(acc.name)}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div>
-                            <p className="font-bold text-[#0F172A]">
-                              {acc.name}
-                            </p>
-                            <p className="text-[11px] text-[#64748B]">
-                              {acc.email || `${acc.uid}@fb.com`}
-                            </p>
+                        <td className="px-6 py-3.5" onClick={(e) => e.stopPropagation()}>
+                          <Checkbox checked={checked} onCheckedChange={(c) => toggle(acc.uid, !!c)} />
+                        </td>
+                        <td className="px-2 py-3.5 font-mono text-[#94A3B8]">{String(realIdx + 1).padStart(2, "0")}</td>
+                        <td className="px-3 py-3.5">
+                          <div className="flex items-center gap-2.5">
+                            <Avatar className="size-9">
+                              {acc.avatar_url ? <AvatarImage src={acc.avatar_url} alt="" /> : null}
+                              <AvatarFallback className={`font-bold text-white ${AVATAR_COLORS[realIdx % AVATAR_COLORS.length]}`}>
+                                {initialsOf(acc.name)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <span className="max-w-[150px] font-bold leading-snug text-[#0F172A]">{acc.name}</span>
                           </div>
-                        </div>
-                      </td>
-                      <td className="px-3 py-3 font-mono text-[#334155]">
-                        <div className="inline-flex items-center gap-1.5">
-                          <span>{acc.uid}</span>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigator.clipboard?.writeText(acc.uid);
-                              toast.success(`Đã sao chép UID ${acc.uid}`);
-                            }}
-                            className="text-[#94A3B8] hover:text-[#1877F2]"
-                          >
-                            <Copy className="size-3" />
-                          </button>
-                        </div>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className="rounded-md bg-[#EFF6FF] px-2.5 py-1 text-[11px] font-semibold text-[#1D4ED8]">
-                          {acc.category || acc.folder || "Folder Nuôi 01"}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
-                            isLive
-                              ? "bg-[#ECFDF5] text-[#059669]"
-                              : "bg-[#FEF2F2] text-[#DC2626]"
-                          }`}
-                        >
-                          <span
-                            className={`size-1.5 rounded-full ${
-                              isLive ? "bg-[#10B981]" : "bg-[#EF4444]"
-                            }`}
-                          />
-                          {acc.status || "Live"}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className="inline-flex items-center gap-1 rounded-full bg-[#EFF6FF] px-2.5 py-0.5 text-[11px] font-bold text-[#1877F2]">
-                          <span className="size-1.5 rounded-full bg-[#1877F2]" />
-                          Đã đăng nhập
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 font-mono text-[11px] text-[#475569]">
-                        {acc.proxy || "Không dùng Proxy"}
-                      </td>
-                      <td className="px-3 py-3 text-right font-semibold text-[#334155]">
-                        {acc.farm_time || "30 ngày"}
-                      </td>
-                    </tr>
-                  );
-                })}
+                        </td>
+                        <td className="px-3 py-3.5 font-mono text-[#334155]">
+                          <div className="inline-flex items-center gap-1.5">
+                            <span>{acc.uid}</span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigator.clipboard?.writeText(acc.uid);
+                                toast.success(`Đã sao chép UID ${acc.uid}`);
+                              }}
+                              className="text-[#94A3B8] hover:text-[#1877F2]"
+                              aria-label="Sao chép UID"
+                            >
+                              <Copy className="size-3" />
+                            </button>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <span className="inline-block max-w-[120px] truncate rounded-md border border-[#E2E8F0] bg-[#F1F5F9] px-2 py-1 text-[11px] text-[#475569]" title={categoryName(acc)}>
+                            {categoryName(acc)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${status.box}`}>
+                            <span className={`size-1.5 rounded-full ${status.dot}`} />
+                            {status.label}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3.5">
+                          <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap ${login.box}`}>
+                            <span className={`size-1.5 rounded-full ${login.dot}`} />
+                            {login.label}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3.5 font-mono text-[11px] text-[#475569]">{acc.proxy || "Không dùng proxy"}</td>
+                        <td className="px-6 py-3.5 text-right font-bold text-[#334155]">{days == null ? "—" : `${days} ngày`}</td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           )}
         </div>
 
-        {/* Pagination bar (Ảnh 2) */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#F1F5F9] bg-white px-6 py-3 text-xs text-[#64748B]">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#F1F5F9] bg-[#F8FAFC] px-6 py-3 text-xs text-[#64748B]">
           <span>
-            Hiển thị{" "}
-            <strong className="text-[#0F172A]">
-              {filtered.length === 0 ? 0 : (safePage - 1) * pageSize + 1} -{" "}
-              {Math.min(safePage * pageSize, filtered.length)}
-            </strong>{" "}
-            của <strong className="text-[#0F172A]">{filtered.length}</strong>{" "}
-            tài khoản
+            Hiển thị {filtered.length === 0 ? 0 : (safePage - 1) * pageSize + 1} - {Math.min(safePage * pageSize, filtered.length)} của{" "}
+            {filtered.length} tài khoản
           </span>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              disabled={safePage <= 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className="h-7 rounded-lg border border-[#E2E8F0] px-2.5 text-xs font-semibold text-[#64748B] hover:bg-[#F8FAFC] disabled:opacity-40"
-            >
-              Trước
-            </button>
-            {Array.from({ length: totalPages }, (_, i) => i + 1)
-              .slice(0, 5)
-              .map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => setPage(p)}
-                  className={`size-7 rounded-lg text-xs font-bold ${
-                    p === safePage
-                      ? "bg-[#1877F2] text-white"
-                      : "border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC]"
-                  }`}
-                >
-                  {p}
-                </button>
-              ))}
-            <button
-              type="button"
-              disabled={safePage >= totalPages}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              className="h-7 rounded-lg border border-[#E2E8F0] px-2.5 text-xs font-semibold text-[#64748B] hover:bg-[#F8FAFC] disabled:opacity-40"
-            >
-              Sau
-            </button>
-          </div>
+          <Pager page={safePage} totalPages={totalPages} onChange={setPage} variant="text" />
         </div>
 
-        {/* Footer */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#F1F5F9] bg-[#F8FAFC] px-6 py-4">
-          <div className="flex items-center gap-2 text-xs text-[#475569]">
-            <CheckCircle2 className="size-4 text-[#10B981]" />
-            <span>
-              Đã chọn:{" "}
-              <strong className="text-[#1877F2]">
-                {draftUids.length} tài khoản
-              </strong>{" "}
-              (Sẵn sàng thực thi)
-            </span>
-          </div>
-          <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="h-9 rounded-xl border border-[#CBD5E1] bg-white px-4 text-xs font-bold text-[#475569] hover:bg-[#F1F5F9]"
-            >
-              Hủy bỏ
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                onConfirm(draftUids);
-                onClose();
-                toast.success(
-                  `Đã chọn ${draftUids.length} tài khoản thực thi.`,
-                );
-              }}
-              className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#1877F2] px-5 text-xs font-bold text-white shadow-sm hover:bg-[#166FE5]"
-            >
-              <Check className="size-4" />
-              Xác nhận chọn ({draftUids.length} tài khoản)
-            </button>
-          </div>
+        <div className="flex items-center justify-end gap-3 border-t border-[#F1F5F9] px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 rounded-xl border border-[#CBD5E1] bg-white px-6 text-sm font-semibold text-[#334155] hover:bg-[#F1F5F9]"
+          >
+            Hủy bỏ
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onConfirm(draftUids);
+              onClose();
+              toast.success(`Đã chọn ${draftUids.length} tài khoản thực thi.`);
+            }}
+            className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#1D4ED8] px-6 text-sm font-semibold text-white shadow-sm hover:bg-[#1E40AF]"
+          >
+            <Check className="size-4" />
+            Xác nhận chọn ({draftUids.length} tài khoản)
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-/* ─── Modal 2: Chọn page từ danh mục đã quét (Chọn page.png) ─── */
-export function SelectPagesModal({
-  open,
-  onClose,
-  availablePages = DEFAULT_SCANNED_PAGES,
-  selectedPages = [],
-  onConfirm,
-}) {
-  const [draftKeys, setDraftKeys] = useState(() =>
-    selectedPages.map((p) => p.page_key),
-  );
-  const [activePageKey, setActivePageKey] = useState(
-    selectedPages[0]?.page_key || availablePages[0]?.page_key || "",
-  );
+/* ─── Modal: Chọn page từ danh mục đã quét (ảnh 1) ─── */
+const UID_PAGE_SIZE = 6;
+
+export function SelectPagesModal({ open, onClose, selectedPages = [], onConfirm }) {
+  const [pageCache, setPageCache] = useState({}); // page_key -> page (đã thấy / đã chọn)
+  const [listKeys, setListKeys] = useState([]);
+  const [listTotal, setListTotal] = useState(0);
+  const [loadingPages, setLoadingPages] = useState(false);
+  const [uidCounts, setUidCounts] = useState({});
+  const [totalUids, setTotalUids] = useState(0);
+  const [draftKeys, setDraftKeys] = useState([]);
+  const [activePageKey, setActivePageKey] = useState("");
   const [leftSearch, setLeftSearch] = useState("");
+  const [leftQuery, setLeftQuery] = useState("");
   const [rightSearch, setRightSearch] = useState("");
-  const [selectedUidIds, setSelectedUidIds] = useState(["u1", "u2"]);
-  const [pageFollowers, setPageFollowers] = useState([]);
-  const [loadingFollowers, setLoadingFollowers] = useState(false);
+  const [rightQuery, setRightQuery] = useState("");
+  const [selectedUidIds, setSelectedUidIds] = useState([]);
+  const [uidRows, setUidRows] = useState([]);
+  const [uidTotal, setUidTotal] = useState(0);
   const [uidPage, setUidPage] = useState(1);
-  const uidPageSize = 6;
+  const [loadingUids, setLoadingUids] = useState(false);
+  const [reloadUids, setReloadUids] = useState(0);
 
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
     setPrevOpen(open);
     if (open) {
       setDraftKeys(selectedPages.map((p) => p.page_key));
-      setActivePageKey(
-        selectedPages[0]?.page_key || availablePages[0]?.page_key || "",
-      );
+      setPageCache(Object.fromEntries(selectedPages.map((p) => [p.page_key, p])));
+      setActivePageKey(selectedPages[0]?.page_key || "");
+      setLeftSearch("");
+      setLeftQuery("");
+      setRightSearch("");
+      setRightQuery("");
+      setSelectedUidIds([]);
       setUidPage(1);
     }
   }
 
-  const filteredPages = useMemo(() => {
-    if (!leftSearch.trim()) return availablePages;
-    const q = leftSearch.trim().toLowerCase();
-    return availablePages.filter((p) =>
-      `${p.page_name || ""} ${p.uid || ""} ${p.page_key || ""}`
-        .toLowerCase()
-        .includes(q),
-    );
-  }, [availablePages, leftSearch]);
-
-  const activePage = useMemo(
-    () =>
-      availablePages.find((p) => p.page_key === activePageKey) ||
-      availablePages[0] ||
-      DEFAULT_SCANNED_PAGES[0],
-    [availablePages, activePageKey],
-  );
-
+  /* Debounce ô tìm kiếm */
   useEffect(() => {
-    if (!open || !activePage?.page_key) return;
+    const t = setTimeout(() => setLeftQuery(leftSearch.trim()), 300);
+    return () => clearTimeout(t);
+  }, [leftSearch]);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setRightQuery(rightSearch.trim());
+      setUidPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [rightSearch]);
+
+  /* Số UID đã quét theo từng page (thật, từ kho followers) */
+  useEffect(() => {
+    if (!open) return undefined;
     let cancelled = false;
-    Promise.resolve()
-      .then(() => {
-        if (!cancelled) setLoadingFollowers(true);
-        return getPageFollowers({ page_key: activePage.page_key, page_size: 200 });
-      })
+    getPagesWithFollowers()
       .then((res) => {
         if (cancelled) return;
-        const rawList = res?.items || res?.followers || [];
-        const rows = rawList.map((f, idx) => ({
-          id: String(f.id || f.follower_key || f.user_uid || `db_${idx}`),
-          name: f.follower_name || f.user_name || "Người dùng Facebook",
-          uid: String(f.follower_key || f.user_uid || "—").replace(/^id:|^user:/, ""),
-          location: f.location || "Việt Nam",
-          friends: f.friend_count
-            ? `${Number(f.friend_count).toLocaleString("vi-VN")} bạn bè`
-            : "—",
-          time: f.created_at
-            ? new Date(f.created_at).toLocaleTimeString("vi-VN")
-            : "10:42:15",
-        }));
-        setPageFollowers(rows.length > 0 ? rows : SAMPLE_PAGE_UIDS);
-        setUidPage(1);
+        setUidCounts(Object.fromEntries((res?.items || []).map((r) => [r.page_key, Number(r.scanned_uid_count) || 0])));
+        setTotalUids(Number(res?.total_uids) || 0);
       })
       .catch(() => {
-        if (!cancelled) setPageFollowers(SAMPLE_PAGE_UIDS);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingFollowers(false);
+        if (!cancelled) {
+          setUidCounts({});
+          setTotalUids(0);
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [open, activePage?.page_key]);
+  }, [open]);
 
-  const filteredUids = useMemo(() => {
-    const base = pageFollowers.length > 0 ? pageFollowers : SAMPLE_PAGE_UIDS;
-    if (!rightSearch.trim()) return base;
-    const q = rightSearch.trim().toLowerCase();
-    return base.filter((u) =>
-      `${u.name} ${u.uid} ${u.location}`.toLowerCase().includes(q),
-    );
-  }, [pageFollowers, rightSearch]);
+  /* Danh sách page trong kho (tìm kiếm phía server) */
+  useEffect(() => {
+    if (!open) return undefined;
+    let cancelled = false;
+    setLoadingPages(true);
+    getScannedPages({ page: 1, page_size: 200, keyword: leftQuery || undefined, sort_by: "followers" })
+      .then((res) => {
+        if (cancelled) return;
+        const items = res?.items || [];
+        setPageCache((prev) => ({ ...prev, ...Object.fromEntries(items.map((p) => [p.page_key, { ...prev[p.page_key], ...p }])) }));
+        setListKeys(items.map((p) => p.page_key));
+        setListTotal(Number(res?.total) || items.length);
+        setActivePageKey((cur) => cur || items[0]?.page_key || "");
+      })
+      .catch((err) => {
+        if (!cancelled) toast.error(`Lỗi tải danh sách page: ${err.message}`);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingPages(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, leftQuery]);
 
-  const totalUidPages = Math.max(
-    1,
-    Math.ceil(filteredUids.length / uidPageSize),
-  );
-  const safeUidPage = Math.min(uidPage, totalUidPages);
-  const pagedUids = filteredUids.slice(
-    (safeUidPage - 1) * uidPageSize,
-    safeUidPage * uidPageSize,
-  );
+  /* UID đã thu thập của page đang xem (phân trang phía server) */
+  useEffect(() => {
+    if (!open || !activePageKey) {
+      setUidRows([]);
+      setUidTotal(0);
+      return undefined;
+    }
+    let cancelled = false;
+    setLoadingUids(true);
+    getPageFollowers({ page_key: activePageKey, page: uidPage, page_size: UID_PAGE_SIZE, keyword: rightQuery || undefined })
+      .then((res) => {
+        if (cancelled) return;
+        setUidRows(res?.items || []);
+        setUidTotal(Number(res?.total) || 0);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setUidRows([]);
+        setUidTotal(0);
+        toast.error(`Lỗi tải UID của page: ${err.message}`);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingUids(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, activePageKey, uidPage, rightQuery, reloadUids]);
 
-  const totalProcessedUids = useMemo(() => {
-    const sum = availablePages.reduce(
-      (acc, p) => acc + Number(p.scanned_uid_count || 0),
-      0,
-    );
-    return sum > 0 ? sum : 5050;
-  }, [availablePages]);
+  const listPages = useMemo(() => listKeys.map((k) => pageCache[k]).filter(Boolean), [listKeys, pageCache]);
+  const activePage = pageCache[activePageKey] || null;
+  const uidTotalPages = Math.max(1, Math.ceil(uidTotal / UID_PAGE_SIZE));
 
   if (!open) return null;
 
-  const toggleDraftPage = (pageKey) => {
-    setDraftKeys((prev) =>
-      prev.includes(pageKey)
-        ? prev.filter((k) => k !== pageKey)
-        : [...prev, pageKey],
-    );
+  const selectPage = (key) => {
+    setActivePageKey(key);
+    setSelectedUidIds([]);
+    setUidPage(1);
+    setDraftKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
   };
+  const unselectPage = (key) => setDraftKeys((prev) => prev.filter((k) => k !== key));
+
+  const rowUid = (f) => String(f.follower_key || "").replace(/^id:|^user:/, "") || "—";
 
   const handleExportSelectedUids = () => {
-    const chosen = filteredUids.filter((u) => selectedUidIds.includes(u.id));
-    if (chosen.length === 0) {
+    const chosen = uidRows.filter((f) => selectedUidIds.includes(f.id));
+    if (!chosen.length) {
       toast.warning("Vui lòng chọn ít nhất 1 UID để xuất file.");
       return;
     }
-    const header = "STT,Ho va Ten,UID,Dia chi,So ban be,Thoi gian";
-    const lines = chosen.map(
-      (u, idx) =>
-        `${idx + 1},"${(u.name || "").replace(/"/g, '""')}",${u.uid},"${u.location}",${u.friends},${u.time}`,
-    );
-    const blob = new Blob(["\uFEFF" + [header, ...lines].join("\n")], {
-      type: "text/csv;charset=utf-8",
-    });
+    const header = ["STT", "Họ và tên", "UID", "Profile", "Địa chỉ", "Số bạn bè", "Thời gian"];
+    const lines = chosen.map((f, i) => [
+      i + 1,
+      f.follower_name || "",
+      rowUid(f),
+      f.profile_url || "",
+      f.location || "",
+      f.friend_count ?? "",
+      f.updated_at || f.created_at || "",
+    ]);
+    const csv = [header, ...lines].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `uid_selected_${activePage?.uid || "page"}.csv`;
+    a.href = url;
+    a.download = `uid_${String(activePageKey).replace(/[:/\\]/g, "_")}.csv`;
     a.click();
-    URL.revokeObjectURL(a.href);
+    URL.revokeObjectURL(url);
     toast.success(`Đã xuất ${chosen.length} UID đã chọn.`);
   };
 
-  const handleDeleteSelectedUids = () => {
-    if (selectedUidIds.length === 0) return;
-    setPageFollowers((prev) =>
-      (prev.length > 0 ? prev : SAMPLE_PAGE_UIDS).filter(
-        (u) => !selectedUidIds.includes(u.id),
-      ),
-    );
-    setSelectedUidIds([]);
-    toast.success("Đã xóa các UID được chọn khỏi danh sách.");
+  const handleDeleteSelectedUids = async () => {
+    const ids = uidRows.filter((f) => selectedUidIds.includes(f.id) && f.id != null).map((f) => f.id);
+    if (!ids.length) return;
+    if (!window.confirm(`Xóa vĩnh viễn ${ids.length} UID khỏi kho followers?`)) return;
+    try {
+      const res = await deletePageFollowers({ follower_ids: ids });
+      const deleted = Number(res?.deleted ?? ids.length);
+      toast.success(`Đã xóa ${deleted} UID.`);
+      setSelectedUidIds([]);
+      setUidCounts((prev) => ({ ...prev, [activePageKey]: Math.max(0, (prev[activePageKey] || 0) - deleted) }));
+      setTotalUids((prev) => Math.max(0, prev - deleted));
+      setReloadUids((n) => n + 1);
+    } catch (err) {
+      toast.error(`Lỗi xóa UID: ${err.message}`);
+    }
   };
+
+  const allRowsChecked = uidRows.length > 0 && uidRows.every((f) => selectedUidIds.includes(f.id));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1px]">
-      <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-[#F8FAFC] shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-[#E2E8F0] bg-[#E2E8F0]/60 px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-xl bg-white text-[#0F172A] shadow-sm">
-              <FolderKanban className="size-5" />
-            </div>
+      <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl bg-[#F4F7FC] shadow-2xl">
+        <div className="flex items-center justify-between border-b border-[#E2E8F0] bg-[#E2E8F0]/70 px-8 py-5">
+          <div className="flex items-center gap-4">
+            <FolderCog className="size-6 text-[#0F172A]" />
             <div>
-              <h2 className="text-base font-bold text-[#0F172A]">
-                Chọn page từ danh mục đã quét
-              </h2>
-              <p className="text-xs text-[#475569]">
-                Lựa chọn các page từ danh sách đã thu thập trước đó để tiến hành
-                quét bài viết mục tiêu
+              <h2 className="font-heading text-lg font-bold text-[#0F172A]">Chọn page từ danh mục đã quét</h2>
+              <p className="text-sm text-[#334155]">
+                Lựa chọn các page từ danh sách đã thu thập trước đó để tiến hành quét bài viết mục tiêu
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg p-1.5 text-[#475569] hover:bg-black/5"
-          >
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-[#334155] hover:bg-black/5" aria-label="Đóng">
             <X className="size-5" />
           </button>
         </div>
 
-        {/* Body: 2 Columns */}
-        <div className="grid flex-1 grid-cols-1 gap-4 overflow-auto p-5 lg:grid-cols-12">
-          {/* Left Column (4 cols) */}
-          <div className="flex flex-col rounded-2xl border border-[#E2E8F0] bg-white p-4 lg:col-span-4">
-            <div className="mb-3 flex items-center justify-between">
-              <span className="text-xs font-bold text-[#0F172A]">
-                Danh sách Page ({filteredPages.length})
-              </span>
-              <SlidersHorizontal className="size-3.5 text-[#64748B]" />
+        <div className="grid flex-1 grid-cols-1 gap-5 overflow-auto px-8 py-5 lg:grid-cols-12">
+          {/* Trái: danh sách page */}
+          <div className="flex min-h-[480px] flex-col rounded-2xl border border-[#E2E8F0] bg-white lg:col-span-4">
+            <div className="flex items-center justify-between border-b border-[#F1F5F9] px-4 py-4">
+              <span className="text-sm font-bold text-[#0F172A]">Danh sách Page ({fmtNum(listTotal)})</span>
+              <SlidersHorizontal className="size-4 text-[#64748B]" />
             </div>
-
-            <div className="relative mb-3">
-              <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-[#94A3B8]" />
-              <input
-                value={leftSearch}
-                onChange={(e) => setLeftSearch(e.target.value)}
-                placeholder="Tìm tên Page, UID..."
-                className="h-9 w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] pl-9 pr-3 text-xs text-[#0F172A] outline-none focus:border-[#1877F2] focus:bg-white"
-              />
+            <div className="px-3 pt-3">
+              <div className="relative">
+                <Search className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-[#94A3B8]" />
+                <input
+                  value={leftSearch}
+                  onChange={(e) => setLeftSearch(e.target.value)}
+                  placeholder="Tìm tên Page, UID..."
+                  className="h-9 w-full rounded-xl border border-[#E2E8F0] bg-white pr-3 pl-9 text-xs text-[#0F172A] outline-none focus:border-[#1877F2]"
+                />
+              </div>
             </div>
-
-            <div className="flex-1 space-y-2.5 overflow-y-auto pr-1">
-              {filteredPages.map((pg) => {
-                const isSelected = draftKeys.includes(pg.page_key);
-                const isCurrent = activePage?.page_key === pg.page_key;
-                return (
-                  <div
-                    key={pg.page_key}
-                    onClick={() => {
-                      setActivePageKey(pg.page_key);
-                      if (!isSelected) toggleDraftPage(pg.page_key);
-                    }}
-                    className={`cursor-pointer rounded-xl border p-3 transition ${
-                      isCurrent
-                        ? "border-[#1877F2] bg-[#EFF6FF]/40 shadow-sm"
-                        : "border-[#E2E8F0] bg-white hover:bg-[#F8FAFC]"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <Checkbox
-                          checked={isSelected}
-                          onCheckedChange={() => toggleDraftPage(pg.page_key)}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                        <span className="line-clamp-1 text-xs font-bold text-[#0F172A]">
-                          {pg.page_name}
+            <div className="flex-1 space-y-2.5 overflow-y-auto p-3">
+              {loadingPages && listPages.length === 0 ? (
+                <div className="py-10 text-center text-xs text-[#64748B]">
+                  <Loader2 className="mx-auto mb-2 size-5 animate-spin text-[#1877F2]" />
+                  Đang tải page...
+                </div>
+              ) : listPages.length === 0 ? (
+                <p className="py-10 text-center text-xs text-[#94A3B8]">
+                  {leftQuery ? "Không có page khớp tìm kiếm." : "Chưa có page trong kho — hãy chạy Quét thông tin page trước."}
+                </p>
+              ) : (
+                listPages.map((pg) => {
+                  const isSelected = draftKeys.includes(pg.page_key);
+                  const isCurrent = activePageKey === pg.page_key;
+                  return (
+                    <div
+                      key={pg.page_key}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => selectPage(pg.page_key)}
+                      onKeyDown={(e) => e.key === "Enter" && selectPage(pg.page_key)}
+                      className={`cursor-pointer rounded-xl border p-3.5 transition ${
+                        isCurrent
+                          ? "border-2 border-[#1877F2] bg-white shadow-sm"
+                          : isSelected
+                            ? "border-[#BFDBFE] bg-[#F8FBFF]"
+                            : "border-[#E2E8F0] bg-white hover:bg-[#F8FAFC]"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="line-clamp-1 text-sm font-bold text-[#0F172A]">{pg.page_name || pg.page_key}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isSelected) unselectPage(pg.page_key);
+                            else selectPage(pg.page_key);
+                          }}
+                          title={isSelected ? "Bỏ chọn page" : "Chọn page"}
+                          aria-label={isSelected ? "Bỏ chọn page" : "Chọn page"}
+                          className="flex size-5 shrink-0 items-center justify-center rounded-full hover:bg-slate-100"
+                        >
+                          <span className={`size-2 rounded-full ${isSelected ? "bg-[#10B981]" : "bg-[#CBD5E1]"}`} />
+                        </button>
+                      </div>
+                      <div className="mt-2.5 flex items-center justify-between gap-2 text-[11px] text-[#64748B]">
+                        <span>
+                          Quy mô: <strong className="text-[#0F172A]">{pg.follower_count != null ? fmtNum(pg.follower_count) : "—"}</strong> followers
+                        </span>
+                        <span className={isCurrent ? "font-bold text-[#1877F2]" : "font-semibold text-[#334155]"}>
+                          Đã quét: {fmtNum(uidCounts[pg.page_key])} UID
                         </span>
                       </div>
-                      <span
-                        className={`mt-1 size-2 shrink-0 rounded-full ${
-                          isSelected ? "bg-[#10B981]" : "bg-[#CBD5E1]"
-                        }`}
-                      />
                     </div>
-                    <div className="mt-2 flex items-center justify-between text-[11px] text-[#64748B]">
-                      <span>
-                        Quy mô:{" "}
-                        <strong className="text-[#0F172A]">
-                          {(pg.follower_count || 120000).toLocaleString(
-                            "vi-VN",
-                          )}
-                        </strong>{" "}
-                        followers
-                      </span>
-                      <span className="font-bold text-[#1877F2]">
-                        Đã quét:{" "}
-                        {(pg.scanned_uid_count || 1250).toLocaleString("vi-VN")}{" "}
-                        UID
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
-
-            <div className="mt-3 flex items-center justify-between border-t border-[#F1F5F9] pt-3 text-xs">
-              <span className="text-[#64748B]">Tổng UID đã xử lý:</span>
-              <strong className="font-mono font-bold text-[#1877F2]">
-                {totalProcessedUids.toLocaleString("vi-VN")} UID
-              </strong>
+            <div className="flex items-center justify-between border-t border-[#F1F5F9] px-4 py-3.5 text-xs">
+              <span className="text-[#475569]">Tổng UID đã xử lý:</span>
+              <strong className="font-mono text-sm font-bold text-[#1877F2]">{fmtNum(totalUids)} UID</strong>
             </div>
           </div>
 
-          {/* Right Column (8 cols) */}
-          <div className="flex flex-col rounded-2xl border border-[#E2E8F0] bg-white p-4 lg:col-span-8">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#F1F5F9] pb-3">
-              <div>
-                <h3 className="text-sm font-bold text-[#0F172A]">
-                  {activePage?.page_name}
-                </h3>
-                <p className="text-[11px] text-[#64748B]">
-                  Quy mô:{" "}
-                  <strong className="text-[#0F172A]">
-                    {(activePage?.follower_count || 520000).toLocaleString(
-                      "vi-VN",
-                    )}
-                  </strong>{" "}
-                  Followers • Đã thu thập:{" "}
-                  <strong className="text-[#1877F2]">
-                    {(
-                      activePage?.scanned_uid_count || filteredUids.length
-                    ).toLocaleString("vi-VN")}
-                  </strong>{" "}
-                  UID
-                </p>
+          {/* Phải: UID của page đang xem */}
+          <div className="flex min-h-[480px] flex-col rounded-2xl border border-[#E2E8F0] bg-white lg:col-span-8">
+            <div className="border-b border-[#F1F5F9] px-4 py-4">
+              <h3 className="text-sm font-bold text-[#0F172A]">{activePage?.page_name || "Chọn page bên trái"}</h3>
+              <p className="mt-0.5 text-[11px] text-[#64748B]">
+                Quy mô: <strong className="text-[#0F172A]">{activePage?.follower_count != null ? fmtNum(activePage.follower_count) : "—"}</strong> Followers •
+                Đã thu thập: <strong className="font-mono text-[#1877F2]">{fmtNum(uidCounts[activePageKey] ?? uidTotal)}</strong> UID
+              </p>
+            </div>
+
+            <div className="px-4 pt-3">
+              <div className="relative">
+                <Search className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-[#94A3B8]" />
+                <input
+                  value={rightSearch}
+                  onChange={(e) => setRightSearch(e.target.value)}
+                  placeholder="Tìm UID, Tên, Vị trí..."
+                  className="h-9 w-full rounded-xl border border-[#E2E8F0] bg-white pr-3 pl-9 text-xs text-[#0F172A] outline-none focus:border-[#1877F2]"
+                />
               </div>
             </div>
 
-            <div className="relative my-3">
-              <Search className="absolute left-3.5 top-1/2 size-3.5 -translate-y-1/2 text-[#94A3B8]" />
-              <input
-                value={rightSearch}
-                onChange={(e) => {
-                  setRightSearch(e.target.value);
-                  setUidPage(1);
-                }}
-                placeholder="Tìm UID, Tên, Vị trí..."
-                className="h-9 w-full rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] pl-9 pr-3 text-xs text-[#0F172A] outline-none focus:border-[#1877F2] focus:bg-white"
-              />
-            </div>
-
-            {/* Sub-toolbar */}
-            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#EFF6FF]/60 px-3 py-2">
-              <div className="flex items-center gap-2 text-xs font-bold text-[#1877F2]">
-                <span className="flex size-5 items-center justify-center rounded-full bg-[#1877F2] text-[10px] text-white">
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-y border-[#DBEAFE] bg-[#EFF6FF] px-4 py-2">
+              <div className="flex items-center gap-2 text-xs font-bold text-[#1D4ED8]">
+                <span className="flex size-5 items-center justify-center rounded-full bg-[#1D4ED8] text-[10px] text-white">
                   {selectedUidIds.length}
                 </span>
                 Đã chọn: {selectedUidIds.length} UID
@@ -862,7 +668,7 @@ export function SelectPagesModal({
                 <button
                   type="button"
                   onClick={handleExportSelectedUids}
-                  className="inline-flex items-center gap-1 rounded-lg border border-[#BFDBFE] bg-white px-2.5 py-1 text-[11px] font-bold text-[#1877F2] hover:bg-[#DBEAFE]"
+                  className="inline-flex items-center gap-1 rounded-lg border border-[#BFDBFE] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#1D4ED8] hover:bg-[#DBEAFE]"
                 >
                   <Download className="size-3" />
                   Xuất file chọn
@@ -870,7 +676,8 @@ export function SelectPagesModal({
                 <button
                   type="button"
                   onClick={handleDeleteSelectedUids}
-                  className="inline-flex items-center gap-1 rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-2.5 py-1 text-[11px] font-bold text-[#DC2626] hover:bg-[#FEE2E2]"
+                  disabled={!selectedUidIds.length}
+                  className="inline-flex items-center gap-1 rounded-lg border border-[#FECACA] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#DC2626] hover:bg-[#FEF2F2] disabled:opacity-40"
                 >
                   <Trash2 className="size-3" />
                   Xóa
@@ -878,199 +685,122 @@ export function SelectPagesModal({
               </div>
             </div>
 
-            {/* Table */}
             <div className="flex-1 overflow-auto">
-              {loadingFollowers ? (
-                <div className="py-10 text-center text-xs text-[#64748B]">
-                  <Loader2 className="mx-auto mb-2 size-5 animate-spin text-[#1877F2]" />
-                  Đang tải UID của Page...
-                </div>
-              ) : (
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-[#F8FAFC] text-[10px] font-bold uppercase text-[#64748B]">
-                    <tr className="border-b border-[#E2E8F0]">
-                      <th className="w-8 px-2 py-2.5">
-                        <Checkbox
-                          checked={
-                            filteredUids.length > 0 &&
-                            selectedUidIds.length === filteredUids.length
-                          }
-                          onCheckedChange={(c) =>
-                            setSelectedUidIds(
-                              c ? filteredUids.map((u) => u.id) : [],
-                            )
-                          }
-                        />
-                      </th>
-                      <th className="w-10 px-2 py-2.5">STT</th>
-                      <th className="px-2 py-2.5">HỌ VÀ TÊN</th>
-                      <th className="px-2 py-2.5">UID / PROFILE LINK</th>
-                      <th className="px-2 py-2.5">ĐỊA CHỈ</th>
-                      <th className="px-2 py-2.5">SỐ BẠN BÈ</th>
-                      <th className="px-2 py-2.5 text-right">THỜI GIAN</th>
+              <table className="w-full text-left text-xs">
+                <thead className="bg-white text-[10px] font-bold text-[#475569] uppercase">
+                  <tr className="border-b border-[#E2E8F0]">
+                    <th className="w-10 px-4 py-3">
+                      <Checkbox
+                        checked={allRowsChecked}
+                        onCheckedChange={(c) => setSelectedUidIds(c ? uidRows.map((f) => f.id) : [])}
+                      />
+                    </th>
+                    <th className="w-12 px-2 py-3">STT</th>
+                    <th className="px-2 py-3">Họ và tên</th>
+                    <th className="px-2 py-3">UID / Profile link</th>
+                    <th className="px-2 py-3">Địa chỉ</th>
+                    <th className="px-2 py-3">Số bạn bè</th>
+                    <th className="px-4 py-3 text-right">Thời gian</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#F1F5F9]">
+                  {loadingUids ? (
+                    <tr>
+                      <td colSpan={7} className="py-10 text-center text-[#64748B]">
+                        <Loader2 className="mx-auto mb-2 size-5 animate-spin text-[#1877F2]" />
+                        Đang tải UID của Page...
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#F1F5F9]">
-                    {pagedUids.map((u, idx) => {
-                      const realIdx = (safeUidPage - 1) * uidPageSize + idx;
-                      const checked = selectedUidIds.includes(u.id);
+                  ) : uidRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-10 text-center text-[#94A3B8]">
+                        {activePageKey ? "Page này chưa có UID nào được quét." : "Chọn một page để xem UID đã thu thập."}
+                      </td>
+                    </tr>
+                  ) : (
+                    uidRows.map((f, idx) => {
+                      const realIdx = (uidPage - 1) * UID_PAGE_SIZE + idx;
+                      const checked = selectedUidIds.includes(f.id);
+                      const uid = rowUid(f);
+                      const name = f.follower_name || uid;
                       return (
-                        <tr key={u.id} className="hover:bg-[#F8FAFC]">
-                          <td className="px-2 py-2.5">
+                        <tr key={f.id} className="hover:bg-[#F8FAFC]">
+                          <td className="px-4 py-3">
                             <Checkbox
                               checked={checked}
                               onCheckedChange={(c) =>
-                                setSelectedUidIds((prev) =>
-                                  c
-                                    ? [...prev, u.id]
-                                    : prev.filter((id) => id !== u.id),
-                                )
+                                setSelectedUidIds((prev) => (c ? [...prev, f.id] : prev.filter((id) => id !== f.id)))
                               }
                             />
                           </td>
-                          <td className="px-2 py-2.5 font-mono text-[#64748B]">
-                            {String(realIdx + 1).padStart(2, "0")}
-                          </td>
-                          <td className="px-2 py-2.5">
+                          <td className="px-2 py-3 font-mono text-[#94A3B8]">{String(realIdx + 1).padStart(2, "0")}</td>
+                          <td className="px-2 py-3">
                             <div className="flex items-center gap-2">
-                              <Avatar className="size-7">
-                                <AvatarFallback
-                                  className={
-                                    AVATAR_COLORS[
-                                      realIdx % AVATAR_COLORS.length
-                                    ]
-                                  }
-                                >
-                                  {initialsOf(u.name)}
+                              <Avatar className="size-8">
+                                {f.avatar_url ? <AvatarImage src={f.avatar_url} alt="" /> : null}
+                                <AvatarFallback className={AVATAR_COLORS[realIdx % AVATAR_COLORS.length]}>
+                                  {initialsOf(name)}
                                 </AvatarFallback>
                               </Avatar>
-                              <span className="font-bold text-[#0F172A]">
-                                {u.name}
-                              </span>
+                              <span className="max-w-[110px] font-bold leading-snug text-[#0F172A]">{name}</span>
                             </div>
                           </td>
-                          <td className="px-2 py-2.5">
+                          <td className="px-2 py-3">
                             <a
-                              href={`https://www.facebook.com/${u.uid}`}
+                              href={f.profile_url || `https://www.facebook.com/${uid}`}
                               target="_blank"
                               rel="noreferrer"
                               className="inline-flex items-center gap-1 font-mono text-[#1877F2] hover:underline"
                             >
-                              {u.uid}
+                              {uid}
                               <ExternalLink className="size-3" />
                             </a>
                           </td>
-                          <td className="px-2 py-2.5 text-[#475569]">
-                            {u.location}
+                          <td className="px-2 py-3 text-[#475569]">{f.location || "—"}</td>
+                          <td className="px-2 py-3 text-[#334155]">
+                            {f.friend_count != null ? `${fmtNum(f.friend_count)} bạn bè` : "—"}
                           </td>
-                          <td className="px-2 py-2.5 font-semibold text-[#1E293B]">
-                            {u.friends}
-                          </td>
-                          <td className="px-2 py-2.5 text-right font-mono text-[#64748B]">
-                            {u.time}
+                          <td className="px-4 py-3 text-right font-mono text-[#64748B]" title={f.updated_at || f.created_at || ""}>
+                            {clockOf(f.updated_at || f.created_at)}
                           </td>
                         </tr>
                       );
-                    })}
-                  </tbody>
-                </table>
-              )}
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
 
-            {/* Pagination bar inside Right Column (Ảnh 1) */}
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#F1F5F9] pt-3 text-xs text-[#64748B]">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#F1F5F9] px-4 py-3 text-xs text-[#64748B]">
               <span>
                 Hiển thị{" "}
                 <strong className="text-[#0F172A]">
-                  {filteredUids.length === 0
-                    ? 0
-                    : (safeUidPage - 1) * uidPageSize + 1}{" "}
-                  - {Math.min(safeUidPage * uidPageSize, filteredUids.length)}
+                  {uidTotal === 0 ? 0 : (uidPage - 1) * UID_PAGE_SIZE + 1} - {Math.min(uidPage * UID_PAGE_SIZE, uidTotal)}
                 </strong>{" "}
-                của{" "}
-                <strong className="text-[#0F172A]">
-                  {(
-                    activePage?.scanned_uid_count || filteredUids.length
-                  ).toLocaleString("vi-VN")}
-                </strong>{" "}
-                UID
+                của <strong className="text-[#0F172A]">{fmtNum(uidTotal)}</strong> UID
               </span>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  disabled={safeUidPage <= 1}
-                  onClick={() => setUidPage((p) => Math.max(1, p - 1))}
-                  className="flex size-7 items-center justify-center rounded-lg border border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC] disabled:opacity-40"
-                >
-                  <ChevronLeft className="size-3.5" />
-                </button>
-                {Array.from({ length: totalUidPages }, (_, i) => i + 1)
-                  .slice(0, 3)
-                  .map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setUidPage(p)}
-                      className={`size-7 rounded-lg text-xs font-bold ${
-                        p === safeUidPage
-                          ? "bg-[#1877F2] text-white"
-                          : "border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC]"
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  ))}
-                {totalUidPages > 3 && (
-                  <>
-                    <span className="px-1 text-[#94A3B8]">...</span>
-                    <button
-                      type="button"
-                      onClick={() => setUidPage(totalUidPages)}
-                      className={`h-7 rounded-lg px-2 text-xs font-bold ${
-                        safeUidPage === totalUidPages
-                          ? "bg-[#1877F2] text-white"
-                          : "border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC]"
-                      }`}
-                    >
-                      {totalUidPages}
-                    </button>
-                  </>
-                )}
-                <button
-                  type="button"
-                  disabled={safeUidPage >= totalUidPages}
-                  onClick={() =>
-                    setUidPage((p) => Math.min(totalUidPages, p + 1))
-                  }
-                  className="flex size-7 items-center justify-center rounded-lg border border-[#E2E8F0] text-[#64748B] hover:bg-[#F8FAFC] disabled:opacity-40"
-                >
-                  <ChevronRight className="size-3.5" />
-                </button>
-              </div>
+              <Pager page={uidPage} totalPages={uidTotalPages} onChange={setUidPage} />
             </div>
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-3 border-t border-[#E2E8F0] bg-white px-6 py-4">
+        <div className="flex items-center justify-end gap-3 px-8 pb-6">
           <button
             type="button"
             onClick={onClose}
-            className="h-10 rounded-xl border border-[#CBD5E1] bg-white px-5 text-xs font-bold text-[#475569] hover:bg-[#F8FAFC]"
+            className="h-11 rounded-xl border border-[#CBD5E1] bg-white px-7 text-sm font-semibold text-[#334155] shadow-sm hover:bg-[#F8FAFC]"
           >
             Hủy bỏ
           </button>
           <button
             type="button"
             onClick={() => {
-              const chosen = availablePages.filter((p) =>
-                draftKeys.includes(p.page_key),
-              );
+              const chosen = draftKeys.map((k) => pageCache[k]).filter(Boolean);
               onConfirm(chosen);
               onClose();
               toast.success(`Đã chọn ${chosen.length} Fanpage mục tiêu.`);
             }}
-            className="inline-flex h-10 items-center gap-2 rounded-xl bg-[#1877F2] px-6 text-xs font-bold text-white shadow-sm hover:bg-[#166FE5]"
+            className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#1D4ED8] px-7 text-sm font-semibold text-white shadow-sm hover:bg-[#1E40AF]"
           >
             <Check className="size-4" />
             Xác nhận chọn ({draftKeys.length} page)
