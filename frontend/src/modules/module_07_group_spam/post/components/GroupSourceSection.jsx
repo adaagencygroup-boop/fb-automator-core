@@ -144,6 +144,14 @@ export default function GroupSourceSection({
     });
   }, [baseGroups, groupFilter, memberFilter, groupTypeFilter, membershipFilter, frequencyFilter]);
 
+  const activeResultFilterCount = [
+    memberFilter,
+    groupTypeFilter,
+    frequencyFilter,
+    membershipFilter,
+  ].filter((value) => value !== "all").length;
+  const activeSearchFilterCount = activeResultFilterCount + (maxResults !== "10" ? 1 : 0);
+
   // A filter must affect the groups sent to the campaign as well as the visible rows.
   useEffect(() => {
     const filtersActive = Boolean(groupFilter.trim()) || activeResultFilterCount > 0;
@@ -159,14 +167,6 @@ export default function GroupSourceSection({
     isFileProcessing ||
     isSearching ||
     (groupSource === "search" && hasSearched);
-
-  const activeResultFilterCount = [
-    memberFilter,
-    groupTypeFilter,
-    frequencyFilter,
-    membershipFilter,
-  ].filter((value) => value !== "all").length;
-  const activeSearchFilterCount = activeResultFilterCount + (maxResults !== "10" ? 1 : 0);
 
   // Toggle chọn 1 nhóm
   const toggleGroup = (key, checked) => {

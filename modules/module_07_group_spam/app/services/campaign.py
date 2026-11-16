@@ -109,6 +109,19 @@ def _friendly_automation_error(error: Exception | str) -> dict[str, str]:
         if any(needle in lowered for needle in needles):
             return {"message": message, "error_code": code, "error_detail": message}
 
+    if "checkpoint" in lowered or "xác minh danh tính" in lowered:
+        concise_cp = raw.split("Stacktrace:", 1)[0].strip()
+        concise_cp = " ".join(concise_cp.split())
+        fallback_msg = (
+            "Tài khoản Facebook đang bị yêu cầu xác minh danh tính / bảo mật. "
+            "Vui lòng đăng nhập trình duyệt để xác minh thủ công trước khi chạy lại."
+        )
+        return {
+            "message": concise_cp or fallback_msg,
+            "error_code": "CHECKPOINT",
+            "error_detail": concise_cp or fallback_msg,
+        }
+
     # Selenium thường nối hàng trăm dòng Stacktrace vào message. Chỉ giữ phần
     # mô tả đầu tiên để lịch sử tác vụ không bị vỡ giao diện.
     concise = raw.split("Stacktrace:", 1)[0].strip()
