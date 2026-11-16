@@ -1,9 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import React, { useEffect, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
-import { CheckCircle2, XCircle, ExternalLink, Maximize2, Minimize2 } from "lucide-react";
 import { CheckCircle2, XCircle, ExternalLink, Maximize2, Minimize2 } from "lucide-react";
 
 function renderLogContent(message, colorClass) {
@@ -26,7 +24,6 @@ function renderLogContent(message, colorClass) {
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-0.5 font-medium text-sky-300 hover:text-sky-100 underline underline-offset-2 break-all transition-colors mx-0.5"
-              className="inline-flex items-center gap-0.5 font-medium text-sky-300 hover:text-sky-100 underline underline-offset-2 break-all transition-colors mx-0.5"
               onClick={(e) => e.stopPropagation()}
             >
               <span>{part}</span>
@@ -44,19 +41,16 @@ export default function GroupProgressSection({
   runState = "idle",
   campaignProgress = null,
   onClearLogs,
-  onClearLogs,
 }) {
   const status = campaignProgress?.status || (runState === "pending" ? "SCHEDULED" : runState === "starting" ? "STARTING" : runState === "running" ? "RUNNING" : "IDLE");
   const logs = campaignProgress?.logs || [];
   const logContainerRef = useRef(null);
-  const [expanded, setExpanded] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     if (!logs.length || !logContainerRef.current) return;
     logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
   }, [logs]);
-}, [logs]);
 
 return (
   <Card className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-0 shadow-sm">

@@ -39,9 +39,6 @@ export default function GroupAccountSection({
   const isEligible = (account) =>
     String(account?.status || "").toLowerCase() === "live" &&
     String(account?.login_status || "").toLowerCase() === "logged_in";
-  const isEligible = (account) =>
-    String(account?.status || "").toLowerCase() === "live" &&
-    String(account?.login_status || "").toLowerCase() === "logged_in";
 
   const [accountSearch, setAccountSearch] = useState("");
 
@@ -53,11 +50,6 @@ export default function GroupAccountSection({
       `${account.name || ""} ${account.uid || ""} ${account.email || ""}`.toLowerCase().includes(query)
     );
   }, [accountSearch, effectiveAccounts]);
-
-  const displayedAccounts = useMemo(
-    () => filteredAccounts.filter((account) => String(account.login_status || "").toLowerCase() === "logged_in"),
-    [filteredAccounts]
-  );
 
   const displayedAccounts = useMemo(
     () => filteredAccounts.filter((account) => String(account.login_status || "").toLowerCase() === "logged_in"),
@@ -79,17 +71,10 @@ export default function GroupAccountSection({
     setSelectedAccountKeys((current) => current.filter((key) => eligibleKeys.has(key)));
   }, [effectiveAccounts, setSelectedAccountKeys]);
 
-  useEffect(() => {
-    if (!effectiveAccounts.length) return;
-    const eligibleKeys = new Set(effectiveAccounts.filter(isEligible).map((account) => account.key));
-    setSelectedAccountKeys((current) => current.filter((key) => eligibleKeys.has(key)));
-  }, [effectiveAccounts, setSelectedAccountKeys]);
-
   // Gắn cơ chế drag-to-select (giữ chuột kéo để chọn nhiều dòng liên tục)
   useEffect(() => {
     if (!tableContainerRef.current) return;
     return attachDragSelection(tableContainerRef.current, {
-      getVisibleKeys: () => rowsRef.current.filter(isEligible).map((row) => row.key),
       getVisibleKeys: () => rowsRef.current.filter(isEligible).map((row) => row.key),
       getSelectedKeys: () => selectedKeysRef.current,
       onSelectionChange: (keys) => {
@@ -102,8 +87,6 @@ export default function GroupAccountSection({
 
   // Toggle chọn 1 tài khoản
   const toggleAccount = (key, checked) => {
-    const account = effectiveAccounts.find((item) => item.key === key);
-    if (!account || !isEligible(account)) return;
     const account = effectiveAccounts.find((item) => item.key === key);
     if (!account || !isEligible(account)) return;
     setSelectedAccountKeys((current) =>
@@ -120,7 +103,6 @@ export default function GroupAccountSection({
 
   // Chọn tất cả tài khoản trong kết quả lọc
   const handleSelectAll = () => {
-    setSelectedAccountKeys(filteredAccounts.filter(isEligible).map((account) => account.key));
     setSelectedAccountKeys(filteredAccounts.filter(isEligible).map((account) => account.key));
   };
 
@@ -166,11 +148,8 @@ export default function GroupAccountSection({
                     checked={
                       displayedAccounts.some(isEligible) &&
                       displayedAccounts.filter(isEligible).every((account) => selectedAccountKeys.includes(account.key))
-                      displayedAccounts.some(isEligible) &&
-                      displayedAccounts.filter(isEligible).every((account) => selectedAccountKeys.includes(account.key))
                     }
-                  onCheckedChange={(checked) =>
-                    setSelectedAccountKeys(checked ? displayedAccounts.filter(isEligible).map((account) => account.key) : [])
+                    onCheckedChange={(checked) =>
                       setSelectedAccountKeys(checked ? displayedAccounts.filter(isEligible).map((account) => account.key) : [])
                     }
                   />
@@ -179,121 +158,104 @@ export default function GroupAccountSection({
                 <th className="px-3 py-3 font-semibold">UID Facebook</th>
                 <th className="px-3 py-3 font-semibold">Trạng thái tài khoản</th>
                 <th className="px-3 py-3 font-semibold">Trạng thái đăng nhập</th>
-                <th className="px-3 py-3 font-semibold">Trạng thái tài khoản</th>
-                <th className="px-3 py-3 font-semibold">Trạng thái đăng nhập</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {displayedAccounts.map((account, index) => {
-                {
-                  displayedAccounts.map((account, index) => {
-                    const selected = selectedAccountKeys.includes(account.key);
-                    const eligible = isEligible(account);
-                    const loggedIn = String(account.login_status || "").toLowerCase() === "logged_in";
-                    const eligible = isEligible(account);
-                    const loggedIn = String(account.login_status || "").toLowerCase() === "logged_in";
-                    return (
-                      <tr
-                        key={account.key}
-                        data-account-key={account.key}
-                        onClick={(e) => eligible && handleRowClick(account.key, e)}
-                        className={`${eligible ? "cursor-pointer" : "cursor-not-allowed opacity-50"} transition-colors select-none ${selected ? "bg-blue-50/70 hover:bg-blue-100/60" : "bg-white hover:bg-slate-50"
-                          }`}
-                      >
-                        <td className="px-4 py-2.5">
-                          <Checkbox
-                            checked={selected}
-                            disabled={!eligible}
-                            disabled={!eligible}
-                            onCheckedChange={(checked) => toggleAccount(account.key, checked)}
-                          />
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <div className="flex items-center gap-2.5">
-                            <Avatar className="size-8 border-0">
-                              {(account.avatar_url || account.avatar) && (
-                                <AvatarImage src={account.avatar_url || account.avatar} alt={account.name || "FB"} />
-                              )}
-                              <AvatarFallback className={AVATAR_COLORS[index % AVATAR_COLORS.length]}>
-                                {initialsOf(account.name)}
-                              </AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <p className="font-semibold text-slate-700 text-sm">{account.name}</p>
-                              <p className="text-xs text-slate-400">
-                                {account.email || "Chưa có email"}
-                              </p>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-3 py-2.5 font-mono text-slate-500">{account.uid}</td>
-                        <td className="px-3 py-2.5">
-                          {String(account.status || "").toUpperCase() === "LIVE" ? (
-                            <span className="font-semibold text-emerald-600">● Live</span>
-                          ) : String(account.status || "").toUpperCase() === "DIE" ? (
-                            <span className="font-semibold text-red-500">● Die</span>
-                          ) : (
-                            <span className="font-semibold text-slate-400">
-                              ● {account.status || "Chưa check"}
-                            </span>
+                const selected = selectedAccountKeys.includes(account.key);
+                const eligible = isEligible(account);
+                const loggedIn = String(account.login_status || "").toLowerCase() === "logged_in";
+                return (
+                  <tr
+                    key={account.key}
+                    data-account-key={account.key}
+                    onClick={(e) => eligible && handleRowClick(account.key, e)}
+                    className={`${eligible ? "cursor-pointer" : "cursor-not-allowed opacity-50"} transition-colors select-none ${
+                      selected ? "bg-blue-50/70 hover:bg-blue-100/60" : "bg-white hover:bg-slate-50"
+                    }`}
+                  >
+                    <td className="px-4 py-2.5">
+                      <Checkbox
+                        checked={selected}
+                        disabled={!eligible}
+                        onCheckedChange={(checked) => toggleAccount(account.key, checked)}
+                      />
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <Avatar className="size-8 border-0">
+                          {(account.avatar_url || account.avatar) && (
+                            <AvatarImage src={account.avatar_url || account.avatar} alt={account.name || "FB"} />
                           )}
-                        </td>
-                        <td className="px-3 py-2.5">
-                          {loggedIn && <span className="font-semibold text-emerald-600">● Đã đăng nhập</span>}
-                        </td>
-                        <td className="px-3 py-2.5">
-                          {loggedIn && <span className="font-semibold text-emerald-600">● Đã đăng nhập</span>}
-                        </td>
-                      </tr>
-                    );
-                  })
-                }
+                          <AvatarFallback className={AVATAR_COLORS[index % AVATAR_COLORS.length]}>
+                            {initialsOf(account.name)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <p className="font-semibold text-slate-700 text-sm">{account.name}</p>
+                          <p className="text-xs text-slate-400">
+                            {account.email || "Chưa có email"}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 font-mono text-slate-500">{account.uid}</td>
+                    <td className="px-3 py-2.5">
+                      {String(account.status || "").toUpperCase() === "LIVE" ? (
+                        <span className="font-semibold text-emerald-600">● Live</span>
+                      ) : String(account.status || "").toUpperCase() === "DIE" ? (
+                        <span className="font-semibold text-red-500">● Die</span>
+                      ) : (
+                        <span className="font-semibold text-slate-400">
+                          ● {account.status || "Chưa check"}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      {loggedIn && <span className="font-semibold text-emerald-600">● Đã đăng nhập</span>}
+                    </td>
+                  </tr>
+                );
+              })}
 
-                {
-                  !accountsLoading && !displayedAccounts.length && (
-                    {!accountsLoading && !displayedAccounts.length && (
-                      <tr>
-                        <td colSpan={5} className="px-4 py-10 text-center">
-                          <td colSpan={5} className="px-4 py-10 text-center">
-                            <div className="flex flex-col items-center justify-center space-y-2">
-                              <Users className="size-8 text-slate-300" />
-                              <p className="text-xs font-semibold text-slate-600">
-                                {effectiveAccounts.length === 0
-                                  ? "Chưa có tài khoản Facebook nào trong Module 2 (Quản lý tài khoản)"
-                                  : "Không tìm thấy tài khoản Facebook phù hợp"}
-                              </p>
-                              <p className="max-w-md text-[11px] text-slate-400">
-                                {effectiveAccounts.length === 0
-                                  ? "Vui lòng vào Module 2 để thêm hoặc import tài khoản Facebook, sau đó quay lại để chọn tài khoản đi seeding."
-                                  : "Thử tìm kiếm với từ khóa khác hoặc bấm nút làm mới."}
-                              </p>
-                              {effectiveAccounts.length === 0 ? (
-                                <div className="pt-2">
-                                  <Link
-                                    href="/accounts"
-                                    className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-primary/90"
-                                  >
-                                    <Plus className="size-3.5" /> Thêm tài khoản tại Module 2
-                                  </Link>
-                                </div>
-                              ) : null}
-                            </div>
-                          </td>
-                      </tr>
-                    )
-                }
+              {!accountsLoading && !displayedAccounts.length && (
+                <tr>
+                  <td colSpan={5} className="px-4 py-10 text-center">
+                    <div className="flex flex-col items-center justify-center space-y-2">
+                      <Users className="size-8 text-slate-300" />
+                      <p className="text-xs font-semibold text-slate-600">
+                        {effectiveAccounts.length === 0
+                          ? "Chưa có tài khoản Facebook nào trong Module 2 (Quản lý tài khoản)"
+                          : "Không tìm thấy tài khoản Facebook phù hợp"}
+                      </p>
+                      <p className="max-w-md text-[11px] text-slate-400">
+                        {effectiveAccounts.length === 0
+                          ? "Vui lòng vào Module 2 để thêm hoặc import tài khoản Facebook, sau đó quay lại để chọn tài khoản đi seeding."
+                          : "Thử tìm kiếm với từ khóa khác hoặc bấm nút làm mới."}
+                      </p>
+                      {effectiveAccounts.length === 0 ? (
+                        <div className="pt-2">
+                          <Link
+                            href="/accounts"
+                            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-primary/90"
+                          >
+                            <Plus className="size-3.5" /> Thêm tài khoản tại Module 2
+                          </Link>
+                        </div>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              )}
 
-                {
-                  accountsLoading && (
-                    <tr>
-                      <td colSpan={5} className="px-4 py-10 text-center text-slate-400">
-                        <td colSpan={5} className="px-4 py-10 text-center text-slate-400">
-                          <RefreshCw className="inline mr-2 size-4 animate-spin text-primary" />
-                          Đang tải tài khoản từ Module 2...
-                        </td>
-                    </tr>
-                  )
-                }
+              {accountsLoading && (
+                <tr>
+                  <td colSpan={5} className="px-4 py-10 text-center text-slate-400">
+                    <RefreshCw className="inline mr-2 size-4 animate-spin text-primary" />
+                    Đang tải tài khoản từ Module 2...
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
