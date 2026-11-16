@@ -224,24 +224,67 @@ function ageOf(key) {
 }
 
 /**
+ * Tăng mỗi lần cache bị xoá. Lượt làm mới nền chụp lại số này lúc khởi hành;
+ * về đích mà số đã đổi nghĩa là giữa chừng có người ghi dữ liệu — khi đó kết
+ * quả trên tay đã cũ, ghi vào cache là làm sống lại thứ vừa bị xoá có chủ ý.
+ */
+let invalidationEpoch = 0;
+
+/**
  * Gọi lại ở nền để cập nhật cache. Không ai chờ kết quả này, nên lỗi thì im
  * lặng bỏ qua — người dùng đã nhận được dữ liệu cũ và không nên bị quấy vì
  * một lượt làm mới ngầm.
+ *
+ * KHÔNG dùng `fresh: true` ở đây.
+ *
+ * `fresh` bật `cache: { override: true }`, và thư viện xử lý override bằng
+ * cách đặt entry về trạng thái `loading` NGAY khi khởi hành. Trong suốt thời
+ * gian request bay, entry không còn phục vụ được: mọi lượt đọc chen vào giữa
+ * sẽ đứng chờ nó. Với DB ở Tokyo thì cửa sổ đó dài hàng trăm ms tới vài giây,
+ * nên chỉ cần đổi trang rồi quay lại đủ nhanh là người dùng phải chờ đúng như
+ * lúc chưa có cache — triệu chứng "tự nhiên mất cache".
+ *
+ * Thay vào đó cho request này chạy NGOÀI cache (`__bg` -> `cache: false`), giữ
+ * nguyên dữ liệu cũ phục vụ suốt thời gian chờ, rồi tự tay ghi đè khi có kết
+ * quả. Đó mới đúng là stale-while-revalidate.
  */
 function scheduleRefresh(api, config, key) {
   if (refreshing.has(key)) return;
   refreshing.add(key);
 
+  const epoch = invalidationEpoch;
   api
     .get(config.url, {
       params: config.params,
       headers: config.headers,
       timeout: config.timeout,
-      fresh: true,
       __bg: true, // đừng để chính nó kích thêm một lượt nền nữa
+      __bgKey: key,
+      __bgEpoch: epoch,
     })
     .catch(() => {})
     .finally(() => refreshing.delete(key));
+}
+
+/** Ghi kết quả của một lượt làm mới nền vào cache, thay cho thư viện */
+function storeBackgroundResult(response) {
+  const config = response?.config;
+  const key = config?.__bgKey;
+  if (!storage || !key) return;
+  if (config.__bgEpoch !== invalidationEpoch) return; // đã có lệnh ghi chen ngang
+  if (!(response.status >= 200 && response.status < 300)) return;
+
+  storage.set(key, {
+    state: "cached",
+    ttl: hardFor(config.url),
+    createdAt: Date.now(),
+    data: {
+      data: response.data,
+      headers: response.headers,
+      status: response.status,
+      statusText: response.statusText,
+    },
+  });
 }
 
 /**
@@ -298,6 +341,12 @@ export function installApiCache(api) {
       return config;
     }
 
+    // Lượt làm mới nền: đi thẳng ra mạng, không đụng vào entry đang phục vụ.
+    if (config.__bg) {
+      config.cache = false;
+      return config;
+    }
+
     if (config.fresh) {
       // `api.get(url, { fresh: true })` — ép ra mạng và cập nhật lại cache.
       // Dùng cho nút "Làm mới" và cho các vòng hỏi lại cần số thật.
@@ -325,11 +374,28 @@ export function installApiCache(api) {
 
   // Ghi xong thì dữ liệu đọc liên quan đã cũ -> xoá cache tương ứng.
   api.interceptors.response.use((response) => {
+    if (response?.config?.__bg) storeBackgroundResult(response);
     const method = String(response?.config?.method || "").toLowerCase();
+    if (method === "get") {
+      const url = String(response?.config?.url || "");
+      const row = tally.get(url) || { url, trung: 0, ra_mang: 0, loi: 0 };
+      if (response.cached) row.trung += 1;
+      else row.ra_mang += 1;
+      tally.set(url, row);
+    }
     if (method && method !== "get" && method !== "head") {
       for (const prefix of prefixesToInvalidate(response.config?.url)) invalidate(prefix);
     }
     return response;
+  }, (error) => {
+    const config = error?.config;
+    if (String(config?.method || "").toLowerCase() === "get") {
+      const url = String(config?.url || "");
+      const row = tally.get(url) || { url, trung: 0, ra_mang: 0, loi: 0 };
+      row.loi += 1;
+      tally.set(url, row);
+    }
+    return Promise.reject(error);
   });
 
   return api;
@@ -400,14 +466,72 @@ function prefixesToInvalidate(url) {
 export function invalidate(prefix) {
   if (!storage || !prefix) return;
   const target = String(prefix);
-  for (const key of [...storage.data.keys()]) {
-    if (urlOfKey(key).startsWith(target)) storage.remove(key);
-  }
+  invalidationEpoch += 1;
+  const hit = [...storage.data.keys()].filter((key) => urlOfKey(key).startsWith(target));
+  if (hit.length) note("INVALIDATE", `${target} -> xoá ${hit.length} entry`);
+  for (const key of hit) storage.remove(key);
 }
 
 /** Xoá sạch — gọi khi đăng xuất, bị thu hồi phiên, hoặc đổi tài khoản */
 export function clearApiCache() {
   if (!storage) return;
+  invalidationEpoch += 1;
+  note("CLEAR", `${storage.data.size} entry bị xoá sạch`);
   storage.data.clear();
   refreshing.clear();
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// CHẨN ĐOÁN
+//
+// Có báo cáo "mất cache sau vài lần đổi trang" mà không tái hiện được ngoài
+// app thật. Nhật ký này ghi lại MỌI lần cache bị xoá, kèm nơi gọi, để phân
+// biệt ba khả năng: cache bị xoá (có dòng ở đây), cache không bao giờ được
+// ghi (soi `entries`), hay cache vẫn còn nguyên và chỉ là màn hình chớp.
+//
+// Mở Console rồi gõ:  __apiCache()
+// ──────────────────────────────────────────────────────────────────────────
+
+const auditLog = [];
+
+/** Đếm theo URL: bao nhiêu lượt trúng cache, bao nhiêu lượt phải ra mạng */
+const tally = new Map();
+
+function note(kind, detail) {
+  auditLog.push({
+    at: new Date().toLocaleTimeString("vi-VN"),
+    kind,
+    detail,
+    // Bỏ 3 khung đầu (Error, note, chính hàm gọi) để ra đúng nơi châm ngòi
+    from: String(new Error().stack || "").split("\n").slice(3, 6).join(" <- ").trim(),
+  });
+  if (auditLog.length > 100) auditLog.shift();
+}
+
+if (typeof window !== "undefined") {
+  window.__apiCache = () => {
+    const entries = storage
+      ? [...storage.data.entries()].map(([k, v]) => ({
+          key: urlOfKey(k),
+          // state != "cached" nghĩa là entry CÓ trong map nhưng KHÔNG dùng được:
+          // "loading" = request đang bay hoặc đã chết giữa chừng.
+          state: v?.state ?? "?",
+          tuoi_ms: ageOf(k),
+        }))
+      : [];
+    // eslint-disable-next-line no-console
+    console.log(`[api-cache] ${entries.length} entry đang nằm trong cache`);
+    // eslint-disable-next-line no-console
+    console.table(entries);
+    // eslint-disable-next-line no-console
+    console.log(`[api-cache] ${auditLog.length} lần cache bị xoá kể từ khi mở trang:`);
+    // eslint-disable-next-line no-console
+    console.table(auditLog);
+    const diem = [...tally.values()].sort((a, b) => (b.trung + b.ra_mang) - (a.trung + a.ra_mang));
+    // eslint-disable-next-line no-console
+    console.log("[api-cache] trúng cache / ra mạng, tính từ lúc mở trang:");
+    // eslint-disable-next-line no-console
+    console.table(diem);
+    return { soEntry: entries.length, entries, nhatKyXoa: auditLog, thongKe: diem };
+  };
 }
