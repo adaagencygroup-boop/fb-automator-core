@@ -242,6 +242,7 @@ def scrape_real_groups_via_browser(
         const mainArea = document.querySelector('[role="main"]') || document.body;
         const text = mainArea ? mainArea.innerText.slice(0, 4000) : '';
 
+        res.is_unavailable = /bạn hiện không xem được nội dung này|this content isn't available|content isn't available right now|trang này không khả dụng|this page isn't available|liên kết này có thể bị hỏng|this link may be broken|nội dung này hiện không khả dụng/i.test(text);
         res.is_private = /riêng tư|private/i.test(text);
         res.is_public = /công khai|public/i.test(text);
 
@@ -270,6 +271,23 @@ def scrape_real_groups_via_browser(
                 time.sleep(2)
                 data = driver.execute_script(js_extract_script) or {}
                 scraped_name = (data.get("name") or "").strip()
+                unavailable_markers = (
+                    "bạn hiện không xem được nội dung này",
+                    "this content isn't available",
+                    "trang này không khả dụng",
+                    "this page isn't available",
+                    "content not found",
+                )
+                if data.get("is_unavailable") or any(
+                    marker in scraped_name.lower() for marker in unavailable_markers
+                ):
+                    entry_result = {"unavailable": True}
+                    if uid:
+                        scraped_map[uid.lower()] = entry_result
+                    if url:
+                        scraped_map[clean_group_url(url).lower()] = entry_result
+                    continue
+
                 forbidden = {"facebook", "error", "lỗi", "log in", "đăng nhập", "login"}
                 if scraped_name and scraped_name.lower() not in forbidden:
                     privacy = "private" if data.get("is_private") else ("public" if data.get("is_public") else "public")
@@ -444,7 +462,23 @@ def parse_group_file_content(
             or cached_groups.get(url_key)
         )
 
+        if real_data and real_data.get("unavailable"):
+            invalid_count += 1
+            continue
+
         if real_data and real_data.get("name"):
+            lowered_name = real_data["name"].strip().lower()
+            if any(
+                marker in lowered_name
+                for marker in (
+                    "bạn hiện không xem được nội dung này",
+                    "this content isn't available",
+                    "trang này không khả dụng",
+                    "this page isn't available",
+                )
+            ):
+                invalid_count += 1
+                continue
             group_name = real_data["name"]
             privacy = real_data.get("privacy") or "public"
             members = real_data.get("members") or "Công khai"

@@ -476,28 +476,47 @@ class FacebookGroupPoster:
         )
         pending_xpath = (
             "//*[@role='button' and (contains(@aria-label,'Hủy yêu cầu') or "
-            "contains(@aria-label,'Cancel request') or contains(.,'Đang chờ') or "
-            "contains(.,'Đã gửi yêu cầu') or contains(.,'Yêu cầu đã gửi') or "
-            "contains(.,'Đã yêu cầu') or contains(.,'Request sent') or "
+            "contains(@aria-label,'Cancel request') or contains(@aria-label,'Cancel Request') or "
+            "contains(.,'Đang chờ') or contains(.,'Đã gửi yêu cầu') or contains(.,'Yêu cầu đã gửi') or "
+            "contains(.,'Đã yêu cầu') or contains(.,'Request sent') or contains(.,'Request Sent') or "
             "contains(.,'Requested') or contains(.,'Pending'))]"
         )
         join_xpath = (
             "//*[@role='button' and (contains(@aria-label,'Tham gia nhóm') or "
-            "contains(@aria-label,'Join group') or normalize-space(.)='Tham gia nhóm' or "
-            "normalize-space(.)='Join group' or normalize-space(.)='Tham gia')]"
+            "contains(@aria-label,'Join group') or contains(@aria-label,'Join Group') or "
+            "normalize-space(.)='Tham gia nhóm' or normalize-space(.)='Tham gia' or "
+            "normalize-space(.)='Join group' or normalize-space(.)='Join Group' or "
+            "normalize-space(.)='Join' or "
+            "translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')='join group')]"
         )
 
         def visible(xpath: str) -> list[Any]:
             return [element for element in driver.find_elements(By.XPATH, xpath) if self._is_displayed(element)]
 
-        if visible(already_joined_xpath):
-            return {"status": "ALREADY_MEMBER", "message": "Tài khoản đã là thành viên nhóm"}
-        if visible(pending_xpath):
-            return {"status": "PENDING_APPROVAL", "message": "Đã gửi yêu cầu, đang chờ quản trị viên duyệt"}
+        composer_xpath = (
+            "//*[@role='button' and (contains(.,'Bạn viết gì đi') or "
+            "contains(.,'Tạo bài viết công khai') or contains(.,'Write something') or "
+            "contains(.,'Create a public post'))]"
+        )
 
-        buttons = visible(join_xpath)
-        if not buttons:
-            return {"status": "FAILED", "message": "Facebook không hiển thị nút tham gia hoặc trạng thái đã là thành viên"}
+        # Chờ tối đa 6s để React/SPA của Facebook render xong các nút trạng thái nhóm
+        # sau khi document.readyState == 'complete'.
+        render_deadline = time.monotonic() + 6
+        buttons: list[Any] = []
+        while True:
+            if visible(already_joined_xpath):
+                return {"status": "ALREADY_MEMBER", "message": "Tài khoản đã là thành viên nhóm"}
+            if visible(pending_xpath):
+                return {"status": "PENDING_APPROVAL", "message": "Đã gửi yêu cầu, đang chờ quản trị viên duyệt"}
+            buttons = visible(join_xpath)
+            if buttons:
+                break
+            if visible(composer_xpath):
+                return {"status": "ALREADY_MEMBER", "message": "Tài khoản đã là thành viên nhóm"}
+            if time.monotonic() >= render_deadline:
+                return {"status": "FAILED", "message": "Facebook không hiển thị nút tham gia hoặc trạng thái đã là thành viên"}
+            if self.cancel.wait(0.35):
+                self._raise_if_cancelled()
 
         try:
             driver.execute_script("arguments[0].click()", buttons[0])
@@ -746,11 +765,11 @@ class FacebookGroupPoster:
                         By.XPATH,
                         ".//a[contains(@href,'/posts/') or contains(@href,'/permalink/') or contains(@href,'story_fbid=') or contains(@href,'multi_permalinks=') or contains(@href,'/photo')]",
                     )
-                    for link in links:
-                        href = link.get_attribute("href")
-                        if not href:
-                            continue
-                        href_str = str(href)
+                    hrefs = [str(href) for link in links if (href := link.get_attribute("href"))]
+                    for href_str in hrefs:
+                        if "/posts/" in href_str or "/permalink/" in href_str:
+                            return href_str
+                    for href_str in hrefs:
                         if "set=gm." in href_str:
                             m = re.search(r"set=gm\.(\d+)", href_str)
                             if m:
@@ -761,10 +780,8 @@ class FacebookGroupPoster:
                             if m:
                                 clean_group = url.split("?", 1)[0].rstrip("/")
                                 return f"{clean_group}/posts/{m.group(1)}"
-                        if "/posts/" in href_str or "/permalink/" in href_str:
-                            return href_str.split("?", 1)[0].rstrip("/")
                         if "/photo" in href_str:
-                            return href_str.split("&__cft__", 1)[0]
+                            return href_str
             except Exception:
                 return None
             return None
@@ -828,7 +845,7 @@ class FacebookGroupPoster:
         def find_first_article():
             visible = [item for item in driver.find_elements(By.XPATH, article_xpath) if self._is_displayed(item)]
             # role=article còn được Facebook dùng cho thẻ giới thiệu và một số khối
-            # phụ. Ưu tiên article có permalink hoặc điều khiển bình luận để lấy
+            # phụ. Chỉ lấy article có permalink hoặc điều khiển bình luận để lấy
             # đúng bài viết đầu tiên trong feed.
             for item in visible:
                 try:
@@ -836,7 +853,7 @@ class FacebookGroupPoster:
                         return item
                 except Exception:
                     continue
-            return visible[0] if visible else None
+            return None
 
         article = self._wait_until(
             find_first_article,
@@ -924,6 +941,7 @@ class FacebookGroupPoster:
                 "contains(@aria-label,'Bình luận dưới tên') or contains(@aria-label,'Write a comment') or "
                 "contains(@aria-label,'Comment as') or contains(@aria-placeholder,'Bình luận') or "
                 "contains(@aria-placeholder,'Comment'))] | "
+                "//div[@role='dialog']//*[@data-lexical-editor='true' and (@role='textbox' or @contenteditable='true')] | "
                 "//textarea[contains(@placeholder,'Bình luận') or contains(@placeholder,'comment')]"
             )
             try:
@@ -1161,7 +1179,7 @@ class FacebookGroupPoster:
         return {
             "status": "SUCCESS",
             "message": "Bình luận bài viết đầu tiên thành công",
-            "result_url": str(permalink).split("?", 1)[0],
+            "result_url": str(permalink),
         }
 
 
