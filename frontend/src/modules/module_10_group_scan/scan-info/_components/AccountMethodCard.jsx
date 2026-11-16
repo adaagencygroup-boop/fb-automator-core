@@ -83,8 +83,6 @@ export default function AccountMethodCard({
   duplicateFileRowsCount = 0,
   invalidFileRowsCount = 0,
   displayedFileRows = [],
-  skipInvalidRows = true,
-  onSkipInvalidRowsChange,
 }) {
   return (
     <section className="flex flex-col h-full rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
@@ -372,16 +370,7 @@ export default function AccountMethodCard({
       {method === "file" && (
         <div className="space-y-4">
           <div className="flex items-center justify-between pb-1">
-            <span className="text-xs font-bold text-[#0F172A]">Tải tệp danh sách liên kết nhóm (.txt / .csv / .xlsx)</span>
-            <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-medium text-slate-600 hover:text-slate-900">
-              <input
-                type="checkbox"
-                checked={skipInvalidRows}
-                onChange={(e) => onSkipInvalidRowsChange?.(e.target.checked)}
-                className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-              />
-              <span>Bỏ qua các dòng không phải link nhóm hoặc trùng lặp</span>
-            </label>
+            <span className="text-xs font-bold text-[#0F172A]">Tải tệp danh sách liên kết nhóm</span>
           </div>
           <label className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-[#CBD5E1] rounded-2xl bg-white hover:bg-[#F8FAFC] transition-colors cursor-pointer group">
             <input
