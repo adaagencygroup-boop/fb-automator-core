@@ -354,6 +354,14 @@ if farm_router:
     app.include_router(farm_router)
 if post_router:
     app.include_router(post_router)
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+
+    Instrumentator(should_group_status_codes=False).instrument(app).expose(
+        app, endpoint="/metrics", include_in_schema=False
+    )
+except ImportError:
+    pass
 @app.get("/api/health")
 async def health_check():
     """async: không phụ thuộc threadpool — luôn trả lời được khi Engine còn sống."""

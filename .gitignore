@@ -22,7 +22,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-
+nginx/ssl/
 # 2. Environment & Secrets
 .env
 .env.local
@@ -37,6 +37,7 @@ web-admin/.env.*.local
 !.env.test
 
 # 3. Database & Local Data
+data/
 data/*.db
 data/*.db-journal
 data/*.db-wal

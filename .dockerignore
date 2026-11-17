@@ -4,6 +4,7 @@
 venv
 frontend
 src-tauri
+devops
 **/__pycache__
 **/*.pyc
 **/.pytest_cache
