@@ -275,21 +275,43 @@ function RunningScreen({ task, accounts, logs, paused, stopped, finished, onPaus
   const logRef = useRef(null);
   const pages = Array.isArray(task?.pages) ? task.pages : [];
   const startMs = Number(task?.start_time) || 0;
-  const rows = useMemo(() => buildJobRows(pages, accounts, logs, startMs), [pages, accounts, logs, startMs]);
+  const engineLogs = useMemo(() => {
+    const taskLogs = Array.isArray(task?.logs) ? task.logs : [];
+    const combined = [...taskLogs, ...logs];
+    const deduped = [];
+    combined.forEach((log) => {
+      if (!log) return;
+      const t = log?.extra?.time || log?.timestamp || log?.time || "";
+      const msg = String(log?.message || "").trim();
+      const stamp = Date.parse(t);
+      if (startMs && Number.isFinite(stamp) && stamp + 3000 < startMs) return;
+      if (stopped && Number(task?.finished_time) > 0 && Number.isFinite(stamp) && stamp > Number(task.finished_time) + 500 && log?.extra?.action !== "all_finished") {
+        return;
+      }
+      const isDuplicate = deduped.some((existing) => {
+        const existingMsg = String(existing?.message || "").trim();
+        if (existingMsg !== msg) return false;
+        const existingStamp = Date.parse(existing?.extra?.time || existing?.timestamp || existing?.time || "");
+        if (!Number.isFinite(stamp) || !Number.isFinite(existingStamp)) return true;
+        return Math.abs(stamp - existingStamp) <= 2000;
+      });
+      if (isDuplicate) return;
+      deduped.push(log);
+    });
+    deduped.sort((a, b) => {
+      const ta = Date.parse(a?.extra?.time || a?.timestamp || a?.time || "") || 0;
+      const tb = Date.parse(b?.extra?.time || b?.timestamp || b?.time || "") || 0;
+      return ta - tb;
+    });
+    return deduped;
+  }, [task?.logs, task?.finished_time, logs, startMs, stopped]);
+  const rows = useMemo(() => buildJobRows(pages, accounts, engineLogs, startMs), [pages, accounts, engineLogs, startMs]);
   const success = rows.filter((row) => row.state === "done").length;
   const failed = rows.filter((row) => row.state === "error" || row.state === "partial").length;
   const active = rows.filter((row) => row.state === "running");
   const waiting = rows.filter((row) => row.state === "claimed");
   const liveRows = active.length ? active : waiting;
   const queued = rows.filter((row) => row.state === "queued" || row.state === "claimed").length;
-  const engineLogs = useMemo(
-    () => logs.filter((log) => {
-      if (!startMs) return true;
-      const stamp = Date.parse(log?.extra?.time || log?.timestamp);
-      return !Number.isFinite(stamp) || stamp >= startMs - 3000;
-    }),
-    [logs, startMs]
-  );
   const sessionEnded = stopped || finished;
 
   useEffect(() => {
@@ -495,7 +517,7 @@ function RunningScreen({ task, accounts, logs, paused, stopped, finished, onPaus
             </span>
             <p className="flex items-center gap-1 pl-1 text-xs leading-4 font-semibold tracking-[0.3px] text-slate-300">
               <CreatorIcon name="terminal" className="text-[#7BD0FF]" />
-              Realtime Automation Engine Log
+              Nhật ký thực thi trực tiếp
             </p>
           </div>
           <div ref={logRef} className={`flex-1 space-y-1.5 overflow-auto p-4 font-mono text-xs leading-[19.5px] tracking-[0.24px] text-slate-300 ${SCROLLBAR}`}>
@@ -1150,6 +1172,8 @@ function CreateView() {
     };
   });
 
+  const DISMISSED_BATCH_KEY = "creator_dismissed_batch_id";
+
   const refreshStatus = useCallback(async () => {
     try {
       const status = await getCreatorTaskStatus();
@@ -1158,12 +1182,28 @@ function CreateView() {
         if (!current?.pages?.length) return status;
         return {
           ...status,
-          pages: current.pages,
+          pages: status?.pages?.length ? status.pages : current.pages,
           start_time: current.start_time || status?.start_time,
           total_pages: current.total_pages || status?.total_pages,
         };
       });
+      if (status?.account_names && typeof status.account_names === "object") {
+        setKnownAccounts((current) => {
+          const next = { ...current };
+          Object.entries(status.account_names).forEach(([uid, profileName]) => {
+            if (!next[uid]) {
+              next[uid] = { uid, profile_name: profileName };
+            } else if (!next[uid].profile_name && profileName) {
+              next[uid] = { ...next[uid], profile_name: profileName };
+            }
+          });
+          return next;
+        });
+      }
       const isRunning = Boolean(status?.running);
+      const dismissedBatchId = typeof window !== "undefined" ? window.sessionStorage.getItem(DISMISSED_BATCH_KEY) : null;
+      const isDismissed = Boolean(status?.batch_id && status.batch_id === dismissedBatchId);
+
       setRunning((wasRunning) => {
         if (wasRunning && !isRunning) {
           if (status?.stopped) {
@@ -1177,9 +1217,14 @@ function CreateView() {
         return isRunning;
       });
       setPaused(Boolean(status?.paused));
-      if (status?.stopped) {
-        setStopped(true);
-        setFinished(false);
+      if (!isRunning && !isDismissed && status?.batch_id) {
+        if (status?.stopped) {
+          setStopped(true);
+          setFinished(false);
+        } else if (Number(status?.finished_time) > 0 && Array.isArray(status?.pages) && status.pages.length > 0) {
+          setFinished(true);
+          setStopped(false);
+        }
       }
     } catch {
       /* engine có thể đang khởi động lại */
@@ -1526,6 +1571,9 @@ function CreateView() {
         repeat_count: loopsNum,
         country_code: countryCode || "+84",
       });
+      if (typeof window !== "undefined") {
+        window.sessionStorage.removeItem(DISMISSED_BATCH_KEY);
+      }
       toast.info(`Đã bắt đầu tạo ${assigned.length} page (${threadsNum} luồng × ${loopsNum} vòng).`, "TẠO PAGE");
       setTask({
         running: true,
@@ -1585,6 +1633,9 @@ function CreateView() {
   };
 
   const handleBackToSetup = () => {
+    if (typeof window !== "undefined" && task?.batch_id) {
+      window.sessionStorage.setItem(DISMISSED_BATCH_KEY, task.batch_id);
+    }
     setStopped(false);
     setFinished(false);
     setRunning(false);

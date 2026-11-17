@@ -868,10 +868,11 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
         accounts: selectedAccs.map((a) => ({ uid: String(a.uid), name: a.name })),
         api_key_source: apiKeyContent || keyFileName,
         pixabay_key: pixabayKey || undefined,
-      });
+      }, { timeout: 300000 });
 
       const rawDrafts = res?.data ?? res;
       const newDrafts = Array.isArray(rawDrafts) ? rawDrafts : (rawDrafts?.data || []);
+      const imageWarnings = Array.isArray(res?.image_warnings) ? res.image_warnings : [];
       if (Array.isArray(newDrafts) && newDrafts.length > 0) {
         const formattedNew = newDrafts.map((d) => {
           const imgs = normalizeImagePaths(d);
@@ -895,6 +896,15 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
         });
         setActiveDraftPage(1);
         toast.success(`Đã thực thi tạo thành công ${newDrafts.length} bài viết AI! Vui lòng xem trước và nhấn Lưu bài viết.`, "TẠO BÀI THÀNH CÔNG");
+        if (imageWarnings.length > 0) {
+          const names = imageWarnings.map((w) => w.name || w.uid).filter(Boolean).join(", ");
+          toast.warning(
+            names
+              ? `Đã thêm nội dung. Không tìm được ảnh cho: ${names}.`
+              : "Đã thêm nội dung. Không tìm được ảnh minh họa.",
+            "THIẾU ẢNH"
+          );
+        }
       } else {
         toast.error("Không tạo được bài viết. Vui lòng kiểm tra lại API Key hoặc cấu hình.", "LỖI TẠO BÀI");
       }
@@ -933,10 +943,11 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
         accounts: [{ uid: String(acc.uid), name: acc.name }],
         api_key_source: apiKeyContent || keyFileName,
         pixabay_key: pixabayKey || undefined,
-      });
+      }, { timeout: 300000 });
 
       const raw = res?.data ?? res;
       const list = Array.isArray(raw) ? raw : (raw?.data || []);
+      const imageWarnings = Array.isArray(res?.image_warnings) ? res.image_warnings : [];
       if (Array.isArray(list) && list.length > 0) {
         const d = list[0];
         const imgs = normalizeImagePaths(d);
@@ -959,6 +970,12 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
             },
           ];
         });
+        if (imageWarnings.length > 0) {
+          toast.warning(
+            `Đã thêm nội dung cho ${acc.name}. Không tìm được ảnh minh họa.`,
+            "THIẾU ẢNH"
+          );
+        }
       }
     } catch (err) {
       toast.error("Lỗi khi tạo bài: " + (err.message || err), "LỖI TẠO BÀI");
@@ -1597,6 +1614,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
   };
   const minDelayNum = parseInt(minDelay, 10) || 0;
   const maxDelayNum = parseInt(maxDelay, 10) || 0;
+  const step1Locked = isGeneratingDrafts || Boolean(generatingCardUid);
 
   // Tự hạ số luồng khi bỏ chọn acc / vượt trần 10
   useEffect(() => {
@@ -1620,9 +1638,15 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
           <h2 className="text-sm font-bold text-slate-800 tracking-tight">
             Bước 1: Thiết lập cấu hình hệ thống
           </h2>
+          {step1Locked && (
+            <span className="text-[11px] font-semibold text-[#64748B]">Đang thực thi, tạm khóa</span>
+          )}
         </div>
 
-        <div className="bg-white rounded-2xl border border-[#E2E8F0] p-6 shadow-xs space-y-5">
+        <fieldset
+          disabled={step1Locked}
+          className={`m-0 min-w-0 rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-xs space-y-5 ${step1Locked ? "cursor-not-allowed opacity-60" : ""}`}
+        >
           {/* Header với icon_post_setting */}
           <div className="flex items-center gap-2.5 text-[#0F172A] font-bold text-base tracking-tight">
             <Image src="/icons/icon_post_setting.svg" alt="Setting Icon" width={16} height={16} className="block shrink-0" />
@@ -1831,7 +1855,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
               )}
             </div>
           </div>
-        </div>
+        </fieldset>
       </div>
       )}
 
@@ -1845,6 +1869,9 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
           <h2 className="text-sm font-bold text-slate-800 tracking-tight">
             Bước 2: Chọn danh sách thực thi
           </h2>
+          {step1Locked && (
+            <span className="text-[11px] font-semibold text-[#64748B]">Đang thực thi, tạm khóa</span>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl border border-[#E2E8F0] shadow-[0_1px_2px_0_rgba(0,0,0,0.05)] overflow-hidden select-none">
@@ -1868,6 +1895,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
 
           </div>
 
+          <div className={step1Locked ? "pointer-events-none select-none opacity-60" : ""}>
           {/* Toolbar Tìm kiếm chuẩn Figma (Full width, placeholder, icon xám) */}
           {viewState === "config" && (
             <div className="px-5 pb-4">
@@ -1877,6 +1905,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                   type="text"
                   value={searchAccount}
                   onChange={(e) => setSearchAccount(e.target.value)}
+                  disabled={step1Locked}
                   placeholder="Tìm UID, tên nick, proxy..."
                   className="w-full h-11 pl-10 pr-4 rounded-xl bg-[#F0F4FA] border border-[#E2E8F0] text-xs sm:text-sm text-[#0F172A] placeholder-[#64748B] focus:outline-none focus:bg-white focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-all"
                 />
@@ -1905,7 +1934,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                         type="checkbox"
                         checked={allEligibleSelected}
                         onChange={toggleSelectAll}
-                        disabled={visibleEligibleAccounts.length === 0}
+                        disabled={step1Locked || visibleEligibleAccounts.length === 0}
                         aria-label="Chọn tất cả tài khoản hợp lệ"
                         className="w-4 h-4 rounded border-[#CBD5E1] accent-[#2563EB] cursor-pointer align-middle"
                         title={visibleEligibleAccounts.length === 0 ? "Không có tài khoản Live & Đã đăng nhập để chọn" : "Chọn tất cả tài khoản Live & Đã đăng nhập"}
@@ -1999,6 +2028,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                             <input
                               type="checkbox"
                               checked={acc.selected}
+                              disabled={step1Locked}
                               onChange={(e) => {
                                 e.stopPropagation();
                                 if (eligible) {
@@ -2112,6 +2142,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                 )}
               </tbody>
             </table>
+          </div>
           </div>
 
           {/* ── Nút THỰC THI ở Bước 2 (Chuẩn Figma) ── */}
@@ -2846,7 +2877,7 @@ export function StatusPostView({ initialState = "config", onHasPostsChange, isAc
                     <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
                   </div>
                   <span className="text-xs font-mono font-semibold text-slate-300">
-                    Live Automation Log Console [Thread-01]
+                    Live Automation Log Console
                   </span>
                 </div>
                 <div className="flex items-center gap-2">

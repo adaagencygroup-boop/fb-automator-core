@@ -586,7 +586,13 @@ export function ReelsPostView({ mode, initialState = "config" }) {
         );
         const allPostedCount = data.filter((m) => m?.subfolder_path && m.all_posted).length;
         const mappedCount = data.filter((m) => m?.subfolder_path).length;
-        const missingCount = data.filter((m) => !m?.subfolder_path).length;
+        const nameByUid = new Map(
+          accounts.map((a) => [String(a.uid), a.name || String(a.uid)])
+        );
+        const missingNames = data
+          .filter((m) => !m?.subfolder_path)
+          .map((m) => nameByUid.get(String(m.account_uid)) || m.account_uid)
+          .filter(Boolean);
 
         setAccounts((prev) =>
           prev.map((acc) => {
@@ -618,18 +624,15 @@ export function ReelsPostView({ mode, initialState = "config" }) {
             "VIDEO ĐÃ ĐĂNG HẾT"
           );
         }
-        if (missingCount > 0) {
-          toast.warning(
-            `Không tìm thấy thư mục ${isReels ? "Reels" : "Story"} tương ứng cho ${missingCount} tài khoản. Cột Bộ nội dung Map đã để trống — hãy tạo thư mục trùng tên/UID hoặc chọn thư mục riêng.`,
-            "KHÔNG TÌM THẤY THƯ MỤC"
-          );
-        }
-        if (mappedCount > 0) {
+        if (mappedCount > 0 || missingNames.length > 0) {
+          const missingLine = missingNames.length
+            ? ` Không tìm thấy thư mục cho: ${missingNames.join(", ")}.`
+            : "";
           toast.success(
-            `Đã quét xong! Map thành công ${mappedCount} tài khoản.`,
+            `Đã quét xong! Map thành công ${mappedCount} tài khoản.${missingLine}`,
             "QUÉT THƯ MỤC THÀNH CÔNG"
           );
-        } else if (missingCount === 0) {
+        } else {
           toast.info("Không có tài khoản nào để map.", "QUÉT THƯ MỤC");
         }
       }

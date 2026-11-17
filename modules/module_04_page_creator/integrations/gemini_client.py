@@ -94,7 +94,7 @@ class GeminiClient:
         parts = response.json()["candidates"][0]["content"]["parts"]
         return "".join(part.get("text", "") for part in parts)
 
-    def generate_page_content(self, page_name: str, preferred_model: str = None) -> dict:
+    def generate_page_content(self, page_name: str, preferred_model: str = None, stop_checker=None) -> dict:
         """
         Sinh nội dung cho một Page Facebook với tùy chọn Model từ người dùng.
         Args:
@@ -137,6 +137,8 @@ class GeminiClient:
 
         last_error = None
         for model_name in candidate_models:
+            if stop_checker and stop_checker():
+                raise InterruptedError("Đã dừng khẩn cấp")
             try:
                 logger.info(f"Calling Gemini model '{model_name}' for page: '{page_name}'")
                 
@@ -144,6 +146,8 @@ class GeminiClient:
                 try:
                     raw_text = self._call_model(model_name, prompt, json_mode=True)
                 except Exception as config_err:
+                    if stop_checker and stop_checker():
+                        raise InterruptedError("Đã dừng khẩn cấp")
                     logger.warning(f"Failed JSON mode for '{model_name}': {config_err}. Retrying standard config...")
                     raw_text = self._call_model(model_name, prompt, json_mode=False)
 
@@ -170,9 +174,13 @@ class GeminiClient:
                     result["_fallback_reason"] = str(last_error) if last_error else "Model ban đầu không phản hồi"
                 return result
 
+            except InterruptedError:
+                raise
             except Exception as e:
                 logger.warning(f"Gemini model '{model_name}' failed: {e}")
                 last_error = e
+                if stop_checker and stop_checker():
+                    raise InterruptedError("Đã dừng khẩn cấp")
 
         raise ValueError(f"Tất cả các model Gemini ({candidate_models}) đều thất bại. Lỗi chi tiết: {last_error}")
 

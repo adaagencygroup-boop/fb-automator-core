@@ -24,6 +24,7 @@ import {
   markNotificationRead,
   reactToMessage,
 } from "./service";
+import { invalidate } from "@/services/api-cache.mjs";
 import PageList from "./components/PageList";
 import PageSwitcher from "./components/PageSwitcher";
 import ConversationList from "./components/ConversationList";
@@ -418,6 +419,7 @@ export default function OmnichannelChatModule() {
               // Bắn CustomEvent lên window để NotificationDetail / CommentThread bắt được realtime
               window.dispatchEvent(new CustomEvent("fb_comment_reaction", { detail: payload.data }));
             } else if (payload.type === "notification_remove" && payload.data) {
+              invalidate("/api/facebook/notifications");
               const { id, page_id: pid, was_unread, notification_type } = payload.data;
               setNotifications((prev) => prev.filter((n) => String(n.id) !== String(id) && String(n.rawId) !== String(id)));
               if (was_unread) {
@@ -443,6 +445,7 @@ export default function OmnichannelChatModule() {
                 });
               }
             } else if (payload.type === "notification" && payload.data) {
+              invalidate("/api/facebook/notifications");
               const incomingNotif = mapNotification(payload.data);
 
               // Phát CustomEvent fb_new_notification để NotificationDetail tự động tải lại nếu đang mở bài viết này
@@ -470,6 +473,11 @@ export default function OmnichannelChatModule() {
                 const pid = String(incomingNotif.pageId || "");
                 setNotifMeta((m) => ({
                   ...m,
+                  total: (m.total || 0) + 1,
+                  typeCounts: {
+                    ...m.typeCounts,
+                    [incomingNotif.type]: (m.typeCounts?.[incomingNotif.type] || 0) + 1,
+                  },
                   unreadCounts: matchPage
                     ? {
                         ...m.unreadCounts,

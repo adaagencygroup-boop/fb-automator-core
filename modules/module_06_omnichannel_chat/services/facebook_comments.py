@@ -261,4 +261,31 @@ class FacebookCommentService:
             raise FacebookAPIError(f"Network error deleting comment via Facebook: {str(e)}")
 
         self.auth_service.handle_api_errors(response_json)
+
+        # Xóa thông báo liên quan đến bình luận này trong DB và thông báo realtime cho client
+        try:
+            notif = self.db.query(Notification).filter(
+                Notification.page_id == page_id,
+                Notification.facebook_notification_id == comment_id
+            ).first()
+            if notif:
+                removed_id = notif.id
+                was_unread = notif.unread
+                notif_type = notif.notification_type or "comment"
+                self.db.delete(notif)
+                self.db.commit()
+
+                asyncio.create_task(manager.broadcast({
+                    "type": "notification_remove",
+                    "page_id": str(page_id),
+                    "data": {
+                        "id": removed_id,
+                        "page_id": str(page_id),
+                        "was_unread": was_unread,
+                        "notification_type": notif_type,
+                    }
+                }))
+        except Exception as e:
+            print(f"[Delete Comment Notification Cleanup Warning] {comment_id}: {e}", flush=True)
+
         return response_json

@@ -73,10 +73,17 @@ def read_admin_display_name(element, uid: str = "") -> str:
     return ""
 
 
-def _post_welcome_content(driver: webdriver.Chrome, post_content: str, image_path: str = None) -> bool:
+def _post_welcome_content(driver: webdriver.Chrome, post_content: str, image_path: str = None, on_log=None) -> bool:
     """
     Đăng bài viết chào mừng (nội dung + hình ảnh) trên Page vừa tạo theo chuẩn HTML Facebook mới.
     """
+    def _emit(level: str, msg: str):
+        if on_log:
+            try:
+                on_log(level, msg)
+            except Exception:
+                pass
+
     try:
         logger.info("Starting welcome post creation on Fanpage...")
 
@@ -93,6 +100,7 @@ def _post_welcome_content(driver: webdriver.Chrome, post_content: str, image_pat
         human_sleep(2.0, 3.5)
 
         # ── B2: Nhập nội dung text bài viết ──
+        _emit("info", "✍️ Đang nhập nội dung bài viết chào mừng...")
         text_area = wait_and_find(driver, PAGE_CREATION["post_text_area"], timeout=15)
         try:
             text_area.click()
@@ -104,6 +112,7 @@ def _post_welcome_content(driver: webdriver.Chrome, post_content: str, image_pat
         # ── B3: Thêm hình ảnh bài viết (nếu có) ──
         if image_path and os.path.exists(image_path):
             try:
+                _emit("info", "🖼️ Đang đính kèm hình ảnh cho bài viết chào mừng...")
                 logger.info(f"Attaching image to post: {image_path}")
                 file_inputs = driver.find_elements(By.XPATH, '//div[@role="dialog"]//input[@type="file"]')
                 if not file_inputs:
@@ -132,6 +141,7 @@ def _post_welcome_content(driver: webdriver.Chrome, post_content: str, image_pat
             logger.info("No intermediate 'Next' button found, continuing to 'Post' button...")
 
         # ── B5: Click element duy nhất Post/Đăng bài viết ──
+        _emit("info", "📤 Đang nhấn đăng bài viết chào mừng...")
         submit_btn = wait_and_find(driver, PAGE_CREATION["post_submit_button"], timeout=15)
         try:
             submit_btn.click()
@@ -153,6 +163,7 @@ def run_share_admin(
     post_content: str = "",
     image_path: str = None,
     creator_uid: str = "",
+    on_log=None,
 ) -> dict:
     """
     UC-06: phân quyền Admin rồi đăng bài chào mừng.
@@ -179,13 +190,36 @@ def run_share_admin(
     clean_target = (target_admin_uid or "").strip()
     clean_creator = (creator_uid or "").strip()
 
+    def _emit(level: str, message: str, extra: dict = None):
+        if on_log:
+            try:
+                on_log(level, message, extra=extra)
+            except Exception:
+                pass
+
     def _try_post_welcome():
         if not post_content:
+            _emit("info", "ℹ️ Không có nội dung bài viết chào mừng, bỏ qua bước đăng bài.")
             return False
         wait_if_paused()
         raise_if_creator_stopped()
+        _emit(
+            "info",
+            "📝 Đang tiến hành đăng bài viết chào mừng lên Fanpage...",
+            extra={
+                "action": "step",
+                "step": "Bước 6/6: Đăng bài viết chào mừng",
+                "subStage": "Đăng bài chào mừng",
+                "percent": 95,
+            },
+        )
         logger.info("Publishing welcome content on Fanpage...")
-        ok = _post_welcome_content(driver, post_content, image_path)
+        ok = _post_welcome_content(driver, post_content, image_path, on_log=_emit)
+        raise_if_creator_stopped()
+        if ok:
+            _emit("success", "✅ Đã đăng bài viết chào mừng lên Fanpage thành công!")
+        else:
+            _emit("warning", "⚠️ Không thể đăng bài viết chào mừng lên Fanpage.")
         human_sleep(3.0, 5.0)
         return bool(ok)
 

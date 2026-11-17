@@ -47,7 +47,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
       return "";
     }
   });
-  const [hasDownloadedData, setHasDownloadedData] = useState(() => {
+  const [, setHasDownloadedData] = useState(() => {
     if (typeof window === "undefined") return false;
     try {
       return localStorage.getItem("fb_tiktok_has_data") === "true";
@@ -207,16 +207,8 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     isActionLockedRef.current = true;
     setIsPickingFolder(true);
     try {
-      if (hasDownloadedData) {
-        alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!");
-        return;
-      }
-      setHasDownloadedData(false);
-      try { localStorage.removeItem("fb_tiktok_has_data"); } catch {}
       const res = await selectFolder(downloadFolder);
       if (res && res.error) {
-        setHasDownloadedData(true);
-        try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch {}
         alert(res.error);
         return;
       }
@@ -243,15 +235,6 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     }
   };
   const handleFolderFileChange = async (e) => {
-    if (downloadFolder && downloadFolder.trim()) {
-      const check = await checkFolderData(downloadFolder);
-      if (check && check.has_data) {
-        setHasDownloadedData(true);
-        try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch {}
-        alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!");
-        return;
-      }
-    }
     setHasDownloadedData(false);
     try { localStorage.removeItem("fb_tiktok_has_data"); } catch {}
     const files = e.target.files;
@@ -706,7 +689,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                   <span>Đã Kết Nối TikTok</span>
                 </Badge>
-                <Button variant="outline" size="sm" type="button" onClick={handleDisconnect} className="h-7 text-xs font-normal text-rose-600 border-rose-200 hover:bg-rose-50 dark:border-rose-900/60 dark:hover:bg-rose-950/40 gap-1 px-2.5 shadow-none">
+                <Button variant="outline" size="sm" type="button" disabled={isRunning || isStarting} onClick={handleDisconnect} className="h-7 text-xs font-normal text-rose-600 border-rose-200 hover:bg-rose-50 dark:border-rose-900/60 dark:hover:bg-rose-950/40 gap-1 px-2.5 shadow-none">
                   <LogOut className="w-3.5 h-3.5" /> Đăng Xuất
                 </Button>
               </div>
@@ -720,7 +703,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                   <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
                   <span>Chưa Đăng Nhập TikTok</span>
                 </Badge>
-                <Button variant="outline" size="sm" type="button" onClick={handleOpenLogin} className="h-7 text-xs font-normal gap-1.5 border-dashed border-primary/60 text-primary hover:bg-primary/10">
+                <Button variant="outline" size="sm" type="button" disabled={isRunning || isStarting} onClick={handleOpenLogin} className="h-7 text-xs font-normal gap-1.5 border-dashed border-primary/60 text-primary hover:bg-primary/10">
                   <LogIn className="w-3.5 h-3.5" /> Đăng Nhập TikTok
                 </Button>
               </div>
@@ -755,7 +738,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                 </span>
               </div>
               {!isConfigLoading && !isAuthChecking && !openingLogin && !authStatus.connected && (
-                <Button variant="outline" size="sm" type="button" onClick={handleOpenLogin} className="h-6 px-2.5 text-xs font-normal border-amber-400 bg-white dark:bg-zinc-900 text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-950/60 gap-1 shrink-0 shadow-none">
+                <Button variant="outline" size="sm" type="button" disabled={isRunning || isStarting} onClick={handleOpenLogin} className="h-6 px-2.5 text-xs font-normal border-amber-400 bg-white dark:bg-zinc-900 text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-950/60 gap-1 shrink-0 shadow-none">
                   <LogIn className="w-3 h-3" /> Đăng Nhập Ngay
                 </Button>
               )}
@@ -770,7 +753,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                 </div>
                 <div className="flex gap-2">
                   <input ref={folderInputRef} type="file" webkitdirectory="" directory="" className="hidden" onChange={handleFolderFileChange} />
-                  <Input value={downloadFolder} readOnly={hasDownloadedData} onClick={() => { if (hasDownloadedData) alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!"); }} onChange={(e) => { if (hasDownloadedData) { alert("Thư Mục Hiện Tại Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!"); return; } setDownloadFolder(e.target.value); if (e.target.value.trim()) setFolderError(false); }} placeholder="Chưa Chọn Thư Mục Lưu Video (Bắt Buộc)..." className={`h-8 text-xs font-normal font-mono ${hasDownloadedData ? "cursor-not-allowed" : ""} ${folderError || !downloadFolder.trim() ? "border-amber-400 focus-visible:border-amber-500" : ""}`} />
+                  <Input value={downloadFolder} disabled={isRunning || isStarting} onChange={(e) => { setDownloadFolder(e.target.value); if (e.target.value.trim()) setFolderError(false); }} placeholder="Chưa Chọn Thư Mục Lưu Video (Bắt Buộc)..." className={`h-8 text-xs font-normal font-mono ${folderError || !downloadFolder.trim() ? "border-amber-400 focus-visible:border-amber-500" : ""}`} />
                   <Button
                     variant="outline"
                     size="sm"
@@ -799,6 +782,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                 <div className="flex items-center gap-2">
                   <Input
                     type="text"
+                    disabled={isRunning || isStarting}
                     value={maxVideos}
                     onChange={(e) => {
                       const val = e.target.value.replace(/\D/g, "").replace(/^0+/, "");
@@ -817,7 +801,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                     size="sm"
                     type="button"
                     onClick={handleDeleteAllVideos}
-                    disabled={isDeletingAll}
+                    disabled={isDeletingAll || isRunning || isStarting}
                     className="h-8 px-2.5 text-xs font-normal text-rose-600 border-rose-200 hover:bg-rose-50 dark:border-rose-900/60 dark:hover:bg-rose-950/40 gap-1 shadow-none shrink-0"
                     title="Xóa Toàn Bộ Video Đã Tải Khỏi Ổ Đĩa & Cơ Sở Dữ Liệu"
                   >
@@ -831,6 +815,9 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-500" /> Chưa Chọn Thư Mục Lưu Video (Bắt Buộc). Bấm &quot;Chọn Thư Mục&quot; Hoặc Nhập Đường Dẫn Lưu Video.
               </p>
             )}
+            <p className="text-[11px] font-normal text-muted-foreground flex items-center gap-1 pt-0.5">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-500" /> Lưu Ý: Có Thể Đổi Nhiều Thư Mục Lưu Khác Nhau. Vui Lòng Xóa Video Bằng Nút Thùng Rác Trên Ứng Dụng (Không Xóa Trực Tiếp Trong Windows File Explorer) Để Đồng Bộ Dữ Liệu.
+            </p>
           </div>
         </CardContent>
       </Card>
@@ -851,7 +838,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
               <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-lg border border-border bg-muted/20">
                 <div className="relative flex-1 min-w-[200px] max-w-sm">
                   <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />
-                  <Input value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} placeholder="Tìm Kiếm Fanpage Theo Tên..." className="h-8 pl-8 text-xs font-normal" />
+                  <Input disabled={isRunning || isStarting} value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }} placeholder="Tìm Kiếm Fanpage Theo Tên..." className="h-8 pl-8 text-xs font-normal" />
                 </div>
                 <div className="text-xs text-muted-foreground font-normal flex items-center gap-1.5">
                   <span>Tổng Số:</span>
@@ -903,7 +890,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                         <TableRow key={it.id || idx} className="hover:bg-muted/20">
                           <TableCell className="text-center text-xs font-normal font-mono text-muted-foreground w-10 p-2">{(currentPage - 1) * pageSize + idx + 1}</TableCell>
                           <TableCell className="max-w-[150px] p-2">
-                            <div className="flex items-center gap-1.5 cursor-pointer group min-w-0" onClick={() => handleOpenVideos(it)} title={it.page_name}>
+                            <div className={`flex items-center gap-1.5 min-w-0 ${isRunning || isStarting ? "opacity-50 pointer-events-none" : "cursor-pointer group"}`} onClick={() => { if (!isRunning && !isStarting) handleOpenVideos(it); }} title={it.page_name}>
                               <PageLogo avatar={it.avatar} name={it.page_name} />
                               <span className="text-xs font-normal text-foreground truncate group-hover:text-primary group-hover:underline min-w-0">{it.page_name}</span>
                             </div>
@@ -912,6 +899,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                             <div className="flex items-center gap-1 min-w-[140px]">
                               <div className="relative flex-1 min-w-0">
                                 <Input
+                                  disabled={isRunning || isStarting}
                                   value={it.keyword || ""}
                                   onChange={(e) => handleKeywordChange(it.id, e.target.value)}
                                   onBlur={(e) => {
@@ -933,6 +921,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                                 variant="outline"
                                 size="sm"
                                 type="button"
+                                disabled={isRunning || isStarting}
                                 onClick={() => handleOpenEditModal(it)}
                                 className={`h-7 px-1.5 shrink-0 text-xs font-normal shadow-none gap-0.5 ${
                                   (it.keyword || "").split(/[\n,;]+/).filter(Boolean).length > 1
@@ -953,6 +942,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                             <div className="flex items-center gap-1 min-w-[130px]">
                               <div className="relative flex-1 min-w-0">
                                 <Input
+                                  disabled={isRunning || isStarting}
                                   value={it.link || ""}
                                   onChange={(e) => handleLinkChange(it.id, e.target.value)}
                                   onBlur={(e) => {
@@ -974,6 +964,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                                 variant="outline"
                                 size="sm"
                                 type="button"
+                                disabled={isRunning || isStarting}
                                 onClick={() => handleOpenEditModal(it)}
                                 className={`h-7 px-1.5 shrink-0 text-xs font-normal shadow-none gap-0.5 ${
                                   (it.link || "").split(/[\n,;]+/).filter(Boolean).length > 1
@@ -1014,10 +1005,10 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                                   <Play className="w-3 h-3 fill-current" /> Kích Hoạt
                                 </Button>
                               )}
-                              <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-primary hover:bg-muted" onClick={() => handleOpenVideos(it)} title="Xem Video Đã Tải Của Fanpage Này">
+                              <Button size="icon" variant="ghost" disabled={isRunning || isStarting} className="h-7 w-7 text-muted-foreground hover:text-primary hover:bg-muted" onClick={() => handleOpenVideos(it)} title="Xem Video Đã Tải Của Fanpage Này">
                                 <Video className="w-3.5 h-3.5" />
                               </Button>
-                              <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-rose-600 hover:bg-muted" onClick={() => handleClearPageVideos(it)} title="Xóa Toàn Bộ Video Đã Tải Của Fanpage Này">
+                              <Button size="icon" variant="ghost" disabled={isRunning || isStarting} className="h-7 w-7 text-muted-foreground hover:text-rose-600 hover:bg-muted" onClick={() => handleClearPageVideos(it)} title="Xóa Toàn Bộ Video Đã Tải Của Fanpage Này">
                                 <Trash2 className="w-3.5 h-3.5" />
                               </Button>
                             </div>
@@ -1032,14 +1023,16 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-2 px-1">
                   <div className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
                     <span>Hiển Thị</span>
-                    <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }} className="h-7 text-xs font-normal border border-input rounded px-2 bg-background text-foreground focus:outline-none">
+                    <select disabled={isRunning || isStarting} value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }} className="h-7 text-xs font-normal border border-input rounded px-2 bg-background text-foreground focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed">
                       <option value={10}>10</option>
                       <option value={20}>20</option>
                       <option value={50}>50</option>
                     </select>
                     <span>/ Trang (Tổng {filteredItems.length} Fanpage)</span>
                   </div>
-                  <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} />
+                  <div className={isRunning || isStarting ? "pointer-events-none opacity-50" : ""}>
+                    <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} />
+                  </div>
                 </div>
               )}
               <div className="space-y-2 pt-3 border-t border-border">
@@ -1097,7 +1090,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                   <span className="font-normal">Nhật Ký Tải Chi Tiết</span>
                 </div>
               </div>
-              <Button variant="outline" size="sm" onClick={() => setLogs([])} className="h-6 px-2 text-[11px] font-normal text-slate-600 border-slate-200 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-rose-800 dark:hover:bg-rose-950/40 gap-1 rounded shadow-none" title="Xóa Nhật Ký">
+              <Button variant="outline" size="sm" disabled={isRunning || isStarting} onClick={() => setLogs([])} className="h-6 px-2 text-[11px] font-normal text-slate-600 border-slate-200 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-rose-800 dark:hover:bg-rose-950/40 gap-1 rounded shadow-none" title="Xóa Nhật Ký">
                 <Trash2 className="w-3 h-3" />
                 <span className="font-normal">Xóa Nhật Ký</span>
               </Button>

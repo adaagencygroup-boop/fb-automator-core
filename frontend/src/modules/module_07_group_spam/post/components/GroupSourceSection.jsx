@@ -467,7 +467,7 @@ export default function GroupSourceSection({
             options={[
               { value: "all", label: "Mọi loại nhóm" },
               { value: "public", label: "Công khai" },
-              { value: "private", label: "Riêng tư" },
+              { value: "private", label: "Kiểm duyệt" },
             ]}
             size="sm"
             buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
@@ -835,7 +835,7 @@ export default function GroupSourceSection({
                           <td className="px-3 py-2">
                             <span className={`inline-flex items-center gap-1 text-sm ${isPublic ? "text-emerald-600" : "text-amber-600"}`}>
                               {isPublic ? <Globe size={16} /> : <Lock size={16} />}
-                              {isPublic ? "Công khai" : "Riêng tư"}
+                              {isPublic ? "Công khai" : "Kiểm duyệt"}
                             </span>
                           </td>
                           <td className="whitespace-nowrap px-3 py-2 text-slate-500">{group.frequency || "—"}</td>
