@@ -5,6 +5,8 @@ import { cn } from "@/lib/utils";
 import { MaskIcon, FitMaskIcon } from "@/components/icons";
 import Link from "next/link";
 import { NAV_ITEMS, NAV_CHEVRON, pathOf } from "@/config/navigation";
+import { LockKeyhole } from "lucide-react";
+import { canAccessNav } from "@/lib/module-access.mjs";
 
 /** Độ rộng sidebar (px): kéo mép phải để đổi, nhớ lại bằng localStorage */
 export const SIDEBAR_WIDTH = { min: 220, max: 400, default: 310 };
@@ -109,7 +111,7 @@ function useResizableWidth() {
 }
 
 // Figma: Aside - LeftSidebar (1016:5); kiểu mục cấp 1 theo 1020:13823 / 1020:13770
-export default function Sidebar({ activeTab, open = true, onNavigate }) {
+export default function Sidebar({ activeTab, open = true, onNavigate, user, now }) {
   const { asideRef, handleProps, dragging } = useResizableWidth();
 
   // Accordion: mỗi lúc chỉ mở 1 nhóm submenu.
@@ -161,21 +163,24 @@ export default function Sidebar({ activeTab, open = true, onNavigate }) {
       {/* Navigation Menu Items */}
       <nav className="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-0.5">
         {NAV_ITEMS.map((item) =>
-          item.children?.length ? (
+          item.children?.length && canAccessNav(user, item.id, now) ? (
             <NavGroup
               key={item.id}
               item={item}
               activeTab={activeTab}
+              user={user}
+              now={now}
               open={isGroupOpen(item)}
               onToggle={() => toggleGroup(item)}
               onNavigate={onNavigate}
             />
           ) : (
-              <NavLink
+            <NavLink
               key={item.id}
               item={item}
-              active={activeTab === item.id}
-                onNavigate={onNavigate}
+              active={activeTab === item.id || item.children?.some((child) => child.id === activeTab)}
+              locked={!canAccessNav(user, item.id, now)}
+              onNavigate={onNavigate}
             />
           ),
         )}
@@ -223,31 +228,34 @@ const FOCUS_RING =
   "outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-500";
 
 /** Mục cấp 1 không có submenu (Tổng quan, Quản lý tài khoản Facebook, ...) — là link tới trang riêng */
-function NavLink({ item, active, onNavigate }) {
+function NavLink({ item, active, locked, onNavigate }) {
+  const path = pathOf(item.children?.[0] ?? item);
   return (
     <Link
-      href={pathOf(item)}
-      onClick={(event) => onNavigate?.(event, pathOf(item))}
+      href={path}
+      onClick={(event) => onNavigate?.(event, path)}
       aria-current={active ? "page" : undefined}
+      title={locked ? `${item.label} — Chưa được cấp quyền sử dụng` : undefined}
       className={cn(
         TOP_ITEM,
         FOCUS_RING,
-        active ? "bg-sky-100 text-sky-700 font-semibold" : TOP_IDLE,
+        active ? (locked ? "bg-[#eeecff] text-[#5842ff] font-semibold" : "bg-sky-100 text-sky-700 font-semibold") : TOP_IDLE,
       )}
     >
       <span className="flex items-center min-w-0">
         <NavIcon
           icon={item.icon}
-          className={active ? "text-sky-700" : "text-[#434655]"}
+          className={active ? (locked ? "text-[#5842ff]" : "text-sky-700") : "text-[#434655]"}
         />
         <span>{item.label}</span>
       </span>
+      {locked && <LockIndicator />}
     </Link>
   );
 }
 
 /** Nhóm có submenu (Đăng bài & tương tác, Tạo fanpage, Quản lý Fanpage, Spam Group, Seeding) */
-function NavGroup({ item, activeTab, open, onToggle, onNavigate }) {
+function NavGroup({ item, activeTab, open, onToggle, onNavigate, user, now }) {
   const sectionActive = item.children.some((c) => c.id === activeTab);
   const submenuId = `submenu-${item.id}`;
 
@@ -314,7 +322,8 @@ function NavGroup({ item, activeTab, open, onToggle, onNavigate }) {
                     size={SUB_ICON_SIZE}
                     className={active ? "text-sky-700" : "text-slate-600"}
                   />
-                  <span className="truncate">{child.label}</span>
+                  <span className="truncate flex-1">{child.label}</span>
+                  {!canAccessNav(user, child.id, now) && <LockIndicator />}
                 </Link>
               );
             })}
@@ -323,4 +332,11 @@ function NavGroup({ item, activeTab, open, onToggle, onNavigate }) {
       </div>
     </div>
   );
+}
+
+function LockIndicator() {
+  return <span className="ml-2 shrink-0 text-amber-700">
+    <LockKeyhole size={14} aria-hidden="true" />
+    <span className="sr-only">Chưa được cấp quyền sử dụng</span>
+  </span>;
 }
