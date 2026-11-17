@@ -115,40 +115,44 @@ ws_manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    with startup_step("Core database and module schemas"):
-        init_database()
-    with startup_step("Authentication schema"):
-        init_auth_tables()
-    with startup_step("Admin account"):
-        ensure_admin()
-    with startup_step("Module 02 account manager"):
-        initialize_accounts()
-    with startup_step("Module 04 created pages"):
-        from modules.module_04_page_creator.database import (
-            ensure_schema as ensure_creator_schema,
-        )
+    fast_startup = os.environ.get("FB_FAST_STARTUP", "").strip().lower() in {"1", "true", "yes"}
+    if fast_startup:
+        print("[Startup] Fast mode enabled (FB_FAST_STARTUP=1): skipping remote DB schema checks.")
+    else:
+        with startup_step("Core database and module schemas"):
+            init_database()
+        with startup_step("Authentication schema"):
+            init_auth_tables()
+        with startup_step("Admin account"):
+            ensure_admin()
+        with startup_step("Module 02 account manager"):
+            initialize_accounts()
+        with startup_step("Module 04 created pages"):
+            from modules.module_04_page_creator.database import (
+                ensure_schema as ensure_creator_schema,
+            )
 
-        ensure_creator_schema()
-    with startup_step("Module 05 page manager"):
-        from modules.module_05_page_manager.models import (
-            init_models as init_page_models,
-        )
+            ensure_creator_schema()
+        with startup_step("Module 05 page manager"):
+            from modules.module_05_page_manager.models import (
+                init_models as init_page_models,
+            )
 
-        init_page_models()
-    with startup_step("Module 07 group posting"):
-        from modules.module_07_group_spam.app.models import init_models as init_group_models
+            init_page_models()
+        with startup_step("Module 07 group posting"):
+            from modules.module_07_group_spam.app.models import init_models as init_group_models
 
-        init_group_models()
-    with startup_step("Module 10 group scan"):
-        from modules.module_10_group_scan.models import init_models as init_group_scan_models
+            init_group_models()
+        with startup_step("Module 10 group scan"):
+            from modules.module_10_group_scan.models import init_models as init_group_scan_models
 
-        init_group_scan_models()
-    with startup_step("Module 11 page scanner"):
-        from modules.module_11_page_scanner.models import (
-            init_models as init_page_scanner_models,
-        )
+            init_group_scan_models()
+        with startup_step("Module 11 page scanner"):
+            from modules.module_11_page_scanner.models import (
+                init_models as init_page_scanner_models,
+            )
 
-        init_page_scanner_models()
+            init_page_scanner_models()
     with startup_step("Backend module imports"):
         loaded = load_backend_modules()
     print(
@@ -515,7 +519,13 @@ def main():
     parser.add_argument(
         "--reload", action="store_true", help="Enable auto-reload on code change (development)"
     )
+    parser.add_argument(
+        "--fast", action="store_true", help="Skip remote DB schema checks on startup (fast dev restart)"
+    )
     args = parser.parse_args()
+
+    if args.fast:
+        os.environ["FB_FAST_STARTUP"] = "1"
 
     print(f"[Local Engine] Starting on http://{args.host}:{args.port}")
     if args.reload:
