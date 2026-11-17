@@ -818,6 +818,23 @@ def get_post_history(
     return rows or [], total
 
 
+def list_post_history_accounts() -> list:
+    """Nick còn trong lịch sử đăng bài, kể cả khi đã xóa khỏi Module 02."""
+    sql = """
+        SELECT DISTINCT ON (account_uid) account_uid, account_name
+        FROM posts
+        WHERE status IN ('PUBLISHED', 'FAILED', 'STOPPED', 'BLOCKED', 'DIE')
+          AND account_uid IS NOT NULL
+          AND BTRIM(account_uid) <> ''
+        ORDER BY account_uid, created_at DESC;
+    """
+    try:
+        return db.fetch_all(sql) or []
+    except Exception as e:
+        logger.error(f"Lỗi lấy nick cho bộ lọc lịch sử: {e}")
+        return []
+
+
 def cleanup_post_history(days: int = 30) -> int:
     try:
         if days <= 0:
