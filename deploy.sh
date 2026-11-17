@@ -20,6 +20,9 @@ fi
 if command -v sysctl >/dev/null 2>&1; then
   sysctl -w vm.overcommit_memory=1 >/dev/null 2>&1 || true
   sysctl -w vm.swappiness=10 >/dev/null 2>&1 || true
+  sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
+  sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1 || true
+  sysctl -w net.ipv6.conf.lo.disable_ipv6=1 >/dev/null 2>&1 || true
 fi
 if command -v ufw >/dev/null 2>&1; then
   ufw allow 80/tcp >/dev/null 2>&1 || true
@@ -30,6 +33,9 @@ if ! command -v docker >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com/ | sh
   systemctl enable --now docker
 fi
+mkdir -p /etc/docker
+echo '{"dns":["8.8.8.8","1.1.1.1"],"ipv6":false,"max-concurrent-downloads":2}' > /etc/docker/daemon.json
+systemctl restart docker
 if ! docker compose version >/dev/null 2>&1; then
   apt-get update && apt-get install -y docker-compose-plugin 2>/dev/null || true
 fi
