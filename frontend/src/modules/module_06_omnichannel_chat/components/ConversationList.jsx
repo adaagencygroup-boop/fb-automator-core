@@ -221,10 +221,7 @@ export default function ConversationList({
     [conversations],
   );
   const unreadNotifications = Object.values(notificationCounts || {}).reduce((a, b) => a + b, 0);
-  const typeTotalNotifications = Object.values(notificationTypeCounts || {}).reduce((a, b) => a + b, 0);
-  const displayNotificationCount = typeTotalNotifications > 0
-    ? typeTotalNotifications
-    : (totalNotifications !== undefined ? totalNotifications : unreadNotifications);
+  const displayNotificationCount = unreadNotifications;
 
   return (
     <section
