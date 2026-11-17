@@ -339,9 +339,8 @@ export default function GroupPostModule({ actionType = "POST" }) {
       isPostingSettingsLocked,
     };
     const draftSnapshot = JSON.stringify(draft);
-    if (draftBaselineRef.current === null) {
+    if (draftBaselineRef.current === null || !draftUserEditedRef.current) {
       draftBaselineRef.current = draftSnapshot;
-      draftUserEditedRef.current = false;
       writeGroupPostDraft(draft, draftScope);
       setUnsavedChanges(false);
       return;
@@ -853,16 +852,15 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const canStart = runState === "idle";
   const markDraftUserEdit = () => {
     draftUserEditedRef.current = true;
-    setUnsavedChanges(true, async () => {
-      await clearGroupPostDraft(draftScope);
-      await writeGroupPostDraftMedia([], draftScope);
-    });
+  };
+  const markDraftButtonEdit = (event) => {
+    if (event.target.closest("button, [role='button']")) markDraftUserEdit();
   };
 
   return (
     <div
       className="space-y-6"
-      onClickCapture={markDraftUserEdit}
+      onClickCapture={markDraftButtonEdit}
       onChangeCapture={markDraftUserEdit}
       onInputCapture={markDraftUserEdit}
     >
