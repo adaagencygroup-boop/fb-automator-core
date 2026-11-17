@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import sys
+import threading
 from urllib.parse import unquote
 from contextlib import asynccontextmanager
 
@@ -27,7 +28,7 @@ from pydantic import BaseModel
 from config.settings import settings
 from config.constants import UPLOADS_DIR
 from core.database.connection import db
-from core.database.models import init_database
+from core.database.models import init_core_tables, init_database
 from core.facebook.fb_graph_client import fb_client
 from core.ai.gemini_engine import ai_engine
 from core.media.tiktok_scraper import tiktok_scraper
@@ -113,46 +114,55 @@ class ConnectionManager:
 ws_manager = ConnectionManager()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    fast_startup = os.environ.get("FB_FAST_STARTUP", "").strip().lower() in {"1", "true", "yes"}
-    if fast_startup:
-        print("[Startup] Fast mode enabled (FB_FAST_STARTUP=1): skipping remote DB schema checks.")
-    else:
-        with startup_step("Core database and module schemas"):
-            init_database()
-        with startup_step("Authentication schema"):
-            init_auth_tables()
-        with startup_step("Admin account"):
-            ensure_admin()
-        with startup_step("Module 02 account manager"):
-            initialize_accounts()
-        with startup_step("Module 04 created pages"):
-            from modules.module_04_page_creator.database import (
-                ensure_schema as ensure_creator_schema,
-            )
+def _warm_auth_hwid():
+    try:
+        from modules.module_auth.hwid import get_hwid
 
-            ensure_creator_schema()
-        with startup_step("Module 05 page manager"):
-            from modules.module_05_page_manager.models import (
-                init_models as init_page_models,
-            )
+        get_hwid()
+        print("[Startup] HWID cache ready", flush=True)
+    except Exception as exc:
+        print(f"[Local Engine] HWID warmup note: {exc}", flush=True)
 
-            init_page_models()
-        with startup_step("Module 07 group posting"):
-            from modules.module_07_group_spam.app.models import init_models as init_group_models
 
-            init_group_models()
-        with startup_step("Module 10 group scan"):
-            from modules.module_10_group_scan.models import init_models as init_group_scan_models
+threading.Thread(target=_warm_auth_hwid, name="hwid-warm", daemon=True).start()
 
-            init_group_scan_models()
-        with startup_step("Module 11 page scanner"):
-            from modules.module_11_page_scanner.models import (
-                init_models as init_page_scanner_models,
-            )
 
-            init_page_scanner_models()
+def _init_remaining_schemas():
+    with startup_step("Core database and module schemas"):
+        init_database()
+    with startup_step("Module 02 account manager"):
+        initialize_accounts()
+    with startup_step("Module 04 created pages"):
+        from modules.module_04_page_creator.database import (
+            ensure_schema as ensure_creator_schema,
+        )
+
+        ensure_creator_schema()
+    with startup_step("Module 05 page manager"):
+        from modules.module_05_page_manager.models import (
+            init_models as init_page_models,
+        )
+
+        init_page_models()
+    with startup_step("Module 07 group posting"):
+        from modules.module_07_group_spam.app.models import init_models as init_group_models
+
+        init_group_models()
+    with startup_step("Module 10 group scan"):
+        from modules.module_10_group_scan.models import init_models as init_group_scan_models
+
+        init_group_scan_models()
+    with startup_step("Module 11 page scanner"):
+        from modules.module_11_page_scanner.models import (
+            init_models as init_page_scanner_models,
+        )
+
+        init_page_scanner_models()
+
+
+async def _finish_engine_startup(fast_startup: bool):
+    if not fast_startup:
+        await asyncio.to_thread(_init_remaining_schemas)
     with startup_step("Backend module imports"):
         loaded = load_backend_modules()
     print(
@@ -161,6 +171,7 @@ async def lifespan(app: FastAPI):
     try:
         from modules.module_06_omnichannel_chat.queue_worker import start_queue_worker
         from modules.module_06_omnichannel_chat.services.sync_service import watch_and_sync_webhook_loop
+
         asyncio.create_task(start_queue_worker())
         asyncio.create_task(watch_and_sync_webhook_loop())
     except Exception as qe:
@@ -178,9 +189,34 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[Local Engine] Account WS log channel note: {e}")
     print("[Startup] Backend ready", flush=True)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    fast_startup = os.environ.get("FB_FAST_STARTUP", "").strip().lower() in {"1", "true", "yes"}
+    deferred = None
+    if fast_startup:
+        print("[Startup] Fast mode enabled (FB_FAST_STARTUP=1): skipping remote DB schema checks.")
+        await _finish_engine_startup(True)
+    else:
+        # Mở cổng sớm để màn login lấy HWID / đăng nhập, schema module chạy nền.
+        with startup_step("Core tables"):
+            await asyncio.to_thread(init_core_tables)
+        with startup_step("Authentication schema"):
+            await asyncio.to_thread(init_auth_tables)
+        with startup_step("Admin account"):
+            await asyncio.to_thread(ensure_admin)
+        print("[Startup] Auth ready — accepting login/HWID", flush=True)
+        deferred = asyncio.create_task(_finish_engine_startup(False))
     try:
         yield
     finally:
+        if deferred and not deferred.done():
+            deferred.cancel()
+            try:
+                await deferred
+            except asyncio.CancelledError:
+                pass
         await shutdown_accounts()
         if farm_on_shutdown:
             await farm_on_shutdown()
