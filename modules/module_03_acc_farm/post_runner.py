@@ -1477,9 +1477,16 @@ class PostRunner:
                             "message": f"{success_msg} {log_link_msg}",
                         }
                     )
-                    post_repository.finish_post(
-                        post["id"], uid, "PUBLISHED", url=res_url, logs=post_logs
-                    )
+                    try:
+                        post_repository.finish_post(
+                            post["id"], uid, "PUBLISHED", url=res_url, logs=post_logs
+                        )
+                    except Exception as db_err:
+                        self.log(
+                            thread_name,
+                            "error",
+                            f"Không ghi được trạng thái bài ID {post['id']} vào DB: {db_err}",
+                        )
                     try:
                         from modules.module_02_account_manager.database.connection import SessionLocal
                         from modules.module_02_account_manager.database.repository import (
@@ -1588,9 +1595,21 @@ class PostRunner:
                             "message": f"[{status}] {err_msg}",
                         }
                     )
-                    post_repository.finish_post(
-                        post["id"], uid, status, message=err_msg, logs=post_logs
+                    self.log(
+                        thread_name,
+                        "warn" if status == "STOPPED" else "error",
+                        f"[{status}] {err_msg}",
                     )
+                    try:
+                        post_repository.finish_post(
+                            post["id"], uid, status, message=err_msg, logs=post_logs
+                        )
+                    except Exception as db_err:
+                        self.log(
+                            thread_name,
+                            "error",
+                            f"Không ghi được trạng thái bài ID {post['id']} vào DB: {db_err}",
+                        )
                     if status == "DIE":
                         try:
                             from modules.module_02_account_manager.database.connection import (
