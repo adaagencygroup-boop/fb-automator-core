@@ -114,5 +114,36 @@ class ShareAdminWelcomePostLogTest(unittest.TestCase):
         self.assertTrue(any("Không thể đăng bài viết chào mừng" in msg and lvl == "warning" for lvl, msg, _ in logs))
 
 
+class ErrorFormattingAndSafeClickTest(unittest.TestCase):
+    def test_format_creator_error_strips_stacktrace_and_translates_intercept(self):
+        raw = (
+            'Không bật được Full Control: Message: element click intercepted: '
+            'Element <div class="x1">...</div> is not clickable at point (180, 84). '
+            '(Session info: chrome=157.0.8103.39)\nStacktrace:\nSymbols not available. '
+            'Dumping unresolved backtrace:\n[0x7ff62be49cf5] (No symbol)'
+        )
+        cleaned = routes.format_creator_error(raw)
+        self.assertNotIn("Stacktrace", cleaned)
+        self.assertNotIn("<div", cleaned)
+        self.assertIn("che khuất", cleaned)
+
+    def test_format_creator_error_strips_generic_stacktrace_and_html(self):
+        raw = (
+            'Custom error <span class="err">details</span> '
+            '(Session info: chrome=157.0)\nStacktrace:\n[0x1234]'
+        )
+        cleaned = routes.format_creator_error(raw)
+        self.assertEqual(cleaned, "Custom error details")
+
+    def test_safe_click_falls_back_to_js_click_when_intercepted(self):
+        driver = MagicMock()
+        el = MagicMock()
+        el.click.side_effect = Exception("element click intercepted")
+        share_admin_flow._safe_click(driver, el)
+        self.assertTrue(driver.execute_script.called)
+        calls = [c.args[0] for c in driver.execute_script.call_args_list]
+        self.assertTrue(any("arguments[0].click()" in script for script in calls))
+
+
 if __name__ == "__main__":
     unittest.main()
