@@ -33,6 +33,23 @@ def is_checkpoint_url(url: str) -> bool:
     return path == "/checkpoint" or path.startswith("/checkpoint/")
 
 
+def _on_checkpoint(driver: webdriver.Chrome) -> bool:
+    try:
+        return driver is not None and is_checkpoint_url(driver.current_url or "")
+    except Exception:
+        return False
+
+
+def _checkpoint_failure(driver: webdriver.Chrome, result: dict) -> dict:
+    """Ghi thông tin lỗi yêu cầu xác minh danh tính để dừng ngay thay vì cố đăng nhập lại."""
+    result["checkpoint"] = True
+    result["error"] = (
+        "Tài khoản Facebook đang bị yêu cầu xác minh danh tính / bảo mật. "
+        "Vui lòng đăng nhập trình duyệt để xác minh thủ công trước khi chạy lại."
+    )
+    return result
+
+
 def _handle_saved_account_screen(driver: webdriver.Chrome, sleep_before_click: float = 1.0) -> bool:
     """
     Nếu vào phải trang lưu tài khoản (có nút 'Dùng trang cá nhân khác' / 'Đăng nhập bằng tài khoản khác'):
@@ -756,7 +773,7 @@ def run_login(uid: str, password: str, two_fa: str = None, cookie: str = None, p
                 result["error"] = "2FA required but no secret key provided"
                 return result
         elif is_checkpoint_url(driver.current_url or ""):
-            result["error"] = f"Checkpoint, URL: {driver.current_url}"
+            _checkpoint_failure(driver, result)
             return result
 
         # ── Bước 4: Kiểm tra đăng nhập thành công & bắt Dismiss popup ──
@@ -822,7 +839,7 @@ def ensure_logged_in(
     Nếu phiên bị hết hạn / văng ra trang login: Tự động đăng nhập lại (Cookie hoặc Form + 2FA).
     Không đóng trình duyệt driver khi hoàn tất.
     """
-    result = {"success": False, "error": "", "reloaded": False}
+    result = {"success": False, "error": "", "reloaded": False, "checkpoint": False}
 
     def _sync_fresh_cookie():
         try:
@@ -839,6 +856,10 @@ def ensure_logged_in(
 
     try:
         current_url = (driver.current_url or "").lower()
+        if is_checkpoint_url(current_url):
+            _checkpoint_failure(driver, result)
+            logger.warning(f"[{uid}] {result['error']}")
+            return result
         if "facebook.com" in current_url and not any(k in current_url for k in ["/login", "checkpoint", "two_step"]):
             if _check_logged_in(driver):
                 ensure_personal_profile(driver, uid)
@@ -850,6 +871,8 @@ def ensure_logged_in(
             # Chờ tối đa 6-8 giây cho phiên Facebook load xong cookie qua proxy
             for _ in range(5):
                 human_sleep(1.0, 1.5)
+                if _on_checkpoint(driver):
+                    break
                 if _check_logged_in(driver):
                     ensure_personal_profile(driver, uid)
                     _sync_fresh_cookie()
@@ -857,6 +880,11 @@ def ensure_logged_in(
                     return result
     except Exception as e:
         logger.debug(f"[{uid}] Quick session check exception: {e}")
+
+    if _on_checkpoint(driver):
+        _checkpoint_failure(driver, result)
+        logger.warning(f"[{uid}] {result['error']}")
+        return result
 
     logger.info(f"[{uid}] Phiên đăng nhập chưa active trên driver. Đang tiến hành đăng nhập lại...")
     result["reloaded"] = True
@@ -870,6 +898,10 @@ def ensure_logged_in(
             _sync_fresh_cookie()
             result["success"] = True
             return result
+        if _on_checkpoint(driver):
+            _checkpoint_failure(driver, result)
+            logger.warning(f"[{uid}] {result['error']}")
+            return result
         logger.info(f"[{uid}] Cookie hết hạn hoặc không hợp lệ, chuyển sang form login")
 
     # 2. Thử login bằng tài khoản mật khẩu
@@ -880,6 +912,10 @@ def ensure_logged_in(
     try:
         driver.get(FB_HOME)
         human_sleep(2.0, 3.5)
+        if _on_checkpoint(driver):
+            _checkpoint_failure(driver, result)
+            logger.warning(f"[{uid}] {result['error']}")
+            return result
 
         _handle_saved_account_screen(driver)
 
@@ -919,7 +955,7 @@ def ensure_logged_in(
                 result["error"] = "Facebook yêu cầu mã 2FA nhưng tài khoản chưa có Secret Key 2FA"
                 return result
         elif is_checkpoint_url(driver.current_url or ""):
-            result["error"] = f"Checkpoint, URL: {driver.current_url}"
+            _checkpoint_failure(driver, result)
             return result
 
         human_sleep(2.0, 3.0)

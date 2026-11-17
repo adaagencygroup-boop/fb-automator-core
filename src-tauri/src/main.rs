@@ -73,6 +73,44 @@ fn prepare_for_update(state: tauri::State<'_, SidecarState>) -> Result<(), Strin
     Ok(())
 }
 
+/// HWID giống Python: SHA-256("{uuid}::{cpu}") — hiện mã máy không chờ Local Engine.
+#[tauri::command]
+fn get_machine_hwid() -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        let script = concat!(
+            "$u=(Get-CimInstance Win32_ComputerSystemProduct).UUID; ",
+            "$c=(Get-CimInstance Win32_Processor | Select-Object -First 1).ProcessorId; ",
+            "$raw=\"$u::$c\"; ",
+            "$sha=[System.Security.Cryptography.SHA256]::Create(); ",
+            "$hash=$sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($raw)); ",
+            "(-join ($hash | ForEach-Object { $_.ToString('x2') }))"
+        );
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-Command", script])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .creation_flags(0x0800_0000)
+            .output()
+            .map_err(|e| format!("Không chạy được PowerShell HWID: {e}"))?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Lỗi thu thập HWID: {err}"));
+        }
+        let hwid = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .to_ascii_lowercase();
+        if hwid.len() == 64 && hwid.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Ok(hwid);
+        }
+        return Err(format!("HWID không hợp lệ: {hwid}"));
+    }
+    #[cfg(not(windows))]
+    {
+        Err("get_machine_hwid chỉ hỗ trợ Windows".into())
+    }
+}
+
 fn is_module5_deep_link(url: &Url) -> bool {
     url.scheme() == "fbautomator"
         && url.host_str() == Some("open")
@@ -458,7 +496,7 @@ fn main() {
             child: Arc::clone(&sidecar_child),
             shutting_down: Arc::clone(&shutting_down),
         })
-        .invoke_handler(tauri::generate_handler![prepare_for_update])
+        .invoke_handler(tauri::generate_handler![prepare_for_update, get_machine_hwid])
         .setup(move |_app| {
             // Deep links are registered by the installer in release builds.
             // Register the configured scheme for the current executable in Windows dev builds.

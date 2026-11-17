@@ -746,7 +746,7 @@ def _run_post_scan_worker(job_id: str) -> None:
     )
     from modules.module_02_account_manager.database.connection import SessionLocal
     from modules.module_02_account_manager.database.repository import AccountRepository as Repo
-    from modules.module_02_account_manager.security.encryption import decrypt_data
+    from modules.module_02_account_manager.security.encryption import decrypt_secret
     from modules.module_10_group_scan.models import (
         list_known_post_ids,
         update_scan_session,
@@ -914,14 +914,14 @@ def _run_post_scan_worker(job_id: str) -> None:
                         continue
                     cookie = account_obj.cookie or ""
                     proxy = account_obj.proxy
-                    try:
-                        password = decrypt_data(account_obj.password or "")
-                    except Exception:
-                        password = ""
-                    try:
-                        two_fa = decrypt_data(account_obj.two_fa or "")
-                    except Exception:
-                        two_fa = ""
+                    password = decrypt_secret(account_obj.password or "")
+                    two_fa = decrypt_secret(account_obj.two_fa or "")
+                    if (account_obj.password or account_obj.two_fa) and not password and not two_fa and cookie:
+                        _append_post_log(
+                            job_id,
+                            f"⚠️ [{current_uid}] Không giải mã mật khẩu — dùng cookie phiên đã lưu.",
+                            "warn",
+                        )
                 finally:
                     db_sess.close()
 

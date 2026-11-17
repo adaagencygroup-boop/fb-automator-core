@@ -39,7 +39,7 @@ def _sleep(value, fallback: int) -> int:
         number = int(value)
     except (TypeError, ValueError):
         return fallback
-    return min(86400, max(0, number))
+    return min(3600, max(0, number))
 
 
 def normalize_settings(raw) -> dict:

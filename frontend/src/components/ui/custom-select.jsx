@@ -122,20 +122,24 @@ export default function CustomSelect({
           <div className="max-h-56 overflow-y-auto space-y-0.5">
             {options.map((option) => {
               const isSelected = option.value === value;
+              const isDisabled = Boolean(option.disabled);
 
               return (
                 <div
                   key={String(option.value)}
                   onClick={() => {
+                    if (isDisabled) return;
                     onChange(option.value);
                     setIsOpen(false);
                   }}
-                  className={`w-full flex items-center justify-between gap-2 rounded-md transition-colors cursor-pointer ${
+                  className={`w-full flex items-center justify-between gap-2 rounded-md transition-colors ${
                     currentSize.item
                   } ${
-                    isSelected
-                      ? "bg-primary-subtle text-primary font-semibold"
-                      : "text-slate-700 hover:bg-slate-100 font-medium"
+                    isDisabled
+                      ? "opacity-50 cursor-not-allowed text-slate-400"
+                      : isSelected
+                      ? "bg-primary-subtle text-primary font-semibold cursor-pointer"
+                      : "text-slate-700 hover:bg-slate-100 font-medium cursor-pointer"
                   }`}
                 >
                   <div className="flex items-center gap-2 min-w-0 truncate">

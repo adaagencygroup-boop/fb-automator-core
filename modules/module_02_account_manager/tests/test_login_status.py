@@ -175,3 +175,39 @@ class PersistentSessionTests(unittest.TestCase):
         ensure_personal.assert_called_once_with(driver, "123")
         driver.quit.assert_not_called()
 
+    @patch("modules.module_02_account_manager.automation.login_flow.human_sleep")
+    @patch("modules.module_02_account_manager.automation.login_flow.wait_and_find")
+    @patch("modules.module_02_account_manager.automation.login_flow._try_cookie_login")
+    def test_ensure_logged_in_stops_immediately_on_checkpoint_redirect(self, try_cookie, wait_find, sleep):
+        from modules.module_02_account_manager.automation.login_flow import ensure_logged_in
+        driver = Mock()
+        driver.current_url = "data:,"
+        driver.get.side_effect = lambda _url: setattr(
+            driver,
+            "current_url",
+            "https://www.facebook.com/checkpoint/1501092823525282/?next=https%3A%2F%2Fwww.facebook.com%2F#",
+        )
+
+        result = ensure_logged_in(driver, "123", password="secret", cookie="c_user=123")
+
+        self.assertFalse(result["success"])
+        self.assertTrue(result["checkpoint"])
+        self.assertFalse(result["reloaded"])
+        self.assertIn("xác minh danh tính", result["error"])
+        try_cookie.assert_not_called()
+        wait_find.assert_not_called()
+
+    @patch("modules.module_02_account_manager.automation.login_flow._try_cookie_login")
+    def test_ensure_logged_in_stops_immediately_when_already_on_checkpoint(self, try_cookie):
+        from modules.module_02_account_manager.automation.login_flow import ensure_logged_in
+        driver = Mock()
+        driver.current_url = "https://www.facebook.com/checkpoint/1501092823525282/"
+
+        result = ensure_logged_in(driver, "123", password="secret", cookie="c_user=123")
+
+        self.assertFalse(result["success"])
+        self.assertTrue(result["checkpoint"])
+        self.assertIn("xác minh danh tính", result["error"])
+        driver.get.assert_not_called()
+        try_cookie.assert_not_called()
+

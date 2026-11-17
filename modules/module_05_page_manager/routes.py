@@ -321,8 +321,11 @@ def start(body: StartBody, db: Session = Depends(get_db)):
     prompt = (body.prompt or "").strip()
     if keys and not prompt:
         raise HTTPException(status_code=400, detail="Có Gemini key thì phải nhập khung prompt bài đăng.")
-    if body.sleep_min < 0 or body.sleep_max < body.sleep_min:
-        raise HTTPException(status_code=400, detail="Giãn cách không hợp lệ.")
+    if body.sleep_min < 0 or body.sleep_max > 3600 or body.sleep_max < body.sleep_min:
+        raise HTTPException(
+            status_code=400,
+            detail="Thời gian giãn cách phải từ 0 đến 3600 giây và 'Đến' không được nhỏ hơn 'Từ'.",
+        )
     try:
         times = parse_schedule_times(",".join(body.schedule_times)) if body.schedule_enabled else []
     except ValueError as exc:

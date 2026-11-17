@@ -54,8 +54,8 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const contentLabel = isComment ? "bình luận" : "bài viết";
   const editorRef = useRef(null);
   const completionToastJobRef = useRef(null);
-  const draftWriteInitializedRef = useRef(false);
   const draftBaselineRef = useRef(null);
+  const draftUserEditedRef = useRef(false);
   const { setUnsavedChanges } = useUnsavedChanges();
 
   // Bước 1: Chiến dịch
@@ -102,6 +102,13 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const [minMedia, setMinMedia] = useState("1");
   const [maxMedia, setMaxMedia] = useState("4");
   const [isMediaLocked, setIsMediaLocked] = useState(false);
+  const selectedMediaCount = mediaFiles.length + savedMedia.length;
+
+  useEffect(() => {
+    if (selectedMediaCount > 0) {
+      setMaxMedia(String(selectedMediaCount));
+    }
+  }, [selectedMediaCount]);
 
   // Bước 6: Nội dung bài viết (Hỗ trợ AI)
   const [prompt, setPrompt] = useState("");
@@ -113,7 +120,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const [isContentLocked, setIsContentLocked] = useState(false);
 
   // Bước 7: Cài đặt đăng bài
-  const [delayMin, setDelayMin] = useState("30");
+  const [delayMin, setDelayMin] = useState("10");
   const [delayMax, setDelayMax] = useState("60");
   const [delayUnit, setDelayUnit] = useState("seconds");
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
@@ -135,6 +142,8 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const resetCompletedRun = useCallback(async () => {
     sessionStorage.removeItem("fb_rerun_campaign");
     rerunUidsRef.current = null;
+    draftBaselineRef.current = null;
+    draftUserEditedRef.current = false;
     setCampaignId(null);
     setJobId(null);
     setCampaignName("");
@@ -238,6 +247,46 @@ export default function GroupPostModule({ actionType = "POST" }) {
             return;
           }
         }
+
+        const draft = readGroupPostDraft(draftScope);
+        if (draft) {
+          if (draft.campaignId !== undefined) setCampaignId(draft.campaignId);
+          if (draft.campaignName !== undefined) setCampaignName(draft.campaignName);
+          if (draft.campaignDescription !== undefined) setCampaignDescription(draft.campaignDescription);
+          if (draft.campaignLocked !== undefined) setCampaignLocked(draft.campaignLocked);
+          if (Array.isArray(draft.selectedAccountKeys)) setSelectedAccountKeys(draft.selectedAccountKeys);
+          if (draft.isAccountLocked !== undefined) setIsAccountLocked(draft.isAccountLocked);
+          if (draft.credentialId !== undefined) selectApi(draft.credentialId);
+          if (draft.threads !== undefined) setThreads(draft.threads);
+          if (draft.restMinutes !== undefined) setRestMinutes(draft.restMinutes);
+          if (draft.maxPosts !== undefined) setMaxPosts(draft.maxPosts);
+          if (draft.isSettingsLocked !== undefined) setIsSettingsLocked(draft.isSettingsLocked);
+          if (draft.confirmedApi !== undefined) setConfirmedApi(draft.confirmedApi);
+          if (draft.groupSource !== undefined) setGroupSource(draft.groupSource);
+          if (draft.customGroups !== undefined) setCustomGroups(draft.customGroups);
+          if (draft.groupSearch !== undefined) setGroupSearch(draft.groupSearch);
+          if (draft.groupFilter !== undefined) setGroupFilter(draft.groupFilter);
+          if (Array.isArray(draft.selectedGroupKeys)) setSelectedGroupKeys(draft.selectedGroupKeys);
+          if (draft.isGroupSourceLocked !== undefined) setIsGroupSourceLocked(draft.isGroupSourceLocked);
+          if (Array.isArray(draft.savedMedia)) setSavedMedia(draft.savedMedia);
+          if (draft.minMedia !== undefined) setMinMedia(draft.minMedia);
+          if (draft.maxMedia !== undefined) setMaxMedia(draft.maxMedia);
+          if (draft.isMediaLocked !== undefined) setIsMediaLocked(draft.isMediaLocked);
+          if (draft.prompt !== undefined) setPrompt(draft.prompt);
+          if (draft.aiCount !== undefined) setAiCount(draft.aiCount);
+          if (Array.isArray(draft.posts)) setPosts(draft.posts);
+          if (draft.activePost !== undefined) setActivePost(draft.activePost);
+          if (draft.hasGeneratedContent !== undefined) setHasGeneratedContent(draft.hasGeneratedContent);
+          if (draft.isContentLocked !== undefined) setIsContentLocked(draft.isContentLocked);
+          if (draft.delayMin !== undefined) setDelayMin(draft.delayMin);
+          if (draft.delayMax !== undefined) setDelayMax(draft.delayMax);
+          if (draft.delayUnit !== undefined) setDelayUnit(draft.delayUnit);
+          if (draft.scheduleEnabled !== undefined) setScheduleEnabled(draft.scheduleEnabled);
+          if (draft.scheduleDate !== undefined) setScheduleDate(draft.scheduleDate);
+          if (draft.scheduleTime !== undefined) setScheduleTime(draft.scheduleTime);
+          if (draft.isPostingSettingsLocked !== undefined) setIsPostingSettingsLocked(draft.isPostingSettingsLocked);
+          setMediaFiles(await readGroupPostDraftMedia(draftScope));
+        }
       } catch (e) {
         console.warn(`Lỗi khôi phục cấu hình ${actionLabel} nhóm:`, e);
       } finally {
@@ -250,11 +299,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
   }, [actionLabel, actionType, draftScope, isComment, selectApi]);
 
   useEffect(() => {
-    if (!draftReady || isRerun) return;
-    if (!draftWriteInitializedRef.current) {
-      draftWriteInitializedRef.current = true;
-      return;
-    }
+    if (!draftReady || settingsLoading || accountsLoading || apiSource.loading || isRerun) return;
     const draft = {
       campaignId,
       campaignName,
@@ -296,15 +341,20 @@ export default function GroupPostModule({ actionType = "POST" }) {
     const draftSnapshot = JSON.stringify(draft);
     if (draftBaselineRef.current === null) {
       draftBaselineRef.current = draftSnapshot;
+      draftUserEditedRef.current = false;
+      writeGroupPostDraft(draft, draftScope);
+      setUnsavedChanges(false);
+      return;
     }
     writeGroupPostDraft(draft, draftScope);
-    const hasUnsavedChanges = draftSnapshot !== draftBaselineRef.current;
+    const hasUnsavedChanges = draftUserEditedRef.current && draftSnapshot !== draftBaselineRef.current;
     setUnsavedChanges(hasUnsavedChanges, async () => {
       await clearGroupPostDraft(draftScope);
       await writeGroupPostDraftMedia([], draftScope);
     });
   }, [
-    draftReady, isRerun, campaignId, campaignName, campaignDescription, campaignLocked, draftScope,
+    draftReady, settingsLoading, accountsLoading, apiSource.loading, isRerun,
+    campaignId, campaignName, campaignDescription, campaignLocked, draftScope,
     selectedAccountKeys, isAccountLocked, apiSource.selectedId, threads, restMinutes, maxPosts, isSettingsLocked,
     confirmedApi, groupSource, groupFile, customGroups, groupSearch, groupFilter,
     selectedGroupKeys, isGroupSourceLocked, savedMedia, minMedia, maxMedia, isMediaLocked,
@@ -392,15 +442,24 @@ export default function GroupPostModule({ actionType = "POST" }) {
     let cancelled = false;
     getCurrentGroupCampaign()
       .then((job) => {
-        if (cancelled || !job?.job_id || job.action_type !== actionType) return;
+        if (cancelled) return;
+        if (!job?.job_id) {
+          window.localStorage.removeItem("fb-group-campaign-active");
+          return;
+        }
         const terminal = ["COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"].includes(job.status);
-        if (terminal) return;
+        if (terminal) {
+          window.localStorage.removeItem("fb-group-campaign-active");
+          return;
+        }
+        if (job.action_type !== actionType) return;
         setCampaignProgress(job);
         setJobId(job.job_id);
         setCampaignId(job.campaign_id);
-        setRunState(job.status === "QUEUED" ? "starting" : "running");
+        window.localStorage.setItem("fb-group-campaign-active", job.job_id);
+        setRunState(job.status === "SCHEDULED" ? "pending" : job.status === "QUEUED" ? "starting" : "running");
       })
-      .catch(() => {});
+      .catch(() => { });
     return () => { cancelled = true; };
   }, [actionType]);
 
@@ -416,6 +475,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
         setCampaignProgress(job);
         const terminal = ["COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"].includes(job.status);
         if (terminal) {
+          window.localStorage.removeItem("fb-group-campaign-active");
           setRunState("idle");
           setJobId(null);
           if (job.status === "COMPLETED" || (job.status === "PARTIAL" && job.success > 0)) {
@@ -432,7 +492,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
           }
           return;
         }
-        setRunState(job.status === "QUEUED" ? "starting" : "running");
+        setRunState(job.status === "SCHEDULED" ? "pending" : job.status === "QUEUED" ? "starting" : "running");
         timer = window.setTimeout(poll, 1000);
       } catch (error) {
         if (!cancelled) {
@@ -490,7 +550,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const selectedGroups = currentGroupPool.filter((group) => selectedGroupKeys.includes(group.key));
   const activeGroupsCount = groupSource === "file" ? (groupFile?.validGroupsCount || selectedGroups.length) : selectedGroups.length;
   const generatedCount = posts.filter((post) => post.trim()).length;
-  const totalPlanned = Math.min(Number(maxPosts) || 0, activeGroupsCount * Math.max(selectedAccounts.length, 1));
+  const totalPlanned = activeGroupsCount * selectedAccounts.length;
   const hasApiKey = Boolean(apiSource.selected) && !apiSource.loading;
 
   const liveAccountsCount = useMemo(() => {
@@ -649,9 +709,10 @@ export default function GroupPostModule({ actionType = "POST" }) {
 
     const delayMinValue = Number(delayMin);
     const delayMaxValue = Number(delayMax);
-    const delayLimit = delayUnit === "minutes" ? 60 : 3600;
-    if (!Number.isFinite(delayMinValue) || !Number.isFinite(delayMaxValue) || delayMinValue < 0 || delayMaxValue < delayMinValue || delayMinValue > delayLimit || delayMaxValue > delayLimit) {
-      toast.warning(`Bước 7: khoảng nghỉ phải từ 0 đến ${delayLimit} ${delayUnit === "minutes" ? "phút" : "giây"}, và giá trị 'Đến' không được nhỏ hơn giá trị 'Từ'.`, "CẤU HÌNH CHƯA HỢP LỆ");
+    const delayMinimum = delayUnit === "minutes" ? 1 : 10;
+    const delayLimit = 60;
+    if (!Number.isFinite(delayMinValue) || !Number.isFinite(delayMaxValue) || delayMinValue < delayMinimum || delayMaxValue < delayMinValue || delayMinValue > delayLimit || delayMaxValue > delayLimit) {
+      toast.warning(`Bước 7: khoảng nghỉ phải từ ${delayMinimum} đến ${delayLimit} ${delayUnit === "minutes" ? "phút" : "giây"}, và giá trị 'Đến' không được nhỏ hơn giá trị 'Từ'.`, "CẤU HÌNH CHƯA HỢP LỆ");
       document.getElementById("step-7-posting")?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
@@ -733,6 +794,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
       appendCampaignLog("INFO", `Đang gửi chiến dịch ${selectedAccounts.length} tài khoản × ${activeGroups.length} nhóm tới worker...`);
       const campaign = await runGroupCampaign({
         campaign_id: effectiveCampaignId,
+        search_keyword: groupSource === "search" ? groupSearch.trim() || null : null,
         name: trimmedCampaignName,
         description: campaignDescription || undefined,
         action_type: actionType,
@@ -746,13 +808,12 @@ export default function GroupPostModule({ actionType = "POST" }) {
           credential_id: apiSource.selectedId,
           threads: Number(threads),
           rest_minutes: Number(restMinutes),
-          max_posts: Number(maxPosts),
           delay_min: Math.round(Number(delayMin) * (delayUnit === "minutes" ? 60 : 1)),
           delay_max: Math.round(Number(delayMax) * (delayUnit === "minutes" ? 60 : 1)),
           min_media: totalMediaCount > 0 ? (Number(minMedia) || 0) : 0,
           max_media: totalMediaCount > 0 ? (Number(maxMedia) || 0) : 0,
           avoid_duplicate: false,
-          shuffle_content: true,
+          shuffle_content: false,
           auto_like: isComment,
           schedule_at: scheduleEnabled && scheduleDate ? `${scheduleDate}T${scheduleTime}` : null,
         },
@@ -760,7 +821,12 @@ export default function GroupPostModule({ actionType = "POST" }) {
       setJobId(campaign.job_id);
       setCampaignId(campaign.campaign_id);
       setCampaignProgress(campaign);
-      setRunState(campaign.status === "QUEUED" ? "starting" : "running");
+      window.localStorage.setItem("fb-group-campaign-active", campaign.job_id);
+      setRunState(campaign.status === "SCHEDULED" ? "pending" : campaign.status === "QUEUED" ? "starting" : "running");
+      // The campaign now owns a saved snapshot of this configuration. Leaving
+      // the page must not trigger the draft-only unsaved-changes dialog.
+      draftUserEditedRef.current = false;
+      setUnsavedChanges(false);
       sessionStorage.removeItem("fb_rerun_campaign");
       setIsRerun(false);
       toast.success(`Đã khởi động chiến dịch ${actionLabel} nhóm thành công!`, "BẮT ĐẦU CHIẾN DỊCH");
@@ -785,15 +851,27 @@ export default function GroupPostModule({ actionType = "POST" }) {
   };
 
   const canStart = runState === "idle";
+  const markDraftUserEdit = () => {
+    draftUserEditedRef.current = true;
+    setUnsavedChanges(true, async () => {
+      await clearGroupPostDraft(draftScope);
+      await writeGroupPostDraftMedia([], draftScope);
+    });
+  };
 
   return (
-    <div className="space-y-6">
+    <div
+      className="space-y-6"
+      onClickCapture={markDraftUserEdit}
+      onChangeCapture={markDraftUserEdit}
+      onInputCapture={markDraftUserEdit}
+    >
       {/* Header */}
       <div>
-        <h1 className="font-heading text-xl font-bold tracking-tight text-slate-800">
+        <h1 className="font-heading text-2xl font-bold tracking-tight text-slate-800 uppercase">
           {isComment ? "Spam Group – Bình luận" : "Spam Group – Đăng bài"}
         </h1>
-        <p className="mt-1 text-xs text-slate-400">
+        <p className="mt-1 text-sm text-slate-400">
           {isComment
             ? "Tự động bình luận vào bài viết đầu tiên của các nhóm Facebook theo từ khoá hoặc từ file link nhóm."
             : "Tự động tìm kiếm và đăng bài vào các hội nhóm Facebook theo từ khoá hoặc từ file link nhóm."}
@@ -931,7 +1009,6 @@ export default function GroupPostModule({ actionType = "POST" }) {
           campaignName={campaignName}
           selectedAccountsCount={selectedAccounts.length}
           liveAccountsCount={liveAccountsCount}
-          maxPosts={maxPosts}
           totalPlanned={totalPlanned}
           hasApiKey={hasApiKey}
           modelDisplayName={modelDisplayName}
@@ -959,6 +1036,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
         <GroupProgressSection
           runState={runState}
           campaignProgress={campaignProgress}
+          onClearLogs={() => setCampaignProgress((current) => current ? { ...current, logs: [] } : current)}
           onClearLogs={() => setCampaignProgress((current) => current ? { ...current, logs: [] } : current)}
         />
       </div>
@@ -1028,7 +1106,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
                 onClick={closeCompletionModal}
                 className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm"
               >
-                Đã hiểu & Đóng
+                {"\u0110\u00e3 hi\u1ec3u & \u0110\u00f3ng"}
               </Button>
             </DialogFooter>
           </div>
