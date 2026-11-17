@@ -91,10 +91,22 @@ def encrypt_data(plain_text):
 def decrypt_data(cipher_text):
     if not cipher_text:
         return ""
+    errors = []
+    for key_fn in (get_hwid, get_legacy_hwid):
+        try:
+            return _decrypt(cipher_text, key_fn())
+        except Exception as exc:
+            errors.append(exc)
+    raise ValueError("Unable to decrypt saved credential") from errors[-1]
+
+def decrypt_secret(cipher_text):
+    """Giải mã credential cho automation: lỗi HWID/máy khác → chuỗi rỗng (dùng cookie)."""
+    if not cipher_text:
+        return ""
     try:
-        return _decrypt(cipher_text, get_hwid())
-    except Exception as exc:
-        raise ValueError("Unable to decrypt saved credential") from exc
+        return decrypt_data(cipher_text)
+    except Exception:
+        return ""
 
 def decrypt_legacy_data(cipher_text):
     if not cipher_text:

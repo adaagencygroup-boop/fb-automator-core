@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import sys
+import threading
 from urllib.parse import unquote
 from contextlib import asynccontextmanager
 
@@ -27,7 +28,7 @@ from pydantic import BaseModel
 from config.settings import settings
 from config.constants import UPLOADS_DIR
 from core.database.connection import db
-from core.database.models import init_database
+from core.database.models import init_core_tables, init_database
 from core.facebook.fb_graph_client import fb_client
 from core.ai.gemini_engine import ai_engine
 from core.media.tiktok_scraper import tiktok_scraper
@@ -113,14 +114,22 @@ class ConnectionManager:
 ws_manager = ConnectionManager()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+def _warm_auth_hwid():
+    try:
+        from modules.module_auth.hwid import get_hwid
+
+        get_hwid()
+        print("[Startup] HWID cache ready", flush=True)
+    except Exception as exc:
+        print(f"[Local Engine] HWID warmup note: {exc}", flush=True)
+
+
+threading.Thread(target=_warm_auth_hwid, name="hwid-warm", daemon=True).start()
+
+
+def _init_remaining_schemas():
     with startup_step("Core database and module schemas"):
         init_database()
-    with startup_step("Authentication schema"):
-        init_auth_tables()
-    with startup_step("Admin account"):
-        ensure_admin()
     with startup_step("Module 02 account manager"):
         initialize_accounts()
     with startup_step("Module 04 created pages"):
@@ -149,6 +158,11 @@ async def lifespan(app: FastAPI):
         )
 
         init_page_scanner_models()
+
+
+async def _finish_engine_startup(fast_startup: bool):
+    if not fast_startup:
+        await asyncio.to_thread(_init_remaining_schemas)
     with startup_step("Backend module imports"):
         loaded = load_backend_modules()
     print(
@@ -157,6 +171,7 @@ async def lifespan(app: FastAPI):
     try:
         from modules.module_06_omnichannel_chat.queue_worker import start_queue_worker
         from modules.module_06_omnichannel_chat.services.sync_service import watch_and_sync_webhook_loop
+
         asyncio.create_task(start_queue_worker())
         asyncio.create_task(watch_and_sync_webhook_loop())
     except Exception as qe:
@@ -174,9 +189,34 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[Local Engine] Account WS log channel note: {e}")
     print("[Startup] Backend ready", flush=True)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    fast_startup = os.environ.get("FB_FAST_STARTUP", "").strip().lower() in {"1", "true", "yes"}
+    deferred = None
+    if fast_startup:
+        print("[Startup] Fast mode enabled (FB_FAST_STARTUP=1): skipping remote DB schema checks.")
+        await _finish_engine_startup(True)
+    else:
+        # Mở cổng sớm để màn login lấy HWID / đăng nhập, schema module chạy nền.
+        with startup_step("Core tables"):
+            await asyncio.to_thread(init_core_tables)
+        with startup_step("Authentication schema"):
+            await asyncio.to_thread(init_auth_tables)
+        with startup_step("Admin account"):
+            await asyncio.to_thread(ensure_admin)
+        print("[Startup] Auth ready — accepting login/HWID", flush=True)
+        deferred = asyncio.create_task(_finish_engine_startup(False))
     try:
         yield
     finally:
+        if deferred and not deferred.done():
+            deferred.cancel()
+            try:
+                await deferred
+            except asyncio.CancelledError:
+                pass
         await shutdown_accounts()
         if farm_on_shutdown:
             await farm_on_shutdown()
@@ -515,7 +555,13 @@ def main():
     parser.add_argument(
         "--reload", action="store_true", help="Enable auto-reload on code change (development)"
     )
+    parser.add_argument(
+        "--fast", action="store_true", help="Skip remote DB schema checks on startup (fast dev restart)"
+    )
     args = parser.parse_args()
+
+    if args.fast:
+        os.environ["FB_FAST_STARTUP"] = "1"
 
     print(f"[Local Engine] Starting on http://{args.host}:{args.port}")
     if args.reload:

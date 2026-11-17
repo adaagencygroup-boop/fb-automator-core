@@ -241,7 +241,10 @@ def scrape_real_groups_via_browser(
         res.name = name;
         const mainArea = document.querySelector('[role="main"]') || document.body;
         const text = mainArea ? mainArea.innerText.slice(0, 4000) : '';
+        const bodyText = (document.body ? document.body.innerText : '').slice(0, 6000);
 
+        res.is_unavailable = /bạn hiện không xem được nội dung này|this content isn't available|content isn't available right now|trang này không khả dụng|this page isn't available|liên kết này có thể bị hỏng|this link may be broken|nội dung này hiện không khả dụng/i.test(bodyText);
+        res.is_login_or_checkpoint = /\\/login|\\/checkpoint/i.test(window.location.pathname || '');
         res.is_private = /riêng tư|private/i.test(text);
         res.is_public = /công khai|public/i.test(text);
 
@@ -267,10 +270,35 @@ def scrape_real_groups_via_browser(
 
             try:
                 driver.get(full_url)
-                time.sleep(2)
-                data = driver.execute_script(js_extract_script) or {}
-                scraped_name = (data.get("name") or "").strip()
                 forbidden = {"facebook", "error", "lỗi", "log in", "đăng nhập", "login"}
+                unavailable_markers = (
+                    "bạn hiện không xem được nội dung này",
+                    "this content isn't available",
+                    "trang này không khả dụng",
+                    "this page isn't available",
+                    "content not found",
+                )
+                data = {}
+                scraped_name = ""
+                for _ in range(10):
+                    time.sleep(0.5)
+                    data = driver.execute_script(js_extract_script) or {}
+                    scraped_name = (data.get("name") or "").strip()
+                    if data.get("is_unavailable") or data.get("is_login_or_checkpoint"):
+                        break
+                    if scraped_name and scraped_name.lower() not in forbidden:
+                        break
+
+                if data.get("is_unavailable") or any(
+                    marker in scraped_name.lower() for marker in unavailable_markers
+                ) or (not data.get("is_login_or_checkpoint") and (not scraped_name or scraped_name.lower() in forbidden)):
+                    entry_result = {"unavailable": True}
+                    if uid:
+                        scraped_map[uid.lower()] = entry_result
+                    if url:
+                        scraped_map[clean_group_url(url).lower()] = entry_result
+                    continue
+
                 if scraped_name and scraped_name.lower() not in forbidden:
                     privacy = "private" if data.get("is_private") else ("public" if data.get("is_public") else "public")
                     members_label = data.get("members") or ""
@@ -419,6 +447,10 @@ def parse_group_file_content(
         scraped_groups = scrape_real_groups_via_browser(
             uncached_groups, account_uid=account_uid, owner=owner
         )
+    # Khi đã có tài khoản để kiểm tra Facebook, chỉ giữ nhóm có dữ liệu xác minh
+    # (từ cache hoặc lần quét vừa chạy). Trước đây nhóm không đọc được thường bị
+    # gán tên dự phòng từ slug và hiển thị như thể hợp lệ.
+    require_verified_group = bool(account_uid)
 
     # 5. Tổng hợp dữ liệu thật vào kết quả trả về
     parsed_groups: List[Dict[str, Any]] = []
@@ -444,7 +476,27 @@ def parse_group_file_content(
             or cached_groups.get(url_key)
         )
 
+        if real_data and real_data.get("unavailable"):
+            invalid_count += 1
+            continue
+
+        if require_verified_group and not (real_data and real_data.get("name")):
+            invalid_count += 1
+            continue
+
         if real_data and real_data.get("name"):
+            lowered_name = real_data["name"].strip().lower()
+            if any(
+                marker in lowered_name
+                for marker in (
+                    "bạn hiện không xem được nội dung này",
+                    "this content isn't available",
+                    "trang này không khả dụng",
+                    "this page isn't available",
+                )
+            ):
+                invalid_count += 1
+                continue
             group_name = real_data["name"]
             privacy = real_data.get("privacy") or "public"
             members = real_data.get("members") or "Công khai"

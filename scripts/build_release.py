@@ -99,7 +99,23 @@ def main():
         TAURI_CONF_PATH.write_text(temp_tauri_conf, encoding="utf-8")
         print("--> Đã tạm thời gỡ 'beforeBuildCommand' để tránh xung đột build lại.")
 
-        run_command("npx @tauri-apps/cli build", "Build Tauri NSIS Package")
+        # Tránh CARGO_TARGET_DIR sandbox lệch path; thiếu private key updater
+        # không được làm mất file NSIS đã tạo.
+        env = os.environ.copy()
+        env.pop("CARGO_TARGET_DIR", None)
+        print("--> Đang thực hiện: Build Tauri NSIS Package")
+        print('    Lệnh: npx @tauri-apps/cli build')
+        res = subprocess.run(
+            "npx @tauri-apps/cli build",
+            cwd=str(ROOT_DIR),
+            shell=True,
+            env=env,
+        )
+        if res.returncode != 0:
+            print(
+                f"\n[!] Tauri CLI mã {res.returncode} "
+                "(thường thiếu TAURI_SIGNING_PRIVATE_KEY). Vẫn kiểm tra NSIS…"
+            )
     finally:
         # Luôn luôn khôi phục lại tauri.conf.json ngay cả khi build gặp lỗi hoặc bị hủy
         TAURI_CONF_PATH.write_text(original_tauri_conf, encoding="utf-8")
@@ -117,6 +133,12 @@ def main():
         sys.exit(1)
 
     latest_exe = max(exe_files, key=lambda f: f.stat().st_mtime)
+    dist_dir = ROOT_DIR / "dist"
+    dist_dir.mkdir(parents=True, exist_ok=True)
+    dist_exe = dist_dir / latest_exe.name
+    import shutil
+
+    shutil.copy2(latest_exe, dist_exe)
     size_mb = latest_exe.stat().st_size / (1024 * 1024)
     file_time = datetime.fromtimestamp(latest_exe.stat().st_mtime).strftime("%d/%m/%Y %H:%M:%S")
     elapsed = datetime.now() - start_time
@@ -130,7 +152,9 @@ def main():
     print(f"  📏 Dung lượng:    {size_mb:.2f} MB ({latest_exe.stat().st_size:,} bytes)")
     print(f"  🕒 Thời gian tạo: {file_time}")
     print(f"  ⏱ Tổng thời gian:{minutes} phút {seconds} giây")
-    print(f"  📍 Đường dẫn:     {latest_exe.resolve()}")
+    print(f"  📍 Đường dẫn:     {dist_exe.resolve()}")
+    print("  ℹ️  Chỉ dùng file *-setup.exe này. Cài xong mở app — BE tự chạy.")
+    print("      Không mở riêng dist/local_engine/local_engine.exe.")
     print("======================================================================")
 
     try:

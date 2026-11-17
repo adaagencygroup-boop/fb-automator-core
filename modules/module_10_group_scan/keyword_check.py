@@ -2555,7 +2555,7 @@ def _check_keywords_on_account(
     )
     from modules.module_02_account_manager.database.connection import SessionLocal
     from modules.module_02_account_manager.database.repository import AccountRepository as Repo
-    from modules.module_02_account_manager.security.encryption import decrypt_data
+    from modules.module_02_account_manager.security.encryption import decrypt_secret
 
     pool_uids = [str(u).strip() for u in (uids or []) if str(u).strip()]
     if not pool_uids:
@@ -2588,8 +2588,24 @@ def _check_keywords_on_account(
                 return
             cookie = account.cookie or ""
             proxy = account.proxy
-            password = decrypt_data(account.password or "")
-            two_fa = decrypt_data(account.two_fa or "")
+            password = decrypt_secret(account.password or "")
+            two_fa = decrypt_secret(account.two_fa or "")
+            if (account.password or account.two_fa) and not password and not two_fa:
+                if cookie:
+                    _append_log(
+                        job_id,
+                        f"⚠️ [{uid}] Không giải mã được mật khẩu trên máy này — tiếp tục bằng cookie phiên đã lưu.",
+                        "warn",
+                    )
+                else:
+                    _append_log(
+                        job_id,
+                        f"❌ [{uid}] Không giải mã được mật khẩu và không có cookie. "
+                        "Hãy đăng nhập lại nick ở Module 2 trên máy này.",
+                        "error",
+                    )
+                    _set_job(job_id, status="error", error="Unable to decrypt saved credential")
+                    return
         finally:
             db.close()
 
@@ -2802,8 +2818,14 @@ def _check_keywords_on_account(
                             if acc_obj:
                                 acc_cookie = acc_obj.cookie or ""
                                 acc_proxy = acc_obj.proxy
-                                acc_password = decrypt_data(acc_obj.password or "")
-                                acc_two_fa = decrypt_data(acc_obj.two_fa or "")
+                                acc_password = decrypt_secret(acc_obj.password or "")
+                                acc_two_fa = decrypt_secret(acc_obj.two_fa or "")
+                                if (acc_obj.password or acc_obj.two_fa) and not acc_password and not acc_two_fa and acc_cookie:
+                                    _append_log(
+                                        job_id,
+                                        f"⚠️ [{uid}] Không giải mã mật khẩu — dùng cookie phiên đã lưu.",
+                                        "warn",
+                                    )
                                 _append_log(job_id, f"🌐 [{uid}] Mở Chrome cho tài khoản mới trong Bot Pool...", "info")
                                 driver = create_driver(uid, headless=False, detach=True, proxy=acc_proxy, scope="group-scan", verify_egress=False)
                                 login_res = _safe_login(driver, uid, acc_password, acc_two_fa, acc_cookie)

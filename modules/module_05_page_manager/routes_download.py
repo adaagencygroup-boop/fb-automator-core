@@ -16,7 +16,6 @@ from .runner import (
   run_tiktok_download_task,
   run_youtube_download_task,
 )
-
 _picker_lock = threading.Lock()
 router = APIRouter(prefix="/pages", tags=["Module 05: Media & Downloads"])
 class TikTokDownloadRequest(BaseModel):
@@ -73,6 +72,45 @@ def log_page_activity(page_id: str, page_name: str, action_type: str, title: str
     )
   except Exception:
     pass
+def _resolve_disk_path(path_str: str) -> str:
+  norm_p = os.path.normpath(str(path_str or "").strip())
+  if norm_p and not os.path.isabs(norm_p):
+    from config.constants import BASE_DIR
+    norm_p = os.path.join(str(BASE_DIR), norm_p)
+  return norm_p
+def _remove_empty_dir_chain(pdir: str):
+  if not pdir or not os.path.exists(pdir) or not os.path.isdir(pdir):
+    return
+  try:
+    if not os.listdir(pdir):
+      os.rmdir(pdir)
+      if os.path.basename(pdir).isdigit():
+        grand_dir = os.path.dirname(pdir)
+        if grand_dir and os.path.exists(grand_dir) and os.path.isdir(grand_dir) and not os.listdir(grand_dir):
+          os.rmdir(grand_dir)
+  except Exception:
+    pass
+def _wipe_page_folder_tree(p_dir: str) -> int:
+  removed = 0
+  if not os.path.isdir(p_dir):
+    return 0
+  try:
+    for root_w, _, files_w in os.walk(p_dir, topdown=False):
+      for f in files_w:
+        if f.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".part", ".txt")):
+          try:
+            os.remove(os.path.join(root_w, f))
+            removed += 1
+          except Exception:
+            pass
+      if not os.listdir(root_w):
+        try:
+          os.rmdir(root_w)
+        except Exception:
+          pass
+  except Exception:
+    pass
+  return removed
 def check_folder_has_page_videos(folder_path: str):
   if not folder_path:
     return False, 0
@@ -110,9 +148,10 @@ def check_folder_has_page_videos(folder_path: str):
         checked_dirs.add(p_dir)
         if os.path.isdir(p_dir):
           try:
-            for f in os.listdir(p_dir):
-              if f.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".part")):
-                count += 1
+            for _, _, files_walk in os.walk(p_dir):
+              for f in files_walk:
+                if f.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".part")):
+                  count += 1
           except Exception:
             pass
     if count > 0:
@@ -379,7 +418,7 @@ def clear_all_downloaded_videos(source: Optional[str] = None, folder: Optional[s
   for r in rows:
     p = r.get("object_path")
     if p:
-      norm_p = os.path.normpath(p)
+      norm_p = _resolve_disk_path(p)
       parent_dirs.add(os.path.dirname(norm_p))
       if os.path.exists(norm_p):
         try:
@@ -393,7 +432,7 @@ def clear_all_downloaded_videos(source: Optional[str] = None, folder: Optional[s
           os.remove(txt_p)
         except Exception:
           pass
-  for pdir in parent_dirs:
+  for pdir in sorted(parent_dirs, key=len, reverse=True):
     if pdir and os.path.exists(pdir) and os.path.isdir(pdir):
       try:
         has_other = any(f.lower().endswith((".mp4", ".txt", ".part")) for f in os.listdir(pdir))
@@ -405,8 +444,7 @@ def clear_all_downloaded_videos(source: Optional[str] = None, folder: Optional[s
                 os.remove(fp)
               except Exception:
                 pass
-          if not os.listdir(pdir):
-            os.rmdir(pdir)
+          _remove_empty_dir_chain(pdir)
       except Exception:
         pass
   if folder and folder.strip():
@@ -429,19 +467,7 @@ def clear_all_downloaded_videos(source: Optional[str] = None, folder: Optional[s
             names.append(p_id)
           for n in names:
             p_dir = os.path.join(target_f, n)
-            if os.path.isdir(p_dir):
-              try:
-                for f in os.listdir(p_dir):
-                  if f.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".part", ".txt")):
-                    try:
-                      os.remove(os.path.join(p_dir, f))
-                      deleted_count += 1
-                    except Exception:
-                      pass
-                if not os.listdir(p_dir):
-                  os.rmdir(p_dir)
-              except Exception:
-                pass
+            deleted_count += _wipe_page_folder_tree(p_dir)
       except Exception:
         pass
   del_query = "DELETE FROM downloaded_videos"
@@ -512,7 +538,25 @@ def get_page_videos(page_id: str, source: Optional[str] = None):
     params.append(source.upper())
   query += " ORDER BY id DESC LIMIT 200"
   rows = db.fetch_all(query, tuple(params))
-  return {"page_id": real_pid, "page_name": p_row["page_name"] if p_row else "", "videos": rows}
+  valid_rows = []
+  stale_ids = []
+  for r in rows or []:
+    p = r.get("object_path")
+    if p and str(p).strip():
+      resolved = _resolve_disk_path(p)
+      if os.path.exists(resolved) and os.path.isfile(resolved):
+        valid_rows.append(r)
+      elif r.get("id") is not None:
+        stale_ids.append(r["id"])
+    elif r.get("id") is not None:
+      stale_ids.append(r["id"])
+  if stale_ids:
+    try:
+      placeholders = ",".join(["%s"] * len(stale_ids))
+      db.execute(f"DELETE FROM downloaded_videos WHERE id IN ({placeholders})", tuple(stale_ids))
+    except Exception:
+      pass
+  return {"page_id": real_pid, "page_name": p_row["page_name"] if p_row else "", "videos": valid_rows}
 @router.delete("/{page_id}/videos")
 def clear_page_videos(page_id: str, source: Optional[str] = None):
   p_row = db.fetch_one("SELECT id, page_id, page_name FROM pages WHERE page_id = %s OR id::text = %s", (page_id, page_id))
@@ -529,7 +573,7 @@ def clear_page_videos(page_id: str, source: Optional[str] = None):
   for r in rows:
     p = r.get("object_path")
     if p:
-      norm_p = os.path.normpath(p)
+      norm_p = _resolve_disk_path(p)
       parent_dirs.add(os.path.dirname(norm_p))
       if os.path.exists(norm_p):
         try:
@@ -571,20 +615,8 @@ def clear_page_videos(page_id: str, source: Optional[str] = None):
       continue
     for d_name in set(name_candidates):
       sub_dir = os.path.join(target_base, d_name)
-      if os.path.exists(sub_dir) and os.path.isdir(sub_dir):
-        try:
-          for f in os.listdir(sub_dir):
-            if f.lower().endswith((".mp4", ".mkv", ".mov", ".webm", ".avi", ".part", ".txt")):
-              try:
-                os.remove(os.path.join(sub_dir, f))
-                deleted_count += 1
-              except Exception:
-                pass
-          if not os.listdir(sub_dir):
-            os.rmdir(sub_dir)
-        except Exception:
-          pass
-  for pdir in parent_dirs:
+      deleted_count += _wipe_page_folder_tree(sub_dir)
+  for pdir in sorted(parent_dirs, key=len, reverse=True):
     if pdir and os.path.exists(pdir) and os.path.isdir(pdir):
       try:
         for f in os.listdir(pdir):
@@ -594,8 +626,7 @@ def clear_page_videos(page_id: str, source: Optional[str] = None):
               deleted_count += 1
             except Exception:
               pass
-        if not os.listdir(pdir):
-          os.rmdir(pdir)
+        _remove_empty_dir_chain(pdir)
       except Exception:
         pass
   del_query = "DELETE FROM downloaded_videos WHERE (page_id = %s OR page_id = %s OR page_id = %s)"
@@ -620,7 +651,7 @@ def delete_single_video(page_id: str, video_db_id: int):
     return {"success": False, "message": "Video Không Tồn Tại"}
   p = row.get("object_path")
   if p:
-    norm_p = os.path.normpath(p)
+    norm_p = _resolve_disk_path(p)
     if os.path.exists(norm_p):
       try:
         os.remove(norm_p)
@@ -633,12 +664,7 @@ def delete_single_video(page_id: str, video_db_id: int):
       except Exception:
         pass
     pdir = os.path.dirname(norm_p)
-    if pdir and os.path.exists(pdir) and os.path.isdir(pdir):
-      try:
-        if not os.listdir(pdir):
-          os.rmdir(pdir)
-      except Exception:
-        pass
+    _remove_empty_dir_chain(pdir)
   db.execute("DELETE FROM downloaded_videos WHERE id = %s", (video_db_id,))
   p_name = p_row["page_name"] if p_row and p_row.get("page_name") else "Fanpage"
   vid_title = row.get("title") or "1 Video"
@@ -774,17 +800,11 @@ def get_job_status(job_id: int):
   return {"job": job, "items": items}
 @router.post("/select-folder")
 def select_folder_endpoint(req: Optional[SelectFolderRequest] = None):
-  """
-  Mở hộp thoại Windows native FolderBrowserDialog độc lập qua PowerShell (STA thread).
-  Hoạt động 100% ổn định trên Windows cả khi chạy dev lẫn khi build đóng gói PyInstaller / Tauri.
-  """
   init_dir = (req.initial_dir if req else None) or ""
   clean_init = init_dir.strip().strip('"').strip("'") if init_dir else ""
   dialog_init = clean_init if (clean_init and os.path.exists(clean_init) and os.path.isdir(clean_init)) else ""
-
   if not _picker_lock.acquire(blocking=False):
     return {"folder": "", "error": "Cửa sổ chọn thư mục đang mở, vui lòng thao tác trên cửa sổ đó!", "success": False}
-
   selected = ""
   error_msg = ""
   try:
@@ -798,7 +818,6 @@ def select_folder_endpoint(req: Optional[SelectFolderRequest] = None):
     selected = ""
   finally:
     _picker_lock.release()
-
   if selected:
     selected = os.path.normpath(selected)
   return {"folder": selected or "", "success": bool(selected), "error": error_msg}
@@ -822,11 +841,6 @@ def save_tiktok_config_endpoint(req: Dict[str, Any]):
   try:
     cfg = read_persistent_tiktok_config()
     df = str(req.get("download_folder", "")).strip()
-    if df and df != cfg.get("download_folder") and cfg.get("download_folder"):
-      old_folder = cfg.get("download_folder")
-      has_vids, _ = check_folder_has_page_videos(old_folder)
-      if has_vids:
-        return {"success": False, "error": "Thư Mục Cũ Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!"}
     if df:
       cfg["download_folder"] = df
     if "max_videos" in req and req["max_videos"]:
@@ -843,11 +857,6 @@ def save_youtube_config_endpoint(req: Dict[str, Any]):
   try:
     cfg = read_persistent_youtube_config()
     df = str(req.get("download_folder", "")).strip()
-    if df and df != cfg.get("download_folder") and cfg.get("download_folder"):
-      old_folder = cfg.get("download_folder")
-      has_vids, _ = check_folder_has_page_videos(old_folder)
-      if has_vids:
-        return {"success": False, "error": "Thư Mục Cũ Đang Chứa Dữ Liệu Video Đã Tải. Không Thể Thay Đổi Đường Dẫn Khi Chưa Xóa Hết Dữ Liệu Cũ!"}
     if df:
       cfg["download_folder"] = df
     if "max_videos" in req and req["max_videos"]:
