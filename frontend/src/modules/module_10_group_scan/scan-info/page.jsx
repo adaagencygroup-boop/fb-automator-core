@@ -142,7 +142,6 @@ export default function GroupScanInfoPage() {
   const [fileData, setFileData] = useState(null);
   const [fileQuotas, setFileQuotas] = useState({});
   const [fileFilter, setFileFilter] = useState("all"); // all | valid | duplicate
-  const [skipInvalidRows, setSkipInvalidRows] = useState(true);
 
   const [rotateAfter, setRotateAfter] = useState(50);
   const [delayMin, setDelayMin] = useState(5);
@@ -574,7 +573,8 @@ export default function GroupScanInfoPage() {
         limit: Math.max(1, Math.min(200, Number(quotas[word]) || 30)),
       }));
     } else if (method === "link") {
-      payloadKeywords = (parsedLinks || []).map((l) => ({
+      const validLinks = (parsedLinks || []).filter((l) => l.status === "valid");
+      payloadKeywords = validLinks.map((l) => ({
         keyword: l.url,
         limit: Math.max(1, Math.min(200, Number(linkQuotas[l.url]) || 30)),
       }));
@@ -718,9 +718,12 @@ export default function GroupScanInfoPage() {
       toast.warning("Thêm ít nhất một từ khóa, bấm Kiểm tra rồi Bắt đầu thực thi.");
       return;
     }
-    if (method === "link" && (!parsedLinks || !parsedLinks.length)) {
-      toast.warning("Vui lòng nhập danh sách liên kết và bấm Kiểm tra & Lọc trùng lặp.");
-      return;
+    if (method === "link") {
+      const validLinks = (parsedLinks || []).filter((l) => l.status === "valid");
+      if (!validLinks.length) {
+        toast.warning("Vui lòng nhập và kiểm tra ít nhất 1 liên kết nhóm Facebook hợp lệ.");
+        return;
+      }
     }
     if (method === "file") {
       const validRows = (fileData?.rows || []).filter((r) => r.status === "valid");
@@ -765,8 +768,9 @@ export default function GroupScanInfoPage() {
         "info",
       );
     } else if (method === "link") {
+      const validLinks = (parsedLinks || []).filter((l) => l.status === "valid");
       pushLog(
-        `Bắt đầu thực thi quét liên kết: nick ${uid}, ${parsedLinks.length} link nhóm Facebook…`,
+        `Bắt đầu thực thi quét liên kết: nick ${uid}, ${validLinks.length} link nhóm Facebook…`,
         "info",
       );
     } else {
@@ -1060,8 +1064,6 @@ export default function GroupScanInfoPage() {
             duplicateFileRowsCount={(fileData?.rows || []).filter((r) => r.status === "duplicate").length}
             invalidFileRowsCount={(fileData?.rows || []).filter((r) => r.status === "invalid").length}
             displayedFileRows={displayedFileRows}
-            skipInvalidRows={skipInvalidRows}
-            onSkipInvalidRowsChange={setSkipInvalidRows}
           />
 
           {/* Card 2: Thiết lập cấu hình quét mục tiêu */}

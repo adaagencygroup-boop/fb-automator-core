@@ -160,22 +160,18 @@ export function PostProgressPreview({
           </div>
         ) : null}
 
-        {(content || isMediaPost) && (
+        {/* Reels/Story: chỉ media card — ẩn khối caption / "(Không có caption) — file: …" */}
+        {!isMediaPost && content ? (
           <textarea
             readOnly
-            value={
-              content ||
-              (isMediaPost
-                ? `(Không có caption) — file: ${mediaName || mediaPath || "—"}`
-                : "")
-            }
-            rows={Math.min(12, Math.max(4, (content || "").split("\n").length + 1))}
+            value={content}
+            rows={Math.min(12, Math.max(4, content.split("\n").length + 1))}
             className="w-full resize-none rounded-xl border border-slate-200 bg-white p-3.5 text-xs sm:text-[13px] leading-relaxed text-slate-800 font-sans cursor-default focus:outline-none [scrollbar-width:thin]"
             aria-label="Nội dung bài viết đang đăng (chỉ xem)"
           />
-        )}
+        ) : null}
 
-        {content ? (
+        {!isMediaPost && content ? (
           <p className="text-[11px] text-slate-500">{content.length} ký tự · chỉ xem, không chỉnh sửa</p>
         ) : null}
       </div>

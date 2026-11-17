@@ -167,6 +167,10 @@ def order_accounts_free_first(accounts: List[Dict[str, Any]]) -> List[Dict[str, 
     )
 
 
+class AccountLoginError(RuntimeError):
+    """Acc không có phiên Facebook hợp lệ (cookie hết hạn, sai mật khẩu, checkpoint, 2FA…)."""
+
+
 class AccountRotation:
     """
     Xoay vòng nhiều acc trong 1 phiên Selenium (POST_SCAN / FOLLOW):
@@ -185,6 +189,7 @@ class AccountRotation:
         headless: bool = False,
         allow_direct_fallback: bool = True,
         log=None,
+        require_login: bool = False,
     ):
         self.accounts = [a for a in (accounts or []) if _acc_uid(a)]
         if not self.accounts:
@@ -194,6 +199,8 @@ class AccountRotation:
         self.owner_key = owner_key
         self.headless = headless
         self.allow_direct_fallback = allow_direct_fallback
+        # True: mở Chrome xong phải có phiên đăng nhập thật (tự login lại bằng cookie / mật khẩu + 2FA)
+        self.require_login = require_login
         self._log = log or (lambda message, level="info": None)
         self.idx = 0
         self.dead: Set[str] = set()
@@ -226,7 +233,75 @@ class AccountRotation:
             allow_direct_fallback=self.allow_direct_fallback,
         )
         self.count = 0
+        if self.require_login:
+            try:
+                self.ensure_login()
+            except Exception:
+                # Không đăng nhập được → đóng Chrome + nhả khóa profile ngay; slot BUSY do nơi gọi xử lý
+                uid = self.uid
+                try:
+                    release_browser("CHECKPOINT", False, self.acquired_lock, self.lock, uid)
+                finally:
+                    self.driver = None
+                    self.lock = None
+                    self.acquired_lock = False
+                raise
         return self.driver
+
+    def _login_credentials(self) -> Tuple[str, str]:
+        """Mật khẩu + 2FA (đã giải mã) của acc hiện tại — dùng khi cookie hết hạn."""
+        try:
+            from core.database.connection import db
+            from modules.module_02_account_manager.security.encryption import decrypt_data
+
+            row = db.fetch_one(
+                """
+                SELECT password, two_fa FROM accounts
+                WHERE uid = %s AND user_id IS NOT DISTINCT FROM %s
+                LIMIT 1
+                """,
+                (self.uid, self.account.get("user_id")),
+            ) or {}
+        except Exception as exc:
+            logger.debug(f"[browser_session] đọc mật khẩu {self.uid}: {exc}")
+            return "", ""
+
+        def _dec(value):
+            try:
+                return decrypt_data(value) if value else ""
+            except Exception:
+                return ""
+
+        return _dec(row.get("password")), _dec(row.get("two_fa"))
+
+    def ensure_login(self) -> None:
+        """Bắt buộc có phiên Facebook đăng nhập; không được → AccountLoginError."""
+        from modules.module_02_account_manager.automation import ensure_logged_in
+
+        uid = self.uid
+        password, two_fa = self._login_credentials()
+        self._log(f"Kiểm tra đăng nhập tài khoản {uid}…", "info")
+        res = ensure_logged_in(
+            self.driver, uid, password=password, two_fa=two_fa, cookie=self.account.get("cookie") or ""
+        ) or {}
+        if not res.get("success"):
+            reason = res.get("error") or "phiên hết hạn / checkpoint"
+            self._log(f"Tài khoản {uid} chưa đăng nhập được: {reason}", "error")
+            raise AccountLoginError(f"Tài khoản {uid} chưa đăng nhập được: {reason}")
+        self._log(
+            f"Tài khoản {uid} {'đã đăng nhập lại' if res.get('reloaded') else 'đang đăng nhập'} — bắt đầu quét",
+            "success",
+        )
+
+    def relogin(self) -> bool:
+        """Bị đăng xuất giữa phiên → thử đăng nhập lại trên Chrome hiện tại."""
+        if self.driver is None:
+            return False
+        try:
+            self.ensure_login()
+            return True
+        except Exception:
+            return False
 
     def release(self, stop_reason: str, keep_browser: bool = False) -> None:
         """Đóng / giữ Chrome acc hiện tại và nhả slot BUSY của nó."""

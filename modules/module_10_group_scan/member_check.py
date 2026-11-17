@@ -34,7 +34,6 @@ SCRAPE_MEMBERS_JS = """
     if (/^(join|tham gia|joined|đang chờ|xem tất cả|see all|quản trị viên|admin|người kiểm duyệt|moderator|thành viên|members?|bạn bè|friends)$/i.test(n)) {
       return '';
     }
-    // Bỏ tên quá dài (thường là block text lẫn nút)
     if (n.length > 80) return '';
     return n;
   };
@@ -49,10 +48,11 @@ SCRAPE_MEMBERS_JS = """
 
   const extractUid = (href) => {
     if (!href) return '';
-    // /groups/790752766302091/user/61554844533119/
     let m = href.match(/\\/groups\\/[^/]+\\/user\\/(\\d+)/i);
     if (m) return m[1];
     m = href.match(/\\/user\\/(\\d+)/i);
+    if (m) return m[1];
+    m = href.match(/profile\\.php\\?id=(\\d+)/i);
     if (m) return m[1];
     m = href.match(/[?&]id=(\\d+)/i);
     if (m) return m[1];
@@ -64,15 +64,12 @@ SCRAPE_MEMBERS_JS = """
     if (/profile photo|ảnh đại diện|anh dai dien/.test(aria)) return true;
     const text = (a.innerText || a.textContent || '').replace(/\\s+/g, ' ').trim();
     const hasImg = !!a.querySelector('img, image, svg image');
-    // Link chỉ chứa ảnh, không có tên chữ
     if (hasImg && (!text || text.length < 2)) return true;
     return false;
   };
 
   const nameFromAnchor = (a) => {
-    // Ưu tiên text trực tiếp của thẻ a (đúng case "Emily Martin")
     let raw = '';
-    // Child text nodes / span text trước
     const spans = a.querySelectorAll('span');
     for (const sp of spans) {
       const t = (sp.innerText || sp.textContent || '').replace(/\\s+/g, ' ').trim();
@@ -91,13 +88,47 @@ SCRAPE_MEMBERS_JS = """
     return cleanName(raw);
   };
 
+  const nameNearAnchor = (a) => {
+    let name = nameFromAnchor(a);
+    if (name) return name;
+    const row = a.closest('div[role="listitem"]')
+      || a.closest('div[data-visualcompletion="ignore-dynamic-rendering"]')
+      || a.parentElement
+      || a;
+    const links = row.querySelectorAll('a[href*="/user/"], a[href*="profile.php"], a[role="link"]');
+    for (const link of links) {
+      if (isAvatarOnlyLink(link)) continue;
+      name = nameFromAnchor(link);
+      if (name) return name;
+    }
+    return '';
+  };
+
+  const roleFromRow = (row) => {
+    let isAdmin = false;
+    let isMod = false;
+    let role = 'member';
+    if (!row) return { isAdmin, isMod, role };
+    const leafElements = row.querySelectorAll('span, div');
+    for (const el of leafElements) {
+      if (el.children.length !== 0) continue;
+      const leafText = (el.innerText || el.textContent || '').trim().toLowerCase();
+      if (leafText === 'quản trị viên' || leafText === 'admin') {
+        return { isAdmin: true, isMod: false, role: 'admin' };
+      }
+      if (leafText === 'người kiểm duyệt' || leafText === 'moderator') {
+        return { isAdmin: false, isMod: true, role: 'moderator' };
+      }
+    }
+    return { isAdmin, isMod, role };
+  };
+
   const upsertMember = (uid, payload) => {
     const prev = byUid.get(uid);
     if (!prev) {
       byUid.set(uid, payload);
       return;
     }
-    // Giữ tên đẹp hơn (có chữ, không rỗng) và avatar nếu thiếu
     const betterName = payload.name && (!prev.name || payload.name.length > prev.name.length);
     byUid.set(uid, {
       ...prev,
@@ -111,108 +142,294 @@ SCRAPE_MEMBERS_JS = """
     });
   };
 
-  // 1) PRIMARY: đúng pattern /groups/.../user/{uid}/
-  const primaryAnchors = document.querySelectorAll(
-    'a[href*="/groups/"][href*="/user/"], a[role="link"][href*="/groups/"][href*="/user/"]'
-  );
-
-  for (const a of primaryAnchors) {
-    const href = a.getAttribute('href') || a.href || '';
-    const uid = extractUid(href);
-    if (!uid) continue;
-    if (isAvatarOnlyLink(a)) {
-      // Vẫn lấy avatar từ link ảnh nếu đã có bản ghi tên
-      continue;
-    }
-    const name = nameFromAnchor(a);
-    if (!name) continue;
-
-    let row = a.closest('div[role="listitem"]')
-      || a.closest('div[data-visualcompletion="ignore-dynamic-rendering"]')
-      || a.parentElement;
-    let avatarUrl = '';
-    if (row) {
-      const img = row.querySelector('img[src*="scontent"], img[src*="fbcdn"], image');
-      if (img) avatarUrl = img.getAttribute('xlink:href') || img.getAttribute('src') || '';
-    }
-    const rowText = row ? (row.innerText || row.textContent || '') : '';
-    const friendCount = parseFriends(rowText);
-
-    let isAdmin = false;
-    let isMod = false;
-    let role = 'member';
-    if (row) {
-      const leafElements = row.querySelectorAll('span, div');
-      for (const el of leafElements) {
-        if (el.children.length !== 0) continue;
-        const leafText = (el.innerText || el.textContent || '').trim().toLowerCase();
-        if (leafText === 'quản trị viên' || leafText === 'admin') {
-          isAdmin = true;
-          role = 'admin';
-          break;
-        }
-        if (leafText === 'người kiểm duyệt' || leafText === 'moderator') {
-          isMod = true;
-          role = 'moderator';
-          break;
-        }
-      }
-    }
-
-    upsertMember(uid, {
-      uid,
-      name,
-      href: href.startsWith('http') ? href.split('?')[0] : ('https://www.facebook.com' + href.split('?')[0]),
-      avatarUrl,
-      friendCount,
-      role,
-      isAdmin,
-      isMod,
-    });
-  }
-
-  // 2) Bổ sung avatar từ link ảnh cùng /groups/.../user/{uid}/
-  for (const a of primaryAnchors) {
-    const href = a.getAttribute('href') || a.href || '';
-    const uid = extractUid(href);
-    if (!uid || !byUid.has(uid)) continue;
-    const img = a.querySelector('img[src*="scontent"], img[src*="fbcdn"], image');
-    if (!img) continue;
-    const avatarUrl = img.getAttribute('xlink:href') || img.getAttribute('src') || '';
-    if (!avatarUrl) continue;
-    const prev = byUid.get(uid);
-    if (!prev.avatarUrl) {
-      byUid.set(uid, { ...prev, avatarUrl });
-    }
-  }
-
-  // 3) FALLBACK hẹp: /user/{uid}/ ngoài pattern groups (ít dùng trên /members)
-  if (byUid.size === 0) {
-    const fallback = document.querySelectorAll('a[href*="/user/"]');
-    for (const a of fallback) {
+  const collectFromAnchors = (anchors) => {
+    for (const a of anchors) {
       const href = a.getAttribute('href') || a.href || '';
       const uid = extractUid(href);
-      if (!uid || isAvatarOnlyLink(a)) continue;
-      const name = nameFromAnchor(a);
+      if (!uid) continue;
+
+      let row = a.closest('div[role="listitem"]')
+        || a.closest('div[data-visualcompletion="ignore-dynamic-rendering"]')
+        || a.parentElement;
+
+      let avatarUrl = '';
+      if (row) {
+        const img = row.querySelector('img[src*="scontent"], img[src*="fbcdn"], image');
+        if (img) avatarUrl = img.getAttribute('xlink:href') || img.getAttribute('src') || '';
+      }
+      if (!avatarUrl) {
+        const img = a.querySelector('img[src*="scontent"], img[src*="fbcdn"], image');
+        if (img) avatarUrl = img.getAttribute('xlink:href') || img.getAttribute('src') || '';
+      }
+
+      const name = isAvatarOnlyLink(a) ? nameNearAnchor(a) : (nameFromAnchor(a) || nameNearAnchor(a));
       if (!name) continue;
+
+      const rowText = row ? (row.innerText || row.textContent || '') : '';
+      const friendCount = parseFriends(rowText);
+      const roleInfo = roleFromRow(row);
+
       upsertMember(uid, {
         uid,
         name,
         href: href.startsWith('http') ? href.split('?')[0] : ('https://www.facebook.com' + href.split('?')[0]),
-        avatarUrl: '',
-        friendCount: 0,
-        role: 'member',
-        isAdmin: false,
-        isMod: false,
+        avatarUrl,
+        friendCount,
+        role: roleInfo.role,
+        isAdmin: roleInfo.isAdmin,
+        isMod: roleInfo.isMod,
       });
     }
+  };
+
+  const primaryAnchors = Array.from(document.querySelectorAll(
+    'a[href*="/groups/"][href*="/user/"], a[role="link"][href*="/groups/"][href*="/user/"]'
+  ));
+  collectFromAnchors(primaryAnchors);
+
+  // Fallback rộng hơn nếu DOM không dùng /groups/.../user/
+  if (byUid.size === 0) {
+    const fallback = Array.from(document.querySelectorAll(
+      'a[href*="/user/"], a[href*="profile.php?id="], a[role="link"][href*="/user/"], a[role="link"][href*="profile.php?id="]'
+    ));
+    collectFromAnchors(fallback);
   }
 
-  return Array.from(byUid.values());
+  const bodyText = ((document.body && document.body.innerText) || '').slice(0, 800).toLowerCase();
+  const debug = {
+    primaryAnchors: primaryAnchors.length,
+    userAnchors: document.querySelectorAll('a[href*="/user/"]').length,
+    profileAnchors: document.querySelectorAll('a[href*="profile.php?id="]').length,
+    found: byUid.size,
+    url: location.href,
+    blocked: /this page isn't available|trang này hiện không khả dụng|content isn't available|nội dung không khả dụng/.test(bodyText),
+    needJoin: /tham gia nhóm|join group|join this group/.test(bodyText),
+  };
+
+  debug.scrapeVersion = 3;
+  return { members: Array.from(byUid.values()), debug };
 })();
 """
+
+PREPARE_MEMBERS_PAGE_JS = """
+(() => {
+  const clicked = [];
+  const want = /^(everyone|tất cả|tat ca|all members|thành viên|thanh vien|members|people|thành viên mới|thanh vien moi|new members|recently joined|người đóng góp mới)$/i;
+  const nodes = Array.from(document.querySelectorAll('a, div[role="tab"], span, div[role="button"], div[role="link"]'));
+  for (const el of nodes) {
+    const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (!t || t.length > 40) continue;
+    if (!want.test(t)) continue;
+    try { el.click(); clicked.push(t); } catch (e) {}
+    if (clicked.length >= 3) break;
+  }
+  return clicked;
+})();
+"""
+
+SCROLL_MEMBERS_JS = """
+(() => {
+  const cands = Array.from(document.querySelectorAll('div, main, section')).filter((el) => {
+    try {
+      const s = window.getComputedStyle(el);
+      const oy = s.overflowY;
+      return (oy === 'auto' || oy === 'scroll' || oy === 'overlay')
+        && el.scrollHeight > el.clientHeight + 80
+        && el.clientHeight > 180;
+    } catch (e) { return false; }
+  });
+  cands.sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
+  const target = cands[0];
+  if (target) {
+    const before = target.scrollTop;
+    target.scrollTop = before + 1100;
+    return { type: 'container', before, after: target.scrollTop, sh: target.scrollHeight, ch: target.clientHeight };
+  }
+  const beforeY = window.scrollY || window.pageYOffset || 0;
+  window.scrollBy(0, 1100);
+  return { type: 'window', before: beforeY, after: window.scrollY || window.pageYOffset || 0 };
+})();
+"""
+
+DIAG_MEMBERS_DOM_JS = """
+return {
+  scrapeVersion: 4,
+  href: String(window.location.href || ''),
+  title: String(document.title || ''),
+  groupsUser: document.querySelectorAll('a[href*="/groups/"][href*="/user/"]').length,
+  user: document.querySelectorAll('a[href*="/user/"]').length,
+  profile: document.querySelectorAll('a[href*="profile.php?id="]').length,
+  bodyLen: document.body ? (document.body.innerText || '').length : -1
+};
+"""
+
+
 def _now_str() -> str:
     return time.strftime("%H:%M:%S")
+
+
+def _diag_members_page(driver) -> dict[str, Any]:
+    """Chẩn đoán trang members bằng Selenium Python (không phụ thuộc IIFE JS)."""
+    debug: dict[str, Any] = {
+        "scrapeVersion": 4,
+        "href": "",
+        "title": "",
+        "groupsUser": 0,
+        "user": 0,
+        "profile": 0,
+        "needJoin": False,
+        "blocked": False,
+        "sample": "",
+        "sourceLen": 0,
+        "jsError": "",
+    }
+    try:
+        debug["href"] = str(getattr(driver, "current_url", "") or "")
+        debug["title"] = str(getattr(driver, "title", "") or "")
+    except Exception as exc:
+        debug["jsError"] = f"url/title: {exc}"
+
+    html = ""
+    try:
+        html = driver.page_source or ""
+        debug["sourceLen"] = len(html)
+    except Exception as exc:
+        debug["jsError"] = f"page_source: {exc}"
+
+    try:
+        js_diag = driver.execute_script(DIAG_MEMBERS_DOM_JS)
+        if isinstance(js_diag, dict):
+            for key in ("scrapeVersion", "href", "title", "groupsUser", "user", "profile"):
+                if key in js_diag and js_diag[key] not in (None, ""):
+                    debug[key] = js_diag[key]
+        elif js_diag is None:
+            debug["jsError"] = (debug.get("jsError") or "") + " | execute_script returned None"
+    except Exception as exc:
+        debug["jsError"] = str(exc)[:200]
+
+    if html:
+        debug["groupsUser"] = max(int(debug.get("groupsUser") or 0), len(re.findall(r"/groups/[^\"/'<>\s]+/user/\d+", html, flags=re.I)))
+        debug["user"] = max(int(debug.get("user") or 0), len(re.findall(r"/user/\d+", html, flags=re.I)))
+        debug["profile"] = max(int(debug.get("profile") or 0), len(re.findall(r"profile\.php\?id=\d+", html, flags=re.I)))
+
+    sample = ""
+    try:
+        sample = driver.execute_script("return (document.body && document.body.innerText || '').slice(0, 240);") or ""
+    except Exception:
+        sample = re.sub(r"\s+", " ", html[:2500])[:240]
+    debug["sample"] = str(sample)
+    low = str(sample).lower()
+    debug["needJoin"] = bool(re.search(r"tham gia nhóm|join group|join this group", low, flags=re.I))
+    debug["blocked"] = bool(re.search(r"isn't available|không khả dụng|not available|content isn't available", low, flags=re.I))
+    return debug
+
+
+def _scrape_members_via_selenium(driver) -> list[dict[str, Any]]:
+    """Bóc thành viên bằng find_elements + fallback regex HTML."""
+    from selenium.webdriver.common.by import By
+
+    by_uid: dict[str, dict[str, Any]] = {}
+
+    def _clean_name(raw: str) -> str:
+        n = re.sub(r"\s+", " ", (raw or "")).strip().split("\n")[0].strip()
+        n = re.sub(r"^(Profile photo of|Ảnh đại diện của|Anh dai dien cua)\s*", "", n, flags=re.I)
+        if not n or len(n) < 2 or len(n) > 80:
+            return ""
+        if re.match(
+            r"^(join|tham gia|joined|đang chờ|xem tất cả|see all|quản trị viên|admin|người kiểm duyệt|moderator|thành viên|members?|bạn bè|friends)$",
+            n,
+            flags=re.I,
+        ):
+            return ""
+        return n
+
+    def _uid_from_href(href: str) -> str:
+        if not href:
+            return ""
+        for pat in (
+            r"/groups/[^/]+/user/(\d+)",
+            r"/user/(\d+)",
+            r"profile\.php\?id=(\d+)",
+            r"[?&]id=(\d+)",
+        ):
+            m = re.search(pat, href, flags=re.I)
+            if m:
+                return m.group(1)
+        return ""
+
+    anchors = []
+    try:
+        anchors = driver.find_elements(By.CSS_SELECTOR, 'a[href*="/user/"], a[href*="profile.php?id="]')
+    except Exception:
+        anchors = []
+
+    for a in anchors:
+        try:
+            href = a.get_attribute("href") or ""
+            uid = _uid_from_href(href)
+            if not uid or uid in by_uid:
+                continue
+            name = _clean_name(a.text or "")
+            if not name:
+                aria = a.get_attribute("aria-label") or ""
+                if not re.search(r"profile photo|ảnh đại diện", aria, flags=re.I):
+                    name = _clean_name(aria)
+            if not name:
+                # Avatar-only: tìm tên ở anchor kế bên cùng hàng
+                try:
+                    parent = a.find_element(By.XPATH, "./ancestor::div[contains(@data-visualcompletion,'ignore-dynamic') or @role='listitem'][1]")
+                    for link in parent.find_elements(By.CSS_SELECTOR, 'a[href*="/user/"], a[href*="profile.php?id="]'):
+                        name = _clean_name(link.text or "")
+                        if name:
+                            break
+                except Exception:
+                    pass
+            if not name:
+                continue
+            by_uid[uid] = {
+                "uid": uid,
+                "name": name,
+                "href": href.split("?")[0],
+                "avatarUrl": "",
+                "friendCount": 0,
+                "role": "member",
+                "isAdmin": False,
+                "isMod": False,
+            }
+        except Exception:
+            continue
+
+    # Fallback: có UID trong HTML nhưng Selenium không lấy được text
+    if not by_uid:
+        html = ""
+        try:
+            html = driver.page_source or ""
+        except Exception:
+            html = ""
+        for m in re.finditer(r'href="(https?:[^"]*?/groups/[^"]+?/user/(\d+)/?[^"]*)"', html, flags=re.I):
+            href, uid = m.group(1), m.group(2)
+            if uid in by_uid:
+                continue
+            # Lấy đoạn HTML xung quanh để đoán tên
+            start = max(0, m.start() - 80)
+            end = min(len(html), m.end() + 220)
+            chunk = re.sub(r"<[^>]+>", " ", html[start:end])
+            chunk = re.sub(r"\s+", " ", chunk).strip()
+            name = _clean_name(chunk)
+            if not name:
+                name = f"UID {uid}"
+            by_uid[uid] = {
+                "uid": uid,
+                "name": name,
+                "href": href.split("?")[0],
+                "avatarUrl": "",
+                "friendCount": 0,
+                "role": "member",
+                "isAdmin": False,
+                "isMod": False,
+            }
+
+    return list(by_uid.values())
 
 
 def _append_member_log(job_id: str, message: str, level: str = "info", thread: str = "Thread-01") -> None:
@@ -684,13 +901,13 @@ def _run_member_scan_worker(job_id: str) -> None:
 
             try:
                 driver.get(target_url)
-                human_sleep(2.5, 4.0)
+                human_sleep(3.5, 5.0)
             except Exception as exc:
                 _append_member_log(job_id, f"Lỗi truy cập {target_url}: {exc}", "warn")
                 try:
                     target_url = f"{base_group_url}/members/"
                     driver.get(target_url)
-                    human_sleep(2.5, 4.0)
+                    human_sleep(3.5, 5.0)
                 except Exception:
                     continue
 
@@ -706,6 +923,78 @@ def _run_member_scan_worker(job_id: str) -> None:
                     continue
             except Exception:
                 pass
+
+            # Thử mở tab Everyone / Thành viên mới nếu Facebook hiện filter
+            try:
+                clicked_tabs = driver.execute_script(PREPARE_MEMBERS_PAGE_JS) or []
+                if clicked_tabs:
+                    _append_member_log(
+                        job_id,
+                        f"Đã chuyển tab danh sách thành viên: {', '.join(str(x) for x in clicked_tabs)}",
+                        "info",
+                    )
+                    human_sleep(2.0, 3.0)
+            except Exception:
+                pass
+
+            # Chẩn đoán DOM bằng Selenium Python + JS đơn giản
+            try:
+                diag = _diag_members_page(driver)
+                _append_member_log(
+                    job_id,
+                    (
+                        "DOM members debug: "
+                        f"v={diag.get('scrapeVersion', '?')}, "
+                        f"primary={diag.get('groupsUser', '?')}, "
+                        f"user={diag.get('user', '?')}, "
+                        f"profile={diag.get('profile', '?')}, "
+                        f"needJoin={diag.get('needJoin', '?')}, "
+                        f"blocked={diag.get('blocked', '?')}, "
+                        f"src={diag.get('sourceLen', '?')}, "
+                        f"url={diag.get('href', '')}"
+                    ),
+                    "warn" if not diag.get("groupsUser") and not diag.get("user") else "info",
+                )
+                if diag.get("jsError"):
+                    _append_member_log(job_id, f"JS diag note: {diag.get('jsError')}", "warn")
+                if diag.get("sample"):
+                    _append_member_log(job_id, f"DOM sample: {str(diag.get('sample'))[:180]}", "info")
+                if diag.get("needJoin"):
+                    _append_member_log(
+                        job_id,
+                        f"⚠️ Nick có thể chưa là thành viên nhóm «{group_name}» nên Facebook ẩn danh sách thành viên.",
+                        "warn",
+                    )
+                # Nếu /members trống, thử /people
+                if not diag.get("groupsUser") and not diag.get("user"):
+                    alt_url = f"{base_group_url}/people"
+                    _append_member_log(job_id, f"Không thấy link thành viên trên /members, thử {alt_url} ...", "warn")
+                    try:
+                        driver.get(alt_url)
+                        human_sleep(3.0, 4.5)
+                        try:
+                            driver.execute_script(PREPARE_MEMBERS_PAGE_JS)
+                        except Exception:
+                            pass
+                        human_sleep(1.5, 2.5)
+                        diag2 = _diag_members_page(driver)
+                        _append_member_log(
+                            job_id,
+                            (
+                                "DOM people debug: "
+                                f"primary={diag2.get('groupsUser', '?')}, "
+                                f"user={diag2.get('user', '?')}, "
+                                f"src={diag2.get('sourceLen', '?')}, "
+                                f"url={diag2.get('href', '')}"
+                            ),
+                            "warn" if not diag2.get("groupsUser") and not diag2.get("user") else "info",
+                        )
+                        if diag2.get("sample"):
+                            _append_member_log(job_id, f"DOM people sample: {str(diag2.get('sample'))[:180]}", "info")
+                    except Exception as exc:
+                        _append_member_log(job_id, f"Lỗi mở /people: {exc}", "warn")
+            except Exception as exc:
+                _append_member_log(job_id, f"Lỗi chẩn đoán DOM: {exc}", "warn")
 
             # Vòng lặp Infinite Scroll để bóc tách thành viên
             group_members: list[dict[str, Any]] = []
@@ -735,16 +1024,36 @@ def _run_member_scan_worker(job_id: str) -> None:
                     )
                     break
 
+                raw_items: list[dict[str, Any]] = []
                 try:
-                    raw_items = driver.execute_script(SCRAPE_MEMBERS_JS) or []
+                    raw_items = _scrape_members_via_selenium(driver)
                 except Exception as exc:
-                    _append_member_log(job_id, f"Lỗi đọc DOM thành viên: {exc}", "warn")
+                    _append_member_log(job_id, f"Lỗi Selenium scrape thành viên: {exc}", "warn")
                     raw_items = []
+
+                # Bổ sung bằng JS scrape nếu Selenium chưa ra kết quả
+                if not raw_items:
+                    try:
+                        scrape_payload = driver.execute_script(SCRAPE_MEMBERS_JS)
+                    except Exception as exc:
+                        _append_member_log(job_id, f"Lỗi đọc DOM thành viên (JS): {exc}", "warn")
+                        scrape_payload = None
+
+                    if isinstance(scrape_payload, list):
+                        raw_items = scrape_payload
+                    elif isinstance(scrape_payload, dict):
+                        raw_items = scrape_payload.get("members") or []
+                    else:
+                        raw_items = []
 
                 new_in_round = 0
                 for item in raw_items:
+                    if not isinstance(item, dict):
+                        continue
                     m_uid = str(item.get("uid") or "").strip()
                     m_name = str(item.get("name") or "").strip()
+                    if not m_uid or not m_name:
+                        continue
                     is_admin_or_mod = item.get("isAdmin") or item.get("isMod")
 
                     # Lọc Admin / Mod nếu bật cấu hình
@@ -825,12 +1134,12 @@ def _run_member_scan_worker(job_id: str) -> None:
 
                 prev_found_count = len(group_members)
 
-                # Cuộn trang mượt mà
+                # Cuộn container danh sách (không chỉ window) để FB lazy-load thành viên
                 try:
-                    driver.execute_script("window.scrollBy({ top: 900, behavior: 'smooth' });")
+                    driver.execute_script(SCROLL_MEMBERS_JS)
                 except Exception:
                     try:
-                        driver.execute_script("window.scrollBy(0, 900);")
+                        driver.execute_script("window.scrollBy(0, 1100);")
                     except Exception:
                         pass
 

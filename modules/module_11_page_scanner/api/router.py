@@ -30,6 +30,7 @@ from ..browser_session import (
     mark_stale_running_sessions,
 )
 from ..followers_scan import start_follower_scan_background
+from ..page_detail_scan import start_page_detail_background
 from ..posts_scan import start_post_scan_background
 from ..scanner import (
     append_session_log,
@@ -111,7 +112,7 @@ def _sweep_orphan_sessions(owner: str) -> List[int]:
         return []
 
 
-ACTIVE_JOB_TYPES = ("DISCOVERY", "FOLLOW", "POST_SCAN")
+ACTIVE_JOB_TYPES = ("DISCOVERY", "DETAIL", "FOLLOW", "POST_SCAN")
 
 
 def _is_orphan_candidate(session_id: int, status: Optional[str]) -> bool:
@@ -176,6 +177,27 @@ class FollowerSessionInput(BaseModel):
     page_delay_min_s: Optional[float] = Field(None, ge=0, le=180, description="Giãn cách giữa 2 Page — từ (giây)")
     page_delay_max_s: Optional[float] = Field(None, ge=0, le=180, description="Giãn cách giữa 2 Page — đến (giây)")
     scroll_delay_s: float = Field(1.5, ge=0.2, le=30, description="Delay giữa các lần scroll dialog")
+    headless: bool = Field(False)
+    allow_direct_fallback: bool = Field(True)
+
+
+class DetailPageRef(BaseModel):
+    page_key: str = Field(..., min_length=1, max_length=255)
+    page_url: Optional[str] = Field(None, max_length=2000)
+
+
+class DetailSessionInput(BaseModel):
+    pages: List[DetailPageRef] = Field(..., min_length=1, max_length=5000, description="Page đã chuẩn hoá từ /source/parse|upload")
+    source_type: str = Field("PARSE", description="PARSE (nhập link) | UPLOAD (tải tệp)")
+    source_label: Optional[str] = Field(None, max_length=200, description="Nhãn phiên, vd tên file")
+    account_uids: Optional[List[str]] = Field(None, description="Nhiều acc theo thứ tự xoay vòng")
+    rotate_every: int = Field(0, ge=0, le=5000, description="Đổi acc sau N Page / tài khoản (0 = không)")
+    rotate_on_checkpoint: bool = Field(True, description="Gặp checkpoint → đổi acc và quét lại Page")
+    target_pages: Optional[int] = Field(None, ge=1, le=5000, description="Dừng khi đã lưu đủ N page")
+    min_followers: int = Field(0, ge=0, description="Bỏ qua page có followers nhỏ hơn ngưỡng (0 = không lọc)")
+    page_delay_min_s: Optional[float] = Field(None, ge=0, le=180)
+    page_delay_max_s: Optional[float] = Field(None, ge=0, le=180)
+    keep_browser: bool = Field(False)
     headless: bool = Field(False)
     allow_direct_fallback: bool = Field(True)
 
@@ -406,6 +428,56 @@ async def parse_pages_text(item: ParseInput):
         return parsed
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Lỗi đọc dữ liệu Page: {exc}")
+
+
+@router.post("/details/sessions")
+async def create_detail_scan_session(item: DetailSessionInput):
+    """
+    POST /api/page-scanner/details/sessions
+    Quét thông tin chi tiết (SĐT / Email / Website / Địa chỉ / followers) cho danh sách Page
+    từ Nhập link / Tải tệp. Chạy Selenium nền; poll GET /sessions/{id}, kết quả GET /pages?session_id=.
+    """
+    owner = _get_owner()
+    try:
+        session_id, total = await asyncio.to_thread(
+            start_page_detail_background,
+            pages=[p.model_dump() for p in item.pages],
+            owner_key=owner,
+            account_uids=item.account_uids,
+            source_type=item.source_type,
+            source_label=item.source_label,
+            target_pages=item.target_pages,
+            min_followers=item.min_followers,
+            rotate_every=item.rotate_every,
+            rotate_on_checkpoint=item.rotate_on_checkpoint,
+            page_delay_min_s=item.page_delay_min_s,
+            page_delay_max_s=item.page_delay_max_s,
+            keep_browser=item.keep_browser,
+            headless=item.headless,
+            allow_direct_fallback=item.allow_direct_fallback,
+        )
+    except AccountBusyError as busy:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "BUSY",
+                "message": str(busy),
+                "active_session_id": busy.active_session_id,
+                "job_type": busy.job_type,
+                "account_uid": busy.account_uid,
+            },
+        )
+    except ValueError as val_err:
+        raise HTTPException(status_code=422, detail=str(val_err))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Lỗi tạo phiên quét thông tin page: {exc}")
+    return {
+        "session_id": session_id,
+        "job_type": "DETAIL",
+        "status": "RUNNING",
+        "total_pages": total,
+        "message": f"Phiên quét thông tin #{session_id} đã khởi động ({total} page)",
+    }
 
 
 @router.post("/source/upload")

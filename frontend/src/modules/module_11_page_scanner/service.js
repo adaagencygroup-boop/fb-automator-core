@@ -19,6 +19,11 @@ export async function parsePageLinks(payload) {
   return api.post("/api/page-scanner/source/parse", payload);
 }
 
+// ── DETAIL: quét SĐT / Email / Website / Địa chỉ cho danh sách Page (Nhập link / Tải tệp) ──
+export async function createDetailSession(payload) {
+  return api.post("/api/page-scanner/details/sessions", payload);
+}
+
 // ── SOURCE: UPLOAD FILE .txt/.csv ──
 // Mặc định CHỈ xem trước / kiểm tra; truyền save_to_db: true khi người dùng bấm "Bắt đầu".
 export async function uploadPageFile(formData, params = { save_to_db: false, filter_existing: true }) {

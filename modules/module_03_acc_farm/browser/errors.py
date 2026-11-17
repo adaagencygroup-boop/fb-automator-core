@@ -39,8 +39,17 @@ _PAGE_ERRORS = (
     JavascriptException, MoveTargetOutOfBoundsException, NoSuchElementException, NoSuchFrameException,
     StaleElementReferenceException,
 )
-_BROWSER_GONE_TEXTS = ("chrome not reachable", "disconnected", "session deleted", "tab crashed", "target closed",
-                       "not connected to devtools")
+_BROWSER_GONE_TEXTS = (
+    "chrome not reachable",
+    "disconnected",
+    "session deleted",
+    "tab crashed",
+    "target closed",
+    "target window already closed",
+    "no such window",
+    "web view not found",
+    "not connected to devtools",
+)
 
 
 def _is_hang(e: BaseException) -> bool:
