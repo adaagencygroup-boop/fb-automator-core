@@ -28,6 +28,7 @@ if command -v ufw >/dev/null 2>&1; then
   ufw allow 80/tcp >/dev/null 2>&1 || true
   ufw allow 443/tcp >/dev/null 2>&1 || true
   ufw allow 9000/tcp >/dev/null 2>&1 || true
+  ufw allow 5432/tcp >/dev/null 2>&1 || true
 fi
 if ! command -v docker >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com/ | sh
