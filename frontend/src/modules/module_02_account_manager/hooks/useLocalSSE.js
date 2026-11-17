@@ -51,6 +51,12 @@ export function translateLogMessage(rawMsg) {
   if (/rate limit/i.test(rawMsg) || /spam block/i.test(rawMsg)) {
     return "⚠️ Facebook hạn chế thao tác tạm thời do tần suất nhanh. Vui lòng tăng độ trễ!";
   }
+  if (/Read timed out/i.test(rawMsg) || /Connection refused/i.test(rawMsg) || /Max retries exceeded/i.test(rawMsg)) {
+    return "⚠️ Kết nối tới trình duyệt hoặc máy chủ bị gián đoạn / quá thời gian phản hồi.";
+  }
+  if (rawMsg.includes("WebDriverException")) {
+    return "⚠️ Trình duyệt Chrome gặp sự cố hoặc đã bị đóng đột ngột.";
+  }
 
   return rawMsg;
 }
