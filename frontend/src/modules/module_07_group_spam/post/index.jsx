@@ -193,16 +193,20 @@ export default function GroupPostModule({ actionType = "POST" }) {
   // Cấu hình chạy lại được ưu tiên; nếu không có thì khôi phục bản nháp khi quay lại tab.
   useEffect(() => {
     let cancelled = false;
+    let rerunCleanupTimer = null;
 
     const restoreDraft = async () => {
       try {
         const stored = sessionStorage.getItem("fb_rerun_campaign");
         if (stored) {
-          // Xóa ngay khỏi sessionStorage sau khi đọc để chỉ nạp một lần khi bấm nút Chạy lại.
-          // Khi người dùng chuyển sang module khác rồi quay lại, sẽ không còn dữ liệu cũ nữa.
-          sessionStorage.removeItem("fb_rerun_campaign");
           const data = JSON.parse(stored);
-          if (data?.action_type === actionType) {
+          if (String(data?.action_type || "").toUpperCase() === actionType) {
+            // Trì hoãn xóa khỏi sessionStorage để không bị mất khi React StrictMode chạy effect 2 lần,
+            // và để getGroupSettings() cùng nhận biết đang ở chế độ Chạy lại.
+            rerunCleanupTimer = window.setTimeout(() => {
+              sessionStorage.removeItem("fb_rerun_campaign");
+            }, 1000);
+
             if (data.campaign_id) setCampaignId(data.campaign_id);
             if (data.name) setCampaignName(data.name);
             if (data.description) setCampaignDescription(data.description);
@@ -214,9 +218,13 @@ export default function GroupPostModule({ actionType = "POST" }) {
               setSelectedAccountKeys(cfg.account_uids);
             }
             if (cfg.groups?.length) {
-              setGroupSource("custom");
-              setCustomGroups(cfg.groups);
-              setSelectedGroupKeys(cfg.groups.map((g) => g.key || g.url || g.id));
+              const normalizedGroups = cfg.groups.map((g, index) => ({
+                ...g,
+                key: g.key || (g.uid ? `group_${g.uid}` : null) || g.url || g.id || `group_${index}`,
+              }));
+              setGroupSource("search");
+              setCustomGroups(normalizedGroups);
+              setSelectedGroupKeys(normalizedGroups.map((g) => g.key));
             }
             if (cfg.posts?.length) {
               setPosts(cfg.posts);
@@ -233,6 +241,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
               if (cfg.settings.rest_minutes !== undefined) setRestMinutes(String(cfg.settings.rest_minutes));
               if (cfg.settings.delay_min !== undefined) setDelayMin(String(cfg.settings.delay_min));
               if (cfg.settings.delay_max !== undefined) setDelayMax(String(cfg.settings.delay_max));
+              if (cfg.settings.delay_unit !== undefined) setDelayUnit(String(cfg.settings.delay_unit));
               if (cfg.settings.min_media !== undefined) setMinMedia(String(cfg.settings.min_media));
               if (cfg.settings.max_media !== undefined) setMaxMedia(String(cfg.settings.max_media));
             }
@@ -295,7 +304,10 @@ export default function GroupPostModule({ actionType = "POST" }) {
     };
 
     restoreDraft();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (rerunCleanupTimer) clearTimeout(rerunCleanupTimer);
+    };
   }, [actionLabel, actionType, draftScope, isComment, selectApi]);
 
   useEffect(() => {
@@ -421,7 +433,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
       .then((data) => {
         if (cancelled) return;
         const rerun = JSON.parse(sessionStorage.getItem("fb_rerun_campaign") || "null");
-        if (rerun?.action_type === actionType || readGroupPostDraft(draftScope)) return;
+        if (String(rerun?.action_type || "").toUpperCase() === actionType || readGroupPostDraft(draftScope)) return;
         setThreads(String(data.threads));
         setRestMinutes(String(data.rest_minutes));
         setMaxPosts(String(data.max_posts));
