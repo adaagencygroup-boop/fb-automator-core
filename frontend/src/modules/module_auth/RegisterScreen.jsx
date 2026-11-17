@@ -8,6 +8,7 @@ import { RegisterForm } from "./components/RegisterForm";
 import { AuthFeedback } from "./components/AuthFeedback";
 import { validateRegistrationField } from "./registrationValidation";
 import { useMachineHwid } from "./useMachineHwid";
+import { clearRegistrationToken } from "@/services/authTokens.mjs";
 
 export default function RegisterScreen({ onLogin, onRegistered }) {
   const [fields, setFields] = useState({ username: "", password: "", confirmPassword: "", contactInfo: "", agreed: false });
@@ -81,7 +82,14 @@ export default function RegisterScreen({ onLogin, onRegistered }) {
       }
       const result = await api.post("/api/v1/auth/register", { username: fields.username, password: fields.password, contact_info: fields.contactInfo, hwid: currentHwid });
       if (!alive.current) return;
-      if (!result.user_id || result.status !== "pending") throw new Error("Đăng ký không thành công. Vui lòng thử lại sau.");
+      if (!result.user_id || !["pending", "approved"].includes(result.status)) throw new Error("Đăng ký không thành công. Vui lòng thử lại sau.");
+      if (result.status === "approved") {
+        await api.post("/api/v1/auth/claim-approval", { registration_token: result.registration_token, remember_me: true });
+        clearRegistrationToken();
+        localStorage.removeItem("pending_username");
+        await onRegistered(fields.username, "approved");
+        return;
+      }
       localStorage.setItem("pending_username", fields.username);
       setFeedback({ success: true, title: "ĐĂNG KÝ THÀNH CÔNG", message: "Đăng ký tài khoản thành công! Đang chuyển hướng đến trang chờ kích hoạt..." });
       await new Promise((resolve) => setTimeout(resolve, 1000));

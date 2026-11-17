@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from datetime import timedelta
 from unittest.mock import patch
+from urllib.parse import unquote
+import anyio
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from auth_test_support import load_auth_modules
@@ -16,7 +18,7 @@ class ExpiredDashboardTests(unittest.TestCase):
         self.db.reset_mock(return_value=True, side_effect=True)
         source = ast.parse((Path(__file__).parents[1] / "engine.py").read_text(encoding="utf8"))
         middleware = next(node for node in source.body if isinstance(node, ast.ClassDef) and node.name == "LicenseMiddleware")
-        namespace = {"json": json, "HTTPException": HTTPException, "_PUBLIC_API": set(), "assert_request_module_access": self.r.assert_request_module_access}
+        namespace = {"json": json, "unquote": unquote, "anyio": anyio, "HTTPException": HTTPException, "_PUBLIC_API": set(), "assert_request_module_access": self.r.assert_request_module_access}
         exec(compile(ast.Module(body=[middleware], type_ignores=[]), "engine.py", "exec"), namespace)
         app = FastAPI()
         app.add_middleware(namespace["LicenseMiddleware"])

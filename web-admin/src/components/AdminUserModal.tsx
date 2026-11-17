@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { User, api } from "@/lib/api";
+import { ACCOUNT_FEATURE, withAccountLicense, featureChanges } from "@/lib/account-license";
 import { isValidPhoneNumber, isValidPassword, validatePassword } from "@/lib/validation";
 import { Eye, EyeOff, Phone, Monitor, Clock, Plus, Check, AlertCircle } from "lucide-react";
 import "./AdminUserModal.css";
@@ -51,6 +52,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
 
   // Module state list
   const [modules, setModules] = useState<ModuleOption[]>([]);
+  const displayModules = withAccountLicense(modules, user);
   const [bulkDaysInput, setBulkDaysInput] = useState<string>("30");
 
   const generateRandomPassword = () => {
@@ -71,10 +73,8 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
       setShowPassword(false);
       setBulkDaysInput("30");
 
-      // Default checked modules matching the Figma design screenshot:
-      // Active: 1, 2, 4, 6, 8, 9, 11 (all 30 days)
-      // Inactive: 3, 5, 7, 10 (0 days)
-      const defaultActiveIds = [1, 2, 4, 6, 8, 9, 11];
+      // New users start with the automatic free module only.
+      const defaultActiveIds = [1];
 
       if (user) {
         setUsername(user.username);
@@ -86,8 +86,8 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
         setModules(
           DEFAULT_MODULES.map((m) => ({
             ...m,
-            enabled: true,
-            days: userDays,
+            enabled: user.features?.find((feature) => feature.key === m.key)?.is_enabled ?? m.key === ACCOUNT_FEATURE,
+            days: user.features?.find((feature) => feature.key === m.key)?.days_remaining ?? (m.key === ACCOUNT_FEATURE ? userDays : 0),
           }))
         );
       } else {
@@ -117,7 +117,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
     const fallbackDays = !isNaN(parsedBulk) && parsedBulk > 0 ? parsedBulk : 30;
     setModules((prev) =>
       prev.map((m) => {
-        if (m.id === id) {
+        if (m.id === id && m.key !== ACCOUNT_FEATURE) {
           const nextEnabled = !m.enabled;
           return {
             ...m,
@@ -134,7 +134,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
     const num = parseInt(val, 10);
     setModules((prev) =>
       prev.map((m) => {
-        if (m.id === id) {
+        if (m.id === id && m.key !== ACCOUNT_FEATURE) {
           return {
             ...m,
             days: isNaN(num) ? 0 : Math.max(0, num),
@@ -156,7 +156,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
   const handleSelectAll = () => {
     const parsedBulk = parseInt(bulkDaysInput, 10);
     const targetDays = !isNaN(parsedBulk) && parsedBulk > 0 ? parsedBulk : 30;
-    const allChecked = modules.every((m) => m.enabled);
+    const allChecked = displayModules.every((m) => m.enabled);
     setModules((prev) =>
       prev.map((m) => ({
         ...m,
@@ -217,14 +217,10 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
     }
 
     // Determine max active days from modules
-    const activeModules = modules.filter((m) => m.enabled && m.days > 0);
+    const activeModules = displayModules.filter((m) => m.enabled && m.days > 0);
     const maxDays = activeModules.length > 0 ? Math.max(...activeModules.map((m) => m.days)) : 30;
 
-    const featurePayload = modules.map((m) => ({
-      key: m.key,
-      days: m.days,
-      enabled: m.enabled,
-    }));
+    const featurePayload = featureChanges(displayModules, user);
 
     setLoading(true);
 
@@ -470,14 +466,15 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
                   onClick={handleSelectAll}
                   className="aum-select-all-btn"
                 >
-                  {modules.every((m) => m.enabled) ? "Bỏ chọn tất cả" : "Chọn tất cả"}
+                  {displayModules.every((m) => m.enabled) ? "Bỏ chọn tất cả" : "Chọn tất cả"}
                 </button>
               </div>
             </div>
 
             {/* Modules 2-column Grid */}
+            <p className="text-xs text-slate-500">Quản lý tài khoản Facebook tự động có 30 ngày miễn phí hoặc hạn module dài nhất cộng thêm 30 ngày.</p>
             <div className="aum-modules-grid">
-              {modules.map((m) => (
+              {displayModules.map((m) => (
                 <div
                   key={m.id}
                   className={`aum-module-card ${
@@ -491,6 +488,7 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
                     <input
                       type="checkbox"
                       checked={m.enabled}
+                      disabled={m.key === ACCOUNT_FEATURE}
                       onChange={() => {}}
                       className="aum-module-checkbox"
                     />
@@ -501,7 +499,9 @@ export default function AdminUserModal({ user, isOpen, onClose, onSuccess }: Pro
                     <input
                       type="number"
                       min={0}
-                      disabled={!m.enabled}
+                      disabled={!m.enabled || m.key === ACCOUNT_FEATURE}
+                      aria-label={`Số ngày ${m.name}`}
+                      title={m.key === ACCOUNT_FEATURE ? "Tự động bằng hạn module dài nhất cộng 30 ngày" : undefined}
                       value={m.days}
                       onChange={(e) => handleModuleDaysChange(m.id, e.target.value)}
                       className={`aum-module-days-input ${

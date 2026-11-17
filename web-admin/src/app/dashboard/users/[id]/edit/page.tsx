@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, User, ActivityLog, getCurrentAdminUser } from "@/lib/api";
+import { ACCOUNT_FEATURE, withAccountLicense, featureChanges } from "@/lib/account-license";
 import { LogoutNoticeModal } from "@/components/LogoutNoticeModal";
 import { isValidPhoneNumber, isValidPassword, validatePassword } from "@/lib/validation";
 import { RotateCw, Copy, Check, Eye, EyeOff, Ban, Trash2 } from "lucide-react";
@@ -19,16 +20,16 @@ interface FeatureConfig {
 
 const DEFAULT_FEATURES: FeatureConfig[] = [
   { key: "fb_account", name: "1. Quản lý tài khoản Facebook", checked: true, days: 30 },
-  { key: "post_interact", name: "2. Đăng bài và tương tác tài khoản", checked: true, days: 30 },
+  { key: "post_interact", name: "2. Đăng bài và tương tác tài khoản", checked: false, days: 0 },
   { key: "create_fanpage", name: "3. Tạo Fanpage hàng loạt", checked: false, days: 0 },
-  { key: "manage_fanpage", name: "4. Quản lý Fanpage", checked: true, days: 30 },
+  { key: "manage_fanpage", name: "4. Quản lý Fanpage", checked: false, days: 0 },
   { key: "chat_fanpage", name: "5. Quản lý Chat Page", checked: false, days: 0 },
-  { key: "spam_group", name: "6. Spam Group Hội Nhóm", checked: true, days: 30 },
+  { key: "spam_group", name: "6. Spam Group Hội Nhóm", checked: false, days: 0 },
   { key: "seeding", name: "7. Seeding Bài & Page", checked: false, days: 0 },
-  { key: "scan_group", name: "8. Quét nhóm", checked: true, days: 30 },
-  { key: "scan_page", name: "9. Quét page", checked: true, days: 30 },
+  { key: "scan_group", name: "8. Quét nhóm", checked: false, days: 0 },
+  { key: "scan_page", name: "9. Quét page", checked: false, days: 0 },
   { key: "scan_post", name: "10. Quét bài viết", checked: false, days: 0 },
-  { key: "scan_profile", name: "11. Quét profile", checked: true, days: 30 },
+  { key: "scan_profile", name: "11. Quét profile", checked: false, days: 0 },
 ];
 
 export default function UserEditPage() {
@@ -54,6 +55,8 @@ export default function UserEditPage() {
 
   // Feature states
   const [features, setFeatures] = useState<FeatureConfig[]>(DEFAULT_FEATURES);
+  const displayFeatures = withAccountLicense(features.map((f) => ({ ...f, enabled: f.checked })), user)
+    .map((f) => ({ ...f, checked: f.enabled }));
 
   // Self username rename modal notice
   const [logoutNotice, setLogoutNotice] = useState<{ isOpen: boolean; newUsername: string }>({
@@ -84,11 +87,11 @@ export default function UserEditPage() {
                   ...df,
                   checked: Boolean(f.is_enabled),
                   days: f.is_enabled
-                    ? (f.days_remaining > 0 ? f.days_remaining : f.days_granted || 30)
+                    ? f.days_remaining
                     : 0,
                 };
               }
-              return df;
+              return { ...df, checked: df.key === ACCOUNT_FEATURE, days: 0 };
             })
           );
         }
@@ -179,7 +182,7 @@ export default function UserEditPage() {
   const handleToggleFeature = (index: number) => {
     setFeatures((prev) =>
       prev.map((f, i) => {
-        if (i !== index) return f;
+        if (i !== index || f.key === ACCOUNT_FEATURE) return f;
         const nextChecked = !f.checked;
         return {
           ...f,
@@ -194,7 +197,7 @@ export default function UserEditPage() {
     const num = parseInt(val, 10);
     setFeatures((prev) =>
       prev.map((f, i) => {
-        if (i !== index) return f;
+        if (i !== index || f.key === ACCOUNT_FEATURE) return f;
         const days = isNaN(num) ? 0 : Math.max(0, num);
         return {
           ...f,
@@ -235,7 +238,7 @@ export default function UserEditPage() {
 
     setActionLoading(true);
     try {
-      const maxDays = Math.max(...features.filter((f) => f.checked).map((f) => f.days), 0);
+      const maxDays = Math.max(...displayFeatures.filter((f) => f.checked).map((f) => f.days), 0);
 
       const payload: {
         username?: string;
@@ -247,11 +250,7 @@ export default function UserEditPage() {
       } = {
         contact_info: contactInfo,
         status: status,
-        features: features.map((f) => ({
-          key: f.key,
-          days: f.days,
-          enabled: f.checked,
-        })),
+        features: featureChanges(displayFeatures, user),
       };
 
       if (maxDays > 0) {
@@ -563,8 +562,9 @@ export default function UserEditPage() {
             <h2 className="ue-features-title">TÍNH NĂNG ĐÃ CHỌN</h2>
           </div>
 
+          <p className="text-xs text-slate-500 mb-3">Quản lý tài khoản Facebook tự động có 30 ngày miễn phí hoặc hạn module dài nhất cộng thêm 30 ngày.</p>
           <div className="ue-features-grid">
-            {features.map((feature, idx) => (
+            {displayFeatures.map((feature, idx) => (
               <div
                 key={feature.key}
                 className={`ue-feature-item ${feature.checked ? "checked" : "unchecked"}`}
@@ -573,6 +573,7 @@ export default function UserEditPage() {
                   <input
                     type="checkbox"
                     checked={Boolean(feature.checked)}
+                    disabled={feature.key === ACCOUNT_FEATURE}
                     onChange={() => handleToggleFeature(idx)}
                     className="ue-checkbox"
                   />
@@ -584,6 +585,9 @@ export default function UserEditPage() {
                     type="number"
                     min="0"
                     value={feature.days}
+                    disabled={feature.key === ACCOUNT_FEATURE}
+                    aria-label={`Số ngày ${feature.name}`}
+                    title={feature.key === ACCOUNT_FEATURE ? "Tự động bằng hạn module dài nhất cộng 30 ngày" : undefined}
                     onChange={(e) => handleFeatureDaysChange(idx, e.target.value)}
                     className={`ue-days-input ${feature.checked ? "checked" : "unchecked"}`}
                   />

@@ -142,3 +142,36 @@ def init_auth_tables():
 
     # Seed 11 tính năng vào bảng system_features
     seed_system_features()
+    backfill_account_licenses()
+
+
+def backfill_account_licenses():
+    """Idempotent policy migration. Dates are anchored to signup/subscriptions, never startup."""
+    with db.session() as cursor:
+        cursor.execute("""
+            INSERT INTO user_feature_licenses (user_id, feature_key, is_enabled, days_granted, expired_at)
+            SELECT id, 'fb_account', TRUE,
+                   GREATEST(0, CEIL(EXTRACT(EPOCH FROM (expiry - CURRENT_TIMESTAMP)) / 86400))::INTEGER,
+                   expiry
+            FROM (
+                SELECT u.id, GREATEST(u.created_at, COALESCE(MAX(f.expired_at), u.created_at))
+                             + INTERVAL '30 days' AS expiry
+                FROM users u
+                LEFT JOIN user_feature_licenses f ON f.user_id = u.id
+                    AND f.feature_key <> 'fb_account' AND (f.is_enabled = TRUE OR f.days_granted > 0)
+                WHERE LOWER(COALESCE(u.role, 'user')) <> 'admin'
+                GROUP BY u.id, u.created_at
+            ) terms
+            ON CONFLICT (user_id, feature_key) DO UPDATE
+            SET is_enabled = TRUE, days_granted = EXCLUDED.days_granted,
+                expired_at = EXCLUDED.expired_at, updated_at = CURRENT_TIMESTAMP
+        """)
+        cursor.execute("""
+            UPDATE users u SET expired_at = f.expired_at,
+                status = CASE WHEN u.status IN ('approved', 'expired') THEN
+                    CASE WHEN f.expired_at > CURRENT_TIMESTAMP THEN 'approved' ELSE 'expired' END
+                    ELSE u.status END
+            FROM user_feature_licenses f
+            WHERE f.user_id = u.id AND f.feature_key = 'fb_account'
+              AND LOWER(COALESCE(u.role, 'user')) <> 'admin'
+        """)
