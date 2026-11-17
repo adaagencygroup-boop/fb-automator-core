@@ -228,12 +228,39 @@ export default function GroupScanPostsPage() {
   // Polling Live Status
   useEffect(() => {
     if (!isExecuting || !activeJobId) return;
+    let failStreak = 0;
+    let finishedToast = false;
+
+    const finishUi = (kind, job) => {
+      if (finishedToast) return;
+      finishedToast = true;
+      setIsExecuting(false);
+      setActiveJobId(null);
+      if (kind === "done") {
+        toast.success(`Đã hoàn thành phiên quét! Thu thập được ${job?.total_posts_scanned || 0} bài viết.`);
+        if (selectedCategory) loadDatabasePosts(selectedCategory);
+      } else if (kind === "aborted") {
+        toast.info("Phiên quét bài viết đã dừng lại.");
+      } else if (kind === "error") {
+        toast.error(job?.error || "Phiên quét gặp sự cố!");
+      }
+    };
 
     const interval = setInterval(async () => {
       try {
         const res = await getPostScanStatus({ jobId: activeJobId });
         const job = res?.job;
-        if (!job) return;
+        if (!job) {
+          failStreak += 1;
+          if (failStreak >= 10 && !finishedToast) {
+            finishedToast = true;
+            setIsExecuting(false);
+            setActiveJobId(null);
+            toast.info("Phiên quét không còn trên máy chủ (có thể Engine vừa restart).");
+          }
+          return;
+        }
+        failStreak = 0;
 
         if (Array.isArray(job.logs) && job.logs.length > 0) {
           setLogs(job.logs);
@@ -243,20 +270,18 @@ export default function GroupScanPostsPage() {
           setPosts(job.posts);
         }
 
-        if (job.status === "done" || job.status === "aborted" || job.status === "error") {
-          setIsExecuting(false);
-          setActiveJobId(null);
-          if (job.status === "done") {
-            toast.success(`Đã hoàn thành phiên quét! Thu thập được ${job.total_posts_scanned || 0} bài viết.`);
-            if (selectedCategory) loadDatabasePosts(selectedCategory);
-          } else if (job.status === "aborted") {
-            toast.info("Phiên quét bài viết đã dừng lại.");
-          } else if (job.status === "error") {
-            toast.error(job.error || "Phiên quét gặp sự cố!");
-          }
+        const st = String(job.status || "").toLowerCase();
+        if (st === "done" || st === "aborted" || st === "error") {
+          finishUi(st, job);
         }
       } catch {
-        // Polling error ignored
+        failStreak += 1;
+        // Không spam toast; chỉ dừng UI sau mất kết nối kéo dài
+        if (failStreak >= 20 && !finishedToast) {
+          finishedToast = true;
+          setIsExecuting(false);
+          setActiveJobId(null);
+        }
       }
     }, 1500);
 

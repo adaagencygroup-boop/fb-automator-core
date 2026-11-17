@@ -10,6 +10,7 @@ import {
   LogIn,
   Plus,
   RefreshCw,
+  RotateCcw,
   Search,
   X,
 } from "lucide-react";
@@ -28,7 +29,25 @@ const MODELS = [
   { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash (cũ)" },
 ];
 const PROMPT_LIMIT = 2000;
+const SLEEP_MIN_LIMIT = 0;
+const SLEEP_MAX_LIMIT = 3600;
 const DRAFT_KEY = "m05.ai-post.draft";
+
+function clampSleep(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return SLEEP_MIN_LIMIT;
+  return Math.min(SLEEP_MAX_LIMIT, Math.max(SLEEP_MIN_LIMIT, Math.trunc(num)));
+}
+
+function handleSleepChange(raw, setter) {
+  if (raw === "") {
+    setter("");
+    return;
+  }
+  if (!/^\d+$/.test(raw)) return;
+  const num = Number(raw);
+  setter(num > SLEEP_MAX_LIMIT ? SLEEP_MAX_LIMIT : num);
+}
 
 function readDraft() {
   try {
@@ -60,7 +79,7 @@ function writeDraft(draft) {
 }
 
 const inputClass =
-  "h-[33px] w-full rounded-lg border border-[#E2E8F0] bg-white px-3 text-sm text-[#1E293B] outline-none transition-colors placeholder:text-[#94A3B8] focus:border-[#2563EB]";
+  "h-[33px] w-full rounded-lg border border-[#E2E8F0] bg-white px-3 text-sm text-[#1E293B] outline-none transition-colors placeholder:text-[#94A3B8] focus:border-[#2563EB] disabled:cursor-not-allowed disabled:bg-[#F8FAFC] disabled:text-[#64748B]";
 const PAGE_TONES = ["#10B981", "#F59E0B", "#14B8A6", "#3B82F6", "#F43F5E", "#6366F1"];
 
 function pictureUrl(uid) {
@@ -370,9 +389,12 @@ export default function AiPost() {
 
 
   const testKey = async () => {
+    if (testingKey || running) return;
     const key = geminiKey.trim();
     if (key.length < 20) {
-      toast.warning("Gemini API key quá ngắn hoặc đang để trống.");
+      setTestingKey(true);
+      toast.warning("Gemini API key quá ngắn hoặc đang để trống.", { key: "ai-test-gemini" });
+      setTimeout(() => setTestingKey(false), 800);
       return;
     }
     setTestingKey(true);
@@ -386,26 +408,29 @@ export default function AiPost() {
       if (result.model_name && result.model_name !== modelName) {
         setModelName(result.model_name);
       }
-      toast.success(result.message || "Gemini key dùng được.");
+      toast.success(result.message || "Gemini key dùng được.", { key: "ai-test-gemini" });
     } catch (error) {
-      toast.error(error.message || "Key không dùng được.");
+      toast.error(error.message || "Key không dùng được.", { key: "ai-test-gemini" });
     } finally {
       setTestingKey(false);
     }
   };
 
   const testPixabay = async () => {
+    if (testingPixabay || running) return;
     const key = pixabayKey.trim();
     if (key.length < 10) {
-      toast.warning("Pixabay API key quá ngắn hoặc đang để trống.");
+      setTestingPixabay(true);
+      toast.warning("Pixabay API key quá ngắn hoặc đang để trống.", { key: "ai-test-pixabay" });
+      setTimeout(() => setTestingPixabay(false), 800);
       return;
     }
     setTestingPixabay(true);
     try {
       const result = await testPixabayKey({ pixabay_key: key });
-      toast.success(result.message || "Pixabay key dùng được.");
+      toast.success(result.message || "Pixabay key dùng được.", { key: "ai-test-pixabay" });
     } catch (error) {
-      toast.error(error.message || "Pixabay key không dùng được.");
+      toast.error(error.message || "Pixabay key không dùng được.", { key: "ai-test-pixabay" });
     } finally {
       setTestingPixabay(false);
     }
@@ -461,6 +486,20 @@ export default function AiPost() {
   };
 
   const activate = async () => {
+    if (String(sleepMin).trim() === "" || String(sleepMax).trim() === "") {
+      toast.warning("Vui lòng nhập đầy đủ thời gian giãn cách (0–3600 giây).", { key: "ai-sleep-invalid" });
+      return;
+    }
+    const minVal = Number(sleepMin);
+    const maxVal = Number(sleepMax);
+    if (!Number.isFinite(minVal) || !Number.isFinite(maxVal) || minVal < SLEEP_MIN_LIMIT || maxVal > SLEEP_MAX_LIMIT) {
+      toast.warning(`Thời gian giãn cách phải từ ${SLEEP_MIN_LIMIT} đến ${SLEEP_MAX_LIMIT} giây.`, { key: "ai-sleep-invalid" });
+      return;
+    }
+    if (maxVal < minVal) {
+      toast.warning('Thời gian "Đến" không được nhỏ hơn thời gian "Từ".', { key: "ai-sleep-invalid" });
+      return;
+    }
     const chosen = fanpages.filter((page) => selectedPages.has(page.key));
     if (!chosen.length) {
       toast.warning("Chọn ít nhất một fanpage để chạy AI.");
@@ -479,8 +518,8 @@ export default function AiPost() {
         prompt,
         schedule_enabled: scheduleEnabled,
         schedule_times: times,
-        sleep_min: Number(sleepMin) || 0,
-        sleep_max: Number(sleepMax) || 0,
+        sleep_min: Math.trunc(minVal),
+        sleep_max: Math.trunc(maxVal),
         page_ids: chosen.map((page) => page.key),
         page_keywords: Object.fromEntries(chosen.map((page) => [page.key, (keywords[page.key] || "").trim()])),
       });
@@ -492,6 +531,14 @@ export default function AiPost() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const resetSession = () => {
+    if (busy || running) return;
+    setPrompt("");
+    setKeywords(Object.fromEntries(fanpages.map((page) => [page.key, page.name || ""])));
+    setSelectedPages(new Set());
+    toast.info("Đã làm mới nội dung phiên đăng bài.", { key: "ai-reset" });
   };
 
   const stop = async () => {
@@ -526,15 +573,17 @@ export default function AiPost() {
                 <input
                   type={showGemini ? "text" : "password"}
                   value={geminiKey}
+                  disabled={running}
                   onChange={(event) => setGeminiKey(event.target.value)}
                   placeholder="Dán Gemini API key"
                   className={`${inputClass} pr-9 font-mono`}
                 />
                 <button
                   type="button"
+                  disabled={running}
                   onClick={() => setShowGemini((value) => !value)}
                   aria-label={showGemini ? "Ẩn key" : "Hiện key"}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#94A3B8]"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#94A3B8] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {showGemini ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                 </button>
@@ -542,8 +591,8 @@ export default function AiPost() {
               <button
                 type="button"
                 onClick={testKey}
-                disabled={testingKey}
-                className="inline-flex h-[29px] shrink-0 items-center rounded-lg bg-[#EFF6FF] px-3 text-xs font-semibold text-[#2563EB] disabled:opacity-60"
+                disabled={testingKey || running}
+                className="inline-flex h-[29px] shrink-0 items-center rounded-lg bg-[#EFF6FF] px-3 text-xs font-semibold text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {testingKey ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Kiểm tra Key"}
               </button>
@@ -557,15 +606,17 @@ export default function AiPost() {
                   <input
                     type={showPixabay ? "text" : "password"}
                     value={pixabayKey}
+                    disabled={running}
                     onChange={(event) => setPixabayKey(event.target.value)}
                     placeholder="Nhập Pixabay API Key..."
                     className={`${inputClass} pr-9 font-mono`}
                   />
                   <button
                     type="button"
+                    disabled={running}
                     onClick={() => setShowPixabay((value) => !value)}
                     aria-label={showPixabay ? "Ẩn Pixabay key" : "Hiện Pixabay key"}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#94A3B8]"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#94A3B8] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {showPixabay ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
@@ -573,8 +624,8 @@ export default function AiPost() {
                 <button
                   type="button"
                   onClick={testPixabay}
-                  disabled={testingPixabay}
-                  className="inline-flex h-[29px] shrink-0 items-center rounded-lg bg-[#EFF6FF] px-3 text-xs font-semibold text-[#2563EB] disabled:opacity-60"
+                  disabled={testingPixabay || running}
+                  className="inline-flex h-[29px] shrink-0 items-center rounded-lg bg-[#EFF6FF] px-3 text-xs font-semibold text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {testingPixabay ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Kiểm tra Key"}
                 </button>
@@ -585,7 +636,7 @@ export default function AiPost() {
           <div className="mt-4">
             <Field label="Model Gemini">
               <span className="relative block">
-                <select value={modelName} onChange={(event) => setModelName(event.target.value)} className={`${inputClass} appearance-none pr-8`}>
+                <select value={modelName} disabled={running} onChange={(event) => setModelName(event.target.value)} className={`${inputClass} appearance-none pr-8`}>
                   {MODELS.map((item) => (
                     <option key={item.value} value={item.value}>{item.label}</option>
                   ))}
@@ -600,7 +651,7 @@ export default function AiPost() {
               <span className="text-xs font-semibold text-[#334155]">Hẹn giờ đăng bài</span>
               <span className="flex items-center gap-2 text-xs font-semibold text-[#2563EB]">
                 Kích hoạt
-                <Switch checked={scheduleEnabled} onCheckedChange={setScheduleEnabled} className={scheduleEnabled ? "bg-[#1877F2]" : ""} />
+                <Switch checked={scheduleEnabled} disabled={running} onCheckedChange={setScheduleEnabled} className={scheduleEnabled ? "bg-[#1877F2]" : ""} />
               </span>
             </div>
             {scheduleEnabled ? (
@@ -610,15 +661,17 @@ export default function AiPost() {
                     <input
                       type="time"
                       step="60"
+                      disabled={running}
                       value={/^\d{2}:\d{2}$/.test(time) ? time : ""}
                       onChange={(event) => updateTime(index, event.target.value.slice(0, 5))}
                       className={`${inputClass} min-w-0 flex-1 font-semibold tabular-nums`}
                     />
                     <button
                       type="button"
+                      disabled={running}
                       onClick={() => removeTime(index)}
                       aria-label={`Xóa khung ${time || index + 1}`}
-                      className="inline-flex size-[33px] shrink-0 items-center justify-center rounded-lg border border-[#E2E8F0] text-[#94A3B8] hover:border-[#FCA5A5] hover:text-[#E11D48]"
+                      className="inline-flex size-[33px] shrink-0 items-center justify-center rounded-lg border border-[#E2E8F0] text-[#94A3B8] hover:border-[#FCA5A5] hover:text-[#E11D48] disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
@@ -626,8 +679,9 @@ export default function AiPost() {
                 ))}
                 <button
                   type="button"
+                  disabled={running}
                   onClick={addTime}
-                  className="inline-flex h-[33px] items-center gap-1 rounded-lg bg-[#EFF6FF] px-3 text-xs font-semibold text-[#2563EB]"
+                  className="inline-flex h-[33px] items-center gap-1 rounded-lg bg-[#EFF6FF] px-3 text-xs font-semibold text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Plus className="h-3.5 w-3.5" />
                   Thêm giờ
@@ -637,15 +691,20 @@ export default function AiPost() {
           </div>
 
           <div className="mt-4">
-            <p className="text-xs font-semibold text-[#334155]">Giãn cách đăng ngẫu nhiên</p>
+            <p className="text-xs font-semibold text-[#334155]">Giãn cách đăng ngẫu nhiên (0–3600s)</p>
             <div className="mt-1.5 grid grid-cols-2 gap-3">
               <label className="text-[11px] text-[#64748B]">
                 Từ (giây)
                 <input
                   type="number"
-                  min={0}
+                  min={SLEEP_MIN_LIMIT}
+                  max={SLEEP_MAX_LIMIT}
+                  disabled={running}
                   value={sleepMin}
-                  onChange={(event) => setSleepMin(event.target.value)}
+                  onChange={(event) => handleSleepChange(event.target.value, setSleepMin)}
+                  onBlur={() => {
+                    if (String(sleepMin).trim() !== "") setSleepMin(clampSleep(sleepMin));
+                  }}
                   className={`${inputClass} mt-1`}
                 />
               </label>
@@ -653,9 +712,14 @@ export default function AiPost() {
                 Đến (giây)
                 <input
                   type="number"
-                  min={0}
+                  min={SLEEP_MIN_LIMIT}
+                  max={SLEEP_MAX_LIMIT}
+                  disabled={running}
                   value={sleepMax}
-                  onChange={(event) => setSleepMax(event.target.value)}
+                  onChange={(event) => handleSleepChange(event.target.value, setSleepMax)}
+                  onBlur={() => {
+                    if (String(sleepMax).trim() !== "") setSleepMax(clampSleep(sleepMax));
+                  }}
                   className={`${inputClass} mt-1`}
                 />
               </label>
@@ -668,10 +732,11 @@ export default function AiPost() {
                 <textarea
                   value={prompt}
                   maxLength={PROMPT_LIMIT}
+                  disabled={running}
                   onChange={(event) => setPrompt(event.target.value)}
                   rows={6}
                   placeholder="Nhập cấu trúc bài đăng. Chủ đề từng page lấy từ cột từ khóa bên phải."
-                  className="h-[165px] w-full resize-none rounded-lg border border-[#E2E8F0] px-3 py-2 text-sm leading-5 text-[#1E293B] outline-none placeholder:text-[#94A3B8] focus:border-[#2563EB]"
+                  className="h-[165px] w-full resize-none rounded-lg border border-[#E2E8F0] px-3 pb-7 pt-2 text-sm leading-5 text-[#1E293B] outline-none placeholder:text-[#94A3B8] focus:border-[#2563EB] disabled:cursor-not-allowed disabled:bg-[#F8FAFC] disabled:text-[#64748B]"
                 />
                 <span className="pointer-events-none absolute bottom-2 right-3 text-[11px] text-[#94A3B8]">
                   {prompt.length}/{PROMPT_LIMIT}
@@ -681,12 +746,12 @@ export default function AiPost() {
           </div>
         </section>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-2.5 sm:grid-cols-[1fr_1fr_auto]">
           <button
             type="button"
             onClick={activate}
             disabled={busy || running}
-            className="inline-flex h-9 items-center justify-center rounded-lg bg-[#2563EB] text-sm font-bold tracking-wide text-white disabled:opacity-60"
+            className="inline-flex h-9 items-center justify-center rounded-lg bg-[#2563EB] text-sm font-bold tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-60"
           >
             KÍCH HOẠT ▶
           </button>
@@ -694,9 +759,19 @@ export default function AiPost() {
             type="button"
             onClick={stop}
             disabled={busy || !running}
-            className="inline-flex h-9 items-center justify-center rounded-lg bg-[#F43F5E] text-sm font-bold tracking-wide text-white disabled:opacity-60"
+            className="inline-flex h-9 items-center justify-center rounded-lg bg-[#F43F5E] text-sm font-bold tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-60"
           >
             DỪNG LUỒNG ⏹
+          </button>
+          <button
+            type="button"
+            onClick={resetSession}
+            disabled={busy || running}
+            title="Làm mới Prompt, Từ khóa và lựa chọn Fanpage"
+            className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-white px-3 text-xs font-semibold text-[#334155] hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Làm mới
           </button>
         </div>
         </div>
@@ -718,8 +793,8 @@ export default function AiPost() {
             <button
               type="button"
               onClick={load}
-              disabled={loading}
-              className="inline-flex h-[29px] shrink-0 items-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-white px-3 text-xs font-semibold text-[#2563EB] disabled:opacity-60"
+              disabled={loading || running}
+              className="inline-flex h-[29px] shrink-0 items-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-white px-3 text-xs font-semibold text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-60"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               Đồng bộ
@@ -777,8 +852,8 @@ export default function AiPost() {
                         <button
                           type="button"
                           onClick={() => login(item.uid)}
-                          disabled={loggingUid === item.uid}
-                          className="inline-flex h-[25px] items-center gap-1 rounded-lg border border-[#BFDBFE] bg-white px-2.5 text-[11px] font-semibold text-[#2563EB] disabled:opacity-60"
+                          disabled={loggingUid === item.uid || running}
+                          className="inline-flex h-[25px] items-center gap-1 rounded-lg border border-[#BFDBFE] bg-white px-2.5 text-[11px] font-semibold text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           <LogIn className="h-3 w-3" />
                           {loggingUid === item.uid ? "Đang nhập..." : "Đăng nhập"}
@@ -804,8 +879,8 @@ export default function AiPost() {
               <button
                 type="button"
                 onClick={() => setSelectedPages(new Set(fanpages.map((page) => page.key)))}
-                disabled={!fanpages.length}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#2563EB] px-3 text-xs font-semibold text-white disabled:opacity-50"
+                disabled={running || !fanpages.length}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#2563EB] px-3 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Check className="h-3.5 w-3.5" />
                 Chọn Tất Cả AI
@@ -813,17 +888,17 @@ export default function AiPost() {
               <button
                 type="button"
                 onClick={() => setSelectedPages(new Set())}
-                disabled={!selectedPages.size}
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-white px-3 text-xs font-semibold text-[#334155] disabled:opacity-50"
+                disabled={running || !selectedPages.size}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-white px-3 text-xs font-semibold text-[#334155] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <X className="h-3.5 w-3.5" />
                 Bỏ Chọn Tất Cả
               </button>
             </div>
           </div>
-          <div className="overflow-x-auto">
+          <div className="max-h-[400px] overflow-x-auto overflow-y-auto">
             <table className="w-full min-w-[560px] text-left">
-              <thead>
+              <thead className="sticky top-0 z-10 bg-white">
                 <tr className="border-y border-[#E2E8F0] text-[11px] font-semibold text-[#94A3B8]">
                   <th className="w-12 px-4 py-2.5" />
                   <th className="w-24 px-2 py-2.5 text-center">Chạy AI</th>
@@ -847,6 +922,7 @@ export default function AiPost() {
                         <td className="px-2 py-3">
                           <button
                             type="button"
+                            disabled={running}
                             aria-pressed={checked}
                             aria-label={checked ? `Bỏ chọn ${page.name}` : `Chọn ${page.name}`}
                             onClick={() =>
@@ -857,7 +933,7 @@ export default function AiPost() {
                                 return next;
                               })
                             }
-                            className={`mx-auto flex size-5 items-center justify-center rounded-[5px] ${
+                            className={`mx-auto flex size-5 items-center justify-center rounded-[5px] disabled:cursor-not-allowed disabled:opacity-60 ${
                               checked ? "bg-[#22C55E] text-white" : "border border-[#CBD5E1] bg-white"
                             }`}
                           >
@@ -888,11 +964,12 @@ export default function AiPost() {
                         <td className="px-5 py-3">
                           <input
                             value={keywords[page.key] ?? page.name}
+                            disabled={running}
                             onChange={(event) =>
                               setKeywords((current) => ({ ...current, [page.key]: event.target.value }))
                             }
                             placeholder={page.name}
-                            className="h-9 w-full rounded-lg border border-[#E2E8F0] px-3 text-xs text-[#334155] outline-none placeholder:text-[#94A3B8] focus:border-[#2563EB]"
+                            className="h-9 w-full rounded-lg border border-[#E2E8F0] px-3 text-xs text-[#334155] outline-none placeholder:text-[#94A3B8] focus:border-[#2563EB] disabled:cursor-not-allowed disabled:bg-[#F8FAFC] disabled:text-[#64748B]"
                           />
                         </td>
                       </tr>

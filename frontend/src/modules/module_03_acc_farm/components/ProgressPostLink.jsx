@@ -4,21 +4,37 @@ import { useState } from "react";
 import { ExternalLink, Loader2 } from "lucide-react";
 import {
   isProgressPermalink,
+  isProgressPublishSuccess,
   progressActivityLabel,
   resolveProgressPostUrl,
 } from "@/modules/module_03_acc_farm/postSessionUi";
 import { openPostInAccountBrowser } from "@/modules/module_03_acc_farm/openAccountPost";
 
 /**
- * Cột hoạt động + nút Xem bài viết / Xem trang cá nhân trên bảng tiến trình.
- * Mở Chrome profile của nick (không dùng trình duyệt mặc định).
+ * Cột hoạt động + nút xem trên bảng tiến trình.
+ * Nút chỉ hiện khi xuất bản thành công (không hiện khi lỗi còn URL /reel/ nháp).
  */
+function isDirectReelUrl(url) {
+  return /\/reel\/\d{6,}/i.test(String(url || ""));
+}
+
+function progressViewButtonLabel(row, permalink) {
+  const ptype = String(row?.postType || row?.post_type || "").toLowerCase();
+  if (ptype === "reels" || ptype === "reel") return "Xem reels";
+  if (ptype === "story") return permalink ? "Xem Story" : "Xem trang cá nhân";
+  if (!permalink) return "Xem trang cá nhân";
+  return "Xem bài viết";
+}
+
 export function ProgressActivityCell({ row }) {
   const [opening, setOpening] = useState(false);
   const url = resolveProgressPostUrl(row);
   const label = progressActivityLabel(row);
   const permalink = isProgressPermalink(row, url);
   const uid = row?.accountUid || row?.account_uid || "";
+  const published = isProgressPublishSuccess(row);
+  const viewLabel = progressViewButtonLabel(row, permalink);
+  const showViewBtn = Boolean(published && url);
 
   const handleOpen = async (e) => {
     e?.stopPropagation?.();
@@ -26,7 +42,7 @@ export function ProgressActivityCell({ row }) {
     setOpening(true);
     try {
       await openPostInAccountBrowser(uid, url, {
-        title: permalink ? "Xem bài viết" : "Xem trang cá nhân",
+        title: viewLabel,
       });
     } finally {
       setOpening(false);
@@ -43,7 +59,7 @@ export function ProgressActivityCell({ row }) {
         />
         <span className="break-words">{label || "—"}</span>
       </span>
-      {url ? (
+      {showViewBtn ? (
         <button
           type="button"
           onClick={handleOpen}
@@ -60,7 +76,7 @@ export function ProgressActivityCell({ row }) {
           ) : (
             <ExternalLink size={12} className="shrink-0" />
           )}
-          {permalink ? "Xem bài viết" : "Xem trang cá nhân"}
+          {viewLabel}
         </button>
       ) : null}
     </div>

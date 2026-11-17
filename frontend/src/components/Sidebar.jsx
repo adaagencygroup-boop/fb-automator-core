@@ -110,20 +110,66 @@ function useResizableWidth() {
   return { asideRef, handleProps, dragging };
 }
 
+const OPEN_GROUPS_STORAGE_KEY = "fb-automator.sidebar-open-groups";
+const GROUP_IDS = new Set(
+  NAV_ITEMS.filter((item) => item.children?.length).map((item) => item.id),
+);
+
+/**
+ * Các nhóm submenu đang mở: mở nhiều nhóm cùng lúc, nhóm chỉ đóng khi người dùng bấm vào tên nhóm.
+ * Nhóm chứa trang đang xem tự mở thêm (không đóng nhóm khác). Nhớ lại bằng localStorage.
+ */
+function useOpenGroups(activeGroupId) {
+  const [openIds, setOpenIds] = useState(() => (activeGroupId ? [activeGroupId] : []));
+  const loaded = useRef(false);
+
+  // Khôi phục các nhóm đã mở sau khi trang hiển thị (đọc sau mount để không lệch với bản render phía server)
+  useEffect(() => {
+    let saved = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem(OPEN_GROUPS_STORAGE_KEY) || "[]");
+      if (Array.isArray(parsed)) saved = parsed.filter((id) => GROUP_IDS.has(id));
+    } catch {
+      /* localStorage bị chặn hoặc dữ liệu hỏng — bỏ qua */
+    }
+    loaded.current = true;
+    if (saved.length) {
+      setOpenIds((prev) => [...new Set([...saved, ...prev])]);
+    }
+  }, []);
+
+  // Sang trang thuộc nhóm khác: mở thêm nhóm đó
+  useEffect(() => {
+    if (!activeGroupId) return;
+    setOpenIds((prev) => (prev.includes(activeGroupId) ? prev : [...prev, activeGroupId]));
+  }, [activeGroupId]);
+
+  useEffect(() => {
+    if (!loaded.current) return;
+    try {
+      localStorage.setItem(OPEN_GROUPS_STORAGE_KEY, JSON.stringify(openIds));
+    } catch {
+      /* bỏ qua, chỉ mất tính năng nhớ nhóm đang mở */
+    }
+  }, [openIds]);
+
+  const isGroupOpen = (item) => openIds.includes(item.id);
+  const toggleGroup = (item) =>
+    setOpenIds((prev) =>
+      prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id],
+    );
+
+  return { isGroupOpen, toggleGroup };
+}
+
 // Figma: Aside - LeftSidebar (1016:5); kiểu mục cấp 1 theo 1020:13823 / 1020:13770
 export default function Sidebar({ activeTab, open = true, onNavigate, user, now }) {
   const { asideRef, handleProps, dragging } = useResizableWidth();
 
-  // Accordion: mỗi lúc chỉ mở 1 nhóm submenu.
-  // openGroupId = undefined -> tự mở nhóm chứa mục đang active; null -> đóng hết.
-  const [openGroupId, setOpenGroupId] = useState(undefined);
   const activeGroupId = NAV_ITEMS.find((item) =>
     item.children?.some((c) => c.id === activeTab),
   )?.id;
-  const currentOpenId = openGroupId === undefined ? activeGroupId : openGroupId;
-  const isGroupOpen = (item) => currentOpenId === item.id;
-  const toggleGroup = (item) =>
-    setOpenGroupId(isGroupOpen(item) ? null : item.id);
+  const { isGroupOpen, toggleGroup } = useOpenGroups(activeGroupId);
 
   return (
     <aside

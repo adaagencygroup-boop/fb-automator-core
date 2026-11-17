@@ -71,7 +71,7 @@ export function PostProgressPreview({
             </h4>
             <p className="text-[11px] text-slate-500 truncate">
               {active
-                ? `${active.accountName || "Tài khoản"} · ${active.accountUid || "—"} · ${active.threadId || "—"}`
+                ? `${active.accountName || "Tài khoản"} · ${active.accountUid || "—"}`
                 : "Chọn một dòng trong bảng tiến trình"}
             </p>
           </div>
@@ -99,8 +99,7 @@ export function PostProgressPreview({
                 }`}
                 title={row.contentPreview || row.accountName}
               >
-                <span className="block text-[10px] font-bold font-mono">{row.threadId || "—"}</span>
-                <span className="block max-w-[140px] truncate text-[11px] font-semibold">
+                <span className="block max-w-[160px] truncate text-[11px] font-semibold">
                   {row.accountName || row.accountUid}
                 </span>
               </button>
@@ -160,22 +159,19 @@ export function PostProgressPreview({
           </div>
         ) : null}
 
-        {(content || isMediaPost) && (
+        {/* Reels/Story: chỉ media card — ẩn khối caption / "(Không có caption) — file: …" */}
+        {!isMediaPost && content ? (
           <textarea
             readOnly
-            value={
-              content ||
-              (isMediaPost
-                ? `(Không có caption) — file: ${mediaName || mediaPath || "—"}`
-                : "")
-            }
-            rows={Math.min(12, Math.max(4, (content || "").split("\n").length + 1))}
-            className="w-full resize-none rounded-xl border border-slate-200 bg-white p-3.5 text-xs sm:text-[13px] leading-relaxed text-slate-800 font-sans cursor-default focus:outline-none [scrollbar-width:thin]"
+            disabled
+            value={content}
+            rows={Math.min(12, Math.max(4, content.split("\n").length + 1))}
+            className="w-full resize-none rounded-xl border border-slate-200 bg-slate-100 p-3.5 text-xs sm:text-[13px] leading-relaxed text-slate-500 font-sans cursor-not-allowed focus:outline-none [scrollbar-width:thin] disabled:opacity-100"
             aria-label="Nội dung bài viết đang đăng (chỉ xem)"
           />
-        )}
+        ) : null}
 
-        {content ? (
+        {!isMediaPost && content ? (
           <p className="text-[11px] text-slate-500">{content.length} ký tự · chỉ xem, không chỉnh sửa</p>
         ) : null}
       </div>

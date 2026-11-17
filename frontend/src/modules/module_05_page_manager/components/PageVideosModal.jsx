@@ -30,6 +30,22 @@ function formatDateTimeUtc7(val) {
     return String(val);
   }
 }
+function getDownloadModeMeta(mode) {
+  const m = String(mode || "").toUpperCase().trim();
+  if (m === "KEYWORD_ONLY") {
+    return { label: "Chỉ Từ Khóa", className: "bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20" };
+  }
+  if (m === "PROFILE_ONLY") {
+    return { label: "Chỉ Kênh", className: "bg-violet-500/10 text-violet-700 dark:text-violet-400 border-violet-500/20" };
+  }
+  if (m === "KEYWORD_IN_PROFILE") {
+    return { label: "Từ Khóa Trong Kênh", className: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20" };
+  }
+  if (m === "DIRECT_LINK") {
+    return { label: "Link Video", className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20" };
+  }
+  return { label: "Chưa Rõ", className: "bg-slate-500/10 text-slate-600 dark:text-zinc-400 border-slate-500/20" };
+}
 export default function PageVideosModal({ open, onOpenChange, page, defaultSource = null, onCleared }) {
   const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -150,6 +166,7 @@ export default function PageVideosModal({ open, onOpenChange, page, defaultSourc
                       <TableHead className="w-12 text-center text-[11px] font-normal normal-case tracking-normal shrink-0">STT</TableHead>
                       <TableHead className="text-[11px] font-normal normal-case tracking-normal min-w-[200px]">Tiêu Đề Video</TableHead>
                       {!defaultSource && <TableHead className="w-20 text-center text-[11px] font-normal normal-case tracking-normal shrink-0">Nguồn</TableHead>}
+                      <TableHead className="w-36 text-center text-[11px] font-normal normal-case tracking-normal shrink-0">Chế Độ</TableHead>
                       <TableHead className="text-[11px] font-normal normal-case tracking-normal min-w-[220px]">Đường Dẫn Tập Tin</TableHead>
                       <TableHead className="w-36 text-center text-[11px] font-normal normal-case tracking-normal shrink-0">Thời Gian</TableHead>
                       <TableHead className="w-28 text-center text-[11px] font-normal normal-case tracking-normal pr-2 shrink-0">Thao Tác</TableHead>
@@ -175,6 +192,11 @@ export default function PageVideosModal({ open, onOpenChange, page, defaultSourc
                             </Badge>
                           </TableCell>
                         )}
+                        <TableCell className="text-center shrink-0">
+                          <Badge variant="subtle" className={`text-[10px] font-normal px-2 py-0.5 whitespace-nowrap ${getDownloadModeMeta(v.download_mode).className}`}>
+                            {getDownloadModeMeta(v.download_mode).label}
+                          </Badge>
+                        </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1.5 max-w-sm">
                             <span className="text-[11px] font-mono text-muted-foreground truncate" title={v.object_path || ""}>

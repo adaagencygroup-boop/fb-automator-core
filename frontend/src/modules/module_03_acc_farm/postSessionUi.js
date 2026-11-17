@@ -43,6 +43,13 @@ export function isProgressPermalink(row, url = null) {
   );
 }
 
+/** True khi bài đã xuất bản thành công — dùng để hiện nút xem (không hiện khi lỗi có URL nháp). */
+export function isProgressPublishSuccess(row) {
+  if (!row) return false;
+  if (String(row.status || "") === "Hoàn thành") return true;
+  return /XUẤT BẢN THÀNH CÔNG/i.test(String(row.currentActivity || ""));
+}
+
 /** Nhãn hoạt động ngắn — bỏ phần URL / StatusUrlResult khỏi text. */
 export function progressActivityLabel(row) {
   let t = String(row?.currentActivity || "");
@@ -52,7 +59,13 @@ export function progressActivityLabel(row) {
     .trim();
   t = t.replace(/\s*https?:\/\/\S+/g, "").trim();
   if (t) return t;
-  if (row?.status === "Hoàn thành") return "XUẤT BẢN THÀNH CÔNG!";
+  if (row?.status === "Hoàn thành") {
+    const ptype = String(row?.postType || row?.post_type || "").toLowerCase();
+    if (ptype === "reels" || ptype === "reel") return "XUẤT BẢN THÀNH CÔNG REELS!";
+    if (ptype === "story") return "XUẤT BẢN THÀNH CÔNG STORY!";
+    if (ptype === "status") return "XUẤT BẢN THÀNH CÔNG STATUS!";
+    return "XUẤT BẢN THÀNH CÔNG!";
+  }
   return "";
 }
 

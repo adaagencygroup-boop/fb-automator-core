@@ -877,8 +877,11 @@ export default function GroupPickerModal({
                               <td className="px-3 py-2.5 text-[#334155] font-medium truncate max-w-[120px]">
                                 {group.keyword || "—"}
                               </td>
-                              <td className="px-3 py-2.5">
-                                <span className="font-bold text-xs text-[#0F172A] line-clamp-1">
+                              <td className="px-3 py-2.5 max-w-[160px]">
+                                <span
+                                  className="font-bold text-xs text-[#0F172A] line-clamp-1 block cursor-default"
+                                  title={group.name || ""}
+                                >
                                   {group.name}
                                 </span>
                               </td>

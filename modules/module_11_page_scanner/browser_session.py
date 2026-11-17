@@ -146,6 +146,248 @@ def release_browser(
     )
 
 
+def _acc_uid(account: Dict[str, Any]) -> str:
+    return str((account or {}).get("uid") or "").strip()
+
+
+def order_accounts_free_first(accounts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Giữ thứ tự người dùng chọn nhưng bắt đầu từ acc đầu tiên đang rảnh.
+    Mọi acc đều bận → AccountBusyError (API trả 409) theo acc đầu tiên.
+    """
+    accounts = [a for a in (accounts or []) if _acc_uid(a)]
+    for i, acc in enumerate(accounts):
+        if get_active_job_for_account(_acc_uid(acc)) is None:
+            return accounts[i:] + accounts[:i]
+    if not accounts:
+        return []
+    busy = get_active_job_for_account(_acc_uid(accounts[0])) or {}
+    raise AccountBusyError(
+        _acc_uid(accounts[0]), int(busy.get("session_id") or 0), str(busy.get("job_type") or "")
+    )
+
+
+class AccountLoginError(RuntimeError):
+    """Acc không có phiên Facebook hợp lệ (cookie hết hạn, sai mật khẩu, checkpoint, 2FA…)."""
+
+
+class AccountRotation:
+    """
+    Xoay vòng nhiều acc trong 1 phiên Selenium (POST_SCAN / FOLLOW):
+    - rotate(): đóng Chrome acc hiện tại, mở acc kế tiếp đang rảnh (bỏ acc bận / mở Chrome lỗi).
+    - mark_dead=True (checkpoint): acc cũ không bao giờ được dùng lại trong phiên.
+    - count: số đơn vị (bài / page) đã quét trên acc hiện tại — reset khi đổi acc.
+    Slot BUSY của acc đầu tiên do start_*_background giữ sẵn; các acc sau được giữ khi đổi sang.
+    """
+
+    def __init__(
+        self,
+        session_id: int,
+        job_type: str,
+        accounts: List[Dict[str, Any]],
+        owner_key: str,
+        headless: bool = False,
+        allow_direct_fallback: bool = True,
+        log=None,
+        require_login: bool = False,
+    ):
+        self.accounts = [a for a in (accounts or []) if _acc_uid(a)]
+        if not self.accounts:
+            raise ValueError("Cần ít nhất 1 tài khoản để quét")
+        self.session_id = int(session_id)
+        self.job_type = job_type
+        self.owner_key = owner_key
+        self.headless = headless
+        self.allow_direct_fallback = allow_direct_fallback
+        # True: mở Chrome xong phải có phiên đăng nhập thật (tự login lại bằng cookie / mật khẩu + 2FA)
+        self.require_login = require_login
+        self._log = log or (lambda message, level="info": None)
+        self.idx = 0
+        self.dead: Set[str] = set()
+        self.count = 0
+        self.driver = None
+        self.lock = None
+        self.acquired_lock = False
+
+    @property
+    def account(self) -> Dict[str, Any]:
+        return self.accounts[self.idx]
+
+    @property
+    def uid(self) -> str:
+        return _acc_uid(self.account)
+
+    @property
+    def can_rotate(self) -> bool:
+        return len(self.accounts) > 1
+
+    def open(self):
+        """Mở / tái dùng Chrome cho acc hiện tại."""
+        acc = self.account
+        self.driver, _created, self.lock, self.acquired_lock = acquire_browser(
+            target_uid=self.uid,
+            owner=acc.get("user_id") or self.owner_key,
+            proxy=acc.get("proxy"),
+            cookie_str=acc.get("cookie") or "",
+            headless=self.headless,
+            allow_direct_fallback=self.allow_direct_fallback,
+        )
+        self.count = 0
+        if self.require_login:
+            try:
+                self.ensure_login()
+            except Exception:
+                # Không đăng nhập được → đóng Chrome + nhả khóa profile ngay; slot BUSY do nơi gọi xử lý
+                uid = self.uid
+                try:
+                    release_browser("CHECKPOINT", False, self.acquired_lock, self.lock, uid)
+                finally:
+                    self.driver = None
+                    self.lock = None
+                    self.acquired_lock = False
+                raise
+        return self.driver
+
+    def _login_credentials(self) -> Tuple[str, str]:
+        """Mật khẩu + 2FA (đã giải mã) của acc hiện tại — dùng khi cookie hết hạn."""
+        try:
+            from core.database.connection import db
+            from modules.module_02_account_manager.security.encryption import decrypt_data
+
+            row = db.fetch_one(
+                """
+                SELECT password, two_fa FROM accounts
+                WHERE uid = %s AND user_id IS NOT DISTINCT FROM %s
+                LIMIT 1
+                """,
+                (self.uid, self.account.get("user_id")),
+            ) or {}
+        except Exception as exc:
+            logger.debug(f"[browser_session] đọc mật khẩu {self.uid}: {exc}")
+            return "", ""
+
+        def _dec(value):
+            try:
+                return decrypt_data(value) if value else ""
+            except Exception:
+                return ""
+
+        return _dec(row.get("password")), _dec(row.get("two_fa"))
+
+    def ensure_login(self) -> None:
+        """Bắt buộc có phiên Facebook đăng nhập; không được → AccountLoginError."""
+        from modules.module_02_account_manager.automation import ensure_logged_in
+
+        uid = self.uid
+        password, two_fa = self._login_credentials()
+        self._log(f"Kiểm tra đăng nhập tài khoản {uid}…", "info")
+        res = ensure_logged_in(
+            self.driver, uid, password=password, two_fa=two_fa, cookie=self.account.get("cookie") or ""
+        ) or {}
+        if not res.get("success"):
+            reason = res.get("error") or "phiên hết hạn / checkpoint"
+            self._log(f"Tài khoản {uid} chưa đăng nhập được: {reason}", "error")
+            raise AccountLoginError(f"Tài khoản {uid} chưa đăng nhập được: {reason}")
+        self._log(
+            f"Tài khoản {uid} {'đã đăng nhập lại' if res.get('reloaded') else 'đang đăng nhập'} — bắt đầu quét",
+            "success",
+        )
+
+    def relogin(self) -> bool:
+        """Bị đăng xuất giữa phiên → thử đăng nhập lại trên Chrome hiện tại."""
+        if self.driver is None:
+            return False
+        try:
+            self.ensure_login()
+            return True
+        except Exception:
+            return False
+
+    def release(self, stop_reason: str, keep_browser: bool = False) -> None:
+        """Đóng / giữ Chrome acc hiện tại và nhả slot BUSY của nó."""
+        uid = self.uid
+        try:
+            release_browser(stop_reason, keep_browser, self.acquired_lock, self.lock, uid)
+        finally:
+            self.driver = None
+            self.lock = None
+            self.acquired_lock = False
+            release_account_job(uid, self.session_id)
+
+    def _free_candidates(self) -> List[int]:
+        n = len(self.accounts)
+        out = []
+        for step in range(1, n):
+            j = (self.idx + step) % n
+            uid = _acc_uid(self.accounts[j])
+            if uid in self.dead or get_active_job_for_account(uid) is not None:
+                continue
+            out.append(j)
+        return out
+
+    def _set_session_account(self, uid: str) -> None:
+        try:
+            from core.database.connection import db
+
+            db.execute(
+                "UPDATE page_scan_sessions SET account_uid = %s WHERE id = %s",
+                (uid, self.session_id),
+            )
+        except Exception as exc:
+            logger.debug(f"[browser_session] set session account #{self.session_id}: {exc}")
+
+    def rotate(self, reason: str, mark_dead: bool = False) -> bool:
+        """
+        Đổi sang acc kế tiếp. True = đã đổi (dùng rotation.driver mới).
+        False = không đổi được: khi mark_dead thì không còn Chrome (driver None → nơi gọi dừng);
+        khi xoay theo hạn mức thì tiếp tục với acc cũ (Chrome được mở lại nếu cần).
+        """
+        old_idx, old_uid = self.idx, self.uid
+        if mark_dead:
+            self.dead.add(old_uid)
+        candidates = self._free_candidates() if self.can_rotate else []
+        if not candidates:
+            if mark_dead:
+                self._log(f"Không còn tài khoản thay thế ({reason}) — dừng phiên", "warn")
+                self.release("CHECKPOINT", keep_browser=False)
+            else:
+                self._log(f"Không có tài khoản rảnh để đổi ({reason}) — tiếp tục với {old_uid}", "warn")
+            return False
+
+        self.release("CHECKPOINT" if mark_dead else "ROTATE", keep_browser=False)
+        for j in candidates:
+            uid = _acc_uid(self.accounts[j])
+            try:
+                try_acquire_account_job(uid, self.session_id, self.job_type)
+            except AccountBusyError:
+                continue
+            self.idx = j
+            try:
+                self.open()
+            except Exception as exc:
+                self._log(f"Không mở được Chrome tài khoản {uid}: {exc}", "warn")
+                release_account_job(uid, self.session_id)
+                self.dead.add(uid)
+                continue
+            self._set_session_account(uid)
+            self._log(f"Đổi tài khoản {old_uid} → {uid} ({reason})", "warn")
+            return True
+
+        # Không chuyển được sang acc nào
+        self.idx = old_idx
+        if mark_dead:
+            self._log(f"Không còn tài khoản thay thế ({reason}) — dừng phiên", "warn")
+            return False
+        try:
+            try_acquire_account_job(old_uid, self.session_id, self.job_type)
+            self.open()
+            self._log(f"Không đổi được tài khoản ({reason}) — tiếp tục với {old_uid}", "warn")
+        except Exception as exc:
+            self._log(f"Không mở lại được tài khoản {old_uid}: {exc}", "warn")
+            self.driver = None
+        return False
+
+
 def bump_account_usage(account_uid: str, action: str, delta: int = 1) -> int:
     """Tăng used_count theo (acc, ngày, action). Trả về used_count sau khi cộng."""
     from core.database.connection import db

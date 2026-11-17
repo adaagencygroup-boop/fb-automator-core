@@ -8,13 +8,10 @@ import {
   Play,
   Pause,
   Square,
-  Download,
   Search,
   ExternalLink,
   Eye,
   Loader2,
-  ThumbsUp,
-  MessageSquare,
   FileSpreadsheet,
 } from "lucide-react";
 import Link from "next/link";
@@ -24,19 +21,19 @@ import { normalizeAccount, initialsOf } from "@/modules/module_07_group_spam/sha
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
   createPostScanSession,
+  deleteScannedPosts,
+  getActiveCampaign,
   getScannedPages,
   getScannedPosts,
+  getSessionPostPages,
   stopScanSession,
   pauseScanSession,
   resumeScanSession,
   getScanSessionDetail,
 } from "../service";
-import { LiveLogConsole, nowStamp, LIVE_STATUSES } from "../_shared";
-import {
-  DEFAULT_SCANNED_PAGES,
-  SelectAccountsModal,
-  SelectPagesModal,
-} from "../shared/SelectPagesModal";
+import { LiveLogConsole, nowStamp, LIVE_STATUSES, Pager, parseJsonField, runDelete } from "../_shared";
+import { SelectAccountsModal, SelectPagesModal } from "../shared/SelectPagesModal";
+import { localIsoDate, toCsv } from "../utils.mjs";
 
 const DONE_STATUSES = ["COMPLETED", "PARTIAL", "STOPPED", "FAILED"];
 
@@ -112,11 +109,74 @@ function normalizePostRow(p, idx = 0) {
     page_key: p.page_key || "",
     content: p.content || p.text || p.message || "(Không có nội dung)",
     post_url: p.post_url || p.url || "",
-    published_at: p.published_at || p.posted_at || p.created_at || "",
+    published_at: p.published_at || "",
+    published_text: p.published_text || "",
     likes: Number(p.likes ?? p.reaction_count ?? p.reactions ?? 0),
     comments: Number(p.comments ?? p.comment_count ?? 0),
     shares: Number(p.shares ?? p.share_count ?? 0),
   };
+}
+
+/* Bộ lọc bảng kết quả (ảnh: Lọc Ngày Đăng / Lượt Like / Bình Luận / Lượt Share) — lọc phía server */
+const POST_PAGE_SIZE = 5;
+const DATE_FILTERS = [
+  ["ALL", "Tất cả thời gian"],
+  ["1", "Hôm nay"],
+  ["3", "3 ngày qua"],
+  ["7", "7 ngày qua"],
+  ["30", "30 ngày qua"],
+];
+const LIKE_FILTERS = [
+  ["ALL", "Tất cả like"],
+  ["501", "> 500 Like"],
+  ["1001", "> 1.000 Like"],
+];
+const COMMENT_FILTERS = [
+  ["ALL", "Tất cả bình luận"],
+  ["101", "> 100 bình luận"],
+  ["301", "> 300 bình luận"],
+];
+const SHARE_FILTERS = [
+  ["ALL", "Tất cả share"],
+  ["51", "> 50 share"],
+  ["101", "> 100 share"],
+];
+const POST_SORTS = [
+  ["newest", "Mới nhất"],
+  ["likes", "Lượt Like cao nhất"],
+  ["comments", "Bình luận nhiều nhất"],
+];
+
+const optNum = (v) => (v === "ALL" ? undefined : Number(v));
+
+/** Ngày đăng → "dd/mm/yyyy" (ngày lưu trong kho không có giờ). */
+function fmtPostDate(value) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value || ""));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : "—";
+}
+
+/** "https://www.facebook.com/x/posts/123" → "fb.com/x/posts/123" */
+function shortFbUrl(url) {
+  return String(url || "").replace(/^https?:\/\/(www\.|m\.|web\.)?facebook\.com\//, "fb.com/");
+}
+
+function FilterSelect({ label, value, onChange, options }) {
+  return (
+    <label className="flex min-w-0 flex-col gap-1">
+      <span className="text-[11px] font-medium text-[#475569]">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-9 w-full rounded-lg border border-[#E2E8F0] bg-white px-3 text-xs text-[#1E293B] outline-none focus:border-[#2563EB]"
+      >
+        {options.map(([v, l]) => (
+          <option key={v} value={v}>
+            {l}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
 }
 
 export default function PageScannerPosts() {
@@ -125,7 +185,6 @@ export default function PageScannerPosts() {
   const [selectedUids, setSelectedUids] = useState([]);
   const [showAccountModal, setShowAccountModal] = useState(false);
 
-  const [availablePages, setAvailablePages] = useState(DEFAULT_SCANNED_PAGES);
   const [selectedPages, setSelectedPages] = useState([]);
   const [showPageModal, setShowPageModal] = useState(false);
 
@@ -144,7 +203,11 @@ export default function PageScannerPosts() {
   const [sessionId, setSessionId] = useState(null);
   const [resultCount, setResultCount] = useState(0);
   const [logs, setLogs] = useState([]);
-  const [scannedPosts, setScannedPosts] = useState([]);
+  const [pagePostCounts, setPagePostCounts] = useState({}); // page_key -> số bài của phiên
+  const [tableRows, setTableRows] = useState([]);
+  const [tableTotal, setTableTotal] = useState(0);
+  const [tableLoading, setTableLoading] = useState(false);
+  const [tableTick, setTableTick] = useState(0);
   const [activePageKey, setActivePageKey] = useState(null);
   const [sidebarSearch, setSidebarSearch] = useState("");
   const [postSearch, setPostSearch] = useState("");
@@ -152,12 +215,11 @@ export default function PageScannerPosts() {
   const [likeFilter, setLikeFilter] = useState("ALL");
   const [commentFilter, setCommentFilter] = useState("ALL");
   const [shareFilter, setShareFilter] = useState("ALL");
-  const [sortBy, setSortBy] = useState("NEWEST");
+  const [sortBy, setSortBy] = useState("newest");
   const [selectedPostIds, setSelectedPostIds] = useState(new Set());
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [previewPost, setPreviewPost] = useState(null);
   const [postTablePage, setPostTablePage] = useState(1);
-  const postPageSize = 5;
 
   const logId = useRef(0);
   const pollRef = useRef(null);
@@ -211,16 +273,19 @@ export default function PageScannerPosts() {
     [sessionId],
   );
 
+  /** Số bài theo từng Page của phiên (cột trái) + làm mới bảng đang xem. */
   const refreshPosts = useCallback(async (sid) => {
     if (!sid) return;
     try {
-      const data = await getScannedPosts({ session_id: sid, page: 1, page_size: 200 });
-      const items = (data.items || data.posts || []).map(normalizePostRow);
-      setScannedPosts(items);
-      setResultCount(data.total ?? items.length);
+      const data = await getSessionPostPages(sid);
+      setPagePostCounts(
+        Object.fromEntries((data.items || []).map((r) => [r.page_key, Number(r.post_count) || 0])),
+      );
+      setResultCount(Number(data.total_posts) || 0);
       setLastUpdatedAt(new Date());
+      setTableTick((n) => n + 1);
     } catch {
-      /* ignore */
+      /* lần poll sau thử lại */
     }
   }, []);
 
@@ -275,25 +340,44 @@ export default function PageScannerPosts() {
     };
   }, []);
 
+  /* Khôi phục phiên POST_SCAN đang chạy / tạm dừng khi quay lại trang hoặc reload */
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const data = await getScannedPages({ page: 1, page_size: 100, sort_by: "followers" });
-        if (cancelled || !data?.items?.length) return;
-        const mapped = data.items.map(mapKhoToPage);
-        const combined = [...DEFAULT_SCANNED_PAGES];
-        for (const m of mapped) {
-          if (!combined.some((c) => c.page_key === m.page_key)) combined.push(m);
+        const data = await getActiveCampaign("POST_SCAN");
+        if (cancelled || !data?.active || !(data.sessions || []).length) return;
+        const top =
+          data.sessions.find((s) => s.id === data.primary_session_id) ||
+          data.sessions[data.sessions.length - 1];
+        const settings = parseJsonField(top.settings, {});
+        const pageKeys = (settings.page_keys || []).filter(Boolean);
+        let kho = [];
+        try {
+          kho = (await getScannedPages({ page: 1, page_size: 200, sort_by: "followers" })).items || [];
+        } catch {
+          kho = [];
         }
-        setAvailablePages(combined);
+        if (cancelled) return;
+        const byKey = new Map(kho.map((p) => [p.page_key, p]));
+        setSelectedPages(pageKeys.map((pk, i) => mapKhoToPage(byKey.get(pk) || { page_key: pk }, i)));
+        if (settings.max_posts_per_page) setMaxPostsPerPage(Number(settings.max_posts_per_page));
+        if (typeof settings.skip_existing === "boolean") setDeduplicatePosts(settings.skip_existing);
+        setSessionId(top.id);
+        setResultCount(top.total_unique || 0);
+        setRunPhase(top.status === "PAUSED" ? "paused" : "running");
+        syncSessionLogs(top);
+        pushLog(`Khôi phục phiên POST_SCAN #${top.id} · ${top.status}`, "warn");
+        refreshPosts(top.id);
+        startPoll(top.id);
       } catch {
-        /* keep defaults */
+        /* không có phiên đang chạy */
       }
     })();
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -310,7 +394,7 @@ export default function PageScannerPosts() {
     if (!onlyRecentDays) return null;
     const d = new Date();
     d.setDate(d.getDate() - Math.max(1, recentDaysLimit));
-    return d.toISOString().slice(0, 10);
+    return localIsoDate(d); // ngày theo giờ máy (toISOString là UTC → lệch 1 ngày trước 7h sáng)
   };
 
   const handleStart = async () => {
@@ -319,7 +403,9 @@ export default function PageScannerPosts() {
       const live = accounts.filter(
         (a) => selectedUids.includes(a.uid) && LIVE_STATUSES.has(String(a.status)),
       );
-      const accountUid = live[0]?.uid || selectedUids[0] || null;
+      // Thứ tự xoay vòng = thứ tự acc Live đã chọn (không có acc Live → gửi acc đã chọn, BE kiểm tra)
+      const accountUids = live.length ? live.map((a) => a.uid) : [...selectedUids];
+      const accountUid = accountUids[0] || null;
       if (!accountUid) throw new Error("Chọn ít nhất 1 tài khoản Live.");
 
       const pageKeys = selectedPages.map((p) => p.page_key).filter(Boolean);
@@ -329,7 +415,10 @@ export default function PageScannerPosts() {
       setRunPhase("running");
       setLogs([]);
       setResultCount(0);
-      setScannedPosts([]);
+      setPagePostCounts({});
+      setTableRows([]);
+      setTableTotal(0);
+      setPostTablePage(1);
       setSelectedPostIds(new Set());
       pushLog(
         `Tạo phiên POST_SCAN · ${pageKeys.length} Page · max/page=${maxPostsPerPage} · delay ${delayMin}-${delayMax}s`,
@@ -339,6 +428,9 @@ export default function PageScannerPosts() {
       const res = await createPostScanSession({
         page_keys: pageKeys,
         account_uid: accountUid,
+        account_uids: accountUids,
+        rotate_every: postsPerAccountSwitch,
+        rotate_on_checkpoint: autoRotateOnCheckpoint,
         keep_browser: keepBrowser,
         max_posts_per_page: maxPostsPerPage,
         date_from: computeDateFrom(),
@@ -347,16 +439,21 @@ export default function PageScannerPosts() {
         idle_timeout_s: 90,
         skip_existing: deduplicatePosts,
         skip_pinned_posts: skipPinnedPosts,
-        page_delay_s: delayMin,
-        scroll_delay_s: delayMax,
+        // "Khoảng cách giữa các lần quét" = giãn cách ngẫu nhiên giữa 2 Page (không phải mỗi lần cuộn)
+        page_delay_min_s: delayMin,
+        page_delay_max_s: delayMax,
       });
 
       setSessionId(res.session_id);
       pushLog(`Session #${res.session_id} · ${res.status || "RUNNING"} · ${res.message || "OK"}`, "success");
-      if (autoRotateOnCheckpoint) {
-        pushLog(`Đảo acc khi checkpoint · đổi sau ${postsPerAccountSwitch} bài/nick`, "info");
+      if (accountUids.length > 1) {
+        pushLog(
+          `Xoay vòng ${accountUids.length} tài khoản · đổi sau ${postsPerAccountSwitch} bài/nick` +
+            (autoRotateOnCheckpoint ? " · tự đảo khi checkpoint" : ""),
+          "info",
+        );
       }
-      if (skipPinnedPosts) pushLog("Đã bật lọc bỏ bài viết ghim của Quản trị viên.", "info");
+      if (skipPinnedPosts) pushLog("Bỏ qua bài viết ghim của Quản trị viên.", "info");
       toast.success(`Đã khởi động POST_SCAN #${res.session_id}`);
       startPoll(res.session_id);
     } catch (err) {
@@ -411,75 +508,61 @@ export default function PageScannerPosts() {
     setSelectedPages((prev) => prev.filter((p) => p.page_key !== pageKey));
   };
 
-  const postsByPage = useMemo(() => {
-    const map = {};
-    for (const post of scannedPosts) {
-      const key = post.page_key || "_unknown";
-      if (!map[key]) map[key] = [];
-      map[key].push(post);
-    }
-    return map;
-  }, [scannedPosts]);
-
   const filteredSidebarPages = useMemo(() => {
     const q = sidebarSearch.trim().toLowerCase();
-    return selectedPages.filter((p) => {
-      if (!q) return true;
-      return `${p.name} ${p.page_id} ${p.page_key}`.toLowerCase().includes(q);
-    });
+    return selectedPages.filter((p) => !q || `${p.name} ${p.page_id} ${p.page_key}`.toLowerCase().includes(q));
   }, [selectedPages, sidebarSearch]);
 
   const activePage = selectedPages.find((p) => p.page_key === activePageKey) || selectedPages[0];
-  const activePostsRaw = postsByPage[activePage?.page_key] || [];
+  const pageCount = (key) => Number(pagePostCounts[key]) || 0;
 
-  const filteredPosts = useMemo(() => {
-    let list = [...activePostsRaw];
-    const q = postSearch.trim().toLowerCase();
-    if (q) {
-      list = list.filter(
-        (p) =>
-          p.content.toLowerCase().includes(q) ||
-          String(p.id).toLowerCase().includes(q) ||
-          (p.post_url || "").toLowerCase().includes(q),
-      );
+  /* Bảng bài viết của Page đang xem — phân trang, lọc, sắp xếp phía server (không giới hạn 200 bài) */
+  useEffect(() => {
+    if (!sessionId || !activePage?.page_key) {
+      setTableRows([]);
+      setTableTotal(0);
+      return undefined;
     }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setTableLoading(true);
+      try {
+        const data = await getScannedPosts({
+          session_id: sessionId,
+          page_key: activePage.page_key,
+          page: postTablePage,
+          page_size: POST_PAGE_SIZE,
+          keyword: postSearch.trim() || undefined,
+          days: optNum(dateFilter),
+          min_reactions: optNum(likeFilter),
+          min_comments: optNum(commentFilter),
+          min_shares: optNum(shareFilter),
+          sort_by: sortBy,
+        });
+        if (cancelled) return;
+        setTableRows((data.items || []).map(normalizePostRow));
+        setTableTotal(Number(data.total) || 0);
+      } catch (err) {
+        if (!cancelled) toast.error(`Lỗi tải bài viết: ${err.message}`);
+      } finally {
+        if (!cancelled) setTableLoading(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [sessionId, activePage?.page_key, postTablePage, postSearch, dateFilter, likeFilter, commentFilter, shareFilter, sortBy, tableTick]);
 
-    const now = Date.now();
-    if (dateFilter !== "ALL") {
-      const days = dateFilter === "TODAY" ? 1 : dateFilter === "3DAYS" ? 3 : 7;
-      const cutoff = now - days * 86400000;
-      list = list.filter((p) => {
-        const t = Date.parse(p.published_at);
-        return Number.isFinite(t) ? t >= cutoff : true;
-      });
-    }
-    if (likeFilter === "GT_500") list = list.filter((p) => p.likes > 500);
-    if (likeFilter === "GT_1000") list = list.filter((p) => p.likes > 1000);
-    if (commentFilter === "GT_100") list = list.filter((p) => p.comments > 100);
-    if (commentFilter === "GT_300") list = list.filter((p) => p.comments > 300);
-    if (shareFilter === "GT_50") list = list.filter((p) => p.shares > 50);
-    if (shareFilter === "GT_100") list = list.filter((p) => p.shares > 100);
-
-    list.sort((a, b) => {
-      if (sortBy === "LIKES_DESC") return b.likes - a.likes;
-      if (sortBy === "COMMENTS_DESC") return b.comments - a.comments;
-      return String(b.published_at).localeCompare(String(a.published_at));
-    });
-    return list;
-  }, [activePostsRaw, postSearch, dateFilter, likeFilter, commentFilter, shareFilter, sortBy]);
-
-  const allFilteredSelected =
-    filteredPosts.length > 0 && filteredPosts.every((p) => selectedPostIds.has(p.id));
-  const totalPostPages = Math.max(1, Math.ceil(filteredPosts.length / postPageSize));
-  const safePostPage = Math.min(postTablePage, totalPostPages);
-  const pagedPosts = filteredPosts.slice(
-    (safePostPage - 1) * postPageSize,
-    safePostPage * postPageSize,
-  );
+  const totalPostPages = Math.max(1, Math.ceil(tableTotal / POST_PAGE_SIZE));
+  const allRowsSelected = tableRows.length > 0 && tableRows.every((p) => selectedPostIds.has(p.id));
 
   const handleToggleSelectAllPosts = () => {
-    if (allFilteredSelected) setSelectedPostIds(new Set());
-    else setSelectedPostIds(new Set(filteredPosts.map((p) => p.id)));
+    setSelectedPostIds((prev) => {
+      const next = new Set(prev);
+      tableRows.forEach((p) => (allRowsSelected ? next.delete(p.id) : next.add(p.id)));
+      return next;
+    });
   };
 
   const handleToggleSelectPost = (id) => {
@@ -491,49 +574,67 @@ export default function PageScannerPosts() {
     });
   };
 
-  const exportCsv = (rows, filename) => {
-    if (!rows.length) {
-      toast.info("Chưa có bài viết để xuất.");
-      return;
-    }
-    const header = ["id", "page_key", "content", "post_url", "published_at", "likes", "comments", "shares"];
-    const lines = [header.join(",")];
-    for (const r of rows) {
-      lines.push(
-        header
-          .map((k) => `"${String(r[k] ?? "").replace(/"/g, '""')}"`)
-          .join(","),
+  /** "Xuất Page này" — toàn bộ bài viết của Page trong phiên (tải nối tiếp, không chỉ trang đang xem). */
+  const handleExportActivePage = async () => {
+    if (!sessionId || !activePage) return;
+    try {
+      const rows = [];
+      for (let p = 1; p <= 50; p += 1) {
+        const data = await getScannedPosts({
+          session_id: sessionId,
+          page_key: activePage.page_key,
+          page: p,
+          page_size: 200,
+          sort_by: sortBy,
+        });
+        const batch = data.items || [];
+        rows.push(...batch.map(normalizePostRow));
+        if (!batch.length || rows.length >= (Number(data.total) || 0)) break;
+      }
+      if (!rows.length) {
+        toast.info("Page này chưa có bài viết để xuất.");
+        return;
+      }
+      const csv = toCsv(
+        ["STT", "Nội dung", "Link bài viết", "Ngày đăng", "Thời gian (FB)", "Lượt like", "Bình luận", "Chia sẻ"],
+        rows.map((r, i) => [i + 1, r.content, r.post_url, fmtPostDate(r.published_at), r.published_text, r.likes, r.comments, r.shares]),
       );
+      const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `bai_viet_${String(activePage.page_key).replace(/[:/\\]/g, "_")}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Đã xuất ${rows.length.toLocaleString("vi-VN")} bài viết.`);
+    } catch (err) {
+      toast.error(`Lỗi xuất bài viết: ${err.message}`);
     }
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success(`Đã xuất ${rows.length} bài viết.`);
   };
 
-  const pageStatusMeta = (page) => {
-    const count = (postsByPage[page.page_key] || []).length;
-    if (runPhase === "running" && activePageKey === page.page_key) {
-      return { label: "Đang thu thập...", color: "text-blue-600", status: "RUNNING" };
+  /* Trạng thái từng Page ở cột trái: Page cuối cùng đã có bài = đang thu thập, trước đó = hoàn tất */
+  let lastScannedIdx = -1;
+  selectedPages.forEach((p, i) => {
+    if (pageCount(p.page_key) > 0) lastScannedIdx = i;
+  });
+  const pageStatusMeta = (page, idx) => {
+    if (isBusy) {
+      const cur = Math.max(0, lastScannedIdx);
+      if (idx < cur) return { label: "Hoàn tất quét", color: "text-[#059669]" };
+      if (idx === cur) {
+        return isPaused
+          ? { label: "Tạm dừng", color: "text-[#D97706]" }
+          : { label: "Đang thu thập...", color: "text-[#2563EB]" };
+      }
+      return { label: "Đang chờ hàng đợi", color: "text-[#EA580C]" };
     }
-    if (count > 0 || runPhase === "done") {
-      return { label: "Hoàn tất quét", color: "text-emerald-600", status: "DONE" };
-    }
-    if (isBusy) return { label: "Đang chờ hàng đợi", color: "text-amber-600", status: "QUEUE" };
-    return { label: "Chưa quét", color: "text-slate-500", status: "IDLE" };
+    if (pageCount(page.page_key) > 0) return { label: "Hoàn tất quét", color: "text-[#059669]" };
+    return runPhase === "done"
+      ? { label: "Không có bài mới", color: "text-[#64748B]" }
+      : { label: "Chưa quét", color: "text-[#64748B]" };
   };
-
-  const runningPagesCount = useMemo(() => {
-    if (!isBusy) return selectedPages.filter((p) => (postsByPage[p.page_key] || []).length > 0).length;
-    return Math.max(
-      1,
-      selectedPages.filter((p) => (postsByPage[p.page_key] || []).length > 0).length,
-    );
-  }, [isBusy, selectedPages, postsByPage]);
+  const processedPages = isBusy
+    ? Math.min(selectedPages.length, Math.max(1, lastScannedIdx + 1))
+    : selectedPages.filter((p) => pageCount(p.page_key) > 0).length;
 
   const lastUpdatedLabel = lastUpdatedAt
     ? lastUpdatedAt.toLocaleTimeString("vi-VN", { hour12: false })
@@ -575,7 +676,7 @@ export default function PageScannerPosts() {
 
           <div className="space-y-4">
             <div className="space-y-2">
-              <p className="text-[11px] font-semibold tracking-wide text-[#475569] uppercase">
+              <p className="text-xs font-medium text-[#334155]">
                 Tài khoản Facebook thực thi:
               </p>
               <div className="flex flex-wrap items-center gap-3">
@@ -602,7 +703,7 @@ export default function PageScannerPosts() {
             </div>
 
             <div className="space-y-2">
-              <p className="text-[11px] font-semibold tracking-wide text-[#475569] uppercase">
+              <p className="text-xs font-medium text-[#334155]">
                 Danh sách nhóm mục tiêu:
               </p>
               <div className="flex flex-wrap items-center gap-3">
@@ -624,8 +725,8 @@ export default function PageScannerPosts() {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-medium text-[#334155]">
+            <div className="space-y-2">
+              <span className="block text-xs font-medium text-[#334155]">
                 Khoảng cách giữa các lần quét:
               </span>
               <div className="flex items-center gap-2">
@@ -783,7 +884,7 @@ export default function PageScannerPosts() {
                 </span>
               </div>
               <p className="text-xs text-[#94A3B8]">
-                Kiểm tra ngành nghề và quy mô followers trước khi tiến hành quét
+                Danh sách các trang đã được lập trình sẵn sàng quét bài viết
               </p>
             </div>
           </div>
@@ -833,9 +934,7 @@ export default function PageScannerPosts() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="inline-flex rounded bg-[#F1F5F9] px-2 py-0.5 text-[10px] font-semibold text-[#475569]">
-                        {page.category || "Fanpage"}
-                      </span>
+                      <span className="text-xs text-[#334155]">{page.category || "Fanpage"}</span>
                     </td>
                     <td className="px-4 py-3 font-semibold text-[#0F172A]">
                       {page.followers_text || fmtNum(page.follower_count)} Followers
@@ -904,420 +1003,341 @@ export default function PageScannerPosts() {
         )}
       </div>
 
-      {/* Results — chỉ hiện khi quét xong */}
+      {/* Kết quả — ảnh "Quét bài viết page" */}
       {showResults ? (
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <h2 className="font-heading text-base font-bold text-slate-800">
-              Kết quả quét bài viết Fanpage
-            </h2>
-            <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
-              Tổng {fmtNum(resultCount || scannedPosts.length)} bài viết
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="font-heading text-base font-bold text-[#0F172A]">Kết quả quét bài viết Fanpage</h2>
+            <span className="rounded-full bg-[#E2E8F0] px-3 py-1 text-xs font-semibold text-[#334155]">
+              Tổng {fmtNum(resultCount)} bài viết
             </span>
           </div>
-          <button
-            type="button"
-            onClick={() => exportCsv(scannedPosts, "toan_bo_bai_viet_fanpage.csv")}
-            className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-xs transition-colors hover:bg-emerald-700"
-          >
-            <FileSpreadsheet className="size-4" />
-            Xuất toàn bộ file Excel
-          </button>
-        </div>
 
-        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
-          {/* Left: DANH MỤC PAGE */}
-          <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs lg:col-span-3">
-            <div className="flex items-center justify-between border-b border-slate-100 p-3.5">
-              <span className="text-xs font-bold tracking-wider text-slate-700 uppercase">
-                DANH MỤC PAGE ({selectedPages.length})
-              </span>
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-                Đang chạy {isBusy ? runningPagesCount : Math.min(runningPagesCount, selectedPages.length)}/
-                {selectedPages.length || 0}
-              </span>
-            </div>
-
-            <div className="border-b border-slate-100 p-3">
-              <div className="relative">
-                <Search className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  value={sidebarSearch}
-                  onChange={(e) => setSidebarSearch(e.target.value)}
-                  placeholder="Tìm tên hoặc ID Fanpage..."
-                  className="w-full rounded-lg border border-slate-200 py-1.5 pr-3 pl-8 text-xs focus:border-blue-500 focus:outline-none"
-                />
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-12">
+            {/* Trái: DANH MỤC PAGE */}
+            <div className="flex min-h-[560px] flex-col overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white lg:col-span-4">
+              <div className="flex items-center justify-between px-4 pt-4 pb-3">
+                <span className="text-xs font-bold tracking-wide text-[#334155] uppercase">
+                  Danh mục Page ({selectedPages.length})
+                </span>
+                <span className="rounded-md bg-[#DBEAFE] px-2 py-0.5 text-[11px] font-semibold text-[#1D4ED8]">
+                  {isBusy ? "Đang chạy" : "Đã quét"} {processedPages}/{selectedPages.length}
+                </span>
               </div>
-            </div>
-
-            <div className="max-h-[520px] divide-y divide-slate-100 overflow-y-auto">
-              {filteredSidebarPages.length === 0 ? (
-                <p className="px-4 py-8 text-center text-xs text-slate-400">Chưa chọn page</p>
-              ) : (
-                filteredSidebarPages.map((page, pIdx) => {
-                  const isSelected = page.page_key === activePage?.page_key;
-                  const count = (postsByPage[page.page_key] || []).length;
-                  const st = pageStatusMeta(page);
-                  return (
-                    <button
-                      key={page.page_key}
-                      type="button"
-                      onClick={() => {
-                        setActivePageKey(page.page_key);
-                        setPostTablePage(1);
-                      }}
-                      className={`flex w-full cursor-pointer items-start justify-between gap-2.5 p-3.5 text-left transition-colors ${
-                        isSelected
-                          ? "border-l-4 border-l-blue-600 bg-blue-50/80"
-                          : "hover:bg-slate-50"
-                      }`}
-                    >
-                      <div className="flex min-w-0 items-start gap-2.5">
+              <div className="px-4 pb-3">
+                <div className="relative">
+                  <Search className="absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-[#94A3B8]" />
+                  <input
+                    type="text"
+                    value={sidebarSearch}
+                    onChange={(e) => setSidebarSearch(e.target.value)}
+                    placeholder="Tìm tên hoặc ID Fanpage..."
+                    className="h-9 w-full rounded-lg border border-[#E2E8F0] pr-3 pl-8 text-xs outline-none focus:border-[#2563EB]"
+                  />
+                </div>
+              </div>
+              <div className="flex-1 space-y-2.5 overflow-y-auto px-4 pb-4">
+                {filteredSidebarPages.length === 0 ? (
+                  <p className="py-8 text-center text-xs text-[#94A3B8]">Chưa chọn page</p>
+                ) : (
+                  filteredSidebarPages.map((page) => {
+                    const idx = selectedPages.findIndex((p) => p.page_key === page.page_key);
+                    const isSelected = page.page_key === activePage?.page_key;
+                    const st = pageStatusMeta(page, idx);
+                    return (
+                      <button
+                        key={page.page_key}
+                        type="button"
+                        onClick={() => {
+                          setActivePageKey(page.page_key);
+                          setPostTablePage(1);
+                        }}
+                        className={`flex w-full cursor-pointer items-center gap-3 rounded-xl border p-3 text-left transition ${
+                          isSelected
+                            ? "border-2 border-[#2563EB] bg-white shadow-sm"
+                            : "border-[#E2E8F0] bg-white hover:bg-[#F8FAFC]"
+                        }`}
+                      >
                         <div
-                          className={`flex size-9 shrink-0 items-center justify-center rounded-xl text-xs font-bold text-white ${
-                            page.avatar_color || AVATAR_COLORS[pIdx % AVATAR_COLORS.length]
+                          className={`flex size-9 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white ${
+                            page.avatar_color || AVATAR_COLORS[idx % AVATAR_COLORS.length]
                           }`}
                         >
                           {page.avatar_initials || initialsOf(page.name)}
                         </div>
-                        <div className="min-w-0">
-                          <div className="truncate text-xs font-bold text-slate-800">{page.name}</div>
-                          <div className="mt-0.5 text-[11px] text-slate-400">
-                            ID: {page.page_id || page.uid}
-                          </div>
-                          <div className={`mt-1 text-[11px] font-semibold ${st.color}`}>
-                            ● {st.label}
-                          </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-xs font-bold text-[#0F172A]">{page.name}</div>
+                          <div className={`mt-0.5 text-[11px] font-medium ${st.color}`}>{st.label}</div>
                         </div>
-                      </div>
-                      <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-bold ${
-                          isSelected ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-700"
-                        }`}
-                      >
-                        {count} bài
-                      </span>
+                        <span
+                          className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${
+                            isSelected
+                              ? "border-[#BFDBFE] bg-[#EFF6FF] text-[#1D4ED8]"
+                              : "border-[#E2E8F0] bg-[#F8FAFC] text-[#334155]"
+                          }`}
+                        >
+                          {fmtNum(pageCount(page.page_key))} bài
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Phải: bài viết của Page đang xem */}
+            <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white lg:col-span-8">
+              {activePage ? (
+                <>
+                  <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-5 pb-3">
+                    <div>
+                      <h3 className="font-heading text-base font-bold text-[#0F172A]">{activePage.name}</h3>
+                      <p className="mt-0.5 text-xs text-[#64748B]">
+                        Quy mô:{" "}
+                        <strong className="text-[#0F172A]">
+                          {activePage.followers_text || fmtNum(activePage.follower_count)} Followers
+                        </strong>{" "}
+                        • Đã quét: <strong className="text-[#2563EB]">{fmtNum(pageCount(activePage.page_key))}</strong> bài viết •
+                        Cập nhật lúc: {lastUpdatedLabel}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleExportActivePage}
+                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#BFDBFE] bg-white px-3.5 py-2 text-xs font-semibold text-[#1D4ED8] transition hover:bg-[#EFF6FF]"
+                    >
+                      <FileSpreadsheet className="size-4" />
+                      Xuất Page này
                     </button>
-                  );
-                })
+                  </div>
+
+                  <div className="space-y-3 border-b border-[#F1F5F9] px-5 pb-4">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="relative min-w-[240px] flex-1">
+                        <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-[#94A3B8]" />
+                        <input
+                          type="text"
+                          value={postSearch}
+                          onChange={(e) => {
+                            setPostSearch(e.target.value);
+                            setPostTablePage(1);
+                          }}
+                          placeholder="Tìm kiếm nội dung bài viết, hashtag (#sofa, #salong), SĐT..."
+                          className="h-9 w-full rounded-lg border border-[#E2E8F0] bg-white pr-3 pl-9 text-xs outline-none focus:border-[#2563EB]"
+                        />
+                      </div>
+                      <select
+                        value={sortBy}
+                        onChange={(e) => {
+                          setSortBy(e.target.value);
+                          setPostTablePage(1);
+                        }}
+                        className="h-9 min-w-[200px] rounded-lg border border-[#E2E8F0] bg-white px-3 text-xs font-medium text-[#1E293B] outline-none"
+                      >
+                        {POST_SORTS.map(([v, l]) => (
+                          <option key={v} value={v}>
+                            Sắp xếp: {l}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      <FilterSelect
+                        label="Lọc Ngày Đăng:"
+                        value={dateFilter}
+                        options={DATE_FILTERS}
+                        onChange={(v) => {
+                          setDateFilter(v);
+                          setPostTablePage(1);
+                        }}
+                      />
+                      <FilterSelect
+                        label="Lọc Lượt Like:"
+                        value={likeFilter}
+                        options={LIKE_FILTERS}
+                        onChange={(v) => {
+                          setLikeFilter(v);
+                          setPostTablePage(1);
+                        }}
+                      />
+                      <FilterSelect
+                        label="Lọc Bình Luận:"
+                        value={commentFilter}
+                        options={COMMENT_FILTERS}
+                        onChange={(v) => {
+                          setCommentFilter(v);
+                          setPostTablePage(1);
+                        }}
+                      />
+                      <FilterSelect
+                        label="Lọc Lượt Share:"
+                        value={shareFilter}
+                        options={SHARE_FILTERS}
+                        onChange={(v) => {
+                          setShareFilter(v);
+                          setPostTablePage(1);
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto px-5 pt-3">
+                    <table className="w-full min-w-[720px] border-collapse text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-[#F1F5F9] text-[11px] font-bold text-[#475569] uppercase">
+                          <th className="w-10 px-2 py-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={allRowsSelected}
+                              onChange={handleToggleSelectAllPosts}
+                              className="size-3.5 rounded border-slate-300 text-blue-600"
+                            />
+                          </th>
+                          <th className="w-12 px-2 py-3">STT</th>
+                          <th className="min-w-[160px] px-2 py-3">Nội dung bài viết</th>
+                          <th className="px-2 py-3">Link post</th>
+                          <th className="px-2 py-3 text-center">Ngày đăng</th>
+                          <th className="px-2 py-3 text-center">Lượt like</th>
+                          <th className="px-2 py-3 text-center">Bình luận</th>
+                          <th className="px-2 py-3 text-center">Chia sẻ</th>
+                          <th className="w-16 px-2 py-3 text-center">Thao tác</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#F1F5F9]">
+                        {tableLoading && tableRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={9} className="px-4 py-10 text-center text-[#64748B]">
+                              <Loader2 className="mx-auto mb-2 size-5 animate-spin text-[#2563EB]" />
+                              {isBusy ? "Đang thu thập bài viết..." : "Đang tải bài viết..."}
+                            </td>
+                          </tr>
+                        ) : tableRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={9} className="px-4 py-10 text-center text-[#94A3B8]">
+                              {isBusy ? "Chưa có bài viết nào cho page này — đang quét..." : "Không có bài viết nào khớp bộ lọc."}
+                            </td>
+                          </tr>
+                        ) : (
+                          tableRows.map((post, idx) => {
+                            const stt = (postTablePage - 1) * POST_PAGE_SIZE + idx + 1;
+                            const url = post.post_url
+                              ? post.post_url.startsWith("http")
+                                ? post.post_url
+                                : `https://${post.post_url}`
+                              : "";
+                            return (
+                              <tr key={post.id} className="hover:bg-[#F8FAFC]">
+                                <td className="px-2 py-4 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedPostIds.has(post.id)}
+                                    onChange={() => handleToggleSelectPost(post.id)}
+                                    className="size-3.5 rounded border-slate-300 text-blue-600"
+                                  />
+                                </td>
+                                <td className="px-2 py-4 font-mono text-[#64748B]">{padStt(stt)}</td>
+                                <td className="max-w-[220px] px-2 py-4">
+                                  <p className="truncate font-medium text-[#1E293B]" title={post.content}>
+                                    {post.content}
+                                  </p>
+                                </td>
+                                <td className="px-2 py-4">
+                                  {url ? (
+                                    <a
+                                      href={url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="inline-flex max-w-[150px] items-center gap-1 font-mono text-[11px] text-[#2563EB] hover:underline"
+                                      title={url}
+                                    >
+                                      <span className="truncate">{shortFbUrl(url)}</span>
+                                      <ExternalLink className="size-3 shrink-0" />
+                                    </a>
+                                  ) : (
+                                    <span className="text-[#94A3B8]">—</span>
+                                  )}
+                                </td>
+                                <td className="px-2 py-4 text-center whitespace-nowrap">
+                                  <div className="font-semibold text-[#1E293B]">{fmtPostDate(post.published_at)}</div>
+                                  {post.published_text ? (
+                                    <div className="mx-auto max-w-[110px] truncate text-[11px] text-[#94A3B8]" title={post.published_text}>
+                                      {post.published_text}
+                                    </div>
+                                  ) : null}
+                                </td>
+                                <td className="px-2 py-4 text-center">
+                                  <span className="inline-flex min-w-12 justify-center rounded-full bg-[#DBEAFE] px-2.5 py-0.5 text-[11px] font-bold text-[#1D4ED8]">
+                                    {fmtNum(post.likes)}
+                                  </span>
+                                </td>
+                                <td className="px-2 py-4 text-center">
+                                  <span className="inline-flex min-w-12 justify-center rounded-full bg-[#F3E8FF] px-2.5 py-0.5 text-[11px] font-bold text-[#7E22CE]">
+                                    {fmtNum(post.comments)}
+                                  </span>
+                                </td>
+                                <td className="px-2 py-4 text-center font-semibold text-[#334155]">{fmtNum(post.shares)}</td>
+                                <td className="px-2 py-4 text-center">
+                                  <div className="inline-flex items-center justify-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => setPreviewPost(post)}
+                                      className="cursor-pointer rounded p-1 text-[#94A3B8] transition hover:bg-[#EFF6FF] hover:text-[#2563EB]"
+                                      title="Xem chi tiết bài viết"
+                                    >
+                                      <Eye className="size-4" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        const n = await runDelete({
+                                          count: 1,
+                                          noun: "bài viết",
+                                          request: () => deleteScannedPosts({ post_ids: [post.id] }),
+                                        });
+                                        if (n == null) return;
+                                        setSelectedPostIds((prev) => {
+                                          const next = new Set(prev);
+                                          next.delete(post.id);
+                                          return next;
+                                        });
+                                        refreshPosts(sessionId);
+                                      }}
+                                      className="cursor-pointer rounded p-1 text-[#94A3B8] transition hover:bg-red-50 hover:text-red-600"
+                                      title="Xóa bài viết"
+                                    >
+                                      <Trash2 className="size-3.5" />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-[#F1F5F9] px-5 py-4 text-xs text-[#64748B]">
+                    <span>
+                      Hiển thị{" "}
+                      <strong className="text-[#0F172A]">
+                        {tableTotal === 0
+                          ? 0
+                          : `${(postTablePage - 1) * POST_PAGE_SIZE + 1} - ${Math.min(postTablePage * POST_PAGE_SIZE, tableTotal)}`}
+                      </strong>{" "}
+                      của <strong className="text-[#0F172A]">{fmtNum(tableTotal)}</strong> bài viết
+                    </span>
+                    <Pager page={postTablePage} totalPages={totalPostPages} onChange={setPostTablePage} />
+                  </div>
+                </>
+              ) : (
+                <div className="flex min-h-[320px] items-center justify-center text-sm text-[#94A3B8]">
+                  Chọn page ở cột trái để xem kết quả
+                </div>
               )}
             </div>
           </div>
-
-          {/* Right detail */}
-          <div className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-xs lg:col-span-9">
-            {activePage ? (
-              <>
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-4">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-sm font-bold text-slate-900">{activePage.name}</h3>
-                      <span className="rounded-md bg-blue-50 px-2 py-0.5 text-[11px] font-bold text-blue-700">
-                        {activePage.category || "Fanpage"}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Quy mô:{" "}
-                      <strong className="text-slate-700">
-                        {activePage.followers_text || fmtNum(activePage.follower_count)} Followers
-                      </strong>{" "}
-                      • Đã quét:{" "}
-                      <strong className="text-blue-600">
-                        {(postsByPage[activePage.page_key] || []).length} bài viết
-                      </strong>{" "}
-                      • Cập nhật lúc: {lastUpdatedLabel}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      exportCsv(
-                        postsByPage[activePage.page_key] || [],
-                        `bai_viet_${activePage.page_id || "page"}.csv`,
-                      )
-                    }
-                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs font-bold text-emerald-700 transition-colors hover:bg-emerald-100"
-                  >
-                    <Download className="size-3.5" />
-                    Xuất Page này
-                  </button>
-                </div>
-
-                <div className="space-y-3 border-b border-slate-100 bg-slate-50/60 p-4">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div className="relative min-w-[240px] flex-1">
-                      <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-slate-400" />
-                      <input
-                        type="text"
-                        value={postSearch}
-                        onChange={(e) => setPostSearch(e.target.value)}
-                        placeholder="Tìm từ khóa trong nội dung bài viết, ID post, hashtag..."
-                        className="w-full rounded-xl border border-slate-200 bg-white py-2 pr-3 pl-9 text-xs focus:border-blue-500 focus:outline-none"
-                      />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold text-slate-500">Sắp xếp:</span>
-                      <select
-                        value={sortBy}
-                        onChange={(e) => setSortBy(e.target.value)}
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 focus:outline-none"
-                      >
-                        <option value="NEWEST">Mới nhất</option>
-                        <option value="LIKES_DESC">Lượt Like cao nhất</option>
-                        <option value="COMMENTS_DESC">Bình luận nhiều nhất</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-                    <select
-                      value={dateFilter}
-                      onChange={(e) => setDateFilter(e.target.value)}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
-                    >
-                      <option value="ALL">Lọc Ngày Đăng: Tất cả</option>
-                      <option value="TODAY">Hôm nay</option>
-                      <option value="3DAYS">3 ngày gần đây</option>
-                      <option value="7DAYS">7 ngày gần đây</option>
-                    </select>
-                    <select
-                      value={likeFilter}
-                      onChange={(e) => setLikeFilter(e.target.value)}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
-                    >
-                      <option value="ALL">Lọc Lượt Like: Tất cả</option>
-                      <option value="GT_500">Trên 500 Likes</option>
-                      <option value="GT_1000">Trên 1.000 Likes</option>
-                    </select>
-                    <select
-                      value={commentFilter}
-                      onChange={(e) => setCommentFilter(e.target.value)}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
-                    >
-                      <option value="ALL">Lọc Bình Luận: Tất cả</option>
-                      <option value="GT_100">Trên 100 Comments</option>
-                      <option value="GT_300">Trên 300 Comments</option>
-                    </select>
-                    <select
-                      value={shareFilter}
-                      onChange={(e) => setShareFilter(e.target.value)}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
-                    >
-                      <option value="ALL">Lọc Lượt Share: Tất cả</option>
-                      <option value="GT_50">Trên 50 Shares</option>
-                      <option value="GT_100">Trên 100 Shares</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-100 bg-slate-50 text-[11px] font-bold text-slate-500 uppercase">
-                        <th className="w-10 px-3 py-3 text-center">
-                          <input
-                            type="checkbox"
-                            checked={allFilteredSelected}
-                            onChange={handleToggleSelectAllPosts}
-                            className="size-3.5 rounded border-slate-300 text-blue-600"
-                          />
-                        </th>
-                        <th className="w-12 px-3 py-3">STT</th>
-                        <th className="min-w-[260px] px-3 py-3">NỘI DUNG BÀI VIẾT</th>
-                        <th className="px-3 py-3">LINK POST</th>
-                        <th className="px-3 py-3">NGÀY ĐĂNG</th>
-                        <th className="px-3 py-3 text-center">LƯỢT LIKE</th>
-                        <th className="px-3 py-3 text-center">BÌNH LUẬN</th>
-                        <th className="px-3 py-3 text-center">CHIA SẺ</th>
-                        <th className="w-20 px-3 py-3 text-center">THAO TÁC</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {isBusy && filteredPosts.length === 0 ? (
-                        <tr>
-                          <td colSpan={9} className="px-4 py-10 text-center text-slate-500">
-                            <Loader2 className="mx-auto mb-2 size-5 animate-spin text-blue-600" />
-                            Đang thu thập bài viết...
-                          </td>
-                        </tr>
-                      ) : filteredPosts.length === 0 ? (
-                        <tr>
-                          <td colSpan={9} className="px-4 py-10 text-center text-slate-400">
-                            Không có bài viết nào được thu thập cho page này.
-                          </td>
-                        </tr>
-                      ) : (
-                        pagedPosts.map((post, idx) => {
-                          const realIdx = (safePostPage - 1) * postPageSize + idx;
-                          const url = post.post_url
-                            ? post.post_url.startsWith("http")
-                              ? post.post_url
-                              : `https://${post.post_url}`
-                            : "";
-                          const dateStr = post.published_at
-                            ? String(post.published_at).slice(0, 10)
-                            : "—";
-                          const timeStr =
-                            post.published_at && String(post.published_at).includes("T")
-                              ? String(post.published_at).slice(11, 16)
-                              : "";
-                          return (
-                            <tr key={post.id} className="hover:bg-slate-50/80">
-                              <td className="px-3 py-3 text-center">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedPostIds.has(post.id)}
-                                  onChange={() => handleToggleSelectPost(post.id)}
-                                  className="size-3.5 rounded border-slate-300 text-blue-600"
-                                />
-                              </td>
-                              <td className="px-3 py-3 font-mono font-semibold text-slate-500">
-                                {String(realIdx + 1).padStart(2, "0")}
-                              </td>
-                              <td className="max-w-md px-3 py-3">
-                                <p className="line-clamp-2 leading-relaxed font-medium text-slate-800">
-                                  {post.content}
-                                </p>
-                                <span className="text-[10px] text-slate-400">
-                                  Post ID: {String(post.id).replace(/^p_/, "")}
-                                </span>
-                              </td>
-                              <td className="px-3 py-3">
-                                {url ? (
-                                  <a
-                                    href={url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:underline"
-                                  >
-                                    {(post.post_url || "").slice(0, 26)}
-                                    {(post.post_url || "").length > 26 ? "..." : ""}
-                                    <ExternalLink className="size-3" />
-                                  </a>
-                                ) : (
-                                  <span className="text-slate-400">—</span>
-                                )}
-                              </td>
-                              <td className="px-3 py-3 whitespace-nowrap">
-                                <div className="font-semibold text-slate-700">{dateStr}</div>
-                                {timeStr ? (
-                                  <div className="text-[11px] text-slate-400">{timeStr}</div>
-                                ) : null}
-                              </td>
-                              <td className="px-3 py-3 text-center">
-                                <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-[11px] font-bold text-blue-700">
-                                  <ThumbsUp className="size-3" />
-                                  {fmtNum(post.likes)}
-                                </span>
-                              </td>
-                              <td className="px-3 py-3 text-center">
-                                <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2.5 py-0.5 text-[11px] font-bold text-purple-700">
-                                  <MessageSquare className="size-3" />
-                                  {fmtNum(post.comments)}
-                                </span>
-                              </td>
-                              <td className="px-3 py-3 text-center font-semibold text-slate-600">
-                                {fmtNum(post.shares)}
-                              </td>
-                              <td className="px-3 py-3 text-center">
-                                <div className="inline-flex items-center justify-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => setPreviewPost(post)}
-                                    className="cursor-pointer rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-blue-50 hover:text-blue-600"
-                                    title="Xem chi tiết bài viết"
-                                  >
-                                    <Eye className="size-4" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setPostsByPage((prev) => ({
-                                        ...prev,
-                                        [activePage.page_key]: (
-                                          prev[activePage.page_key] || []
-                                        ).filter((p) => p.id !== post.id),
-                                      }));
-                                      toast.success("Đã xóa bài viết khỏi danh sách.");
-                                    }}
-                                    className="cursor-pointer rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
-                                    title="Xóa bài viết"
-                                  >
-                                    <Trash2 className="size-3.5" />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-                  <span>
-                    Hiển thị{" "}
-                    <strong>
-                      {filteredPosts.length === 0
-                        ? 0
-                        : `${(safePostPage - 1) * postPageSize + 1} - ${Math.min(
-                            safePostPage * postPageSize,
-                            filteredPosts.length,
-                          )}`}
-                    </strong>{" "}
-                    trong tổng số{" "}
-                    <strong>
-                      {(postsByPage[activePage.page_key] || []).length || filteredPosts.length}
-                    </strong>{" "}
-                    bài viết
-                  </span>
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      disabled={safePostPage <= 1}
-                      onClick={() => setPostTablePage((p) => Math.max(1, p - 1))}
-                      className="rounded border border-slate-200 px-2.5 py-1 text-slate-600 hover:bg-slate-50 disabled:opacity-40"
-                    >
-                      Trước
-                    </button>
-                    {Array.from({ length: totalPostPages }, (_, i) => i + 1)
-                      .slice(0, 5)
-                      .map((p) => (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => setPostTablePage(p)}
-                          className={`rounded px-2.5 py-1 font-bold ${
-                            p === safePostPage
-                              ? "bg-blue-600 text-white"
-                              : "border border-slate-200 text-slate-600 hover:bg-slate-50"
-                          }`}
-                        >
-                          {p}
-                        </button>
-                      ))}
-                    <button
-                      type="button"
-                      disabled={safePostPage >= totalPostPages}
-                      onClick={() => setPostTablePage((p) => Math.min(totalPostPages, p + 1))}
-                      className="rounded border border-slate-200 px-2.5 py-1 text-slate-600 hover:bg-slate-50 disabled:opacity-40"
-                    >
-                      Sau
-                    </button>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="flex min-h-[320px] items-center justify-center text-sm text-slate-400">
-                Chọn page ở cột trái để xem kết quả
-              </div>
-            )}
-          </div>
         </div>
-      </div>
       ) : null}
 
       {previewPost ? (
@@ -1360,7 +1380,7 @@ export default function PageScannerPosts() {
       ) : null}
 
       {(runPhase !== "idle" || logs.length > 0) && (
-        <LiveLogConsole title="Live Log · Quét bài viết page" logs={logs} phase={runPhase} />
+        <LiveLogConsole logs={logs} phase={runPhase} />
       )}
 
       <SelectAccountsModal
@@ -1378,7 +1398,6 @@ export default function PageScannerPosts() {
       <SelectPagesModal
         open={showPageModal}
         onClose={() => setShowPageModal(false)}
-        availablePages={availablePages}
         selectedPages={selectedPages}
         onConfirm={(pages) => {
           setSelectedPages(pages.map((p, i) => mapKhoToPage(p, i)));

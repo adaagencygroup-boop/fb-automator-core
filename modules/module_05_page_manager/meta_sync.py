@@ -10,6 +10,11 @@ from urllib.parse import urlencode, urlsplit, parse_qs
 
 logger = logging.getLogger(__name__)
 
+try:
+    from psycopg2.extras import execute_values
+except ImportError:
+    execute_values = None
+
 from core.database.connection import db
 from core.facebook.fb_graph_client import fb_client, MetaAPIError
 from modules.module_02_account_manager.context import owner_scope
@@ -156,22 +161,53 @@ def save(owner, uid, prepared):
                 facebook_name = EXCLUDED.facebook_name, token_metadata = EXCLUDED.token_metadata, updated_at = NOW()""",
             (owner, uid, meta["app_id"], identity["id"], identity["name"], json.dumps(meta)))
         cur.execute("UPDATE accounts SET token = %s WHERE user_id = %s AND uid = %s", (prepared["token"], owner, uid))
-        for page in sorted(prepared["pages"], key=lambda item: item["id"]):
-            cur.execute("""INSERT INTO pages
-                (user_id, page_id, page_name, access_token, category, account_uid, status, token_metadata)
-                VALUES (%s, %s, %s, %s, %s, %s, 'ACTIVE', %s::jsonb)
-                ON CONFLICT (user_id, page_id) DO UPDATE SET
-                    page_name = EXCLUDED.page_name, access_token = EXCLUDED.access_token,
-                    category = EXCLUDED.category, account_uid = EXCLUDED.account_uid,
-                    web_connection_id = NULL,
-                    token_metadata = EXCLUDED.token_metadata, status = 'ACTIVE', updated_at = NOW()""",
-                (owner, page["id"], page["name"], page["access_token"], page.get("category"), uid, json.dumps(page["token_metadata"])))
+        pages = prepared.get("pages") or []
+        if pages:
+            sorted_pages = sorted(pages, key=lambda item: item["id"])
+            rows = []
+            for page in sorted_pages:
+                raw_meta = page.get("token_metadata")
+                meta_json = raw_meta if isinstance(raw_meta, str) else json.dumps(raw_meta or {})
+                rows.append((
+                    owner,
+                    page["id"],
+                    page["name"],
+                    page["access_token"],
+                    page.get("category"),
+                    uid,
+                    None,
+                    "ACTIVE",
+                    meta_json,
+                ))
+            template = "(%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)"
+            if hasattr(cur, "connection") and getattr(cur.connection, "encoding", None) and execute_values:
+                sql = """INSERT INTO pages
+                    (user_id, page_id, page_name, access_token, category, account_uid, web_connection_id, status, token_metadata)
+                    VALUES %s
+                    ON CONFLICT (user_id, page_id) DO UPDATE SET
+                        page_name = EXCLUDED.page_name, access_token = EXCLUDED.access_token,
+                        category = EXCLUDED.category, account_uid = EXCLUDED.account_uid,
+                        web_connection_id = NULL,
+                        token_metadata = EXCLUDED.token_metadata, status = 'ACTIVE', updated_at = NOW()"""
+                execute_values(cur, sql, rows, template=template)
+            else:
+                placeholders = ", ".join([template] * len(rows))
+                sql = f"""INSERT INTO pages
+                    (user_id, page_id, page_name, access_token, category, account_uid, web_connection_id, status, token_metadata)
+                    VALUES {placeholders}
+                    ON CONFLICT (user_id, page_id) DO UPDATE SET
+                        page_name = EXCLUDED.page_name, access_token = EXCLUDED.access_token,
+                        category = EXCLUDED.category, account_uid = EXCLUDED.account_uid,
+                        web_connection_id = NULL,
+                        token_metadata = EXCLUDED.token_metadata, status = 'ACTIVE', updated_at = NOW()"""
+                flat = [val for row in rows for val in row]
+                cur.execute(sql, flat)
 
     # Khởi chạy kiểm tra ngầm đa luồng cho các Page Token (8 workers, siêu nhẹ RAM)
-    start_background_page_verification(owner, prepared["pages"], identity["id"])
+    start_background_page_verification(owner, pages, identity["id"])
 
-    return {"success": True, "count": len(prepared["pages"]), "identity": identity,
-            "message": f"Đã lưu token và đồng bộ {len(prepared['pages'])} Fanpage."}
+    return {"success": True, "count": len(pages), "identity": identity,
+            "message": f"Đã lưu token và đồng bộ {len(pages)} Fanpage."}
 
 
 def _update(job, **values):

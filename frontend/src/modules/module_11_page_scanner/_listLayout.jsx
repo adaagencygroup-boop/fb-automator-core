@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Loader2,
   FolderInput,
+  Trash2,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -101,8 +102,8 @@ export function SideListItem({
   );
 }
 
-/** Thanh chọn hàng (Figma: N đang tick · Chuyển danh mục · Xuất) */
-export function SelectionBar({ count, onExport, onMoveCategory, moveLabel = "Chuyển danh mục" }) {
+/** Thanh chọn hàng (Figma: N đang tick · Chuyển danh mục · Xuất · Xóa (N)) */
+export function SelectionBar({ count, onExport, onMoveCategory, onDelete, moveLabel = "Chuyển danh mục" }) {
   if (!count) return null;
   return (
     <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
@@ -118,6 +119,11 @@ export function SelectionBar({ count, onExport, onMoveCategory, moveLabel = "Chu
         {onExport ? (
           <Button type="button" size="sm" variant="outline" className="h-7 gap-1 border-emerald-200 bg-emerald-50 text-[11px] text-emerald-700" onClick={onExport}>
             <Download className="size-3.5" /> Xuất
+          </Button>
+        ) : null}
+        {onDelete ? (
+          <Button type="button" size="sm" variant="outline" className="h-7 gap-1 border-red-200 bg-red-50 text-[11px] text-red-600 hover:bg-red-100" onClick={onDelete}>
+            <Trash2 className="size-3.5" /> Xóa ({count.toLocaleString("vi-VN")})
           </Button>
         ) : null}
       </div>

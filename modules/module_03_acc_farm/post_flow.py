@@ -16,6 +16,7 @@ import base64
 import hmac
 import hashlib
 import struct
+import threading
 from urllib.parse import urlparse, parse_qs, urlencode
 from typing import Optional, Any, List, Callable, NamedTuple
 import json
@@ -38,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 DEAD_TEXT = ("tài khoản của bạn đã bị khóa", "your account has been locked")
 BLOCK_TEXT = ("tạm thời bị chặn", "temporarily blocked")
+
+# 2 luồng Extract Share cùng Copy link → đụng 1 clipboard Windows → permalink lệch
+_CLIPBOARD_EXTRACT_LOCK = threading.Lock()
 
 
 class PostAccountDead(Exception):
@@ -673,33 +677,52 @@ def wait_dialog_closed(
 
 
 def is_audience_dialog_open(driver) -> bool:
-    """Kiểm tra xem hộp thoại chọn đối tượng (Post audience) có đang thực sự mở hay không."""
+    """True khi panel chọn đối tượng đang HIỂN THỊ (kể cả lồng trong Create post)."""
     js = """
+        function isVisible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 8 || r.height < 8) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+            return true;
+        }
         const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
-        if (dialogs.length === 0) return false;
-
         for (const d of dialogs) {
+            if (!isVisible(d)) continue;
             const label = (d.getAttribute('aria-label') || '').toLowerCase();
-            if (label.includes('đối tượng bài viết') || label.includes('post audience') || label.includes('select audience') || label.includes('chọn đối tượng')) {
-                const rect = d.getBoundingClientRect();
-                if (rect.width > 50 && rect.height > 50) return true;
+            if (label.includes('đối tượng bài viết') || label.includes('post audience')
+                || label.includes('select audience') || label.includes('chọn đối tượng')) {
+                return true;
             }
             const header = d.querySelector('h2, h1');
-            if (header) {
+            if (header && isVisible(header)) {
                 const ht = (header.innerText || header.textContent || '').trim().toLowerCase();
-                if (ht === 'đối tượng bài viết' || ht === 'post audience' || ht === 'select audience' || ht === 'chọn đối tượng') {
-                    const rect = d.getBoundingClientRect();
-                    if (rect.width > 50 && rect.height > 50) return true;
+                if (ht === 'đối tượng bài viết' || ht === 'post audience'
+                    || ht === 'select audience' || ht === 'chọn đối tượng'
+                    || ht.includes('who can see your post') || ht.includes('ai có thể xem')) {
+                    return true;
                 }
             }
-            const radios = d.querySelectorAll('div[role="radio"], div[role="radiogroup"]');
+            // Audience lồng trong Create post: Done + Back đang hiện
+            const btns = Array.from(d.querySelectorAll('div[role="button"], button')).filter(isVisible);
+            const hasDone = btns.some(b => {
+                const t = ((b.innerText || b.textContent || '') + '').trim().toLowerCase();
+                const a = ((b.getAttribute('aria-label') || '') + '').trim().toLowerCase();
+                return t === 'done' || t === 'xong' || a === 'done' || a === 'xong';
+            });
+            const hasBack = btns.some(b => {
+                const a = ((b.getAttribute('aria-label') || '') + '').trim().toLowerCase();
+                return a === 'back' || a.includes('cancel privacy');
+            });
+            if (hasDone && hasBack) return true;
+
+            const radios = Array.from(d.querySelectorAll('div[role="radio"]')).filter(isVisible);
             if (radios.length >= 2) {
-                const dText = (d.innerText || '').toLowerCase();
-                if ((dText.includes('công khai') || dText.includes('public')) && (dText.includes('bạn bè') || dText.includes('friends'))) {
-                    if (!label.includes('tạo bài viết') && !label.includes('create post')) {
-                        const rect = d.getBoundingClientRect();
-                        if (rect.width > 50 && rect.height > 50) return true;
-                    }
+                const joined = radios.map(r => ((r.innerText || '') + '').toLowerCase()).join(' | ');
+                if ((joined.includes('công khai') || joined.includes('public'))
+                    && (joined.includes('bạn bè') || joined.includes('friends'))) {
+                    return true;
                 }
             }
         }
@@ -740,6 +763,175 @@ def is_composer_dialog_open(driver) -> bool:
         return False
 
 
+def _status_dismiss_notifications_dialog(driver, log_cb=None) -> bool:
+    """Đóng hộp Notifications nếu đang đè Share/composer."""
+    def log(msg: str):
+        if log_cb:
+            log_cb(msg)
+        logger.info(msg)
+
+    try:
+        closed = driver.execute_script(
+            r"""
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                if (r.width < 20 || r.height < 20) return false;
+                const st = window.getComputedStyle(el);
+                return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0;
+            }
+            const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).filter(isVisible);
+            const notif = dialogs.find(d => {
+                const a = ((d.getAttribute('aria-label') || '') + '').toLowerCase();
+                const t = ((d.innerText || '') + '').toLowerCase();
+                return a.includes('notification') || t.startsWith('notifications')
+                    || t.includes('notification actions') || t.includes('see previous notifications');
+            });
+            if (!notif) return false;
+            const closeBtn = Array.from(notif.querySelectorAll('div[role="button"], button')).find(b => {
+                if (!isVisible(b)) return false;
+                const a = ((b.getAttribute('aria-label') || '') + '').toLowerCase();
+                const t = ((b.innerText || b.textContent || '') + '').trim().toLowerCase();
+                return a === 'close' || a === 'đóng' || t === 'close' || t === 'đóng' || a.includes('close');
+            });
+            if (closeBtn) { closeBtn.click(); return true; }
+            return 'esc';
+            """
+        )
+        if closed is True:
+            log("pre: đã đóng hộp Notifications")
+            time.sleep(0.35)
+            return True
+        if closed == "esc":
+            try:
+                from selenium.webdriver.common.action_chains import ActionChains
+                ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+                log("pre: ESC đóng Notifications")
+                time.sleep(0.35)
+                return True
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return False
+
+
+def _status_collapse_duplicate_create_posts(driver, log_cb=None) -> bool:
+    """
+    Gỡ Create post trùng — KHÔNG đóng composer vừa mở (chưa gõ vẫn 'trống').
+    - Shell không có textbox: đóng an toàn.
+    - ≥2 composer có editor: giữ cái lớn nhất (hoặc Public nếu đã có chữ), đóng phần còn lại.
+    - Chỉ còn 1 composer có editor → không đụng.
+    """
+    def log(msg: str):
+        if log_cb:
+            log_cb(msg)
+        logger.info(msg)
+
+    try:
+        res = driver.execute_script(
+            r"""
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                if (r.width < 80 || r.height < 80) return false;
+                const st = window.getComputedStyle(el);
+                return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0;
+            }
+            function hasEditor(d) {
+                return !!d.querySelector("div[role='textbox'], div[contenteditable='true'], div[data-lexical-editor='true']");
+            }
+            function looksCreate(d) {
+                if (!isVisible(d)) return false;
+                const text = (d.innerText || '').toLowerCase();
+                const aria = (d.getAttribute('aria-label') || '').toLowerCase();
+                return text.includes('create post') || text.includes('tạo bài viết')
+                    || aria.includes('create post') || aria.includes('tạo bài viết')
+                    || text.includes("what's on your mind") || text.includes('bạn đang nghĩ gì')
+                    || text.includes('add to your post') || text.includes('thêm vào bài viết');
+            }
+            function plainOf(d) {
+                const ed = d.querySelector("div[role='textbox'], div[contenteditable='true']");
+                return ((ed && (ed.innerText || ed.textContent)) || '').replace(/\s+/g, ' ').trim();
+            }
+            function privacyOf(d) {
+                const btn = Array.from(d.querySelectorAll('div[role="button"], button')).find(b => {
+                    const a = ((b.getAttribute('aria-label') || '') + '').toLowerCase();
+                    return a.includes('edit privacy') || a.includes('sharing with');
+                });
+                if (!btn) return '';
+                const t = ((btn.innerText || '') + ' ' + (btn.getAttribute('aria-label') || '')).toLowerCase();
+                if (t.includes('public') || t.includes('công khai')) return 'public';
+                if (t.includes('friends') || t.includes('bạn bè')) return 'friends';
+                return 'other';
+            }
+            function areaOf(d) {
+                const r = d.getBoundingClientRect();
+                return r.width * r.height;
+            }
+            function findClose(d) {
+                return Array.from(d.querySelectorAll('div[role="button"], button')).find(b => {
+                    const a = ((b.getAttribute('aria-label') || '') + '').toLowerCase();
+                    return a.includes('close composer') || a === 'close' || a === 'đóng';
+                });
+            }
+            const all = Array.from(document.querySelectorAll('div[role="dialog"]')).filter(looksCreate);
+            const withEd = all.filter(hasEditor);
+            const shells = all.filter(d => !hasEditor(d));
+
+            // 1) Đóng shell không có ô soạn (an toàn — không phải composer thật)
+            for (const d of shells) {
+                const c = findClose(d);
+                if (c) {
+                    c.click();
+                    return { action: 'closed_shell', count: all.length, editors: withEd.length };
+                }
+            }
+
+            if (withEd.length < 2) {
+                return { action: 'ok', count: all.length, editors: withEd.length };
+            }
+
+            // 2) ≥2 composer có editor: chọn KEEP
+            //    - ưu tiên đã có chữ + Public
+            //    - không thì cái diện tích lớn nhất (composer vừa mở thường lớn nhất)
+            let keep = null;
+            const withText = withEd.filter(d => plainOf(d).length >= 2);
+            if (withText.length) {
+                keep = withText.find(d => privacyOf(d) === 'public') || withText[0];
+            } else {
+                keep = withEd.slice().sort((a, b) => areaOf(b) - areaOf(a))[0];
+            }
+            for (const d of withEd) {
+                if (d === keep) continue;
+                const c = findClose(d);
+                if (c) {
+                    c.click();
+                    return {
+                        action: 'closed_duplicate_editor',
+                        count: withEd.length,
+                        keptPrivacy: privacyOf(keep),
+                        keptArea: Math.round(areaOf(keep)),
+                    };
+                }
+            }
+            return { action: 'keep', count: withEd.length, editors: withEd.length };
+            """
+        ) or {}
+    except Exception as e:
+        log(f"dual_composer_check lỗi: {e}")
+        return False
+    action = (res or {}).get("action")
+    if action in ("closed_shell", "closed_duplicate_editor"):
+        log(
+            f"dual_composer: {action} (dialogs={res.get('count')}, editors={res.get('editors')}, "
+            f"keptPrivacy={res.get('keptPrivacy')})"
+        )
+        time.sleep(0.55)
+        return True
+        return False
+
+
 def close_audience_dialog(driver, human: HumanInteraction, log_cb: Optional[Any] = None) -> bool:
     """
     Đóng hộp thoại Post audience CHỈ bằng nút Done / Xong trong bảng đó.
@@ -751,6 +943,13 @@ def close_audience_dialog(driver, human: HumanInteraction, log_cb: Optional[Any]
         logger.info(msg)
 
     js_click_done = """
+        function isVisible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 12 || r.height < 12) return false;
+            const st = window.getComputedStyle(el);
+            return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0;
+        }
         function triggerRealClick(el) {
             if (!el) return false;
             try {
@@ -763,35 +962,47 @@ def close_audience_dialog(driver, human: HumanInteraction, log_cb: Optional[Any]
                 return true;
             } catch (e) { return false; }
         }
-        // Chỉ trong dialog audience (không đụng dialog composer)
-        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
-        const audience = dialogs.find(d => {
-            const t = ((d.innerText || '') + ' ' + (d.getAttribute('aria-label') || '')).toLowerCase();
-            return t.includes('đối tượng') || t.includes('audience') || t.includes('ai có thể xem');
-        }) || null;
-        const root = audience || document;
-        const buttons = Array.from(root.querySelectorAll('div[role="button"], button'));
-        for (const btn of buttons) {
+        function isDone(btn) {
             const text = (btn.innerText || btn.textContent || '').trim().toLowerCase();
             const aria = (btn.getAttribute('aria-label') || '').trim().toLowerCase();
-            // Chỉ Done/Xong — KHÔNG Save/Lưu (tránh Lưu nháp), KHÔNG Back
-            if (text === 'done' || text === 'xong' || aria === 'done' || aria === 'xong') {
-                triggerRealClick(btn);
-                return true;
+            return text === 'done' || text === 'xong' || aria === 'done' || aria === 'xong';
+        }
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).filter(isVisible);
+        // Ưu tiên dialog có Done+Back (audience lồng Create post) hoặc aria audience
+        const roots = [];
+        for (const d of dialogs) {
+            const btns = Array.from(d.querySelectorAll('div[role="button"], button')).filter(isVisible);
+            const hasDone = btns.some(isDone);
+            const hasBack = btns.some(b => ((b.getAttribute('aria-label') || '') + '').toLowerCase() === 'back'
+                || ((b.getAttribute('aria-label') || '') + '').toLowerCase().includes('cancel privacy'));
+            const t = ((d.innerText || '') + ' ' + (d.getAttribute('aria-label') || '')).toLowerCase();
+            if ((hasDone && hasBack) || t.includes('đối tượng') || t.includes('post audience')
+                || t.includes('select audience') || t.includes('ai có thể xem')) {
+                roots.push(d);
             }
         }
-        for (const span of Array.from(root.querySelectorAll('span'))) {
-            const text = (span.innerText || span.textContent || '').trim().toLowerCase();
-            if (text === 'done' || text === 'xong') {
-                const btn = span.closest('div[role="button"]') || span.closest('button') || span;
+        if (!roots.length) roots.push(...dialogs);
+        for (const root of roots) {
+            const buttons = Array.from(root.querySelectorAll('div[role="button"], button')).filter(isVisible);
+            for (const btn of buttons) {
+                if (isDone(btn)) {
+                    triggerRealClick(btn);
+                    return true;
+                }
+            }
+            for (const span of Array.from(root.querySelectorAll('span')).filter(isVisible)) {
+                const text = (span.innerText || span.textContent || '').trim().toLowerCase();
+                if (text === 'done' || text === 'xong') {
+                    const btn = span.closest('div[role="button"]') || span.closest('button') || span;
                 triggerRealClick(btn);
                 return true;
+                }
             }
         }
         return false;
     """
 
-    for attempt in range(3):
+    for attempt in range(5):
         if not is_audience_dialog_open(driver):
             return True
         try:
@@ -2423,15 +2634,47 @@ def ensure_reels_privacy_public(driver, human: HumanInteraction, log_cb: Optiona
             log_cb(msg)
         logger.info(msg)
 
-    log("Kiểm tra quyền riêng tư Reels (Audience)...")
+    def _browser_line() -> str:
+        n = "?"
+        url = "?"
+        try:
+            n = len(driver.window_handles)
+        except Exception as e:
+            n = f"? ({type(e).__name__})"
+        try:
+            url = (driver.current_url or "")[:160]
+        except Exception as e:
+            url = f"? ({type(e).__name__})"
+        return f"windows={n} url={url}"
+
+    def _step(name: str, fn):
+        log(f"Privacy [{name}] trước — {_browser_line()}")
+        try:
+            result = fn()
+        except Exception as e:
+            log(
+                f"Privacy [{name}] MẤT PHIÊN — {_browser_line()} "
+                f"{type(e).__name__}: {str(e)[:220]}"
+            )
+            raise
+        shown = result
+        if isinstance(result, dict):
+            shown = {k: result.get(k) for k in list(result)[:8]}
+        log(f"Privacy [{name}] xong — {_browser_line()} kết quả={shown}")
+        return result
+
+    log(f"Kiểm tra quyền riêng tư Reels (Audience) — {_browser_line()}")
     time.sleep(2.0)
 
     # 1. Kiểm tra xem quyền riêng tư hiện tại đã là Công khai (Public) chưa
     # Nhận biết qua dòng subtext đặc trưng của Facebook: "Anyone on or off Facebook" hoặc "Bất kỳ ai ở trên hoặc ngoài Facebook"
-    is_already_public = driver.execute_script("""
+    is_already_public = _step(
+        "đọc audience hiện tại",
+        lambda: driver.execute_script("""
         const t = (document.body.innerText || '').toLowerCase();
         return (t.includes('anyone on or off facebook') || t.includes('bất kỳ ai ở trên hoặc ngoài facebook')) && !t.includes('your friends on facebook');
-    """)
+    """),
+    )
 
     if is_already_public:
         log("✓ Quyền riêng tư Reels đã là 'Công khai' (Public) sẵn.")
@@ -2439,11 +2682,41 @@ def ensure_reels_privacy_public(driver, human: HumanInteraction, log_cb: Optiona
 
     log("Quyền riêng tư Reels đang là Bạn bè/Khác. Đang mở bảng chọn đối tượng...")
 
+    open_target = _step(
+        "tìm dòng Friends trước khi bấm",
+        lambda: driver.execute_script("""
+        const leaves = Array.from(document.querySelectorAll('span, div, p'));
+        const targetLeaf = leaves.find(el => {
+            const txt = (el.textContent || '').trim().toLowerCase();
+            return txt === 'your friends on facebook' ||
+                   txt === 'bạn bè của bạn trên facebook' ||
+                   txt.includes('your friends on facebook') ||
+                   txt.includes('bạn bè của bạn trên facebook');
+        });
+        if (!targetLeaf) return { found: false };
+        const btn = targetLeaf.closest("[role='button']") ||
+                    targetLeaf.closest("[tabindex='0']") ||
+                    targetLeaf.closest(".x1i10hfl") ||
+                    targetLeaf.parentElement;
+        const el = btn || targetLeaf;
+        return {
+            found: true,
+            tag: el.tagName || '',
+            role: el.getAttribute && (el.getAttribute('role') || ''),
+            aria: ((el.getAttribute && el.getAttribute('aria-label')) || '').slice(0, 80),
+            text: ((el.innerText || el.textContent || '') + '').trim().slice(0, 120),
+            leaf: ((targetLeaf.textContent || '') + '').trim().slice(0, 80),
+            inDialog: !!(el.closest && el.closest("[role='dialog']")),
+        };
+    """),
+    )
+    log(f"Privacy mục tiêu mở bảng: {open_target}")
+
     # 2. Click chính xác vào mục Friends (Dòng "Your friends on Facebook" hoặc "Bạn bè của bạn trên Facebook")
     clicked_open = False
 
     # Thử click bằng JS tìm leaf element có text đặc trưng
-    clicked_open = driver.execute_script("""
+    clicked_open = _step("bấm mở bảng Friends", lambda: driver.execute_script("""
         function triggerClick(el) {
             if (!el) return false;
             try {
@@ -2474,56 +2747,105 @@ def ensure_reels_privacy_public(driver, human: HumanInteraction, log_cb: Optiona
             return triggerClick(btn) || triggerClick(targetLeaf);
         }
         return false;
-    """)
+    """))
 
     if not clicked_open:
         # Fallback bằng XPath tìm kiếm leaf element
-        sub_labels = driver.find_elements(By.XPATH, "//*[contains(text(), 'Your friends on Facebook') or contains(text(), 'Bạn bè của bạn trên Facebook')]")
+        log(f"Privacy JS không bấm được dòng Friends — thử XPath. {_browser_line()}")
+        sub_labels = _step(
+            "tìm XPath Friends",
+            lambda: driver.find_elements(
+                By.XPATH,
+                "//*[contains(text(), 'Your friends on Facebook') or contains(text(), 'Bạn bè của bạn trên Facebook')]",
+            ),
+        )
         for sl in sub_labels:
             if sl.is_displayed():
                 try:
+                    label = (sl.text or "")[:80]
+                except Exception:
+                    label = "?"
+                log(f"Privacy fallback human.click dòng Friends text={label!r} — {_browser_line()}")
+                try:
                     human.click(sl)
                     clicked_open = True
+                    log(f"Privacy fallback human.click xong — {_browser_line()}")
                     break
-                except Exception:
+                except Exception as e_click:
+                    log(f"Privacy fallback human.click lỗi: {type(e_click).__name__}: {e_click}")
                     driver.execute_script("arguments[0].click();", sl)
                     clicked_open = True
+                    log(f"Privacy fallback el.click xong — {_browser_line()}")
                     break
 
     # 3. Chờ và xác thực bảng chọn đối tượng Reels đã mở ra
     audience_panel_opened = False
-    for _ in range(8):
+    for poll_i in range(8):
         time.sleep(0.6)
-        audience_panel_opened = driver.execute_script("""
+        audience_panel_opened = _step(
+            f"poll bảng đối tượng {poll_i + 1}/8",
+            lambda: driver.execute_script("""
             const t = (document.body.innerText || '').toLowerCase();
-            return t.includes('anyone on or off facebook') || 
+            return t.includes('anyone on or off facebook') ||
                    t.includes('bất kỳ ai ở trên hoặc ngoài facebook') ||
                    t.includes('who can see your reel') ||
                    t.includes('ai có thể xem thước phim');
-        """)
+        """),
+        )
         if audience_panel_opened:
             break
 
     if not audience_panel_opened:
         # Nếu chưa mở được, thử tìm nút Friends hoặc biểu tượng người bạn bè ở cột bên trái
-        log("Thử bấm lại vào nút đối tượng Reels...")
-        alt_clicked = driver.execute_script("""
+        log(f"Thử bấm lại vào nút đối tượng Reels... {_browser_line()}")
+        alt_clicked = _step("bấm lại nút Friends", lambda: driver.execute_script("""
             const btns = Array.from(document.querySelectorAll("[role='button'], div[tabindex='0']"));
             for (const b of btns) {
-                const t = (b.innerText || '').toLowerCase();
-                if ((t.includes('friends') || t.includes('bạn bè')) && !t.includes('describe') && !t.includes('tag')) {
+                const t = (b.innerText || '').trim();
+                const low = t.toLowerCase();
+                if ((low.includes('friends') || low.includes('bạn bè')) && !low.includes('describe') && !low.includes('tag')) {
                     b.click();
-                    return true;
+                    return {
+                        clicked: true,
+                        text: t.slice(0, 120),
+                        aria: (b.getAttribute('aria-label') || '').slice(0, 80),
+                        inDialog: !!(b.closest && b.closest("[role='dialog']")),
+                    };
                 }
             }
-            return false;
-        """)
+            return { clicked: false };
+        """))
+        log(f"Privacy bấm lại Friends kết quả={alt_clicked}")
         time.sleep(1.5)
 
     log("Đang chọn chế độ: 'Công khai' (Public / Bất kỳ ai ở trên hoặc ngoài Facebook)...")
+    pub_target = _step(
+        "tìm nút Public trước khi bấm",
+        lambda: driver.execute_script("""
+        const dialog = document.querySelector("div[role='dialog']");
+        const scope = dialog || document;
+        const rows = Array.from(scope.querySelectorAll("[role='radio'], span"));
+        for (const row of rows) {
+            const txt = ((row.innerText || row.textContent || '') + '').trim();
+            const low = txt.toLowerCase();
+            if (low.includes('anyone on or off facebook') || low.includes('bất kỳ ai ở trên hoặc ngoài facebook')
+                || low === 'public' || low === 'công khai') {
+                return {
+                    found: true,
+                    scope: dialog ? 'dialog' : 'document',
+                    tag: row.tagName || '',
+                    role: row.getAttribute && (row.getAttribute('role') || ''),
+                    text: txt.slice(0, 120),
+                };
+            }
+        }
+        return { found: false, scope: dialog ? 'dialog' : 'document' };
+    """),
+    )
+    log(f"Privacy mục tiêu Public: {pub_target}")
 
     # 4. Click chọn 'Public' (Anyone on or off Facebook) trong dialog 'Select audience'
-    selected_pub = driver.execute_script("""
+    selected_pub = _step("bấm Public", lambda: driver.execute_script("""
         function triggerClick(el) {
             if (!el) return false;
             try {
@@ -2571,7 +2893,7 @@ def ensure_reels_privacy_public(driver, human: HumanInteraction, log_cb: Optiona
             }
         }
         return false;
-    """)
+    """))
 
     if not selected_pub:
         pub_xpaths = [
@@ -2585,9 +2907,16 @@ def ensure_reels_privacy_public(driver, human: HumanInteraction, log_cb: Optiona
                 for elem in driver.find_elements(By.XPATH, px):
                     if elem.is_displayed():
                         try:
-                            human.click(elem)
+                            label = (elem.text or "")[:80]
                         except Exception:
+                            label = "?"
+                        log(f"Privacy fallback Public text={label!r} — {_browser_line()}")
+                        try:
+                            human.click(elem)
+                        except Exception as e_pub:
+                            log(f"Privacy fallback Public human.click lỗi: {type(e_pub).__name__}: {e_pub}")
                             driver.execute_script("arguments[0].click();", elem)
+                        log(f"Privacy fallback Public xong — {_browser_line()}")
                         selected_pub = True
                         break
                 if selected_pub:
@@ -2599,7 +2928,30 @@ def ensure_reels_privacy_public(driver, human: HumanInteraction, log_cb: Optiona
 
     # 5. Bấm nút 'Done' (hoặc 'Xong') để lưu và đóng modal 'Select audience'
     log("Nhấn nút 'Done' (Xong) để xác nhận chế độ Công khai...")
-    clicked_done = driver.execute_script("""
+    done_target = _step(
+        "tìm nút Done trước khi bấm",
+        lambda: driver.execute_script("""
+        const dialog = document.querySelector("div[role='dialog']");
+        const scope = dialog || document;
+        const btns = Array.from(scope.querySelectorAll("[role='button'], button"));
+        for (const b of btns) {
+            const t = ((b.innerText || b.textContent || b.getAttribute('aria-label') || '') + '').trim();
+            const low = t.toLowerCase();
+            if (low === 'done' || low === 'xong' || low === 'save' || low === 'lưu') {
+                return {
+                    found: true,
+                    scope: dialog ? 'dialog' : 'document',
+                    tag: b.tagName || '',
+                    aria: (b.getAttribute('aria-label') || '').slice(0, 80),
+                    text: t.slice(0, 80),
+                };
+            }
+        }
+        return { found: false, scope: dialog ? 'dialog' : 'document', buttons: btns.length };
+    """),
+    )
+    log(f"Privacy mục tiêu Done: {done_target}")
+    clicked_done = _step("bấm Done", lambda: driver.execute_script("""
         function triggerClick(el) {
             if (!el) return false;
             try {
@@ -2622,7 +2974,7 @@ def ensure_reels_privacy_public(driver, human: HumanInteraction, log_cb: Optiona
             }
         }
         return false;
-    """)
+    """))
 
     if not clicked_done:
         done_xpaths = [
@@ -2635,9 +2987,16 @@ def ensure_reels_privacy_public(driver, human: HumanInteraction, log_cb: Optiona
                 for db in driver.find_elements(By.XPATH, dx):
                     if db.is_displayed():
                         try:
-                            human.click(db)
+                            label = (db.get_attribute("aria-label") or db.text or "")[:80]
                         except Exception:
+                            label = "?"
+                        log(f"Privacy fallback Done/Back text={label!r} xpath={dx[:80]!r} — {_browser_line()}")
+                        try:
+                            human.click(db)
+                        except Exception as e_done:
+                            log(f"Privacy fallback Done human.click lỗi: {type(e_done).__name__}: {e_done}")
                             driver.execute_script("arguments[0].click();", db)
+                        log(f"Privacy fallback Done xong — {_browser_line()}")
                         clicked_done = True
                         break
                 if clicked_done:
@@ -2646,12 +3005,15 @@ def ensure_reels_privacy_public(driver, human: HumanInteraction, log_cb: Optiona
                 continue
 
     # Chờ modal đóng hoàn toàn
-    for _ in range(8):
+    for poll_i in range(8):
         time.sleep(0.5)
-        is_dialog_still_open = driver.execute_script("""
+        is_dialog_still_open = _step(
+            f"poll dialog audience {poll_i + 1}/8",
+            lambda: driver.execute_script("""
             const d = document.querySelector("div[role='dialog']");
             return d ? (d.innerText || '').toLowerCase().includes('select audience') : false;
-        """)
+        """),
+        )
         if not is_dialog_still_open:
             break
         # Nếu dialog vẫn chưa đóng, bấm Escape hoặc click nút Back
@@ -2664,10 +3026,13 @@ def ensure_reels_privacy_public(driver, human: HumanInteraction, log_cb: Optiona
     time.sleep(1.2)
 
     # 6. Xác nhận kết quả
-    is_now_public = driver.execute_script("""
+    is_now_public = _step(
+        "xác nhận Public sau Done",
+        lambda: driver.execute_script("""
         const t = (document.body.innerText || '').toLowerCase();
         return (t.includes('anyone on or off facebook') || t.includes('bất kỳ ai ở trên hoặc ngoài facebook')) && !t.includes('your friends on facebook');
-    """)
+    """),
+    )
 
     if is_now_public:
         log("✓ Đã chuyển quyền riêng tư Reels sang 'Công khai' (Public) thành công!")
@@ -2743,7 +3108,7 @@ def _clean_facebook_url(url: str) -> str:
             for k in ("story_fbid", "id", "fbid"):
                 if k in qs and qs[k]:
                     clean_params[k] = qs[k][0]
-            script_name = "permalink.php" if "permalink.php" in clean_path else "story.php"
+                script_name = "permalink.php" if "permalink.php" in clean_path else "story.php"
             if clean_params:
                 return f"https://www.facebook.com/{script_name}?{urlencode(clean_params)}"
             return f"https://www.facebook.com/{script_name}"
@@ -3060,7 +3425,7 @@ _FIND_TIMESTAMP_LINK_JS = r"""
     let firstBody = "";
     let firstArtLen = 0;
     let firstOuter = "";
-    for (const art of articles) {
+                for (const art of articles) {
         const t = readText(art);
         if (t) {
             firstBody = t.slice(0, 120);
@@ -3083,8 +3448,8 @@ _FIND_TIMESTAMP_LINK_JS = r"""
         if (matched) matchedArticles += 1;
         if (hint && hint.length >= 12 && !matched) return;
 
-        const allA = Array.from(art.querySelectorAll("a[href]"));
-        for (const a of allA) {
+                    const allA = Array.from(art.querySelectorAll("a[href]"));
+                    for (const a of allA) {
             const txt = (a.innerText || a.textContent || "").trim();
             const aria = (a.getAttribute("aria-label") || "").trim();
             const h = a.href || "";
@@ -3118,10 +3483,10 @@ _FIND_TIMESTAMP_LINK_JS = r"""
             if (!body.includes(shortHint)) continue;
             matchedArticles += 1;
             const allA = Array.from(art.querySelectorAll("a[href]"));
-            for (const a of allA) {
+                    for (const a of allA) {
                 const txt = (a.innerText || a.textContent || "").trim();
                 const aria = (a.getAttribute("aria-label") || "").trim();
-                const h = a.href || "";
+                        const h = a.href || "";
                 const timed = isTime(txt, aria);
                 if (timed) timestampLinks += 1;
                 const r = rankHref(h);
@@ -3503,6 +3868,8 @@ def extract_status_post_url(
         }
 
         matched.setAttribute("data-ada-share-card", "1");
+        const matchedMsg = matched.querySelector("[data-ad-rendering-role='story_message']");
+        const msgPreview = matchedMsg ? readText(matchedMsg).slice(0, 100) : "";
 
         // Nút Share ở footer: sau Like/Comment — aria/text Share/Chia sẻ, không phải menu ...
         const isBad = (b) => {
@@ -3541,39 +3908,73 @@ def extract_status_post_url(
             scrollY: window.scrollY || 0,
             cards: cards.length,
             hasShareBtn: !!shareBtn,
-            preview: readText(matched).slice(0, 100),
+            preview: msgPreview || readText(matched).slice(0, 100),
         };
     """
 
     read_share_sheet_js = r"""
-        // Đọc link /share/p/ từ bảng Share đang mở + liệt kê nút
-        const roots = Array.from(document.querySelectorAll(
-            'div[role="dialog"], div[role="menu"], div[data-pagelet*="Share"], [aria-label*="Share"], [aria-label*="Chia sẻ"]'
-        ));
-        // fallback: mọi dialog/menu gần đây
-        const allRoots = roots.length ? roots : Array.from(document.querySelectorAll('div[role="dialog"], div[role="menu"]'));
+        // Chỉ đọc bảng Share thật — bỏ Notifications / Create post / audience
+        function isVisible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 20 || r.height < 20) return false;
+            const st = window.getComputedStyle(el);
+            return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0;
+        }
+        function rootBlob(root) {
+            return (((root.getAttribute('aria-label') || '') + ' ' + (root.innerText || '')).toLowerCase());
+        }
+        function isNoise(root) {
+            const t = rootBlob(root);
+            if (t.includes('notification') || t.startsWith('notifications')
+                || t.includes('see previous notifications') || t.includes('notification actions')) return true;
+            if (t.includes('create post') || t.includes('tạo bài viết')) return true;
+            if (t.includes('post audience') || t.includes('select audience') || t.includes('đối tượng bài viết')) return true;
+            return false;
+        }
+        function looksLikeShare(root) {
+            const t = rootBlob(root);
+            if (isNoise(root)) return false;
+            if (t.includes('copy link') || t.includes('sao chép liên kết')) return true;
+            if (t.includes('share now') || t.includes('chia sẻ ngay')) return true;
+            if (/facebook\.com\/share\/p\//i.test(t)) return true;
+            if ((t.includes('share') || t.includes('chia sẻ')) && (t.includes('send') || t.includes('gửi') || t.includes('copy'))) return true;
+            return false;
+        }
+        const candidates = Array.from(document.querySelectorAll(
+            'div[role="dialog"], div[role="menu"], div[data-pagelet*="Share"]'
+        )).filter(isVisible);
+        let allRoots = candidates.filter(looksLikeShare);
+        if (!allRoots.length) {
+            // fallback hẹp: dialog/menu có Copy link, vẫn loại Notifications
+            allRoots = candidates.filter(r => {
+                if (isNoise(r)) return false;
+                const t = rootBlob(r);
+                return t.includes('copy link') || t.includes('sao chép liên kết') || /share\/p\//i.test(t);
+            });
+        }
         const buttons = [];
         let shareHref = null;
         let hasCopy = false;
         for (const root of allRoots) {
             for (const a of Array.from(root.querySelectorAll('a[href]'))) {
-                const h = a.href || "";
-                if (/facebook\.com\/share\/p\//i.test(h)) {
-                    shareHref = h;
-                }
+                        const h = a.href || "";
+                if (/facebook\.com\/share\/p\//i.test(h)) shareHref = h;
             }
             const blob = (root.innerText || root.textContent || "");
             const m = blob.match(/https?:\/\/(?:www\.|web\.)?facebook\.com\/share\/p\/[A-Za-z0-9_-]+\/?/i);
             if (m && !shareHref) shareHref = m[0];
 
             for (const b of Array.from(root.querySelectorAll('div[role="button"], button, span[role="button"], a[role="link"]'))) {
+                if (!isVisible(b)) continue;
                 const text = ((b.innerText || b.textContent || "") + "").replace(/\s+/g, " ").trim();
                 const aria = (b.getAttribute("aria-label") || "").trim();
                 const href = b.href || "";
                 buttons.push({ text: text.slice(0, 80), aria: aria.slice(0, 80), href: (href || "").slice(0, 160) });
                 const blob2 = (text + " " + aria).toLowerCase();
-                if (blob2.includes("copy link") || blob2.includes("sao chép liên kết") || blob2.includes("copy")) {
-                    if (!blob2.includes("copy text") && !blob2.includes("embed")) hasCopy = true;
+                if ((blob2.includes("copy link") || blob2.includes("sao chép liên kết"))
+                    && !blob2.includes("copy text") && !blob2.includes("embed")) {
+                    hasCopy = true;
                 }
                 if (/facebook\.com\/share\/p\//i.test(href) && !shareHref) shareHref = href;
             }
@@ -3582,6 +3983,13 @@ def extract_status_post_url(
     """
 
     click_copy_link_js = r"""
+        function isVisible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 8 || r.height < 8) return false;
+            const st = window.getComputedStyle(el);
+            return st.display !== 'none' && st.visibility !== 'hidden';
+        }
         function trigger(el) {
             if (!el) return false;
             try {
@@ -3592,16 +4000,20 @@ def extract_status_post_url(
                 return true;
             } catch (e) { return false; }
         }
-        const roots = Array.from(document.querySelectorAll('div[role="dialog"], div[role="menu"]'));
-        const re = /(sao chép liên kết|copy link|copy)/i;
-        const bad = /(share now|chia sẻ ngay|đăng|post|embed|nhúng|like|thích|comment|bình luận)/i;
+        function isNoiseRoot(root) {
+            const t = (((root.getAttribute('aria-label') || '') + ' ' + (root.innerText || '')).toLowerCase());
+            return t.includes('notification') || t.startsWith('notifications')
+                || t.includes('create post') || t.includes('tạo bài viết');
+        }
+        const roots = Array.from(document.querySelectorAll('div[role="dialog"], div[role="menu"]'))
+            .filter(isVisible).filter(r => !isNoiseRoot(r));
+        const re = /(sao chép liên kết|copy link)/i;
         for (const root of roots) {
             for (const b of Array.from(root.querySelectorAll('div[role="button"], button, span[role="button"], a'))) {
+                if (!isVisible(b)) continue;
                 const text = ((b.innerText || b.textContent || "") + " " + (b.getAttribute("aria-label") || "")).replace(/\s+/g, " ").trim();
                 if (!re.test(text)) continue;
-                if (bad.test(text) && !/copy link|sao chép liên kết/i.test(text)) continue;
-                // tránh Share Now
-                if (/share now|chia sẻ ngay/i.test(text)) continue;
+                if (/share now|chia sẻ ngay|embed|nhúng/i.test(text)) continue;
                 trigger(b);
                 return { clicked: true, label: text.slice(0, 80) };
             }
@@ -3801,6 +4213,12 @@ def extract_status_post_url(
         except Exception:
             pass
 
+        # Đóng Notifications trước khi tìm Share (tránh đọc nhầm dialog)
+        try:
+            _status_dismiss_notifications_dialog(driver, log_cb=_log)
+        except Exception:
+            pass
+
         # ── 1. Tìm card khớp (≤10s, scrollY=0) ──
         _log("Extract(share): tìm card khớp trên feed hiện tại (scrollY=0, không /me)...")
         matched_info = None
@@ -3830,146 +4248,162 @@ def extract_status_post_url(
             _log("Extract(share): không khớp card — Tier5, không thử timestamp/Embed/me.")
             return _fallback_profile()
 
-        # ── 2. Bấm Share trên card ──
-        share_clicked = False
-        try:
-            btn = driver.find_element(By.CSS_SELECTOR, "[data-ada-share-btn='1']")
-            try:
-                driver.execute_script(
-                    "arguments[0].scrollIntoView({block:'nearest', inline:'nearest'});", btn
-                )
-            except Exception:
-                pass
-            try:
-                btn.click()
-            except Exception:
-                driver.execute_script("arguments[0].click();", btn)
-            share_clicked = True
-            _log("Extract(share): đã bấm nút Share trên card khớp.")
-        except Exception as e:
-            _log(f"Extract(share): không bấm được nút Share — {e}")
+        # Mutex clipboard OS: 2 luồng Copy cùng lúc → permalink lệch / clipboard rỗng
+        _log("Extract(share): chờ khóa clipboard (tránh 2 luồng Copy đụng nhau)...")
+        _clip_locked = _CLIPBOARD_EXTRACT_LOCK.acquire(timeout=60)
+        if not _clip_locked:
+            _log("Extract(share): không lấy được khóa clipboard trong 60s — Tier5.")
             return _fallback_profile()
 
-        # Chờ bảng Share ≤5s
         share_url = None
         link_source = None
-        sheet_deadline = time.time() + 5.0
         sheet_seen = False
-        while time.time() < sheet_deadline:
-            try:
-                sheet = driver.execute_script(read_share_sheet_js)
-            except Exception as e:
-                _log(f"Extract(share): đọc bảng Share lỗi: {e}")
-                sheet = None
-            if isinstance(sheet, dict):
-                if int(sheet.get("rootCount") or 0) > 0 or sheet.get("buttons"):
-                    sheet_seen = True
-                href = _normalize_share_p(sheet.get("shareHref"))
-                if href:
-                    share_url = href
-                    link_source = "dom"
-                    _log(f"Extract(share): lấy /share/p/ từ DOM bảng Share: {share_url}")
-                    break
-                if sheet.get("hasCopy"):
-                    _grant_clipboard_permission()
-                    # Snapshot clipboard TRƯỚC Copy để biết khi nào FB ghi xong
-                    before_clip = _read_clipboard_os()
-                    _log(
-                        f"Extract(share): clipboard trước Copy "
-                        f"(len={len(before_clip or '')})={((before_clip or '')[:120])!r}"
-                    )
-                    try:
-                        clicked = driver.execute_script(click_copy_link_js)
-                        _log(f"Extract(share): bấm Copy link → {clicked}")
-                    except Exception as e:
-                        _log(f"Extract(share): lỗi bấm Copy link: {e}")
-                        clicked = None
-
-                    # Chờ clipboard đổi — KHÔNG Escape ngay (Escape dễ đọc nhầm clipboard cũ)
-                    clip = _wait_clipboard_after_copy(before_clip, timeout=4.0)
-                    _log(
-                        f"Extract(share): clipboard sau Copy "
-                        f"(len={len(clip or '')})={((clip or '')[:180])!r}"
-                    )
-                    href2 = _extract_any_post_link(clip)
-                    if href2 and _normalize_share_p(href2):
-                        share_url = _normalize_share_p(href2)
-                        link_source = "clipboard_os"
-                        _log(f"Extract(share): lấy /share/p/ từ clipboard OS: {share_url}")
-                        break
-                    if href2 and _accept_permalink(href2):
-                        # FB đôi khi copy thẳng permalink — nhận luôn, khỏi mở /share/p/
-                        accepted = _accept_permalink(href2)
-                        _close_share_sheet()
-                        _log(f"Permalink OK (source=clipboard_permalink): {accepted}")
-                        return StatusUrlResult(accepted, True)
-
-                    # Chỉ khi clipboard trống mới thử Escape bubble rồi đọc lại
-                    if not clip or clip == (before_clip or ""):
-                        _log("Extract(share): clipboard chưa đổi — thử Escape bubble quyền rồi đọc lại...")
-                        _dismiss_clipboard_permission_bubble()
-                        clip2 = _wait_clipboard_after_copy(before_clip, timeout=2.0)
-                        _log(
-                            f"Extract(share): clipboard sau Escape "
-                            f"(len={len(clip2 or '')})={((clip2 or '')[:180])!r}"
-                        )
-                        href2b = _extract_any_post_link(clip2)
-                        if href2b and _normalize_share_p(href2b):
-                            share_url = _normalize_share_p(href2b)
-                            link_source = "clipboard_os_retry"
-                            _log(f"Extract(share): lấy /share/p/ từ clipboard (retry): {share_url}")
-                            break
-                        if href2b and _accept_permalink(href2b):
-                            accepted = _accept_permalink(href2b)
-                            _close_share_sheet()
-                            _log(f"Permalink OK (source=clipboard_permalink_retry): {accepted}")
-                            return StatusUrlResult(accepted, True)
-
-                    _log(
-                        "Extract(share): Copy xong nhưng clipboard không chứa /share/p/ "
-                        "hay permalink — thử DOM lại."
-                    )
-                    try:
-                        sheet2 = driver.execute_script(read_share_sheet_js)
-                        href3 = _normalize_share_p((sheet2 or {}).get("shareHref")) if isinstance(sheet2, dict) else None
-                        if href3:
-                            share_url = href3
-                            link_source = "dom_after_copy"
-                            _log(f"Extract(share): lấy /share/p/ từ DOM sau Copy: {share_url}")
-                            break
-                    except Exception:
-                        pass
-                    # Đã Copy 1 lần — thoát vòng chờ sheet (menu thường đã đóng)
-                    break
-            time.sleep(0.5)
-
-        if not share_url:
-            # Log nút trong bảng rồi đóng → Tier5
-            try:
-                sheet = driver.execute_script(read_share_sheet_js)
-                if isinstance(sheet, dict):
-                    _log(
-                        f"Extract(share): không có /share/p/ — sheet_seen={sheet_seen} "
-                        f"hasCopy={sheet.get('hasCopy')} buttons={sheet.get('buttons')!r}"
-                    )
-            except Exception:
-                _log("Extract(share): không có /share/p/ và không đọc được nút bảng Share.")
-            _close_share_sheet()
-            _log("Extract(share): Share fail → Tier5 (không timestamp / Embed /me).")
-            return _fallback_profile()
-
-        _close_share_sheet()
-        time.sleep(0.4)
-        # Kiểm tra card còn trên feed
+        early_permalink = None
         try:
-            still = driver.execute_script(
-                "return !!document.querySelector(\"[data-ada-share-card='1']\");"
-            )
-            _log(f"Extract(share): sau đóng Share, card còn trên feed={bool(still)}")
-        except Exception:
-            pass
+            # ── 2. Bấm Share trên card (trong khóa) ──
+            try:
+                btn = driver.find_element(By.CSS_SELECTOR, "[data-ada-share-btn='1']")
+                try:
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'nearest', inline:'nearest'});", btn
+                    )
+                except Exception:
+                    pass
+                try:
+                    btn.click()
+                except Exception:
+                    driver.execute_script("arguments[0].click();", btn)
+                _log("Extract(share): đã bấm nút Share trên card khớp.")
+            except Exception as e:
+                _log(f"Extract(share): không bấm được nút Share — {e}")
+                return _fallback_profile()
 
-        # ── 3. Mở /share/p/ tab mới → chờ permalink ──
+            # Chờ bảng Share ≤5s
+            sheet_deadline = time.time() + 5.0
+            while time.time() < sheet_deadline:
+                try:
+                    sheet = driver.execute_script(read_share_sheet_js)
+                except Exception as e:
+                    _log(f"Extract(share): đọc bảng Share lỗi: {e}")
+                    sheet = None
+                if isinstance(sheet, dict):
+                    # Chỉ coi là Share sheet khi có Copy /share/p (không tính Notifications)
+                    if sheet.get("hasCopy") or sheet.get("shareHref") or int(sheet.get("rootCount") or 0) > 0:
+                        sheet_seen = True
+                    href = _normalize_share_p(sheet.get("shareHref"))
+                    if href:
+                        share_url = href
+                        link_source = "dom"
+                        _log(f"Extract(share): lấy /share/p/ từ DOM bảng Share: {share_url}")
+                        break
+                    if sheet.get("hasCopy"):
+                        _grant_clipboard_permission()
+                        before_clip = _read_clipboard_os()
+                        _log(
+                            f"Extract(share): clipboard trước Copy "
+                            f"(len={len(before_clip or '')})={((before_clip or '')[:120])!r}"
+                        )
+                        try:
+                            clicked = driver.execute_script(click_copy_link_js)
+                            _log(f"Extract(share): bấm Copy link → {clicked}")
+                        except Exception as e:
+                            _log(f"Extract(share): lỗi bấm Copy link: {e}")
+                            clicked = None
+
+                        clip = _wait_clipboard_after_copy(before_clip, timeout=4.0)
+                        _log(
+                            f"Extract(share): clipboard sau Copy "
+                            f"(len={len(clip or '')})={((clip or '')[:180])!r}"
+                        )
+                        href2 = _extract_any_post_link(clip)
+                        if href2 and _normalize_share_p(href2):
+                            share_url = _normalize_share_p(href2)
+                            link_source = "clipboard_os"
+                            _log(f"Extract(share): lấy /share/p/ từ clipboard OS: {share_url}")
+                            break
+                        if href2 and _accept_permalink(href2):
+                            early_permalink = _accept_permalink(href2)
+                            _close_share_sheet()
+                            _log(f"Permalink OK (source=clipboard_permalink): {early_permalink}")
+                            break
+
+                        if not clip or clip == (before_clip or ""):
+                            _log("Extract(share): clipboard chưa đổi — thử Escape bubble quyền rồi đọc lại...")
+                            _dismiss_clipboard_permission_bubble()
+                            clip2 = _wait_clipboard_after_copy(before_clip, timeout=2.0)
+                            _log(
+                                f"Extract(share): clipboard sau Escape "
+                                f"(len={len(clip2 or '')})={((clip2 or '')[:180])!r}"
+                            )
+                            href2b = _extract_any_post_link(clip2)
+                            if href2b and _normalize_share_p(href2b):
+                                share_url = _normalize_share_p(href2b)
+                                link_source = "clipboard_os_retry"
+                                _log(f"Extract(share): lấy /share/p/ từ clipboard (retry): {share_url}")
+                                break
+                            if href2b and _accept_permalink(href2b):
+                                early_permalink = _accept_permalink(href2b)
+                                _close_share_sheet()
+                                _log(f"Permalink OK (source=clipboard_permalink_retry): {early_permalink}")
+                                break
+
+                        _log(
+                            "Extract(share): Copy xong nhưng clipboard không chứa /share/p/ "
+                            "hay permalink — thử DOM lại."
+                        )
+                        try:
+                            sheet2 = driver.execute_script(read_share_sheet_js)
+                            href3 = (
+                                _normalize_share_p((sheet2 or {}).get("shareHref"))
+                                if isinstance(sheet2, dict)
+                                else None
+                            )
+                            if href3:
+                                share_url = href3
+                                link_source = "dom_after_copy"
+                                _log(f"Extract(share): lấy /share/p/ từ DOM sau Copy: {share_url}")
+                                break
+                        except Exception:
+                            pass
+                        break
+                time.sleep(0.5)
+
+            if early_permalink:
+                return StatusUrlResult(early_permalink, True)
+
+            if not share_url:
+                # Log nút trong bảng rồi đóng → Tier5
+                try:
+                    sheet = driver.execute_script(read_share_sheet_js)
+                    if isinstance(sheet, dict):
+                        _log(
+                            f"Extract(share): không có /share/p/ — sheet_seen={sheet_seen} "
+                            f"hasCopy={sheet.get('hasCopy')} buttons={sheet.get('buttons')!r}"
+                        )
+                except Exception:
+                    _log("Extract(share): không có /share/p/ và không đọc được nút bảng Share.")
+                _close_share_sheet()
+                _log("Extract(share): Share fail → Tier5 (không timestamp / Embed /me).")
+                return _fallback_profile()
+
+            _close_share_sheet()
+            time.sleep(0.4)
+            # Kiểm tra card còn trên feed
+            try:
+                still = driver.execute_script(
+                    "return !!document.querySelector(\"[data-ada-share-card='1']\");"
+                )
+                _log(f"Extract(share): sau đóng Share, card còn trên feed={bool(still)}")
+            except Exception:
+                pass
+        finally:
+            try:
+                _CLIPBOARD_EXTRACT_LOCK.release()
+                _log("Extract(share): đã nhả khóa clipboard.")
+            except Exception:
+                pass
+
+        # ── 3. Mở /share/p/ tab mới → chờ permalink (ngoài khóa clipboard) ──
         _log(f"Extract(share): mở tab mới resolve {share_url} (source={link_source})...")
         handles_before = list(driver.window_handles)
         try:
@@ -4072,6 +4506,664 @@ def _canonical_reel_url(reel_id: str) -> str:
     return f"https://www.facebook.com/reel/{reel_id}"
 
 
+def _reels_page_is_unavailable(driver) -> bool:
+    """
+    Facebook hiện trang lỗi kỹ thuật (wrench) trên create/draft /reel/{id}.
+    Ưu tiên text nhìn thấy được — tránh false positive từ chuỗi trong JS bundle.
+    """
+    try:
+        visible = driver.execute_script(
+            """
+            const needles = [
+              "this page isn't available",
+              "trang này không khả dụng",
+              "the link may be broken",
+              "liên kết có thể bị hỏng",
+              "we're working to get fixed",
+              "chúng tôi đang khắc phục",
+            ];
+            const nodes = Array.from(document.querySelectorAll("h1,h2,h3,span,div,p"));
+            for (const el of nodes) {
+              try {
+                if (!el || el.offsetParent === null) continue;
+                const t = (el.innerText || el.textContent || "").trim().toLowerCase();
+                if (!t || t.length > 280) continue;
+                if (needles.some((n) => t.includes(n))) return true;
+              } catch (e) {}
+            }
+            return false;
+            """
+        )
+        if visible:
+            return True
+    except Exception:
+        pass
+    try:
+        src = (driver.page_source or "").lower()
+    except Exception:
+        return False
+    # Fallback: chỉ tin page_source khi có cả tiêu đề lỗi + nút Reload
+    has_title = (
+        "this page isn't available" in src or "trang này không khả dụng" in src
+    )
+    has_reload = "reload page" in src or "tải lại trang" in src
+    return bool(has_title and has_reload)
+
+
+def _reels_edit_reel_ui_ready(driver) -> bool:
+    """Màn Edit reel / Reel settings đã hiện (sau Next thành công)."""
+    try:
+        return bool(
+            driver.execute_script(
+                """
+                const t = (document.body && document.body.innerText || '').toLowerCase();
+                const markers = [
+                  'trim video', 'cắt video', 'closed captions', 'phụ đề',
+                  'edit reel', 'chỉnh sửa thước phim', 'reel settings',
+                  'cài đặt thước phim', 'next', 'tiếp', 'post', 'đăng'
+                ];
+                // Cần ít nhất marker chỉnh sửa (không chỉ Next/Post chung)
+                const editMarks = [
+                  'trim video', 'cắt video', 'closed captions', 'phụ đề',
+                  'edit reel', 'chỉnh sửa thước phim', 'reel settings', 'cài đặt thước phim'
+                ];
+                if (editMarks.some((m) => t.includes(m))) return true;
+                const hasTextbox = !!document.querySelector("div[role='textbox']");
+                const hasVideo = !!document.querySelector('video');
+                return hasTextbox && hasVideo && !t.includes("this page isn't available");
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
+def _reels_wait_unavailable_clear(driver, timeout: float = 120.0, log_fn=None) -> bool:
+    """
+    Sau Next: poll /reel/{id} tới 60–120s.
+    Chỉ OK khi có Edit reel UI (không coi trang xám 'hết unavailable' là thành công —
+    tránh bấm Next bước 2 trên trang hỏng).
+    """
+    timeout = max(60.0, float(timeout or 120.0))
+    deadline = time.time() + timeout
+    last_log = 0.0
+    while time.time() < deadline:
+        bad = _reels_page_is_unavailable(driver)
+        edit_ok = _reels_edit_reel_ui_ready(driver)
+        if (not bad) and edit_ok:
+            if log_fn:
+                try:
+                    log_fn("Trang /reel/{id} đã vào Edit reel / settings — tiếp tục.")
+                except Exception:
+                    pass
+            return True
+        now = time.time()
+        if log_fn and now - last_log >= 15.0:
+            try:
+                url = getattr(driver, "current_url", "") or ""
+                left = int(max(0, deadline - now))
+                log_fn(
+                    f"Chờ trang Reels sau Next... còn ~{left}s "
+                    f"(unavailable={bad}, edit_ui={edit_ok}, url={url[:90]})"
+                )
+            except Exception:
+                pass
+            last_log = now
+        time.sleep(1.0)
+    # Bắt buộc Edit reel UI — trang xám không unavailable vẫn FAIL
+    return (not _reels_page_is_unavailable(driver)) and _reels_edit_reel_ui_ready(driver)
+
+
+def _reels_raise_if_unavailable(
+    driver, log_fn=None, context: str = "", wait_clear: bool = False, wait_timeout: float = 120.0
+) -> None:
+    """
+    wait_clear=True: chỉ long-poll khi ĐANG unavailable (flash SPA).
+    Sau Next Bước 1 phải gọi _reels_wait_unavailable_clear(120s) riêng — luôn poll đủ.
+    """
+    if wait_clear and _reels_page_is_unavailable(driver):
+        if _reels_wait_unavailable_clear(driver, timeout=wait_timeout, log_fn=log_fn):
+            return
+    if not _reels_page_is_unavailable(driver):
+        return
+    try:
+        url = getattr(driver, "current_url", "") or ""
+    except Exception:
+        url = ""
+    where = f" ({context})" if context else ""
+    msg = (
+        f"Facebook báo trang Reels không khả dụng{where}. "
+        f"URL: {url or 'N/A'}. ID nháp chết sau Next — "
+        f"cần mở lại /reels/create/ và upload lại."
+    )
+    if log_fn:
+        try:
+            log_fn(msg)
+        except Exception:
+            pass
+    raise RuntimeError(msg)
+
+
+def _reels_video_file_size_mb(video_path: str) -> float:
+    try:
+        return max(0.1, os.path.getsize(video_path) / (1024 * 1024))
+    except Exception:
+        return 20.0
+
+
+def _reels_upload_timeout_seconds(video_path: str = "", attempt: int = 1) -> float:
+    """Chờ tối đa tín hiệu vupload receive — không scale theo MB / không ×2 retry."""
+    return 60.0
+
+
+def _reels_video_file_size_bytes(video_path: str) -> int:
+    try:
+        return int(os.path.getsize(video_path))
+    except Exception:
+        return 0
+
+
+def _reels_video_preview_ready(driver) -> bool:
+    """Preview local (MSE có thể src='') — chỉ tham khảo, không = upload xong."""
+    try:
+        return bool(
+            driver.execute_script(
+                """
+                const videos = Array.from(document.querySelectorAll('video'));
+                for (const v of videos) {
+                  try {
+                    if (!v) continue;
+                    const dur = Number(v.duration);
+                    const rs = Number(v.readyState || 0);
+                    if (rs >= 3 && Number.isFinite(dur) && dur > 0) return true;
+                  } catch (e) {}
+                }
+                return false;
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
+def _reels_vupload_probe(driver, expected_file_size: int) -> dict:
+    """
+    Detector duy nhất: performance resource vupload-edge + /receive/.
+    OK khi responseStatus==200 và end_offset == đúng file size (bytes).
+    """
+    expected = int(expected_file_size or 0)
+    try:
+        raw = driver.execute_script(
+            """
+            const expected = Number(arguments[0]) || 0;
+            const entries = performance.getEntriesByType('resource') || [];
+            const parseEntry = (e) => {
+              const name = String(e.name || '');
+              const low = name.toLowerCase();
+              let video_id = null, start_offset = null, end_offset = null;
+              try {
+                const u = new URL(name, location.href);
+                video_id = u.searchParams.get('video_id') || u.searchParams.get('videoId');
+                const so = u.searchParams.get('start_offset') || u.searchParams.get('startOffset');
+                const eo = u.searchParams.get('end_offset') || u.searchParams.get('endOffset');
+                if (so != null && so !== '') start_offset = Number(so);
+                if (eo != null && eo !== '') end_offset = Number(eo);
+              } catch (err) {}
+              try {
+                if (video_id == null) {
+                  const m = name.match(/[?&]video_id=(\\d+)/i);
+                  if (m) video_id = m[1];
+                }
+                if (start_offset == null) {
+                  const m = name.match(/[?&]start_offset=(\\d+)/i);
+                  if (m) start_offset = Number(m[1]);
+                }
+                if (end_offset == null) {
+                  const m = name.match(/[?&]end_offset=(\\d+)/i);
+                  if (m) end_offset = Number(m[1]);
+                }
+              } catch (err) {}
+              let responseStatus = null;
+              try {
+                if (typeof e.responseStatus === 'number') responseStatus = e.responseStatus;
+              } catch (err) {}
+              const kind = low.includes('/receive') ? 'receive'
+                : (low.includes('/start') ? 'start' : 'other');
+              return {
+                name: name.slice(0, 600),
+                kind: kind,
+                video_id: video_id,
+                start_offset: start_offset,
+                end_offset: end_offset,
+                responseStatus: responseStatus,
+                startTime: e.startTime,
+                responseEnd: e.responseEnd,
+                duration: e.duration,
+              };
+            };
+            const vupload = entries
+              .filter((e) => String(e.name || '').toLowerCase().includes('vupload-edge'))
+              .map(parseEntry);
+            const receives = vupload.filter((x) => x.kind === 'receive');
+            let best = null;
+            for (const r of receives) {
+              if (!best || Number(r.responseEnd || 0) >= Number(best.responseEnd || 0)) best = r;
+            }
+            const statusOk = !!(best && Number(best.responseStatus) === 200);
+            // Có end_offset trên URL → phải khớp file size; không có (body POST) → không chặn
+            let offsetMode = 'absent_in_url';
+            let offsetOk = true;
+            if (best && best.end_offset != null && Number.isFinite(Number(best.end_offset))) {
+              if (expected > 0 && Number(best.end_offset) === expected) {
+                offsetMode = 'matched';
+                offsetOk = true;
+              } else {
+                offsetMode = 'mismatch';
+                offsetOk = false;
+              }
+            }
+            return {
+              expectedSize: expected,
+              vuploadCount: vupload.length,
+              receiveCount: receives.length,
+              vupload: vupload.slice(-8),
+              bestReceive: best,
+              receiveOk: statusOk && offsetOk,
+              statusOk: statusOk,
+              offsetOk: offsetOk,
+              offsetMode: offsetMode,
+            };
+            """,
+            expected,
+        ) or {}
+    except Exception as e:
+        return {
+            "expectedSize": expected,
+            "vuploadCount": 0,
+            "receiveCount": 0,
+            "vupload": [],
+            "bestReceive": None,
+            "receiveOk": False,
+            "statusOk": False,
+            "offsetOk": False,
+            "offsetMode": "error",
+            "error": str(e)[:160],
+        }
+
+    best = raw.get("bestReceive") if isinstance(raw.get("bestReceive"), dict) else None
+    return {
+        "expectedSize": int(raw.get("expectedSize") or expected),
+        "vuploadCount": int(raw.get("vuploadCount") or 0),
+        "receiveCount": int(raw.get("receiveCount") or 0),
+        "vupload": list(raw.get("vupload") or []),
+        "bestReceive": best,
+        "receiveOk": bool(raw.get("receiveOk")),
+        "statusOk": bool(raw.get("statusOk")),
+        "offsetOk": bool(raw.get("offsetOk")),
+        "offsetMode": str(raw.get("offsetMode") or ""),
+        "error": str(raw.get("error") or ""),
+    }
+
+
+def _reels_dialog_preview_status(driver, kick_play: bool = False) -> dict:
+    """
+    Preview Create reel — KHÔNG nhận video feed (fbcdn) ngoài composer.
+    Ứng viên: trong dialog, hoặc gần 'Replace video', hoặc src rỗng/blob (MSE local).
+    kick_play chỉ trên ứng viên composer.
+    """
+    try:
+        raw = driver.execute_script(
+            """
+            const kick = !!arguments[0];
+            const nearComposerText = (el) => {
+              let n = el;
+              for (let i = 0; i < 14 && n; i++) {
+                try {
+                  const t = (n.innerText || n.textContent || '').toLowerCase();
+                  if (!t || t.length > 4000) { n = n.parentElement; continue; }
+                  if (t.includes('replace video') || t.includes('thay video')
+                      || t.includes('or drag and drop') || t.includes('kéo và thả')
+                      || t.includes('create reel') || t.includes('tạo thước')
+                      || t.includes('uploading video') || t.includes('đang tải video')) {
+                    return true;
+                  }
+                } catch (e) {}
+                n = n.parentElement;
+              }
+              return false;
+            };
+            const dialogs = Array.from(document.querySelectorAll("[role='dialog']"));
+            let scope = null;
+            let scopeMode = 'none';
+            for (const d of dialogs) {
+              try {
+                if (!d || d.offsetParent === null) continue;
+                if (d.querySelector('video')) {
+                  scope = d; scopeMode = 'dialog_with_video'; break;
+                }
+              } catch (e) {}
+            }
+            if (!scope) {
+              for (const d of dialogs) {
+                try {
+                  if (!d || d.offsetParent === null) continue;
+                  const t = (d.innerText || '').toLowerCase();
+                  if (t.includes('reel') || t.includes('thước phim') || t.includes('create')
+                      || t.includes('replace video') || t.includes('thay video')) {
+                    scope = d; scopeMode = 'dialog_reel_text'; break;
+                  }
+                } catch (e) {}
+              }
+            }
+
+            let videos = scope ? Array.from(scope.querySelectorAll('video')) : [];
+            if (!videos.length) {
+              videos = Array.from(document.querySelectorAll('video'));
+              if (videos.length) {
+                scopeMode = scopeMode === 'none' ? 'document_video' : (scopeMode + '+document_video');
+              }
+            }
+
+            const items = videos.map((v, i) => {
+              let dur = null, rs = null, paused = null, muted = null;
+              let inDialog = false, nearComposer = false, isFeed = false, srcKind = 'empty';
+              try {
+                inDialog = !!(v.closest && v.closest("[role='dialog']"));
+                nearComposer = nearComposerText(v);
+                const src = String(v.currentSrc || v.src || '').trim().toLowerCase();
+                if (!src) srcKind = 'empty';
+                else if (src.startsWith('blob:')) srcKind = 'blob';
+                else if (src.includes('fbcdn') || src.includes('scontent') || src.includes('facebook.com')) {
+                  srcKind = 'fbcdn';
+                  isFeed = true;
+                } else srcKind = 'other';
+                // Chỉ kick play trên ứng viên composer — tránh play nhầm video feed
+                const candidate = inDialog || nearComposer || srcKind === 'empty' || srcKind === 'blob';
+                if (kick && candidate && !isFeed) {
+                  try { v.muted = true; } catch (e) {}
+                  try { const p = v.play(); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+                }
+                dur = Number(v.duration);
+                if (!Number.isFinite(dur)) dur = null;
+                rs = Number(v.readyState || 0);
+                paused = !!v.paused;
+                muted = !!v.muted;
+              } catch (e) {}
+              return {
+                index: i, duration: dur, readyState: rs, paused: paused, muted: muted,
+                inDialog: inDialog, nearComposer: nearComposer, isFeed: isFeed, srcKind: srcKind,
+              };
+            });
+
+            let ready = null;
+            const ranked = items.slice().sort((a, b) => {
+              const score = (it) => {
+                if (it.isFeed) return -100;
+                return (it.inDialog ? 20 : 0)
+                  + (it.nearComposer ? 15 : 0)
+                  + ((it.srcKind === 'empty' || it.srcKind === 'blob') ? 8 : 0)
+                  + ((it.duration != null && it.duration > 0) ? 5 : 0)
+                  + ((it.readyState || 0) >= 3 ? 3 : 0);
+              };
+              return score(b) - score(a);
+            });
+            for (const it of ranked) {
+              if (it.isFeed) continue;
+              // Bắt buộc gắn composer (dialog / Replace video / local MSE) — không nhận feed
+              if (!(it.inDialog || it.nearComposer || it.srcKind === 'empty' || it.srcKind === 'blob')) continue;
+              if (it.duration != null && it.duration > 0 && (it.readyState || 0) >= 3) {
+                ready = it;
+                break;
+              }
+            }
+            let vis = '', focused = false;
+            try { vis = String(document.visibilityState || ''); } catch (e) {}
+            try { focused = !!document.hasFocus(); } catch (e) {}
+            return {
+              dialogFound: !!scope,
+              scopeMode: scopeMode,
+              videoCount: items.length,
+              videos: items,
+              ready: ready,
+              previewOk: !!ready,
+              visibilityState: vis,
+              hasFocus: focused,
+            };
+            """,
+            bool(kick_play),
+        ) or {}
+    except Exception as e:
+        return {
+            "dialogFound": False,
+            "scopeMode": "error",
+            "videoCount": 0,
+            "videos": [],
+            "ready": None,
+            "previewOk": False,
+            "visibilityState": "",
+            "hasFocus": False,
+            "error": str(e)[:160],
+        }
+
+    ready = raw.get("ready") if isinstance(raw.get("ready"), dict) else None
+    return {
+        "dialogFound": bool(raw.get("dialogFound")),
+        "scopeMode": str(raw.get("scopeMode") or ""),
+        "videoCount": int(raw.get("videoCount") or 0),
+        "videos": list(raw.get("videos") or []),
+        "ready": ready,
+        "previewOk": bool(raw.get("previewOk")),
+        "visibilityState": str(raw.get("visibilityState") or ""),
+        "hasFocus": bool(raw.get("hasFocus")),
+        "error": str(raw.get("error") or ""),
+    }
+
+
+def _reels_wait_preview_ready(driver, log_fn=None, timeout: float = 30.0) -> tuple:
+    """
+    Sau receive-200: kick play() muted, poll tối đa 30s chờ duration>0 và readyState>=3.
+    Returns (ok: bool, meta: dict).
+    """
+    timeout = max(5.0, float(timeout or 30.0))
+    started = time.time()
+    deadline = started + timeout
+    last_log = 0.0
+    # Cửa sổ mất focus dễ làm media không sẵn — cố gắng đưa Chrome lên trước
+    try:
+        from core.browser.driver import bring_chrome_to_front
+        bring_chrome_to_front(driver)
+    except Exception:
+        pass
+    meta = _reels_dialog_preview_status(driver, kick_play=True)
+    while time.time() < deadline:
+        meta = _reels_dialog_preview_status(driver, kick_play=True)
+        ready = meta.get("ready") or {}
+        elapsed = time.time() - started
+        now = time.time()
+        if log_fn and now - last_log >= 0.7:
+            try:
+                sample = ready if ready else (
+                    (meta.get("videos") or [{}])[0] if meta.get("videos") else {}
+                )
+                log_fn(
+                    f"Chờ preview sẵn... {elapsed:.1f}s/{int(timeout)}s "
+                    f"(scope={meta.get('scopeMode')}, videos={meta.get('videoCount')}, "
+                    f"dur={sample.get('duration')}, rs={sample.get('readyState')}, "
+                    f"paused={sample.get('paused')}, inDialog={sample.get('inDialog')}, "
+                    f"nearComposer={sample.get('nearComposer')}, srcKind={sample.get('srcKind')}, "
+                    f"isFeed={sample.get('isFeed')}, hasFocus={meta.get('hasFocus')})"
+                )
+            except Exception:
+                pass
+            last_log = now
+        if meta.get("previewOk") and ready:
+            if log_fn:
+                try:
+                    log_fn(
+                        f"preview sẵn sau {elapsed:.1f}s "
+                        f"(dur={ready.get('duration')}s, rs={ready.get('readyState')}, "
+                        f"paused={ready.get('paused')}, scope={meta.get('scopeMode')})"
+                    )
+                except Exception:
+                    pass
+            return True, meta
+        time.sleep(0.7)
+    return False, meta
+
+
+def _reels_file_inputs_diag(driver) -> list:
+    try:
+        return list(
+            driver.execute_script(
+                """
+                return Array.from(document.querySelectorAll("input[type='file']")).map((el, i) => {
+                  let file0 = null;
+                  try {
+                    if (el.files && el.files[0]) {
+                      file0 = { name: el.files[0].name || '', size: el.files[0].size || 0 };
+                    }
+                  } catch (e) {}
+                  let cs = {};
+                  try {
+                    const s = getComputedStyle(el);
+                    cs = { display: s.display, opacity: s.opacity, visibility: s.visibility };
+                  } catch (e) {}
+                  return {
+                    index: i,
+                    accept: el.getAttribute('accept') || '',
+                    filesLen: (el.files && el.files.length) || 0,
+                    file0: file0,
+                    id: el.id || '',
+                    name: el.name || '',
+                    styleInline: el.getAttribute('style') || '',
+                    computed: cs,
+                  };
+                });
+                """
+            )
+            or []
+        )
+    except Exception as e:
+        return [{"error": str(e)[:120]}]
+
+
+def _reels_upload_status(driver) -> dict:
+    """
+    Chỉ còn: panel uploading thật (không dính CTA create) + edit UI.
+    Không dùng fbcdn src / pct / net_idle làm tín hiệu server.
+    """
+    try:
+        raw = driver.execute_script(
+            """
+            const nearVideoPlayer = (el) => {
+              let n = el;
+              for (let i = 0; i < 14 && n; i++) {
+                try {
+                  if (n.tagName === 'VIDEO') return true;
+                  if (n.querySelector && n.querySelector('video')) return true;
+                } catch (e) {}
+                n = n.parentElement;
+              }
+              return false;
+            };
+            const brief = (el) => {
+              try {
+                const t = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+                return (t || '').slice(0, 160);
+              } catch (e) { return '?'; }
+            };
+            // CTA trang create: "Create reel / Uploading video / or drag and drop" — KHÔNG phải đang upload
+            const isCreateCta = (t) => {
+              const s = (t || '').toLowerCase();
+              return s.includes('drag and drop') || s.includes('kéo và thả')
+                || s.includes('or drag') || (s.includes('create reel') && s.includes('next'));
+            };
+
+            let uploading = false;
+            let reason = '';
+            let detail = '';
+
+            const bars = Array.from(document.querySelectorAll('[role="progressbar"]'));
+            for (const pb of bars) {
+              try {
+                if (!pb || pb.offsetParent === null) continue;
+                if (nearVideoPlayer(pb)) continue;
+                uploading = true;
+                reason = 'progressbar_upload_panel';
+                detail = brief(pb);
+                break;
+              } catch (e) {}
+            }
+
+            if (!uploading) {
+              const hints = [
+                'đang tải lên', 'đang tải video', 'uploading video', 'upload in progress',
+                'đang tải tệp', 'đang tải file', 'đang xử lý video'
+              ];
+              const nodes = Array.from(document.querySelectorAll('span,div,p,h1,h2,h3'));
+              for (const el of nodes) {
+                try {
+                  if (!el || el.offsetParent === null) continue;
+                  if (nearVideoPlayer(el)) continue;
+                  const t = (el.innerText || el.textContent || '').trim();
+                  const tl = t.toLowerCase();
+                  if (!tl || tl.length > 120) continue;
+                  if (isCreateCta(tl)) continue;
+                  if (hints.some((h) => tl.includes(h))) {
+                    uploading = true;
+                    reason = 'upload_text';
+                    detail = t.slice(0, 120);
+                    break;
+                  }
+                } catch (e) {}
+              }
+            }
+
+            const body = (document.body && document.body.innerText || '').toLowerCase();
+            const editMarks = [
+              'trim video', 'cắt video', 'closed captions', 'phụ đề',
+              'edit reel', 'chỉnh sửa thước phim', 'reel settings', 'cài đặt thước phim'
+            ];
+            const editUi = editMarks.some((m) => body.includes(m));
+            return { uploading: uploading, reason: reason, detail: detail, editUi: editUi };
+            """
+        ) or {}
+    except Exception as e:
+        return {
+            "uploading": False,
+            "reason": "status_script_error",
+            "detail": str(e)[:120],
+            "editUi": False,
+        }
+
+    return {
+        "uploading": bool(raw.get("uploading")),
+        "reason": str(raw.get("reason") or ""),
+        "detail": str(raw.get("detail") or "")[:160],
+        "editUi": bool(raw.get("editUi")),
+    }
+
+
+def _reels_is_still_uploading(driver) -> bool:
+    return bool(_reels_upload_status(driver).get("uploading"))
+
+
+def _reels_upload_looks_ready(driver) -> bool:
+    """Không dùng một mình để bấm Next — giữ API cũ."""
+    return _reels_video_preview_ready(driver)
+
+
+# Nút Next trong wizard Reels — tránh khớp "Tiếp tục" / Continue
+_REELS_NEXT_BTN_XPATH = (
+    "//*[self::button or @role='button']"
+    "[@aria-label='Tiếp' or @aria-label='Next' "
+    "or .//span[normalize-space(text())='Tiếp' or normalize-space(text())='Next'] "
+    "or normalize-space(text())='Tiếp' or normalize-space(text())='Next']"
+    "[not(contains(@aria-label,'Tiếp tục')) and not(contains(@aria-label,'Continue')) "
+    "and not(.//span[contains(normalize-space(.),'Tiếp tục') or contains(normalize-space(.),'Continue')])]"
+)
+
+
 def _snapshot_profile_reel_ids(driver, uid: Optional[str] = None) -> list:
     """Lấy danh sách ID Reels trên tab profile (mới → cũ). Không navigate nếu đang ở create."""
     js_collect = """
@@ -4096,19 +5188,115 @@ def _snapshot_profile_reel_ids(driver, uid: Optional[str] = None) -> list:
         return []
 
 
+def _read_windows_clipboard() -> Optional[str]:
+    """Đọc clipboard Windows (text + HTML). Không gọi navigator.clipboard."""
+    chunks: List[str] = []
+    for _ in range(8):
+        try:
+            import win32clipboard  # type: ignore
+
+            win32clipboard.OpenClipboard()
+            try:
+                if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT):
+                    data = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+                    if isinstance(data, str) and data.strip():
+                        chunks.append(data.strip())
+                try:
+                    cf_html = win32clipboard.RegisterClipboardFormat("HTML Format")
+                    if win32clipboard.IsClipboardFormatAvailable(cf_html):
+                        raw = win32clipboard.GetClipboardData(cf_html)
+                        if isinstance(raw, bytes):
+                            raw = raw.decode("utf-8", errors="ignore")
+                        if isinstance(raw, str) and raw.strip():
+                            chunks.append(raw.strip())
+                except Exception:
+                    pass
+            finally:
+                win32clipboard.CloseClipboard()
+            if chunks:
+                break
+        except Exception:
+            time.sleep(0.15)
+    if not chunks:
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            CF_UNICODETEXT = 13
+            for _ in range(8):
+                if not user32.OpenClipboard(0):
+                    time.sleep(0.15)
+                    continue
+                try:
+                    handle = user32.GetClipboardData(CF_UNICODETEXT)
+                    if handle:
+                        ptr = kernel32.GlobalLock(handle)
+                        if ptr:
+                            try:
+                                data = ctypes.wstring_at(ptr)
+                                if data and data.strip():
+                                    chunks.append(data.strip())
+                            finally:
+                                kernel32.GlobalUnlock(handle)
+                finally:
+                    user32.CloseClipboard()
+                if chunks:
+                    break
+                time.sleep(0.15)
+        except Exception:
+            pass
+    if not chunks:
+        return None
+    return "\n".join(chunks)
+
+
+def _parse_reel_share_text(text: Optional[str]) -> tuple:
+    """
+    ('reel', numeric_id) hoặc ('share', https://www.facebook.com/share/r/CODE).
+    Không nhận bare /reel/ và không nhận /share/p/.
+    """
+    if not text:
+        return None, None
+    raw = str(text)
+    m = re.search(
+        r"(?:https?:)?//(?:www\.|web\.|m\.)?facebook\.com/reel/(\d{6,})",
+        raw,
+        re.I,
+    )
+    if not m:
+        m = re.search(r"facebook\.com/reel/(\d{6,})", raw, re.I)
+    if m:
+        return "reel", m.group(1)
+    m = re.search(
+        r"https?://(?:www\.|web\.|m\.)?facebook\.com/share/r/([A-Za-z0-9_-]+)/?",
+        raw,
+        re.I,
+    )
+    if not m:
+        m = re.search(r"facebook\.com/share/r/([A-Za-z0-9_-]+)/?", raw, re.I)
+    if m:
+        return "share", f"https://www.facebook.com/share/r/{m.group(1)}"
+    return None, None
+
+
 def extract_reels_post_url(
     driver,
     uid: Optional[str] = None,
     log_cb: Optional[Any] = None,
     known_reel_ids: Optional[Any] = None,
+    caption: Optional[str] = None,
+    upload_video_id: Optional[str] = None,
+    draft_reel_id: Optional[str] = None,
 ) -> Optional[str]:
     """
-    Link đúng video vừa đăng: https://www.facebook.com/reel/{id}.
+    Link đúng clip vừa đăng: https://www.facebook.com/reel/{id}.
 
-    Không dùng bare /reel/ (For You). Không lấy đại link /reel/{id} đầu tiên trên /me
-    (dễ gán nhầm ID video cũ khi đăng nhiều clip cùng nick).
-
-    known_reel_ids: ID đã có trước khi đăng — ưu tiên ID mới xuất hiện.
+    Không mở tab /{uid}/reels (video đầu trang là gợi ý For You).
+    current_url chỉ nhận khi ID khác trang soạn có từ trước lúc bấm Post.
+    Sau đó: toast, rồi Share → Copy link, resolve /share/r/.
+    Không lấy được ID thì trả None — không gắn permalink giả.
+    upload_video_id chỉ để đối chiếu log, không dùng làm link.
     """
     def _log(m):
         if log_cb:
@@ -4116,102 +5304,529 @@ def extract_reels_post_url(
         logger.info(m)
 
     known = {str(x) for x in (known_reel_ids or []) if x}
+    upload_id = str(upload_video_id).strip() if upload_video_id else ""
+    draft_id = str(draft_reel_id).strip() if draft_reel_id else ""
 
     def _accept(rid: Optional[str], source: str) -> Optional[str]:
         if not rid:
             return None
+        rid = str(rid)
         if known and rid in known:
+            _log(f"Bỏ reel {rid} ({source}) — ID đã có trước khi đăng.")
             return None
         url = _canonical_reel_url(rid)
         _log(f"Lấy được URL Reels ({source}): {url}")
+        if upload_id and upload_id != rid:
+            _log(
+                f"Đối chiếu: link id={rid} khác video_id upload={upload_id} "
+                "— vẫn dùng link vừa lấy, không dùng video_id làm permalink."
+            )
+        elif upload_id:
+            _log(f"Đối chiếu: link khớp video_id upload={upload_id}.")
         return url
 
+    hint = re.sub(r"\s+", " ", (caption or "").strip())
+    if len(hint) > 40:
+        hint = hint[:40]
+
     js_find_notif_reel = """
+        const ids = [];
+        const seen = new Set();
+        const push = (href) => {
+            const m = (href || '').match(/\\/reel\\/(\\d{6,})/);
+            if (m && !seen.has(m[1])) { seen.add(m[1]); ids.push(m[1]); }
+        };
         const allAnchors = Array.from(document.querySelectorAll("a[href*='/reel/']"));
-        const notifAnchor = allAnchors.find(a =>
-            (a.href || '').includes('fb_shorts_video_processed') ||
-            (a.href || '').includes('notification_fb_shorts')
-        );
-        if (notifAnchor) {
-            const m = notifAnchor.href.match(/\\/reel\\/(\\d{6,})/);
-            if (m) return m[1];
+        for (const a of allAnchors) {
+            const h = a.href || '';
+            if (h.includes('fb_shorts_video_processed') || h.includes('notification_fb_shorts')) push(h);
         }
         const alertAnchors = Array.from(document.querySelectorAll(
             "div[role='alert'] a[href*='/reel/'], [role='status'] a[href*='/reel/']"
         ));
-        for (const a of alertAnchors) {
-            const m = (a.href || '').match(/\\/reel\\/(\\d{6,})/);
-            if (m) return m[1];
-        }
-        return null;
+        for (const a of alertAnchors) push(a.href || '');
+        return ids;
     """
 
-    try:
-        _log("Đang trích xuất liên kết Reels vừa đăng (bắt buộc có ID số)...")
+    js_mark_share = r"""
+        const hint = (arguments[0] || "").replace(/\s+/g, " ").trim().toLowerCase();
+        const hintSlice = hint ? hint.slice(0, Math.min(40, hint.length)) : "";
+        const readText = (el) => ((el && (el.innerText || el.textContent)) || "").replace(/\s+/g, " ").trim();
+        const isVisible = (el) => {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 8 || r.height < 8) return false;
+            const st = window.getComputedStyle(el);
+            return st.display !== "none" && st.visibility !== "hidden" && Number(st.opacity) !== 0;
+        };
+        const isShare = (b) => {
+            if (!b || b.closest("[role='navigation'], [role='banner']")) return false;
+            const aria = (b.getAttribute("aria-label") || "").toLowerCase().trim();
+            const t = readText(b).toLowerCase();
+            const blob = aria + " " + t;
+            if (/share now|chia sẻ ngay|embed|nhúng/.test(blob)) return false;
+            if (/^(chia sẻ|share)$/.test(t) || /^(chia sẻ|share)$/.test(aria)) return true;
+            if (/^(chia sẻ|share)\b/.test(aria)) return true;
+            return false;
+        };
+        document.querySelectorAll("[data-ada-reel-share]").forEach((el) => {
+            el.removeAttribute("data-ada-reel-share");
+        });
+        const confirmMarks = [
+            "đã đăng", "đã chia sẻ", "has been shared", "reel posted",
+            "your reel", "thước phim của bạn", "shared to", "is now shared"
+        ];
+        const dialogs = Array.from(document.querySelectorAll("div[role='dialog']")).filter(isVisible);
+        for (const d of dialogs) {
+            const blob = readText(d).toLowerCase();
+            if (blob.includes("notification") || blob.includes("post audience") || blob.includes("đối tượng bài viết")) {
+                continue;
+            }
+            const share = Array.from(d.querySelectorAll("[role='button'], button")).filter(isVisible).find(isShare);
+            if (!share) continue;
+            const isConfirm = confirmMarks.some((m) => blob.includes(m));
+            const hasHint = !!(hintSlice && hintSlice.length >= 4 && blob.includes(hintSlice));
+            if (hasHint || (!hintSlice && isConfirm)) {
+                share.setAttribute("data-ada-reel-share", "1");
+                return { matched: 1, via: hasHint ? "dialog_caption" : "dialog_confirm", preview: readText(d).slice(0, 140) };
+            }
+        }
+        if (!hintSlice || hintSlice.length < 4) {
+            return { matched: 0, via: "no_caption", cards: 0 };
+        }
+        const shareBtns = Array.from(document.querySelectorAll("[role='button'], button")).filter(isVisible).filter(isShare);
+        const hits = [];
+        for (const b of shareBtns) {
+            let n = b;
+            let ok = false;
+            for (let i = 0; i < 14 && n && n !== document.body && n !== document.documentElement; i++) {
+                const t = readText(n).toLowerCase();
+                if (t.includes(hintSlice) && t.length < 2500) { ok = true; break; }
+                n = n.parentElement;
+            }
+            if (ok) hits.push(b);
+        }
+        if (hits.length === 1) {
+            hits[0].setAttribute("data-ada-reel-share", "1");
+            return { matched: 1, via: "caption", cards: 1, preview: hintSlice };
+        }
+        const mains = Array.from(document.querySelectorAll("[role='main']")).filter(isVisible);
+        const mainHits = [];
+        for (const main of mains) {
+            const t = readText(main).toLowerCase();
+            if (!t.includes(hintSlice)) continue;
+            const shares = Array.from(main.querySelectorAll("[role='button'], button")).filter(isVisible).filter(isShare);
+            if (shares.length === 1) mainHits.push(shares[0]);
+        }
+        if (mainHits.length === 1) {
+            mainHits[0].setAttribute("data-ada-reel-share", "1");
+            return { matched: 1, via: "main_caption", cards: 1, preview: hintSlice, shareCount: shareBtns.length };
+        }
+        return { matched: 0, via: "caption", cards: hits.length, shareCount: shareBtns.length, mainShares: mainHits.length };
+    """
 
-        # Tier 0: current_url ngay sau đăng (có ID) — bỏ qua bare /reel/
+    js_read_sheet = r"""
+        function isVisible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 20 || r.height < 20) return false;
+            const st = window.getComputedStyle(el);
+            return st.display !== "none" && st.visibility !== "hidden" && Number(st.opacity) !== 0;
+        }
+        function rootBlob(root) {
+            return (((root.getAttribute("aria-label") || "") + " " + (root.innerText || "")).toLowerCase());
+        }
+        function isNoise(root) {
+            const t = rootBlob(root);
+            if (t.includes("notification") || t.startsWith("notifications")) return true;
+            if (t.includes("create post") || t.includes("tạo bài viết")) return true;
+            if (t.includes("post audience") || t.includes("select audience") || t.includes("đối tượng bài viết")) return true;
+            return false;
+        }
+        const candidates = Array.from(document.querySelectorAll("div[role='dialog'], div[role='menu']")).filter(isVisible);
+        const roots = candidates.filter((r) => {
+            if (isNoise(r)) return false;
+            const t = rootBlob(r);
+            return t.includes("copy link") || t.includes("sao chép liên kết")
+                || t.includes("share now") || t.includes("chia sẻ ngay")
+                || /facebook\.com\/share\/r\//i.test(t)
+                || /facebook\.com\/reel\/\d{6,}/i.test(t);
+        });
+        let reelHref = null;
+        let shareHref = null;
+        let hasCopy = false;
+        const buttons = [];
+        for (const root of roots) {
+            const blob = (root.innerText || root.textContent || "");
+            const rm = blob.match(/https?:\/\/(?:www\.|web\.|m\.)?facebook\.com\/reel\/\d{6,}/i);
+            if (rm && !reelHref) reelHref = rm[0];
+            const sm = blob.match(/https?:\/\/(?:www\.|web\.|m\.)?facebook\.com\/share\/r\/[A-Za-z0-9_-]+\/?/i);
+            if (sm && !shareHref) shareHref = sm[0];
+            for (const b of Array.from(root.querySelectorAll("a[href], div[role='button'], button, span[role='button']"))) {
+                if (!isVisible(b)) continue;
+                const text = ((b.innerText || b.textContent || "") + "").replace(/\s+/g, " ").trim();
+                const aria = (b.getAttribute("aria-label") || "").trim();
+                const href = b.href || "";
+                buttons.push({ text: text.slice(0, 80), aria: aria.slice(0, 80), href: (href || "").slice(0, 180) });
+                if (/facebook\.com\/reel\/\d{6,}/i.test(href) && !reelHref) reelHref = href;
+                if (/facebook\.com\/share\/r\//i.test(href) && !shareHref) shareHref = href;
+                const blob2 = (text + " " + aria).toLowerCase();
+                if ((blob2.includes("copy link") || blob2.includes("sao chép liên kết"))
+                    && !blob2.includes("embed") && !blob2.includes("nhúng")) {
+                    hasCopy = true;
+                }
+            }
+        }
+        return { reelHref, shareHref, hasCopy, buttons: buttons.slice(0, 40), rootCount: roots.length };
+    """
+
+    js_click_copy = r"""
+        function isVisible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 8 || r.height < 8) return false;
+            const st = window.getComputedStyle(el);
+            return st.display !== "none" && st.visibility !== "hidden";
+        }
+        function trigger(el) {
+            try {
+                if (typeof el.click === "function") { el.click(); return true; }
+            } catch (e) {}
+            return false;
+        }
+        const roots = Array.from(document.querySelectorAll("div[role='dialog'], div[role='menu']")).filter(isVisible);
+        const re = /(sao chép liên kết|copy link)/i;
+        for (const root of roots) {
+            const blob = (((root.getAttribute("aria-label") || "") + " " + (root.innerText || "")).toLowerCase());
+            if (blob.includes("notification") || blob.includes("tạo bài viết") || blob.includes("create post")) continue;
+            for (const b of Array.from(root.querySelectorAll("div[role='button'], button, span[role='button'], a"))) {
+                if (!isVisible(b)) continue;
+                const text = ((b.innerText || b.textContent || "") + " " + (b.getAttribute("aria-label") || "")).replace(/\s+/g, " ").trim();
+                if (!re.test(text)) continue;
+                if (/share now|chia sẻ ngay|embed|nhúng/i.test(text)) continue;
+                trigger(b);
+                return { clicked: true, label: text.slice(0, 80) };
+            }
+        }
+        return { clicked: false };
+    """
+
+    def _grant_clipboard() -> None:
+        for origin in (
+            "https://www.facebook.com",
+            "https://web.facebook.com",
+            "https://m.facebook.com",
+        ):
+            try:
+                driver.execute_cdp_cmd(
+                    "Browser.grantPermissions",
+                    {"origin": origin, "permissions": ["clipboardReadWrite", "clipboardSanitizedWrite"]},
+                )
+            except Exception:
+                pass
+
+    def _resolve_share_r(share_url: str) -> Optional[str]:
+        _log(f"Mở tab mới resolve {share_url}...")
+        try:
+            feed_handle = driver.current_window_handle
+        except Exception:
+            feed_handle = None
+        try:
+            feed_url = driver.current_url or ""
+        except Exception:
+            feed_url = ""
+        try:
+            handles_before = list(driver.window_handles)
+        except Exception:
+            handles_before = []
+        try:
+            driver.execute_script("window.open(arguments[0], '_blank');", share_url)
+        except Exception as e:
+            _log(f"window.open lỗi: {e}")
+        time.sleep(0.8)
+        new_handle = None
+        try:
+            new_handles = [h for h in driver.window_handles if h not in handles_before]
+            if new_handles:
+                new_handle = new_handles[0]
+                driver.switch_to.window(new_handle)
+            else:
+                _log("Không có tab mới — mở /share/r/ trên tab hiện tại.")
+                driver.get(share_url)
+        except Exception as e:
+            _log(f"Không chuyển được sang tab share: {e}")
+            return None
+        found = None
+        deadline = time.time() + 10.0
+        last_url = ""
+        while time.time() < deadline:
+            try:
+                cur = driver.current_url or ""
+                last_url = cur
+                kind, val = _parse_reel_share_text(cur)
+                if kind == "reel":
+                    if known and val in known:
+                        _log(f"Resolve ra reel cũ {val} — bỏ.")
+                        break
+                    found = val
+                    _log(f"Resolve /share/r/ → /reel/{val}")
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+        if not found:
+            _log(f"Sau 10s /share/r/ chưa ra /reel/{{id}} (last={last_url[:180]!r}).")
+        try:
+            if new_handle and feed_handle and driver.current_window_handle != feed_handle:
+                driver.close()
+                driver.switch_to.window(feed_handle)
+            elif feed_handle and not new_handle and feed_url:
+                driver.get(feed_url)
+        except Exception as e:
+            _log(f"Đóng tab share lỗi: {e}")
+        return found
+
+    try:
+        _log("Đang trích xuất liên kết Reels vừa đăng (mở profile, cuộn, lấy /reel/ của bài đầu)...")
+        if upload_id:
+            _log(f"video_id lúc upload (chỉ đối chiếu, không dùng làm link): {upload_id}")
+        else:
+            _log("Không có video_id upload để đối chiếu.")
+
+        if draft_id:
+            _log(
+                f"ID trang soạn trước Post = {draft_id} — không lấy làm link nếu URL không đổi."
+            )
+        unavailable_logged = False
+        draft_logged = False
         for _ in range(8):
             try:
                 cur = driver.current_url or ""
             except Exception:
                 cur = ""
             rid = _reel_id_from_url(cur)
-            hit = _accept(rid, "current_url")
-            if hit:
-                return hit
-            # Bare /reel/ = feed For You, không phải link video
-            time.sleep(0.75)
-
-        # Tier 1: poll toast / notification ~15s
-        for attempt in range(8):
-            try:
-                rid = driver.execute_script(js_find_notif_reel)
-                hit = _accept(rid, "thông báo xuất bản")
+            if draft_id and rid == draft_id:
+                if not draft_logged:
+                    _log(
+                        f"Bỏ current_url /reel/{rid} — vẫn là trang soạn có từ trước khi bấm Post."
+                    )
+                    draft_logged = True
+            elif _reels_page_is_unavailable(driver):
+                if not unavailable_logged:
+                    _log(f"Bỏ current_url vì trang không khả dụng: {cur[:160]}")
+                    unavailable_logged = True
+            else:
+                hit = _accept(rid, "current_url")
                 if hit:
                     return hit
+            time.sleep(0.75)
+
+        # Đọc thông báo khi còn đứng ở trang vừa đăng. Mở profile sau sẽ mất toast.
+        stale_notif_logged = False
+        stale_polls = 0
+        for attempt in range(4):
+            try:
+                raw_ids = driver.execute_script(js_find_notif_reel) or []
+            except Exception:
+                raw_ids = []
+            ids = [str(x) for x in raw_ids if x]
+            fresh = [rid for rid in ids if rid not in known and rid != draft_id]
+            if fresh:
+                hit = _accept(fresh[0], "thông báo xuất bản")
+                if hit:
+                    return hit
+            if ids and not fresh:
+                stale_polls += 1
+                if not stale_notif_logged:
+                    _log(
+                        f"Thông báo chỉ có reel cũ {ids[:4]} — bỏ, không lấy làm link vừa đăng."
+                    )
+                    stale_notif_logged = True
+                if stale_polls >= 2:
+                    break
+            time.sleep(1.0)
+
+        # Cùng cách Status: mở trang profile, cuộn xuống, lấy bài đầu timeline.
+        # Status ra /posts|permalink. Reels trên cùng card đó ra /reel/{id}.
+        profile_home = _profile_url_from_uid(uid) or "https://www.facebook.com/me"
+        _log(f"Mở profile, cuộn lấy bài đầu: {profile_home}")
+        try:
+            driver.get(profile_home)
+        except Exception as e:
+            _log(f"Không mở được profile: {e}")
+            profile_home = None
+        if profile_home and _reels_page_is_unavailable(driver):
+            _log(f"Profile báo không khả dụng: {profile_home}")
+            profile_home = None
+        if profile_home:
+            js_first_post = r"""
+                try { window.scrollBy(0, 900); } catch (e) {}
+                const main = document.querySelector("[role='main']") || document.body;
+                const cards = Array.from(main.querySelectorAll("div[role='article'], article")).filter((el) => {
+                    if (el.closest("[role='navigation'], [role='banner'], [role='complementary']")) return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 200 && r.height > 80;
+                });
+                cards.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+                const card = cards[0] || null;
+                if (!card) return { found: false, cards: 0 };
+                let rid = null;
+                let href = "";
+                for (const a of Array.from(card.querySelectorAll("a[href*='/reel/']"))) {
+                    const h = a.href || "";
+                    const m = h.match(/\/reel\/(\d{6,})/);
+                    if (m) { rid = m[1]; href = h; break; }
+                }
+                const preview = ((card.innerText || "") + "").replace(/\s+/g, " ").trim().slice(0, 100);
+                return { found: !!rid, rid, href: href.slice(0, 160), cards: cards.length, preview };
+            """
+            for attempt in range(8):
+                time.sleep(1.2)
+                try:
+                    top = driver.execute_script(js_first_post) or {}
+                except Exception as e:
+                    _log(f"Đọc bài đầu profile lỗi: {e}")
+                    break
+                rid = str(top.get("rid") or "")
+                fresh = bool(rid) and rid not in known and rid != draft_id
+                if attempt == 0 or fresh:
+                    _log(
+                        f"Profile bài đầu rid={rid or '-'} mới={fresh} "
+                        f"cards={top.get('cards')} preview={(top.get('preview') or '')[:70]!r} "
+                        f"(lần {attempt + 1}/8)"
+                    )
+                if fresh:
+                    hit = _accept(rid, "profile bài đầu")
+                    if hit:
+                        return hit
+            _log("Profile bài đầu chưa có reel mới — thử Share.")
+
+        if _reels_page_is_unavailable(driver):
+            _log("Đang ở trang không khả dụng — không bấm Share trên trang lỗi.")
+            return None
+
+        _log("Không có /reel/{id} trên URL, thông báo hay lưới profile — bấm Share trên reel vừa đăng...")
+        marked = None
+        try:
+            marked = driver.execute_script(js_mark_share, hint)
+        except Exception as e:
+            _log(f"Không tìm được nút Share của reel vừa đăng: {e}")
+            marked = None
+        if not isinstance(marked, dict) or int(marked.get("matched") or 0) != 1:
+            via = (marked or {}).get("via") if isinstance(marked, dict) else ""
+            cards = (marked or {}).get("cards") if isinstance(marked, dict) else None
+            shares = (marked or {}).get("shareCount") if isinstance(marked, dict) else None
+            _log(
+                f"Không khớp đúng một reel để Share (via={via}, cards={cards}, "
+                f"shareCount={shares}, caption={hint!r}). Không lấy video đầu tab."
+            )
+            return None
+
+        _log(
+            f"Share target via={marked.get('via')} preview={(marked.get('preview') or '')[:100]!r}"
+        )
+        try:
+            btn = driver.find_element(By.CSS_SELECTOR, "[data-ada-reel-share='1']")
+            try:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center', inline:'nearest'});",
+                    btn,
+                )
             except Exception:
                 pass
-            time.sleep(2.0 if attempt < 4 else 1.5)
+            try:
+                btn.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", btn)
+            _log("Đã bấm Share một lần trên reel khớp.")
+        except Exception as e:
+            _log(f"Không bấm được Share: {e}")
+            return None
 
-        # Tier 2: tab Reels của chính nick — lấy ID mới nhất (đầu danh sách)
-        # Không quét timeline /me (dễ trúng video cũ / người khác).
-        profile_reels = None
-        if uid:
-            profile_reels = f"https://www.facebook.com/{uid}/reels"
-        else:
-            profile_reels = "https://www.facebook.com/me/reels"
+        reel_id = None
+        share_url = None
+        sheet_deadline = time.time() + 5.0
+        copied = False
+        while time.time() < sheet_deadline and not reel_id and not share_url:
+            try:
+                sheet = driver.execute_script(js_read_sheet)
+            except Exception as e:
+                _log(f"Đọc bảng Share lỗi: {e}")
+                sheet = None
+            if isinstance(sheet, dict):
+                kind, val = _parse_reel_share_text(sheet.get("reelHref"))
+                if kind == "reel":
+                    reel_id = val
+                    _log(f"Lấy /reel/{{id}} từ DOM bảng Share: {val}")
+                    break
+                kind, val = _parse_reel_share_text(sheet.get("shareHref"))
+                if kind == "share":
+                    share_url = val
+                    _log(f"Lấy /share/r/ từ DOM bảng Share: {share_url}")
+                    break
+                if sheet.get("hasCopy") and not copied:
+                    copied = True
+                    _grant_clipboard()
+                    locked = _CLIPBOARD_EXTRACT_LOCK.acquire(timeout=60)
+                    if not locked:
+                        _log("Không lấy được khóa clipboard trong 60s — dừng, không đoán link.")
+                        return None
+                    try:
+                        before = _read_windows_clipboard()
+                        _log(f"Clipboard trước Copy (len={len(before or '')}).")
+                        try:
+                            clicked = driver.execute_script(js_click_copy)
+                            _log(f"Bấm Copy link → {clicked}")
+                        except Exception as e:
+                            _log(f"Lỗi bấm Copy link: {e}")
+                            clicked = None
+                        clip_deadline = time.time() + 4.0
+                        clip = None
+                        while time.time() < clip_deadline:
+                            raw = _read_windows_clipboard()
+                            if raw and raw != (before or ""):
+                                clip = raw
+                                kind, val = _parse_reel_share_text(raw)
+                                if kind:
+                                    break
+                            time.sleep(0.25)
+                        _log(f"Clipboard sau Copy (len={len(clip or '')})={((clip or '')[:180])!r}")
+                        kind, val = _parse_reel_share_text(clip)
+                        if kind == "reel":
+                            reel_id = val
+                            _log(f"Lấy /reel/{{id}} từ clipboard: {val}")
+                            break
+                        if kind == "share":
+                            share_url = val
+                            _log(f"Lấy /share/r/ từ clipboard: {share_url}")
+                            break
+                        _log("Copy xong nhưng clipboard không có /reel/{id} hay /share/r/.")
+                    finally:
+                        try:
+                            _CLIPBOARD_EXTRACT_LOCK.release()
+                            _log("Đã nhả khóa clipboard.")
+                        except Exception:
+                            pass
+            time.sleep(0.4)
 
         try:
-            _log(f"Mở tab Reels profile để lấy ID mới nhất: {profile_reels}")
-            driver.get(profile_reels)
-            time.sleep(4.0)
-            for attempt in range(5):
-                ids = _snapshot_profile_reel_ids(driver, uid)
-                if ids:
-                    # Ưu tiên ID chưa có trong known (video vừa đăng)
-                    for rid in ids:
-                        hit = _accept(rid, "tab Reels profile (mới)")
-                        if hit:
-                            return hit
-                    # Không có known → ID đầu = mới nhất trên tab
-                    if not known:
-                        hit = _accept(ids[0], "tab Reels profile (đầu danh sách)")
-                        if hit:
-                            return hit
-                time.sleep(2.0)
-        except Exception as e:
-            logger.debug(f"Không đọc được tab Reels profile: {e}")
+            driver.execute_script(
+                "try { document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', keyCode:27, bubbles:true})); } catch (e) {}"
+            )
+        except Exception:
+            pass
 
-        # Tier 3: fallback — chỉ trang Reels profile (không gắn ID giả)
-        if uid:
-            fallback = f"https://www.facebook.com/{uid}/reels"
-            _log(f"Chưa bắt được ID Reels — fallback tạm: {fallback}")
-            return fallback
+        if reel_id:
+            return _accept(reel_id, "share_dom_or_clipboard")
+        if share_url:
+            resolved = _resolve_share_r(share_url)
+            return _accept(resolved, "share_r_redirect")
 
+        _log("Share không ra /reel/{id} hay /share/r/ — không gắn link tab Reels.")
+        return None
     except Exception as e:
-        logger.debug(f"Lỗi nhẹ trong extract_reels_post_url: {e}")
-
-    return None
+        _log(f"extract_reels_post_url lỗi (không fail bài đăng): {e}")
+        return None
 
 
 def extract_story_post_url(driver, uid: Optional[str] = None, log_cb: Optional[Any] = None) -> Optional[str]:
@@ -4716,15 +6331,15 @@ def publish_status_post(
     except Exception:
         pass
 
-    try:
-        human.click(status_box)
-    except Exception:
-        pass
+    # Đã có Create post thì KHÔNG click lại — click đôi dễ mở 2 modal chồng
+    composer_opened = is_composer_dialog_open(driver)
+    if not composer_opened:
+        try:
+            human.click(status_box)
+        except Exception:
+            pass
     time.sleep(random.uniform(1.2, 1.8))
     check_account_health(driver)
-
-    # Đảm bảo dialog "Tạo bài viết" đã xuất hiện bằng is_composer_dialog_open
-    composer_opened = False
     for _ in range(8):
         if is_composer_dialog_open(driver):
             composer_opened = True
@@ -4732,7 +6347,7 @@ def publish_status_post(
         time.sleep(0.5)
 
     if not composer_opened:
-        log("Thử kích hoạt lại khung soạn thảo bằng click trực tiếp...")
+        log("Thử kích hoạt lại khung soạn thảo bằng click trực tiếp (composer chưa mở)...")
         try:
             driver.execute_script("""
                 const el = arguments[0];
@@ -4784,6 +6399,28 @@ def publish_status_post(
         check_account_health(driver)
         raise RuntimeError("Không thể mở hộp thoại tạo bài viết trên Facebook.")
 
+    # Gỡ Notifications + shell Create post trùng (KHÔNG đóng composer vừa mở / chưa gõ)
+    _status_dismiss_notifications_dialog(driver, log_cb=log)
+    for _ in range(3):
+        if not _status_collapse_duplicate_create_posts(driver, log_cb=log):
+            break
+    if not is_composer_dialog_open(driver):
+        log("Cảnh báo: composer mất sau khi dọn modal trùng — thử mở lại 1 lần...")
+        try:
+            human.click(status_box)
+        except Exception:
+            try:
+                driver.execute_script("arguments[0].click();", status_box)
+            except Exception:
+                pass
+        time.sleep(1.2)
+        if not is_composer_dialog_open(driver):
+            check_account_health(driver)
+            raise RuntimeError(
+                "composer_closed: hộp Create post bị đóng ngay sau khi mở (dọn modal trùng). "
+                "Chưa gõ / chưa bấm Đăng."
+            )
+
     # 2. Chờ và tìm ô nhập văn bản trong hộp thoại đăng bài (chờ tối đa 15s để modal render xong)
     log("Tìm ô nhập văn bản trong hộp thoại đăng bài...")
     input_selectors = [
@@ -4827,11 +6464,21 @@ def publish_status_post(
     except Exception as e:
         logger.warning(f"Lỗi khi kiểm tra đối tượng bài viết lúc mở hộp thoại: {e}")
 
-    # Nếu audience còn mở → chỉ Done/Xong (close_audience_dialog đã siết)
-    if is_audience_dialog_open(driver):
-        log("Bảng audience còn mở — chỉ bấm Done/Xong để đóng...")
+    # Audience còn mở = đè Create post → bắt buộc Done trước khi gõ
+    for _aud_try in range(3):
+        if not is_audience_dialog_open(driver):
+            break
+        log(f"Bảng audience còn mở (đè modal đăng) — bấm Done/Xong (lần {_aud_try + 1}/3)...")
         close_audience_dialog(driver, human, log_cb=log)
-        time.sleep(0.8)
+        time.sleep(0.6)
+    if is_audience_dialog_open(driver):
+        _log_open_dialogs_snapshot(driver, log_cb=log)
+        _save_status_fail_screenshot(driver, "audience_still_open_blocks_composer", log_cb=log)
+        check_account_health(driver)
+        raise RuntimeError(
+            "audience_still_open: bảng chọn đối tượng vẫn đè hộp Create post sau khi chọn Public. "
+            "Chưa gõ / chưa bấm Đăng — không chạy extract."
+        )
 
     # Sau đóng audience: composer phải còn mở; không đi tìm Đăng nếu đã mất
     if not is_composer_dialog_open(driver):
@@ -4848,12 +6495,12 @@ def publish_status_post(
             )
     try:
         plain_now = _status_composer_plain_text(driver)
-        log(f"Sau audience: composer còn mở, nội dung hiện có {len(plain_now)} ký tự.")
+        log(f"Sau audience: composer còn mở (audience đã đóng), nội dung hiện có {len(plain_now)} ký tự.")
     except Exception:
         pass
 
     _mark("TYPE_CONTENT", "Nhập nội dung bài viết...")
-    log("Nhập nội dung bài viết theo tốc độ gõ người thật...")
+    log("Nhập nội dung bài viết qua CDP (không cướp OS focus — an toàn 2 luồng)...")
     # Tắt gõ nhầm (mistake_rate=0.0) để tránh phím Backspace làm vỡ cấu trúc draft editor của Facebook
     human.human_type(input_box, content_text or content, mistake_rate=0.0)
     time.sleep(random.uniform(0.8, 1.4))
@@ -5131,8 +6778,8 @@ def publish_status_post(
                 const aria = (b.getAttribute('aria-label') || '').trim().toLowerCase();
                 if (text === 'đăng' || text === 'post' || aria === 'đăng' || aria === 'post') {
                     if (b.getAttribute('aria-disabled') !== 'true' && !b.disabled) return b;
+                    }
                 }
-            }
             for (const b of buttons) {
                 const text = (b.innerText || b.textContent || '').trim().toLowerCase();
                 const aria = (b.getAttribute('aria-label') || '').trim().toLowerCase();
@@ -5177,6 +6824,17 @@ def publish_status_post(
 
     # Bấm Đăng — không ENSURE_CONTENT / settle trước đó
     _mark("CLICK_POST", "Đã sẵn sàng — nhấn nút Đăng (post_clicked)...")
+    # Đóng overlay trước khi bấm (Notifications / audience Done / composer trùng)
+    _status_dismiss_notifications_dialog(driver, log_cb=log)
+    if is_audience_dialog_open(driver):
+        log("pre_click: audience còn mở — Done trước khi Đăng...")
+        close_audience_dialog(driver, human, log_cb=log)
+        time.sleep(0.5)
+    for _ in range(2):
+        if not _status_collapse_duplicate_create_posts(driver, log_cb=log):
+            break
+    post_btn = _refind_post_button() or post_btn
+
     log("Di chuột quỹ đạo Bézier tự nhiên và nhấn nút 'Đăng'...")
     clicked = False
     for attempt in range(4):
@@ -5337,13 +6995,7 @@ def publish_reels_post(
     _chk()
 
     # Kiểm tra xem có bị lỗi 'This Page Isn't Available' / 'Trang này không khả dụng' không
-    page_source = driver.page_source.lower()
-    is_page_broken = (
-        "this page isn't available" in page_source
-        or "trang này không khả dụng" in page_source
-        or "the link may be broken" in page_source
-        or "liên kết có thể bị hỏng" in page_source
-    )
+    is_page_broken = _reels_page_is_unavailable(driver)
 
     if is_page_broken:
         log("Trang /reels/create/ báo lỗi không khả dụng, mở trình tạo Reels từ Bảng tin Facebook...")
@@ -5397,38 +7049,13 @@ def publish_reels_post(
     # 1. Nạp video
     _mark("REELS_UPLOAD", "Nạp / upload video Reels...")
     log(f"Nạp video vào trình upload Reels: {os.path.basename(video_path)}...")
-    # Bộc lộ input type=file ẩn
-    try:
-        driver.execute_script("""
-            document.querySelectorAll("input[type='file']").forEach(el => {
-                el.style.display = 'block';
-                el.style.opacity = '1';
-                el.style.visibility = 'visible';
-                el.style.width = '100px';
-                el.style.height = '100px';
-                el.style.position = 'fixed';
-                el.style.top = '0';
-                el.style.left = '0';
-                el.style.zIndex = '999999';
-            });
-        """)
-    except Exception:
-        pass
 
-    try:
-        file_input = WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.XPATH, "//input[@type='file' and (contains(@accept, 'video') or @accept='*' or contains(@accept, 'mp4'))]"))
-        )
-        file_input.send_keys(os.path.abspath(video_path))
-    except Exception as e:
-        check_account_health(driver)
-        raise RuntimeError(f"Không tìm thấy cổng nạp file video Reels: {e}")
-
-    log("Đang tải video lên Facebook, chờ video tải xong...")
-    next_btn_xpath = (
-        "//*[self::button or @role='button']"
-        "[@aria-label='Tiếp' or @aria-label='Next' or contains(., 'Tiếp') or contains(., 'Next')]"
-    )
+    next_btn_xpath = _REELS_NEXT_BTN_XPATH
+    video_abs = os.path.abspath(video_path)
+    size_mb = _reels_video_file_size_mb(video_path)
+    file_size_bytes = _reels_video_file_size_bytes(video_path)
+    upload_timeout_s = _reels_upload_timeout_seconds(video_path)
+    send_input_meta = {"index": None, "accept": "", "xpath": "", "exposed": False}
 
     def _find_active_btn(d, xpath):
         for btn in d.find_elements(By.XPATH, xpath):
@@ -5437,37 +7064,524 @@ def publish_reels_post(
                     continue
                 if btn.get_attribute("aria-disabled") == "true" or btn.get_attribute("disabled") is not None:
                     continue
+                label = (btn.get_attribute("aria-label") or btn.text or "").strip().lower()
+                if "tiếp tục" in label or label.startswith("continue"):
+                    continue
                 return btn
             except Exception:
                 continue
         return False
 
-    # Chờ nút 'Tiếp' bật sáng (không bị disabled)
-    try:
-        next_btn = WebDriverWait(driver, 45).until(lambda d: _find_active_btn(d, next_btn_xpath))
-        _chk()
-        log("Di chuột click nút 'Tiếp' (Bước 1)...")
-        try:
-            human.click(next_btn)
-        except Exception:
-            driver.execute_script("arguments[0].click();", next_btn)
-        time.sleep(random.uniform(1.8, 2.8))
-    except Exception:
-        log("Cảnh báo: Bỏ qua bước 'Tiếp' đầu tiên...")
-
-    # Bước tiếp theo (nếu có thêm nút Tiếp)
-    try:
-        second_next = _find_active_btn(driver, next_btn_xpath)
-        if second_next:
-            _chk()
-            log("Di chuột click nút 'Tiếp' (Bước 2)...")
+    def _find_disabled_next(d, xpath):
+        for btn in d.find_elements(By.XPATH, xpath):
             try:
-                human.click(second_next)
+                if not btn.is_displayed():
+                    continue
+                label = (btn.get_attribute("aria-label") or btn.text or "").strip().lower()
+                if "tiếp tục" in label or label.startswith("continue"):
+                    continue
+                if btn.get_attribute("aria-disabled") == "true" or btn.get_attribute("disabled") is not None:
+                    return True
             except Exception:
-                driver.execute_script("arguments[0].click();", second_next)
-            time.sleep(random.uniform(1.8, 2.8))
+                continue
+        return False
+
+    def _expose_one_file_input(el) -> bool:
+        """Chỉ sửa style 1 input đã chọn — tránh đụng mọi input (nghi React handler)."""
+        try:
+            driver.execute_script(
+                """
+                const el = arguments[0];
+                if (!el) return false;
+                el.setAttribute('data-reels-exposed', '1');
+                el.style.display = 'block';
+                el.style.opacity = '0.01';
+                el.style.visibility = 'visible';
+                el.style.width = '1px';
+                el.style.height = '1px';
+                el.style.position = 'fixed';
+                el.style.top = '0';
+                el.style.left = '0';
+                el.style.zIndex = '999999';
+                return true;
+                """,
+                el,
+            )
+            return True
+        except Exception:
+            return False
+
+    def _send_video_to_input():
+        """
+        Ưu tiên send_keys không expose; chỉ expose 1 input nếu cần.
+        Ghi meta input đã chọn cho diagnostic trường hợp A.
+        """
+        xpath = (
+            "//input[@type='file' and (contains(@accept, 'video') or @accept='*' "
+            "or contains(@accept, 'mp4') or contains(@accept, 'video/'))]"
+        )
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.XPATH, xpath)))
+        candidates = driver.find_elements(By.XPATH, xpath)
+        if not candidates:
+            raise RuntimeError("Không tìm thấy input[type=file] video trên /reels/create/")
+
+        # Ưu tiên accept có 'video'
+        ranked = []
+        for i, el in enumerate(candidates):
+            try:
+                acc = (el.get_attribute("accept") or "").lower()
+            except Exception:
+                acc = ""
+            score = 2 if "video" in acc else (1 if acc in ("*", "") else 0)
+            ranked.append((score, i, el, acc))
+        ranked.sort(key=lambda x: (-x[0], x[1]))
+
+        last_err = None
+        for score, idx, el, acc in ranked:
+            exposed = False
+            try:
+                el.send_keys(video_abs)
+            except Exception as e1:
+                last_err = e1
+                exposed = _expose_one_file_input(el)
+                try:
+                    el.send_keys(video_abs)
+                except Exception as e2:
+                    last_err = e2
+                    continue
+            send_input_meta.update(
+                {
+                    "index": idx,
+                    "accept": acc,
+                    "xpath": xpath,
+                    "exposed": exposed,
+                    "candidates": len(candidates),
+                    "score": score,
+                }
+            )
+            log(
+                f"send_keys video → input[{idx}] accept={acc!r} "
+                f"exposed={exposed} (candidates={len(candidates)}, file_size={file_size_bytes})"
+            )
+            return
+        raise RuntimeError(f"send_keys video thất bại trên mọi input: {last_err}")
+
+    def _log_case_a_diag(probe: dict, reason: str):
+        log(f"CASE A — vupload receive chưa OK: {reason}")
+        for ent in (probe.get("vupload") or []):
+            try:
+                log(
+                    f"  vupload[{ent.get('kind')}] status={ent.get('responseStatus')} "
+                    f"video_id={ent.get('video_id')} start_offset={ent.get('start_offset')} "
+                    f"end_offset={ent.get('end_offset')} "
+                    f"t={ent.get('startTime')}→{ent.get('responseEnd')} "
+                    f"name={(ent.get('name') or '')[:220]}"
+                )
+            except Exception:
+                pass
+        log(f"  expected_file_size={file_size_bytes} best={probe.get('bestReceive')}")
+        log(f"  send_input_meta={send_input_meta}")
+        try:
+            log(f"  file_inputs={_reels_file_inputs_diag(driver)}")
+        except Exception as e:
+            log(f"  file_inputs diag lỗi: {e}")
+
+    def _next_btn_click_diag(btn) -> dict:
+        try:
+            return (
+                driver.execute_script(
+                    """
+                    const btn = arguments[0];
+                    if (!btn) return {ok: false};
+                    const r = btn.getBoundingClientRect();
+                    const cx = r.left + r.width / 2;
+                    const cy = r.top + r.height / 2;
+                    const top = document.elementFromPoint(cx, cy);
+                    return {
+                      ok: true,
+                      aria: btn.getAttribute('aria-label') || '',
+                      text: (btn.innerText || btn.textContent || '').trim().slice(0, 80),
+                      rect: {x: r.x, y: r.y, w: r.width, h: r.height},
+                      center: {cx: cx, cy: cy},
+                      topTag: top ? top.tagName : null,
+                      topAria: top ? (top.getAttribute('aria-label') || '') : '',
+                      topText: top ? (top.innerText || '').trim().slice(0, 60) : '',
+                      topIsSameOrChild: !!(top && (top === btn || btn.contains(top))),
+                    };
+                    """,
+                    btn,
+                )
+                or {"ok": False}
+            )
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:120]}
+
+    def _restart_reels_create(reason: str):
+        log(f"{reason} — quay về /reels/create/ và upload lại (không reload ID chết)...")
+        driver.get("https://www.facebook.com/reels/create/")
+        time.sleep(3.0)
+        check_account_health(driver)
+        _chk()
+        if _reels_page_is_unavailable(driver):
+            raise RuntimeError(
+                "Không mở lại được /reels/create/ (trang vẫn không khả dụng)."
+            )
+
+    def _single_click_next(btn) -> None:
+        """
+        Bấm Next ĐÚNG 1 lần. human.click = CDP + JS dispatch + el.click() → 2–3 lần,
+        Facebook tạo nhiều nháp / sập trang.
+        """
+        driver.execute_script(
+            """
+            const el = arguments[0];
+            if (!el) return;
+            try { el.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (e) {}
+            try { el.click(); } catch (e2) {
+              try {
+                el.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+              } catch (e3) {}
+            }
+            """,
+            btn,
+        )
+
+    def _click_reels_next(step_label: str) -> bool:
+        btn = _find_active_btn(driver, next_btn_xpath)
+        if not btn:
+            return False
+        _chk()
+        log(f"Click 1 lần nút 'Tiếp' ({step_label}) — không human.click đa sự kiện...")
+        try:
+            _single_click_next(btn)
+        except Exception:
+            driver.execute_script("arguments[0].click();", btn)
+        time.sleep(random.uniform(2.5, 4.0))
+        try:
+            cur = getattr(driver, "current_url", "") or ""
+            log(f"Sau Next ({step_label}): URL = {cur}")
+        except Exception:
+            pass
+        if not _reels_wait_unavailable_clear(driver, timeout=120.0, log_fn=log):
+            _reels_raise_if_unavailable(driver, log, f"sau Next {step_label}")
+        return True
+
+    def _log_case_a2_diag(preview_meta: dict):
+        log(
+            "CASE A2 — receive OK nhưng preview không có duration sau 30s "
+            "(không bấm Next, tránh nháp chết)."
+        )
+        try:
+            log(
+                f"  preview_diag: dialog={preview_meta.get('dialogFound')}, "
+                f"scope={preview_meta.get('scopeMode')}, "
+                f"videoCount={preview_meta.get('videoCount')}, "
+                f"visibilityState={preview_meta.get('visibilityState')}, "
+                f"hasFocus={preview_meta.get('hasFocus')}, "
+                f"videos={preview_meta.get('videos')}"
+            )
+        except Exception:
+            pass
+
+    def _wait_upload_then_next(upload_started: float, attempt: int):
+        """
+        Cổng 1: vupload receive-200 (+ end_offset khớp nếu có trên URL).
+        Cổng 2: preview dialog duration>0 + readyState>=3 (sau muted play()).
+        Chỉ Next khi cả hai đủ. Không min_wait / lock.
+        """
+        deadline = time.time() + upload_timeout_s
+        last_progress_log = 0.0
+        last_signals = {
+            "receive_ok": False,
+            "preview_ok": False,
+            "server_reason": "none",
+            "case": None,
+            "elapsed": 0,
+            "probe": {},
+        }
+
+        while time.time() < deadline:
+            _chk()
+            if _reels_page_is_unavailable(driver):
+                _reels_raise_if_unavailable(driver, log, "đang chờ upload Reels")
+            elapsed = time.time() - upload_started
+            st = _reels_upload_status(driver)
+            still_up = bool(st.get("uploading"))
+            probe = _reels_vupload_probe(driver, file_size_bytes)
+            best = probe.get("bestReceive") or {}
+            receive_ok = bool(probe.get("receiveOk"))
+            offset_mode = probe.get("offsetMode") or ""
+            next_btn = _find_active_btn(driver, next_btn_xpath)
+            next_on = bool(next_btn)
+
+            if receive_ok and offset_mode == "matched":
+                server_reason = "vupload_receive_200_offset_matched"
+            elif receive_ok:
+                server_reason = "vupload_receive_200"
+            else:
+                server_reason = "none"
+            last_signals = {
+                "receive_ok": receive_ok,
+                "preview_ok": False,
+                "server_reason": server_reason,
+                "case": None,
+                "elapsed": int(elapsed),
+                "uploading": still_up,
+                "next_on": next_on,
+                "video_id": best.get("video_id"),
+                "start_offset": best.get("start_offset"),
+                "end_offset": best.get("end_offset"),
+                "responseStatus": best.get("responseStatus"),
+                "offset_mode": offset_mode,
+                "file_size": file_size_bytes,
+                "probe": probe,
+            }
+
+            now = time.time()
+            if now - last_progress_log >= 2.0:
+                block = []
+                if not receive_ok:
+                    if probe.get("statusOk") and offset_mode == "mismatch":
+                        block.append("end_offset_mismatch")
+                    else:
+                        block.append("need_vupload_receive_200")
+                if still_up:
+                    block.append(
+                        f"uploading({st.get('reason') or '?'}:{(st.get('detail') or '')[:50]})"
+                    )
+                if not next_on:
+                    block.append("next_off")
+                if receive_ok and (not still_up) and next_on:
+                    block.append("need_preview_ready")
+                log(
+                    f"Chờ vupload receive... {int(elapsed)}s/{int(upload_timeout_s)}s "
+                    f"(attempt={attempt}, file_size={file_size_bytes}, "
+                    f"vupload={probe.get('vuploadCount')}, receive={probe.get('receiveCount')}, "
+                    f"video_id={best.get('video_id')}, start_offset={best.get('start_offset')}, "
+                    f"end_offset={best.get('end_offset')}, offsetMode={offset_mode}, "
+                    f"responseStatus={best.get('responseStatus')}, "
+                    f"req={best.get('startTime')}→{best.get('responseEnd')}, "
+                    f"uploading={still_up}, nút Tiếp={next_on}"
+                    f"{('; block=' + '+'.join(block)) if block else ''})"
+                )
+                last_progress_log = now
+
+            gate1 = receive_ok and (not still_up) and next_on
+            if gate1 and next_btn:
+                log(
+                    f"vupload receive OK sau {elapsed:.1f}s — video_id={best.get('video_id')}, "
+                    f"start_offset={best.get('start_offset')}, end_offset={best.get('end_offset')}, "
+                    f"offsetMode={offset_mode}, file_size={file_size_bytes}, "
+                    f"responseStatus={best.get('responseStatus')}, "
+                    f"req={best.get('startTime')}→{best.get('responseEnd')} — chờ preview sẵn."
+                )
+                preview_ok, preview_meta = _reels_wait_preview_ready(
+                    driver, log_fn=log, timeout=30.0
+                )
+                last_signals["preview_ok"] = preview_ok
+                last_signals["preview"] = preview_meta
+                if preview_ok:
+                    ready = preview_meta.get("ready") or {}
+                    last_signals["server_reason"] = f"{server_reason}+preview_ready"
+                    # Refind Next sau khi chờ preview (tránh stale)
+                    next_btn2 = _find_active_btn(driver, next_btn_xpath) or next_btn
+                    return next_btn2, last_signals
+                # CASE A2: không bấm Next
+                _log_case_a2_diag(preview_meta)
+                last_signals["case"] = "A2"
+                last_signals["server_reason"] = "case_a2_preview_no_duration"
+                return None, last_signals
+            time.sleep(0.7)
+
+        return None, last_signals
+
+    def _wait_before_second_next():
+        """Sau Next 1: chỉ Next bước 2 khi đã có Edit reel UI — tránh bấm trên trang xám."""
+        deadline = time.time() + 45.0
+        last_log = 0.0
+        started = time.time()
+        while time.time() < deadline:
+            _chk()
+            if _reels_page_is_unavailable(driver):
+                _reels_raise_if_unavailable(
+                    driver, log, "chờ bước 2 sau Next 1", wait_clear=True, wait_timeout=90.0
+                )
+            elapsed = time.time() - started
+            st = _reels_upload_status(driver)
+            still_up = bool(st.get("uploading"))
+            next_on = bool(_find_active_btn(driver, next_btn_xpath))
+            has_textbox = False
+            try:
+                has_textbox = bool(
+                    driver.execute_script(
+                        "return !!document.querySelector(\"div[role='textbox']\");"
+                    )
+                )
+            except Exception:
+                pass
+            edit_ui = bool(st.get("editUi")) or _reels_edit_reel_ui_ready(driver)
+            if time.time() - last_log >= 6.0:
+                log(
+                    f"Chờ bước 2 Reels... {int(elapsed)}s "
+                    f"(uploading={still_up}, Tiếp={next_on}, textbox={has_textbox}, "
+                    f"edit_ui={edit_ui}"
+                    f"{(', up_reason=' + st.get('reason')) if still_up else ''})"
+                )
+                last_log = time.time()
+            # Bắt buộc edit_ui trước khi cho phép Next 2
+            if elapsed >= 5.0 and edit_ui and (not still_up):
+                if next_on:
+                    return True
+                if has_textbox and elapsed >= 8.0:
+                    return False
+            time.sleep(0.7)
+        return bool(_find_active_btn(driver, next_btn_xpath)) and _reels_edit_reel_ui_ready(driver)
+
+    # Upload + Next bước 1: song song OK (không lock). Detector = vupload receive (timeout 60s).
+    # Retry lần 2 chỉ cho CASE B (receive OK nhưng /reel/{id} chết) — không chờ lâu hơn.
+    max_upload_attempts = 2
+    last_fail_meta = {}
+    log("Reels upload: chạy song song (không _REELS_UPLOAD_LOCK).")
+    for upload_attempt in range(1, max_upload_attempts + 1):
+        if upload_attempt > 1:
+            dead_url = last_fail_meta.get("url") or "N/A"
+            dead_id = ""
+            m = re.search(r"/reel/(\d+)", str(dead_url))
+            if m:
+                dead_id = m.group(1)
+            log(
+                f"CASE B retry {upload_attempt}/{max_upload_attempts}: lần trước receive OK "
+                f"nhưng /reel/{{id}} chết (ID={dead_id or 'n/a'}, URL={str(dead_url)[:100]}, "
+                f"bấm@{last_fail_meta.get('clicked_at_s', '?')}s, "
+                f"video_id={last_fail_meta.get('video_id')}, "
+                f"end_offset={last_fail_meta.get('end_offset')}, "
+                f"btn={last_fail_meta.get('btn_diag')}). "
+                f"Upload lại — vẫn timeout {int(upload_timeout_s)}s, không chờ lâu hơn."
+            )
+            _restart_reels_create(
+                f"Lần {upload_attempt}/{max_upload_attempts}: CASE B — ID nháp chết sau Next"
+            )
+
+        try:
+            _send_video_to_input()
+        except Exception as e:
+            check_account_health(driver)
+            raise RuntimeError(f"Không tìm thấy cổng nạp file video Reels: {e}")
+
+        upload_started = time.time()
+        log(
+            f"Đang tải video lên Facebook (lần {upload_attempt}/{max_upload_attempts}) — "
+            f"size≈{size_mb:.1f}MB ({file_size_bytes} bytes), "
+            f"timeout vupload={int(upload_timeout_s)}s. "
+            "Chỉ Next khi (1) vupload receive-200 + (2) preview duration>0/rs>=3 "
+            "+ panel uploading hết + nút Tiếp (không min_wait)."
+        )
+
+        try:
+            next_btn, sig = _wait_upload_then_next(upload_started, upload_attempt)
+            if not next_btn:
+                if (sig or {}).get("case") == "A2":
+                    raise TimeoutError(
+                        f"CASE A2: receive OK nhưng preview không có duration sau 30s "
+                        f"(attempt={upload_attempt}, preview={sig.get('preview')}). "
+                        f"Không bấm Next."
+                    )
+                probe = (sig or {}).get("probe") or _reels_vupload_probe(driver, file_size_bytes)
+                _log_case_a_diag(
+                    probe,
+                    f"hết {int(upload_timeout_s)}s không có receive-200 hợp lệ "
+                    f"(offsetMode={probe.get('offsetMode')})",
+                )
+                raise TimeoutError(
+                    f"CASE A: hết {int(upload_timeout_s)}s không có vupload receive 200 "
+                    f"(file_size={file_size_bytes}, attempt={upload_attempt}, "
+                    f"receiveCount={probe.get('receiveCount')}, "
+                    f"offsetMode={probe.get('offsetMode')}, "
+                    f"best={probe.get('bestReceive')}). Không bấm Next."
+                )
+            _chk()
+            _reels_raise_if_unavailable(driver, log, "trước khi Next (đang upload)")
+            clicked_at = time.time() - upload_started
+            btn_diag = _next_btn_click_diag(next_btn)
+            ready = ((sig or {}).get("preview") or {}).get("ready") or {}
+            log(
+                f"Bấm Next Bước 1 (1 lần) sau {clicked_at:.1f}s từ send_keys "
+                f"(receive+preview OK, dur={ready.get('duration')}, rs={ready.get('readyState')}, "
+                f"inDialog={ready.get('inDialog')}, nearComposer={ready.get('nearComposer')}, "
+                f"srcKind={ready.get('srcKind')}) | btn_diag={btn_diag}"
+            )
+            try:
+                _single_click_next(next_btn)
+            except Exception:
+                driver.execute_script("arguments[0].click();", next_btn)
+            time.sleep(random.uniform(2.5, 4.0))
+            cur_url = ""
+            try:
+                cur_url = getattr(driver, "current_url", "") or ""
+                log(f"Sau Next (Bước 1): URL = {cur_url}")
+            except Exception:
+                pass
+            last_fail_meta = {
+                "url": cur_url,
+                "clicked_at_s": round(clicked_at, 1),
+                "server_reason": sig.get("server_reason"),
+                "video_id": sig.get("video_id"),
+                "end_offset": sig.get("end_offset"),
+                "responseStatus": sig.get("responseStatus"),
+                "btn_diag": btn_diag,
+                "attempt": upload_attempt,
+                "case": "B_pending",
+            }
+            if not _reels_wait_unavailable_clear(driver, timeout=120.0, log_fn=log):
+                log(
+                    f"CASE B — receive đã OK nhưng /reel/{{id}} vẫn unavailable sau 120s. "
+                    f"URL={cur_url} btn_diag={btn_diag} "
+                    f"video_id={sig.get('video_id')} end_offset={sig.get('end_offset')} "
+                    f"responseStatus={sig.get('responseStatus')} clicked@{clicked_at:.1f}s"
+                )
+                last_fail_meta["case"] = "B"
+                _reels_raise_if_unavailable(driver, log, "CASE B sau Next Bước 1")
+            log(
+                f"Next Bước 1 OK (attempt={upload_attempt}, "
+                f"video_id={sig.get('video_id')}, end_offset={sig.get('end_offset')}, "
+                f"clicked@{clicked_at:.1f}s)."
+            )
+            break
+        except TimeoutError:
+            # CASE A: không retry bằng chờ lâu hơn
+            raise
+        except RuntimeError as e:
+            err = str(e).lower()
+            is_dead_draft = (
+                "không khả dụng" in err
+                or "isn't available" in err
+                or "case b" in err
+            )
+            try:
+                last_fail_meta["url"] = (
+                    getattr(driver, "current_url", "") or last_fail_meta.get("url")
+                )
+            except Exception:
+                pass
+            if is_dead_draft and upload_attempt < max_upload_attempts:
+                log(f"CASE B — sẽ upload lại (không chờ lâu hơn): {e}")
+                continue
+            raise
+
+    # Bước 2: chờ FB xử lý xong rồi mới Next (không chờ 1–2s rồi bấm)
+    try:
+        need_second = _wait_before_second_next()
+        if need_second:
+            _reels_raise_if_unavailable(driver, log, "trước Next Bước 2", wait_clear=True)
+            _click_reels_next("Bước 2")
+        else:
+            log("Không còn nút Tiếp bước 2 (đã ở màn caption/Đăng) — bỏ qua.")
+    except RuntimeError:
+        raise
     except Exception:
         pass
+
+    _reels_raise_if_unavailable(driver, log, "trước bước privacy/caption", wait_clear=True)
 
     # 2. Thiết lập quyền riêng tư Reels sang 'Công khai' (Public)
     _mark("REELS_PRIVACY", "Thiết lập quyền riêng tư Reels sang Công khai...")
@@ -5477,42 +7591,107 @@ def publish_reels_post(
         log(f"Cảnh báo: Không thể thiết lập quyền riêng tư Reels: {e}")
 
     # 3. Điền Caption mô tả Reels
+    # Lexical: human.human_type (insertText từng cụm + gõ nhầm) làm chữ chồng / hashtag đứt.
+    # Chèn CẢ caption một lần (giống Status), không click đa sự kiện.
     if caption:
         _mark("REELS_CAPTION", "Nhập mô tả / caption Reels...")
         caption_preview = caption.replace('\n', ' ')[:45] + ('...' if len(caption) > 45 else '')
         log(f"Nhập mô tả Reels: \"{caption_preview}\"...")
         typed_caption = False
+
+        def _read_caption_text() -> str:
+            try:
+                return str(
+                    driver.execute_script(
+                        """
+                        const box = document.querySelector("div[role='textbox']");
+                        return (box && (box.innerText || box.textContent) || '').trim();
+                        """
+                    )
+                    or ""
+                )
+            except Exception:
+                return ""
+
+        def _insert_caption_once(box) -> None:
+            driver.execute_script(
+                """
+                const el = arguments[0];
+                if (!el) return;
+                try { el.scrollIntoView({block:'center'}); } catch (e) {}
+                try { el.focus({preventScroll:true}); } catch (e) { try { el.focus(); } catch (e2) {} }
+                """,
+                box,
+            )
+            time.sleep(0.15)
+            try:
+                box.send_keys(Keys.CONTROL, "a")
+                time.sleep(0.08)
+                box.send_keys(Keys.BACKSPACE)
+            except Exception:
+                driver.execute_script(
+                    """
+                    const el = arguments[0];
+                    if (!el) return;
+                    el.focus();
+                    try { document.execCommand('selectAll', false, null); } catch (e) {}
+                    try { document.execCommand('delete', false, null); } catch (e) {}
+                    """,
+                    box,
+                )
+            time.sleep(0.12)
+            inserted = False
+            try:
+                driver.execute_cdp_cmd("Input.insertText", {"text": caption})
+                inserted = True
+            except Exception as e_cdp:
+                logger.debug(f"CDP insertText caption Reels: {e_cdp}")
+            if not inserted:
+                driver.execute_script(
+                    """
+                    const el = arguments[0];
+                    const text = arguments[1];
+                    if (!el) return;
+                    el.focus();
+                    document.execCommand('insertText', false, text);
+                    """,
+                    box,
+                    caption,
+                )
+            time.sleep(0.25)
+            try:
+                box.send_keys(Keys.ESCAPE)
+            except Exception:
+                pass
+            time.sleep(0.2)
+            driver.execute_script(
+                """
+                document.querySelectorAll("[role='listbox']").forEach(p => { p.style.display = 'none'; });
+                if (document.activeElement && document.activeElement !== document.body) {
+                    try { document.activeElement.blur(); } catch (e) {}
+                }
+                """
+            )
+
         for attempt in range(3):
             try:
-                time.sleep(0.8)
+                time.sleep(0.6)
                 desc_box = WebDriverWait(driver, 8).until(
-                    EC.element_to_be_clickable((By.XPATH, "//div[@role='textbox']"))
+                    EC.presence_of_element_located((By.XPATH, "//div[@role='textbox']"))
                 )
-                try:
-                    human.click(desc_box)
-                except Exception:
-                    driver.execute_script("arguments[0].focus();", desc_box)
-                time.sleep(0.5)
-                human.human_type(desc_box, caption)
-                time.sleep(random.uniform(0.5, 1.0))
-
-                # Đóng popup gợi ý hashtag nếu đang mở (nhấn ESC và blur để không bị kẹt)
-                try:
-                    from selenium.webdriver.common.keys import Keys
-                    desc_box.send_keys(Keys.ESCAPE)
-                    time.sleep(0.4)
-                except Exception:
-                    pass
-
-                driver.execute_script("""
-                    if (document.activeElement && document.activeElement !== document.body) {
-                        document.activeElement.blur();
-                    }
-                    // Ẩn menu dropdown hashtag nếu đang che giao diện
-                    document.querySelectorAll("[role='listbox']").forEach(p => {
-                        p.style.display = 'none';
-                    });
-                """)
+                _insert_caption_once(desc_box)
+                got = _read_caption_text()
+                # So khớp phần chữ (bỏ khoảng trắng) — Lexical đôi khi nuốt newline
+                want = re.sub(r"\s+", "", caption)[:40]
+                have = re.sub(r"\s+", "", got)
+                if want and want.lower() not in have.lower():
+                    log(
+                        f"Caption Reels chưa khớp (lần {attempt + 1}): "
+                        f"đọc được {got[:60]!r}"
+                    )
+                    time.sleep(0.6)
+                    continue
+                log(f"Đã nhập caption Reels ({len(got)} ký tự).")
                 typed_caption = True
                 break
             except Exception as e:
@@ -5520,18 +7699,7 @@ def publish_reels_post(
                 time.sleep(1.0)
 
         if not typed_caption:
-            # Fallback nhập bằng JavaScript nếu Selenium gặp stale element
-            try:
-                driver.execute_script("""
-                    const box = document.querySelector("div[role='textbox']");
-                    if (box) {
-                        box.focus();
-                        document.execCommand('insertText', false, arguments[0]);
-                    }
-                """, caption)
-                log("Đã nhập caption Reels qua fallback script.")
-            except Exception as e:
-                log(f"Cảnh báo: Không thể nhập caption Reels: {e}")
+            log("Cảnh báo: Không nhập đúng caption Reels sau 3 lần — không gõ chồng thêm.")
 
     # 3. Chờ nút Đăng Reels ở trạng thái sẵn sàng (aria-disabled != 'true')
     _mark("REELS_CLICK_POST", "Chờ render video và bấm Post / Đăng Reels...")
@@ -5543,16 +7711,30 @@ def publish_reels_post(
         "or (normalize-space(text())='Đăng' or normalize-space(text())='Publish' or normalize-space(text())='Post')]"
     )
     clicked_reels = False
+    draft_reel_id = None
     start_wait_reels = time.time()
     last_log_reels = start_wait_reels
     reels_timeout = 900  # 15 phút để đảm bảo các video 25MB - 100MB render xong hoàn toàn
     deadline = start_wait_reels + reels_timeout
     while time.time() < deadline:
         _chk()
+        # Fail sớm nếu FB đã nhảy sang trang lỗi (tránh treo chờ Đăng đến 15 phút)
+        if _reels_page_is_unavailable(driver):
+            _reels_raise_if_unavailable(
+                driver, log, "khi chờ nút Đăng Reels", wait_clear=True
+            )
+
         now = time.time()
         if now - last_log_reels >= 15:
             elapsed = int(now - start_wait_reels)
-            log(f"Đang chờ Facebook render/xử lý video Reels (đã chờ {elapsed}s/{reels_timeout}s - kiên nhẫn đợi render xong)...")
+            try:
+                cur_u = getattr(driver, "current_url", "") or ""
+            except Exception:
+                cur_u = ""
+            log(
+                f"Đang chờ Facebook render/xử lý video Reels "
+                f"(đã chờ {elapsed}s/{reels_timeout}s - URL: {cur_u})..."
+            )
             last_log_reels = now
 
         # Cuộn cột bên trái xuống dưới cùng nếu bị che khuất
@@ -5579,6 +7761,15 @@ def publish_reels_post(
                         continue
                     if btn.get_attribute("aria-disabled") == "true" or btn.get_attribute("disabled") is not None:
                         continue
+                    try:
+                        draft_reel_id = _reel_id_from_url(getattr(driver, "current_url", "") or "")
+                    except Exception:
+                        draft_reel_id = None
+                    if draft_reel_id:
+                        log(
+                            f"Ghi ID trang soạn trước Post: {draft_reel_id} "
+                            "(không dùng làm link nếu URL không đổi sau khi đăng)."
+                        )
                     _mark("REELS_CLICK_POST", "Đã sẵn sàng — nhấn Post / Đăng Reels (post_clicked)...")
                     elapsed_done = int(time.time() - start_wait_reels)
                     log(f"Video đã render xong hoàn tất (sau {elapsed_done}s)! Di chuột Bézier và bấm nút 'Post / Đăng' Reels...")
@@ -5636,14 +7827,22 @@ def publish_reels_post(
     log("Reels đã được đăng lên thành công!")
 
     check_account_health(driver)
+    upload_vid = str((last_fail_meta or {}).get("video_id") or "").strip() or None
     res_url = extract_reels_post_url(
-        driver, uid=uid, log_cb=log, known_reel_ids=known_reel_ids
+        driver,
+        uid=uid,
+        log_cb=log,
+        known_reel_ids=known_reel_ids,
+        caption=caption,
+        upload_video_id=upload_vid,
+        draft_reel_id=draft_reel_id,
     )
-    # Không lưu bare /reel/ (For You) — thiếu ID thì fallback profile
-    if res_url and _reel_id_from_url(res_url) is None and uid:
-        if f"/{uid}/reels" not in (res_url or ""):
-            log(f"Loại URL không hợp lệ (thiếu ID): {res_url}")
-            res_url = f"https://www.facebook.com/{uid}/reels"
+    if res_url and _reel_id_from_url(res_url) is None:
+        log(f"Loại URL không có /reel/{{id}}: {res_url}")
+        res_url = None
+    if not res_url:
+        log("Chưa lấy được link /reel/{id} của clip vừa đăng — không gắn nút Xem reels.")
+        return None
     return res_url
 
 

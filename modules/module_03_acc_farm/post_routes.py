@@ -11,8 +11,10 @@ Cung cấp các API:
 """
 import os
 import re
+import random
 import logging
 import mimetypes
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from config.constants import UPLOADS_DIR
 from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Body, UploadFile, File
@@ -123,6 +125,16 @@ def save_settings(payload: SettingsPayload):
 # ==============================================================================
 # 2. FOLDER MAPPING ENDPOINTS
 # ==============================================================================
+
+@router.get("/folders/mappings")
+def list_folder_mappings(post_type: str = Query("reels", description="reels | story")):
+    """Lấy mapping thư mục đã lưu theo post_type (dùng khi reload danh sách nick)."""
+    pt = (post_type or "reels").strip().lower()
+    if pt not in ("reels", "story"):
+        raise HTTPException(status_code=400, detail="post_type phải là reels hoặc story")
+    rows = post_repository.get_folder_mappings(pt)
+    return {"success": True, "data": rows or []}
+
 
 @router.post("/folders/scan")
 def scan_and_map_folders(payload: ScanFolderPayload):
@@ -260,6 +272,8 @@ def generate_drafts(payload: GenerateDraftsPayload):
     chosen_model = payload.model or (settings.get('gemini_model') if settings else None) or "gemini-3.8-flash"
 
     created_drafts = []
+    errors = []
+    image_warnings = []
     for acc in payload.accounts:
         uid = str(acc.get('uid', ''))
         name = str(acc.get('name', ''))
@@ -276,34 +290,83 @@ def generate_drafts(payload: GenerateDraftsPayload):
             else:
                 content, img_kw = gen_res, None
 
-            img_path = None
-            # Ảnh minh họa: Pixabay (nếu có key) → Gemini; chỉ lấy đúng 1 ảnh
-            if img_kw:
-                logger.info(
-                    f"Prompt yêu cầu ảnh với từ khóa '{img_kw}'. "
-                    f"Ưu tiên Pixabay rồi fallback Gemini (tối đa 1 ảnh)..."
-                )
-                img_path = crawl_or_fetch_image(
-                    img_kw,
-                    pixabay_key=payload.pixabay_key,
-                    gemini_keys=keys,
-                )
-
+            # Lưu nội dung trước. Tìm ảnh không được làm mất bài.
             post_repository.delete_drafts_by_account(uid, payload.post_type)
             post = post_repository.create_post(
                 post_type=payload.post_type,
                 account_uid=uid,
                 account_name=name,
                 content=content,
-                image_path=img_path,
-                image_paths=[img_path] if img_path else None,
                 status='DRAFT'
             )
+
+            img_path = None
+            if img_kw:
+                logger.info(f"Đã lưu nội dung UID {uid}. Tìm ảnh riêng, từ khóa '{img_kw}'.")
+                pool = ThreadPoolExecutor(max_workers=1)
+                try:
+                    fut = pool.submit(
+                        crawl_or_fetch_image,
+                        img_kw,
+                        payload.pixabay_key,
+                        None,
+                        keys,
+                    )
+                    img_path = fut.result(timeout=25)
+                except FuturesTimeout:
+                    img_path = None
+                    logger.warning(f"Tìm ảnh quá 25s cho UID {uid} — giữ nội dung, không ảnh.")
+                except Exception as img_err:
+                    img_path = None
+                    logger.warning(f"Tìm ảnh lỗi UID {uid}: {img_err}")
+                finally:
+                    pool.shutdown(wait=False, cancel_futures=True)
+
+                if img_path:
+                    updated = post_repository.save_or_update_draft(
+                        account_uid=uid,
+                        content=content,
+                        post_type=payload.post_type,
+                        draft_id=post.get("id"),
+                        account_name=name,
+                        status="DRAFT",
+                        image_path=img_path,
+                        image_paths=[img_path],
+                    )
+                    if updated:
+                        post = updated
+                else:
+                    image_warnings.append({
+                        "uid": uid,
+                        "name": name or uid,
+                        "message": f"Không tìm được ảnh cho {name or uid}. Đã thêm nội dung.",
+                    })
+
             created_drafts.append(post)
         except Exception as e:
+            msg = str(e)
+            errors.append({"uid": uid, "error": msg})
             logger.error(f"Lỗi tạo bài nháp cho UID {uid}: {e}")
 
-    return {"success": True, "data": created_drafts}
+    if not created_drafts:
+        detail = errors[0]["error"] if errors else "Không tạo được bài viết."
+        # Rút gọn lỗi Gemini cho FE (401 key invalid / 429 / model…)
+        lower = detail.lower()
+        if "401" in detail or "api key not valid" in lower or "unauthenticated" in lower:
+            detail = (
+                "Gemini API Key không hợp lệ hoặc đã hết hạn (HTTP 401). "
+                "Hãy tạo key mới tại Google AI Studio rồi dán/chọn lại."
+            )
+        elif "429" in detail or "resource_exhausted" in lower:
+            detail = "Gemini bị giới hạn tốc độ (HTTP 429). Thử lại sau hoặc đổi API Key."
+        raise HTTPException(status_code=400, detail=detail)
+
+    return {
+        "success": True,
+        "data": created_drafts,
+        "partial_errors": errors or None,
+        "image_warnings": image_warnings or None,
+    }
 
 
 @router.get("/drafts")
@@ -555,30 +618,33 @@ def start_posting(payload: StartPostPayload):
                 logger.warning(f"Tài khoản {name} ({uid}) đã đăng hết toàn bộ {len(clips)} video trong thư mục, không còn video mới chưa đăng.")
                 continue
 
-            logger.info(f"Tài khoản {name} ({uid}): tìm thấy {len(target_clips)}/{len(clips)} video sẵn sàng để đưa vào hàng đợi đăng.")
-            for clip in target_clips:
-                c_path = clip['path']
-                c_hash = clip.get('hash')
+            # Ticket #70: mỗi lần thực thi, mỗi nick chỉ chọn ngẫu nhiên 1 file chưa đăng
+            clip = random.choice(target_clips)
+            c_path = clip['path']
+            c_hash = clip.get('hash')
+            logger.info(
+                f"Tài khoản {name} ({uid}): chọn ngẫu nhiên 1/{len(target_clips)} "
+                f"file chưa đăng từ {len(clips)} file trong thư mục → {os.path.basename(c_path)}"
+            )
 
-                if payload.post_type == 'reels':
-                    c_caption = generate_caption_from_filename(c_path, post_type='reels')
-                elif payload.post_type == 'story':
-                    c_caption = generate_caption_from_filename(c_path, post_type='story')
-                else:
-                    c_caption = ""
+            # Ticket #66: Story không dùng caption — chỉ Reels sinh caption từ tên file
+            if payload.post_type == 'reels':
+                c_caption = generate_caption_from_filename(c_path, post_type='reels')
+            else:
+                c_caption = ""
 
-                post_repository.create_post(
-                    session_id=session_id,
-                    post_type=payload.post_type,
-                    account_uid=uid,
-                    account_name=name,
-                    content=c_caption,
-                    media_path=c_path,
-                    media_hash=c_hash,
-                    schedule_time=schedule_time_val,
-                    status='PENDING'
-                )
-                inserted_count += 1
+            post_repository.create_post(
+                session_id=session_id,
+                post_type=payload.post_type,
+                account_uid=uid,
+                account_name=name,
+                content=c_caption,
+                media_path=c_path,
+                media_hash=c_hash,
+                schedule_time=schedule_time_val,
+                status='PENDING'
+            )
+            inserted_count += 1
         else:
             # Status Post: xác định nội dung & ảnh đính kèm (tối đa 3)
             img_paths = post_repository.normalize_image_paths(

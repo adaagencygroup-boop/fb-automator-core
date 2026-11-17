@@ -378,7 +378,7 @@ async def process_webhook_event(event: Dict[str, Any]):
                         notif_id = f"mention_{post_id}_{sender_id}"
                         link = f"https://facebook.com/{post_id}"
 
-                    elif field_name == "feed" and sender_id and page_id and sender_id != page_id:
+                    elif field_name == "feed" and page_id:
                         comment_id = value.get("comment_id")
                         group_id = value.get("group_id") or value.get("community_id") or value.get("community")
                         permalink = value.get("permalink_url") or value.get("link")
@@ -396,26 +396,34 @@ async def process_webhook_event(event: Dict[str, Any]):
 
                         prefix = "👥 [Nhóm]" if is_group_post else "📌 [Trang]"
 
-                        # Xử lý trường hợp BỎ THÍCH / BỎ TƯƠNG TÁC (verb == "remove"):
+                        # Xử lý trường hợp BỎ THÍCH / BỎ TƯƠNG TÁC hoặc XOÁ BÌNH LUẬN (verb == "remove"):
                         # Tuyệt đối không tạo thông báo mới và không tăng số lượng thông báo chưa đọc.
-                        # Nếu trước đó người này đã từng like và tạo notification, ta xoá thông báo đó đi.
-                        if item in ("like", "reaction") and verb == "remove":
-                            # Tìm thông báo tương tác đã tạo trước đó của người này với bài viết hoặc bình luận
-                            existing_react_notif = db.query(Notification).filter(
-                                Notification.page_id == page_id,
-                                or_(
+                        # Nếu trước đó đã tạo notification, ta xoá thông báo đó đi.
+                        if (item in ("like", "reaction") and verb == "remove") or (item == "comment" and verb == "remove"):
+                            # Tìm thông báo tương tác hoặc bình luận đã tạo trước đó
+                            existing_notif_filter = []
+                            if sender_id:
+                                existing_notif_filter.extend([
                                     Notification.facebook_notification_id == f"{comment_id or post_id}_{item}_add_{sender_id}",
                                     Notification.facebook_notification_id == f"{comment_id or post_id}_like_add_{sender_id}",
                                     Notification.facebook_notification_id == f"{comment_id or post_id}_reaction_add_{sender_id}",
                                     Notification.facebook_notification_id == f"react_{comment_id or post_id}_{sender_id}",
                                     Notification.facebook_notification_id == f"{comment_id or post_id}_{sender_id}",
-                                )
-                            ).first()
+                                ])
+                            if comment_id:
+                                existing_notif_filter.append(Notification.facebook_notification_id == comment_id)
+
+                            existing_react_notif = None
+                            if existing_notif_filter:
+                                existing_react_notif = db.query(Notification).filter(
+                                    Notification.page_id == page_id,
+                                    or_(*existing_notif_filter)
+                                ).first()
 
                             if existing_react_notif:
                                 removed_notif_id = existing_react_notif.id
                                 was_unread = existing_react_notif.unread
-                                notif_type = existing_react_notif.notification_type or "reaction"
+                                notif_type = existing_react_notif.notification_type or ("comment" if item == "comment" else "reaction")
                                 db.delete(existing_react_notif)
                                 db.commit()
 
@@ -430,7 +438,11 @@ async def process_webhook_event(event: Dict[str, Any]):
                                         "notification_type": notif_type,
                                     }
                                 })
-                            # Không tạo thông báo mới khi bỏ tương tác
+                            # Không tạo thông báo mới khi bỏ tương tác hoặc xoá bình luận
+                            title = None
+                            notif_id = None
+                        elif not sender_id or sender_id == page_id:
+                            # Không tạo thông báo từ chính Page
                             title = None
                             notif_id = None
                         elif item == "comment":
