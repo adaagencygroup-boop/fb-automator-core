@@ -539,12 +539,12 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
                   <span>
                     {loadingApprove
                       ? isExtend
-                        ? "Đang gia hạn..."
+                        ? "Đang lưu..."
                         : "Đang duyệt..."
                       : user.status === "pending"
                       ? "Duyệt"
                       : isExtend
-                      ? "Gia hạn"
+                      ? "Lưu thay đổi"
                       : isRejected
                       ? "Phê duyệt lại"
                       : "Duyệt"}
