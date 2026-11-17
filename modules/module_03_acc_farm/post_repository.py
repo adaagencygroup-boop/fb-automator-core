@@ -567,7 +567,7 @@ def finish_post(
     - Nếu DIE hoặc BLOCKED:
         + Cập nhật bài hiện tại thành DIE hoặc BLOCKED
         + Hủy toàn bộ bài PENDING còn lại của nick này sang STOPPED
-        + Với DIE: cập nhật fb_accounts.account_status = 'CHECKPOINT'
+        + Với DIE: thử cập nhật fb_accounts ngoài transaction (thiếu bảng thì bỏ qua)
     - Nếu FAILED: lưu lỗi bài viết
     """
     logs_json = json.dumps(logs, ensure_ascii=False) if logs else None
@@ -617,14 +617,19 @@ def finish_post(
             """)
             cursor.execute(stop_pending_sql, (f"Nick {status}, hủy hàng đợi", account_uid))
 
-        if status == "DIE":
-            acc_sql = db._normalize_query("""
+    if status == "DIE":
+        try:
+            db.execute(
+                """
                 UPDATE fb_accounts
                 SET account_status = 'CHECKPOINT',
                     updated_at = NOW()
                 WHERE uid = %s;
-            """)
-            cursor.execute(acc_sql, (account_uid,))
+                """,
+                (account_uid,),
+            )
+        except Exception as e:
+            logger.warning(f"Bỏ qua cập nhật fb_accounts: {e}")
 
 
 def update_post_result(
