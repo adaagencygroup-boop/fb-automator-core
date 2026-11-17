@@ -71,7 +71,14 @@ export default function GroupSourceSection({
   stepNumber = "4",
 }) {
   const groupFileInputRef = useRef(null);
+  // Bộ lọc phục vụ Quét Nhóm (gọi API tìm kiếm Facebook)
   const [maxResults, setMaxResults] = useState("10");
+  const [searchMemberFilter, setSearchMemberFilter] = useState("all");
+  const [searchGroupTypeFilter, setSearchGroupTypeFilter] = useState("all");
+  const [searchFrequencyFilter, setSearchFrequencyFilter] = useState("all");
+  const [searchMembershipFilter, setSearchMembershipFilter] = useState("all");
+
+  // Bộ lọc độc lập cho bảng kết quả hiện có (client-side)
   const [memberFilter, setMemberFilter] = useState("all");
   const [groupTypeFilter, setGroupTypeFilter] = useState("all");
   const [frequencyFilter, setFrequencyFilter] = useState("all");
@@ -150,7 +157,13 @@ export default function GroupSourceSection({
     frequencyFilter,
     membershipFilter,
   ].filter((value) => value !== "all").length;
-  const activeSearchFilterCount = activeResultFilterCount + (maxResults !== "10" ? 1 : 0);
+  const activeSearchFilterCount =
+    [
+      searchMemberFilter,
+      searchGroupTypeFilter,
+      searchFrequencyFilter,
+      searchMembershipFilter,
+    ].filter((value) => value !== "all").length + (maxResults !== "10" ? 1 : 0);
 
   // A filter must affect the groups sent to the campaign as well as the visible rows.
   useEffect(() => {
@@ -244,10 +257,10 @@ export default function GroupSourceSection({
       const res = await searchGroupSource({
         keyword,
         max_results: Number(maxResults) || 10,
-        member_filter: memberFilter,
-        group_type: groupTypeFilter,
-        frequency_filter: frequencyFilter,
-        membership_filter: membershipFilter,
+        member_filter: searchMemberFilter,
+        group_type: searchGroupTypeFilter,
+        frequency_filter: searchFrequencyFilter,
+        membership_filter: searchMembershipFilter,
         account_uid: activeScrapingAccount.uid,
       });
       const foundGroups = res?.groups || [];
@@ -389,96 +402,108 @@ export default function GroupSourceSection({
     toast.info("Đã xóa file danh sách nhóm", "THÔNG BÁO");
   };
 
-  const renderGroupFilters = (className, includeMaxResults = false) => (
-    <div className={className}>
-      <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-        Lọc kết quả
-      </span>
-      {includeMaxResults && (
-        <div className="min-w-[140px] flex-1 sm:flex-none">
+  const renderGroupFilters = (className, includeMaxResults = false) => {
+    const currentMember = includeMaxResults ? searchMemberFilter : memberFilter;
+    const setCurrentMember = includeMaxResults ? setSearchMemberFilter : setMemberFilter;
+    const currentFrequency = includeMaxResults ? searchFrequencyFilter : frequencyFilter;
+    const setCurrentFrequency = includeMaxResults ? setSearchFrequencyFilter : setFrequencyFilter;
+    const currentGroupType = includeMaxResults ? searchGroupTypeFilter : groupTypeFilter;
+    const setCurrentGroupType = includeMaxResults ? setSearchGroupTypeFilter : setGroupTypeFilter;
+    const currentMembership = includeMaxResults ? searchMembershipFilter : membershipFilter;
+    const setCurrentMembership = includeMaxResults ? setSearchMembershipFilter : setMembershipFilter;
+    const hasActive = includeMaxResults ? activeSearchFilterCount > 0 : activeResultFilterCount > 0;
+
+    return (
+      <div className={className}>
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+          {includeMaxResults ? "Điều kiện quét" : "Lọc kết quả"}
+        </span>
+        {includeMaxResults && (
+          <div className="min-w-[140px] flex-1 sm:flex-none">
+            <CustomSelect
+              value={String(maxResults)}
+              onChange={(val) => setMaxResults(String(val))}
+              options={[10, 20, 30, 50, 100, 150, 200].map((value) => ({
+                value: String(value),
+                label: `Tối đa ${value} nhóm`,
+              }))}
+              size="sm"
+              buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-xs"
+            />
+          </div>
+        )}
+        <div className="w-[190px] min-w-[190px] flex-none">
           <CustomSelect
-            value={String(maxResults)}
-            onChange={(val) => setMaxResults(String(val))}
-            options={[10, 20, 30, 50, 100, 150, 200].map((value) => ({
-              value: String(value),
-              label: `Tối đa ${value} nhóm`,
-            }))}
+            value={currentMember}
+            onChange={setCurrentMember}
+            options={[
+              { value: "all", label: "Mọi quy mô" },
+              { value: "10k", label: "Trên 10K thành viên" },
+              { value: "50k", label: "Trên 50K thành viên" },
+              { value: "100k", label: "Trên 100K thành viên" },
+            ]}
             size="sm"
-            buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-xs"
+            buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
           />
         </div>
-      )}
-      <div className="w-[190px] min-w-[190px] flex-none">
-        <CustomSelect
-          value={memberFilter}
-          onChange={setMemberFilter}
-          options={[
-            { value: "all", label: "Mọi quy mô" },
-            { value: "10k", label: "Trên 10K thành viên" },
-            { value: "50k", label: "Trên 50K thành viên" },
-            { value: "100k", label: "Trên 100K thành viên" },
-          ]}
-          size="sm"
-          buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
-        />
+        <div className="min-w-[135px] flex-1 sm:flex-none">
+          <CustomSelect
+            value={currentFrequency}
+            onChange={setCurrentFrequency}
+            options={[
+              { value: "all", label: "Mọi tần suất" },
+              { value: "5", label: "5+ bài/ngày" },
+              { value: "10", label: "10+ bài/ngày" },
+              { value: "20", label: "20+ bài/ngày" },
+            ]}
+            size="sm"
+            buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
+          />
+        </div>
+        <div className="min-w-[125px] flex-1 sm:flex-none">
+          <CustomSelect
+            value={currentGroupType}
+            onChange={setCurrentGroupType}
+            options={[
+              { value: "all", label: "Mọi loại nhóm" },
+              { value: "public", label: "Công khai" },
+              { value: "private", label: "Kiểm duyệt" },
+            ]}
+            size="sm"
+            buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
+          />
+        </div>
+        <div className="min-w-[135px] flex-1 sm:flex-none">
+          <CustomSelect
+            value={currentMembership}
+            onChange={setCurrentMembership}
+            options={[
+              { value: "all", label: "Mọi trạng thái tham gia" },
+              { value: "joined", label: "Đã tham gia" },
+              { value: "not_joined", label: "Chưa tham gia" },
+            ]}
+            size="sm"
+            buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
+          />
+        </div>
+        {hasActive && (
+          <button
+            type="button"
+            onClick={() => {
+              if (includeMaxResults) setMaxResults("10");
+              setCurrentMember("all");
+              setCurrentGroupType("all");
+              setCurrentFrequency("all");
+              setCurrentMembership("all");
+            }}
+            className="inline-flex h-7 items-center gap-1 px-1 text-[10px] font-medium text-slate-500 hover:text-red-600"
+          >
+            <RotateCw className="size-3" /> Đặt lại
+          </button>
+        )}
       </div>
-      <div className="min-w-[135px] flex-1 sm:flex-none">
-        <CustomSelect
-          value={frequencyFilter}
-          onChange={setFrequencyFilter}
-          options={[
-            { value: "all", label: "Mọi tần suất" },
-            { value: "5", label: "5+ bài/ngày" },
-            { value: "10", label: "10+ bài/ngày" },
-            { value: "20", label: "20+ bài/ngày" },
-          ]}
-          size="sm"
-          buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
-        />
-      </div>
-      <div className="min-w-[125px] flex-1 sm:flex-none">
-        <CustomSelect
-          value={groupTypeFilter}
-          onChange={setGroupTypeFilter}
-          options={[
-            { value: "all", label: "Mọi loại nhóm" },
-            { value: "public", label: "Công khai" },
-            { value: "private", label: "Kiểm duyệt" },
-          ]}
-          size="sm"
-          buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
-        />
-      </div>
-      <div className="min-w-[135px] flex-1 sm:flex-none">
-        <CustomSelect
-          value={membershipFilter}
-          onChange={setMembershipFilter}
-          options={[
-            { value: "all", label: "Mọi trạng thái tham gia" },
-            { value: "joined", label: "Đã tham gia" },
-            { value: "not_joined", label: "Chưa tham gia" },
-          ]}
-          size="sm"
-          buttonClassName="h-7 border-slate-200 bg-white px-2 py-0 text-[11px]"
-        />
-      </div>
-      {(activeResultFilterCount > 0 || (includeMaxResults && maxResults !== "10")) && (
-        <button
-          type="button"
-          onClick={() => {
-            if (includeMaxResults) setMaxResults("50");
-            setMemberFilter("all");
-            setGroupTypeFilter("all");
-            setFrequencyFilter("all");
-            setMembershipFilter("all");
-          }}
-          className="inline-flex h-7 items-center gap-1 px-1 text-[10px] font-medium text-slate-500 hover:text-red-600"
-        >
-          <RotateCw className="size-3" /> Đặt lại
-        </button>
-      )}
-    </div>
-  );
+    );
+  };
 
   return (
     <SectionCard

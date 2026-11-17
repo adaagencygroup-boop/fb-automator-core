@@ -4,8 +4,11 @@ import { formatVietnamDateTime, parseToVietnamDate } from "@/lib/date-utils";
 // ── Tài khoản (Module 02): Tab 1 đọc nick local, giống adapters.py phía BE ──
 
 // filters = { search, category_id | uncategorized } (categoryQuery của Module 02)
+// Chỉ nick Live + Đã đăng nhập (đủ cả 2) — lọc ở BE để phân trang và tổng số đúng
 export const getFarmAccountsPage = (filters = {}, cursor) =>
-  api.get("/api/accounts/page", { params: { limit: 10, active_only: true, ...filters, cursor } });
+  api.get("/api/accounts/page", {
+    params: { limit: 10, status: "live", login_status: "logged_in", ...filters, cursor },
+  });
 
 // ── Chạy tương tác ──
 

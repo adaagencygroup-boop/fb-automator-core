@@ -26,6 +26,25 @@ from core.media.youtube_scraper import (
 _active_jobs = {}
 _jobs_lock = threading.Lock()
 _folder_num_lock = threading.Lock()
+_mode_col_ready = False
+def _ensure_download_mode_column():
+  global _mode_col_ready
+  with _folder_num_lock:
+    if _mode_col_ready:
+      return
+    try:
+      db.execute("ALTER TABLE downloaded_videos ADD COLUMN IF NOT EXISTS download_mode VARCHAR(50)")
+      _mode_col_ready = True
+    except Exception:
+      pass
+def _resolve_download_mode(raw_kw: str, raw_link: str, is_direct: bool) -> str:
+  if is_direct:
+    return "DIRECT_LINK"
+  if raw_link and raw_kw:
+    return "KEYWORD_IN_PROFILE"
+  if raw_link:
+    return "PROFILE_ONLY"
+  return "KEYWORD_ONLY"
 def get_next_folder_number(page_dir: str) -> int:
   if not os.path.exists(page_dir):
     return 1
@@ -203,6 +222,7 @@ def run_reels_posting_task(job_id: int, config: dict):
 def run_tiktok_download_task(job_id: int, config: dict):
   with _jobs_lock:
     _active_jobs["TIKTOK"] = {"running": True, "job_id": job_id}
+  _ensure_download_mode_column()
   db.execute("UPDATE page_jobs SET status = 'RUNNING', started_at = NOW() WHERE id = %s", (job_id,))
   items = config.get("items", [])
   folder = config.get("download_folder", "downloads/tiktok")
@@ -314,6 +334,7 @@ def run_tiktok_download_task(job_id: int, config: dict):
           search_res = search_tiktok_videos(sub_kw, count=needed)
           if search_res.get("code") == 0 and search_res.get("data", {}).get("videos"):
             videos.extend(search_res["data"]["videos"][:needed])
+      dl_mode = _resolve_download_mode(raw_kw, raw_link, is_direct_url)
       success_count = 0
       skipped_count = 0
       for idx, v in enumerate(videos):
@@ -349,10 +370,10 @@ def run_tiktok_download_task(job_id: int, config: dict):
           with open(txt_path, "w", encoding="utf-8") as f:
             f.write(convert_tiktok_hashtags_to_facebook(raw_title))
           db.execute(
-            """INSERT INTO downloaded_videos (page_id, video_id, source, title, object_path)
-            VALUES (%s, %s, 'TIKTOK', %s, %s)
-            ON CONFLICT (page_id, source, video_id) DO UPDATE SET title = EXCLUDED.title, object_path = EXCLUDED.object_path, downloaded_at = NOW()""",
-            (page_id, v_id, raw_title, f_path)
+            """INSERT INTO downloaded_videos (page_id, video_id, source, title, object_path, download_mode)
+            VALUES (%s, %s, 'TIKTOK', %s, %s, %s)
+            ON CONFLICT (page_id, source, video_id) DO UPDATE SET title = EXCLUDED.title, object_path = EXCLUDED.object_path, download_mode = EXCLUDED.download_mode, downloaded_at = NOW()""",
+            (page_id, v_id, raw_title, f_path, dl_mode)
           )
           db.execute(
             """INSERT INTO download_logs (page_id, source, video_id, title, object_path, status)
@@ -401,6 +422,7 @@ def run_tiktok_download_task(job_id: int, config: dict):
 def run_youtube_download_task(job_id: int, config: dict):
   with _jobs_lock:
     _active_jobs["YOUTUBE"] = {"running": True, "job_id": job_id}
+  _ensure_download_mode_column()
   db.execute("UPDATE page_jobs SET status = 'RUNNING', started_at = NOW() WHERE id = %s", (job_id,))
   items = config.get("items", [])
   folder = config.get("download_folder", "downloads/youtube")
@@ -435,6 +457,7 @@ def run_youtube_download_task(job_id: int, config: dict):
     if not kw and not link:
       kw = (item.get("page_name") or f"Page_{page_id}").strip()
     direct_matches = [m.strip() for m in re.split(r'[,;\s\n]+', link) if "watch?v=" in m or "/shorts/" in m or "youtu.be/" in m] if link else []
+    dl_mode = _resolve_download_mode(kw, link, bool(direct_matches))
     if direct_matches:
       target_queries = direct_matches
     elif link:
@@ -505,10 +528,10 @@ def run_youtube_download_task(job_id: int, config: dict):
                   tf.write(clean_title)
                 downloaded_items.append({"id": v_id, "title": clean_title, "path": f_path})
                 db.execute(
-                  """INSERT INTO downloaded_videos (page_id, video_id, source, title, object_path)
-                  VALUES (%s, %s, 'YOUTUBE', %s, %s)
-                  ON CONFLICT (page_id, source, video_id) DO UPDATE SET title = EXCLUDED.title, object_path = EXCLUDED.object_path, downloaded_at = NOW()""",
-                  (page_id, v_id, clean_title, f_path)
+                  """INSERT INTO downloaded_videos (page_id, video_id, source, title, object_path, download_mode)
+                  VALUES (%s, %s, 'YOUTUBE', %s, %s, %s)
+                  ON CONFLICT (page_id, source, video_id) DO UPDATE SET title = EXCLUDED.title, object_path = EXCLUDED.object_path, download_mode = EXCLUDED.download_mode, downloaded_at = NOW()""",
+                  (page_id, v_id, clean_title, f_path, dl_mode)
                 )
                 db.execute(
                   """INSERT INTO download_logs (page_id, source, video_id, title, object_path, status)

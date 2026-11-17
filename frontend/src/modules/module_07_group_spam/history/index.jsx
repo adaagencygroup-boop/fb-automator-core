@@ -12,7 +12,6 @@ import {
   ExternalLink,
   Eye,
   FileText,
-  Filter,
   Layers,
   RotateCcw,
   Search,
@@ -366,17 +365,14 @@ export default function GroupHistoryModule() {
               </select>
             </div>
 
-            {/* 5. Nút Lọc & Đặt lại */}
+            {/* 5. Nút Đặt lại */}
             <div className="flex items-center gap-2">
-              <Button type="submit" size="sm" className="flex-1 bg-primary text-white hover:bg-primary/90 text-xs">
-                <Filter className="mr-1.5 size-3.5" /> Lọc
-              </Button>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 onClick={handleResetFilter}
-                className="text-xs"
+                className="w-full text-xs"
               >
                 <RotateCcw className="mr-1.5 size-3" /> Đặt lại
               </Button>
