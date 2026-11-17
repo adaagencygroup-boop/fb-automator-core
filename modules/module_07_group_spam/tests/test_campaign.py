@@ -220,13 +220,14 @@ class CampaignTests(unittest.TestCase):
 
         self.assertEqual(self.persistence.tasks[0][1]["result_url"], comment_url)
 
-    def test_pending_comment_is_not_counted_as_success_or_given_a_link(self):
+    def test_pending_comment_saves_parent_post_link_without_counting_success(self):
+        post_url = "https://www.facebook.com/groups/159341141325119/posts/2144468799479000/"
         class PendingCommentPoster(FakePoster):
             def comment(self, group, content, media, *, auto_like=False):
                 return {
                     "status": "PENDING_APPROVAL",
                     "message": "Bình luận đang chờ quản trị viên duyệt; chưa có link trực tiếp",
-                    "result_url": None,
+                    "result_url": post_url,
                 }
 
         manager = CampaignManager(poster_factory=PendingCommentPoster, persistence=self.persistence)
@@ -242,7 +243,24 @@ class CampaignTests(unittest.TestCase):
         saved = self.persistence.tasks[0][1]
         self.assertEqual((result["status"], result["success"], result["pending_actions"]), ("PARTIAL", 0, 1))
         self.assertEqual(saved["status"], "PENDING_APPROVAL")
-        self.assertIsNone(saved["result_url"])
+        self.assertEqual(saved["result_url"], post_url)
+
+    def test_parent_post_url_is_derived_from_existing_comment_timestamp(self):
+        comment_url = (
+            "https://web.facebook.com/groups/159341141325119/posts/2144468799479000/"
+            "?comment_id=2145171706075376&__tn__=R-R"
+        )
+
+        class Driver:
+            def execute_script(self, _script, _anchor):
+                return [comment_url]
+
+        poster = FacebookGroupPoster({"uid": "100"}, threading.Event(), lambda *_: None)
+        poster.driver = Driver()
+        self.assertEqual(
+            poster._extract_group_post_permalink(object(), "https://facebook.com/groups/159341141325119"),
+            "https://www.facebook.com/groups/159341141325119/posts/2144468799479000/",
+        )
 
     def test_scheduled_campaign_can_be_stopped_before_browser_starts(self):
         payload = self.payload()

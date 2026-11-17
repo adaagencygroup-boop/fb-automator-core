@@ -212,7 +212,7 @@ export default function GroupCampaignsModule() {
       const rerunData = await getGroupCampaignRerunConfig(campaign.id);
       sessionStorage.setItem("fb_rerun_campaign", JSON.stringify(rerunData));
 
-      if (campaign.action_type === "COMMENT") {
+      if (String(campaign.action_type || "").toUpperCase() === "COMMENT") {
         router.push("/groups/comment");
       } else {
         router.push("/groups/post");
