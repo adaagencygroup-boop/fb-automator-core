@@ -169,6 +169,9 @@ def _init_remaining_schemas():
 async def _finish_engine_startup(fast_startup: bool):
     if not fast_startup:
         await asyncio.to_thread(_init_remaining_schemas)
+    else:
+        # Fast startup skips schema checks, but account API sessions still need a bind.
+        await asyncio.to_thread(initialize_accounts)
     with startup_step("Backend module imports"):
         loaded = load_backend_modules()
     print(
