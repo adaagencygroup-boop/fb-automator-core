@@ -147,6 +147,7 @@ function Workspace({ session, children }) {
         <Header
           activeTab={activeTab}
           user={{
+            id: user.id,
             name: user.username,
             initials: String(user.username || "?").slice(0, 2).toUpperCase(),
           }}

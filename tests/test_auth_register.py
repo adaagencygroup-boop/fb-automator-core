@@ -33,12 +33,12 @@ class RegistrationTests(unittest.TestCase):
         with patch.object(self.router, "get_hwid", return_value="engine-device"):
             return self.client.post("/api/v1/auth/register", json={**self.body, **changes})
 
-    def test_success_is_pending_with_hashed_password_and_admin_event(self):
+    def test_success_is_approved_with_free_license_and_admin_event(self):
         queue = self.events.subscribe()
         try:
             response = self.register(role="admin", status="approved")
             self.assertEqual(response.status_code, 201, response.text)
-            self.assertEqual(response.json()["status"], "pending")
+            self.assertEqual(response.json()["status"], "approved")
             cookies = [c for c in response.headers.get_list("set-cookie") if c.startswith("fb_registration=") and "Max-Age=0" not in c]
             self.assertEqual(len(cookies), 1)
             self.assertTrue(cookies[0].startswith("fb_registration="))
@@ -47,13 +47,15 @@ class RegistrationTests(unittest.TestCase):
             self.assertNotIn("access_token", response.json())
             self.db.session.assert_called_once()
             calls = self.cursor.execute.call_args_list
-            self.assertEqual(len(calls), 2)
-            self.assertIn("'user', 'pending'", calls[0].args[0])
+            self.assertEqual(len(calls), 4)
+            self.assertIn("'user', 'approved'", calls[0].args[0])
             params = calls[0].args[1]
             self.assertNotEqual(params[1], self.body["password"])
             self.assertTrue(self.security.verify_password(self.body["password"], params[1]))
             self.assertEqual(params[3], "engine-device")
-            self.assertIn("'NEW_REGISTRATION', 'admin'", calls[1].args[0])
+            self.assertEqual(calls[1].args[1][1:3], ("fb_account", 30))
+            self.assertEqual(calls[2].args[1][1], "ACCOUNT_APPROVED")
+            self.assertIn("'NEW_REGISTRATION', 'admin'", calls[3].args[0])
             event = queue.get_nowait()
             self.assertEqual(event["type"], "NEW_REGISTRATION")
             self.assertEqual(event["user_id"], 42)
@@ -106,7 +108,7 @@ class RegistrationTests(unittest.TestCase):
         self.assertIs(self.db.session.return_value.__exit__.call_args.args[0], UniqueViolation)
 
     def test_failed_notification_rolls_back_account_without_event(self):
-        self.cursor.execute.side_effect = [None, RuntimeError("notification insert failed")]
+        self.cursor.execute.side_effect = [None, None, None, RuntimeError("notification insert failed")]
         with patch.object(self.service, "publish") as publish:
             with self.assertRaises(RuntimeError):
                 self.register()

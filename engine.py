@@ -287,7 +287,6 @@ class LicenseMiddleware:
             and path.startswith("/api/")
             and path not in _PUBLIC_API
             and not path.startswith("/api/v1/")
-            and not path.startswith("/api/post")
         ):
             headers = {
                 key.decode("latin1").lower(): value.decode("latin1")
