@@ -38,9 +38,11 @@ export default function AccountPicker({
   const selection = useRef(selected);
   const visibleUids = useRef([]);
   const availableUids = useRef([]);
-  const visible = useMemo(() => readOnly ? accounts : accounts.filter(
-    (acc) => acc.status === "live" || acc.login_status === "logged_in",
-  ), [accounts, readOnly]);
+  // Chỉ hiện nick Live + Đã đăng nhập; lúc chạy (readOnly) giữ mọi nick đã chọn kể cả nick vừa đổi trạng thái
+  const visible = useMemo(
+    () => (readOnly ? accounts : accounts.filter(isEligible)),
+    [accounts, readOnly],
+  );
   const selectable = visible.filter(isEligible);
   const allChecked = selectable.length > 0 && selectable.every((acc) => selected.has(acc.uid));
 
@@ -108,7 +110,7 @@ export default function AccountPicker({
       subtitle={
         readOnly
           ? `${accounts.length} tài khoản`
-          : `Đã chọn ${selected.size} tài khoản · Đã tải ${visible.length}/${total} (${selectable.length} đủ điều kiện Live + Đã đăng nhập)`
+          : `Đã chọn ${selected.size} tài khoản · Đã tải ${visible.length}/${total}`
       }
       action={
         !readOnly && (
@@ -247,8 +249,8 @@ export default function AccountPicker({
                   {loading
                     ? "Đang tải danh sách tài khoản..."
                     : search || filtered
-                      ? "Không có tài khoản Live hoặc Đã đăng nhập khớp bộ lọc."
-                      : "Chưa có tài khoản Live hoặc Đã đăng nhập."}
+                      ? "Không có tài khoản Live + Đã đăng nhập khớp bộ lọc."
+                      : "Chưa có tài khoản Live + Đã đăng nhập."}
                 </td>
               </tr>
             )}

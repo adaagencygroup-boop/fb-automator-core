@@ -749,6 +749,22 @@ def get_posting_status():
 # 5. HISTORY ENDPOINT
 # ==============================================================================
 
+@router.get("/history/accounts")
+def get_history_accounts():
+    rows = post_repository.list_post_history_accounts()
+    accounts = []
+    for row in rows:
+        uid = str(row.get("account_uid") or "").strip()
+        if not uid:
+            continue
+        accounts.append({
+            "uid": uid,
+            "name": str(row.get("account_name") or "").strip(),
+        })
+    accounts.sort(key=lambda a: ((a["name"] or a["uid"]).lower(), a["uid"]))
+    return {"success": True, "data": accounts}
+
+
 @router.get("/history")
 def get_history(
     post_type: Optional[str] = Query(None),

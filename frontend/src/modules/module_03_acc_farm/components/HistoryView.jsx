@@ -222,33 +222,25 @@ export function HistoryView() {
     }
   }, []);
 
-  // ── Tải danh sách tài khoản cho bộ lọc ──
+  // ── Tải nick cho bộ lọc từ lịch sử (còn sau khi xóa nick ở Module 02) ──
   useEffect(() => {
     let ignore = false;
     async function loadAccounts() {
       try {
-        const res = await api.get("/api/accounts");
+        const res = await api.get("/api/post/history/accounts");
         if (ignore) return;
-        let raw = [];
-        if (Array.isArray(res)) raw = res;
-        else if (Array.isArray(res?.accounts)) raw = res.accounts;
-        else if (Array.isArray(res?.data)) raw = res.data;
-
+        const raw = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
         const opts = [{ value: "all", label: "Tất cả tài khoản" }];
-        const seen = new Set();
         const named = [];
+        const seen = new Set();
         raw.forEach((acc) => {
-          const uid = String(acc.uid || acc.fb_uid || acc.account_uid || "").trim();
+          const uid = String(acc.uid || acc.account_uid || "").trim();
           if (!uid || seen.has(uid)) return;
-          // Chỉ hiện nick còn sống (Live) — khớp yêu cầu bỏ lọc Die/Blocked
-          const status = String(acc.status || "").toLowerCase();
-          if (status && status !== "live") return;
           seen.add(uid);
-          // Module 02 serialize dùng profile_name (Ticket #71)
-          const name = String(
-            acc.profile_name || acc.name || acc.fb_name || acc.account_name || ""
-          ).trim();
-          named.push({ uid, name });
+          named.push({
+            uid,
+            name: String(acc.name || acc.account_name || "").trim(),
+          });
         });
         const nameCounts = {};
         named.forEach((a) => {
@@ -273,7 +265,7 @@ export function HistoryView() {
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [reloadCounter]);
 
   // ── Tải dữ liệu lịch sử từ API ──
   useEffect(() => {
