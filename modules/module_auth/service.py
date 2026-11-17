@@ -12,6 +12,7 @@ from psycopg2.errors import UniqueViolation
 from core.database.connection import db
 from modules.module_auth.notification_events import publish
 from modules.module_auth.license_policy import ACCOUNT_FEATURE, ACCOUNT_FREE_DAYS, account_license_expiry
+from modules.module_auth.schema import SYSTEM_DEFAULT_FEATURES
 from modules.module_auth.security import (
     ACCESS_TOKEN_MINUTES,
     create_access_token,
@@ -23,6 +24,7 @@ from modules.module_auth.security import (
 )
 
 LOCKED_STATUSES = ("banned", "locked", "rejected")
+FEATURE_NAMES = {key: re.sub(r"^\d+\.\s*", "", name) for key, name, _description, _order in SYSTEM_DEFAULT_FEATURES}
 
 
 def utcnow():
@@ -120,6 +122,59 @@ def log_activity(admin_name, admin_role, action_type, target_username=None, targ
         (admin_name, admin_role, action_type, target_username, target_uid, target_role,
          change_detail, ip_address, user_agent, note, utcnow()),
     )
+
+
+def _user_event(cursor, user_id, event_type, message, event_key, at):
+    """A persisted unique key prevents duplicates across polls, restarts and workers."""
+    cursor.execute(
+        """INSERT INTO system_notifications (user_id, type, target, message, is_read, created_at, event_key)
+           VALUES (%s, %s, 'user', %s, FALSE, %s, %s)
+           ON CONFLICT (event_key) DO NOTHING""",
+        (user_id, event_type, message, at, event_key),
+    )
+
+
+def _account_approved_event(cursor, user_id, at, free_trial=False):
+    message = "Tài khoản của bạn đã được phê duyệt."
+    if free_trial:
+        message += f" Bạn được dùng miễn phí module Quản lý tài khoản Facebook trong {ACCOUNT_FREE_DAYS} ngày."
+    _user_event(cursor, user_id, "ACCOUNT_APPROVED", message, f"account-approved:{user_id}", at)
+
+
+def _license_time(expiry):
+    # All stored license timestamps are UTC; messages use the user's Vietnam timezone.
+    return (expiry + timedelta(hours=7)).strftime("%H:%M ngày %d/%m/%Y")
+
+
+def _expired_module_events(cursor, user_id, features, now):
+    for feature in features:
+        expiry = _as_dt(feature.get("expired_at"))
+        if not feature.get("is_enabled") or not expiry or expiry > now:
+            continue
+        key = feature["feature_key"]
+        name = FEATURE_NAMES.get(key, key)
+        _user_event(cursor, user_id, "MODULE_EXPIRED",
+                    f"Module {name} đã hết hạn lúc {_license_time(expiry)}. Vui lòng liên hệ Admin để gia hạn.",
+                    f"module-expired:{user_id}:{key}:{expiry.isoformat()}", expiry)
+
+
+def _module_term_event(cursor, user_id, key, old, expiry, now, automatic=False):
+    previous = _as_dt(old.get("expired_at")) if old else None
+    if expiry <= now or (previous == expiry and old.get("is_enabled")):
+        return
+    name = FEATURE_NAMES.get(key, key)
+    purchased_before = bool(old and (old.get("is_enabled") or (old.get("days_granted") or 0) > 0))
+    if automatic:
+        event_type, action = "MODULE_RENEWED", "được tự động gia hạn"
+    elif not purchased_before:
+        event_type, action = "MODULE_ACTIVATED", "được kích hoạt"
+    elif previous and expiry > previous:
+        event_type, action = "MODULE_RENEWED", "đã được gia hạn"
+    else:
+        event_type, action = "MODULE_UPDATED", "được cập nhật thời hạn"
+    _user_event(cursor, user_id, event_type,
+                f"Module {name} {action}, có hiệu lực đến {_license_time(expiry)}.",
+                f"{event_type.lower()}:{user_id}:{key}:{expiry.isoformat()}", now)
 
 
 def revoke_active_sessions(user_id: int, at=None) -> None:
@@ -236,6 +291,7 @@ def sync_user_feature_licenses(user_id: int, feature_items: list, base_expired_a
             raise HTTPException(404, "Không tìm thấy người dùng")
         cursor.execute("SELECT feature_key, is_enabled, days_granted, expired_at FROM user_feature_licenses WHERE user_id = %s", (user_id,))
         existing = {row["feature_key"]: dict(row) for row in cursor.fetchall()}
+        _expired_module_events(cursor, user_id, existing.values(), now)
         for item in feature_items:
             key = item.get("key")
             if not key or key == ACCOUNT_FEATURE:
@@ -255,9 +311,14 @@ def sync_user_feature_licenses(user_id: int, feature_items: list, base_expired_a
             else:
                 expiry, granted = now, 0
             cursor.execute(upsert, (user_id, key, enabled, granted, expiry))
+            if enabled:
+                _module_term_event(cursor, user_id, key, old, expiry, now)
             existing[key] = {"feature_key": key, "is_enabled": enabled, "days_granted": granted, "expired_at": expiry}
         expired_at = account_license_expiry(user["created_at"], existing.values())
         cursor.execute(upsert, (user_id, ACCOUNT_FEATURE, True, days_remaining(expired_at, now), expired_at))
+        account_before = existing.get(ACCOUNT_FEATURE)
+        if account_before and expired_at > _as_dt(account_before["expired_at"]):
+            _module_term_event(cursor, user_id, ACCOUNT_FEATURE, account_before, expired_at, now, automatic=True)
         cursor.execute(
             """UPDATE users SET expired_at = %s,
                status = CASE WHEN status IN ('approved', 'expired') THEN
@@ -362,6 +423,7 @@ def register_user(username, password, contact_info, hwid):
                    VALUES (%s, %s, TRUE, %s, %s)""",
                 (user_id, ACCOUNT_FEATURE, ACCOUNT_FREE_DAYS, created_at + timedelta(days=ACCOUNT_FREE_DAYS)),
             )
+            _account_approved_event(cursor, user_id, created_at, free_trial=True)
             cursor.execute(
                 """INSERT INTO system_notifications (user_id, type, target, message, is_read, created_at)
                    VALUES (%s, 'NEW_REGISTRATION', 'admin', %s, FALSE, %s) RETURNING id""",
@@ -658,6 +720,9 @@ def create_user_admin(username, password, contact_info, days, status, role, requ
     user_id = user["id"]
 
     sync_user_feature_licenses(user_id, features or [])
+    if status == "approved":
+        with db.session() as cursor:
+            _account_approved_event(cursor, user_id, utcnow())
 
     log_activity(admin["username"], admin.get("role"), "create_user", username, user_id, role, status, ip_address, ua)
     return public_user(_row_by_id(user_id))
@@ -704,6 +769,9 @@ def edit_user_admin(user_id: int, payload: dict, request: Request):
     )
     if role == "user":
         sync_user_feature_licenses(user_id, payload.get("features") or [])
+        if user.get("status") in ("pending", "rejected") and _row_by_id(user_id).get("status") == "approved":
+            with db.session() as cursor:
+                _account_approved_event(cursor, user_id, utcnow())
     if payload.get("password") or username != user["username"] or status in LOCKED_STATUSES or hwid_changed:
         revoke_active_sessions(user_id)
     log_activity(admin["username"], admin.get("role"), "edit_user", username, user_id, role, f"status={status}", ip_address, ua)
@@ -785,6 +853,44 @@ def list_notifications(unread_only=False, target="admin"):
 
 def mark_notification(notif_id: int):
     db.execute("UPDATE system_notifications SET is_read = ? WHERE id = ?", (True, notif_id))
+    return {"success": True}
+
+
+def list_user_notifications(user_id: int, unread_only=False):
+    # Polling the inbox also catches modules that expired while the app was closed.
+    with db.session() as cursor:
+        cursor.execute(
+            "SELECT feature_key, is_enabled, expired_at FROM user_feature_licenses WHERE user_id = %s",
+            (user_id,),
+        )
+        _expired_module_events(cursor, user_id, cursor.fetchall(), utcnow())
+    unread_clause = " AND COALESCE(is_read, false) = false" if unread_only else ""
+    rows = db.fetch_all(
+        "SELECT id, type, message, is_read, created_at FROM system_notifications "
+        "WHERE user_id = ? AND target = 'user'" + unread_clause + " ORDER BY id DESC",
+        (user_id,),
+    )
+    return [{"id": row["id"], "type": row.get("type"), "message": row.get("message"),
+             "is_read": bool(row.get("is_read")), "created_at": str(row.get("created_at") or "")}
+            for row in rows]
+
+
+def mark_user_notification(user_id: int, notif_id: int):
+    row = db.fetch_one(
+        """UPDATE system_notifications SET is_read = ?
+           WHERE id = ? AND user_id = ? AND target = 'user' RETURNING id""",
+        (True, notif_id, user_id),
+    )
+    if not row:
+        raise HTTPException(404, "Không tìm thấy thông báo")
+    return {"success": True}
+
+
+def mark_all_user_notifications(user_id: int):
+    db.execute(
+        "UPDATE system_notifications SET is_read = ? WHERE user_id = ? AND target = 'user'",
+        (True, user_id),
+    )
     return {"success": True}
 
 
@@ -955,7 +1061,8 @@ def approve_user(user_id: int, days: int, request: Request, features: Optional[l
         expired_at = sync_user_feature_licenses(user_id, [])
 
     db.execute("UPDATE users SET status = ?, expired_at = ? WHERE id = ?", ("approved" if expired_at > utcnow() else "expired", expired_at, user_id))
-    notify(user_id, "LICENSE_EXTENDED", "user", f"Tài khoản của bạn đã được Admin phê duyệt ({days} ngày sử dụng)!")
+    with db.session() as cursor:
+        _account_approved_event(cursor, user_id, utcnow())
     log_activity(admin["username"], admin.get("role"), "approve_user", user["username"], user_id, user.get("role"),
                  f"{old} -> approved (+{days} ngay)", ip_address, ua)
     return {"message": f"User {user['username']} approved for {days} days", "expired_at": expired_at.isoformat() + "Z"}
@@ -974,7 +1081,6 @@ def extend_user(user_id: int, days: int, request: Request, features: Optional[li
         expired_at = sync_user_feature_licenses(user_id, items, preserve_unchanged=False)
 
     db.execute("UPDATE users SET status = ?, expired_at = ? WHERE id = ?", ("approved" if expired_at > utcnow() else "expired", expired_at, user_id))
-    notify(user_id, "LICENSE_EXTENDED", "user", f"Admin đã gia hạn tài khoản thêm {days} ngày.")
     log_activity(admin["username"], admin.get("role"), "extend_user", user["username"], user_id, user.get("role"),
                  f"+{days} ngay", ip_address, ua)
     return {"message": f"Extended {user['username']}", "expired_at": expired_at.isoformat() + "Z"}

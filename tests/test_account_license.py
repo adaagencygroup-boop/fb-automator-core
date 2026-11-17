@@ -39,7 +39,7 @@ class TestDB:
                 days_granted INTEGER, expired_at TIMESTAMP, updated_at TIMESTAMP,
                 UNIQUE(user_id, feature_key));
             CREATE TABLE system_notifications (id INTEGER PRIMARY KEY, user_id INTEGER,
-                type TEXT, target TEXT, message TEXT, is_read BOOLEAN, created_at TIMESTAMP);
+                type TEXT, target TEXT, message TEXT, is_read BOOLEAN, created_at TIMESTAMP, event_key TEXT UNIQUE);
         """)
         for order, key in enumerate(['fb_account', 'create_fanpage', 'spam_group', 'scan_group']):
             self.connection.execute("INSERT INTO system_features VALUES (?, ?, ?, TRUE)", (key, key, order))
@@ -112,6 +112,43 @@ class AccountLicenseTests(unittest.TestCase):
         self.now = signup + timedelta(days=120)
         self.assertFalse(self.s.licensed_for_modules(self.user(), 'fb_account'))
 
+    def test_trial_registration_creates_an_approval_message_for_the_user(self):
+        notes = self.db.fetch_all("SELECT * FROM system_notifications WHERE target = 'user'")
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]['type'], 'ACCOUNT_APPROVED')
+        self.assertIn('30 ngày', notes[0]['message'])
+
+    def test_module_messages_use_its_own_name_and_expiry_not_the_account_grace_term(self):
+        self.grant('create_fanpage', 60)
+        self.now += timedelta(days=1)
+        self.grant('create_fanpage', 90)
+        notes = self.db.fetch_all("SELECT * FROM system_notifications WHERE type = 'MODULE_RENEWED'")
+        paid = [item for item in notes if 'Tạo Fanpage hàng loạt' in item['message']]
+        self.assertEqual(len(paid), 1)
+        expected = (self.now + timedelta(days=90, hours=7)).strftime('%H:%M ngày %d/%m/%Y')
+        self.assertIn(expected, paid[0]['message'])
+        count = len(self.db.fetch_all('SELECT * FROM system_notifications'))
+        self.s.sync_user_feature_licenses(self.uid, [])
+        self.s.sync_user_feature_licenses(self.uid, [{'key': 'create_fanpage', 'days': 90, 'enabled': True}])
+        self.assertEqual(len(self.db.fetch_all('SELECT * FROM system_notifications')), count)
+
+    def test_renewing_after_expiry_preserves_one_notice_of_the_previous_expiration(self):
+        self.grant('spam_group', 60)
+        self.now += timedelta(days=61)
+        self.grant('spam_group', 90)
+        self.s.sync_user_feature_licenses(self.uid, [])
+        notes = self.db.fetch_all("SELECT * FROM system_notifications WHERE type = 'MODULE_EXPIRED'")
+        expired_group = [item for item in notes if 'Spam Group Hội Nhóm' in item['message']]
+        self.assertEqual(len(expired_group), 1)
+        self.assertTrue(any('Spam Group Hội Nhóm' in item['message'] for item in self.db.fetch_all("SELECT * FROM system_notifications WHERE type = 'MODULE_RENEWED'")))
+
+    def test_shortening_a_module_is_an_update_instead_of_a_renewal(self):
+        self.grant('spam_group', 90)
+        self.grant('spam_group', 20)
+        notes = self.db.fetch_all("SELECT * FROM system_notifications WHERE type = 'MODULE_UPDATED'")
+        self.assertEqual(len(notes), 1)
+        self.assertIn('Spam Group Hội Nhóm', notes[0]['message'])
+
     def test_short_module_adds_grace_and_edit_scales_both_up_and_down(self):
         signup = self.now
         self.grant('create_fanpage', 10)
@@ -180,12 +217,14 @@ class AccountLicenseTests(unittest.TestCase):
 
     def test_feature_and_account_updates_rollback_together(self):
         before = self.term()
+        note_count = len(self.db.fetch_all('SELECT * FROM system_notifications'))
         with self.assertRaises(sqlite3.IntegrityError):
             self.s.sync_user_feature_licenses(self.uid, [
                 {'key': 'spam_group', 'days': 90, 'enabled': True},
                 {'key': 'unknown_feature', 'days': 900, 'enabled': True}])
         self.assertEqual(self.term(), before)
         self.assertIsNone(self.db.fetch_one("SELECT * FROM user_feature_licenses WHERE feature_key = 'spam_group'"))
+        self.assertEqual(len(self.db.fetch_all('SELECT * FROM system_notifications')), note_count)
 
     def test_expired_module_cannot_be_used_during_the_account_grace_period(self):
         self.grant('spam_group', 60)

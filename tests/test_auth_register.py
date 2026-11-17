@@ -47,14 +47,15 @@ class RegistrationTests(unittest.TestCase):
             self.assertNotIn("access_token", response.json())
             self.db.session.assert_called_once()
             calls = self.cursor.execute.call_args_list
-            self.assertEqual(len(calls), 3)
+            self.assertEqual(len(calls), 4)
             self.assertIn("'user', 'approved'", calls[0].args[0])
             params = calls[0].args[1]
             self.assertNotEqual(params[1], self.body["password"])
             self.assertTrue(self.security.verify_password(self.body["password"], params[1]))
             self.assertEqual(params[3], "engine-device")
             self.assertEqual(calls[1].args[1][1:3], ("fb_account", 30))
-            self.assertIn("'NEW_REGISTRATION', 'admin'", calls[2].args[0])
+            self.assertEqual(calls[2].args[1][1], "ACCOUNT_APPROVED")
+            self.assertIn("'NEW_REGISTRATION', 'admin'", calls[3].args[0])
             event = queue.get_nowait()
             self.assertEqual(event["type"], "NEW_REGISTRATION")
             self.assertEqual(event["user_id"], 42)
@@ -107,7 +108,7 @@ class RegistrationTests(unittest.TestCase):
         self.assertIs(self.db.session.return_value.__exit__.call_args.args[0], UniqueViolation)
 
     def test_failed_notification_rolls_back_account_without_event(self):
-        self.cursor.execute.side_effect = [None, None, RuntimeError("notification insert failed")]
+        self.cursor.execute.side_effect = [None, None, None, RuntimeError("notification insert failed")]
         with patch.object(self.service, "publish") as publish:
             with self.assertRaises(RuntimeError):
                 self.register()

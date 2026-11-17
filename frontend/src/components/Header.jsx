@@ -5,12 +5,12 @@ import { LogOut, UserRound, History } from "lucide-react";
 import { FitMaskIcon, MaskIcon } from "@/components/icons";
 import { findNavItem } from "@/config/navigation";
 import { CURRENT_USER } from "@/config/constants";
+import UserNotificationBell from "@/components/UserNotificationBell";
 
 // Figma: Header - TopBar (1016:109)
 export default function Header({
   activeTab,
   user = CURRENT_USER,
-  onNotificationsClick,
   onProfileClick,
   sidebarOpen = true,
   onToggleSidebar,
@@ -110,14 +110,7 @@ export default function Header({
             Trang Admin
           </a>
         )}
-        <button
-          type="button"
-          onClick={onNotificationsClick}
-          aria-label="Thông báo"
-          className="size-9 rounded-full border border-border flex items-center justify-center transition-colors hover:bg-slate-50 outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2"
-        >
-          <img src="/icons/icon_bell.svg" alt="" width={12.2588} height={14} className="block" />
-        </button>
+        <UserNotificationBell key={user?.id ?? user?.name} userId={user?.id} />
 
         <div ref={profileRef} className="relative" onBlur={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget)) setProfileOpen(false);

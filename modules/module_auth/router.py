@@ -34,11 +34,14 @@ from modules.module_auth.service import (
     list_activity,
     list_admins,
     list_notifications,
+    list_user_notifications,
     list_users,
     login_user,
     logout_token,
     mark_all_notifications,
     mark_notification,
+    mark_user_notification,
+    mark_all_user_notifications,
     public_user,
     claim_approved_session,
     pending_login_ticket,
@@ -365,6 +368,24 @@ def me(request: Request, authorization: Optional[str] = Header(None)):
 def user_sessions(user_id: int, authorization: Optional[str] = Header(None)):
     require_admin(authorization)
     return session_summary(user_id)
+
+
+@auth_router.get("/notifications")
+def my_notifications(request: Request, unread_only: bool = False, authorization: Optional[str] = Header(None)):
+    user = bearer_user(authorization, request=request)
+    return list_user_notifications(user["id"], unread_only)
+
+
+@auth_router.put("/notifications/read-all")
+def read_all_my_notifications(request: Request, authorization: Optional[str] = Header(None)):
+    user = bearer_user(authorization, request=request)
+    return mark_all_user_notifications(user["id"])
+
+
+@auth_router.put("/notifications/{notif_id}/read")
+def read_my_notification(notif_id: int, request: Request, authorization: Optional[str] = Header(None)):
+    user = bearer_user(authorization, request=request)
+    return mark_user_notification(user["id"], notif_id)
 
 
 @auth_router.get("/my-sessions")

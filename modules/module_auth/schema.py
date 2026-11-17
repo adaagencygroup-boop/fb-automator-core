@@ -90,7 +90,8 @@ def init_auth_tables():
             target VARCHAR(20) NOT NULL DEFAULT 'admin',
             message TEXT NOT NULL,
             is_read BOOLEAN DEFAULT {'FALSE' if db._is_postgres else '0'},
-            created_at TIMESTAMP
+            created_at TIMESTAMP,
+            event_key VARCHAR(200)
         )
         """,
         f"""
@@ -139,6 +140,11 @@ def init_auth_tables():
     ]
     for stmt in statements:
         db.execute(stmt)
+
+    # Older installations already have system_notifications without event keys.
+    if "event_key" not in _column_names("system_notifications"):
+        db.execute("ALTER TABLE system_notifications ADD COLUMN event_key VARCHAR(200)")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_event_key ON system_notifications (event_key)")
 
     # Seed 11 tính năng vào bảng system_features
     seed_system_features()
