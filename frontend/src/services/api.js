@@ -100,7 +100,8 @@ function notifySessionLost(code) {
 
 function extractErrorMessage(error) {
   if (error.code === "ECONNABORTED" || (typeof error.message === "string" && error.message.toLowerCase().includes("timeout"))) {
-    return "Quá thời gian kết nối tới máy chủ (timeout 60s). Vui lòng thử lại sau.";
+    const sec = Math.max(1, Math.round((Number(error.config?.timeout) || 60000) / 1000));
+    return `Quá thời gian kết nối tới máy chủ (timeout ${sec}s). Vui lòng thử lại sau.`;
   }
   const detail = error.response?.data?.detail;
   if (typeof detail === "string") return detail;

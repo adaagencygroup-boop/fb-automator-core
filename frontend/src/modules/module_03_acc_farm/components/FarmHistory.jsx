@@ -439,7 +439,7 @@ export default function FarmHistory() {
       />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex rounded-xl border border-slate-200/60 bg-slate-100 p-1 shadow-2xs">
+        <div className="inline-flex rounded-xl border-2 border-slate-300/60 bg-slate-100  shadow-2xs">
           {[
             ["post", "Đăng Facebook"],
             ["interact", "Tương tác tài khoản"],
