@@ -134,6 +134,36 @@ def _broadcast_creator(level: str, message: str, uid: Optional[str] = None, extr
 broadcast = _broadcast_creator
 
 
+def format_creator_error(raw_err) -> str:
+    """Chuẩn hóa & Việt hóa thông báo lỗi kỹ thuật (Selenium/DB/mạng), loại bỏ Stacktrace và HTML."""
+    import re
+    text = str(raw_err or "").strip()
+    if not text:
+        return "Lỗi không xác định"
+
+    low = text.lower()
+    if "element click intercepted" in low or "is not clickable at point" in low:
+        return "Không thể nhấn nút thao tác do bị phần tử khác trên giao diện Facebook che khuất."
+    if "none of" in low and "locators matched" in low:
+        return "Không tìm thấy nút hoặc biểu mẫu cần thao tác trên giao diện Facebook (hết thời gian chờ)."
+    if "timeoutexception" in low or "timed out" in low:
+        return "Quá thời gian chờ phản hồi từ Facebook hoặc trình duyệt."
+    if "nosuchelementexception" in low:
+        return "Không tìm thấy thành phần giao diện Facebook cần thao tác."
+    if "staleelementreferenceexception" in low:
+        return "Giao diện Facebook vừa thay đổi trong lúc thao tác."
+    if "target window already closed" in low or "no such window" in low or "chrome not reachable" in low or "webdriverexception" in low:
+        return "Trình duyệt Chrome đã bị đóng hoặc mất kết nối."
+    if "invalid transaction is rolled back" in low or "pendingrollbackerror" in low:
+        return "Kết nối cơ sở dữ liệu tạm thời bị gián đoạn."
+
+    # Cắt bỏ phần Stacktrace, Session info, URL tài liệu Selenium và thẻ HTML thô
+    cleaned = re.split(r"(?:Stacktrace:|For documentation on this error|\(Session info:)", text, maxsplit=1)[0]
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:220] or "Lỗi không xác định"
+
+
 class CreatorStopRequested(Exception):
     """Worker bị cắt bởi Dừng khẩn cấp."""
 
@@ -361,7 +391,12 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
         )
 
         if not login_check["success"]:
-            broadcast("error", f"❌ [{uid}] Phiên đăng nhập không hợp lệ: {login_check['error']}", uid=uid, extra={"action": "failed", "page_name": page_name, "percent": 100})
+            clean_login_err = format_creator_error(login_check.get("error"))
+            broadcast("error", f"❌ [{uid}] Phiên đăng nhập không hợp lệ: {clean_login_err}", uid=uid, extra={"action": "failed", "page_name": page_name, "percent": 100})
+            try:
+                db.rollback()
+            except Exception:
+                pass
             AccountRepo.update_login_status(db, uid, "failed")
             PageRepo.create(db, {
                 "owner_username": owner,
@@ -369,10 +404,10 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
                 "shared_admin_uid": target_admin_uid,
                 "page_name": page_name,
                 "status": "FAILED",
-                "log_detail": f"Lỗi đăng nhập: {login_check['error']}",
+                "log_detail": f"Lỗi đăng nhập: {clean_login_err}",
                 "run_log": run_log_text(),
             }, owner_username=owner)
-            return {"success": False, "reason": "login_failed", "error": login_check["error"]}
+            return {"success": False, "reason": "login_failed", "error": clean_login_err}
 
         if login_check.get("reloaded"):
             AccountRepo.update_login_status(db, uid, "logged_in")
@@ -412,10 +447,15 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
         raise_if_creator_stopped()
 
         if not page_result["success"]:
-            err_msg = page_result.get("error") or ""
-            if stop_task_requested or "dừng khẩn cấp" in err_msg.lower():
+            raw_err = page_result.get("error") or ""
+            if stop_task_requested or "dừng khẩn cấp" in raw_err.lower():
                 raise CreatorStopRequested("stopped")
+            err_msg = format_creator_error(raw_err)
             broadcast("error", f"❌ [{uid}] Tạo page thất bại: {err_msg}", uid=uid, extra={"action": "failed", "page_name": page_name, "percent": 100})
+            try:
+                db.rollback()
+            except Exception:
+                pass
             PageRepo.create(db, {
                 "owner_username": owner,
                 "creator_fb_uid": uid,
@@ -504,9 +544,10 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
         if stop_task_requested or "dừng khẩn cấp" in (admin_result.get("error") or "").lower():
             raise CreatorStopRequested("stopped")
         if not admin_result.get("admin_success", admin_result.get("success", False)):
+            clean_admin_err = format_creator_error(admin_result.get("error"))
             broadcast(
                 "warning",
-                f"⚠️ [{uid}] Gán Quản trị viên thất bại — vẫn đã chuyển sang bước đăng bài chào mừng. Chi tiết: {admin_result.get('error') or 'không rõ'}",
+                f"⚠️ [{uid}] Gán Quản trị viên thất bại — vẫn đã chuyển sang bước đăng bài chào mừng. Chi tiết: {clean_admin_err}",
                 uid=uid,
                 extra={
                     "action": "step",
@@ -551,7 +592,7 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
             worker_ok = False
         elif not admin_ok:
             status = "PARTIAL"
-            admin_err = admin_result.get("error") or "Lỗi không xác định"
+            admin_err = format_creator_error(admin_result.get("error"))
             if posted_ok:
                 log = f"Tạo trang OK, cấp Admin thất bại ({admin_err}), đã tiếp tục đăng bài chào mừng."
             elif post_content:
@@ -611,8 +652,10 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
         if stop_task_requested:
             return {"success": False, "reason": "stopped"}
         logger.exception(f"[{uid}] Create page worker crashed: {e}")
-        broadcast("error", f"💥 [{uid}] Lỗi nghiêm trọng: {e}", uid=uid, extra={"action": "failed", "page_name": page_name, "percent": 100})
+        clean_crash = format_creator_error(e)
+        broadcast("error", f"💥 [{uid}] Lỗi nghiêm trọng: {clean_crash}", uid=uid, extra={"action": "failed", "page_name": page_name, "percent": 100})
         try:
+            db.rollback()
             PageRepo.create(db, {
                 "owner_username": owner,
                 "creator_fb_uid": uid,
@@ -620,12 +663,12 @@ def _create_page_worker(item: dict, target_admin_uid: str, country_code: str = "
                 "shared_admin_name": admin_name,
                 "page_name": page_name,
                 "status": "FAILED",
-                "log_detail": str(e),
+                "log_detail": clean_crash,
                 "run_log": run_log_text(),
             }, owner_username=owner)
         except Exception:
             pass
-        return {"success": False, "error": str(e), "reason": "error"}
+        return {"success": False, "error": clean_crash, "reason": "error"}
 
     finally:
         if driver:
