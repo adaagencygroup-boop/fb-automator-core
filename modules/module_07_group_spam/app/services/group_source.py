@@ -819,6 +819,12 @@ def search_facebook_via_browser(
         logger.info(f"[{target_uid}] Truy cập: {search_url}")
         driver.get(search_url)
         time.sleep(4)
+        current_url = (driver.current_url or "").lower()
+        if "/checkpoint/" in current_url or "/login/" in current_url:
+            raise GroupSearchAuthenticationRequired(
+                "Tài khoản Facebook dùng để quét đã bị chuyển tới trang xác minh/đăng nhập. "
+                "Hãy mở tài khoản này trong Quản lý tài khoản, hoàn tất xác minh Facebook rồi quét lại."
+            )
 
         # Trích xuất dữ liệu thẻ nhóm bằng JavaScript DOM Inspector
         js_extract_script = """
@@ -874,18 +880,20 @@ def search_facebook_via_browser(
             
             // Tìm container chứa thông tin thẻ nhóm
             let container = a;
-            let hasGroupMetadata = false;
+            let fallbackContainer = a;
             for (let i = 0; i < 6; i++) {
                 if (container.parentElement && container.parentElement !== document.body) {
                     container = container.parentElement;
                     const text = container.innerText || '';
+                    if (text.trim() && text.length < 500) fallbackContainer = container;
                     if (text.includes('thành viên') || text.includes('members') || text.includes('bài viết') || text.includes('posts')) {
-                        hasGroupMetadata = true;
                         break;
                     }
                 }
             }
-            if (!hasGroupMetadata) continue;
+            // Facebook does not always show member/post counts on result cards.
+            // Keep a named group link and let the relevance filter validate it.
+            if (!(container.innerText || '').trim()) container = fallbackContainer;
             
             const cardText = container.innerText || a.innerText || '';
             const lines = cardText.split('\\n').map(l => l.trim()).filter(Boolean);
@@ -1017,6 +1025,8 @@ def search_facebook_via_browser(
 
         return parsed_groups
 
+    except GroupSearchAuthenticationRequired:
+        raise
     except Exception as e:
         logger.error(f"Lỗi khi cào nhóm Facebook thật qua trình duyệt: {e}")
         return []
@@ -1035,6 +1045,10 @@ def search_facebook_via_browser(
 
 # Search results must come from Facebook. Empty scraping results stay empty.
 REAL_FACEBOOK_GROUPS: tuple[dict[str, Any], ...] = ()
+
+
+class GroupSearchAuthenticationRequired(Exception):
+    """Facebook redirected the scraping account to login or checkpoint."""
 
 
 def search_facebook_groups(
