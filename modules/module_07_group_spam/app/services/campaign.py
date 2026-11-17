@@ -11,6 +11,7 @@ from pathlib import Path
 import random
 import threading
 import time
+import unicodedata
 import uuid
 from typing import Any, Callable
 
@@ -174,6 +175,7 @@ class CampaignJob:
     success: int = 0
     failed: int = 0
     skipped: int = 0
+    pending_actions: int = 0
     joined: int = 0
     already_member: int = 0
     pending_approval: int = 0
@@ -217,6 +219,7 @@ class CampaignJob:
                 "success": self.success,
                 "failed": self.failed,
                 "skipped": self.skipped,
+                "pending_actions": self.pending_actions,
                 "joined": self.joined,
                 "already_member": self.already_member,
                 "pending_approval": self.pending_approval,
@@ -798,7 +801,12 @@ class FacebookGroupPoster:
                 raise RuntimeError("Facebook đang giới hạn thao tác đăng bài của tài khoản")
         except Exception:
             pass
-        copied_link = self._extract_post_share_link(content)
+        post_permalink = (
+            result_url
+            if re.search(r"/posts/|/permalink/|/photo/|story_fbid=|multi_permalinks=", result_url, re.I)
+            else None
+        )
+        copied_link = self._extract_post_share_link(content, post_permalink)
         return {
             "status": "SUCCESS",
             "message": "Đăng bài thành công",
@@ -807,12 +815,19 @@ class FacebookGroupPoster:
             "share_link_copied": bool(copied_link),
         }
 
-    def _extract_post_share_link(self, content: str) -> str | None:
+    def _extract_post_share_link(self, content: str, post_url: str | None = None) -> str | None:
         """Click Share -> Sao chép liên kết for the post just published."""
         from selenium.webdriver.common.by import By
 
         driver = self.driver
-        content_marker = " ".join(content.split())[:80].lower()
+        def normalize_match_text(value: str) -> str:
+            value = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]", "", str(value or ""))
+            value = unicodedata.normalize("NFKD", value)
+            value = "".join(char for char in value if not unicodedata.category(char).startswith("M"))
+            value = re.sub(r"[^\w]+", " ", value, flags=re.UNICODE)
+            return " ".join(value.split()).casefold()
+
+        content_marker = normalize_match_text(content)[:48]
         article_xpath = "//div[@role='feed']//div[@role='article'] | //div[@role='article']"
 
         def find_post_article():
@@ -820,7 +835,7 @@ class FacebookGroupPoster:
                 for article in driver.find_elements(By.XPATH, article_xpath):
                     if not self._is_visible(article):
                         continue
-                    article_text = " ".join((article.text or "").split()).lower()
+                    article_text = normalize_match_text(article.text or "")
                     if content_marker and content_marker in article_text:
                         return article
             except Exception:
@@ -828,27 +843,8 @@ class FacebookGroupPoster:
             return None
 
         try:
-            # Ưu tiên nút Share trong bài có nội dung vừa đăng. Nếu Facebook
-            # không expose role=article hoặc text bài trong DOM, dùng phần tử
-            # data-ad-rendering-role mà giao diện hiện tại cung cấp.
+            # Ưu tiên nút Share trong bài có nội dung vừa đăng.
             article = find_post_article()
-            share_marker_xpath = ".//*[@data-ad-rendering-role='share_button']"
-            share_marker = None
-            if article is not None:
-                share_marker = next(
-                    (node for node in article.find_elements(By.XPATH, share_marker_xpath) if self._is_visible(node)),
-                    None,
-                )
-            if share_marker is None:
-                share_marker_xpath = "//*[@data-ad-rendering-role='share_button']"
-                share_marker = self._wait_until(
-                    lambda: next(
-                        (node for node in driver.find_elements(By.XPATH, share_marker_xpath) if self._is_visible(node)),
-                        None,
-                    ),
-                    12,
-                    "Không tìm thấy phần tử share_button của bài vừa đăng",
-                )
             share_xpath = (
                 ".//*[@role='button' and (normalize-space(.)='Share' or "
                 "normalize-space(.)='Chia sẻ' or "
@@ -858,19 +854,98 @@ class FacebookGroupPoster:
                 "contains(@aria-label,'Gửi') or contains(@aria-label,'Chia sẻ'))]"
             )
             share_button = None
-            if share_marker is not None:
-                share_button = driver.execute_script(
-                    "return arguments[0].closest('[role=button]') || arguments[0];",
-                    share_marker,
-                )
-            if share_button is None:
-                if article is not None:
+            if article is not None:
+                try:
                     share_button = next(
                         (button for button in article.find_elements(By.XPATH, share_xpath) if self._is_visible(button)),
                         None,
                     )
+                except Exception:
+                    share_button = None
+            if share_button is None and content_marker:
+                try:
+                    share_button = self._wait_until(
+                        lambda: driver.execute_script(
+                    """
+                    const stripInvisible = value => String(value || '').replace(/[\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F\\uFEFF]/g, '');
+                    const marker = stripInvisible(arguments[0]);
+                    const postUrl = String(arguments[1] || '');
+                    const accountUid = String(arguments[2] || '');
+                    const normalize = value => stripInvisible(value).normalize('NFKD')
+                      .replace(/\\p{M}/gu, '').replace(/[^\\p{L}\\p{N}_]+/gu, ' ')
+                      .replace(/\\s+/g, ' ').trim().toLowerCase();
+                    const normalizedMarker = normalize(marker);
+                    const accountName = normalize(arguments[3] || '');
+                    const pathOf = value => { try { return new URL(value, location.href).pathname.replace(/\\/+$/, ''); } catch (_) { return ''; } };
+                    const postPath = pathOf(postUrl);
+                    const visible = element => !!(
+                      element.getClientRects().length &&
+                      getComputedStyle(element).display !== 'none' &&
+                      getComputedStyle(element).visibility !== 'hidden'
+                    );
+                    const isPostShareButton = element => {
+                      const label = normalize(element.getAttribute('aria-label'));
+                      const text = normalize(element.innerText || element.textContent);
+                      const accessibleName = `${label} ${text}`;
+                      if (accessibleName.normalize('NFKD').replace(/\\p{M}/gu, '').includes('chia se bai viet')) return true;
+                      return /chia s[ẻ] bài viết|chia sẻ bài viết|share.{0,40}post|post.{0,40}share|send this to friends or post/i.test(accessibleName);
+                    };
+                    const permalinkCandidates = postPath
+                      ? [...document.querySelectorAll('a[href]')].filter(anchor => pathOf(anchor.href) === postPath)
+                      : [];
+                    const contentCandidates = marker
+                      ? [...document.querySelectorAll('div')]
+                      .filter(element => visible(element) && normalize(element.innerText).includes(normalizedMarker))
+                          .sort((left, right) => normalize(left.innerText).length - normalize(right.innerText).length)
+                      : [];
+                    const candidates = [...permalinkCandidates, ...contentCandidates];
+                    for (const candidate of candidates) {
+                      let container = candidate;
+                      for (let depth = 0; container && depth < 12; depth += 1, container = container.parentElement) {
+                        const button = [...container.querySelectorAll('button, [role="button"]')]
+                          .find(control => visible(control) && isPostShareButton(control));
+                        if (button) return button;
+                        if (container.matches('main, body')) break;
+                      }
+                    }
+                    if (accountUid) {
+                      const accountPosts = new Set();
+                      const authorLinks = [...document.querySelectorAll('a[href]')].filter(anchor => {
+                        const href = anchor.href || '';
+                        return href.includes(`/user/${accountUid}/`) || href.includes(`profile.php?id=${accountUid}`);
+                      });
+                      for (const authorLink of authorLinks) {
+                        let container = authorLink;
+                        for (let depth = 0; container && depth < 12; depth += 1, container = container.parentElement) {
+                          const button = [...container.querySelectorAll('button, [role="button"]')]
+                            .find(control => {
+                              const label = normalize(control.getAttribute('aria-label'));
+                              return visible(control) && isPostShareButton(control) &&
+                                (!accountName || label.includes(accountName));
+                            });
+                          if (button) {
+                            accountPosts.add(button);
+                            break;
+                          }
+                          if (container.matches('main, body')) break;
+                        }
+                      }
+                      if (accountPosts.size === 1) return [...accountPosts][0];
+                    }
+                    return null;
+                    """,
+                    content_marker,
+                    post_url or "",
+                    str(self.account.get("uid") or ""),
+                    str(self.account.get("profile_name") or ""),
+                        ),
+                        8,
+                        "Không tìm thấy nút chia sẻ gắn với bài vừa đăng",
+                    )
+                except RuntimeError:
+                    share_button = None
             if share_button is None:
-                self.log("WARNING", f"[{self.account['uid']}] Không tìm thấy nút Share của bài vừa đăng")
+                self.log("WARNING", f"[{self.account['uid']}] Không tìm thấy nút Chia sẻ trong bài vừa đăng (đã đối chiếu nội dung bài)")
                 return None
 
             # Capture the link passed to the browser clipboard when Facebook
@@ -1435,19 +1510,64 @@ class FacebookGroupPoster:
         if any(message in page_text for message in blocked):
             raise RuntimeError("Facebook đang giới hạn thao tác bình luận của tài khoản")
 
-        copied_link = self._extract_comment_share_link(resolve_article() or article, content)
+        current_article = resolve_article() or article
+        if self._comment_is_pending(current_article, content):
+            return {
+                "status": "PENDING_APPROVAL",
+                "message": "Bình luận đang chờ quản trị viên duyệt; chưa có link trực tiếp",
+                "result_url": None,
+            }
+        comment_link = self._extract_comment_share_link(current_article, content)
+        if not comment_link and self._comment_is_pending(resolve_article() or article, content):
+            return {
+                "status": "PENDING_APPROVAL",
+                "message": "Bình luận đang chờ quản trị viên duyệt; chưa có link trực tiếp",
+                "result_url": None,
+            }
+        if not comment_link:
+            self.log("WARNING", f"[{self.account['uid']}] Đã gửi bình luận nhưng chưa lấy được link trực tiếp")
         return {
             "status": "SUCCESS",
             "message": "Bình luận bài viết đầu tiên thành công",
-            "result_url": copied_link or str(permalink),
+            "result_url": comment_link or str(permalink),
+            "comment_link_captured": bool(comment_link),
         }
 
+    def _comment_is_pending(self, root_article, content: str) -> bool:
+        """Recognize a submitted comment awaiting group moderation."""
+        try:
+            return bool(self.driver.execute_script(
+                """
+                const root = arguments[0] || document;
+                const expected = String(arguments[1] || '').replace(/\\s+/g, ' ').trim();
+                if (!expected) return false;
+                const pending = /\\bPending\\b|đang chờ|chờ phê duyệt|awaiting approval/i;
+                for (const node of root.querySelectorAll('div, span, p')) {
+                  if (!node.getClientRects().length) continue;
+                  if (String(node.innerText || '').replace(/\\s+/g, ' ').trim() !== expected) continue;
+                  let parent = node.parentElement;
+                  for (let depth = 0; parent && depth < 7; depth++, parent = parent.parentElement) {
+                    const text = String(parent.innerText || '').replace(/\\s+/g, ' ').trim();
+                    if (text.length > 350) break;
+                    if (pending.test(text)) return true;
+                  }
+                }
+                return false;
+                """,
+                root_article,
+                content,
+            ))
+        except Exception:
+            return False
+
     def _extract_comment_share_link(self, root_article, content: str) -> str | None:
-        """Click Share -> Copy link on the newly posted comment and capture the copied URL."""
+        """Get the new comment's link through Share, with its timestamp as fallback."""
         from selenium.webdriver.common.by import By
+        from urllib.parse import parse_qs, urlsplit
 
         driver = self.driver
-        content_marker = " ".join(content.split())[:60].lower()
+        content_marker = " ".join(content.split()).casefold()
+        account_uid = str(self.account.get("uid") or "")
         share_xpath = (
             ".//*[@role='button' and ("
             "normalize-space(.)='Share' or normalize-space(.)='Chia sẻ' or "
@@ -1456,43 +1576,75 @@ class FacebookGroupPoster:
         copy_link_xpath = (
             "//*[@role='menuitem' or @role='button']["
             "normalize-space(.)='Copy link' or normalize-space(.)='Sao chép liên kết' or "
-            ".//*[normalize-space(.)='Copy link' or normalize-space(.)='Sao chép liên kết']]"
+            "normalize-space(.)='Chia sẻ liên kết' or "
+            ".//*[normalize-space(.)='Copy link' or normalize-space(.)='Sao chép liên kết' or "
+            "normalize-space(.)='Chia sẻ liên kết']]"
         )
 
-        def find_comment_share_button():
+        def comment_url(value):
+            """Keep only a Facebook comment URL, without tracking parameters."""
             try:
-                comment_nodes = root_article.find_elements(By.XPATH, ".//div[@role='article']")
+                parsed = urlsplit(str(value or "").strip())
+                comment_id = parse_qs(parsed.query).get("comment_id", [""])[0]
+                if (parsed.hostname or "").lower() not in {"facebook.com", "www.facebook.com", "web.facebook.com"}:
+                    return None
+                if not comment_id.isdigit() or not re.search(r"/groups/[^/]+/(posts|permalink)/[^/]+", parsed.path):
+                    return None
+                return f"https://www.facebook.com{parsed.path}?comment_id={comment_id}"
             except Exception:
-                comment_nodes = []
-            # Duyệt ngược để ưu tiên bình luận mới nhất nằm ở cuối danh sách
-            for node in reversed(comment_nodes):
+                return None
+
+        def find_comment():
+            for scope in (root_article, driver):
                 try:
-                    if not self._is_displayed(node):
-                        continue
-                    node_text = " ".join((node.text or "").split()).lower()
-                    if content_marker and content_marker not in node_text:
-                        continue
-                    buttons = node.find_elements(By.XPATH, share_xpath)
-                    for btn in buttons:
-                        if self._is_displayed(btn):
-                            return btn
+                    comment_nodes = scope.find_elements(By.XPATH, ".//div[@role='article']")
                 except Exception:
                     continue
+                # Prefer comments inside the target post before searching the page.
+                for node in reversed(comment_nodes):
+                    try:
+                        if not self._is_displayed(node):
+                            continue
+                        node_text = " ".join((node.text or "").split()).casefold()
+                        if content_marker and content_marker not in node_text:
+                            continue
+                        author_links = node.find_elements(By.XPATH, ".//a[@href]")
+                        if account_uid and author_links and not any(
+                            f"/user/{account_uid}/" in str(link.get_attribute("href") or "")
+                            or f"profile.php?id={account_uid}" in str(link.get_attribute("href") or "")
+                            for link in author_links
+                        ):
+                            continue
+                        permalink = next(
+                            (url for link in author_links if (url := comment_url(link.get_attribute("href")))),
+                            None,
+                        )
+                        share_button = next(
+                            (button for button in node.find_elements(By.XPATH, share_xpath) if self._is_displayed(button)),
+                            None,
+                        )
+                        if share_button or permalink:
+                            return share_button, permalink
+                    except Exception:
+                        continue
             return None
 
         try:
-            share_btn = None
-            deadline = time.monotonic() + 4.0
+            found = None
+            deadline = time.monotonic() + 6.0
             while time.monotonic() < deadline:
                 self._raise_if_cancelled()
-                share_btn = find_comment_share_button()
-                if share_btn is not None:
+                found = find_comment()
+                if found is not None:
                     break
                 if self.cancel.wait(0.35):
                     self._raise_if_cancelled()
 
-            if share_btn is None:
+            if found is None:
                 return None
+            share_btn, timestamp_url = found
+            if share_btn is None:
+                return timestamp_url
 
             # Cài hook JS bắt dữ liệu clipboard ngay trước khi ấn Copy link (an toàn đa luồng)
             driver.execute_script(
@@ -1538,7 +1690,7 @@ class FacebookGroupPoster:
                     self._raise_if_cancelled()
 
             if copy_btn is None:
-                return None
+                return timestamp_url
 
             driver.execute_script("arguments[0].click();", copy_btn)
 
@@ -1546,15 +1698,16 @@ class FacebookGroupPoster:
             while time.monotonic() < copy_deadline:
                 self._raise_if_cancelled()
                 copied = driver.execute_script("return window.__fbCopiedCommentLink;")
-                if isinstance(copied, str) and copied.strip().startswith(("http://", "https://")):
-                    return copied.strip()
+                copied_url = comment_url(copied)
+                if copied_url and (not timestamp_url or copied_url == timestamp_url):
+                    return copied_url
                 if self.cancel.wait(0.15):
                     self._raise_if_cancelled()
         except InterruptedError:
             raise
         except Exception:
-            return None
-        return None
+            return locals().get("timestamp_url")
+        return timestamp_url
 
 
 class CampaignManager:
@@ -1759,16 +1912,16 @@ class CampaignManager:
                 job.log("WARNING", "Chiến dịch đã dừng theo yêu cầu")
             elif (job.failed or job.skipped) and job.success:
                 job.status = "PARTIAL"
-                job.message = f"Hoàn tất một phần: {job.success} lượt {action_label} thành công, {job.failed} thất bại"
-                job.log("SUCCESS", f"Chiến dịch đã hoàn thành! {job.success}/{job.total} lượt {action_label} thành công (Thất bại: {job.failed})")
+                job.message = f"Hoàn tất một phần: {job.success} thành công, {job.pending_actions} chờ duyệt, {job.failed} thất bại"
+                job.log("WARNING", job.message)
             elif job.failed:
                 job.status = "FAILED"
                 job.message = f"Chiến dịch thất bại ({job.failed}/{job.total} lượt)"
                 job.log("ERROR", f"Chiến dịch kết thúc: {job.message}")
             elif job.skipped:
                 job.status = "PARTIAL"
-                job.message = f"Đã xử lý: {job.success} lượt {action_label} thành công, {job.skipped} nhóm bỏ qua"
-                job.log("SUCCESS", f"Chiến dịch đã hoàn thành! {job.success}/{job.total} lượt {action_label} thành công ({job.skipped} nhóm bỏ qua)")
+                job.message = f"Đã xử lý: {job.pending_actions} lượt chờ duyệt, {job.skipped - job.pending_actions} lượt bỏ qua"
+                job.log("WARNING", job.message)
             else:
                 job.status = "COMPLETED"
                 job.message = f"Đã {action_label} thành công {job.success}/{job.total} lượt"
@@ -1982,7 +2135,10 @@ class CampaignManager:
             "content": result.get("content"),
             "error_code": result.get("error_code"),
             "error_detail": result.get("error_detail"),
-            "result_url": result.get("result_url") or result.get("group_url") or _group_url(group),
+            "result_url": (
+                result.get("result_url") if status == "PENDING_APPROVAL"
+                else result.get("result_url") or result.get("group_url") or _group_url(group)
+            ),
             "finished_at": datetime.now().isoformat(timespec="seconds"),
         }
         with job.lock:
@@ -1990,8 +2146,10 @@ class CampaignManager:
             job.completed += 1
             if item["status"] == "SUCCESS":
                 job.success += 1
-            elif item["status"] == "SKIPPED":
+            elif item["status"] in {"SKIPPED", "PENDING_APPROVAL"}:
                 job.skipped += 1
+                if item["status"] == "PENDING_APPROVAL":
+                    job.pending_actions += 1
             else:
                 job.failed += 1
         persisted = self.persistence.record_task(job.id, item)
@@ -2006,6 +2164,11 @@ class CampaignManager:
                 job.log("WARNING", f"[{uid}] Đã lấy link bài đăng nhưng database chưa lưu được: {target_url}")
             else:
                 job.log("SUCCESS", f"[{uid}] Đã lưu link bài đăng vào database: {target_url}")
+        if result.get("comment_link_captured"):
+            if persisted is False:
+                job.log("WARNING", f"[{uid}] Đã lấy link bình luận nhưng database chưa lưu được: {target_url}")
+            else:
+                job.log("SUCCESS", f"[{uid}] Đã lưu link bình luận vào database: {target_url}")
 
     def _persist_final_results(self, job: CampaignJob) -> None:
         """Finalize the PostgreSQL run summary and ensure campaign media is stored in Supabase Storage."""

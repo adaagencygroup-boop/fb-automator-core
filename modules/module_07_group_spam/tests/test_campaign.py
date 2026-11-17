@@ -196,6 +196,54 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual(saved["message"], "Bình luận bài viết đầu tiên thành công")
         self.assertTrue(saved["result_url"].endswith("/posts/first"))
 
+    def test_comment_link_is_saved_in_campaign_history(self):
+        comment_url = "https://www.facebook.com/groups/159341141325119/posts/2144468799479000/?comment_id=2145171706075376"
+
+        class LinkedCommentPoster(FakePoster):
+            def comment(self, group, content, media, *, auto_like=False):
+                return {
+                    "status": "SUCCESS",
+                    "message": "Bình luận bài viết đầu tiên thành công",
+                    "result_url": comment_url,
+                    "comment_link_captured": True,
+                }
+
+        manager = CampaignManager(poster_factory=LinkedCommentPoster, persistence=self.persistence)
+        payload = self.payload()
+        payload["action_type"] = "COMMENT"
+        payload["account_uids"] = ["100"]
+        payload["groups"] = [{"key": "g1", "url": "https://facebook.com/groups/g1"}]
+        payload["settings"]["max_posts"] = 1
+        with patch.object(manager, "_load_accounts", return_value=self.accounts):
+            started = manager.start(payload, "owner-1")
+            wait_for_job(manager, started["job_id"])
+
+        self.assertEqual(self.persistence.tasks[0][1]["result_url"], comment_url)
+
+    def test_pending_comment_is_not_counted_as_success_or_given_a_link(self):
+        class PendingCommentPoster(FakePoster):
+            def comment(self, group, content, media, *, auto_like=False):
+                return {
+                    "status": "PENDING_APPROVAL",
+                    "message": "Bình luận đang chờ quản trị viên duyệt; chưa có link trực tiếp",
+                    "result_url": None,
+                }
+
+        manager = CampaignManager(poster_factory=PendingCommentPoster, persistence=self.persistence)
+        payload = self.payload()
+        payload["action_type"] = "COMMENT"
+        payload["account_uids"] = ["100"]
+        payload["groups"] = [{"key": "g1", "url": "https://facebook.com/groups/g1"}]
+        payload["settings"]["max_posts"] = 1
+        with patch.object(manager, "_load_accounts", return_value=self.accounts):
+            started = manager.start(payload, "owner-1")
+            result = wait_for_job(manager, started["job_id"])
+
+        saved = self.persistence.tasks[0][1]
+        self.assertEqual((result["status"], result["success"], result["pending_actions"]), ("PARTIAL", 0, 1))
+        self.assertEqual(saved["status"], "PENDING_APPROVAL")
+        self.assertIsNone(saved["result_url"])
+
     def test_scheduled_campaign_can_be_stopped_before_browser_starts(self):
         payload = self.payload()
         payload["settings"]["schedule_at"] = "2999-01-01T08:00"
@@ -607,6 +655,56 @@ class CampaignTests(unittest.TestCase):
         self.assertTrue(share_btn.clicked)
         self.assertTrue(copy_btn.clicked)
         self.assertEqual(copied_link, expected_url)
+
+    def test_extract_comment_link_uses_timestamp_when_share_menu_is_absent(self):
+        expected = "https://www.facebook.com/groups/159341141325119/posts/2144468799479000/?comment_id=2145171706075376"
+
+        class Link:
+            def __init__(self, href):
+                self.href = href
+
+            def get_attribute(self, name):
+                return self.href if name == "href" else None
+
+        class Button:
+            def __init__(self):
+                self.clicked = False
+
+            def is_displayed(self):
+                return True
+
+        share = Button()
+
+        class Comment:
+            text = "Anh Nguyen\nhay quá\nChia sẻ"
+
+            def is_displayed(self):
+                return True
+
+            def find_elements(self, _by, xpath):
+                if "a[@href]" in xpath:
+                    return [
+                        Link("https://web.facebook.com/groups/159341141325119/user/100049941467173/"),
+                        Link(expected + "&__tn__=R-R"),
+                    ]
+                if "Share" in xpath:
+                    return [share]
+                return []
+
+        class Driver:
+            def find_elements(self, _by, xpath):
+                return [Comment()] if "role='article'" in xpath else []
+
+            def execute_script(self, script, *args):
+                if "arguments[0].click()" in script:
+                    args[0].clicked = True
+                return None
+
+        poster = FacebookGroupPoster({"uid": "100049941467173"}, threading.Event(), lambda *_: None)
+        poster.driver = Driver()
+        actual = poster._extract_comment_share_link(Driver(), "hay quá")
+        self.assertTrue(share.clicked)
+        self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":
