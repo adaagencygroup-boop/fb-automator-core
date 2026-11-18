@@ -9,6 +9,8 @@ if not DATABASE_URL or DATABASE_URL.startswith("sqlite"):
     raise RuntimeError("Module chat chỉ dùng PostgreSQL production. Không dùng SQLite local.")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = "postgresql+psycopg2://" + DATABASE_URL[len("postgresql://"):]
 
 connect_args = {}
 
