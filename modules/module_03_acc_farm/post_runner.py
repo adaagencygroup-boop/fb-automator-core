@@ -188,8 +188,63 @@ class PostRunner:
             "deadAccount": 0,
             "stopped": 0,
         }
+        # Đồng hồ tiến trình: không đếm thời gian khi đang tạm dừng (giống Farm ProgressMonitor)
+        self._paused_at: Optional[float] = None
+        self._paused_seconds: float = 0.0
         self._logs: List[Dict[str, Any]] = []
         self._log_listeners: List[Callable[[Dict[str, Any]], None]] = []
+
+    def _pause_clock_reset(self) -> None:
+        self._paused_at = None
+        self._paused_seconds = 0.0
+
+    def _pause_clock_seconds(self) -> float:
+        """Tổng giây đã tạm dừng (kể cả đang pause dở)."""
+        total = float(self._paused_seconds or 0.0)
+        if self._paused_at is not None:
+            total += max(0.0, time.time() - self._paused_at)
+        return total
+
+    _WAITING_CLOCK = ("Chờ thực thi", "Đang chờ")
+    _TERMINAL_CLOCK = ("Hoàn thành", "Lỗi hệ thống", "Acc chết", "Đã dừng")
+
+    @staticmethod
+    def _format_elapsed(start_t: float, end_t: float, pause_secs: float) -> str:
+        elapsed = int(max(0.0, end_t - start_t - pause_secs))
+        mins, secs = divmod(elapsed, 60)
+        return f"{mins}:{str(secs).zfill(2)}"
+
+    def _row_elapsed_label(self, row: Dict[str, Any], pause_secs: float) -> str:
+        """Chờ = 0:00. Đang chạy = từ lúc nhận bài. Xong/lỗi = đứng tại thời điểm kết thúc."""
+        frozen = row.get("elapsedFrozen")
+        if frozen:
+            return str(frozen)
+        status = row.get("status")
+        start_t = row.get("startTime")
+        if status in self._WAITING_CLOCK or not start_t:
+            return "0:00"
+        if status in self._TERMINAL_CLOCK:
+            self._freeze_row_clock(row, pause_secs)
+            return str(row.get("elapsedFrozen") or "0:00")
+        return self._format_elapsed(float(start_t), time.time(), pause_secs)
+
+    def _freeze_row_clock(self, row: Optional[Dict[str, Any]], pause_secs: Optional[float] = None) -> None:
+        if not row or row.get("elapsedFrozen"):
+            return
+        status = row.get("status")
+        start_t = row.get("startTime")
+        if status in self._WAITING_CLOCK or not start_t:
+            row["elapsedFrozen"] = "0:00"
+            return
+        if status not in self._TERMINAL_CLOCK:
+            return
+        end_t = time.time()
+        row["endTime"] = end_t
+        row["elapsedFrozen"] = self._format_elapsed(
+            float(start_t),
+            end_t,
+            self._pause_clock_seconds() if pause_secs is None else pause_secs,
+        )
 
     @staticmethod
     def _content_preview_from_post(post: Dict[str, Any], post_type: str = "status") -> str:
@@ -298,7 +353,6 @@ class PostRunner:
             return
         if not posts:
             return
-        now = time.time()
         # Merge: giữ activity in-memory nếu đã có, bổ sung bài thiếu từ DB
         for post in posts:
             pid = str(post.get("id") or "")
@@ -312,6 +366,7 @@ class PostRunner:
                 # Đồng bộ status từ DB nếu bài đã kết thúc
                 if ui_status in ("Hoàn thành", "Lỗi hệ thống", "Acc chết", "Đã dừng"):
                     existing["status"] = ui_status
+                    self._freeze_row_clock(existing)
                     if post.get("error_message"):
                         existing["currentActivity"] = post.get("error_message")
                     elif ui_status == "Hoàn thành" and not (existing.get("currentActivity") or "").startswith("XUẤT BẢN"):
@@ -359,7 +414,6 @@ class PostRunner:
                     if ui_status == "Hoàn thành"
                     else "Đang chờ trong hàng đợi..."
                 ),
-                "startTime": now,
                 "isPermalink": is_perm,
                 **detail,
             }
@@ -376,7 +430,6 @@ class PostRunner:
         posts = post_repository.list_session_posts(session_id)
         self._progress_posts.clear()
         self._progress_order.clear()
-        now = time.time()
         for post in posts:
             pid = str(post.get("id") or "")
             if not pid:
@@ -394,7 +447,6 @@ class PostRunner:
                 "contentPreview": content_override
                 or self._content_preview_from_post(post, self._post_type or "status"),
                 "currentActivity": initial_activity,
-                "startTime": now,
                 **detail,
             }
 
@@ -406,6 +458,7 @@ class PostRunner:
         if not row:
             return
         row.update(fields)
+        self._freeze_row_clock(row)
 
     def _set_checkpoint(
         self,
@@ -440,6 +493,8 @@ class PostRunner:
                 row["status"] = "Đã dừng"
                 row["currentActivity"] = activity
                 row["threadId"] = row.get("threadId") or "—"
+                row.pop("startTime", None)
+                row["elapsedFrozen"] = "0:00"
 
     def get_account_credentials(self, uid: str) -> Dict[str, str]:
         """Lấy mật khẩu, 2FA, cookie từ cache hoặc từ Module 02 qua adapters."""
@@ -545,13 +600,11 @@ class PostRunner:
                 ]
             else:
                 source_rows = []
+            pause_secs = self._pause_clock_seconds()
             for t_info in source_rows:
-                start_t = t_info.get("startTime", time.time())
-                elapsed = int(time.time() - start_t)
-                mins, secs = divmod(elapsed, 60)
                 threads_list.append({
                     **t_info,
-                    "elapsedTime": f"{mins}:{str(secs).zfill(2)}"
+                    "elapsedTime": self._row_elapsed_label(t_info, pause_secs),
                 })
             all_done = (self._finished_thread_count >= self._total_thread_count) if self._total_thread_count > 0 else False
             is_finished = all_done or (
@@ -609,6 +662,7 @@ class PostRunner:
                 "deadAccount": 0,
                 "stopped": 0,
             }
+            self._pause_clock_reset()
             self._logs.clear()
 
         self.log("System", "info", f"Khởi chạy phiên đăng {post_type.upper()} ({session_id}) với {len(accounts)} tài khoản.")
@@ -710,6 +764,7 @@ class PostRunner:
                     "deadAccount": 0,
                     "stopped": 0,
                 }
+            self._pause_clock_reset()
             self._logs.clear()
 
             # Cache thông tin credentials từ danh sách accounts nếu có
@@ -832,6 +887,9 @@ class PostRunner:
         """Tạm dừng phiên chạy."""
         self._pause_event.clear()
         with self._lock:
+            # Bắt đầu cộng dồn thời gian tạm dừng → cột THỜI GIAN đứng yên
+            if self._paused_at is None:
+                self._paused_at = time.time()
             self._metrics["paused"] = self._metrics["running"]
             self._metrics["running"] = 0
             for t_info in self._active_threads.values():
@@ -850,6 +908,9 @@ class PostRunner:
         """Tiếp tục phiên chạy sau khi tạm dừng."""
         self._pause_event.set()
         with self._lock:
+            if self._paused_at is not None:
+                self._paused_seconds += max(0.0, time.time() - self._paused_at)
+                self._paused_at = None
             self._metrics["running"] = self._metrics["paused"]
             self._metrics["paused"] = 0
             for t_info in self._active_threads.values():
@@ -874,6 +935,10 @@ class PostRunner:
             post_repository.stop_all_session_posts(self._active_session_id)
 
         with self._lock:
+            # Chốt đồng hồ pause nếu đang tạm dừng
+            if self._paused_at is not None:
+                self._paused_seconds += max(0.0, time.time() - self._paused_at)
+                self._paused_at = None
             self._metrics["stopped"] += self._metrics["running"] + self._metrics["waiting"]
             self._metrics["running"] = 0
             self._metrics["waiting"] = 0
@@ -888,8 +953,11 @@ class PostRunner:
                     "Chờ thực thi",
                     "Đang chờ",
                 ):
+                    if p_info.get("status") in ("Chờ thực thi", "Đang chờ") or not p_info.get("startTime"):
+                        p_info["elapsedFrozen"] = "0:00"
                     p_info["status"] = "Đã dừng"
                     p_info["currentActivity"] = "Đã dừng theo yêu cầu"
+                    self._freeze_row_clock(p_info)
 
         self.log("System", "warn", "Đã nhận lệnh DỪNG KHẨN CẤP: Đang đóng toàn bộ Chrome profiles...")
 
@@ -937,6 +1005,7 @@ class PostRunner:
                 "deadAccount": 0,
                 "stopped": 0,
             }
+            self._pause_clock_reset()
             self._logs.clear()
 
     def _check_all_threads_finished(self, session_id: str):
@@ -1357,8 +1426,11 @@ class PostRunner:
                             on_checkpoint=on_checkpoint,
                         )
                         res_url, is_permalink = self._coerce_publish_url(res_url)
-                        if res_url:
+                        if res_url and _post_flow_mod._reel_id_from_url(res_url):
                             is_permalink = True
+                        else:
+                            res_url = None
+                            is_permalink = False
                     elif post_type == "story":
                         res_url = _post_flow_mod.publish_story_post(
                             driver,
@@ -1375,11 +1447,8 @@ class PostRunner:
                     else:
                         res_url = None
 
-                    if not res_url and uid:
-                        if post_type == "reels":
-                            res_url = f"https://www.facebook.com/{uid}/reels"
-                            is_permalink = False
-                        elif post_type == "story":
+                    if not res_url and uid and post_type != "reels":
+                        if post_type == "story":
                             res_url = f"https://www.facebook.com/stories/{uid}"
                             is_permalink = False
                         else:
@@ -1394,6 +1463,9 @@ class PostRunner:
                     if post_type == "status" and res_url and not is_permalink:
                         success_msg = "XUẤT BẢN THÀNH CÔNG STATUS! (chưa lấy được permalink)"
                         log_link_msg = f"Chưa lấy được permalink — link trang cá nhân: {res_url}"
+                    elif post_type == "reels" and not res_url:
+                        success_msg = "XUẤT BẢN THÀNH CÔNG REELS!"
+                        log_link_msg = "Chưa lấy được link /reel/{id} — không gắn nút Xem reels."
                     else:
                         success_msg = f"XUẤT BẢN THÀNH CÔNG {post_type.upper()}!"
                         log_link_msg = f"Link bài: {res_url or 'N/A'}"
@@ -1405,9 +1477,16 @@ class PostRunner:
                             "message": f"{success_msg} {log_link_msg}",
                         }
                     )
-                    post_repository.finish_post(
-                        post["id"], uid, "PUBLISHED", url=res_url, logs=post_logs
-                    )
+                    try:
+                        post_repository.finish_post(
+                            post["id"], uid, "PUBLISHED", url=res_url, logs=post_logs
+                        )
+                    except Exception as db_err:
+                        self.log(
+                            thread_name,
+                            "error",
+                            f"Không ghi được trạng thái bài ID {post['id']} vào DB: {db_err}",
+                        )
                     try:
                         from modules.module_02_account_manager.database.connection import SessionLocal
                         from modules.module_02_account_manager.database.repository import (
@@ -1516,9 +1595,21 @@ class PostRunner:
                             "message": f"[{status}] {err_msg}",
                         }
                     )
-                    post_repository.finish_post(
-                        post["id"], uid, status, message=err_msg, logs=post_logs
+                    self.log(
+                        thread_name,
+                        "warn" if status == "STOPPED" else "error",
+                        f"[{status}] {err_msg}",
                     )
+                    try:
+                        post_repository.finish_post(
+                            post["id"], uid, status, message=err_msg, logs=post_logs
+                        )
+                    except Exception as db_err:
+                        self.log(
+                            thread_name,
+                            "error",
+                            f"Không ghi được trạng thái bài ID {post['id']} vào DB: {db_err}",
+                        )
                     if status == "DIE":
                         try:
                             from modules.module_02_account_manager.database.connection import (

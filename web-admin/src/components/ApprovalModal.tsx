@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { User, api } from "@/lib/api";
+import { ACCOUNT_FEATURE, withAccountLicense, featureChanges } from "@/lib/account-license";
 import { X, User as UserIcon, Contact, Cpu, Calendar, Copy, CheckCircle2, RotateCw } from "lucide-react";
 import "./ApprovalModal.css";
 
@@ -45,6 +46,34 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
   const isExtend = user?.status !== "pending" && (mode === "extend" || (user && (user.status === "approved" || user.status === "expired")));
   const isRejected = user?.status === "rejected";
 
+  const toNum = (v: number | string) => {
+    const n = typeof v === "number" ? v : parseInt(v, 10);
+    return isNaN(n) ? 0 : n;
+  };
+
+  // Quy đổi về số ngày tuyệt đối để tính trước hạn tự động cho module Quản lý tài khoản Facebook
+  const absoluteDrafts = modules.map((m) => {
+    const val = toNum(m.days);
+    if (!isExtend) {
+      return { ...m, days: Math.max(0, val) };
+    }
+    const saved = user?.features?.find((f) => f.key === m.key);
+    const savedRem = saved?.days_remaining ?? 0;
+    return {
+      ...m,
+      days: m.enabled ? Math.max(0, savedRem + val) : 0,
+    };
+  });
+  const previewedWithAccount = withAccountLicense(absoluteDrafts, user);
+  const accountPreviewDays =
+    previewedWithAccount.find((m) => m.key === ACCOUNT_FEATURE)?.days ?? 30;
+
+  const displayModules: ModuleOption[] = modules.map((m) =>
+    m.key === ACCOUNT_FEATURE
+      ? { ...m, enabled: true, days: accountPreviewDays }
+      : m
+  );
+
   useEffect(() => {
     if (user) {
       setError("");
@@ -52,12 +81,12 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
 
       if (isExtend) {
         setBulkDaysInput("0");
-        // Chế độ Gia hạn: Mặc định mỗi module được tích chọn là 0 ngày thêm (giữ nguyên hạn)
+        // Chế độ Gia hạn: Mặc định mỗi module đang kích hoạt là 0 ngày thêm (giữ nguyên hạn)
         if (user.features && Array.isArray(user.features) && user.features.length > 0) {
           setModules(
             DEFAULT_MODULES.map((m) => {
               const found = user.features?.find((f) => f.key === m.key);
-              const isEn = Boolean(found && found.is_enabled);
+              const isEn = m.key === ACCOUNT_FEATURE ? true : Boolean(found && found.is_enabled);
               return {
                 ...m,
                 enabled: isEn,
@@ -69,7 +98,7 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
           setModules(
             DEFAULT_MODULES.map((m) => ({
               ...m,
-              enabled: true,
+              enabled: m.key === ACCOUNT_FEATURE,
               days: 0,
             }))
           );
@@ -86,24 +115,24 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
               if (found) {
                 return {
                   ...m,
-                  enabled: found.is_enabled,
-                  days: found.days_remaining > 0 ? found.days_remaining : found.days_granted || 30,
+                  enabled: m.key === ACCOUNT_FEATURE ? true : found.is_enabled,
+                  days: found.days_remaining,
                 };
               }
               return {
                 ...m,
-                enabled: true,
-                days: userDays,
+                enabled: m.key === ACCOUNT_FEATURE,
+                days: m.key === ACCOUNT_FEATURE ? userDays : 0,
               };
             })
           );
         } else {
-          // Default: All 11 modules selected with user days
+          // Paid modules require an explicit subscription.
           setModules(
             DEFAULT_MODULES.map((m) => ({
               ...m,
-              enabled: true,
-              days: userDays,
+              enabled: m.key === ACCOUNT_FEATURE,
+              days: m.key === ACCOUNT_FEATURE ? userDays : 0,
             }))
           );
         }
@@ -118,9 +147,9 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
     const fallbackDays = !isNaN(parsedBulk) ? (isExtend ? parsedBulk : Math.max(1, parsedBulk)) : (isExtend ? 0 : 30);
     setModules((prev) =>
       prev.map((m) => {
-        if (m.id === id) {
+        if (m.id === id && m.key !== ACCOUNT_FEATURE) {
           const nextEnabled = !m.enabled;
-          const currentDaysNum = typeof m.days === "number" ? m.days : parseInt(m.days, 10) || 0;
+          const currentDaysNum = toNum(m.days);
           return {
             ...m,
             enabled: nextEnabled,
@@ -136,14 +165,14 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
     // Cho phép nhập dấu trừ '-' hoặc rỗng khi đang gõ
     if (val === "" || val === "-") {
       setModules((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, days: val } : m))
+        prev.map((m) => (m.id === id && m.key !== ACCOUNT_FEATURE ? { ...m, days: val } : m))
       );
       return;
     }
     const num = parseInt(val, 10);
     setModules((prev) =>
       prev.map((m) => {
-        if (m.id === id) {
+        if (m.id === id && m.key !== ACCOUNT_FEATURE) {
           return {
             ...m,
             days: isNaN(num) ? 0 : isExtend ? num : Math.max(0, num),
@@ -158,7 +187,9 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
     const parsed = parseInt(bulkDaysInput, 10);
     const targetDays = !isNaN(parsed) ? (isExtend ? parsed : Math.max(1, parsed)) : (isExtend ? 0 : 30);
     setModules((prev) =>
-      prev.map((m) => (m.enabled ? { ...m, days: targetDays } : m))
+      prev.map((m) =>
+        m.key === ACCOUNT_FEATURE ? m : m.enabled ? { ...m, days: targetDays } : m
+      )
     );
   };
 
@@ -166,28 +197,28 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
     const parsed = parseInt(bulkDaysInput, 10);
     const targetDays = !isNaN(parsed) ? (isExtend ? parsed : Math.max(1, parsed)) : (isExtend ? 0 : 30);
     setModules((prev) =>
-      prev.map((m) => ({
-        ...m,
-        enabled: true,
-        days: targetDays,
-      }))
+      prev.map((m) =>
+        m.key === ACCOUNT_FEATURE
+          ? { ...m, enabled: true }
+          : { ...m, enabled: true, days: targetDays }
+      )
     );
   };
 
   const handleDeselectAll = () => {
     setModules((prev) =>
-      prev.map((m) => ({
-        ...m,
-        enabled: false,
-        days: 0,
-      }))
+      prev.map((m) =>
+        m.key === ACCOUNT_FEATURE
+          ? { ...m, enabled: true }
+          : { ...m, enabled: false, days: 0 }
+      )
     );
   };
 
   const handleConfirm = async () => {
-    const activeModules = modules.filter((m) => {
+    const activeModules = displayModules.filter((m) => {
       if (!m.enabled) return false;
-      const d = typeof m.days === "number" ? m.days : parseInt(m.days, 10) || 0;
+      const d = toNum(m.days);
       return isExtend ? true : d > 0;
     });
     if (activeModules.length === 0) {
@@ -199,20 +230,31 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
       return;
     }
     const maxDays = Math.max(
-      ...activeModules.map((m) =>
-        typeof m.days === "number" ? m.days : parseInt(m.days, 10) || 0
-      )
+      ...previewedWithAccount
+        .filter((m) => m.enabled)
+        .map((m) => m.days),
+      0
     );
 
     setLoadingApprove(true);
     setError("");
     try {
       let successMsg = "";
-      const featurePayload = modules.map((m) => ({
-        key: m.key,
-        days: typeof m.days === "number" ? m.days : parseInt(m.days, 10) || 0,
-        enabled: m.enabled,
-      }));
+      const featurePayload = isExtend
+        ? modules
+            .filter((m) => {
+              if (m.key === ACCOUNT_FEATURE) return false;
+              const saved = user.features?.find((f) => f.key === m.key);
+              const wasEnabled = Boolean(saved?.is_enabled);
+              const delta = toNum(m.days);
+              return m.enabled !== wasEnabled || (m.enabled && delta !== 0);
+            })
+            .map((m) => ({
+              key: m.key,
+              days: m.enabled ? toNum(m.days) : 0,
+              enabled: m.enabled,
+            }))
+        : featureChanges(previewedWithAccount, user);
 
       if (isExtend) {
         if (user.status === "pending") {
@@ -221,7 +263,7 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
           return;
         }
         await api.extendUser(user.id, maxDays, featurePayload);
-        successMsg = `Cập nhật thời hạn thành công (${maxDays >= 0 ? "+" : ""}${maxDays} ngày) cho tài khoản ${user.username}!`;
+        successMsg = `Đã cập nhật thời hạn các module cho tài khoản ${user.username}!`;
       } else {
         await api.approveUser(user.id, maxDays, featurePayload);
         successMsg = isRejected
@@ -305,7 +347,7 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
       ? "Expired"
       : user.status;
 
-  const activeCount = modules.filter((m) => m.enabled).length;
+  const activeCount = displayModules.filter((m) => m.enabled).length;
 
   return (
     <div className="apm-backdrop">
@@ -524,8 +566,9 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
                   </div>
                 </div>
 
+                <p className="text-xs text-slate-500 mb-3">Quản lý tài khoản Facebook tự động có 30 ngày miễn phí hoặc hạn module dài nhất cộng thêm 30 ngày.</p>
                 <div className="apm-modules-list">
-                  {modules.map((m) => (
+                  {displayModules.map((m) => (
                     <div
                       key={m.id}
                       className={`apm-module-item ${
@@ -539,6 +582,7 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
                         <input
                           type="checkbox"
                           checked={m.enabled}
+                          disabled={m.key === ACCOUNT_FEATURE}
                           onChange={() => {}}
                           className="apm-module-checkbox"
                         />
@@ -548,8 +592,10 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
                       <div className="apm-module-item-right">
                         <input
                           type="number"
-                          min={isExtend ? -3650 : 0}
-                          disabled={!m.enabled}
+                          min={isExtend && m.key !== ACCOUNT_FEATURE ? -3650 : 0}
+                          disabled={!m.enabled || m.key === ACCOUNT_FEATURE}
+                          aria-label={`Số ngày ${m.name}`}
+                          title={m.key === ACCOUNT_FEATURE ? "Tự động bằng hạn module dài nhất cộng 30 ngày" : undefined}
                           value={m.days}
                           onChange={(e) => handleModuleDaysChange(m.id, e.target.value)}
                           onBlur={() => {
@@ -563,7 +609,15 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
                           }`}
                         />
                         <span className="apm-module-unit">
-                          {isExtend ? (typeof m.days === "number" ? (m.days >= 0 ? `+${m.days} ngày` : `${m.days} ngày`) : "ngày") : "ngày"}
+                          {m.key === ACCOUNT_FEATURE
+                            ? "ngày"
+                            : isExtend
+                              ? typeof m.days === "number"
+                                ? m.days >= 0
+                                  ? `+${m.days} ngày`
+                                  : `${m.days} ngày`
+                                : "ngày"
+                              : "ngày"}
                         </span>
                       </div>
                     </div>

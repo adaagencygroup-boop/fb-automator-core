@@ -186,7 +186,7 @@ def create_placeholder_image(uid: str, kind: str, page_name: str = "") -> str:
     return path
 
 
-def generate_ai_page_media(uid: str, kind: str, page_name: str, prompt: str = "") -> str:
+def generate_ai_page_media(uid: str, kind: str, page_name: str, prompt: str = "", stop_checker=None) -> str:
     """
     Sinh ảnh AI nghệ thuật chất lượng cao (Avatar, Cover, Post) chuẩn tỉ lệ & kích thước Facebook.
     - Avatar: 800x800 (1:1 Vuông, dạng Emblem Badge Logo)
@@ -252,6 +252,8 @@ def generate_ai_page_media(uid: str, kind: str, page_name: str, prompt: str = ""
     logger.info(f"[{uid}] Generating AI image for kind='{kind}' ({width}x{height}) via AI engine...")
 
     for url in engine_urls:
+        if stop_checker and stop_checker():
+            return ""
         try:
             with httpx.Client(timeout=35.0, follow_redirects=True) as client:
                 resp = client.get(url)

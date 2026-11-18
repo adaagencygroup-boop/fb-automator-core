@@ -51,6 +51,21 @@ export function translateLogMessage(rawMsg) {
   if (/rate limit/i.test(rawMsg) || /spam block/i.test(rawMsg)) {
     return "⚠️ Facebook hạn chế thao tác tạm thời do tần suất nhanh. Vui lòng tăng độ trễ!";
   }
+  if (/Read timed out/i.test(rawMsg) || /Connection refused/i.test(rawMsg) || /Max retries exceeded/i.test(rawMsg)) {
+    return "⚠️ Kết nối tới trình duyệt hoặc máy chủ bị gián đoạn / quá thời gian phản hồi.";
+  }
+  if (rawMsg.includes("WebDriverException")) {
+    return "⚠️ Trình duyệt Chrome gặp sự cố hoặc đã bị đóng đột ngột.";
+  }
+  if (/element click intercepted|is not clickable at point/i.test(rawMsg)) {
+    return "⚠️ Không thể nhấn nút thao tác do bị phần tử khác trên giao diện Facebook che khuất.";
+  }
+  if (/None of \d+ locators matched/i.test(rawMsg)) {
+    return "⚠️ Không tìm thấy nút hoặc biểu mẫu cần thao tác trên giao diện Facebook.";
+  }
+  if (/Stacktrace:/i.test(rawMsg)) {
+    return rawMsg.split(/(?:Stacktrace:|For documentation on this error|\(Session info:)/i)[0].replace(/<[^>]+>/g, "").trim();
+  }
 
   return rawMsg;
 }

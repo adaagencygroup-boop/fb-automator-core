@@ -55,7 +55,7 @@ export function uploadGroupSourceFile(formData) {
 }
 
 export function searchGroupSource(data) {
-  return api.post("/api/groups/source/search", data);
+  return api.post("/api/groups/source/search", data, { timeout: 180000 });
 }
 
 export function getGroupPostingHistory() {

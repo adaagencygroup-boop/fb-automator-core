@@ -1,0 +1,11 @@
+apiVersion: 1
+providers:
+  - name: 'fb'
+    orgId: 1
+    folder: 'fb'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 1
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

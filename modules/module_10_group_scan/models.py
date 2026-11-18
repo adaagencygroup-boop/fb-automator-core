@@ -224,9 +224,9 @@ def _sync_keywords_to_categories() -> None:
             FROM scanned_groups
             WHERE keyword IS NOT NULL AND TRIM(keyword) != ''
               AND lower(keyword) != 'directlink'
-              AND keyword NOT LIKE 'http%'
-              AND keyword NOT LIKE '%facebook.com%'
-              AND keyword NOT LIKE '%fb.com%'
+              AND keyword NOT LIKE 'http%%'
+              AND keyword NOT LIKE '%%facebook.com%%'
+              AND keyword NOT LIKE '%%fb.com%%'
             ON CONFLICT (owner_username, name) DO NOTHING;
             """
         )
@@ -237,9 +237,9 @@ def _sync_keywords_to_categories() -> None:
             FROM scanned_groups
             WHERE keyword IS NOT NULL AND TRIM(keyword) != ''
               AND lower(keyword) != 'directlink'
-              AND keyword NOT LIKE 'http%'
-              AND keyword NOT LIKE '%facebook.com%'
-              AND keyword NOT LIKE '%fb.com%'
+              AND keyword NOT LIKE 'http%%'
+              AND keyword NOT LIKE '%%facebook.com%%'
+              AND keyword NOT LIKE '%%fb.com%%'
             ON CONFLICT (owner_username, category_name, group_id) DO NOTHING;
             """
         )

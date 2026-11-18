@@ -23,6 +23,102 @@ from typing import Any, Dict, List, Optional, Set
 logger = logging.getLogger(__name__)
 
 
+def parse_group_activity(text: str) -> str | None:
+    """Read today's post count from a Facebook group's About activity section."""
+    patterns = (
+        r"hôm nay có\s+([\d.,]+)\s+bài viết mới",
+        r"([\d.,]+)\s+bài viết mới\s+hôm nay",
+        r"([\d.,]+)\s+new posts?\s+today",
+        r"today\s+([\d.,]+)\s+new posts?",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            count = match.group(1).replace(".", "").replace(",", "")
+            return f"{count} bài viết hôm nay"
+    return None
+
+
+def read_group_activity_from_about(driver, group_uid: str) -> str | None:
+    """Use About only when the search card does not show activity."""
+    about_url = f"https://www.facebook.com/groups/{urllib.parse.quote(group_uid, safe='')}/about/"
+    try:
+        driver.get(about_url)
+        for _ in range(7):
+            text = driver.execute_script("return document.body.innerText || '';") or ""
+            activity = parse_group_activity(text)
+            if activity:
+                return activity
+            time.sleep(0.5)
+    except Exception as exc:
+        logger.debug("Cannot read group activity from %s: %s", about_url, exc)
+    return None
+
+
+def collect_group_search_results(driver, extract_script: str, scroll_count: int, limit: int) -> List[Dict[str, Any]]:
+    """Keep groups seen during each scroll as Facebook may recycle result cards."""
+    found: Dict[str, Dict[str, Any]] = {}
+    for index in range(scroll_count + 1):
+        if index:
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2)
+        for item in driver.execute_script(extract_script) or []:
+            url = item.get("url")
+            if url and url not in found:
+                found[url] = item
+        if len(found) >= limit:
+            break
+    return list(found.values())
+
+
+def parse_group_activity(text: str) -> str | None:
+    """Read today's post count from a Facebook group's About activity section."""
+    patterns = (
+        r"hôm nay có\s+([\d.,]+)\s+bài viết mới",
+        r"([\d.,]+)\s+bài viết mới\s+hôm nay",
+        r"([\d.,]+)\s+new posts?\s+today",
+        r"today\s+([\d.,]+)\s+new posts?",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            count = match.group(1).replace(".", "").replace(",", "")
+            return f"{count} bài viết hôm nay"
+    return None
+
+
+def read_group_activity_from_about(driver, group_uid: str) -> str | None:
+    """Use About only when the search card does not show activity."""
+    about_url = f"https://www.facebook.com/groups/{urllib.parse.quote(group_uid, safe='')}/about/"
+    try:
+        driver.get(about_url)
+        for _ in range(7):
+            text = driver.execute_script("return document.body.innerText || '';") or ""
+            activity = parse_group_activity(text)
+            if activity:
+                return activity
+            time.sleep(0.5)
+    except Exception as exc:
+        logger.debug("Cannot read group activity from %s: %s", about_url, exc)
+    return None
+
+
+def collect_group_search_results(driver, extract_script: str, scroll_count: int, limit: int) -> List[Dict[str, Any]]:
+    """Keep groups seen during each scroll as Facebook may recycle result cards."""
+    found: Dict[str, Dict[str, Any]] = {}
+    for index in range(scroll_count + 1):
+        if index:
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2)
+        for item in driver.execute_script(extract_script) or []:
+            url = item.get("url")
+            if url and url not in found:
+                found[url] = item
+        if len(found) >= limit:
+            break
+    return list(found.values())
+
+
 def clean_group_url(raw_url: str) -> str:
     if not raw_url:
         return ""
@@ -771,12 +867,12 @@ def search_facebook_via_browser(
         logger.info(f"[{target_uid}] Truy cập: {search_url}")
         driver.get(search_url)
         time.sleep(4)
-
-        # Cuộn trang từ 2-4 lần để nạp thêm kết quả
-        scroll_count = min(4, max(2, (max_results // 10)))
-        for _ in range(scroll_count):
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
+        current_url = (driver.current_url or "").lower()
+        if "/checkpoint/" in current_url or "/login/" in current_url:
+            raise GroupSearchAuthenticationRequired(
+                "Tài khoản Facebook dùng để quét đã bị chuyển tới trang xác minh/đăng nhập. "
+                "Hãy mở tài khoản này trong Quản lý tài khoản, hoàn tất xác minh Facebook rồi quét lại."
+            )
 
         # Trích xuất dữ liệu thẻ nhóm bằng JavaScript DOM Inspector
         js_extract_script = """
@@ -832,18 +928,20 @@ def search_facebook_via_browser(
             
             // Tìm container chứa thông tin thẻ nhóm
             let container = a;
-            let hasGroupMetadata = false;
+            let fallbackContainer = a;
             for (let i = 0; i < 6; i++) {
                 if (container.parentElement && container.parentElement !== document.body) {
                     container = container.parentElement;
                     const text = container.innerText || '';
+                    if (text.trim() && text.length < 500) fallbackContainer = container;
                     if (text.includes('thành viên') || text.includes('members') || text.includes('bài viết') || text.includes('posts')) {
-                        hasGroupMetadata = true;
                         break;
                     }
                 }
             }
-            if (!hasGroupMetadata) continue;
+            // Facebook does not always show member/post counts on result cards.
+            // Keep a named group link and let the relevance filter validate it.
+            if (!(container.innerText || '').trim()) container = fallbackContainer;
             
             const cardText = container.innerText || a.innerText || '';
             const lines = cardText.split('\\n').map(l => l.trim()).filter(Boolean);
@@ -905,7 +1003,10 @@ def search_facebook_via_browser(
         return results;
         """
 
-        raw_items = driver.execute_script(js_extract_script) or []
+        scroll_count = min(12, max(2, max_results // 10))
+        raw_items = collect_group_search_results(driver, js_extract_script, scroll_count, max_results)
+        scroll_count = min(12, max(2, max_results // 10))
+        raw_items = collect_group_search_results(driver, js_extract_script, scroll_count, max_results)
         logger.info(f"[{target_uid}] Trích xuất được {len(raw_items)} nhóm Facebook thật từ DOM.")
 
         SYSTEM_GROUP_SLUGS = {
@@ -966,8 +1067,22 @@ def search_facebook_via_browser(
             if len(parsed_groups) >= max_results:
                 break
 
+        for group in parsed_groups:
+            if group["frequency"] in {"", "—"}:
+                activity = read_group_activity_from_about(driver, group["uid"])
+                if activity:
+                    group["frequency"] = activity
+
+        for group in parsed_groups:
+            if group["frequency"] in {"", "—"}:
+                activity = read_group_activity_from_about(driver, group["uid"])
+                if activity:
+                    group["frequency"] = activity
+
         return parsed_groups
 
+    except GroupSearchAuthenticationRequired:
+        raise
     except Exception as e:
         logger.error(f"Lỗi khi cào nhóm Facebook thật qua trình duyệt: {e}")
         return []
@@ -986,6 +1101,10 @@ def search_facebook_via_browser(
 
 # Search results must come from Facebook. Empty scraping results stay empty.
 REAL_FACEBOOK_GROUPS: tuple[dict[str, Any], ...] = ()
+
+
+class GroupSearchAuthenticationRequired(Exception):
+    """Facebook redirected the scraping account to login or checkpoint."""
 
 
 def search_facebook_groups(
@@ -1009,7 +1128,22 @@ def search_facebook_groups(
         return []
 
     # 1. Cào trực tiếp nhóm Facebook thật bằng trình duyệt Chrome qua tài khoản đầu tiên / chỉ định
-    browser_results = search_facebook_via_browser(clean_keyword, account_uid, max_results * 2, owner)
+    restrictive_filter = any(value != "all" for value in (
+        member_filter, group_type, frequency_filter, membership_filter,
+    ))
+    # Private groups can appear well after the first hundred public search results.
+    candidate_limit = 200 if group_type == "private" else min(
+        200, max_results * (10 if restrictive_filter else 2)
+    )
+    browser_results = search_facebook_via_browser(clean_keyword, account_uid, candidate_limit, owner)
+    restrictive_filter = any(value != "all" for value in (
+        member_filter, group_type, frequency_filter, membership_filter,
+    ))
+    # Private groups can appear well after the first hundred public search results.
+    candidate_limit = 200 if group_type == "private" else min(
+        200, max_results * (10 if restrictive_filter else 2)
+    )
+    browser_results = search_facebook_via_browser(clean_keyword, account_uid, candidate_limit, owner)
     if browser_results:
         filtered: List[Dict[str, Any]] = []
         for grp in browser_results:

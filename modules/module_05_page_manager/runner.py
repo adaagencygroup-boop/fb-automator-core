@@ -25,6 +25,70 @@ from core.media.youtube_scraper import (
 )
 _active_jobs = {}
 _jobs_lock = threading.Lock()
+_folder_num_lock = threading.Lock()
+_mode_col_ready = False
+def _ensure_download_mode_column():
+  global _mode_col_ready
+  with _folder_num_lock:
+    if _mode_col_ready:
+      return
+    try:
+      db.execute("ALTER TABLE downloaded_videos ADD COLUMN IF NOT EXISTS download_mode VARCHAR(50)")
+      _mode_col_ready = True
+    except Exception:
+      pass
+def _resolve_download_mode(raw_kw: str, raw_link: str, is_direct: bool) -> str:
+  if is_direct:
+    return "DIRECT_LINK"
+  if raw_link and raw_kw:
+    return "KEYWORD_IN_PROFILE"
+  if raw_link:
+    return "PROFILE_ONLY"
+  return "KEYWORD_ONLY"
+def get_next_folder_number(page_dir: str) -> int:
+  if not os.path.exists(page_dir):
+    return 1
+  existing_numbers = []
+  try:
+    for name in os.listdir(page_dir):
+      if os.path.isdir(os.path.join(page_dir, name)) and name.isdigit():
+        existing_numbers.append(int(name))
+  except Exception:
+    pass
+  return max(existing_numbers) + 1 if existing_numbers else 1
+def _allocate_video_subfolder(page_dir: str) -> str:
+  with _folder_num_lock:
+    sub_num = get_next_folder_number(page_dir)
+    sub_dir = os.path.join(page_dir, str(sub_num))
+    os.makedirs(sub_dir, exist_ok=True)
+    return sub_dir
+def _cleanup_failed_subfolder(sub_dir: str):
+  if not os.path.isdir(sub_dir):
+    return
+  for name in os.listdir(sub_dir):
+    try:
+      os.remove(os.path.join(sub_dir, name))
+    except Exception:
+      pass
+  if not os.listdir(sub_dir):
+    try:
+      os.rmdir(sub_dir)
+    except Exception:
+      pass
+def _is_downloaded_video_present(page_id: str, source: str, video_id: str) -> bool:
+  exist = db.fetch_one("SELECT id, object_path FROM downloaded_videos WHERE page_id = %s AND source = %s AND video_id = %s", (page_id, source, video_id))
+  if not exist:
+    return False
+  old_p = (exist.get("object_path") or "").strip()
+  if old_p:
+    norm_p = os.path.normpath(old_p)
+    if not os.path.isabs(norm_p):
+      from config.constants import BASE_DIR
+      norm_p = os.path.join(str(BASE_DIR), norm_p)
+    if os.path.exists(norm_p) and os.path.isfile(norm_p) and os.path.getsize(norm_p) > 1000:
+      return True
+  db.execute("DELETE FROM downloaded_videos WHERE id = %s", (exist["id"],))
+  return False
 def is_job_running(job_type: str) -> bool:
   with _jobs_lock:
     return job_type in _active_jobs and _active_jobs[job_type].get("running", False)
@@ -158,6 +222,7 @@ def run_reels_posting_task(job_id: int, config: dict):
 def run_tiktok_download_task(job_id: int, config: dict):
   with _jobs_lock:
     _active_jobs["TIKTOK"] = {"running": True, "job_id": job_id}
+  _ensure_download_mode_column()
   db.execute("UPDATE page_jobs SET status = 'RUNNING', started_at = NOW() WHERE id = %s", (job_id,))
   items = config.get("items", [])
   folder = config.get("download_folder", "downloads/tiktok")
@@ -269,6 +334,7 @@ def run_tiktok_download_task(job_id: int, config: dict):
           search_res = search_tiktok_videos(sub_kw, count=needed)
           if search_res.get("code") == 0 and search_res.get("data", {}).get("videos"):
             videos.extend(search_res["data"]["videos"][:needed])
+      dl_mode = _resolve_download_mode(raw_kw, raw_link, is_direct_url)
       success_count = 0
       skipped_count = 0
       for idx, v in enumerate(videos):
@@ -281,16 +347,15 @@ def run_tiktok_download_task(job_id: int, config: dict):
         author = v.get("author", {}).get("unique_id", "user") if isinstance(v.get("author"), dict) else "user"
         if target_channel and author.lower() != target_channel.lower() and f"@{target_channel.lower()}" not in (v.get("source_url") or "").lower():
           continue
-        f_path = os.path.join(page_folder, f"{v_id}.mp4")
-        txt_path = os.path.join(page_folder, f"{v_id}.txt")
-        if not is_direct_url:
-          exist = db.fetch_one("SELECT id FROM downloaded_videos WHERE page_id = %s AND source = 'TIKTOK' AND video_id = %s", (page_id, v_id))
-          if exist and os.path.exists(f_path) and os.path.getsize(f_path) > 1000:
-            skipped_count += 1
-            continue
+        if not is_direct_url and _is_downloaded_video_present(page_id, "TIKTOK", v_id):
+          skipped_count += 1
+          continue
         direct_url = v.get("source_url") or f"https://www.tiktok.com/@{author}/video/{v_id}"
         play_url = v.get("play") or v.get("hdplay") or v.get("wmplay")
         raw_title = v.get("title") or raw_kw or target_label
+        video_sub_folder = _allocate_video_subfolder(page_folder)
+        f_path = os.path.join(video_sub_folder, f"{v_id}.mp4")
+        txt_path = os.path.join(video_sub_folder, f"{v_id}.txt")
         download_ok = False
         if play_url and "v16-webapp-prime" not in play_url:
           download_ok = download_stream_to_file(play_url, f_path)
@@ -305,16 +370,18 @@ def run_tiktok_download_task(job_id: int, config: dict):
           with open(txt_path, "w", encoding="utf-8") as f:
             f.write(convert_tiktok_hashtags_to_facebook(raw_title))
           db.execute(
-            """INSERT INTO downloaded_videos (page_id, video_id, source, title, object_path)
-            VALUES (%s, %s, 'TIKTOK', %s, %s)
-            ON CONFLICT (page_id, source, video_id) DO NOTHING""",
-            (page_id, v_id, raw_title, f_path)
+            """INSERT INTO downloaded_videos (page_id, video_id, source, title, object_path, download_mode)
+            VALUES (%s, %s, 'TIKTOK', %s, %s, %s)
+            ON CONFLICT (page_id, source, video_id) DO UPDATE SET title = EXCLUDED.title, object_path = EXCLUDED.object_path, download_mode = EXCLUDED.download_mode, downloaded_at = NOW()""",
+            (page_id, v_id, raw_title, f_path, dl_mode)
           )
           db.execute(
             """INSERT INTO download_logs (page_id, source, video_id, title, object_path, status)
             VALUES (%s, 'TIKTOK', %s, %s, %s, 'SUCCESS')""",
             (page_id, v_id, raw_title, f_path)
           )
+        else:
+          _cleanup_failed_subfolder(video_sub_folder)
         if delay_sec > 0 and idx < len(videos) - 1:
           time.sleep(delay_sec)
       if success_count > 0:
@@ -355,6 +422,7 @@ def run_tiktok_download_task(job_id: int, config: dict):
 def run_youtube_download_task(job_id: int, config: dict):
   with _jobs_lock:
     _active_jobs["YOUTUBE"] = {"running": True, "job_id": job_id}
+  _ensure_download_mode_column()
   db.execute("UPDATE page_jobs SET status = 'RUNNING', started_at = NOW() WHERE id = %s", (job_id,))
   items = config.get("items", [])
   folder = config.get("download_folder", "downloads/youtube")
@@ -389,6 +457,7 @@ def run_youtube_download_task(job_id: int, config: dict):
     if not kw and not link:
       kw = (item.get("page_name") or f"Page_{page_id}").strip()
     direct_matches = [m.strip() for m in re.split(r'[,;\s\n]+', link) if "watch?v=" in m or "/shorts/" in m or "youtu.be/" in m] if link else []
+    dl_mode = _resolve_download_mode(kw, link, bool(direct_matches))
     if direct_matches:
       target_queries = direct_matches
     elif link:
@@ -400,16 +469,17 @@ def run_youtube_download_task(job_id: int, config: dict):
     else:
       target_queries = [f"ytsearch{max_videos}:{kw} #shorts"]
     try:
-      outtmpl = os.path.join(page_folder, "%(id)s.%(ext)s")
-      ydl_opts = build_youtube_ydl_opts(outtmpl=outtmpl, cookie_browser=cookie_browser, cookie_file=cookie_file)
-      search_opts = dict(ydl_opts)
+      search_opts = build_youtube_ydl_opts(outtmpl=os.path.join(page_folder, "%(id)s.%(ext)s"), cookie_browser=cookie_browser, cookie_file=cookie_file)
       search_opts["extract_flat"] = "in_playlist"
       search_opts["playlistend"] = max(20, max_videos * 5) if (not direct_matches and link and kw) else max_videos
       downloaded_items = []
       skipped_count = 0
       last_error = ""
-      with yt_dlp.YoutubeDL(search_opts) as ydl_search, yt_dlp.YoutubeDL(ydl_opts) as ydl:
+      with yt_dlp.YoutubeDL(search_opts) as ydl_search:
         for tq in target_queries:
+          with _jobs_lock:
+            if not _active_jobs.get("YOUTUBE", {}).get("running", False):
+              break
           if len(downloaded_items) >= max_videos:
             break
           try:
@@ -420,6 +490,9 @@ def run_youtube_download_task(job_id: int, config: dict):
             last_error = str(q_err)
             entries = []
           for ent in entries:
+            with _jobs_lock:
+              if not _active_jobs.get("YOUTUBE", {}).get("running", False):
+                break
             if len(downloaded_items) >= max_videos:
               break
             v_id = str(ent.get("id") or "").strip()
@@ -438,34 +511,38 @@ def run_youtube_download_task(job_id: int, config: dict):
               kw_tokens = [tok for tok in re.split(r'\s+', kw_lower) if tok]
               if kw_lower not in title_lower and not (kw_tokens and all(tok in title_lower for tok in kw_tokens)):
                 continue
-            exist = db.fetch_one("SELECT id FROM downloaded_videos WHERE page_id = %s AND source = 'YOUTUBE' AND video_id = %s", (page_id, v_id))
-            existing_files = [f for f in os.listdir(page_folder) if f.startswith(f"{v_id}.") and not f.endswith(".txt") and not f.endswith(".part") and not f.endswith(".ytdl")] if os.path.exists(page_folder) else []
-            if exist and existing_files and os.path.getsize(os.path.join(page_folder, existing_files[0])) > 1000:
+            if _is_downloaded_video_present(page_id, "YOUTUBE", v_id):
               skipped_count += 1
               continue
+            video_sub_folder = _allocate_video_subfolder(page_folder)
             vid_url = f"https://www.youtube.com/watch?v={v_id}"
+            ydl_opts = build_youtube_ydl_opts(outtmpl=os.path.join(video_sub_folder, "%(id)s.%(ext)s"), cookie_browser=cookie_browser, cookie_file=cookie_file)
             try:
-              ydl.download([vid_url])
-              downloaded_files = [f for f in os.listdir(page_folder) if f.startswith(f"{v_id}.") and not f.endswith(".txt") and not f.endswith(".part") and not f.endswith(".ytdl")] if os.path.exists(page_folder) else []
+              with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([vid_url])
+              downloaded_files = [f for f in os.listdir(video_sub_folder) if f.startswith(f"{v_id}.") and not f.endswith(".txt") and not f.endswith(".part") and not f.endswith(".ytdl")] if os.path.exists(video_sub_folder) else []
               if downloaded_files:
-                f_path = os.path.join(page_folder, downloaded_files[0])
-                txt_path = os.path.join(page_folder, f"{v_id}.txt")
+                f_path = os.path.join(video_sub_folder, downloaded_files[0])
+                txt_path = os.path.join(video_sub_folder, f"{v_id}.txt")
                 with open(txt_path, "w", encoding="utf-8") as tf:
                   tf.write(clean_title)
                 downloaded_items.append({"id": v_id, "title": clean_title, "path": f_path})
                 db.execute(
-                  """INSERT INTO downloaded_videos (page_id, video_id, source, title, object_path)
-                  VALUES (%s, %s, 'YOUTUBE', %s, %s)
-                  ON CONFLICT (page_id, source, video_id) DO NOTHING""",
-                  (page_id, v_id, clean_title, f_path)
+                  """INSERT INTO downloaded_videos (page_id, video_id, source, title, object_path, download_mode)
+                  VALUES (%s, %s, 'YOUTUBE', %s, %s, %s)
+                  ON CONFLICT (page_id, source, video_id) DO UPDATE SET title = EXCLUDED.title, object_path = EXCLUDED.object_path, download_mode = EXCLUDED.download_mode, downloaded_at = NOW()""",
+                  (page_id, v_id, clean_title, f_path, dl_mode)
                 )
                 db.execute(
                   """INSERT INTO download_logs (page_id, source, video_id, title, object_path, status)
                   VALUES (%s, 'YOUTUBE', %s, %s, %s, 'SUCCESS')""",
                   (page_id, v_id, clean_title, f_path)
                 )
+              else:
+                _cleanup_failed_subfolder(video_sub_folder)
             except Exception as dl_err:
               last_error = str(dl_err)
+              _cleanup_failed_subfolder(video_sub_folder)
       if downloaded_items:
         msg = f"Đã Tải {len(downloaded_items)} Video YouTube" + (f" (Đã Bỏ Qua {skipped_count} Video Trùng)" if skipped_count else "")
         st = "SUCCESS"

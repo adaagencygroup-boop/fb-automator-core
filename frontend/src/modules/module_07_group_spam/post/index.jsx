@@ -1,16 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { CheckCircle2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
 
 import { toast } from "@/lib/toast";
 import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
@@ -53,7 +43,6 @@ export default function GroupPostModule({ actionType = "POST" }) {
   const actionLabel = isComment ? "bình luận" : "đăng bài";
   const contentLabel = isComment ? "bình luận" : "bài viết";
   const editorRef = useRef(null);
-  const completionToastJobRef = useRef(null);
   const draftBaselineRef = useRef(null);
   const draftUserEditedRef = useRef(false);
   const { setUnsavedChanges } = useUnsavedChanges();
@@ -131,8 +120,6 @@ export default function GroupPostModule({ actionType = "POST" }) {
   // Bước 9: Tiến trình thực thi
   const [runState, setRunState] = useState("idle");
   const [campaignProgress, setCampaignProgress] = useState(null);
-  const [isCompletionModalOpen, setIsCompletionModalOpen] = useState(false);
-  const [completionData, setCompletionData] = useState(null);
   const [draftReady, setDraftReady] = useState(false);
   const [formResetVersion, setFormResetVersion] = useState(0);
   const rerunUidsRef = useRef(null);
@@ -193,16 +180,20 @@ export default function GroupPostModule({ actionType = "POST" }) {
   // Cấu hình chạy lại được ưu tiên; nếu không có thì khôi phục bản nháp khi quay lại tab.
   useEffect(() => {
     let cancelled = false;
+    let rerunCleanupTimer = null;
 
     const restoreDraft = async () => {
       try {
         const stored = sessionStorage.getItem("fb_rerun_campaign");
         if (stored) {
-          // Xóa ngay khỏi sessionStorage sau khi đọc để chỉ nạp một lần khi bấm nút Chạy lại.
-          // Khi người dùng chuyển sang module khác rồi quay lại, sẽ không còn dữ liệu cũ nữa.
-          sessionStorage.removeItem("fb_rerun_campaign");
           const data = JSON.parse(stored);
-          if (data?.action_type === actionType) {
+          if (String(data?.action_type || "").toUpperCase() === actionType) {
+            // Trì hoãn xóa khỏi sessionStorage để không bị mất khi React StrictMode chạy effect 2 lần,
+            // và để getGroupSettings() cùng nhận biết đang ở chế độ Chạy lại.
+            rerunCleanupTimer = window.setTimeout(() => {
+              sessionStorage.removeItem("fb_rerun_campaign");
+            }, 1000);
+
             if (data.campaign_id) setCampaignId(data.campaign_id);
             if (data.name) setCampaignName(data.name);
             if (data.description) setCampaignDescription(data.description);
@@ -214,9 +205,13 @@ export default function GroupPostModule({ actionType = "POST" }) {
               setSelectedAccountKeys(cfg.account_uids);
             }
             if (cfg.groups?.length) {
-              setGroupSource("custom");
-              setCustomGroups(cfg.groups);
-              setSelectedGroupKeys(cfg.groups.map((g) => g.key || g.url || g.id));
+              const normalizedGroups = cfg.groups.map((g, index) => ({
+                ...g,
+                key: g.key || (g.uid ? `group_${g.uid}` : null) || g.url || g.id || `group_${index}`,
+              }));
+              setGroupSource("search");
+              setCustomGroups(normalizedGroups);
+              setSelectedGroupKeys(normalizedGroups.map((g) => g.key));
             }
             if (cfg.posts?.length) {
               setPosts(cfg.posts);
@@ -233,6 +228,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
               if (cfg.settings.rest_minutes !== undefined) setRestMinutes(String(cfg.settings.rest_minutes));
               if (cfg.settings.delay_min !== undefined) setDelayMin(String(cfg.settings.delay_min));
               if (cfg.settings.delay_max !== undefined) setDelayMax(String(cfg.settings.delay_max));
+              if (cfg.settings.delay_unit !== undefined) setDelayUnit(String(cfg.settings.delay_unit));
               if (cfg.settings.min_media !== undefined) setMinMedia(String(cfg.settings.min_media));
               if (cfg.settings.max_media !== undefined) setMaxMedia(String(cfg.settings.max_media));
             }
@@ -295,7 +291,10 @@ export default function GroupPostModule({ actionType = "POST" }) {
     };
 
     restoreDraft();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (rerunCleanupTimer) clearTimeout(rerunCleanupTimer);
+    };
   }, [actionLabel, actionType, draftScope, isComment, selectApi]);
 
   useEffect(() => {
@@ -339,7 +338,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
       isPostingSettingsLocked,
     };
     const draftSnapshot = JSON.stringify(draft);
-    if (draftBaselineRef.current === null) {
+    if (draftBaselineRef.current === null || !draftUserEditedRef.current) {
       draftBaselineRef.current = draftSnapshot;
       draftUserEditedRef.current = false;
       writeGroupPostDraft(draft, draftScope);
@@ -422,7 +421,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
       .then((data) => {
         if (cancelled) return;
         const rerun = JSON.parse(sessionStorage.getItem("fb_rerun_campaign") || "null");
-        if (rerun?.action_type === actionType || readGroupPostDraft(draftScope)) return;
+        if (String(rerun?.action_type || "").toUpperCase() === actionType || readGroupPostDraft(draftScope)) return;
         setThreads(String(data.threads));
         setRestMinutes(String(data.rest_minutes));
         setMaxPosts(String(data.max_posts));
@@ -479,12 +478,13 @@ export default function GroupPostModule({ actionType = "POST" }) {
           setRunState("idle");
           setJobId(null);
           if (job.status === "COMPLETED" || (job.status === "PARTIAL" && job.success > 0)) {
-            setCompletionData({ ...job, name: job.name || job.campaign_name });
-            setIsCompletionModalOpen(true);
+            toast.success({
+              key: `group-${draftScope}-completed-${job.job_id}`,
+              title: "CHIẾN DỊCH HOÀN TẤT",
+              message: `${job.name || job.campaign_name || `Chiến dịch ${actionLabel} nhóm`}: ${job.success || 0}/${job.total || 0} nhóm thành công.`,
+              duration: 8000,
+            });
             void resetCompletedRun();
-            if (job.status === "PARTIAL") {
-              toast.success(job.message || "Chiến dịch đã hoàn thành một phần!", "HOÀN TẤT CHIẾN DỊCH");
-            }
           } else if (job.status === "STOPPED") {
             toast.info(job.message, "ĐÃ DỪNG CHIẾN DỊCH");
           } else {
@@ -508,26 +508,6 @@ export default function GroupPostModule({ actionType = "POST" }) {
     };
   }, [jobId, resetCompletedRun]);
 
-  // Hiển thị toast sau khi React đã nhận và render dòng log hoàn tất.
-  // Theo dõi job_id để không thông báo lặp lại qua các lần polling.
-  useEffect(() => {
-    if (campaignProgress?.status !== "COMPLETED") return;
-    const completionLog = [...(campaignProgress.logs || [])]
-      .reverse()
-      .find((log) => log.level === "SUCCESS" && log.message?.includes("Chiến dịch đã hoàn thành thành công"));
-    if (!completionLog) return;
-
-    const completionKey = campaignProgress.job_id || campaignProgress.campaign_id || completionLog.time;
-    if (completionToastJobRef.current === completionKey) return;
-    completionToastJobRef.current = completionKey;
-    toast.success({
-      key: `group-${draftScope}-completed-${completionKey}`,
-      title: "HOÀN TẤT CHIẾN DỊCH",
-      message: completionLog.message,
-      duration: 8000,
-    });
-  }, [campaignProgress, draftScope]);
-
   const currentGroupPool = useMemo(() => {
     if (groupSource === "file" && groupFile?.groups?.length) {
       return groupFile.groups;
@@ -548,7 +528,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
   }, [selectedAccountCount]);
 
   const selectedGroups = currentGroupPool.filter((group) => selectedGroupKeys.includes(group.key));
-  const activeGroupsCount = groupSource === "file" ? (groupFile?.validGroupsCount || selectedGroups.length) : selectedGroups.length;
+  const activeGroupsCount = selectedGroups.length;
   const generatedCount = posts.filter((post) => post.trim()).length;
   const totalPlanned = activeGroupsCount * selectedAccounts.length;
   const hasApiKey = Boolean(apiSource.selected) && !apiSource.loading;
@@ -672,14 +652,26 @@ export default function GroupPostModule({ actionType = "POST" }) {
     }));
   };
 
-  const closeCompletionModal = () => {
-    setIsCompletionModalOpen(false);
-    setCompletionData(null);
-  };
-
   const handleStart = async () => {
     const trimmedCampaignName = (campaignName || "").trim();
-    const activeGroups = groupSource === "file" && groupFile?.groups?.length ? groupFile.groups : selectedGroups;
+    // Respect the user's current checkbox selection for imported file groups too.
+    const activeGroups = selectedGroups;
+    // Keep a restorable copy of the selected file groups while the campaign
+    // runs. The job snapshot owns execution; this draft supports page navigation.
+    if (groupSource === "file") {
+      const fileSnapshot = {
+        ...(groupFile || { name: "Danh sách nhóm", size: 0, status: "valid" }),
+        groups: activeGroups,
+        validGroupsCount: activeGroups.length,
+      };
+      setGroupFile(fileSnapshot);
+      writeGroupPostDraft({
+        ...(readGroupPostDraft(draftScope) || {}),
+        groupSource,
+        groupFile: fileSnapshot,
+        selectedGroupKeys: activeGroups.map((group) => group.key),
+      }, draftScope);
+    }
     const hasPostContent = hasGeneratedContent
       ? posts.some((post) => String(post || "").replace(/<[^>]*>/g, "").trim())
       : Boolean(prompt.trim());
@@ -749,8 +741,6 @@ export default function GroupPostModule({ actionType = "POST" }) {
       }
     }
 
-    setIsCompletionModalOpen(false);
-    setCompletionData(null);
     setRunState("starting");
     setCampaignProgress({
       status: "QUEUED",
@@ -851,18 +841,23 @@ export default function GroupPostModule({ actionType = "POST" }) {
   };
 
   const canStart = runState === "idle";
+  const isCampaignActive = runState !== "idle";
   const markDraftUserEdit = () => {
+    if (isCampaignActive) return;
     draftUserEditedRef.current = true;
     setUnsavedChanges(true, async () => {
       await clearGroupPostDraft(draftScope);
       await writeGroupPostDraftMedia([], draftScope);
     });
   };
+  const markDraftButtonEdit = (event) => {
+    if (event.target.closest("button, [role='button']")) markDraftUserEdit();
+  };
 
   return (
     <div
       className="space-y-6"
-      onClickCapture={markDraftUserEdit}
+      onClickCapture={markDraftButtonEdit}
       onChangeCapture={markDraftUserEdit}
       onInputCapture={markDraftUserEdit}
     >
@@ -879,6 +874,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
       </div>
 
       {/* Bước 1: Tạo chiến dịch */}
+      <div inert={isCampaignActive} aria-disabled={isCampaignActive} className={isCampaignActive ? "opacity-60" : undefined}>
       <CampaignInfoSection
         campaignName={campaignName}
         setCampaignName={setCampaignName}
@@ -1002,6 +998,7 @@ export default function GroupPostModule({ actionType = "POST" }) {
       </div>
 
       {/* Bước 8: Thông tin cấu hình tổng hợp */}
+      </div>
       <div id="step-8-summary" className="scroll-mt-6">
         <GroupSummarySection
           contentType={isComment ? "comment" : "post"}
@@ -1037,81 +1034,8 @@ export default function GroupPostModule({ actionType = "POST" }) {
           runState={runState}
           campaignProgress={campaignProgress}
           onClearLogs={() => setCampaignProgress((current) => current ? { ...current, logs: [] } : current)}
-          onClearLogs={() => setCampaignProgress((current) => current ? { ...current, logs: [] } : current)}
         />
       </div>
-
-      {/* Popup Modal thông báo hoàn thành chiến dịch */}
-      <Dialog open={isCompletionModalOpen} onOpenChange={(open) => (open ? setIsCompletionModalOpen(true) : closeCompletionModal())}>
-        <DialogContent className="max-w-md p-6">
-          <div className="flex flex-col items-center text-center">
-            <div className="flex size-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 ring-8 ring-emerald-50 mb-3 shadow-xs">
-              <CheckCircle2 className="size-8 text-emerald-600 animate-in zoom-in-75 duration-300" />
-            </div>
-
-            <DialogHeader className="text-center sm:text-center mb-2">
-              <DialogTitle className="text-lg sm:text-xl font-bold text-slate-900 text-center">
-                Chiến dịch hoàn thành thành công!
-              </DialogTitle>
-              <DialogDescription className="text-xs sm:text-sm text-slate-500 text-center mt-1">
-                Tất cả các tài khoản đã hoàn tất lượt {actionLabel} vào nhóm mục tiêu.
-              </DialogDescription>
-            </DialogHeader>
-
-            {/* Chi tiết thống kê kết quả */}
-            <div className="w-full my-4 rounded-xl border border-emerald-100 bg-emerald-50/70 p-4 text-left space-y-2.5">
-              <div className="flex items-center justify-between text-xs sm:text-sm">
-                <span className="text-slate-600 font-medium">Tên chiến dịch:</span>
-                <span className="font-bold text-slate-800 truncate max-w-[210px]" title={completionData?.name}>
-                  {completionData?.name || `Chiến dịch ${actionLabel} nhóm`}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-xs sm:text-sm">
-                <span className="text-slate-600 font-medium">Số lượt đăng thành công:</span>
-                <span className="inline-flex items-center gap-1 font-bold text-emerald-700">
-                  <span className="text-base font-extrabold">{completionData?.success || 0}</span>
-                  <span className="text-xs font-normal text-slate-500">/ {completionData?.total || 0} nhóm</span>
-                </span>
-              </div>
-              {Number(completionData?.failed || 0) > 0 && (
-                <div className="flex items-center justify-between text-xs sm:text-sm">
-                  <span className="text-slate-600 font-medium">Thất bại / Bỏ qua:</span>
-                  <span className="font-semibold text-rose-600">
-                    {completionData.failed} nhóm
-                  </span>
-                </div>
-              )}
-              <div className="flex items-center justify-between text-xs sm:text-sm">
-                <span className="text-slate-600 font-medium">Trạng thái:</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">
-                  <CheckCircle2 className="size-3" />
-                  {completionData?.status === "COMPLETED" ? "Hoàn tất 100%" : "Hoàn tất một phần"}
-                </span>
-              </div>
-            </div>
-
-            <DialogFooter className="w-full flex flex-col-reverse sm:flex-row sm:justify-end gap-2 mt-2">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  closeCompletionModal();
-                  const el = document.getElementById("step-1-campaign");
-                  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-                }}
-                className="w-full sm:w-auto text-xs"
-              >
-                Tạo chiến dịch mới
-              </Button>
-              <Button
-                onClick={closeCompletionModal}
-                className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-sm"
-              >
-                {"\u0110\u00e3 hi\u1ec3u & \u0110\u00f3ng"}
-              </Button>
-            </DialogFooter>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       {/* Sticky Bottom Action Bar */}
       <GroupActionBar
