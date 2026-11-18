@@ -105,6 +105,16 @@ const SEPARATOR_GAP_MS = 60 * 60 * 1000; // cách nhau > 1 giờ hoặc sang ng�
  * - Cụm các ảnh liên tiếp (không có text, không replyTo) sẽ được gom thành một gallery dạng lưới (`kind: "image-grid"`).
  * - Các tin nhắn đơn khác (tin có chữ, video, audio, file hoặc ảnh đơn lẻ) giữ nguyên dạng (`kind: "single"`).
  */
+function isStickerAttachment(att) {
+  if (!att) return false;
+  if (att.isSticker) return true;
+  const name = String(att.name || "").toLowerCase();
+  if (name.includes("sticker")) return true;
+  const url = String(att.url || "").toLowerCase();
+  // Nhãn dán / GIF từ Giphy hoặc sticker CDN của Facebook (/t39.1997-6/)
+  return url.includes("giphy.com") || url.includes("/t39.1997-6/") || url.includes("sticker");
+}
+
 function groupConsecutiveImages(messages) {
   const items = [];
   let imageBatch = [];
@@ -125,9 +135,21 @@ function groupConsecutiveImages(messages) {
   };
 
   for (const m of messages) {
-    const isPureImage = m.attachment?.type === "image" && !m.text && !m.replyTo;
-    if (isPureImage) {
-      imageBatch.push(m);
+    const attList = m.attachments?.length ? m.attachments : (m.attachment ? [m.attachment] : []);
+    const allPureImages =
+      attList.length > 0 &&
+      attList.every((a) => a?.type === "image" && !isStickerAttachment(a)) &&
+      !m.text &&
+      !m.replyTo;
+
+    if (allPureImages) {
+      if (attList.length === 1) {
+        imageBatch.push(m);
+      } else {
+        attList.forEach((a, idx) => {
+          imageBatch.push({ ...m, id: `${m.id}__att_${idx}`, attachment: a });
+        });
+      }
     } else {
       flushBatch();
       items.push({ kind: "single", message: m });

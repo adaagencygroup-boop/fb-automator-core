@@ -168,23 +168,27 @@ async def process_webhook_event(event: Dict[str, Any]):
                 # Giữ thẳng URL CDN của Facebook (không tải về ổ đĩa VPS để tránh đầy bộ nhớ)
                 attachments = message_obj.get("attachments", [])
                 if attachments:
-                    att = attachments[0]
-                    att_type = str(att.get("type", "image")).lower()
-                    payload = att.get("payload", {})
-                    att_url = payload.get("url") or payload.get("src") or att.get("url") or ""
-                    att_url_lower = att_url.lower()
+                    att_lines = []
+                    for att in attachments:
+                        att_type = str(att.get("type", "image")).lower()
+                        payload = att.get("payload", {})
+                        att_url = payload.get("url") or payload.get("src") or att.get("url") or ""
+                        att_url_lower = att_url.lower()
 
-                    if "audio" in att_type or "audioclip" in att_url_lower or any(att_url_lower.split("?")[0].endswith(ext) for ext in [".m4a", ".aac", ".mp3", ".wav", ".ogg"]):
-                        att_type = "audio"
-                    elif "video" in att_type or any(att_url_lower.split("?")[0].endswith(ext) for ext in [".mp4", ".mov", ".webm"]):
-                        att_type = "video"
+                        if "audio" in att_type or "audioclip" in att_url_lower or any(att_url_lower.split("?")[0].endswith(ext) for ext in [".m4a", ".aac", ".mp3", ".wav", ".ogg"]):
+                            att_type = "audio"
+                        elif "video" in att_type or any(att_url_lower.split("?")[0].endswith(ext) for ext in [".mp4", ".mov", ".webm"]):
+                            att_type = "video"
 
-                    if not att_url:
-                        att_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b8/2021_Facebook_icon.svg/192px-2021_Facebook_icon.svg.png"
+                        if not att_url:
+                            att_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b8/2021_Facebook_icon.svg/192px-2021_Facebook_icon.svg.png"
 
-                    tag = att_type if att_type in ("image", "audio", "video", "file") else "image"
-                    att_text = f"[{tag}] {att_url}"
-                    text = f"{text}\n{att_text}" if (text and text.strip()) else att_text
+                        tag = att_type if att_type in ("image", "audio", "video", "file") else "image"
+                        att_lines.append(f"[{tag}] {att_url}")
+
+                    if att_lines:
+                        att_text = "\n".join(att_lines)
+                        text = f"{text}\n{att_text}" if (text and text.strip()) else att_text
 
                 if not text or not text.strip():
                     text = "📎 [Tin nhắn đính kèm]"

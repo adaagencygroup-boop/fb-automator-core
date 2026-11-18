@@ -39,6 +39,9 @@ function resolveWsBase() {
 
 export const API_BASE = resolveApiBase();
 export const WS_BASE = resolveWsBase();
+export const PUBLIC_MEDIA_BASE = (process.env.NEXT_PUBLIC_MEDIA_BASE_URL || "https://adagroupservice.com")
+  .trim()
+  .replace(/\/+$/, "");
 export const isTauriShell = isDesktopShell;
 
 // Người dùng hiển thị trên Header (tạm thời — thay bằng dữ liệu đăng nhập thật khi có)
