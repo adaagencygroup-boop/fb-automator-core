@@ -1,0 +1,17 @@
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Edit: square + pencil — Figma THAO TÁC -->
+  <path
+    d="M7.333 2.667H4C3.26362 2.667 2.667 3.26362 2.667 4V12C2.667 12.7364 3.26362 13.333 4 13.333H12C12.7364 13.333 13.333 12.7364 13.333 12V8.66667"
+    stroke="#94A3B8"
+    stroke-width="1.333"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M12.06 2.273a1.414 1.414 0 0 1 2 2L8.667 9.667 6 10.333l.667-2.667 5.393-5.393Z"
+    stroke="#94A3B8"
+    stroke-width="1.333"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

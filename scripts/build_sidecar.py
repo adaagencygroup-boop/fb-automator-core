@@ -18,7 +18,7 @@ if sys.platform == "win32":
         pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-TAURI_DIR = BASE_DIR / "src-tauri"
+TAURI_DIR = BASE_DIR / "tauri" / "src-tauri"
 ENGINE_RUNTIME = TAURI_DIR / "engine-runtime"
 ONEDIR = BASE_DIR / "dist" / "local_engine"
 
@@ -39,7 +39,7 @@ def host_target():
 def build_sidecar():
     if sys.version_info < (3, 11):
         raise RuntimeError("Build engine cần Python 3.11 trở lên.")
-    spec_file = BASE_DIR / "build_engine.spec"
+    spec_file = BASE_DIR / "tauri" / "build_engine.spec"
     if not spec_file.is_file():
         raise FileNotFoundError(f"Không tìm thấy: {spec_file}")
 

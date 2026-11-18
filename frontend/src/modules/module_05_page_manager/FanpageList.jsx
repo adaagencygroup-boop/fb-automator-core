@@ -252,6 +252,8 @@ function OwnedFanpageList({ owner }) {
   const router = useRouter();
   const [pages, setPages] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshCooldown, setRefreshCooldown] = useState(false);
+  const refreshTimerRef = useRef(null);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("ALL");
   const [accountFilter, setAccountFilter] = useState(ALL_ACCOUNTS);
@@ -268,7 +270,13 @@ function OwnedFanpageList({ owner }) {
   const tokenRevision = useRef({});
   const modalOpen = useRef(null);
   const [accountsReadyForOpen, setAccountsReadyForOpen] = useState(null);
-  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    };
+  }, []);
   const selectedAccUid = accountList[0]?.uid || "";
   const [customToken, setCustomToken] = useState("");
   const [showCustomToken, setShowCustomToken] = useState(false);
@@ -285,9 +293,11 @@ function OwnedFanpageList({ owner }) {
   const load = useCallback(async (options = {}) => {
     const isManual = typeof options === "boolean" ? options : Boolean(options?.isManual);
     const silent = Boolean(options?.silent);
+    if (isManual && refreshTimerRef.current) return;
     const request = ++pagesRevision.current;
     if (isManual) {
       setLoading(true);
+      setRefreshCooldown(true);
     }
     try {
       const [data] = await Promise.all([
@@ -303,16 +313,23 @@ function OwnedFanpageList({ owner }) {
           }
         } catch {}
         if (isManual && !silent) {
-          toast.success(`Đã làm mới danh sách Fanpage (${pageList.length} Page)!`, "LÀM MỚI");
+          toast.success(`Đã làm mới danh sách Fanpage (${pageList.length} Page)!`, { title: "LÀM MỚI", key: "pages-refresh" });
         }
       }
     } catch (error) {
       if (alive.current && pagesRevision.current === request) {
-        toast.error(error?.message || "Không tải được danh sách fanpage.", "LỖI LÀM MỚI");
+        toast.error(error?.message || "Không tải được danh sách fanpage.", { title: "LỖI LÀM MỚI", key: "pages-refresh" });
       }
     } finally {
       if (alive.current && pagesRevision.current === request) {
         setLoading(false);
+        if (isManual) {
+          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+          refreshTimerRef.current = setTimeout(() => {
+            refreshTimerRef.current = null;
+            if (alive.current) setRefreshCooldown(false);
+          }, 2000);
+        }
       }
     }
   }, [loadAccounts]);
@@ -711,12 +728,12 @@ function OwnedFanpageList({ owner }) {
           <button
             type="button"
             onClick={() => load({ isManual: true })}
-            disabled={loading}
-            className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-[#0284C7] bg-white text-[#0284C7] hover:bg-sky-50 disabled:opacity-60 transition-colors shadow-xs shrink-0"
+            disabled={loading || refreshCooldown}
+            className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-lg border border-[#0284C7] bg-white text-[#0284C7] hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-60 transition-colors shadow-xs shrink-0"
             title="Làm mới danh sách Fanpage"
             aria-label="Làm mới"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${loading || refreshCooldown ? "animate-spin" : ""}`} />
           </button>
         </div>
       </div>

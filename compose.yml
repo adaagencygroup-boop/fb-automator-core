@@ -32,7 +32,7 @@ services:
   admin:
     image: admin
     build:
-      context: ./web-admin
+      context: ./admin
       target: runner
       args:
         NEXT_PUBLIC_VPS_API_URL: ${nextPublicApiUrl:-https://adagroupservice.com}

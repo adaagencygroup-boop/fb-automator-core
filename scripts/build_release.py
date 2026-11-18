@@ -26,7 +26,8 @@ if sys.platform == "win32":
         pass
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-TAURI_CONF_PATH = ROOT_DIR / "src-tauri" / "tauri.conf.json"
+TAURI_DIR = ROOT_DIR / "tauri"
+TAURI_CONF_PATH = TAURI_DIR / "src-tauri" / "tauri.conf.json"
 
 
 def log_step(step: str, title: str):
@@ -75,11 +76,11 @@ def main():
     python_bin = sys.executable
     run_command(f'"{python_bin}" scripts/build_sidecar.py', "Build Sidecar Engine")
 
-    engine_exe = ROOT_DIR / "src-tauri" / "engine-runtime" / "local_engine.exe"
+    engine_exe = TAURI_DIR / "src-tauri" / "engine-runtime" / "local_engine.exe"
     if not engine_exe.exists():
         print(f"\n[X] LỖI: Không tìm thấy file engine sau khi build: {engine_exe}")
         sys.exit(1)
-    print("[OK] Python Engine Runtime đã sẵn sàng trong src-tauri/engine-runtime!")
+    print("[OK] Python Engine Runtime đã sẵn sàng trong tauri/src-tauri/engine-runtime!")
 
     # ------------------------------------------------------------------
     # Bước 3: Build Tauri NSIS Setup
@@ -93,7 +94,7 @@ def main():
     try:
         # Tạm thời bỏ beforeBuildCommand vì FE đã build xong ở Bước 1
         temp_tauri_conf = original_tauri_conf.replace(
-            '"beforeBuildCommand": "npm --prefix frontend run build"',
+            '"beforeBuildCommand": "npm --prefix ../frontend run build"',
             '"beforeBuildCommand": ""',
         )
         TAURI_CONF_PATH.write_text(temp_tauri_conf, encoding="utf-8")
@@ -107,7 +108,7 @@ def main():
         print('    Lệnh: npx @tauri-apps/cli build')
         res = subprocess.run(
             "npx @tauri-apps/cli build",
-            cwd=str(ROOT_DIR),
+            cwd=str(TAURI_DIR),
             shell=True,
             env=env,
         )
@@ -125,7 +126,7 @@ def main():
     # Bước 4: Kiểm tra kết quả file cài đặt
     # ------------------------------------------------------------------
     log_step("BƯỚC 4/4", "KIỂM TRA VÀ XÁC NHẬN FILE BẢN MỚI")
-    nsis_dir = ROOT_DIR / "src-tauri" / "target" / "release" / "bundle" / "nsis"
+    nsis_dir = TAURI_DIR / "src-tauri" / "target" / "release" / "bundle" / "nsis"
     exe_files = list(nsis_dir.glob("*.exe")) if nsis_dir.exists() else []
 
     if not exe_files:

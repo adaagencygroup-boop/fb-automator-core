@@ -1,0 +1,2 @@
+# Thư mục chứa local_engine-*.exe (PyInstaller sidecar).
+# Binary bị gitignore — mỗi máy / CI chạy: python scripts/build_sidecar.py

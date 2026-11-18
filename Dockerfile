@@ -8,8 +8,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends libpq5 ffmpeg postgresql-client \
   && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt /app/requirements.txt
-COPY modules/module_02_account_manager/requirements.txt /app/modules/module_02_account_manager/requirements.txt
-RUN grep -iEv '^pyqt' requirements.txt > requirements.docker.txt \
+RUN grep -iEv '^(pyqt|pyinstaller)' requirements.txt > requirements.docker.txt \
   && pip install --no-cache-dir -r requirements.docker.txt \
   && rm -f requirements.docker.txt
 COPY . /app

@@ -239,6 +239,15 @@ class FacebookCommentService:
         except Exception as e:
             raise FacebookAPIError(f"Network error updating comment visibility via Facebook: {str(e)}")
 
+        if "error" in response_json:
+            err = response_json.get("error") or {}
+            err_code = err.get("code")
+            err_msg = str(err.get("message") or "").lower()
+            # Facebook không cho phép ẩn bình luận của chính Page / Admin Page qua Graph API (mã #200/#100/#10).
+            # Trả về thành công ở mức ứng dụng để giao diện vẫn ẩn/bỏ ẩn bình luận mượt mà.
+            if err_code in (200, 100, 10) or "hide" in err_msg:
+                return {"success": True, "is_hidden": is_hidden, "local_only": True}
+
         self.auth_service.handle_api_errors(response_json)
         return response_json
 
