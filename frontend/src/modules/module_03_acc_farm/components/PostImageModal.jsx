@@ -53,6 +53,56 @@ export function mediaFileUrl(path, version = 0) {
   return `${API_BASE}/api/post/media/file?path=${encodeURIComponent(path)}&t=${version}`;
 }
 
+/** Tải ảnh kèm Bearer. Thẻ img không gửi token, app desktop không gửi cookie sang 127.0.0.1. */
+export function useAuthedMediaObjectUrl(path, version = 0) {
+  const [src, setSrc] = useState(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!path) {
+      setSrc(null);
+      setFailed(false);
+      return undefined;
+    }
+    let cancelled = false;
+    let objectUrl = null;
+    setSrc(null);
+    setFailed(false);
+    api
+      .get("/api/post/media/file", {
+        params: { path, t: version },
+        responseType: "blob",
+        cache: false,
+      })
+      .then((data) => {
+        const payload = data?.data instanceof Blob ? data.data : data;
+        const blob = payload instanceof Blob ? payload : null;
+        if (cancelled) return;
+        if (!blob || (blob.type && !blob.type.startsWith("image/"))) {
+          setFailed(true);
+          return;
+        }
+        objectUrl = URL.createObjectURL(blob);
+        setSrc(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [path, version]);
+
+  return { src, failed };
+}
+
+export function AuthedPostImage({ path, version = 0, alt = "", className }) {
+  const { src, failed } = useAuthedMediaObjectUrl(path, version);
+  if (!src || failed) return null;
+  return <img src={src} alt={alt} className={className} />;
+}
+
 export function PostImageModal({
   isOpen,
   card,
@@ -96,8 +146,22 @@ export function PostImageModal({
   const count = paths.length;
   const selectedPath = paths[selectedIndex] || null;
   const canAddMore = count < MAX_STATUS_IMAGES;
-  const imagePreviewUrl = mediaFileUrl(selectedPath, version);
+  const { src: imagePreviewUrl, failed: previewFailed } = useAuthedMediaObjectUrl(selectedPath, version);
   const statusLabel = count ? `Đã có ảnh (${count}/${MAX_STATUS_IMAGES})` : "Chưa có ảnh";
+
+  useEffect(() => {
+    if (previewFailed) {
+      setImageLoadError(true);
+      setErrorMsg("Ảnh không thể tải xem trước (file bị hỏng hoặc sai định dạng).");
+      return;
+    }
+    if (imagePreviewUrl) {
+      setImageLoadError(false);
+      setErrorMsg((msg) =>
+        msg === "Ảnh không thể tải xem trước (file bị hỏng hoặc sai định dạng)." ? "" : msg,
+      );
+    }
+  }, [previewFailed, imagePreviewUrl]);
 
   if (!isOpen || !card) return null;
 
@@ -372,7 +436,7 @@ export function PostImageModal({
             <div className="space-y-3">
               {/* Preview lớn */}
               <div className="relative rounded-xl border border-slate-200 bg-slate-900/5 p-2 flex items-center justify-center overflow-hidden min-h-[140px]">
-                {imageLoadError || !selectedPath ? (
+                {previewFailed || imageLoadError || !selectedPath ? (
                   <div className="py-6 px-4 flex flex-col items-center justify-center text-center space-y-2">
                     <div className="w-10 h-10 rounded-full bg-rose-50 text-rose-500 flex items-center justify-center border border-rose-100">
                       <AlertCircle size={20} />
@@ -387,16 +451,16 @@ export function PostImageModal({
                 ) : (
                   <>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      key={imagePreviewUrl}
-                      src={imagePreviewUrl}
-                      alt={`Ảnh ${selectedIndex + 1}`}
-                      className="max-h-64 w-full object-contain rounded-lg shadow-2xs"
-                      onError={() => {
-                        setImageLoadError(true);
-                        setErrorMsg("Ảnh không thể tải xem trước (file bị hỏng hoặc sai định dạng).");
-                      }}
-                    />
+                    {imagePreviewUrl ? (
+                      <img
+                        key={imagePreviewUrl}
+                        src={imagePreviewUrl}
+                        alt={`Ảnh ${selectedIndex + 1}`}
+                        className="max-h-64 w-full object-contain rounded-lg shadow-2xs"
+                      />
+                    ) : (
+                      <div className="py-8 text-xs text-slate-400">Đang tải ảnh...</div>
+                    )}
                     <div className="absolute top-3 left-3 bg-emerald-600/90 text-white text-[10px] font-semibold px-2.5 py-0.5 rounded-full flex items-center gap-1 shadow-xs backdrop-blur-xs">
                       <Check size={11} />
                       <span>
@@ -425,7 +489,6 @@ export function PostImageModal({
               {/* Thumbnail strip */}
               <div className="flex items-center gap-2 overflow-x-auto pb-0.5">
                 {paths.map((p, idx) => {
-                  const thumbUrl = mediaFileUrl(p, version);
                   const active = idx === selectedIndex;
                   return (
                     <div key={`${p}-${idx}`} className="relative group shrink-0">
@@ -443,8 +506,7 @@ export function PostImageModal({
                         }`}
                         title={`Ảnh ${idx + 1}`}
                       >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={thumbUrl} alt="" className="w-full h-full object-cover" />
+                        <AuthedPostImage path={p} version={version} className="w-full h-full object-cover" />
                       </button>
                       <div className="absolute inset-0 rounded-lg bg-slate-900/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 pointer-events-none group-hover:pointer-events-auto">
                         <button

@@ -901,129 +901,129 @@ export default function GroupCampaignWorkspace({ actionType = "POST" }) {
 
       {/* Bước 1: Tạo chiến dịch */}
       <div inert={isCampaignActive} aria-disabled={isCampaignActive} className={`space-y-3 ${isCampaignActive ? "opacity-60" : ""}`}>
-      <CampaignInfoSection
-        campaignName={campaignName}
-        setCampaignName={setCampaignName}
-        campaignDescription={campaignDescription}
-        setCampaignDescription={setCampaignDescription}
-        campaignId={campaignId}
-        isRerun={isRerun}
-        stepNumber="1"
-      />
-
-      {/* Bước 2: Chọn tài khoản / người dùng đi seeding */}
-      <div id="step-2-accounts" className="scroll-mt-6">
-        <GroupAccountSection
-          stepNumber="2"
-          accounts={accounts}
-          accountsLoading={accountsLoading}
-          selectedAccountKeys={selectedAccountKeys}
-          setSelectedAccountKeys={setSelectedAccountKeys}
-          onRefreshAccounts={loadAccounts}
-        />
-      </div>
-
-      {/* Bước 3: Cấu hình API & thông số chung */}
-      <div id="step-3-settings" className="scroll-mt-6">
-        <GroupSettingsSection
-          stepNumber="3"
-          apiSource={apiSource}
-          threads={threads}
-          setThreads={setThreads}
-          selectedAccountCount={selectedAccountCount}
-          settingsLoading={settingsLoading}
-          settingsFeedback={settingsFeedback}
-        />
-      </div>
-
-      {/* Bước 4: Nguồn nhóm */}
-      <div id="step-4-group-source" className="scroll-mt-6">
-        <GroupSourceSection
-          key={`group-source-${formResetVersion}`}
-          stepNumber="4"
-          groupSource={groupSource}
-          setGroupSource={setGroupSource}
-          groupFile={groupFile}
-          setGroupFile={setGroupFile}
-          groupSearch={groupSearch}
-          setGroupSearch={setGroupSearch}
-          groupFilter={groupFilter}
-          setGroupFilter={setGroupFilter}
-          selectedGroupKeys={selectedGroupKeys}
-          setSelectedGroupKeys={setSelectedGroupKeys}
-          customGroups={customGroups}
-          setCustomGroups={setCustomGroups}
-          selectedAccountKeys={selectedAccountKeys}
-          accounts={accounts}
-          isLocked={false}
-        />
-      </div>
-
-      {/* Bước 5: Chọn media */}
-      <div id="step-5-media" className="scroll-mt-6">
-        <GroupMediaSection
-          key={`group-media-${formResetVersion}`}
-          stepNumber="5"
-          mediaFiles={mediaFiles}
-          setMediaFiles={setMediaFiles}
-          savedMedia={savedMedia}
-          setSavedMedia={setSavedMedia}
-          minMedia={minMedia}
-          setMinMedia={setMinMedia}
-          maxMedia={maxMedia}
-          setMaxMedia={setMaxMedia}
-          isLocked={false}
+        <CampaignInfoSection
+          campaignName={campaignName}
+          setCampaignName={setCampaignName}
+          campaignDescription={campaignDescription}
+          setCampaignDescription={setCampaignDescription}
           campaignId={campaignId}
-          onCampaignIdGenerated={setCampaignId}
-          isComment={isComment}
+          isRerun={isRerun}
+          stepNumber="1"
         />
-      </div>
 
-      {/* Bước 6: Tạo nội dung bằng AI */}
-      <div id="step-6-content" className="scroll-mt-6">
-        <GroupContentSection
-          key={`group-content-${formResetVersion}`}
-          contentType={isComment ? "comment" : "post"}
-          stepNumber="6"
-          prompt={prompt}
-          setPrompt={setPrompt}
-          aiCount={aiCount}
-          setAiCount={setAiCount}
-          posts={posts}
-          setPosts={setPosts}
-          activePost={activePost}
-          setActivePost={setActivePost}
-          isGenerating={isGenerating}
-          hasGeneratedContent={hasGeneratedContent}
-          setHasGeneratedContent={setHasGeneratedContent}
-          onGeneratePosts={generatePosts}
-          isLocked={false}
-          editorRef={editorRef}
-        />
-      </div>
+        {/* Bước 2: Chọn tài khoản / người dùng đi seeding */}
+        <div id="step-2-accounts" className="scroll-mt-6">
+          <GroupAccountSection
+            stepNumber="2"
+            accounts={accounts}
+            accountsLoading={accountsLoading}
+            selectedAccountKeys={selectedAccountKeys}
+            setSelectedAccountKeys={setSelectedAccountKeys}
+            onRefreshAccounts={loadAccounts}
+          />
+        </div>
 
-      {/* Bước 7: Cài đặt đăng bài */}
-      <div id="step-7-posting" className="scroll-mt-6">
-        <GroupPostingSettingsSection
-          contentType={isComment ? "comment" : "post"}
-          stepNumber="7"
-          scheduleEnabled={scheduleEnabled}
-          setScheduleEnabled={setScheduleEnabled}
-          delayMin={delayMin}
-          setDelayMin={setDelayMin}
-          delayMax={delayMax}
-          setDelayMax={setDelayMax}
-          delayUnit={delayUnit}
-          setDelayUnit={setDelayUnit}
-          scheduleDate={scheduleDate}
-          setScheduleDate={setScheduleDate}
-          scheduleTime={scheduleTime}
-          setScheduleTime={setScheduleTime}
-          isLocked={false}
-        />
-      </div>
+        {/* Bước 3: Cấu hình API & thông số chung */}
+        <div id="step-3-settings" className="scroll-mt-6">
+          <GroupSettingsSection
+            stepNumber="3"
+            apiSource={apiSource}
+            threads={threads}
+            setThreads={setThreads}
+            selectedAccountCount={selectedAccountCount}
+            settingsLoading={settingsLoading}
+            settingsFeedback={settingsFeedback}
+          />
+        </div>
 
-      {/* Bước 8: Thông tin cấu hình tổng hợp */}
+        {/* Bước 4: Nguồn nhóm */}
+        <div id="step-4-group-source" className="scroll-mt-6">
+          <GroupSourceSection
+            key={`group-source-${formResetVersion}`}
+            stepNumber="4"
+            groupSource={groupSource}
+            setGroupSource={setGroupSource}
+            groupFile={groupFile}
+            setGroupFile={setGroupFile}
+            groupSearch={groupSearch}
+            setGroupSearch={setGroupSearch}
+            groupFilter={groupFilter}
+            setGroupFilter={setGroupFilter}
+            selectedGroupKeys={selectedGroupKeys}
+            setSelectedGroupKeys={setSelectedGroupKeys}
+            customGroups={customGroups}
+            setCustomGroups={setCustomGroups}
+            selectedAccountKeys={selectedAccountKeys}
+            accounts={accounts}
+            isLocked={false}
+          />
+        </div>
+
+        {/* Bước 5: Chọn media */}
+        <div id="step-5-media" className="scroll-mt-6">
+          <GroupMediaSection
+            key={`group-media-${formResetVersion}`}
+            stepNumber="5"
+            mediaFiles={mediaFiles}
+            setMediaFiles={setMediaFiles}
+            savedMedia={savedMedia}
+            setSavedMedia={setSavedMedia}
+            minMedia={minMedia}
+            setMinMedia={setMinMedia}
+            maxMedia={maxMedia}
+            setMaxMedia={setMaxMedia}
+            isLocked={false}
+            campaignId={campaignId}
+            onCampaignIdGenerated={setCampaignId}
+            isComment={isComment}
+          />
+        </div>
+
+        {/* Bước 6: Tạo nội dung bằng AI */}
+        <div id="step-6-content" className="scroll-mt-6">
+          <GroupContentSection
+            key={`group-content-${formResetVersion}`}
+            contentType={isComment ? "comment" : "post"}
+            stepNumber="6"
+            prompt={prompt}
+            setPrompt={setPrompt}
+            aiCount={aiCount}
+            setAiCount={setAiCount}
+            posts={posts}
+            setPosts={setPosts}
+            activePost={activePost}
+            setActivePost={setActivePost}
+            isGenerating={isGenerating}
+            hasGeneratedContent={hasGeneratedContent}
+            setHasGeneratedContent={setHasGeneratedContent}
+            onGeneratePosts={generatePosts}
+            isLocked={false}
+            editorRef={editorRef}
+          />
+        </div>
+
+        {/* Bước 7: Cài đặt đăng bài */}
+        <div id="step-7-posting" className="scroll-mt-6">
+          <GroupPostingSettingsSection
+            contentType={isComment ? "comment" : "post"}
+            stepNumber="7"
+            scheduleEnabled={scheduleEnabled}
+            setScheduleEnabled={setScheduleEnabled}
+            delayMin={delayMin}
+            setDelayMin={setDelayMin}
+            delayMax={delayMax}
+            setDelayMax={setDelayMax}
+            delayUnit={delayUnit}
+            setDelayUnit={setDelayUnit}
+            scheduleDate={scheduleDate}
+            setScheduleDate={setScheduleDate}
+            scheduleTime={scheduleTime}
+            setScheduleTime={setScheduleTime}
+            isLocked={false}
+          />
+        </div>
+
+        {/* Bước 8: Thông tin cấu hình tổng hợp */}
       </div>
       <div id="step-8-summary" className="scroll-mt-6">
         <GroupSummarySection

@@ -574,14 +574,19 @@ export async function replyToComment(objectId, pageId, text, attachmentUrl) {
   });
 }
 
-/** Tải tệp/ảnh lên server lấy URL công khai */
+/** Tải tệp/ảnh lên server lấy URL công khai (dùng cho bình luận cần attachment_url) */
 export async function uploadMedia(file) {
   const form = new FormData();
   form.append("file", file);
-  const res = await api.post("/api/facebook/upload-media", form, {
+  const res = await api.post(mediaApiUrl("/api/facebook/upload-media"), form, {
     headers: { "Content-Type": undefined },
   });
   return res?.url;
+}
+
+/** Lấy lại URL CDN mới từ Facebook khi link ảnh/video cũ hết hạn */
+export async function refreshMessageMedia(messageId) {
+  return api.post(`/api/facebook/messages/${encodeURIComponent(messageId)}/refresh-media`);
 }
 
 /** Trả lời riêng (vào hộp thư) cho người bình luận */

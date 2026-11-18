@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { MaskIcon } from "@/components/icons/MaskIcon";
 import { CONVERSATION_TAGS, REACTIONS, REPLY_WINDOW_MS } from "../constants";
-import { displayMediaUrl } from "../service";
+import { displayMediaUrl, refreshMessageMedia } from "../service";
 import { useVoiceRecorder } from "../hooks/useVoiceRecorder";
 import EmojiPickerPanel from "./EmojiPickerPanel";
 import GiphyPicker from "./GiphyPicker";
@@ -564,25 +564,47 @@ function MessageActions({ message, outgoing, onReply, onReact }) {
 
 function MessageBody({ message, outgoing, radius }) {
   const { attachment } = message;
-  // Hiển thị qua engine local thay vì URL tunnel (ngrok chặn request từ trình duyệt)
-  const mediaUrl = attachment ? displayMediaUrl(attachment.url) : "";
+  const [refreshedUrl, setRefreshedUrl] = useState(null);
+  const refreshTriedRef = useRef(false);
+
+  useEffect(() => {
+    setRefreshedUrl(null);
+    refreshTriedRef.current = false;
+  }, [message.id, attachment?.url]);
+
+  const mediaUrl = refreshedUrl || (attachment ? displayMediaUrl(attachment.url) : "");
+  const handleMediaError = async () => {
+    if (refreshTriedRef.current) return;
+    const raw = String(attachment?.url || "");
+    if (!raw || raw.startsWith("blob:") || raw.startsWith("data:")) return;
+    const targetId = message.facebookMessageId || message.id;
+    if (!targetId) return;
+    refreshTriedRef.current = true;
+    try {
+      const res = await refreshMessageMedia(targetId);
+      if (res?.url) setRefreshedUrl(res.url);
+    } catch {
+      // Bỏ qua nếu tin quá cũ hoặc token không còn quyền
+    }
+  };
+
   const bubbleColor = outgoing ? "bg-[#5821F5] text-white" : "bg-[#F0F2F5] text-[#050505]";
   return (
     <>
       {attachment?.type === "image" && (
         <a href={mediaUrl} target="_blank" rel="noreferrer" className={cn("block overflow-hidden border border-slate-200", radius, FOCUS)}>
           {/* eslint-disable-next-line @next/next/no-img-element -- ảnh khách gửi / ảnh tạm khi chọn tệp */}
-          <img src={mediaUrl} alt={attachment.name || "Hình ảnh"} className="block max-h-60 max-w-full object-cover bg-slate-100" />
+          <img src={mediaUrl} alt={attachment.name || "Hình ảnh"} onError={handleMediaError} className="block max-h-60 max-w-full object-cover bg-slate-100" />
         </a>
       )}
       {attachment?.type === "audio" && (
         <div className={cn("px-2 py-2", bubbleColor, radius)}>
-          <audio src={mediaUrl} controls preload="metadata" className="block h-9 w-56 max-w-full" />
+          <audio src={mediaUrl} controls preload="metadata" onError={handleMediaError} className="block h-9 w-56 max-w-full" />
         </div>
       )}
       {attachment?.type === "video" && (
         <div className={cn("overflow-hidden border border-slate-200", radius)}>
-          <video src={mediaUrl} controls preload="metadata" className="block max-h-60 max-w-full bg-slate-900" />
+          <video src={mediaUrl} controls preload="metadata" onError={handleMediaError} className="block max-h-60 max-w-full bg-slate-900" />
         </div>
       )}
       {attachment && !["image", "audio", "video"].includes(attachment.type) && (

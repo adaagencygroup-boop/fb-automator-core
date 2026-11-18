@@ -26,32 +26,29 @@ import Pagination from "@/components/ui/pagination";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/lib/toast";
 import { openPostInAccountBrowser } from "@/modules/module_03_acc_farm/openAccountPost";
-import { mediaFileUrl, normalizeImagePaths } from "./PostImageModal";
+import { normalizeImagePaths, useAuthedMediaObjectUrl } from "./PostImageModal";
 
 function HistoryStatusImageCard({ path }) {
-  const [broken, setBroken] = useState(false);
   const fileName = String(path || "").replace(/\\/g, "/").split("/").pop() || path;
-  const src = mediaFileUrl(path);
+  const { src, failed } = useAuthedMediaObjectUrl(path);
 
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50/80 overflow-hidden flex flex-col min-w-0">
       <div className="aspect-square bg-slate-100 relative flex items-center justify-center overflow-hidden">
-        {!broken && src ? (
-          // eslint-disable-next-line @next/next/no-img-element
+        {src ? (
           <img
             src={src}
             alt={fileName}
             className="h-full w-full object-cover"
-            onError={() => setBroken(true)}
           />
-        ) : (
+        ) : failed ? (
           <div className="px-2 text-center space-y-1">
             <ImageIcon size={18} className="mx-auto text-slate-400" />
             <p className="text-[10px] text-slate-500 leading-snug">
               Không tải được ảnh / file không còn trên máy
             </p>
           </div>
-        )}
+        ) : null}
       </div>
       <div className="p-2 space-y-1.5 border-t border-slate-200/80">
         <p className="text-[10px] font-medium text-slate-700 truncate" title={fileName}>
