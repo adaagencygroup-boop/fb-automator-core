@@ -1,66 +1,26 @@
+"""File đính kèm chat lưu trên máy chạy engine, thư mục uploads."""
 import os
-import mimetypes
+from pathlib import Path
 from typing import Optional
-from dotenv import load_dotenv
+from urllib.parse import quote
 
-load_dotenv()
+from config.constants import UPLOADS_DIR
 
-# ?u ti?n c?u h?nh _1 ri?ng c?a Module 06
-SUPABASE_URL = os.getenv("SUPABASE_URL_1") or os.getenv("SUPABASE_URL", "")
-if SUPABASE_URL and not SUPABASE_URL.startswith("http"):
-    SUPABASE_URL = f"https://{SUPABASE_URL}"
-
-SUPABASE_KEY = (
-    os.getenv("SUPABASE_KEY_1")
-    or os.getenv("SUPABASE_SERVICE_ROLE_KEY_1")
-    or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-    or os.getenv("SUPABASE_KEY", "")
-)
-BUCKET_NAME = (
-    os.getenv("SUPABASE_STORAGE_BUCKET_1")
-    or os.getenv("SUPABASE_CHAT_BUCKET")
-    or os.getenv("SUPABASE_STORAGE_BUCKET", "chat-attachments")
-)
-
-_client = None
-
-def get_supabase_client():
-    global _client
-    if _client is not None:
-        return _client
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return None
-    try:
-        from supabase import create_client
-        _client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        return _client
-    except Exception as e:
-        print(f"[Supabase Storage] Client init error: {e}")
-        return None
 
 def upload_file_bytes(file_bytes: bytes, file_name: str, content_type: Optional[str] = None) -> Optional[str]:
-    """
-    Tải file bytes lên Supabase Storage bucket và trả về Public URL.
-    Nếu upload lỗi hoặc chưa cấu hình Supabase, trả về None (để fallback lưu local).
-    """
-    client = get_supabase_client()
-    if not client:
+    """Ghi file vào thư mục uploads và trả URL công khai để Facebook tải."""
+    del content_type
+    safe_name = Path(file_name or "").name
+    if not file_bytes or not safe_name or safe_name in {".", ".."}:
         return None
-
-    if not content_type:
-        content_type, _ = mimetypes.guess_type(file_name)
-        content_type = content_type or "application/octet-stream"
-
     try:
-        # file_options upsert="true" để ghi đè nếu trùng
-        client.storage.from_(BUCKET_NAME).upload(
-            path=file_name,
-            file=file_bytes,
-            file_options={"content-type": content_type, "upsert": "true"}
-        )
-        public_url = client.storage.from_(BUCKET_NAME).get_public_url(file_name)
-        return public_url
-    except Exception as e:
-        print(f"[Supabase Storage Upload Error] {file_name}: {e}")
+        os.makedirs(UPLOADS_DIR, exist_ok=True)
+        target = UPLOADS_DIR / safe_name
+        if not target.is_file():
+            target.write_bytes(file_bytes)
+        relative = "/uploads/" + quote(safe_name)
+        base = (os.getenv("PUBLIC_MEDIA_BASE_URL") or "").strip().rstrip("/")
+        return f"{base}{relative}" if base else relative
+    except Exception as exc:
+        print(f"[Media Storage] Không lưu được {safe_name} trên máy: {exc}")
         return None
-

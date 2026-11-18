@@ -15,14 +15,13 @@ from ..constants.media_constant import (
     MAX_FILE_COUNT,
     MAX_FILE_SIZE,
     MAX_TOTAL_SIZE,
+    MEDIA_CACHE_DIR,
     UPLOAD_MEDIA_DIR,
 )
-from .supabase_storage import (
-    is_supabase_storage_available,
-    upload_to_supabase,
+from .local_media import (
+    is_media_storage_available,
     download_or_cache_media,
     list_campaign_media,
-    MEDIA_CACHE_DIR,
 )
 
 logger = logging.getLogger("module_07.media_service")
@@ -218,7 +217,7 @@ def list_stored_media(
     *,
     remote_lister: Callable[[str], list[dict[str, str | int]]] | None = None,
 ) -> list[dict[str, str | int]]:
-    if campaign_id and is_supabase_storage_available():
+    if campaign_id and is_media_storage_available():
         fetch_remote = remote_lister or list_campaign_media
         remote_items = fetch_remote(campaign_id)
         if remote_items:

@@ -276,8 +276,12 @@ def get_user_feature_licenses(user_id: int):
     return features
 
 
-def sync_user_feature_licenses(user_id: int, feature_items: list, base_expired_at=None, preserve_unchanged=True):
-    """Update paid modules atomically, then derive the read-only account license."""
+def sync_user_feature_licenses(user_id: int, feature_items: list, base_expired_at=None, preserve_unchanged=True, is_extend=False):
+    """Update paid modules atomically, then derive the read-only account license.
+
+    is_extend=True: days is treated as a signed delta (+/- or 0) applied to each module's current expiry.
+    is_extend=False: days is the target remaining term from now.
+    """
     now = utcnow()
     upsert = """INSERT INTO user_feature_licenses (user_id, feature_key, is_enabled, days_granted, expired_at)
                 VALUES (%s, %s, %s, %s, %s)
@@ -296,20 +300,40 @@ def sync_user_feature_licenses(user_id: int, feature_items: list, base_expired_a
             key = item.get("key")
             if not key or key == ACCOUNT_FEATURE:
                 continue  # This term is managed by the server, including forged API payloads.
-            days = max(0, int(item.get("days") or 0))
+            raw_days = int(item.get("days") or 0)
             enabled = bool(item.get("enabled", False))
             old = existing.get(key)
-            if preserve_unchanged and old and enabled == bool(old["is_enabled"]) and days == days_remaining(old["expired_at"], now):
-                continue
-            if enabled:
-                expiry, granted = now + timedelta(days=days), days
-            elif old and (old["is_enabled"] or (old.get("days_granted") or 0) > 0):
-                # Cancelling a paid term starts grace today; an already-ended term
-                # keeps its historical end so repeatedly saving never restarts grace.
-                expiry = min(_as_dt(old["expired_at"]), now)
-                granted = max(1, old.get("days_granted") or 0)
+            if is_extend:
+                if enabled:
+                    if raw_days == 0 and old and bool(old["is_enabled"]):
+                        continue
+                    feat_base = _as_dt(old["expired_at"]) if (old and old.get("expired_at")) else now
+                    if not feat_base or feat_base < now:
+                        feat_base = now
+                    expiry = feat_base + timedelta(days=raw_days)
+                    if expiry < now:
+                        expiry = now
+                    granted = days_remaining(expiry, now)
+                elif old and (old["is_enabled"] or (old.get("days_granted") or 0) > 0):
+                    if not old["is_enabled"]:
+                        continue
+                    expiry = min(_as_dt(old["expired_at"]), now)
+                    granted = max(1, old.get("days_granted") or 0)
+                else:
+                    continue
             else:
-                expiry, granted = now, 0
+                days = max(0, raw_days)
+                if preserve_unchanged and old and enabled == bool(old["is_enabled"]) and days == days_remaining(old["expired_at"], now):
+                    continue
+                if enabled:
+                    expiry, granted = now + timedelta(days=days), days
+                elif old and (old["is_enabled"] or (old.get("days_granted") or 0) > 0):
+                    # Cancelling a paid term starts grace today; an already-ended term
+                    # keeps its historical end so repeatedly saving never restarts grace.
+                    expiry = min(_as_dt(old["expired_at"]), now)
+                    granted = max(1, old.get("days_granted") or 0)
+                else:
+                    expiry, granted = now, 0
             cursor.execute(upsert, (user_id, key, enabled, granted, expiry))
             if enabled:
                 _module_term_event(cursor, user_id, key, old, expiry, now)
@@ -393,10 +417,8 @@ def validate_phone(contact: str) -> str:
 def validate_registration_password(password: str):
     if not password or not password.strip():
         raise HTTPException(400, "Mật khẩu không được để trống hoặc chỉ chứa khoảng trắng.")
-    if len(password) > 12:
-        raise HTTPException(400, "Mật khẩu không được vượt quá 12 ký tự.")
     if len(password) < 8 or not all(re.search(pattern, password) for pattern in (r"[A-Z]", r"[a-z]", r"[0-9]", r"[^a-zA-Z0-9]")):
-        raise HTTPException(400, "Mật khẩu phải từ 8 đến 12 ký tự, bao gồm ít nhất 1 chữ hoa, 1 chữ thường, 1 chữ số và 1 ký tự đặc biệt.")
+        raise HTTPException(400, "Mật khẩu phải từ 8 ký tự trở lên, bao gồm ít nhất 1 chữ hoa, 1 chữ thường, 1 chữ số và 1 ký tự đặc biệt.")
 
 
 def register_user(username, password, contact_info, hwid):
@@ -708,8 +730,11 @@ def create_user_admin(username, password, contact_info, days, status, role, requ
     validate_password(password)
     if _row(username):
         raise HTTPException(409, "Tên đăng nhập đã tồn tại trên hệ thống")
-    role = "user"
-    status = status if status in ("pending", "approved", "rejected", "banned") else "approved"
+    role = "admin" if role in ("admin", "ADMIN") else "user"
+    if role == "admin":
+        status = "approved"
+    else:
+        status = status if status in ("pending", "approved", "rejected", "banned") else "approved"
     expired_at = utcnow() + timedelta(days=days) if days and status == "approved" else None
     db.execute(
         """INSERT INTO users (username, password_hash, contact_info, role, status, hwid, expired_at, created_at)
@@ -719,10 +744,11 @@ def create_user_admin(username, password, contact_info, days, status, role, requ
     user = _row(username)
     user_id = user["id"]
 
-    sync_user_feature_licenses(user_id, features or [])
-    if status == "approved":
-        with db.session() as cursor:
-            _account_approved_event(cursor, user_id, utcnow())
+    if role == "user":
+        sync_user_feature_licenses(user_id, features or [])
+        if status == "approved":
+            with db.session() as cursor:
+                _account_approved_event(cursor, user_id, utcnow())
 
     log_activity(admin["username"], admin.get("role"), "create_user", username, user_id, role, status, ip_address, ua)
     return public_user(_row_by_id(user_id))
@@ -744,6 +770,8 @@ def edit_user_admin(user_id: int, payload: dict, request: Request):
     else:
         role = "user"
     status = payload.get("status") or user.get("status")
+    if role == "admin" and status in LOCKED_STATUSES:
+        raise HTTPException(400, "Không thể khóa tài khoản quản trị viên")
     expired_at = user.get("expired_at")
     password_sql = ""
     params = [username, contact, role, status, expired_at]
@@ -767,14 +795,19 @@ def edit_user_admin(user_id: int, payload: dict, request: Request):
             WHERE id = ?""",
         tuple(params),
     )
+    log_detail = f"status={status}"
     if role == "user":
-        sync_user_feature_licenses(user_id, payload.get("features") or [])
+        feat_list = payload.get("features") if isinstance(payload.get("features"), list) else []
+        sync_user_feature_licenses(user_id, feat_list)
+        if feat_list:
+            feat_summary = format_feature_changes_summary(feat_list, is_extend=False)
+            log_detail += f"; Tính năng: {feat_summary}"
         if user.get("status") in ("pending", "rejected") and _row_by_id(user_id).get("status") == "approved":
             with db.session() as cursor:
                 _account_approved_event(cursor, user_id, utcnow())
     if payload.get("password") or username != user["username"] or status in LOCKED_STATUSES or hwid_changed:
         revoke_active_sessions(user_id)
-    log_activity(admin["username"], admin.get("role"), "edit_user", username, user_id, role, f"status={status}", ip_address, ua)
+    log_activity(admin["username"], admin.get("role"), "edit_user", username, user_id, role, log_detail, ip_address, ua)
     return public_user(_row_by_id(user_id))
 
 
@@ -1043,6 +1076,42 @@ def _actor(request: Request):
     return admin, _client_ip(request), request.headers.get("user-agent", "")
 
 
+def get_feature_name_map():
+    """Lấy từ điển map {feature_key: tên ngắn gọn hoặc tên đầy đủ}"""
+    try:
+        rows = db.fetch_all("SELECT feature_key, feature_name FROM system_features")
+        mapped = {r["feature_key"]: re.sub(r"^\d+\.\s*", "", r["feature_name"]) for r in rows}
+        return {**FEATURE_NAMES, **mapped}
+    except Exception:
+        return dict(FEATURE_NAMES)
+
+
+def format_feature_changes_summary(features: list, is_extend: bool = False) -> str:
+    """Tạo chuỗi tóm tắt thay đổi tính năng cho admin activity log"""
+    if not features or not isinstance(features, list):
+        return ""
+    name_map = get_feature_name_map()
+    changes = []
+    for f in features:
+        key = f.get("key")
+        if not key or key == ACCOUNT_FEATURE:
+            continue
+        name = name_map.get(key, key)
+        enabled = f.get("enabled", True)
+        days = f.get("days", 0)
+        if not enabled:
+            changes.append(f"Tắt: {name}")
+        elif is_extend:
+            if days != 0:
+                sign = "+" if days > 0 else ""
+                changes.append(f"{name} ({sign}{days} ngày)")
+        else:
+            changes.append(f"{name} ({days} ngày)")
+    if not changes:
+        return "Không có thay đổi tính năng"
+    return "; ".join(changes)
+
+
 def approve_user(user_id: int, days: int, request: Request, features: Optional[list] = None):
     admin, ip_address, ua = _actor(request)
     user = _row_by_id(user_id)
@@ -1051,20 +1120,25 @@ def approve_user(user_id: int, days: int, request: Request, features: Optional[l
     if days < 1:
         raise HTTPException(400, "Số ngày phải lớn hơn 0")
     old = user.get("status")
-    expired_at = utcnow() + timedelta(days=days)
-    
+
     # Đồng bộ sang user_feature_licenses nếu có truyền danh sách tính năng
     if features is not None:
         expired_at = sync_user_feature_licenses(user_id, features, preserve_unchanged=False)
+        if features:
+            feat_text = format_feature_changes_summary(features, is_extend=False)
+            log_detail = f"{old} -> approved (+{days} ngày); Cấp tính năng: {feat_text}"
+        else:
+            log_detail = f"{old} -> approved (+{days} ngày)"
     else:
         # An approval without subscriptions keeps only the automatic free term.
         expired_at = sync_user_feature_licenses(user_id, [])
+        log_detail = f"{old} -> approved (+{days} ngày)"
 
     db.execute("UPDATE users SET status = ?, expired_at = ? WHERE id = ?", ("approved" if expired_at > utcnow() else "expired", expired_at, user_id))
     with db.session() as cursor:
         _account_approved_event(cursor, user_id, utcnow())
     log_activity(admin["username"], admin.get("role"), "approve_user", user["username"], user_id, user.get("role"),
-                 f"{old} -> approved (+{days} ngay)", ip_address, ua)
+                 log_detail, ip_address, ua)
     return {"message": f"User {user['username']} approved for {days} days", "expired_at": expired_at.isoformat() + "Z"}
 
 
@@ -1074,16 +1148,21 @@ def extend_user(user_id: int, days: int, request: Request, features: Optional[li
     if not user:
         raise HTTPException(404, "Không tìm thấy người dùng")
     if features is not None:
-        expired_at = sync_user_feature_licenses(user_id, features, preserve_unchanged=False)
+        expired_at = sync_user_feature_licenses(user_id, features, preserve_unchanged=False, is_extend=True)
+        change_text = format_feature_changes_summary(features, is_extend=True)
     else:
-        current = db.fetch_all("SELECT feature_key, expired_at FROM user_feature_licenses WHERE user_id = ? AND is_enabled = TRUE AND feature_key <> ?", (user_id, ACCOUNT_FEATURE))
-        items = [{"key": row["feature_key"], "enabled": True, "days": days_remaining(row["expired_at"]) + days} for row in current]
-        expired_at = sync_user_feature_licenses(user_id, items, preserve_unchanged=False)
+        current = db.fetch_all(
+            "SELECT feature_key, expired_at FROM user_feature_licenses WHERE user_id = ? AND is_enabled = TRUE AND feature_key <> ?",
+            (user_id, ACCOUNT_FEATURE),
+        )
+        items = [{"key": row["feature_key"], "enabled": True, "days": days} for row in current]
+        expired_at = sync_user_feature_licenses(user_id, items, preserve_unchanged=False, is_extend=True)
+        change_text = f"{'+' if days >= 0 else ''}{days} ngày (Tất cả tính năng)"
 
     db.execute("UPDATE users SET status = ?, expired_at = ? WHERE id = ?", ("approved" if expired_at > utcnow() else "expired", expired_at, user_id))
     log_activity(admin["username"], admin.get("role"), "extend_user", user["username"], user_id, user.get("role"),
-                 f"+{days} ngay", ip_address, ua)
-    return {"message": f"Extended {user['username']}", "expired_at": expired_at.isoformat() + "Z"}
+                 change_text, ip_address, ua)
+    return {"message": f"Updated {user['username']}", "expired_at": expired_at.isoformat() + "Z"}
 
 
 def ban_user(user_id: int, request: Request):

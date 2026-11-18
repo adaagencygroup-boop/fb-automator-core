@@ -990,6 +990,139 @@
   color: #94A3B8;
 }
 
+/* ─── Activity Log Pagination ─────────────────── */
+.ud-activity-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-top: 1px solid #F1F5F9;
+  background: #FFFFFF;
+  border-bottom-left-radius: 12px;
+  border-bottom-right-radius: 12px;
+}
+
+@media (min-width: 640px) {
+  .ud-activity-footer {
+    flex-direction: row;
+  }
+}
+
+.ud-activity-footer-text {
+  margin: 0;
+  font-size: 12px;
+  color: #64748B;
+  font-family: 'Inter', sans-serif;
+}
+
+.ud-activity-footer-strong {
+  font-weight: 600;
+  color: #1E293B;
+}
+
+.ud-activity-footer-page-info {
+  color: #94A3B8;
+}
+
+.ud-activity-footer-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ud-activity-page-size {
+  position: relative;
+}
+
+.ud-activity-page-size select {
+  appearance: none;
+  height: 28px;
+  padding: 0 28px 0 12px;
+  border-radius: 8px;
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  font-size: 12px;
+  font-weight: 500;
+  color: #334155;
+  cursor: pointer;
+  outline: none;
+  font-family: 'Inter', sans-serif;
+}
+
+.ud-activity-page-size select:hover {
+  border-color: #CBD5E1;
+}
+
+.ud-activity-page-size select:focus {
+  border-color: #2563EB;
+}
+
+.ud-activity-page-size-chevron {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  width: 8px;
+  height: 5px;
+}
+
+.ud-activity-pager {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ud-activity-pager-btn {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid #E2E8F0;
+  background: #FFFFFF;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: #334155;
+  transition: all 0.15s ease;
+  font-family: 'Inter', sans-serif;
+}
+
+.ud-activity-pager-btn:hover:not(:disabled):not(.ud-activity-pager-btn--current) {
+  background: #F8FAFC;
+  border-color: #CBD5E1;
+}
+
+.ud-activity-pager-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ud-activity-pager-btn--current {
+  background: #2563EB;
+  border-color: transparent;
+  color: #FFFFFF;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.25);
+}
+
+.ud-activity-pager-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 28px;
+  font-size: 12px;
+  color: #94A3B8;
+  user-select: none;
+}
+
 /* ─── Minimal Admin Footer ─────────────────────── */
 .ud-admin-footer {
   width: 100%;

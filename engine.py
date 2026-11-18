@@ -243,10 +243,22 @@ from modules.module_06_omnichannel_chat.routers import all_routers as module_06_
 for r in module_06_routers:
     app.include_router(r)
 
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 uploads_dir = str(UPLOADS_DIR)
 os.makedirs(uploads_dir, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+
+
+@app.get("/media/{bucket}/{object_path:path}")
+async def serve_stored_object(bucket: str, object_path: str):
+    """Facebook và trình duyệt lấy ảnh/video đã lưu trong PostgreSQL."""
+    from core.storage.postgres_objects import read_object
+
+    found = await anyio.to_thread.run_sync(read_object, bucket, unquote(object_path))
+    if not found or not found.get("data"):
+        raise HTTPException(status_code=404, detail="Không có file")
+    return Response(content=found["data"], media_type=found["content_type"] or "application/octet-stream")
 
 _PUBLIC_API = {
     "/api/health",

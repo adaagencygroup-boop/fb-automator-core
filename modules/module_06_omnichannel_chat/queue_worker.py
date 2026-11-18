@@ -208,7 +208,7 @@ async def process_webhook_event(event: Dict[str, Any]):
                                     else:
                                         att_url = f"/uploads/{local_filename}"
                                 except Exception as sb_err:
-                                    print(f"Supabase upload fallback: {sb_err}")
+                                    print(f"Luu file dinh kem that bai: {sb_err}")
                                     att_url = f"/uploads/{local_filename}"
                         except Exception as e:
                             print(f"Error downloading incoming attachment: {e}")

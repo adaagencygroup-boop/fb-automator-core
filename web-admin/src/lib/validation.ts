@@ -27,7 +27,7 @@ export interface PasswordValidationResult {
 
 /**
  * Kiểm tra định dạng mật khẩu hợp lệ:
- * - Độ dài: Từ 8 đến 12 ký tự, thống nhất với đăng ký và backend.
+ * - Độ dài: Tối thiểu 8 ký tự trở lên (không giới hạn trên), thống nhất với đăng ký và backend.
  * - Chữ cái viết hoa: Chứa ít nhất 1 chữ cái in hoa (A-Z).
  * - Chữ cái viết thường: Chứa ít nhất 1 chữ cái thường (a-z).
  * - Chữ số: Chứa ít nhất 1 chữ số (0-9).
@@ -35,7 +35,7 @@ export interface PasswordValidationResult {
  */
 export function validatePassword(password: string): PasswordValidationResult {
   const p = password || "";
-  const hasMinLength = p.length >= 8 && p.length <= 12;
+  const hasMinLength = p.length >= 8;
   const hasUppercase = /[A-Z]/.test(p);
   const hasLowercase = /[a-z]/.test(p);
   const hasNumber = /[0-9]/.test(p);
@@ -46,7 +46,7 @@ export function validatePassword(password: string): PasswordValidationResult {
   let message = "";
   if (!isValid) {
     const missing: string[] = [];
-    if (!hasMinLength) missing.push("từ 8 đến 12 ký tự");
+    if (!hasMinLength) missing.push("tối thiểu 8 ký tự");
     if (!hasUppercase) missing.push("1 chữ hoa (A-Z)");
     if (!hasLowercase) missing.push("1 chữ thường (a-z)");
     if (!hasNumber) missing.push("1 chữ số (0-9)");

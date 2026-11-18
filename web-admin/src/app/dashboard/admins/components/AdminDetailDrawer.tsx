@@ -18,8 +18,8 @@ interface AdminDetailDrawerProps {
   admin: User | null;
   onClose: () => void;
   onEdit: (user: User) => void;
-  onBan: (user: User) => void;
-  onUnban: (user: User) => void;
+  onBan?: (user: User) => void;
+  onUnban?: (user: User) => void;
   onDelete: (user: User) => void;
   onViewLogs?: (user: User) => void;
 }
@@ -209,22 +209,6 @@ export function AdminDetailDrawer({
           >
             <IconDetailPencil />
             <span>CHỈNH SỬA</span>
-          </button>
-
-          {/* Lock / Unlock */}
-          <button
-            type="button"
-            className="adm-drawer-action-btn adm-drawer-action-btn--danger"
-            onClick={() => {
-              if (isLocked) {
-                onUnban(admin);
-              } else {
-                onBan(admin);
-              }
-            }}
-          >
-            <IconDetailLock />
-            <span>{isLocked ? "MỞ KHÓA" : "KHÓA TÀI KHOẢN"}</span>
           </button>
 
           {/* Delete */}

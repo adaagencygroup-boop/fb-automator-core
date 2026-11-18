@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
-import { api, Notification } from "@/lib/api";
+import { api, Notification, getVpsBase } from "@/lib/api";
 import "./NotificationBell.css";
 
 function formatVietnamDateTime(dateStr?: string | null): string {
@@ -22,9 +22,12 @@ export default function NotificationBell() {
 
   const fetchNotifs = async () => {
     try {
-      const data = await api.getNotifications();
-      setNotifications(data);
-      setUnreadCount(data.filter((n) => !n.is_read).length);
+      const data = await api.getNotifications(false, "admin");
+      const adminOnly = data.filter(
+        (n) => n.target === "admin" || (!n.target && n.type === "NEW_REGISTRATION")
+      );
+      setNotifications(adminOnly);
+      setUnreadCount(adminOnly.filter((n) => !n.is_read).length);
     } catch {
       // VPS offline
     }
@@ -32,8 +35,38 @@ export default function NotificationBell() {
 
   useEffect(() => {
     fetchNotifs();
-    const interval = setInterval(fetchNotifs, 60000);
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchNotifs, 30000);
+
+    // Lắng nghe sự kiện cập nhật thông báo từ các trang khác (ví dụ: system-notifications)
+    const handleUpdate = () => {
+      fetchNotifs();
+    };
+    window.addEventListener("notifications_updated", handleUpdate);
+
+    // Lắng nghe realtime SSE từ server
+    const VPS_BASE = getVpsBase();
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource(`${VPS_BASE}/api/v1/admin/notifications/stream`, { withCredentials: true });
+      es.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === "NEW_REGISTRATION" || payload.type === "RESET_HWID") {
+            fetchNotifs();
+          }
+        } catch {
+          // ignore
+        }
+      };
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("notifications_updated", handleUpdate);
+      if (es) es.close();
+    };
   }, []);
 
   useEffect(() => {

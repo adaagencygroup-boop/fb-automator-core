@@ -140,7 +140,7 @@ export default function ReelsPostTab({ pages = [], accounts = [], loading = fals
     setIsRunning(true);
     setLogs((prev) => [
       `[${new Date().toLocaleTimeString()}] Bắt đầu chu trình đăng Reels lên các Fanpage đã chọn...`,
-      `[${new Date().toLocaleTimeString()}] Kiểm tra kết nối Supabase Storage bucket page-videos... OK`,
+      `[${new Date().toLocaleTimeString()}] Dùng video trong thư mục trên máy: ${rootFolder}`,
       ...prev,
     ]);
     await startReelsPostJob({
