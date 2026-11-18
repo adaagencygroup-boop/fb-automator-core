@@ -85,7 +85,7 @@ export default function PageManagerModule({ subPage } = {}) {
   if (subPage === "pages.history") {
     return (
       <div className="space-y-4">
-        <HistoryTab onSelectPost={handleOpenPostDetail} />
+        <HistoryTab onSelectPost={handleOpenPostDetail} isActive={true} />
         <PostDetailModal open={postModalOpen} onOpenChange={setPostModalOpen} post={selectedPost} />
       </div>
     );
@@ -122,7 +122,7 @@ export default function PageManagerModule({ subPage } = {}) {
         <YouTubeDownloadTab pages={pages} loading={loading} onPageUpdate={handlePageFieldUpdate} />
       </div>
       <div className={currentTab === "pages.history" ? "block" : "hidden"}>
-        <HistoryTab onSelectPost={handleOpenPostDetail} />
+        <HistoryTab onSelectPost={handleOpenPostDetail} isActive={currentTab === "pages.history"} />
       </div>
       <PostDetailModal open={postModalOpen} onOpenChange={setPostModalOpen} post={selectedPost} />
     </div>

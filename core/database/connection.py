@@ -51,7 +51,7 @@ class DatabaseManager:
         - Chuyển datetime('now', 'localtime') sang NOW()
         """
         if self._is_postgres:
-            q = query.replace("?", "%s")
+            q = re.sub(r"('(?:''|[^'])*')|\?", lambda m: m.group(1) if m.group(1) else "%s", query)
             q = re.sub(r"date\('now'\)", "CURRENT_DATE", q, flags=re.IGNORECASE)
             q = re.sub(r"datetime\('now',\s*'localtime'\)", "NOW()", q, flags=re.IGNORECASE)
             q = re.sub(r"datetime\('now'\)", "NOW()", q, flags=re.IGNORECASE)

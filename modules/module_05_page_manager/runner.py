@@ -45,6 +45,38 @@ def _resolve_download_mode(raw_kw: str, raw_link: str, is_direct: bool) -> str:
   if raw_link:
     return "PROFILE_ONLY"
   return "KEYWORD_ONLY"
+def _save_downloaded_video(page_id: str, video_id: str, source: str, title: str, object_path: str, download_mode: str):
+  """Lưu hoặc cập nhật video đã tải mà không phụ thuộc ràng buộc UNIQUE cũ."""
+  try:
+    exist = db.fetch_one(
+      "SELECT id FROM downloaded_videos WHERE page_id = %s AND source = %s AND video_id = %s ORDER BY id DESC LIMIT 1",
+      (page_id, source, video_id),
+    )
+    if exist and exist.get("id") is not None:
+      db.execute(
+        """UPDATE downloaded_videos
+        SET title = %s, object_path = %s, download_mode = %s, downloaded_at = NOW()
+        WHERE id = %s""",
+        (title, object_path, download_mode, exist["id"]),
+      )
+    else:
+      db.execute(
+        """INSERT INTO downloaded_videos (page_id, video_id, source, title, object_path, download_mode)
+        VALUES (%s, %s, %s, %s, %s, %s)""",
+        (page_id, video_id, source, title, object_path, download_mode),
+      )
+  except Exception:
+    pass
+def _log_download_event(page_id: str, source: str, status: str, title: str = "", video_id: str = None, object_path: str = "", error_message: str = ""):
+  """Ghi nhật ký tải video vào bảng download_logs."""
+  try:
+    db.execute(
+      """INSERT INTO download_logs (page_id, source, video_id, title, object_path, status, error_message)
+      VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+      (page_id, source, video_id, title or "", object_path or "", status, error_message or None),
+    )
+  except Exception:
+    pass
 def get_next_folder_number(page_dir: str) -> int:
   if not os.path.exists(page_dir):
     return 1
@@ -370,17 +402,8 @@ def run_tiktok_download_task(job_id: int, config: dict):
           success_count += 1
           with open(txt_path, "w", encoding="utf-8") as f:
             f.write(convert_tiktok_hashtags_to_facebook(raw_title))
-          db.execute(
-            """INSERT INTO downloaded_videos (page_id, video_id, source, title, object_path, download_mode)
-            VALUES (%s, %s, 'TIKTOK', %s, %s, %s)
-            ON CONFLICT (page_id, source, video_id) DO UPDATE SET title = EXCLUDED.title, object_path = EXCLUDED.object_path, download_mode = EXCLUDED.download_mode, downloaded_at = NOW()""",
-            (page_id, v_id, raw_title, f_path, dl_mode)
-          )
-          db.execute(
-            """INSERT INTO download_logs (page_id, source, video_id, title, object_path, status)
-            VALUES (%s, 'TIKTOK', %s, %s, %s, 'SUCCESS')""",
-            (page_id, v_id, raw_title, f_path)
-          )
+          _save_downloaded_video(page_id, v_id, "TIKTOK", raw_title, f_path, dl_mode)
+          _log_download_event(page_id, "TIKTOK", "SUCCESS", title=raw_title, video_id=v_id, object_path=f_path)
         else:
           _cleanup_failed_subfolder(video_sub_folder)
         if delay_sec > 0 and idx < len(videos) - 1:
@@ -406,13 +429,10 @@ def run_tiktok_download_task(job_id: int, config: dict):
           msg = f"Kênh '{raw_link}' Không Có Video Nào Khớp Từ Khóa '{raw_kw}'"
         else:
           msg = f"Không Tìm Thấy Video Nào Khả Dụng Cho '{target_label}'"
+        _log_download_event(page_id, "TIKTOK", "FAILED", title=target_label, error_message=msg)
       db.execute("UPDATE page_job_items SET status = %s, message = %s WHERE job_id = %s AND page_id = %s", (st, msg, job_id, page_id))
     except Exception as e:
-      db.execute(
-        """INSERT INTO download_logs (page_id, source, title, status, error_message)
-        VALUES (%s, 'TIKTOK', %s, 'FAILED', %s)""",
-        (page_id, target_label, str(e))
-      )
+      _log_download_event(page_id, "TIKTOK", "FAILED", title=target_label, error_message=str(e))
       db.execute("UPDATE page_job_items SET status = 'FAILED', message = %s WHERE job_id = %s AND page_id = %s", (str(e), job_id, page_id))
     if delay_sec > 0:
       time.sleep(delay_sec)
@@ -536,17 +556,8 @@ def run_youtube_download_task(job_id: int, config: dict):
                 with open(txt_path, "w", encoding="utf-8") as tf:
                   tf.write(clean_title)
                 downloaded_items.append({"id": v_id, "title": clean_title, "path": f_path})
-                db.execute(
-                  """INSERT INTO downloaded_videos (page_id, video_id, source, title, object_path, download_mode)
-                  VALUES (%s, %s, 'YOUTUBE', %s, %s, %s)
-                  ON CONFLICT (page_id, source, video_id) DO UPDATE SET title = EXCLUDED.title, object_path = EXCLUDED.object_path, download_mode = EXCLUDED.download_mode, downloaded_at = NOW()""",
-                  (page_id, v_id, clean_title, f_path, dl_mode)
-                )
-                db.execute(
-                  """INSERT INTO download_logs (page_id, source, video_id, title, object_path, status)
-                  VALUES (%s, 'YOUTUBE', %s, %s, %s, 'SUCCESS')""",
-                  (page_id, v_id, clean_title, f_path)
-                )
+                _save_downloaded_video(page_id, v_id, "YOUTUBE", clean_title, f_path, dl_mode)
+                _log_download_event(page_id, "YOUTUBE", "SUCCESS", title=clean_title, video_id=v_id, object_path=f_path)
               else:
                 _cleanup_failed_subfolder(video_sub_folder)
             except Exception as dl_err:
@@ -571,13 +582,10 @@ def run_youtube_download_task(job_id: int, config: dict):
           msg = f"Kênh '{link}' Không Có Video Nào Khớp Từ Khóa '{kw}'"
         else:
           msg = "Không Tìm Thấy Video Khả Dụng"
+        _log_download_event(page_id, "YOUTUBE", "FAILED", title=kw or link or page_name, error_message=msg)
       db.execute("UPDATE page_job_items SET status = %s, message = %s WHERE job_id = %s AND page_id = %s", (st, msg, job_id, page_id))
     except Exception as e:
-      db.execute(
-        """INSERT INTO download_logs (page_id, source, title, status, error_message)
-        VALUES (%s, 'YOUTUBE', %s, 'FAILED', %s)""",
-        (page_id, kw or link, str(e))
-      )
+      _log_download_event(page_id, "YOUTUBE", "FAILED", title=kw or link or page_name, error_message=str(e))
       db.execute("UPDATE page_job_items SET status = 'FAILED', message = %s WHERE job_id = %s AND page_id = %s", (str(e), job_id, page_id))
     if delay_sec > 0:
       time.sleep(delay_sec)

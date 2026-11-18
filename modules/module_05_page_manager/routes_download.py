@@ -325,7 +325,7 @@ def get_history_list(post_type: Optional[str] = None, status: Optional[str] = No
   queries = []
   params = []
   if not p_type or p_type == "ALL" or p_type in ("TIKTOK", "YOUTUBE"):
-    q1 = "SELECT l.id::text as id, l.page_id::text as page_id, l.source as post_type, coalesce(l.title, '') as title, coalesce(l.video_id, '') as caption, '' as post_url, coalesce(l.object_path, '') as object_path, l.status, coalesce(l.error_message, '') as error_message, l.created_at as posted_at, coalesce(p.page_name, 'Fanpage') as page_name, coalesce(p.account_uid, '') as account_uid, coalesce((SELECT profile_name FROM accounts WHERE uid = p.account_uid LIMIT 1), '') as account_name, ('https://graph.facebook.com/' || coalesce(p.page_id, l.page_id::text) || '/picture?type=square&width=80&height=80') as avatar FROM download_logs l LEFT JOIN LATERAL (SELECT page_id, page_name, account_uid FROM pages WHERE page_id = l.page_id OR id::text = l.page_id LIMIT 1) p ON true WHERE 1=1"
+    q1 = "SELECT l.id::text as id, l.page_id::text as page_id, l.source::text as post_type, coalesce(l.title, '')::text as title, coalesce(l.video_id, '')::text as caption, ''::text as post_url, coalesce(l.object_path, '')::text as object_path, l.status::text as status, coalesce(l.error_message, '')::text as error_message, l.created_at as posted_at, coalesce(nullif(p.page_name, ''), nullif(am.page_name, ''), 'Fanpage')::text as page_name, coalesce(nullif(p.account_uid, ''), nullif(am.account_uid, ''), '')::text as account_uid, coalesce((SELECT profile_name FROM accounts WHERE uid = coalesce(nullif(p.account_uid, ''), am.account_uid) LIMIT 1), '')::text as account_name, coalesce(nullif(am.avatar_url, ''), '')::text as avatar, coalesce(p.page_id, '')::text as fb_page_id FROM download_logs l LEFT JOIN LATERAL (SELECT page_id, page_name, account_uid FROM pages WHERE page_id = l.page_id OR id::text = l.page_id LIMIT 1) p ON true LEFT JOIN LATERAL (SELECT page_name, account_uid, avatar_url FROM ai_managed_pages WHERE page_key = l.page_id LIMIT 1) am ON true WHERE 1=1"
     if p_type in ("TIKTOK", "YOUTUBE"):
       q1 += " AND l.source = %s"
       params.append(p_type)
@@ -334,7 +334,7 @@ def get_history_list(post_type: Optional[str] = None, status: Optional[str] = No
       params.append(st_filter)
     queries.append(q1)
   if not p_type or p_type == "ALL" or p_type in ("AI", "REEL", "REELS"):
-    q2 = "SELECT h.id::text as id, h.page_id::text as page_id, h.post_type, coalesce(h.title, '') as title, coalesce(h.caption, '') as caption, coalesce(h.post_url, '') as post_url, coalesce(h.media_path, '') as object_path, h.status, coalesce(h.error_message, '') as error_message, h.posted_at, coalesce(p.page_name, nullif(h.title, ''), 'Fanpage') as page_name, coalesce(h.account_uid, p.account_uid, '') as account_uid, coalesce((SELECT profile_name FROM accounts WHERE uid = coalesce(h.account_uid, p.account_uid) LIMIT 1), '') as account_name, ('https://graph.facebook.com/' || coalesce(p.page_id, h.page_id::text) || '/picture?type=square&width=80&height=80') as avatar FROM posting_history h LEFT JOIN LATERAL (SELECT page_id, page_name, account_uid FROM pages WHERE page_id = h.page_id OR id::text = h.page_id LIMIT 1) p ON true WHERE 1=1"
+    q2 = "SELECT h.id::text as id, h.page_id::text as page_id, h.post_type::text as post_type, coalesce(h.title, '')::text as title, coalesce(h.caption, '')::text as caption, coalesce(h.post_url, '')::text as post_url, coalesce(h.media_path, '')::text as object_path, h.status::text as status, coalesce(h.error_message, '')::text as error_message, h.posted_at as posted_at, coalesce(nullif(p.page_name, ''), nullif(am.page_name, ''), nullif(h.title, ''), 'Fanpage')::text as page_name, coalesce(nullif(h.account_uid, ''), nullif(p.account_uid, ''), nullif(am.account_uid, ''), '')::text as account_uid, coalesce((SELECT profile_name FROM accounts WHERE uid = coalesce(nullif(h.account_uid, ''), nullif(p.account_uid, ''), am.account_uid) LIMIT 1), '')::text as account_name, coalesce(nullif(am.avatar_url, ''), '')::text as avatar, coalesce(p.page_id, '')::text as fb_page_id FROM posting_history h LEFT JOIN LATERAL (SELECT page_id, page_name, account_uid FROM pages WHERE page_id = h.page_id OR id::text = h.page_id LIMIT 1) p ON true LEFT JOIN LATERAL (SELECT page_name, account_uid, avatar_url FROM ai_managed_pages WHERE page_key = h.page_id LIMIT 1) am ON true WHERE 1=1"
     if p_type in ("AI", "REEL", "REELS"):
       target_type = "REEL" if "REEL" in p_type else "AI"
       q2 += " AND (h.post_type = %s OR h.post_type = %s)"
@@ -343,8 +343,8 @@ def get_history_list(post_type: Optional[str] = None, status: Optional[str] = No
       q2 += " AND h.status = %s"
       params.append(st_filter)
     queries.append(q2)
-  if p_type == "DELETE":
-    q3 = "SELECT a.id::text as id, a.page_id::text as page_id, a.action_type as post_type, coalesce(a.title, '') as title, coalesce(a.details, '') as caption, '' as post_url, coalesce(a.object_path, '') as object_path, a.status, coalesce(a.error_message, '') as error_message, a.created_at as posted_at, coalesce(a.page_name, 'Fanpage') as page_name, '' as account_uid, '' as account_name, '' as avatar FROM page_activity_logs a WHERE a.action_type = 'DELETE'"
+  if not p_type or p_type == "ALL" or p_type == "DELETE":
+    q3 = "SELECT a.id::text as id, a.page_id::text as page_id, a.action_type::text as post_type, coalesce(a.title, '')::text as title, coalesce(a.details, '')::text as caption, ''::text as post_url, coalesce(a.object_path, '')::text as object_path, a.status::text as status, coalesce(a.error_message, '')::text as error_message, a.created_at as posted_at, coalesce(a.page_name, 'Fanpage')::text as page_name, ''::text as account_uid, ''::text as account_name, ''::text as avatar, ''::text as fb_page_id FROM page_activity_logs a WHERE a.action_type = 'DELETE'"
     if st_filter and st_filter != "ALL":
       q3 += " AND a.status = %s"
       params.append(st_filter)
@@ -359,8 +359,12 @@ def get_history_list(post_type: Optional[str] = None, status: Optional[str] = No
     final_params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
   final_query += " ORDER BY u.posted_at DESC LIMIT %s OFFSET %s"
   final_params.extend([limit, offset])
-  rows = db.fetch_all(final_query, tuple(final_params))
-  return {"history": rows or []}
+  rows = db.fetch_all(final_query, tuple(final_params)) or []
+  for row in rows:
+    fb_pid = str(row.pop("fb_page_id", "") or row.get("page_id") or "").strip()
+    if not row.get("avatar") and fb_pid.isdigit():
+      row["avatar"] = f"https://graph.facebook.com/{fb_pid}/picture?type=square&width=80&height=80"
+  return {"history": rows}
 @router.get("/history/{page_id}")
 def get_page_history_detail(page_id: str, source: Optional[str] = None):
   ensure_page_activity_table()

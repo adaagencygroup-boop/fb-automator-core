@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -124,7 +124,7 @@ function getStatusBadge(status) {
     </span>
   );
 }
-export default function HistoryTab({ onSelectPost }) {
+export default function HistoryTab({ onSelectPost, isActive = true }) {
   const [activeTab, setActiveTab] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [searchTerm, setSearchTerm] = useState("");
@@ -169,9 +169,17 @@ export default function HistoryTab({ onSelectPost }) {
       setRefreshing(false);
     }
   };
+  const prevActiveRef = useRef(isActive);
   useEffect(() => {
     loadStats(true);
   }, []);
+  useEffect(() => {
+    if (isActive && !prevActiveRef.current) {
+      loadStats(true);
+      loadHistory(true);
+    }
+    prevActiveRef.current = isActive;
+  }, [isActive]);
   useEffect(() => {
     setCurrentPage(1);
     loadHistory(true);
