@@ -430,7 +430,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     const displayName = targetItem.link && targetItem.keyword ? `${targetItem.link} ["${targetItem.keyword}"]` : (targetItem.link || (targetItem.keyword ? `Từ Khóa: "${targetItem.keyword}"` : (targetItem.page_name || "Fanpage")));
     addLog(`[${getUtc7Time()}] Thư Mục Lưu: ${downloadFolder} | Giới Hạn: ${Number(maxVideos) || 1} Video/Page`);
     addLog(`[${getUtc7Time()}] Bắt Đầu Tải Cho Fanpage "${targetItem.page_name}" (${displayName})...`);
-    setItems((prev) => prev.map((item) => (item.id === it.id ? { ...item, status: "RUNNING", message: "Đang Tải Video..." } : item)));
+    setItems((prev) => prev.map((item) => (item.id === it.id ? { ...item, status: "RUNNING", message: "Đang Tìm Kiếm Video..." } : item)));
     const res = await startTikTokDownloadJob({
       download_folder: downloadFolder,
       delay_sec: delaySec,
@@ -451,7 +451,9 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
             setItems((prevItems) =>
               prevItems.map((p) => {
                 if (p.id === it.id || String(p.page_id) === String(backendItem.page_id)) {
-                  return { ...p, status: backendItem.status, message: toTitleCase(backendItem.message) };
+                  const nextStatus = (backendItem.status === "PENDING" && backendItem.message !== "Đã Dừng" && p.status === "RUNNING") ? "RUNNING" : backendItem.status;
+                  const nextMsg = toTitleCase(backendItem.message) || (nextStatus === "RUNNING" ? (p.message || "Đang Tải Video...") : "");
+                  return { ...p, status: nextStatus, message: nextMsg };
                 }
                 return p;
               })
@@ -497,7 +499,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     setIsRunning(false);
     await stopJob("tiktok");
-    setItems((prev) => prev.map((item) => (item.id === it.id ? { ...item, status: "PENDING", message: "Đã Dừng" } : item)));
+    setItems((prev) => prev.map((item) => (item.id === it.id ? { ...item, status: "PENDING", message: "Đã Dừng" } : item.message === "Đang Chờ Lượt..." ? { ...item, status: "PENDING", message: "" } : item)));
     addLog(`[${getUtc7Time()}] Đã Gửi Lệnh Dừng Tải Cho Fanpage "${it.page_name}".`);
   };
   const handleStart = async () => {
@@ -533,6 +535,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
       if (cur) savePageItemData(pid, cur.keyword || "", cur.link || "");
     });
     setIsRunning(true);
+    setItems((prev) => prev.map((p, idx) => (idx === 0 ? { ...p, status: "RUNNING", message: "Đang Tìm Kiếm Video..." } : { ...p, status: "PENDING", message: "Đang Chờ Lượt..." })));
     addLog(`[${getUtc7Time()}] Thư Mục Lưu: ${downloadFolder} | Giới Hạn: ${Number(maxVideos) || 1} Video/Page`);
     addLog(`[${getUtc7Time()}] Bắt Đầu Tác Vụ Tải Hàng Loạt TikTok (${items.length} Fanpage)...`);
     loggedStatusesRef.current = {};
@@ -553,7 +556,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
         if (statusData && statusData.items && !isDone) {
           const itemMap = {};
           statusData.items.forEach((it) => {
-            itemMap[it.page_id] = it;
+            itemMap[String(it.page_id)] = it;
           });
           const newLogs = [];
           const nowStr = getUtc7Time();
@@ -562,19 +565,21 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
               const pid = String(p.page_id || p.id);
               const backendItem = itemMap[pid];
               if (backendItem) {
+                const nextStatus = (backendItem.status === "PENDING" && backendItem.message !== "Đã Dừng" && p.status === "RUNNING") ? "RUNNING" : backendItem.status;
+                const nextMsg = toTitleCase(backendItem.message) || (nextStatus === "RUNNING" ? (p.message || "Đang Tải Video...") : "");
                 const prevLogged = loggedStatusesRef.current[pid];
                 const displayName = p.link && p.keyword ? `${p.link} ["${p.keyword}"]` : (p.link || (p.keyword ? `Từ Khóa: "${p.keyword}"` : (p.page_name || "Nguồn")));
-                if (backendItem.status === "RUNNING" && prevLogged !== "RUNNING") {
+                if (nextStatus === "RUNNING" && prevLogged !== "RUNNING") {
                   loggedStatusesRef.current[pid] = "RUNNING";
                   newLogs.push(`[${nowStr}] [${displayName}] Đang Xử Lý Tải Video...`);
-                } else if (backendItem.status === "SUCCESS" && prevLogged !== "SUCCESS") {
+                } else if (nextStatus === "SUCCESS" && prevLogged !== "SUCCESS") {
                   loggedStatusesRef.current[pid] = "SUCCESS";
                   newLogs.push(`[${nowStr}] [${displayName}] Thành Công: ${toTitleCase(backendItem.message || "Đã Tải Xong Video")}`);
-                } else if (backendItem.status === "FAILED" && prevLogged !== "FAILED") {
+                } else if (nextStatus === "FAILED" && prevLogged !== "FAILED") {
                   loggedStatusesRef.current[pid] = "FAILED";
                   newLogs.push(`[${nowStr}] [${displayName}] Thất Bại: ${toTitleCase(backendItem.message || "Lỗi Không Xác Định")}`);
                 }
-                return { ...p, status: backendItem.status, message: toTitleCase(backendItem.message) };
+                return { ...p, status: nextStatus, message: nextMsg };
               }
               return p;
             })
@@ -620,6 +625,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     setIsRunning(false);
     await stopJob("tiktok");
+    setItems((prev) => prev.map((item) => (item.status === "RUNNING" ? { ...item, status: "PENDING", message: "Đã Dừng" } : item.message === "Đang Chờ Lượt..." ? { ...item, status: "PENDING", message: "" } : item)));
     addLog(`[${getUtc7Time()}] Đã Gửi Lệnh Dừng Tiến Trình Tải TikTok.`);
   };
   const handleOpenLogin = async () => {
@@ -982,17 +988,38 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                             </div>
                           </TableCell>
                           <TableCell className="text-center w-24 whitespace-nowrap p-2">
-                            <div className="flex flex-col items-center gap-1">
-                              <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-normal whitespace-nowrap shrink-0 ${it.status === "SUCCESS" ? "bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400" : it.status === "RUNNING" ? "bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-400" : it.status === "FAILED" ? "bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-400" : "bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950/40 dark:text-blue-400"}`} title={toTitleCase(it.message) || ""}>
-                                <span className={`w-1.5 h-1.5 rounded-full ${it.status === "SUCCESS" ? "bg-emerald-500" : it.status === "RUNNING" ? "bg-amber-500 animate-pulse" : it.status === "FAILED" ? "bg-rose-500" : "bg-blue-500"}`}></span>
-                                {it.status === "SUCCESS" ? "Thành Công" : it.status === "RUNNING" ? "Đang Tải..." : it.status === "FAILED" ? "Lỗi" : "Chờ Lệnh..."}
-                              </span>
-                              {it.message && (
-                                <span className={`text-[10px] font-normal text-center line-clamp-1 max-w-[100px] leading-tight cursor-help ${it.status === "FAILED" ? "text-rose-600 dark:text-rose-400" : "text-muted-foreground"}`} title={toTitleCase(it.message)}>
-                                  {toTitleCase(it.message)}
+                            {(() => {
+                              const detailText = it.message ? toTitleCase(it.message) : "";
+                              const fallbackText = it.status === "SUCCESS" ? "Thành Công" : it.status === "RUNNING" ? "Đang Tải..." : it.status === "FAILED" ? "Lỗi" : "Chờ Lệnh...";
+                              const labelText = detailText || fallbackText;
+                              return (
+                                <span
+                                  className={`inline-flex items-center justify-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-normal max-w-[180px] ${
+                                    it.status === "SUCCESS"
+                                      ? "bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400"
+                                      : it.status === "RUNNING"
+                                      ? "bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-400"
+                                      : it.status === "FAILED"
+                                      ? "bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-400"
+                                      : "bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950/40 dark:text-blue-400"
+                                  }`}
+                                  title={labelText}
+                                >
+                                  <span
+                                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                      it.status === "SUCCESS"
+                                        ? "bg-emerald-500"
+                                        : it.status === "RUNNING"
+                                        ? "bg-amber-500 animate-pulse"
+                                        : it.status === "FAILED"
+                                        ? "bg-rose-500"
+                                        : "bg-blue-500"
+                                    }`}
+                                  ></span>
+                                  <span className="truncate">{labelText}</span>
                                 </span>
-                              )}
-                            </div>
+                              );
+                            })()}
                           </TableCell>
                           <TableCell className="text-center p-2 whitespace-nowrap w-36">
                             <div className="inline-flex items-center gap-1">

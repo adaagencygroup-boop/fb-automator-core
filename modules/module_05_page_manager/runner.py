@@ -353,6 +353,7 @@ def run_tiktok_download_task(job_id: int, config: dict):
         direct_url = v.get("source_url") or f"https://www.tiktok.com/@{author}/video/{v_id}"
         play_url = v.get("play") or v.get("hdplay") or v.get("wmplay")
         raw_title = v.get("title") or raw_kw or target_label
+        db.execute("UPDATE page_job_items SET status = 'RUNNING', message = %s WHERE job_id = %s AND page_id = %s", (f"Đang Tải Video ({success_count + 1}/{max_videos})...", job_id, page_id))
         video_sub_folder = _allocate_video_subfolder(page_folder)
         f_path = os.path.join(video_sub_folder, f"{v_id}.mp4")
         txt_path = os.path.join(video_sub_folder, f"{v_id}.txt")
@@ -384,12 +385,17 @@ def run_tiktok_download_task(job_id: int, config: dict):
           _cleanup_failed_subfolder(video_sub_folder)
         if delay_sec > 0 and idx < len(videos) - 1:
           time.sleep(delay_sec)
+      with _jobs_lock:
+        is_stopped = not _active_jobs.get("TIKTOK", {}).get("running", False)
       if success_count > 0:
         msg = f"Đã Tải {success_count} Video TikTok" + (f" (Đã Bỏ Qua {skipped_count} Video Trùng)" if skipped_count else "")
         st = "SUCCESS"
       elif skipped_count > 0:
         msg = f"Đã Có Sẵn {skipped_count} Video Trong Thư Mục (Đã Bỏ Qua Trùng Lặp)"
         st = "SUCCESS"
+      elif is_stopped:
+        msg = "Đã Dừng"
+        st = "PENDING"
       else:
         st = "FAILED"
         if raw_link and raw_kw and len(videos) == 0:
@@ -416,6 +422,7 @@ def run_tiktok_download_task(job_id: int, config: dict):
   else:
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
       list(executor.map(process_tiktok_item, items))
+  db.execute("UPDATE page_job_items SET message = '' WHERE job_id = %s AND status = 'PENDING' AND message = 'Đang Chờ Lượt...'", (job_id,))
   db.execute("UPDATE page_jobs SET status = 'FINISHED', finished_at = NOW() WHERE id = %s", (job_id,))
   with _jobs_lock:
     _active_jobs.pop("TIKTOK", None)
@@ -468,6 +475,7 @@ def run_youtube_download_task(job_id: int, config: dict):
         target_queries = [link]
     else:
       target_queries = [f"ytsearch{max_videos}:{kw} #shorts"]
+    db.execute("UPDATE page_job_items SET status = 'RUNNING', message = 'Đang Tìm Kiếm Video...' WHERE job_id = %s AND page_id = %s", (job_id, page_id))
     try:
       search_opts = build_youtube_ydl_opts(outtmpl=os.path.join(page_folder, "%(id)s.%(ext)s"), cookie_browser=cookie_browser, cookie_file=cookie_file)
       search_opts["extract_flat"] = "in_playlist"
@@ -514,6 +522,7 @@ def run_youtube_download_task(job_id: int, config: dict):
             if _is_downloaded_video_present(page_id, "YOUTUBE", v_id):
               skipped_count += 1
               continue
+            db.execute("UPDATE page_job_items SET status = 'RUNNING', message = %s WHERE job_id = %s AND page_id = %s", (f"Đang Tải Video ({len(downloaded_items) + 1}/{max_videos})...", job_id, page_id))
             video_sub_folder = _allocate_video_subfolder(page_folder)
             vid_url = f"https://www.youtube.com/watch?v={v_id}"
             ydl_opts = build_youtube_ydl_opts(outtmpl=os.path.join(video_sub_folder, "%(id)s.%(ext)s"), cookie_browser=cookie_browser, cookie_file=cookie_file)
@@ -543,12 +552,17 @@ def run_youtube_download_task(job_id: int, config: dict):
             except Exception as dl_err:
               last_error = str(dl_err)
               _cleanup_failed_subfolder(video_sub_folder)
+      with _jobs_lock:
+        is_stopped = not _active_jobs.get("YOUTUBE", {}).get("running", False)
       if downloaded_items:
         msg = f"Đã Tải {len(downloaded_items)} Video YouTube" + (f" (Đã Bỏ Qua {skipped_count} Video Trùng)" if skipped_count else "")
         st = "SUCCESS"
       elif skipped_count > 0:
         msg = f"Đã Có Sẵn {skipped_count} Video Trong Thư Mục (Đã Bỏ Qua Trùng Lặp)"
         st = "SUCCESS"
+      elif is_stopped:
+        msg = "Đã Dừng"
+        st = "PENDING"
       else:
         st = "FAILED"
         if last_error:
@@ -573,6 +587,7 @@ def run_youtube_download_task(job_id: int, config: dict):
   else:
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
       list(executor.map(process_youtube_item, items))
+  db.execute("UPDATE page_job_items SET message = '' WHERE job_id = %s AND status = 'PENDING' AND message = 'Đang Chờ Lượt...'", (job_id,))
   db.execute("UPDATE page_jobs SET status = 'FINISHED', finished_at = NOW() WHERE id = %s", (job_id,))
   with _jobs_lock:
     _active_jobs.pop("YOUTUBE", None)

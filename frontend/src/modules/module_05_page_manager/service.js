@@ -184,9 +184,9 @@ export async function stopJob(jobType) {
     return { success: false };
   }
 }
-export async function getHistoryStats() {
+export async function getHistoryStats(fresh = false) {
   try {
-    const res = await api.get("/api/pages/history/stats");
+    const res = await api.get("/api/pages/history/stats", { fresh });
     if (res && res.ai) return res;
     return {
       total: 0,
@@ -207,7 +207,7 @@ export async function getHistoryStats() {
     };
   }
 }
-export async function getHistory(postType, search, status, limit = 200, offset = 0) {
+export async function getHistory(postType, search, status, limit = 200, offset = 0, fresh = false) {
   try {
     const params = {};
     if (postType && postType !== "ALL") params.post_type = postType;
@@ -215,7 +215,7 @@ export async function getHistory(postType, search, status, limit = 200, offset =
     if (status && status !== "ALL") params.status = status;
     if (limit) params.limit = limit;
     if (offset) params.offset = offset;
-    const res = await api.get("/api/pages/history", { params });
+    const res = await api.get("/api/pages/history", { params, fresh });
     if (res && Array.isArray(res.history)) return res.history;
     if (Array.isArray(res)) return res;
     return [];
