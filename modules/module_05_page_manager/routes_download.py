@@ -325,7 +325,7 @@ def get_history_list(post_type: Optional[str] = None, status: Optional[str] = No
   queries = []
   params = []
   if not p_type or p_type == "ALL" or p_type in ("TIKTOK", "YOUTUBE"):
-    q1 = "SELECT l.id::text as id, l.page_id::text as page_id, l.source as post_type, coalesce(l.title, '') as title, coalesce(l.video_id, '') as caption, coalesce(l.object_path, '') as object_path, l.status, coalesce(l.error_message, '') as error_message, l.created_at as posted_at, coalesce(p.page_name, 'Fanpage') as page_name, coalesce(p.account_uid, '') as account_uid, coalesce((SELECT profile_name FROM accounts WHERE uid = p.account_uid LIMIT 1), '') as account_name FROM download_logs l LEFT JOIN LATERAL (SELECT page_name, account_uid FROM pages WHERE page_id = l.page_id OR id::text = l.page_id LIMIT 1) p ON true WHERE 1=1"
+    q1 = "SELECT l.id::text as id, l.page_id::text as page_id, l.source as post_type, coalesce(l.title, '') as title, coalesce(l.video_id, '') as caption, '' as post_url, coalesce(l.object_path, '') as object_path, l.status, coalesce(l.error_message, '') as error_message, l.created_at as posted_at, coalesce(p.page_name, 'Fanpage') as page_name, coalesce(p.account_uid, '') as account_uid, coalesce((SELECT profile_name FROM accounts WHERE uid = p.account_uid LIMIT 1), '') as account_name FROM download_logs l LEFT JOIN LATERAL (SELECT page_name, account_uid FROM pages WHERE page_id = l.page_id OR id::text = l.page_id LIMIT 1) p ON true WHERE 1=1"
     if p_type in ("TIKTOK", "YOUTUBE"):
       q1 += " AND l.source = %s"
       params.append(p_type)
@@ -334,7 +334,7 @@ def get_history_list(post_type: Optional[str] = None, status: Optional[str] = No
       params.append(st_filter)
     queries.append(q1)
   if not p_type or p_type == "ALL" or p_type in ("AI", "REEL", "REELS"):
-    q2 = "SELECT h.id::text as id, h.page_id::text as page_id, h.post_type, coalesce(h.title, '') as title, coalesce(h.caption, '') as caption, coalesce(h.media_path, h.post_url, '') as object_path, h.status, coalesce(h.error_message, '') as error_message, h.posted_at, coalesce(p.page_name, 'Fanpage') as page_name, coalesce(h.account_uid, p.account_uid, '') as account_uid, coalesce((SELECT profile_name FROM accounts WHERE uid = coalesce(h.account_uid, p.account_uid) LIMIT 1), '') as account_name FROM posting_history h LEFT JOIN LATERAL (SELECT page_name, account_uid FROM pages WHERE page_id = h.page_id OR id::text = h.page_id LIMIT 1) p ON true WHERE 1=1"
+    q2 = "SELECT h.id::text as id, h.page_id::text as page_id, h.post_type, coalesce(h.title, '') as title, coalesce(h.caption, '') as caption, coalesce(h.post_url, '') as post_url, coalesce(h.media_path, '') as object_path, h.status, coalesce(h.error_message, '') as error_message, h.posted_at, coalesce(p.page_name, 'Fanpage') as page_name, coalesce(h.account_uid, p.account_uid, '') as account_uid, coalesce((SELECT profile_name FROM accounts WHERE uid = coalesce(h.account_uid, p.account_uid) LIMIT 1), '') as account_name FROM posting_history h LEFT JOIN LATERAL (SELECT page_name, account_uid FROM pages WHERE page_id = h.page_id OR id::text = h.page_id LIMIT 1) p ON true WHERE 1=1"
     if p_type in ("AI", "REEL", "REELS"):
       target_type = "REEL" if "REEL" in p_type else "AI"
       q2 += " AND (h.post_type = %s OR h.post_type = %s)"
@@ -344,7 +344,7 @@ def get_history_list(post_type: Optional[str] = None, status: Optional[str] = No
       params.append(st_filter)
     queries.append(q2)
   if not p_type or p_type == "ALL" or p_type == "DELETE":
-    q3 = "SELECT a.id::text as id, a.page_id::text as page_id, a.action_type as post_type, coalesce(a.title, '') as title, coalesce(a.details, '') as caption, coalesce(a.object_path, '') as object_path, a.status, coalesce(a.error_message, '') as error_message, a.created_at as posted_at, coalesce(a.page_name, 'Fanpage') as page_name, '' as account_uid, '' as account_name FROM page_activity_logs a WHERE 1=1"
+    q3 = "SELECT a.id::text as id, a.page_id::text as page_id, a.action_type as post_type, coalesce(a.title, '') as title, coalesce(a.details, '') as caption, '' as post_url, coalesce(a.object_path, '') as object_path, a.status, coalesce(a.error_message, '') as error_message, a.created_at as posted_at, coalesce(a.page_name, 'Fanpage') as page_name, '' as account_uid, '' as account_name FROM page_activity_logs a WHERE 1=1"
     if p_type == "DELETE":
       q3 += " AND a.action_type = 'DELETE'"
     if st_filter and st_filter != "ALL":
@@ -368,20 +368,20 @@ def get_page_history_detail(page_id: str, source: Optional[str] = None):
   ensure_page_activity_table()
   s = source.upper().strip() if source else None
   if s in ("TIKTOK", "YOUTUBE"):
-    rows = db.fetch_all("SELECT id::text as id, page_id, source as post_type, video_id, title, object_path, status, error_message, created_at as posted_at FROM download_logs WHERE (page_id = %s OR page_id = (SELECT page_id FROM pages WHERE id::text = %s LIMIT 1)) AND source = %s ORDER BY id DESC LIMIT 100", (page_id, page_id, s))
+    rows = db.fetch_all("SELECT id::text as id, page_id, source as post_type, video_id, title, '' as post_url, object_path, status, error_message, created_at as posted_at FROM download_logs WHERE (page_id = %s OR page_id = (SELECT page_id FROM pages WHERE id::text = %s LIMIT 1)) AND source = %s ORDER BY id DESC LIMIT 100", (page_id, page_id, s))
   elif s in ("AI", "REEL", "REELS"):
     target = "REEL" if "REEL" in s else "AI"
-    rows = db.fetch_all("SELECT id::text as id, page_id, post_type, title, caption, media_path as object_path, status, error_message, posted_at FROM posting_history WHERE (page_id = %s OR page_id = (SELECT page_id FROM pages WHERE id::text = %s LIMIT 1)) AND (post_type = %s OR post_type = %s) ORDER BY id DESC LIMIT 100", (page_id, page_id, target, f"{target}S"))
+    rows = db.fetch_all("SELECT id::text as id, page_id, post_type, title, caption, coalesce(post_url, '') as post_url, coalesce(media_path, '') as object_path, status, error_message, posted_at FROM posting_history WHERE (page_id = %s OR page_id = (SELECT page_id FROM pages WHERE id::text = %s LIMIT 1)) AND (post_type = %s OR post_type = %s) ORDER BY id DESC LIMIT 100", (page_id, page_id, target, f"{target}S"))
   elif s == "DELETE":
-    rows = db.fetch_all("SELECT id::text as id, page_id, action_type as post_type, title, details as caption, object_path, status, error_message, created_at as posted_at FROM page_activity_logs WHERE (page_id = %s OR page_id = (SELECT page_id FROM pages WHERE id::text = %s LIMIT 1)) AND action_type = 'DELETE' ORDER BY id DESC LIMIT 100", (page_id, page_id))
+    rows = db.fetch_all("SELECT id::text as id, page_id, action_type as post_type, title, details as caption, '' as post_url, object_path, status, error_message, created_at as posted_at FROM page_activity_logs WHERE (page_id = %s OR page_id = (SELECT page_id FROM pages WHERE id::text = %s LIMIT 1)) AND action_type = 'DELETE' ORDER BY id DESC LIMIT 100", (page_id, page_id))
   else:
     rows = db.fetch_all("""
       SELECT * FROM (
-        SELECT id::text as id, page_id, source as post_type, title, video_id as caption, object_path, status, error_message, created_at as posted_at FROM download_logs WHERE (page_id = %s OR page_id = (SELECT page_id FROM pages WHERE id::text = %s LIMIT 1))
+        SELECT id::text as id, page_id, source as post_type, title, video_id as caption, '' as post_url, object_path, status, error_message, created_at as posted_at FROM download_logs WHERE (page_id = %s OR page_id = (SELECT page_id FROM pages WHERE id::text = %s LIMIT 1))
         UNION ALL
-        SELECT id::text as id, page_id, post_type, title, caption, media_path as object_path, status, error_message, posted_at FROM posting_history WHERE (page_id = %s OR page_id = (SELECT page_id FROM pages WHERE id::text = %s LIMIT 1))
+        SELECT id::text as id, page_id, post_type, title, caption, coalesce(post_url, '') as post_url, coalesce(media_path, '') as object_path, status, error_message, posted_at FROM posting_history WHERE (page_id = %s OR page_id = (SELECT page_id FROM pages WHERE id::text = %s LIMIT 1))
         UNION ALL
-        SELECT id::text as id, page_id, action_type as post_type, title, details as caption, object_path, status, error_message, created_at as posted_at FROM page_activity_logs WHERE (page_id = %s OR page_id = (SELECT page_id FROM pages WHERE id::text = %s LIMIT 1))
+        SELECT id::text as id, page_id, action_type as post_type, title, details as caption, '' as post_url, object_path, status, error_message, created_at as posted_at FROM page_activity_logs WHERE (page_id = %s OR page_id = (SELECT page_id FROM pages WHERE id::text = %s LIMIT 1))
       ) u ORDER BY u.posted_at DESC LIMIT 100
     """, (page_id, page_id, page_id, page_id, page_id, page_id))
   return {"page_id": page_id, "items": rows or []}
