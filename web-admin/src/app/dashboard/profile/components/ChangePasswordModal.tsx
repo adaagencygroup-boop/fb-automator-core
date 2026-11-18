@@ -354,7 +354,7 @@ export function ChangePasswordModal({
                     </svg>
                   )}
                 </span>
-                <span>Từ 8 đến 12 ký tự</span>
+                <span>Tối thiểu 8 ký tự</span>
               </li>
               <li className={`cpm-rule ${hasLettersOrDigits ? "cpm-rule--met" : ""}`}>
                 <span className="cpm-rule-icon">

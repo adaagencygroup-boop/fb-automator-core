@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { AuthFeedback } from "./components/AuthFeedback";
 import { loginFeedback } from "./loginFeedback";
 import api from "@/services/api";
+import { toast } from "@/lib/toast";
 import { AuthLayout } from "./components/AuthLayout";
 import { LoginHeroBanner } from "./components/LoginHeroBanner";
 import { LoginForm } from "./components/LoginForm";
@@ -95,13 +96,16 @@ export default function LoginScreen({ onAuthenticated, onStatus, onRegister, ses
     } catch (error) {
       if (!alive.current) return;
       const message = String(error.message || "Không thể kết nối đến máy chủ xác thực.");
-      const statuses = { ACCOUNT_PENDING: "pending", ACCOUNT_REJECTED: "rejected", ACCOUNT_BANNED: "banned", ACCOUNT_LOCKED: "banned", ERR_HWID_MISMATCH: "hwid" };
+      if (message === "ERR_HWID_MISMATCH") {
+        toast.error({
+          title: "LỖI XÁC THỰC PHẦN CỨNG HWID",
+          message: "Mã máy trạm hiện tại không trùng khớp với mã HWID đã được kích hoạt trong License của tài khoản này. Mỗi License chỉ gắn với duy nhất 1 thiết bị.",
+          duration: 7000,
+        });
+        return;
+      }
+      const statuses = { ACCOUNT_PENDING: "pending", ACCOUNT_REJECTED: "rejected", ACCOUNT_BANNED: "banned", ACCOUNT_LOCKED: "banned" };
       if (statuses[message]) {
-        if (message === "ERR_HWID_MISMATCH") {
-          setFeedback(loginFeedback.hwid);
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          if (!alive.current) return;
-        }
         onStatus(statuses[message], username.trim());
         return;
       }

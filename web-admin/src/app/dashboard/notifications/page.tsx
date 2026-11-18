@@ -112,12 +112,10 @@ function mapActivityLogToItem(log: ActivityLog): ActivityLogItem {
 function ActivityLogsContent() {
   const searchParams = useSearchParams();
   const [logs, setLogs] = useState<ActivityLogItem[]>([]);
-  const [adminUsernames, setAdminUsernames] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedAdmin, setSelectedAdmin] = useState("all");
   const [selectedAction, setSelectedAction] = useState("all");
   const [selectedResult, setSelectedResult] = useState("all");
   const [dateRange, setDateRange] = useState<"today" | "7d" | "30d" | "custom">("7d");
@@ -139,16 +137,13 @@ function ActivityLogsContent() {
   const [activeLog, setActiveLog] = useState<ActivityLogItem | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Synchronize URL search params (?search=..., ?admin=..., ?admin_id=...)
+  // Synchronize URL search params (?search=..., ?action=...)
   useEffect(() => {
     const q = searchParams.get("search") || searchParams.get("q") || "";
-    const adm = searchParams.get("admin") || searchParams.get("admin_username") || "";
-    const admId = searchParams.get("admin_id") || "";
     const action = searchParams.get("action") || "";
 
-    const query = q || adm || (admId ? `#${admId}` : "");
-    if (query) {
-      setSearchQuery(query);
+    if (q) {
+      setSearchQuery(q);
       setDateRange("30d");
       setCurrentPage(1);
     }
@@ -162,11 +157,7 @@ function ActivityLogsContent() {
   const fetchLiveLogs = async () => {
     setLoading(true);
     try {
-      const [activityLogs, admins] = await Promise.all([
-        api.getActivityLogs(200),
-        api.getAdmins().catch(() => null),
-      ]);
-      setAdminUsernames(Array.isArray(admins) ? admins.map((u) => u.username) : null);
+      const activityLogs = await api.getActivityLogs(200);
       if (Array.isArray(activityLogs) && activityLogs.length > 0) {
         setLogs(activityLogs.map(mapActivityLogToItem));
       } else {
@@ -186,7 +177,6 @@ function ActivityLogsContent() {
   // Reset filters
   const handleResetFilters = () => {
     setSearchQuery("");
-    setSelectedAdmin("all");
     setSelectedAction("all");
     setSelectedResult("all");
     setDateRange("7d");
@@ -217,19 +207,14 @@ function ActivityLogsContent() {
         }
       }
 
-      // 2. Admin Filter
-      if (selectedAdmin !== "all" && item.admin.username !== selectedAdmin) {
-        return false;
-      }
-
-      // 3. Action Filter
+      // 2. Action Filter
       if (selectedAction !== "all") {
         if (item.action.type !== selectedAction && item.action.name !== selectedAction) {
           return false;
         }
       }
 
-      // 4. Result Filter
+      // 3. Result Filter
       if (selectedResult !== "all" && item.result !== selectedResult) {
         return false;
       }
@@ -267,7 +252,7 @@ function ActivityLogsContent() {
 
       return true;
     });
-  }, [logs, searchQuery, selectedAdmin, selectedAction, selectedResult, dateRange, customStartDate, customEndDate, isDateRangeInvalid]);
+  }, [logs, searchQuery, selectedAction, selectedResult, dateRange, customStartDate, customEndDate, isDateRangeInvalid]);
 
   // Pagination calculation
   const totalItems = filteredLogs.length;
@@ -329,14 +314,6 @@ function ActivityLogsContent() {
     setActiveLog(log);
     setIsModalOpen(true);
   };
-
-  // Lấy từ API để có cả admin chưa phát sinh log; chỉ suy từ log khi API admin lỗi
-  const logAdminUsernames = Array.from(new Set(logs.map((l) => l.admin.username)));
-  const adminOptions = adminUsernames ?? logAdminUsernames;
-  // Admin đã bị xóa nhưng còn log: vẫn cho lọc, không tính vào tổng để khớp màn Quản lý Admin
-  const deletedAdminOptions = adminUsernames
-    ? logAdminUsernames.filter((u) => !adminUsernames.includes(u))
-    : [];
 
   return (
     <div className="act-page">
@@ -402,7 +379,7 @@ function ActivityLogsContent() {
 
       {/* ── 2. Filter Box Card (Figma 1:1) ── */}
       <div className="act-filter-card">
-        {/* Row 1: Search + 3 Dropdowns */}
+        {/* Row 1: Search + 2 Dropdowns */}
         <div className="act-filter-row-1">
           <div className="act-search-wrap">
             <span className="act-search-icon">
@@ -423,36 +400,7 @@ function ActivityLogsContent() {
             />
           </div>
 
-          {/* Dropdown 1: Admin Filter */}
-          <div className="act-dropdown-wrap">
-            <select
-              className="act-select"
-              value={selectedAdmin}
-              onChange={(e) => {
-                setSelectedAdmin(e.target.value);
-                setCurrentPage(1);
-              }}
-            >
-              <option value="all">Tất cả Admin ({adminOptions.length})</option>
-              {adminOptions.map((admin) => (
-                <option key={admin} value={admin}>
-                  {admin}
-                </option>
-              ))}
-              {deletedAdminOptions.map((admin) => (
-                <option key={`deleted-${admin}`} value={admin}>
-                  {admin} (đã xóa)
-                </option>
-              ))}
-            </select>
-            <span className="act-select-arrow">
-              <svg width="10" height="6" viewBox="0 0 10 6" fill="none">
-                <path d="M1 1L5 5L9 1" stroke="#424656" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </span>
-          </div>
-
-          {/* Dropdown 2: Action Filter */}
+          {/* Dropdown 1: Action Filter */}
           <div className="act-dropdown-wrap">
             <select
               className="act-select"
@@ -483,7 +431,7 @@ function ActivityLogsContent() {
             </span>
           </div>
 
-          {/* Dropdown 3: Result Filter */}
+          {/* Dropdown 2: Result Filter */}
           <div className="act-dropdown-wrap">
             <select
               className="act-select"

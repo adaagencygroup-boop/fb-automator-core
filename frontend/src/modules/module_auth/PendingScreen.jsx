@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import api from "@/services/api";
+import { toast } from "@/lib/toast";
 import { clearRegistrationToken, getRegistrationToken } from "@/services/authTokens.mjs";
 import { PendingStatusHeader } from "./components/PendingStatusHeader";
 import { PendingSupportCards } from "./components/PendingSupportCards";
@@ -48,7 +49,14 @@ export default function PendingScreen({ onBack, onStatus, onApproved }) {
     } catch (error) {
       const code = String(error.message || "");
       if (code === "ERR_HWID_MISMATCH") {
-        later(() => onStatus("hwid"), 600);
+        toast.error({
+          title: "LỖI XÁC THỰC PHẦN CỨNG HWID",
+          message: "Mã máy trạm hiện tại không trùng khớp với mã HWID đã được kích hoạt trong License của tài khoản này. Mỗi License chỉ gắn với duy nhất 1 thiết bị.",
+          duration: 7000,
+        });
+        clearRegistrationToken();
+        localStorage.removeItem("pending_username");
+        later(onBack, 600);
         return;
       }
       // Ticket hết hạn / claim fail → về login để user đăng nhập lại

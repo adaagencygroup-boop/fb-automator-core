@@ -2,14 +2,13 @@ import { IconLockSmall, IconDetailTrash } from "./AdminIcons";
 
 interface AdminBulkBarProps {
   selectedCount: number;
-  onBulkBan: () => void;
+  onBulkBan?: () => void;
   onBulkDelete: () => void;
   onClearSelection: () => void;
 }
 
 export function AdminBulkBar({
   selectedCount,
-  onBulkBan,
   onBulkDelete,
   onClearSelection,
 }: AdminBulkBarProps) {
@@ -34,16 +33,6 @@ export function AdminBulkBar({
       )}
 
       <div className="adm-bulk-actions">
-        <button
-          type="button"
-          className="adm-bulk-btn adm-bulk-btn--lock"
-          disabled={disabled}
-          title={disabled ? hint : "Khóa các tài khoản đã chọn"}
-          onClick={onBulkBan}
-        >
-          <IconLockSmall />
-          Khóa tài khoản
-        </button>
         <button
           type="button"
           className="adm-bulk-btn adm-bulk-btn--delete"

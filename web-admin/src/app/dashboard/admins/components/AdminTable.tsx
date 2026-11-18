@@ -24,8 +24,8 @@ interface AdminTableProps {
   setPage: (page: number) => void;
   onView: (user: User) => void;
   onEdit: (user: User) => void;
-  onBan: (user: User) => void;
-  onUnban: (user: User) => void;
+  onBan?: (user: User) => void;
+  onUnban?: (user: User) => void;
 }
 
 function getPageNumbers(current: number, total: number): (number | string)[] {
@@ -202,16 +202,6 @@ export function AdminTable({
                           onClick={() => onEdit(u)}
                         >
                           <IconEdit />
-                        </button>
-
-                        {/* Lock / Unlock */}
-                        <button
-                          type="button"
-                          className="adm-action-btn adm-action-btn--lock"
-                          title={isLocked ? "Mở khóa" : "Khóa tài khoản"}
-                          onClick={() => (isLocked ? onUnban(u) : onBan(u))}
-                        >
-                          {isLocked ? <IconUnlock /> : <IconLockSmall />}
                         </button>
                       </div>
                     </td>
