@@ -14,6 +14,8 @@
 .expiry { display: flex; align-items: center; gap: 9px; padding: 10px 15px; border-radius: 14px; background: #effcf6; color: #008762; font-size: 12px; flex-shrink: 0; }
 .expiry strong { font-size: 20px; font-weight: 700; }
 .expiry small { display: block; font-size: 12px; }
+.expiryText { min-width: 0; overflow-wrap: anywhere; }
+.moduleName { display: block; max-width: 300px; font-size: 12px; line-height: 18px; font-weight: 600; }
 .calendar { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: #d4fbe9; }
 .licenseWarning, .licenseExpired { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 172px; min-height: 116px; padding: 24px; gap: 24px; border: 1px solid transparent; }
 .licenseWarning { background: linear-gradient(110deg, #fffbe9, #fff4f5 57%, #f9e1d7); }
@@ -26,7 +28,7 @@
 .licenseExpired .shield svg { fill: #be161b; stroke: #ffdada; }
 .shieldAlert { display: grid; place-items: center; position: absolute; bottom: -3px; right: -3px; width: 17px; height: 17px; border-radius: 50%; background: #be161b; color: white; font-size: 12px; font-weight: 700; }
 .licenseWarning .status, .licenseExpired .status { font-size: 12px; line-height: 18px; min-width: 118px; }
-.licenseExpired .status { background: #bf181d; color: white; }
+.statusExpired { background: #bf181d; color: white; }
 .licenseWarning .expiry, .licenseExpired .expiry { min-height: 66px; padding: 14px 16px; gap: 12px; background: #ffffffd9; border-radius: 14px; color: #3f465b; font-size: 14px; }
 .licenseWarning .expiry strong { font-size: 17px; color: #ca131b; margin-left: 5px; }
 .licenseWarning .expiry small, .licenseExpired .expiry small { font-size: 12px; line-height: 18px; color: #3f465b; }
