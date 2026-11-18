@@ -34,11 +34,14 @@ from modules.module_auth.service import (
     list_activity,
     list_admins,
     list_notifications,
+    list_user_notifications,
     list_users,
     login_user,
     logout_token,
     mark_all_notifications,
     mark_notification,
+    mark_user_notification,
+    mark_all_user_notifications,
     public_user,
     claim_approved_session,
     pending_login_ticket,
@@ -367,6 +370,24 @@ def user_sessions(user_id: int, authorization: Optional[str] = Header(None)):
     return session_summary(user_id)
 
 
+@auth_router.get("/notifications")
+def my_notifications(request: Request, unread_only: bool = False, authorization: Optional[str] = Header(None)):
+    user = bearer_user(authorization, request=request)
+    return list_user_notifications(user["id"], unread_only)
+
+
+@auth_router.put("/notifications/read-all")
+def read_all_my_notifications(request: Request, authorization: Optional[str] = Header(None)):
+    user = bearer_user(authorization, request=request)
+    return mark_all_user_notifications(user["id"])
+
+
+@auth_router.put("/notifications/{notif_id}/read")
+def read_my_notification(notif_id: int, request: Request, authorization: Optional[str] = Header(None)):
+    user = bearer_user(authorization, request=request)
+    return mark_user_notification(user["id"], notif_id)
+
+
 @auth_router.get("/my-sessions")
 def my_sessions(request: Request, authorization: Optional[str] = Header(None)):
     user = bearer_user(authorization, request=request)
@@ -468,7 +489,7 @@ def admins(authorization: Optional[str] = Header(None), status_filter: str = "")
 
 @admin_router.post("/users")
 def create_user(body: CreateUserBody, request: Request):
-    feat_list = [f.model_dump() for f in body.features] if body.features else None
+    feat_list = [f.model_dump() for f in body.features] if body.features is not None else None
     return create_user_admin(body.username, body.password, body.contact_info or "", body.days, body.status, body.role or "user", request, hwid=body.hwid, features=feat_list)
 
 
@@ -484,13 +505,13 @@ def remove_user(user_id: int, request: Request):
 
 @admin_router.put("/users/{user_id}/approve")
 def approve(user_id: int, body: DaysBody, request: Request):
-    feat_list = [f.model_dump() for f in body.features] if body.features else None
+    feat_list = [f.model_dump() for f in body.features] if body.features is not None else None
     return approve_user(user_id, body.days, request, features=feat_list)
 
 
 @admin_router.put("/users/{user_id}/extend")
 def extend(user_id: int, body: DaysBody, request: Request):
-    feat_list = [f.model_dump() for f in body.features] if body.features else None
+    feat_list = [f.model_dump() for f in body.features] if body.features is not None else None
     return extend_user(user_id, body.days, request, features=feat_list)
 
 
@@ -599,15 +620,24 @@ def activity(authorization: Optional[str] = Header(None), limit: int = Query(200
     return list_activity(limit)
 
 
-def assert_module_access(authorization: Optional[str]):
+def assert_module_access(authorization: Optional[str], feature_key: Optional[str] = None):
     user = bearer_user(authorization)
-    if not licensed_for_modules(user):
+    if not licensed_for_modules(user, feature_key):
         raise HTTPException(403, "LICENSE_REQUIRED")
     return user
 
 
 def assert_request_module_access(authorization: Optional[str], path: str, method: str):
     # Dashboard summaries stay readable; their routers still enforce owner scope.
-    if method == "GET" and path in {"/api/accounts/stats", "/api/creator/pages/history"}:
+    if method == "GET" and path in {"/api/accounts/stats", "/api/creator/pages/history", "/api/post/status"}:
         return bearer_user(authorization)
-    return assert_module_access(authorization)
+    prefixes = {
+        "/api/accounts": "fb_account", "/api/categories": "fb_account",
+        "/api/creator": "create_fanpage", "/api/pages": "manage_fanpage",
+        "/api/groups": "spam_group", "/api/group-scan": "scan_group",
+        "/api/page-scanner": "scan_page", "/api/seeding": "seeding",
+        "/api/farm": "post_interact", "/api/post": "post_interact",
+        "/api/facebook": "chat_fanpage",
+    }
+    feature_key = next((key for prefix, key in prefixes.items() if path == prefix or path.startswith(prefix + "/")), None)
+    return assert_module_access(authorization, feature_key)
