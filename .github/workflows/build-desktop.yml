@@ -75,7 +75,9 @@ jobs:
           npm --prefix frontend ci
 
       - name: Test Native Packaging and Storage
-        run: python -m unittest discover -s tauri -t . -p test_desktop_packaging.py
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python -m unittest discover -s tauri -p test_desktop_packaging.py
 
       # Windows Release phải nhúng .env (DATABASE_URL) vào local_engine —
       # không commit .env; lấy từ GitHub Secret DESKTOP_ENV_FILE.
