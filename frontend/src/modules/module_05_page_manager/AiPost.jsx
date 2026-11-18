@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
-  ChevronDown,
   Eye,
   EyeOff,
   Loader2,
@@ -14,6 +13,7 @@ import {
   Search,
   X,
 } from "lucide-react";
+import CustomSelect from "@/components/ui/custom-select";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/lib/toast";
 import { getAiAccounts, getAiPostStatus, getAiSettings, loginAiAccount, openAiPage, saveAiSettings, startAiPost, stopAiPost, testAiKeys, testPixabayKey } from "./service";
@@ -29,6 +29,7 @@ const MODELS = [
   { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash (cũ)" },
 ];
 const PROMPT_LIMIT = 2000;
+const SCHEDULE_LIMIT = 24;
 const SLEEP_MIN_LIMIT = 0;
 const SLEEP_MAX_LIMIT = 3600;
 const DRAFT_KEY = "m05.ai-post.draft";
@@ -113,13 +114,13 @@ function Photo({ src, name, tone = "#0284C7", size = 28 }) {
   );
 }
 
-function Field({ label, hint, children }) {
+function Field({ label, hint, className = "block", bodyClassName = "", children }) {
   return (
-    <label className="block">
+    <div className={className}>
       <span className="text-xs font-semibold text-[#334155]">{label}</span>
       {hint ? <span className="mt-0.5 block text-[11px] font-normal leading-4 text-[#64748B]">{hint}</span> : null}
-      <div className="mt-1.5">{children}</div>
-    </label>
+      <div className={`mt-1.5 ${bodyClassName}`}>{children}</div>
+    </div>
   );
 }
 
@@ -436,7 +437,14 @@ export default function AiPost() {
     }
   };
 
-  const addTime = () => setTimes((current) => [...current, "12:00"]);
+  const addTime = () =>
+    setTimes((current) => {
+      if (current.length >= SCHEDULE_LIMIT) return current;
+      const used = new Set(current);
+      const candidates = ["12:00", "18:00", "06:00", ...Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, "0")}:00`)];
+      const nextSlot = candidates.find((slot) => !used.has(slot)) || "12:00";
+      return [...current, nextSlot];
+    });
   const updateTime = (index, value) => setTimes((current) => current.map((item, i) => (i === index ? value : item)));
   const removeTime = (index) => setTimes((current) => current.filter((_, i) => i !== index));
 
@@ -500,6 +508,16 @@ export default function AiPost() {
       toast.warning('Thời gian "Đến" không được nhỏ hơn thời gian "Từ".', { key: "ai-sleep-invalid" });
       return;
     }
+    if (scheduleEnabled) {
+      if (!times.length || times.some((t) => !/^\d{2}:\d{2}$/.test(t))) {
+        toast.warning("Vui lòng nhập đầy đủ các khung giờ hợp lệ (HH:MM).", { key: "ai-schedule-invalid" });
+        return;
+      }
+      if (new Set(times).size !== times.length) {
+        toast.warning("Các khung giờ hẹn đăng không được trùng nhau.", { key: "ai-schedule-invalid" });
+        return;
+      }
+    }
     const chosen = fanpages.filter((page) => selectedPages.has(page.key));
     if (!chosen.length) {
       toast.warning("Chọn ít nhất một fanpage để chạy AI.");
@@ -555,9 +573,9 @@ export default function AiPost() {
 
   return (
     <div className="-m-6 min-h-full bg-[#F4F7FB] p-6">
-      <div className="grid items-start gap-6 xl:grid-cols-[393px_minmax(0,1fr)]">
-        <div className="flex flex-col gap-3">
-        <section className="rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+      <div className="grid items-stretch gap-6 xl:grid-cols-[393px_minmax(0,1fr)]">
+        <div className="flex h-full flex-col gap-3">
+        <section className="flex flex-1 flex-col rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
           <div className="mb-4 flex items-center gap-2.5">
             <span className="flex size-7 items-center justify-center rounded-lg bg-[#EFF6FF]">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -635,14 +653,13 @@ export default function AiPost() {
 
           <div className="mt-4">
             <Field label="Model Gemini">
-              <span className="relative block">
-                <select value={modelName} disabled={running} onChange={(event) => setModelName(event.target.value)} className={`${inputClass} appearance-none pr-8`}>
-                  {MODELS.map((item) => (
-                    <option key={item.value} value={item.value}>{item.label}</option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#94A3B8]" />
-              </span>
+              <CustomSelect
+                value={modelName}
+                onChange={setModelName}
+                options={MODELS}
+                disabled={running}
+                buttonClassName="h-[33px] rounded-lg border-[#E2E8F0] px-3 text-sm font-normal text-[#1E293B]"
+              />
             </Field>
           </div>
 
@@ -656,35 +673,37 @@ export default function AiPost() {
             </div>
             {scheduleEnabled ? (
               <div className="mt-2 space-y-2">
-                {times.map((time, index) => (
-                  <div key={`schedule-${index}`} className="flex items-center gap-2">
-                    <input
-                      type="time"
-                      step="60"
-                      disabled={running}
-                      value={/^\d{2}:\d{2}$/.test(time) ? time : ""}
-                      onChange={(event) => updateTime(index, event.target.value.slice(0, 5))}
-                      className={`${inputClass} min-w-0 flex-1 font-semibold tabular-nums`}
-                    />
-                    <button
-                      type="button"
-                      disabled={running}
-                      onClick={() => removeTime(index)}
-                      aria-label={`Xóa khung ${time || index + 1}`}
-                      className="inline-flex size-[33px] shrink-0 items-center justify-center rounded-lg border border-[#E2E8F0] text-[#94A3B8] hover:border-[#FCA5A5] hover:text-[#E11D48] disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
+                <div className="max-h-[205px] space-y-2 overflow-y-auto pr-1">
+                  {times.map((time, index) => (
+                    <div key={`schedule-${index}`} className="flex items-center gap-2">
+                      <input
+                        type="time"
+                        step="60"
+                        disabled={running}
+                        value={/^\d{2}:\d{2}$/.test(time) ? time : ""}
+                        onChange={(event) => updateTime(index, event.target.value.slice(0, 5))}
+                        className={`${inputClass} min-w-0 flex-1 font-semibold tabular-nums`}
+                      />
+                      <button
+                        type="button"
+                        disabled={running}
+                        onClick={() => removeTime(index)}
+                        aria-label={`Xóa khung ${time || index + 1}`}
+                        className="inline-flex size-[33px] shrink-0 items-center justify-center rounded-lg border border-[#E2E8F0] text-[#94A3B8] hover:border-[#FCA5A5] hover:text-[#E11D48] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
                 <button
                   type="button"
-                  disabled={running}
+                  disabled={running || times.length >= SCHEDULE_LIMIT}
                   onClick={addTime}
                   className="inline-flex h-[33px] items-center gap-1 rounded-lg bg-[#EFF6FF] px-3 text-xs font-semibold text-[#2563EB] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  Thêm giờ
+                  Thêm giờ ({times.length}/{SCHEDULE_LIMIT})
                 </button>
               </div>
             ) : null}
@@ -726,10 +745,14 @@ export default function AiPost() {
             </div>
           </div>
 
-          <div className="mt-4">
-            <Field label="Khung Prompt AI cấu trúc bài đăng">
+          <div className="mt-4 flex flex-1 flex-col">
+            <Field
+              label="Khung Prompt AI cấu trúc bài đăng"
+              className="flex flex-1 flex-col"
+              bodyClassName="flex flex-1 flex-col"
+            >
               <span
-                className={`block overflow-hidden rounded-lg border border-[#E2E8F0] transition-colors focus-within:border-[#2563EB] ${
+                className={`flex flex-1 flex-col overflow-hidden rounded-lg border border-[#E2E8F0] transition-colors focus-within:border-[#2563EB] ${
                   running ? "bg-[#F8FAFC]" : "bg-white"
                 }`}
               >
@@ -740,7 +763,7 @@ export default function AiPost() {
                   onChange={(event) => setPrompt(event.target.value)}
                   rows={6}
                   placeholder="Nhập cấu trúc bài đăng. Chủ đề từng page lấy từ cột từ khóa bên phải."
-                  className="block h-[142px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-5 text-[#1E293B] outline-none placeholder:text-[#94A3B8] disabled:cursor-not-allowed disabled:text-[#64748B]"
+                  className="block min-h-[142px] w-full flex-1 resize-none bg-transparent px-3 py-2 text-sm leading-5 text-[#1E293B] outline-none placeholder:text-[#94A3B8] disabled:cursor-not-allowed disabled:text-[#64748B]"
                 />
                 <span className="flex justify-end px-3 pb-1.5 pt-0.5 text-[11px] text-[#94A3B8]">
                   {prompt.length}/{PROMPT_LIMIT}
@@ -780,7 +803,7 @@ export default function AiPost() {
         </div>
         </div>
 
-        <div className="flex min-w-0 flex-col gap-4">
+        <div className="flex h-full min-w-0 flex-col gap-4">
         <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
           <div className="flex items-start justify-between gap-3 px-5 pb-3 pt-4">
             <div className="flex items-start gap-2.5">
@@ -815,9 +838,9 @@ export default function AiPost() {
               />
             </label>
           </div>
-          <div className="overflow-x-auto">
+          <div className="max-h-[345px] overflow-x-auto overflow-y-auto">
             <table className="w-full min-w-[520px] text-left">
-              <thead>
+              <thead className="sticky top-0 z-10 bg-white">
                 <tr className="border-y border-[#E2E8F0] text-[11px] font-bold uppercase tracking-wide text-[#64748B]">
                   <th className="w-14 px-5 py-2.5">STT</th>
                   <th className="px-3 py-2.5">Tài khoản</th>
@@ -871,7 +894,7 @@ export default function AiPost() {
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        <section className="flex flex-1 flex-col overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
           <div className="px-5 py-4">
             <div className="flex items-center gap-2">
               <svg width="14" height="13" viewBox="0 0 14 13" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
