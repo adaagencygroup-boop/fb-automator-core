@@ -127,6 +127,7 @@ class FacebookSyncService:
                                         s_url = sticker.get("url") if isinstance(sticker, dict) else str(sticker)
                                         att_text = f"[image] {s_url}"
                                     elif attachments:
+                                        att_lines = []
                                         for att in attachments:
                                             img_data = att.get("image_data") if isinstance(att.get("image_data"), dict) else {}
                                             video_data = att.get("video_data") if isinstance(att.get("video_data"), dict) else {}
@@ -148,7 +149,7 @@ class FacebookSyncService:
 
                                             if att_url:
                                                 if "image" in mime or "image" in att.get("type", "").lower() or img_data:
-                                                    att_text = f"[image] {att_url}"
+                                                    att_lines.append(f"[image] {att_url}")
                                                 elif (
                                                     "audio" in mime
                                                     or "audio" in att.get("type", "").lower()
@@ -157,10 +158,12 @@ class FacebookSyncService:
                                                     or audio_data
                                                     or any(att_url_lower.split("?")[0].endswith(ext) for ext in [".m4a", ".aac", ".mp3", ".wav", ".ogg"])
                                                 ):
-                                                    att_text = f"[audio] {att_url}"
+                                                    att_lines.append(f"[audio] {att_url}")
+                                                elif "video" in mime or "video" in att.get("type", "").lower() or video_data:
+                                                    att_lines.append(f"[video] {att_url}")
                                                 else:
-                                                    att_text = f"[file] {att_url}"
-                                                break
+                                                    att_lines.append(f"[file] {att_url}")
+                                        att_text = "\n".join(att_lines)
 
                                     if not text:
                                         text = att_text or "📎 [Tin nhắn đính kèm]"
@@ -190,7 +193,9 @@ class FacebookSyncService:
                                     try:
                                         existing_msg = message_repo.get_by_fb_message_id(fb_message_id)
                                         if existing_msg:
-                                            if not existing_msg.text or "Tin nhắn đính kèm" in existing_msg.text or existing_msg.text == "[image]":
+                                            old_text = existing_msg.text or ""
+                                            needs_multi_att_update = text and text.count("\n[") > old_text.count("\n[")
+                                            if not old_text or "Tin nhắn đính kèm" in old_text or old_text == "[image]" or needs_multi_att_update:
                                                 if text and "Tin nhắn đính kèm" not in text:
                                                     existing_msg.text = text
                                                     db.commit()

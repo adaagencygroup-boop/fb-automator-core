@@ -257,6 +257,7 @@ export default function OmnichannelChatModule() {
             direction: msgData.direction === "outbound" ? "out" : "in",
             text: parsed.text,
             attachment: parsed.attachment,
+            attachments: parsed.attachments,
             createdAt: toUtcIso(msgData.created_at) || new Date().toISOString(),
           };
 

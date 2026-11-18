@@ -1,5 +1,9 @@
 import api from "@/services/api";
-import { API_BASE } from "@/config/constants";
+import { API_BASE, PUBLIC_MEDIA_BASE } from "@/config/constants";
+
+function mediaApiUrl(path) {
+  return PUBLIC_MEDIA_BASE ? `${PUBLIC_MEDIA_BASE}${path}` : path;
+}
 
 /**
  * Backend trả thời gian dạng UTC "naive" (không kèm múi giờ), vd "2026-10-20T03:00:00".
@@ -21,8 +25,10 @@ export function toUtcIso(value) {
 export function displayMediaUrl(url) {
   const s = String(url || "");
   if (!s || s.startsWith("blob:") || s.startsWith("data:")) return s; // ảnh xem trước tại chỗ
+  if (PUBLIC_MEDIA_BASE && s.startsWith(`${PUBLIC_MEDIA_BASE}/uploads/`)) return s;
   const i = s.indexOf("/uploads/");
   if (i === -1) return s; // file không nằm trên engine (vd ảnh khách gửi từ Facebook)
+  if (s.startsWith("/uploads/")) return `${PUBLIC_MEDIA_BASE || API_BASE}${s}`;
   return `${API_BASE}${s.slice(i)}`;
 }
 
@@ -56,16 +62,36 @@ const ATTACHMENT_LINE = /^\[(image|audio|video|file)\]\s+(\S.*)$/;
 
 export function parseAttachmentText(raw) {
   const value = String(raw || "");
-  // sync_service có thể nối "nội dung\n[file] url" -> đính kèm luôn nằm ở dòng cuối
+  // Một tin nhắn Facebook có thể chứa 1 hoặc nhiều dòng "[type] url" ở cuối
   const lines = value.split("\n");
-  const matched = lines[lines.length - 1].trim().match(ATTACHMENT_LINE);
-  if (!matched) return { text: value, attachment: null };
+  const attachments = [];
+  let cutIndex = lines.length;
 
-  const [, type, rawUrl] = matched;
-  const url = rawUrl.trim();
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) {
+      if (attachments.length > 0) break;
+      cutIndex = i;
+      continue;
+    }
+    const matched = trimmed.match(ATTACHMENT_LINE);
+    if (!matched) break;
+    const [, type, rawUrl] = matched;
+    const url = rawUrl.trim();
+    attachments.unshift({
+      type,
+      url,
+      name: type === "audio" ? "Voice clip" : fileNameFromUrl(url),
+    });
+    cutIndex = i;
+  }
+
+  if (attachments.length === 0) return { text: value, attachment: null, attachments: [] };
+
   return {
-    text: lines.slice(0, -1).join("\n").trim(),
-    attachment: { type, url, name: type === "audio" ? "Voice clip" : fileNameFromUrl(url) },
+    text: lines.slice(0, cutIndex).join("\n").trim(),
+    attachment: attachments[0],
+    attachments,
   };
 }
 
@@ -303,7 +329,7 @@ export async function getMessages(conversationId, { fresh = false } = {}) {
 
     const raw = Array.isArray(res) ? res : res?.messages || [];
     const messages = raw.map((m) => {
-      const { text, attachment } = parseAttachmentText(m.text);
+      const { text, attachment, attachments } = parseAttachmentText(m.text);
 
       return {
         id: String(m.id || m.facebook_message_id),
@@ -311,6 +337,7 @@ export async function getMessages(conversationId, { fresh = false } = {}) {
         direction: m.direction === "outbound" ? "out" : "in",
         text,
         attachment,
+        attachments,
         createdAt:
           (m.timestamp ? new Date(m.timestamp).toISOString() : (toUtcIso(m.created_at) || new Date().toISOString())),
         reaction: m.reactions || null,
