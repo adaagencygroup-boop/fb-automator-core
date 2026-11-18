@@ -30,9 +30,9 @@ nginx/ssl/
 frontend/.env
 frontend/.env.local
 frontend/.env.*.local
-web-admin/.env
-web-admin/.env.local
-web-admin/.env.*.local
+admin/.env
+admin/.env.local
+admin/.env.*.local
 !.env.example
 !.env.test
 
@@ -82,11 +82,11 @@ sessions/
 # 6. Node & Next.js Artifacts
 node_modules/
 frontend/node_modules/
-web-admin/node_modules/
+admin/node_modules/
 frontend/.next/
 frontend/out/
-web-admin/.next/
-web-admin/out/
+admin/.next/
+admin/out/
 frontend/.turbo/
 .turbo/
 .pnp
@@ -119,23 +119,23 @@ dist/
 *.dist/
 
 # Cargo build cache — rất nặng, mỗi máy tự build
-src-tauri/target/
+tauri/src-tauri/target/
 
 # Tauri updater private signing key (chỉ public key nằm trong tauri.conf.json)
-src-tauri/keys/
+tauri/src-tauri/keys/
 
 # Schema sinh tự động khi `tauri build` / `tauri dev`
-src-tauri/gen/
+tauri/src-tauri/gen/
 
 # Sidecar binary / onedir runtime — build bằng: python scripts/build_sidecar.py
-src-tauri/binaries/*
-!src-tauri/binaries/.gitkeep
-src-tauri/engine-runtime/
+tauri/src-tauri/binaries/*
+!tauri/src-tauri/binaries/.gitkeep
+tauri/src-tauri/engine-runtime/
 
 # Icon sinh bởi `npx tauri icon` (android/ios/store…) — chỉ giữ 2 file nguồn
-src-tauri/icons/**
-!src-tauri/icons/icon.png
-!src-tauri/icons/icon.ico
+tauri/src-tauri/icons/**
+!tauri/src-tauri/icons/icon.png
+!tauri/src-tauri/icons/icon.ico
 
 # Installer / debug symbols
 *.msi
