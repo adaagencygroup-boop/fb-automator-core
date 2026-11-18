@@ -9,7 +9,7 @@ services:
     environment:
       ENGINE_HOST: 0.0.0.0
       ENGINE_PORT: "28129"
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://admin.adagroupservice.com,https://adagroupservice.com}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://admin.adagroupservice.com,https://adagroupservice.com,https://www.adagroupservice.com}
     volumes:
       - storage:/app/uploads
       - data:/app/data
@@ -53,6 +53,22 @@ services:
         reservations:
           cpus: '0.1'
           memory: 128M
+    networks:
+      - net
+  landing:
+    image: landing
+    build:
+      context: ./landing
+    container_name: landing
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 64M
+        reservations:
+          cpus: '0.02'
+          memory: 16M
     networks:
       - net
   postgres:
@@ -123,6 +139,7 @@ services:
     depends_on:
       - app
       - admin
+      - landing
     deploy:
       resources:
         limits:
