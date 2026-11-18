@@ -325,7 +325,7 @@ def get_history_list(post_type: Optional[str] = None, status: Optional[str] = No
   queries = []
   params = []
   if not p_type or p_type == "ALL" or p_type in ("TIKTOK", "YOUTUBE"):
-    q1 = "SELECT l.id::text as id, l.page_id::text as page_id, l.source as post_type, coalesce(l.title, '') as title, coalesce(l.video_id, '') as caption, '' as post_url, coalesce(l.object_path, '') as object_path, l.status, coalesce(l.error_message, '') as error_message, l.created_at as posted_at, coalesce(p.page_name, 'Fanpage') as page_name, coalesce(p.account_uid, '') as account_uid, coalesce((SELECT profile_name FROM accounts WHERE uid = p.account_uid LIMIT 1), '') as account_name FROM download_logs l LEFT JOIN LATERAL (SELECT page_name, account_uid FROM pages WHERE page_id = l.page_id OR id::text = l.page_id LIMIT 1) p ON true WHERE 1=1"
+    q1 = "SELECT l.id::text as id, l.page_id::text as page_id, l.source as post_type, coalesce(l.title, '') as title, coalesce(l.video_id, '') as caption, '' as post_url, coalesce(l.object_path, '') as object_path, l.status, coalesce(l.error_message, '') as error_message, l.created_at as posted_at, coalesce(p.page_name, 'Fanpage') as page_name, coalesce(p.account_uid, '') as account_uid, coalesce((SELECT profile_name FROM accounts WHERE uid = p.account_uid LIMIT 1), '') as account_name, ('https://graph.facebook.com/' || coalesce(p.page_id, l.page_id::text) || '/picture?type=square&width=80&height=80') as avatar FROM download_logs l LEFT JOIN LATERAL (SELECT page_id, page_name, account_uid FROM pages WHERE page_id = l.page_id OR id::text = l.page_id LIMIT 1) p ON true WHERE 1=1"
     if p_type in ("TIKTOK", "YOUTUBE"):
       q1 += " AND l.source = %s"
       params.append(p_type)
@@ -334,7 +334,7 @@ def get_history_list(post_type: Optional[str] = None, status: Optional[str] = No
       params.append(st_filter)
     queries.append(q1)
   if not p_type or p_type == "ALL" or p_type in ("AI", "REEL", "REELS"):
-    q2 = "SELECT h.id::text as id, h.page_id::text as page_id, h.post_type, coalesce(h.title, '') as title, coalesce(h.caption, '') as caption, coalesce(h.post_url, '') as post_url, coalesce(h.media_path, '') as object_path, h.status, coalesce(h.error_message, '') as error_message, h.posted_at, coalesce(p.page_name, 'Fanpage') as page_name, coalesce(h.account_uid, p.account_uid, '') as account_uid, coalesce((SELECT profile_name FROM accounts WHERE uid = coalesce(h.account_uid, p.account_uid) LIMIT 1), '') as account_name FROM posting_history h LEFT JOIN LATERAL (SELECT page_name, account_uid FROM pages WHERE page_id = h.page_id OR id::text = h.page_id LIMIT 1) p ON true WHERE 1=1"
+    q2 = "SELECT h.id::text as id, h.page_id::text as page_id, h.post_type, coalesce(h.title, '') as title, coalesce(h.caption, '') as caption, coalesce(h.post_url, '') as post_url, coalesce(h.media_path, '') as object_path, h.status, coalesce(h.error_message, '') as error_message, h.posted_at, coalesce(p.page_name, nullif(h.title, ''), 'Fanpage') as page_name, coalesce(h.account_uid, p.account_uid, '') as account_uid, coalesce((SELECT profile_name FROM accounts WHERE uid = coalesce(h.account_uid, p.account_uid) LIMIT 1), '') as account_name, ('https://graph.facebook.com/' || coalesce(p.page_id, h.page_id::text) || '/picture?type=square&width=80&height=80') as avatar FROM posting_history h LEFT JOIN LATERAL (SELECT page_id, page_name, account_uid FROM pages WHERE page_id = h.page_id OR id::text = h.page_id LIMIT 1) p ON true WHERE 1=1"
     if p_type in ("AI", "REEL", "REELS"):
       target_type = "REEL" if "REEL" in p_type else "AI"
       q2 += " AND (h.post_type = %s OR h.post_type = %s)"
@@ -343,10 +343,8 @@ def get_history_list(post_type: Optional[str] = None, status: Optional[str] = No
       q2 += " AND h.status = %s"
       params.append(st_filter)
     queries.append(q2)
-  if not p_type or p_type == "ALL" or p_type == "DELETE":
-    q3 = "SELECT a.id::text as id, a.page_id::text as page_id, a.action_type as post_type, coalesce(a.title, '') as title, coalesce(a.details, '') as caption, '' as post_url, coalesce(a.object_path, '') as object_path, a.status, coalesce(a.error_message, '') as error_message, a.created_at as posted_at, coalesce(a.page_name, 'Fanpage') as page_name, '' as account_uid, '' as account_name FROM page_activity_logs a WHERE 1=1"
-    if p_type == "DELETE":
-      q3 += " AND a.action_type = 'DELETE'"
+  if p_type == "DELETE":
+    q3 = "SELECT a.id::text as id, a.page_id::text as page_id, a.action_type as post_type, coalesce(a.title, '') as title, coalesce(a.details, '') as caption, '' as post_url, coalesce(a.object_path, '') as object_path, a.status, coalesce(a.error_message, '') as error_message, a.created_at as posted_at, coalesce(a.page_name, 'Fanpage') as page_name, '' as account_uid, '' as account_name, '' as avatar FROM page_activity_logs a WHERE a.action_type = 'DELETE'"
     if st_filter and st_filter != "ALL":
       q3 += " AND a.status = %s"
       params.append(st_filter)
@@ -739,11 +737,12 @@ def start_tiktok_download(req: TikTokDownloadRequest):
     pid = str(it.get("page_id") or it.get("id") or "1")
     if pid in seen_pids:
       continue
+    is_first = len(seen_pids) == 0
     seen_pids.add(pid)
     db.execute(
-      """INSERT INTO page_job_items (job_id, page_id, status)
-      VALUES (%s, %s, 'PENDING')""",
-      (job_id, pid)
+      """INSERT INTO page_job_items (job_id, page_id, status, message)
+      VALUES (%s, %s, %s, %s)""",
+      (job_id, pid, "RUNNING" if is_first else "PENDING", "Đang Tìm Kiếm Video..." if is_first else "Đang Chờ Lượt...")
     )
   mark_job_running("TIKTOK", job_id)
   thread = threading.Thread(target=run_tiktok_download_task, args=(job_id, req.dict()), daemon=True)
@@ -777,11 +776,12 @@ def start_youtube_download(req: YouTubeDownloadRequest):
     pid = str(it.get("page_id") or it.get("id") or "1")
     if pid in seen_pids:
       continue
+    is_first = len(seen_pids) == 0
     seen_pids.add(pid)
     db.execute(
-      """INSERT INTO page_job_items (job_id, page_id, status)
-      VALUES (%s, %s, 'PENDING')""",
-      (job_id, pid)
+      """INSERT INTO page_job_items (job_id, page_id, status, message)
+      VALUES (%s, %s, %s, %s)""",
+      (job_id, pid, "RUNNING" if is_first else "PENDING", "Đang Tìm Kiếm Video..." if is_first else "Đang Chờ Lượt...")
     )
   mark_job_running("YOUTUBE", job_id)
   thread = threading.Thread(target=run_youtube_download_task, args=(job_id, req.dict()), daemon=True)

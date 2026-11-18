@@ -12,7 +12,14 @@ import LockScreen from "@/modules/module_auth/LockScreen";
 import AuthStatusScreen from "@/modules/module_auth/AuthStatusScreen";
 import SessionOverlay from "@/components/auth/SessionOverlay";
 
-const ADMIN_URL = process.env.NEXT_PUBLIC_ADMIN_URL || "http://127.0.0.1:3010";
+const ADMIN_URL =
+  process.env.NEXT_PUBLIC_ADMIN_URL ||
+  (typeof window !== "undefined" &&
+  ["localhost", "127.0.0.1"].includes(window.location.hostname) &&
+  !window.__TAURI_INTERNALS__ &&
+  !window.__TAURI__
+    ? "http://127.0.0.1:3010"
+    : "https://admin.adagroupservice.com");
 /** Proactive refresh trước khi access hết hạn (12h) — desktop không có cookie. */
 const REFRESH_EVERY_MS = 30 * 60 * 1000;
 /** Timeout ngắn cho bước khôi phục phiên — tránh treo trắng khi engine restart/chậm. */

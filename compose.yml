@@ -9,6 +9,7 @@ services:
     environment:
       ENGINE_HOST: 0.0.0.0
       ENGINE_PORT: "28129"
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://admin.adagroupservice.com,https://adagroupservice.com}
     volumes:
       - storage:/app/uploads
       - data:/app/data
@@ -35,7 +36,7 @@ services:
       context: ./admin
       target: runner
       args:
-        NEXT_PUBLIC_VPS_API_URL: ${nextPublicApiUrl:-https://adagroupservice.com}
+        NEXT_PUBLIC_VPS_API_URL: ${nextPublicApiUrl:-https://admin.adagroupservice.com}
     container_name: admin
     restart: always
     environment:

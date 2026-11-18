@@ -295,7 +295,7 @@ def _image_file(keyword, pixabay_key, page_name=""):
     return _placeholder_image_file(page_name, lambda message: _progress(subject, message))
 
 
-def _record(page, uid, caption, ok, error=""):
+def _record(page, uid, caption, ok, error="", post_url=""):
     try:
         from core.database.connection import db
         db.execute(
@@ -308,7 +308,7 @@ def _record(page, uid, caption, ok, error=""):
                 uid,
                 page["name"],
                 caption[:4000],
-                page.get("url") or "",
+                post_url or "",
                 "SUCCESS" if ok else "FAILED",
                 error[:500],
             ),
@@ -398,8 +398,10 @@ def _post_round(owner, uid, pages, config):
                 else:
                     _progress(page["name"], "Không có ảnh — đăng chữ thôi")
                 _progress(page["name"], f"Đang mở page và đăng bài... ({(page.get('url') or '')[:70]})")
-                ok = post_on_page(driver, page["url"], caption, image, page_id=page_id, should_stop=_stopped)
-                _record(page, uid, caption, ok)
+                post_res = post_on_page(driver, page["url"], caption, image, page_id=page_id, should_stop=_stopped)
+                ok = bool(post_res)
+                post_url = post_res if isinstance(post_res, str) and post_res.startswith("http") else ""
+                _record(page, uid, caption, ok, post_url=post_url)
                 _progress(page["name"], "Đăng thành công ✓" if ok else "Đăng thất bại")
             except PostInterrupted as exc:
                 if exc.kind == "stopped":
