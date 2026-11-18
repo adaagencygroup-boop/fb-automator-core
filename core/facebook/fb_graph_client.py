@@ -7,6 +7,7 @@ from modules.module_05_page_manager.meta_config import GRAPH_API_VERSION, REQUIR
 GRAPH_BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 GRAPH_VIDEO_URL = f"https://graph-video.facebook.com/{GRAPH_API_VERSION}"
 class MetaAPIError(RuntimeError):
+  pass
 class FacebookGraphClient:
   def __init__(self, timeout: int = 60):
     self.timeout = timeout

@@ -57,7 +57,7 @@ RESULTS_ROOT_LOCATORS = [
     '//*[@role="main" and (contains(@aria-label,"Kết quả tìm kiếm") or contains(@aria-label,"kết quả"))]',
 ]
 
-CLICK_JOIN_BUTTON_JS = """
+CLICK_JOIN_BUTTON_JS = r"""
 return ((targetUrl, targetName) => {
   const isAlreadyJoined = (rawText) => {
     const text = (rawText || '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -1961,7 +1961,7 @@ def _scrape_group_direct(
         _append_log(job_id, f"⚠️ Không tải được link {clean_url}: {exc}", "warn")
         return None
 
-    SCRAPE_DIRECT_GROUP_JS = """
+    SCRAPE_DIRECT_GROUP_JS = r"""
     return (() => {
       const res = {
         title: document.title || '',
@@ -2222,7 +2222,7 @@ def _scrape_groups_from_results(
       for (let depth = 0; depth < 10 && card && card !== root; depth++) {
         const textElements = card.querySelectorAll ? card.querySelectorAll('div[role="button"], button, span') : [];
         for (const el of textElements) {
-          const t = (el.innerText || el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+          const t = (el.innerText || el.getAttribute('aria-label') || el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
           if (/^(truy cập|truy cập nhóm|visit|visit group|đã tham gia|joined|view group)$/i.test(t) || /(đã tham gia|bạn đã tham gia|truy cập nhóm)/i.test(t)) {
             cardState = 'joined';
             break;
