@@ -255,9 +255,7 @@ export default function GroupMediaSection({
       number={stepNumber}
       title="Chọn media (ảnh/video)"
     >
-      <div className="mb-4 flex h-9 items-center justify-center rounded-md bg-primary text-sm font-semibold text-white">
-        <ImageIcon size={18} className="mr-2" /> Hình ảnh hoặc Video
-      </div>
+
       <input
         ref={mediaInputRef}
         type="file"

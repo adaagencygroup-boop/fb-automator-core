@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -71,14 +72,19 @@ export default function HistoryTableSection({
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow>
-                <TableCell colSpan={9} className="py-12 text-center text-slate-500">
-                  <div className="flex flex-col items-center justify-center">
-                    <RotateCcw className="size-6 animate-spin text-primary" />
-                    <p className="mt-3 text-xs font-medium">Đang tải danh sách lịch sử...</p>
-                  </div>
-                </TableCell>
-              </TableRow>
+              Array.from({ length: 5 }, (_, idx) => (
+                <TableRow key={`hist-skeleton-${idx}`}>
+                  <TableCell className="text-center"><Skeleton className="mx-auto h-4 w-6" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-28" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-16" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-40" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-44" /></TableCell>
+                  <TableCell><Skeleton className="h-5 w-24 rounded-full" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-28" /></TableCell>
+                  <TableCell className="text-right"><Skeleton className="ml-auto h-7 w-24 rounded-md" /></TableCell>
+                </TableRow>
+              ))
             ) : records.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={9} className="py-12 text-center">
