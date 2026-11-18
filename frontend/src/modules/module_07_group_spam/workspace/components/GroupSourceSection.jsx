@@ -17,6 +17,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { attachDragSelection } from "../../shared/drag-selection";
 import { toast } from "@/lib/toast";
 import CustomSelect from "@/components/ui/custom-select";
@@ -700,51 +708,16 @@ export default function GroupSourceSection({
 
         {shouldShowGroupTable && (
           <div className="mt-3 overflow-hidden rounded-lg border border-slate-200">
-            <div className="flex flex-col gap-2 border-b border-slate-200 bg-slate-50/60 p-2.5 sm:flex-row sm:items-center">
-              <div className="relative min-w-[180px] flex-1">
-                <Search className="absolute left-3 top-1/2  -translate-y-1/2 text-slate-400" size={16} />
-                <Input
-                  value={groupFilter}
-                  onChange={(event) => setGroupFilter(event.target.value)}
-                  placeholder="Lọc danh sách nhóm..."
-                  className="h-8 bg-white pl-9 text-xs"
-                />
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => setShowResultFilters((current) => !current)}
-                className={`h-8 shrink-0 px-2.5 text-sm ${showResultFilters || activeResultFilterCount > 0
-                  ? "border-primary/40 bg-blue-50 text-primary"
-                  : ""
-                  }`}
-              >
-                <ListFilter className="mr-2" size={16} /> Bộ lọc
-                {activeResultFilterCount > 0 && (
-                  <span className="ml-1 rounded-full bg-primary px-1.5 py-0.5 text-xs leading-none text-white">
-                    {activeResultFilterCount}
-                  </span>
-                )}
-              </Button>
-              <div className="flex items-center justify-between gap-2 sm:justify-end">
-                <span className="whitespace-nowrap text-xs text-slate-500">
-                  <strong className="text-slate-700">{filteredGroups.length}</strong> nhóm {" "} / {" "}
-                  <strong className="text-primary">{selectedGroupKeys.length}</strong> đã chọn
-                </span>
-              </div>
-            </div>
-
             {(showResultFilters || activeResultFilterCount > 0) &&
               renderGroupFilters(
                 "flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-2.5 py-2"
               )}
 
             <div ref={tableContainerRef} className="max-h-[320px] overflow-auto">
-              <table className="w-full min-w-[700px] text-left text-sm">
-                <thead className="sticky top-0 z-10 bg-white text-slate-500 shadow-xs">
-                  <tr className="border-b border-slate-200">
-                    <th className="w-10 px-3 py-2">
+              <Table className="min-w-[700px] text-left text-sm">
+                <TableHeader className="sticky top-0 z-10 bg-white text-slate-500 shadow-xs">
+                  <TableRow className="border-b border-slate-200 hover:bg-transparent">
+                    <TableHead className="w-10 px-3 py-2">
                       <Checkbox
                         checked={
                           filteredGroups.length > 0 &&
@@ -754,29 +727,29 @@ export default function GroupSourceSection({
                           setSelectedGroupKeys(checked ? filteredGroups.map((group) => group.key) : [])
                         }
                       />
-                    </th>
-                    <th className="px-2 py-2 font-semibold">Nhóm Facebook</th>
-                    <th className="w-28 px-3 py-2 font-semibold">Loại</th>
-                    <th className="w-32 px-3 py-2 font-semibold">Hoạt động</th>
-                    <th className="w-28 px-3 py-2 font-semibold">Thành viên</th>
-                    <th className="w-12 px-2 py-2" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
+                    </TableHead>
+                    <TableHead className="px-2 py-2 font-semibold">Nhóm Facebook</TableHead>
+                    <TableHead className="w-28 px-3 py-2 font-semibold">Loại</TableHead>
+                    <TableHead className="w-32 px-3 py-2 font-semibold">Hoạt động</TableHead>
+                    <TableHead className="w-28 px-3 py-2 font-semibold">Thành viên</TableHead>
+                    <TableHead className="w-12 px-2 py-2" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody className="divide-y divide-slate-100">
                   {isFileProcessing || isSearching ? (
-                    <tr>
-                      <td colSpan="6" className="py-10 text-center text-slate-500">
+                    <TableRow>
+                      <TableCell colSpan={6} className="py-10 text-center text-slate-500">
                         <Loader2 className="mx-auto mb-2 animate-spin text-primary" size={20} />
                         <p className="text-sm">
                           {isFileProcessing
                             ? "Đang đọc file và quét dữ liệu nhóm thật từ Facebook..."
                             : "Đang quét nhóm Facebook..."}
                         </p>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ) : filteredGroups.length === 0 ? (
-                    <tr>
-                      <td colSpan="6" className="py-10 text-center">
+                    <TableRow>
+                      <TableCell colSpan={6} className="py-10 text-center">
                         <div className="mx-auto mb-2 flex size-8 items-center justify-center rounded-full bg-slate-100 text-slate-400">
                           <AlertCircle className="size-4" />
                         </div>
@@ -785,28 +758,28 @@ export default function GroupSourceSection({
                             ? "File chưa có nhóm hợp lệ"
                             : "Không có nhóm phù hợp"}
                         </p>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </TableRow>
                   ) : (
                     filteredGroups.map((group, idx) => {
                       const isSelected = selectedGroupKeys.includes(group.key);
                       const isPublic = group.privacy === "public";
                       const groupUrl = group.url || "";
                       return (
-                        <tr
+                        <TableRow
                           key={group.key}
                           data-group-key={group.key}
                           onClick={(e) => handleRowClick(group.key, e)}
-                          className={`transition-colors select-none cursor-pointer ${isSelected ? "bg-blue-50/60 hover:bg-blue-50" : "bg-white hover:bg-slate-50"
+                          className={`cursor-pointer select-none transition-colors ${isSelected ? "bg-blue-50/60 hover:bg-blue-50" : "bg-white hover:bg-slate-50"
                             }`}
                         >
-                          <td className="px-3 py-2">
+                          <TableCell className="px-3 py-2">
                             <Checkbox
                               checked={isSelected}
                               onCheckedChange={(checked) => toggleGroup(group.key, checked)}
                             />
-                          </td>
-                          <td className="px-2 py-2">
+                          </TableCell>
+                          <TableCell className="px-2 py-2 whitespace-normal">
                             <div className="flex items-center gap-2">
                               <span className="w-5 shrink-0 text-right font-mono text-sm text-slate-500">
                                 {idx + 1}
@@ -831,16 +804,16 @@ export default function GroupSourceSection({
                                 )}
                               </div>
                             </div>
-                          </td>
-                          <td className="px-3 py-2">
+                          </TableCell>
+                          <TableCell className="px-3 py-2">
                             <span className={`inline-flex items-center gap-1 text-sm ${isPublic ? "text-emerald-600" : "text-amber-600"}`}>
                               {isPublic ? <Globe size={16} /> : <Lock size={16} />}
                               {isPublic ? "Công khai" : "Kiểm duyệt"}
                             </span>
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-2 text-slate-500">{group.frequency || "—"}</td>
-                          <td className="whitespace-nowrap px-3 py-2 font-medium text-slate-600">{group.members || "—"}</td>
-                          <td className="px-2 py-2 text-center">
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap px-3 py-2 text-slate-500">{group.frequency || "—"}</TableCell>
+                          <TableCell className="whitespace-nowrap px-3 py-2 font-medium text-slate-600">{group.members || "—"}</TableCell>
+                          <TableCell className="px-2 py-2 text-center">
                             <button
                               type="button"
                               onClick={() => handleRemoveSingleGroup(group.key)}
@@ -849,16 +822,16 @@ export default function GroupSourceSection({
                             >
                               <Trash2 size={16} />
                             </button>
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       );
                     })
                   )}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </div>
             {filteredGroups.length > 0 && (
-              <div className="border-t border-slate-100 px-3 py-1.5 text-right text-sm text-slate-400">
+              <div className="border-t border-slate-100 px-3 py-2 text-right text-xs text-slate-600">
                 Có thể giữ và kéo chuột để chọn nhiều nhóm.
               </div>
             )}

@@ -2,8 +2,19 @@
 
 BEGIN;
 
-DELETE FROM public.cloud_group_campaigns
-WHERE deleted_at IS NOT NULL;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'cloud_group_campaigns'
+          AND column_name = 'deleted_at'
+    ) THEN
+        DELETE FROM public.cloud_group_campaigns
+        WHERE deleted_at IS NOT NULL;
+    END IF;
+END $$;
 
 DROP INDEX IF EXISTS public.idx_cloud_group_campaigns_owner_type;
 

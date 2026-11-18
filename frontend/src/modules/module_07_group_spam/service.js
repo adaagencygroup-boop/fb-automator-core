@@ -1,6 +1,24 @@
 import api from "@/services/api";
 import { API_BASE } from "@/config/constants";
 
+export function getGroupMediaPreviewUrl(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  if (/^(https?:|blob:|data:)/i.test(value)) return value;
+  return `${API_BASE}/api/groups/media/file?token=${encodeURIComponent(value)}`;
+}
+
+export async function fetchGroupMediaBlobUrl(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  if (/^(https?:|blob:|data:)/i.test(value)) return value;
+  const blob = await api.get("/api/groups/media/file", {
+    params: { token: value },
+    responseType: "blob",
+  });
+  return blob instanceof Blob ? URL.createObjectURL(blob) : "";
+}
+
 export const getAiCredentials = () => api.get("/api/groups/credentials");
 export const addAiCredential = (data) => api.post("/api/groups/credentials", data);
 export const updateAiCredential = (id, data) => api.put(`/api/groups/credentials/${encodeURIComponent(id)}`, data);
@@ -122,5 +140,3 @@ export function getGroupHistoryRecords(params) {
 export function openGroupHistoryRecord(logId) {
   return api.post(`/api/groups/history/${encodeURIComponent(logId)}/open`);
 }
-
-

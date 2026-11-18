@@ -768,7 +768,7 @@ export default function GroupCampaignWorkspace({ actionType = "POST" }) {
         });
         const uploadRes = await uploadGroupMedia(formData, effectiveCampaignId);
         if (uploadRes?.files?.length) {
-          savedMediaPaths = uploadRes.files.map((f) => f.saved_name || f.path || f.relative_path);
+          savedMediaPaths = uploadRes.files.map((f) => f.path || f.relative_path || f.saved_name);
           appendCampaignLog("SUCCESS", `Đã chuẩn bị thành công ${savedMediaPaths.length} tệp media.`);
         }
       }
@@ -845,10 +845,6 @@ export default function GroupCampaignWorkspace({ actionType = "POST" }) {
   const markDraftUserEdit = () => {
     if (isCampaignActive) return;
     draftUserEditedRef.current = true;
-    setUnsavedChanges(true, async () => {
-      await clearGroupPostDraft(draftScope);
-      await writeGroupPostDraftMedia([], draftScope);
-    });
   };
   const markDraftButtonEdit = (event) => {
     if (event.target.closest("button, [role='button']")) markDraftUserEdit();

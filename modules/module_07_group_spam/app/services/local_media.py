@@ -51,7 +51,8 @@ def upload_local_media(
     target = _campaign_dir(campaign_id) / file_path.name
     if file_path.resolve() != target.resolve():
         shutil.copy2(file_path, target)
-    return {"url": str(target), "path": str(target), "filename": target.name, "size": target.stat().st_size}
+    relative = f"{_safe_name(campaign_id, 'general')}/{target.name}"
+    return {"url": relative, "path": relative, "filename": target.name, "size": target.stat().st_size}
 
 
 def list_campaign_media(
