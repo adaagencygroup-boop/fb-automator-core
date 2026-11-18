@@ -9,7 +9,6 @@ CREATE TABLE IF NOT EXISTS public.cloud_group_campaigns (
     name VARCHAR(200) NOT NULL,
     description TEXT,
     action_type VARCHAR(20) NOT NULL,
-    deleted_at TIMESTAMP WITHOUT TIME ZONE,
     created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL
         DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
     updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL
@@ -46,10 +45,7 @@ CREATE TABLE IF NOT EXISTS public.cloud_group_runs (
         UNIQUE (campaign_id, run_number),
     CONSTRAINT ck_cloud_group_runs_number CHECK (run_number >= 1),
     CONSTRAINT ck_cloud_group_runs_status
-        CHECK (status IN (
-            'QUEUED', 'SCHEDULED', 'RUNNING', 'STOPPING',
-            'COMPLETED', 'PARTIAL', 'STOPPED', 'CANCELLED', 'FAILED'
-        )),
+        CHECK (status IN ('COMPLETED', 'FAILED')),
     CONSTRAINT ck_cloud_group_runs_totals
         CHECK (
             total_planned >= 0
@@ -105,7 +101,7 @@ CREATE INDEX IF NOT EXISTS idx_cloud_group_logs_group
 CREATE INDEX IF NOT EXISTS idx_cloud_group_campaigns_owner_created
     ON public.cloud_group_campaigns (owner_key, created_at);
 CREATE INDEX IF NOT EXISTS idx_cloud_group_campaigns_owner_type
-    ON public.cloud_group_campaigns (owner_key, action_type, deleted_at);
+    ON public.cloud_group_campaigns (owner_key, action_type);
 CREATE INDEX IF NOT EXISTS idx_cloud_group_campaigns_owner_name
     ON public.cloud_group_campaigns (owner_key, name);
 
