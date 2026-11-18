@@ -948,3 +948,7 @@ def wait_and_find(driver, locators: list, timeout: int = 15):
         time.sleep(0.4)
     raise TimeoutException(f"None of {len(locators)} locators matched after {timeout}s")
 
+
+from core.browser.human import install_os_independent_click
+install_os_independent_click()
+

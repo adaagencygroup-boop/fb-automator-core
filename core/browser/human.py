@@ -9,7 +9,6 @@ from typing import List, Optional, Tuple
 
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.common.actions.action_builder import ActionBuilder
 
 from core.browser.fingerprint import BrowserConfig, MouseProfile
 
@@ -31,9 +30,10 @@ def human_sleep(min_s: float = 2.0, max_s: float = 4.5, config: Optional[Browser
 
 
 # ─────────────────────────── CHUỘT ────────────────────────────
-# Selenium move_to_element / element.click(): trang chỉ nhận đúng 1 mousemove (chuột nhảy tức thời, kể cả khi đặt
-# duration) rồi bấm đúng tâm; bấm bằng JS thì không có chuột nào và isTrusted = false (đã đo trên Chrome 2026-10-23).
-# Facebook có thu chuyển động chuột để phân biệt người / bot. Ở đây chuột đi theo đường cong, mỗi ~16ms 1 mousemove
+# Sự kiện chuột đi qua Chrome DevTools (Input.dispatchMouseEvent), isTrusted = true, và không kéo con trỏ Windows.
+# ActionBuilder/element.click() kéo con trỏ thật: chuột cảm ứng laptop chen một nhịp là cú bấm rơi ra ngoài ô.
+# Bấm bằng JS thì isTrusted = false (đã đo trên Chrome 2026-10-23). Facebook có thu chuyển động chuột để phân biệt
+# người / bot. Ở đây chuột đi theo đường cong, mỗi ~16ms 1 mousemove
 # (nhịp nhanh nhất ChromeDriver đưa được; chuột thật 60-125 sự kiện/giây), chậm ở 2 đầu nhanh ở giữa, có rung tay;
 # lần rê dài đôi khi đi quá đích hoặc dừng hơi hụt rồi chỉnh thêm 1-2 nhịp nhỏ; điểm bấm dạng chuông quanh vùng ưa
 # thích; dừng trước khi bấm, giữ nút chuột 1 chút. Mọi thông số theo thói quen tay riêng của nick (MouseProfile trong
@@ -152,6 +152,20 @@ def _legs(start, end, curve, overshoot, profile, rng, width, height) -> List[tup
     return [(end, curve, None)]
 
 
+def dispatch_mouse(driver, event_type: str, x: float, y: float, button: str = "none",
+                   buttons: int = 0, click_count: int = 0):
+    """Một sự kiện chuột trong đúng phiên Chrome này. Không đụng con trỏ của Windows."""
+    driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
+        "type": event_type,
+        "x": int(x),
+        "y": int(y),
+        "button": button,
+        "buttons": buttons,
+        "clickCount": click_count,
+        "pointerType": "mouse",
+    })
+
+
 def mouse_to(driver, x: float, y: float, curve: float = 1.0, overshoot: bool = True,
              rng: random.Random = random) -> Tuple[int, int]:
     """
@@ -166,30 +180,27 @@ def mouse_to(driver, x: float, y: float, curve: float = 1.0, overshoot: bool = T
     profile = mouse_profile(driver)
     end = _clamp_point(x, y, width, height)
     start = mouse_position(driver)
-    builder = ActionBuilder(driver, duration=0)
     if start is None:
         start = _clamp_point(width * rng.uniform(0.3, 0.7), height * rng.uniform(0.3, 0.7), width, height)
-        builder.pointer_action.move_to_location(*start)
+        dispatch_mouse(driver, "mouseMoved", *start)
     current = start
     for target, bend, leg_ms in _legs(start, end, curve, overshoot, profile, rng, width, height):
         for px, py, pause in mouse_path(current, target, bend, rng, profile, leg_ms):
             px, py = _clamp_point(px, py, width, height)
-            builder.pointer_action.move_to_location(px, py)
+            dispatch_mouse(driver, "mouseMoved", px, py)
             if pause > 0.001:
-                builder.pointer_action.pause(pause)
+                time.sleep(pause)
         current = target
-    builder.perform()
     driver._human_mouse = end
     return end
 
 
 def press_mouse(driver, rng: random.Random = random):
     """Nhấn rồi nhả chuột trái tại chỗ, giữ theo thói quen của nick."""
-    builder = ActionBuilder(driver, duration=0)
-    builder.pointer_action.pointer_down()
-    builder.pointer_action.pause(rng.uniform(*mouse_profile(driver).hold))
-    builder.pointer_action.pointer_up()
-    builder.perform()
+    point = mouse_position(driver) or (1, 1)
+    dispatch_mouse(driver, "mousePressed", point[0], point[1], "left", 1, 1)
+    time.sleep(rng.uniform(*mouse_profile(driver).hold))
+    dispatch_mouse(driver, "mouseReleased", point[0], point[1], "left", 0, 1)
 
 
 def element_box(driver, element) -> Optional[Tuple[float, float, float, float]]:
@@ -286,4 +297,42 @@ def human_click(driver, element, hover: Optional[Tuple[float, float]] = None, rn
         except WebDriverException:
             time.sleep(rng.uniform(0.3, 0.6))
     return False
+
+
+def install_os_independent_click():
+    """element.click() bấm trong Chrome, không kéo con trỏ Windows. Chuột cảm ứng không còn làm lệch cú bấm."""
+    from selenium.webdriver.remote.webelement import WebElement
+    if getattr(WebElement.click, "_ignores_os_cursor", False):
+        return
+    original = WebElement.click
+
+    def click(self):
+        driver = getattr(self, "_parent", None)
+        try:
+            rect = driver.execute_script(
+                "const el = arguments[0];"
+                "el.scrollIntoView({block:'center', inline:'nearest'});"
+                "const r = el.getBoundingClientRect();"
+                "return [r.left, r.top, r.width, r.height];",
+                self,
+            )
+            if isinstance(rect, (list, tuple)) and len(rect) == 4 and rect[2] >= 2 and rect[3] >= 2:
+                x, y = int(rect[0] + rect[2] / 2), int(rect[1] + rect[3] / 2)
+                dispatch_mouse(driver, "mouseMoved", x, y)
+                dispatch_mouse(driver, "mousePressed", x, y, "left", 1, 1)
+                dispatch_mouse(driver, "mouseReleased", x, y, "left", 0, 1)
+                try:
+                    driver._human_mouse = (x, y)
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
+        return original(self)
+
+    click._ignores_os_cursor = True
+    WebElement.click = click
+
+
+install_os_independent_click()
 
