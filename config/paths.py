@@ -1,6 +1,6 @@
 import os
 import sys
-from pathlib import Pat
+from pathlib import Path
 def runtime_root():
   if not getattr(sys, "frozen", False):
     return Path(__file__).resolve().parent.parent
