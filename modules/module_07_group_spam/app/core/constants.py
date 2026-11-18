@@ -89,23 +89,14 @@ class ActionType(str, Enum):
 
 
 class CampaignStatus(str, Enum):
-    QUEUED = "QUEUED"
-    RUNNING = "RUNNING"
-    PAUSED = "PAUSED"
-    STOPPED = "STOPPED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
-    PARTIAL = "PARTIAL"
-    CANCELLED = "CANCELLED"
 
 
 # Tập hợp các trạng thái kết thúc (không thể tiếp tục chạy)
 TERMINAL_STATES: Set[str] = {
     CampaignStatus.COMPLETED.value,
-    CampaignStatus.PARTIAL.value,
-    CampaignStatus.STOPPED.value,
     CampaignStatus.FAILED.value,
-    CampaignStatus.CANCELLED.value,
 }
 
 

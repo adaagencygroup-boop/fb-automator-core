@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from core.database.connection import db
 from modules.module_02_account_manager.api.router import scoped_owner
 from ..services.campaign import _friendly_automation_error
+from ..services.local_media import delete_campaign_media
 
 router = APIRouter(tags=["Module 07: Campaigns & History"])
 
@@ -43,11 +44,11 @@ async def list_campaigns(
     from_date: str | None = Query(None, description="Từ ngày (YYYY-MM-DD)"),
     to_date: str | None = Query(None, description="Đến ngày (YYYY-MM-DD)"),
     action_type: str = Query("ALL", description="Loại tác vụ: ALL, POST, COMMENT"),
-    status: str = Query("ALL", description="Trạng thái: ALL, COMPLETED, STOPPED, FAILED, RUNNING"),
+    status: str = Query("ALL", description="Trạng thái: ALL, COMPLETED, FAILED"),
     owner: str | None = Depends(scoped_owner),
 ):
     """Lấy danh sách các chiến dịch đã lưu và thực thi."""
-    where_clauses = ["c.deleted_at IS NULL"]
+    where_clauses = ["1=1"]
     params: list[Any] = []
 
     if owner:
@@ -238,7 +239,7 @@ async def get_campaign_rerun_config(
     owner: str | None = Depends(scoped_owner),
 ):
     """Nạp cấu hình của lượt chạy trước cho chức năng Chạy lại (CAMP-RUN-01)."""
-    where = "campaign_id = ? AND deleted_at IS NULL"
+    where = "campaign_id = ?"
     params: list[Any] = [campaign_id]
     if owner:
         where += " AND owner_key = ?"
@@ -303,6 +304,7 @@ async def delete_campaign(
         f"DELETE FROM cloud_group_campaigns WHERE {delete_where}",
         tuple(delete_params),
     )
+    delete_campaign_media(campaign_id)
 
     return {
         "success": True,
@@ -397,7 +399,7 @@ async def get_group_history_records(
     }
 
     # 2. Danh sách chiến dịch để đổ vào dropdown filter
-    campaign_filter = "deleted_at IS NULL"
+    campaign_filter = "1=1"
     campaign_filter_params: tuple[Any, ...] = ()
     if owner:
         campaign_filter += " AND owner_key = ?"

@@ -29,30 +29,6 @@ def is_media_storage_available() -> bool:
     return True
 
 
-def upload_media_object(
-    *,
-    file_bytes: bytes,
-    filename: str,
-    campaign_id: str,
-    content_type: str | None = None,
-    bucket: str | None = None,
-    client: Any = None,
-) -> dict[str, Any]:
-    """Ghi ảnh/video của chiến dịch vào thư mục máy."""
-    del content_type, bucket, client
-    safe_filename = _safe_name(Path(filename).name, "media.bin")
-    target = _campaign_dir(campaign_id) / safe_filename
-    target.write_bytes(file_bytes)
-    return {
-        "path": str(target),
-        "relative_path": safe_filename,
-        "url": str(target),
-        "filename": safe_filename,
-        "size": len(file_bytes),
-        "campaign_id": _safe_name(campaign_id, "general"),
-    }
-
-
 def upload_local_media(
     local_path: str | Path,
     campaign_id: str,
@@ -99,6 +75,17 @@ def list_campaign_media(
             "size": path.stat().st_size,
         })
     return items
+
+
+def delete_campaign_media(campaign_id: str) -> None:
+    """Xóa toàn bộ thư mục media của chiến dịch trên đĩa khi xóa cứng chiến dịch."""
+    safe_id = _safe_name(campaign_id, "")
+    if not safe_id:
+        return
+    base_dir = UPLOAD_MEDIA_DIR.resolve()
+    folder = (base_dir / safe_id).resolve()
+    if folder.is_relative_to(base_dir) and folder != base_dir and folder.is_dir():
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def _find_local_file(raw: str) -> Path | None:

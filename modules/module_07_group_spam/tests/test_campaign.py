@@ -104,12 +104,12 @@ class CampaignTests(unittest.TestCase):
         with patch.object(self.manager, "_load_accounts", return_value=self.accounts):
             started = self.manager.start(self.payload(), "owner-1")
             result = wait_for_job(self.manager, started["job_id"])
-        self.assertEqual(result["status"], "PARTIAL")
+        self.assertEqual(result["status"], "FAILED")
         self.assertEqual((result["total"], result["completed"]), (3, 3))
         self.assertEqual((result["success"], result["failed"]), (2, 1))
         self.assertEqual((result["completed_steps"], result["total_steps"]), (6, 6))
         self.assertEqual(len(self.persistence.tasks), 3)
-        self.assertEqual(self.persistence.updates[-1][1]["status"], "PARTIAL")
+        self.assertEqual(self.persistence.updates[-1][1]["status"], "FAILED")
 
     def test_pending_join_request_does_not_block_posting(self):
         payload = self.payload()
@@ -169,7 +169,7 @@ class CampaignTests(unittest.TestCase):
             started = manager.start(payload, "owner-1")
             result = wait_for_job(manager, started["job_id"])
 
-        self.assertEqual(result["status"], "PARTIAL")
+        self.assertEqual(result["status"], "FAILED")
         self.assertEqual(events, [
             ("100", "join", "g1"), ("100", "post", "g1"),
             ("100", "join", "g2"), ("100", "post", "g2"),
@@ -241,7 +241,7 @@ class CampaignTests(unittest.TestCase):
             result = wait_for_job(manager, started["job_id"])
 
         saved = self.persistence.tasks[0][1]
-        self.assertEqual((result["status"], result["success"], result["pending_actions"]), ("PARTIAL", 0, 1))
+        self.assertEqual((result["status"], result["success"], result["pending_actions"]), ("FAILED", 0, 1))
         self.assertEqual(saved["status"], "PENDING_APPROVAL")
         self.assertEqual(saved["result_url"], post_url)
 
@@ -269,7 +269,7 @@ class CampaignTests(unittest.TestCase):
             started = self.manager.start(payload, "owner-1")
             self.manager.stop(started["job_id"], "owner-1")
             result = wait_for_job(self.manager, started["job_id"])
-        self.assertEqual(result["status"], "STOPPED")
+        self.assertEqual(result["status"], "FAILED")
         self.assertEqual(result["completed"], 0)
 
     def test_owner_cannot_read_another_owner_job(self):

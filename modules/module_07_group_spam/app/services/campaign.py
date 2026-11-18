@@ -1944,27 +1944,27 @@ class CampaignManager:
                     future.result()
 
             if job.cancel.is_set():
-                job.status = "STOPPED"
+                job.status = "FAILED"
                 job.message = "Chiến dịch đã dừng theo yêu cầu"
                 job.log("WARNING", "Chiến dịch đã dừng theo yêu cầu")
             elif (job.failed or job.skipped) and job.success:
-                job.status = "PARTIAL"
-                job.message = f"Hoàn tất một phần: {job.success} thành công, {job.pending_actions} chờ duyệt, {job.failed} thất bại"
+                job.status = "FAILED"
+                job.message = f"Thất bại một phần: {job.success} thành công, {job.pending_actions} chờ duyệt, {job.failed} thất bại"
                 job.log("WARNING", job.message)
             elif job.failed:
                 job.status = "FAILED"
                 job.message = f"Chiến dịch thất bại ({job.failed}/{job.total} lượt)"
                 job.log("ERROR", f"Chiến dịch kết thúc: {job.message}")
             elif job.skipped:
-                job.status = "PARTIAL"
-                job.message = f"Đã xử lý: {job.pending_actions} lượt chờ duyệt, {job.skipped - job.pending_actions} lượt bỏ qua"
+                job.status = "FAILED"
+                job.message = f"Chưa hoàn tất: {job.pending_actions} lượt chờ duyệt, {job.skipped - job.pending_actions} lượt bỏ qua"
                 job.log("WARNING", job.message)
             else:
                 job.status = "COMPLETED"
                 job.message = f"Đã {action_label} thành công {job.success}/{job.total} lượt"
                 job.log("SUCCESS", f"Chiến dịch đã hoàn thành thành công! Tổng cộng {job.success}/{job.total} lượt {action_label}.")
         except InterruptedError:
-            job.status = "STOPPED"
+            job.status = "FAILED"
             job.message = "Chiến dịch đã dừng theo yêu cầu"
         except Exception as exc:
             job.status = "FAILED"
@@ -2209,7 +2209,7 @@ class CampaignManager:
 
     def _persist_final_results(self, job: CampaignJob) -> None:
         """Finalize the PostgreSQL run summary and keep campaign media on the local machine."""
-        if job.status not in {"COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"}:
+        if job.status != "COMPLETED":
             job.status = "FAILED"
 
         try:
