@@ -728,7 +728,11 @@ export default function AiPost() {
 
           <div className="mt-4">
             <Field label="Khung Prompt AI cấu trúc bài đăng">
-              <span className="relative block">
+              <span
+                className={`block overflow-hidden rounded-lg border border-[#E2E8F0] transition-colors focus-within:border-[#2563EB] ${
+                  running ? "bg-[#F8FAFC]" : "bg-white"
+                }`}
+              >
                 <textarea
                   value={prompt}
                   maxLength={PROMPT_LIMIT}
@@ -736,9 +740,9 @@ export default function AiPost() {
                   onChange={(event) => setPrompt(event.target.value)}
                   rows={6}
                   placeholder="Nhập cấu trúc bài đăng. Chủ đề từng page lấy từ cột từ khóa bên phải."
-                  className="h-[165px] w-full resize-none rounded-lg border border-[#E2E8F0] px-3 pb-7 pt-2 text-sm leading-5 text-[#1E293B] outline-none placeholder:text-[#94A3B8] focus:border-[#2563EB] disabled:cursor-not-allowed disabled:bg-[#F8FAFC] disabled:text-[#64748B]"
+                  className="block h-[142px] w-full resize-none bg-transparent px-3 py-2 text-sm leading-5 text-[#1E293B] outline-none placeholder:text-[#94A3B8] disabled:cursor-not-allowed disabled:text-[#64748B]"
                 />
-                <span className="pointer-events-none absolute bottom-2 right-3 text-[11px] text-[#94A3B8]">
+                <span className="flex justify-end px-3 pb-1.5 pt-0.5 text-[11px] text-[#94A3B8]">
                   {prompt.length}/{PROMPT_LIMIT}
                 </span>
               </span>

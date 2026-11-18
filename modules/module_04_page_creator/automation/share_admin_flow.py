@@ -25,6 +25,18 @@ _RESULT_NOISE = {
 }
 
 
+def _safe_click(driver: webdriver.Chrome, element) -> None:
+    """Cuộn phần tử vào giữa màn hình rồi click, tự động fallback sang JS click nếu bị che."""
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", element)
+    except Exception:
+        pass
+    try:
+        element.click()
+    except Exception:
+        driver.execute_script("arguments[0].click();", element)
+
+
 def clean_admin_display_name(text: str, uid: str = "") -> str:
     """Lấy dòng tên người từ kết quả tìm UID, bỏ nhãn vai trò và chính UID."""
     target = (uid or "").strip()
@@ -317,7 +329,7 @@ def run_share_admin(
                         logger.info("Input click didn't toggle state, attempting container click...")
                         try:
                             container = wait_and_find(driver, SHARE_ADMIN["full_control_switch_container"], timeout=6)
-                            container.click()
+                            _safe_click(driver, container)
                             human_sleep(1.0, 2.0)
                         except Exception:
                             driver.execute_script(
@@ -336,10 +348,11 @@ def run_share_admin(
                 logger.warning("Full control switch input not found via primary locators, trying container click...")
                 try:
                     container = wait_and_find(driver, SHARE_ADMIN["full_control_switch_container"], timeout=10)
-                    container.click()
+                    _safe_click(driver, container)
                     human_sleep(1.0, 2.0)
                 except Exception as e:
-                    raise RuntimeError(f"Không bật được Full Control: {e}") from e
+                    logger.warning(f"Failed to toggle Full Control container: {e}")
+                    raise RuntimeError("Không bật được quyền kiểm soát toàn phần (Full Control) trên giao diện Facebook") from e
 
             human_sleep(2.0, 3.5)
 

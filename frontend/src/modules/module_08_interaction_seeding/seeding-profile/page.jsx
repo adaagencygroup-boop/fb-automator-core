@@ -12,6 +12,7 @@ import ProfileProgressTerminal from "./_components/ProfileProgressTerminal";
 import ProfileSummaryCards from "./_components/ProfileSummaryCards";
 import ProfileTargetSection from "./_components/ProfileTargetSection";
 import AccountSelectModal from "../_components/AccountSelectModal";
+import { loadSavedUids, resolveInitialUids, saveSelectedUids } from "../accountSelection.mjs";
 
 export default function SeedingProfilePage() {
   const [targets, setTargets] = useState([]);
@@ -44,9 +45,23 @@ export default function SeedingProfilePage() {
           );
           const validCount = validLiveLoggedIn.length;
           setLiveAccountsCount(validCount);
-          const initialUids = validLiveLoggedIn.map((a) => a.uid);
+          // Giữ đúng tài khoản đã chọn lần trước (bỏ tài khoản không còn khả dụng)
+          const { uids: initialUids, restored, dropped } = resolveInitialUids(
+            validLiveLoggedIn.map((a) => a.uid),
+            loadSavedUids("PROFILE"),
+          );
           setSelectedUids(initialUids);
           setAccountCount(initialUids.length);
+          if (restored && dropped > 0) {
+            if (initialUids.length === 0) {
+              toast.warning(
+                "Các tài khoản đã chọn lần trước không còn khả dụng (Die / đăng xuất / đã xóa). Vui lòng chọn lại tài khoản.",
+                "CHƯA CHỌN TÀI KHOẢN",
+              );
+            } else {
+              addLog(`${dropped} tài khoản đã chọn lần trước không còn khả dụng — đã bỏ chọn.`, "warn");
+            }
+          }
         }
       })
       .catch(() => {});
@@ -437,6 +452,7 @@ export default function SeedingProfilePage() {
         onConfirm={(uids) => {
           setSelectedUids(uids);
           setAccountCount(uids.length);
+          saveSelectedUids("PROFILE", uids);
         }}
         isRunning={isRunning || isStopping}
       />

@@ -169,6 +169,9 @@ def _init_remaining_schemas():
 async def _finish_engine_startup(fast_startup: bool):
     if not fast_startup:
         await asyncio.to_thread(_init_remaining_schemas)
+    else:
+        # Fast startup skips schema checks, but account API sessions still need a bind.
+        await asyncio.to_thread(initialize_accounts)
     with startup_step("Backend module imports"):
         loaded = load_backend_modules()
     print(
@@ -351,6 +354,14 @@ if farm_router:
     app.include_router(farm_router)
 if post_router:
     app.include_router(post_router)
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+
+    Instrumentator(should_group_status_codes=False).instrument(app).expose(
+        app, endpoint="/metrics", include_in_schema=False
+    )
+except ImportError:
+    pass
 @app.get("/api/health")
 async def health_check():
     """async: không phụ thuộc threadpool — luôn trả lời được khi Engine còn sống."""

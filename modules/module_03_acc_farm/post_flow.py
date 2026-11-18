@@ -98,11 +98,12 @@ def is_saved_account_screen(driver) -> bool:
             if any(e.is_displayed() for e in elems):
                 return True
 
-        # Selector cho nút 'Tiếp tục'
+        # Nút Tiếp tục/Continue của trang full-page. Bỏ qua nút nằm trong dialog
+        # (modal Review audience cũng có Continue, không phải màn tài khoản đã lưu).
         continue_locators = [
-            "//div[@role='button' and not(@tabindex='-1') and (.//span[contains(text(), 'Tiếp tục') or contains(text(), 'Continue')])]",
-            "//button[contains(., 'Tiếp tục') or contains(., 'Continue')]",
-            "//div[@role='button' and (contains(@aria-label, 'Tiếp tục') or contains(@aria-label, 'Continue'))]",
+            "//div[@role='button' and not(@tabindex='-1') and (.//span[contains(text(), 'Tiếp tục') or contains(text(), 'Continue')]) and not(ancestor::div[@role='dialog'])]",
+            "//button[(contains(., 'Tiếp tục') or contains(., 'Continue')) and not(ancestor::div[@role='dialog'])]",
+            "//div[@role='button' and (contains(@aria-label, 'Tiếp tục') or contains(@aria-label, 'Continue')) and not(ancestor::div[@role='dialog'])]",
         ]
         for sel in continue_locators:
             elems = driver.find_elements(By.XPATH, sel)
@@ -545,6 +546,10 @@ def check_account_health(driver) -> None:
         if login_inputs and any(i.is_displayed() for i in login_inputs):
             raise PostAccountDead("Tài khoản chưa đăng nhập Facebook trên Profile Chrome này. Vui lòng đăng nhập tài khoản trước.")
 
+        # Đã mở composer thì đã qua màn login — không xét màn tài khoản đã lưu.
+        if is_composer_dialog_open(driver):
+            return
+
         # Kiểm tra nếu dừng ở màn hình chọn tài khoản đã lưu
         if is_saved_account_screen(driver):
             raise PostAccountDead("Trình duyệt đang dừng ở màn hình tài khoản đã lưu (chưa vào Newsfeed).")
@@ -743,6 +748,9 @@ def is_composer_dialog_open(driver) -> bool:
             if (rect.width > 250 && rect.height > 150) {
                 const text = (d.innerText || '').toLowerCase();
                 const aria = (d.getAttribute('aria-label') || '').toLowerCase();
+                if (text.includes('who can see your future posts and reels') || text.includes('update settings')) {
+                    continue;
+                }
                 const hasEditor = d.querySelector('div[role="textbox"], div[contenteditable="true"], div[data-lexical-editor="true"]') !== null;
                 const hasKeywords = text.includes("what's on your mind") || 
                                     text.includes("bạn đang nghĩ gì") || 
@@ -761,6 +769,498 @@ def is_composer_dialog_open(driver) -> bool:
         return bool(driver.execute_script(js))
     except Exception:
         return False
+
+
+def _click_update_settings_save(driver, log) -> str:
+    """Cuộn trong dialog rồi bấm Save bằng chuột thật. 'closed' hoặc 'failed'. Không raise."""
+    scroll_js = r"""
+        const save = document.querySelector('[data-ada-audience-save="1"]');
+        if (!save) return {found: false};
+        const dialog = save.closest('div[role="dialog"]') || save.parentElement;
+        let box = save.parentElement;
+        while (box && box !== document.documentElement) {
+            const st = window.getComputedStyle(box);
+            const oy = (st.overflowY || '') + (st.overflow || '');
+            if (box.scrollHeight > box.clientHeight + 2 && /auto|scroll|overlay/.test(oy)) break;
+            box = box.parentElement;
+        }
+        if (!box || box === document.documentElement) box = dialog;
+        const view = () => {
+            const br = box.getBoundingClientRect();
+            const sr = save.getBoundingClientRect();
+            const top = sr.top - br.top;
+            const bottom = sr.bottom - br.top;
+            return {
+                top: Math.round(top),
+                bottom: Math.round(bottom),
+                left: Math.round(sr.left),
+                width: Math.round(sr.width),
+                height: Math.round(sr.height),
+                boxHeight: Math.round(br.height),
+                inView: top >= -1 && bottom <= br.height + 1 && sr.height >= 8 && sr.width >= 8,
+            };
+        };
+        for (let i = 0; i < 2; i++) {
+            const sr = save.getBoundingClientRect();
+            const br = box.getBoundingClientRect();
+            box.scrollTop += (sr.top + sr.height / 2) - (br.top + br.height / 2);
+            if (view().inView) break;
+        }
+        const cls = String(save.className || '');
+        const aria = save.getAttribute('aria-disabled');
+        const disabled = !!(save.disabled || aria === 'true' || /disabled/i.test(cls));
+        const rect = view();
+        const cx = save.getBoundingClientRect().left + save.getBoundingClientRect().width / 2;
+        const cy = save.getBoundingClientRect().top + save.getBoundingClientRect().height / 2;
+        const hit = document.elementFromPoint(cx, cy);
+        const hitOk = !!(hit && (hit === save || save.contains(hit)));
+        return {
+            found: true,
+            disabled: disabled,
+            aria: aria,
+            className: cls.slice(0, 160),
+            rect: rect,
+            inView: rect.inView,
+            hitOk: hitOk,
+            hitText: hit ? String(hit.innerText || hit.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60) : '',
+        };
+    """
+    js_click_js = "const el = document.querySelector('[data-ada-audience-save=\"1\"]'); if (el) el.click();"
+
+    def probe():
+        try:
+            info = driver.execute_script(scroll_js)
+        except Exception as exc:
+            return {"found": False, "error": str(exc)}
+        return info or {"found": False}
+
+    def element(marker: str):
+        try:
+            return driver.execute_script(
+                "return document.querySelector(arguments[0]);",
+                marker,
+            )
+        except Exception:
+            return None
+
+    def wait_closed() -> bool:
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                if not _settings_dialog_still(driver):
+                    return True
+            except Exception:
+                return True
+            time.sleep(0.25)
+        return False
+
+    try:
+        save_el = element('[data-ada-audience-save="1"]')
+        if save_el is None:
+            log("Không đóng được modal Update settings: không thấy nút Save")
+            return "failed"
+        info = {}
+        for _ in range(2):
+            info = probe()
+            if info.get("inView") and info.get("hitOk"):
+                break
+        log(
+            "Save trạng thái: disabled={disabled} aria-disabled={aria} rect={rect} hit={hit}".format(
+                disabled=info.get("disabled"),
+                aria=info.get("aria"),
+                rect=info.get("rect"),
+                hit=info.get("hitText"),
+            )
+        )
+        tries = 0
+        while info.get("disabled") and tries < 2:
+            public_el = element('[data-ada-audience-public="1"]')
+            if public_el is not None:
+                try:
+                    HumanInteraction(driver).click(public_el)
+                except Exception as exc:
+                    log(f"Bấm lại Public lỗi: {exc}")
+            time.sleep(1)
+            info = probe()
+            log(
+                "Save sau khi bấm lại Public: disabled={disabled} aria-disabled={aria} rect={rect}".format(
+                    disabled=info.get("disabled"),
+                    aria=info.get("aria"),
+                    rect=info.get("rect"),
+                )
+            )
+            tries += 1
+        if info.get("disabled"):
+            log(
+                "Save disabled sau khi chọn Public "
+                f"rect={info.get('rect')} aria-disabled={info.get('aria')}"
+            )
+            return "failed"
+        used_mouse = False
+        if info.get("inView") and info.get("hitOk"):
+            try:
+                driver.execute_script("arguments[0].scrollIntoView = function() {};", save_el)
+                HumanInteraction(driver).click(save_el)
+                used_mouse = True
+            except Exception as exc:
+                log(f"human.click Save lỗi: {exc}")
+        if used_mouse and wait_closed():
+            return "closed"
+        try:
+            driver.execute_script(js_click_js)
+        except Exception as exc:
+            log(f"JS click Save lỗi: {exc}")
+        if wait_closed():
+            return "closed"
+        if not used_mouse:
+            try:
+                driver.execute_script("arguments[0].scrollIntoView = function() {};", save_el)
+                HumanInteraction(driver).click(save_el)
+            except Exception as exc:
+                log(f"human.click Save lần 2 lỗi: {exc}")
+            if wait_closed():
+                return "closed"
+        info = probe()
+        log(
+            "Không đóng được modal Update settings "
+            f"disabled={info.get('disabled')} aria-disabled={info.get('aria')} "
+            f"rect={info.get('rect')} elementFromPoint={info.get('hitText')!r}"
+        )
+        return "failed"
+    except Exception as exc:
+        log(f"Không đóng được modal Update settings: {exc}")
+        return "failed"
+
+
+def _settings_dialog_still(driver) -> bool:
+    try:
+        return bool(driver.execute_script(
+            r"""
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                if (r.width < 8 || r.height < 8) return false;
+                const st = window.getComputedStyle(el);
+                return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0;
+            }
+            return Array.from(document.querySelectorAll('div[role="dialog"]')).filter(isVisible).some(d => {
+                const t = ((d.innerText || '') + '').toLowerCase();
+                return t.includes('who can see your future posts and reels') || t.includes('update settings');
+            });
+            """
+        ))
+    except Exception:
+        return False
+
+
+def _read_update_settings_radios(driver):
+    try:
+        rows = driver.execute_script(
+            r"""
+            const radio = document.querySelector('[data-ada-public-radio="1"]');
+            const dialog = (radio && radio.closest('div[role="dialog"]'))
+                || Array.from(document.querySelectorAll('div[role="dialog"]')).find(d => {
+                    const t = ((d.innerText || '') + '').toLowerCase();
+                    return t.includes('who can see your future posts and reels') || t.includes('update settings');
+                });
+            if (!dialog) return [];
+            return Array.from(dialog.querySelectorAll('[role="radio"]')).map(r => ({
+                text: (((r.innerText || '') + ' ' + (r.getAttribute('aria-label') || '')) + '').replace(/\s+/g, ' ').trim().slice(0, 90),
+                checked: ((r.getAttribute('aria-checked') || '') + '').toLowerCase(),
+            }));
+            """
+        )
+        return rows or []
+    except Exception:
+        return []
+
+
+def _public_radios_confirmed(rows) -> bool:
+    public_on = None
+    friends_on = None
+    for row in rows or []:
+        text = str(row.get("text") or "").lower()
+        checked = str(row.get("checked") or "").lower() == "true"
+        if ("friend" in text or "bạn bè" in text) and "public" not in text and "công khai" not in text:
+            friends_on = checked
+        elif "public" in text or "công khai" in text:
+            public_on = checked
+    return public_on is True and friends_on is False
+
+
+def _select_update_settings_public(driver, log) -> str:
+    """Bấm đúng radio Public. 'confirmed' hoặc 'public_failed'. Không bấm Save."""
+    def dump(prefix: str):
+        rows = _read_update_settings_radios(driver)
+        detail = "; ".join(f"{row.get('text')}={row.get('checked')}" for row in rows) or "(không thấy radio)"
+        log(f"{prefix} {detail}")
+        return rows
+
+    hit_js = r"""
+        const el = document.querySelector('[data-ada-public-radio="1"]');
+        if (!el) return {ok: false, hit: ''};
+        const r = el.getBoundingClientRect();
+        const x = r.left + r.width / 2;
+        const y = r.top + r.height / 2;
+        const hit = document.elementFromPoint(x, y);
+        const ok = !!(hit && (hit === el || el.contains(hit)));
+        return {
+            ok: ok,
+            hit: hit ? String(hit.innerText || hit.getAttribute('aria-label') || hit.tagName || '').replace(/\s+/g, ' ').trim().slice(0, 80) : '',
+            x: Math.round(x),
+            y: Math.round(y),
+        };
+    """
+    event_js = r"""
+        const el = document.querySelector('[data-ada-public-radio="1"]');
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const x = r.left + r.width / 2;
+        const y = r.top + r.height / 2;
+        const base = {bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0};
+        ['pointerover', 'mouseover', 'pointerdown', 'mousedown'].forEach(type => {
+            const Ctor = type.startsWith('pointer') ? PointerEvent : MouseEvent;
+            el.dispatchEvent(new Ctor(type, base));
+        });
+        try { el.focus(); } catch (e) {}
+        ['pointerup', 'mouseup', 'click'].forEach(type => {
+            const Ctor = type.startsWith('pointer') ? PointerEvent : MouseEvent;
+            el.dispatchEvent(new Ctor(type, base));
+        });
+        return true;
+    """
+
+    try:
+        rows = dump("Radio trước khi bấm Public:")
+        if _public_radios_confirmed(rows):
+            return "confirmed"
+        radio = driver.execute_script("return document.querySelector('[data-ada-public-radio=\"1\"]');")
+        if radio is None:
+            log("public_failed không thấy node [role=radio] của Public")
+            return "public_failed"
+        hit = driver.execute_script(hit_js) or {}
+        log(f"elementFromPoint tâm Public: ok={hit.get('ok')} hit={hit.get('hit')!r} xy=({hit.get('x')},{hit.get('y')})")
+        if hit.get("ok"):
+            try:
+                driver.execute_script("arguments[0].scrollIntoView = function() {};", radio)
+                HumanInteraction(driver).click(radio)
+            except Exception as exc:
+                log(f"human.click Public lỗi: {exc}")
+        time.sleep(0.4)
+        rows = dump("Radio sau chuột thật:")
+        if _public_radios_confirmed(rows):
+            return "confirmed"
+        try:
+            driver.execute_script(event_js)
+        except Exception as exc:
+            log(f"Chuỗi sự kiện Public lỗi: {exc}")
+        time.sleep(0.4)
+        rows = dump("Radio sau chuỗi sự kiện:")
+        hit = driver.execute_script(hit_js) or {}
+        if _public_radios_confirmed(rows):
+            return "confirmed"
+        log(
+            "public_failed Public chưa được chọn, không bấm Save. "
+            f"elementFromPoint={hit.get('hit')!r} radios="
+            + "; ".join(f"{row.get('text')}={row.get('checked')}" for row in rows)
+        )
+        return "public_failed"
+    except Exception as exc:
+        log(f"public_failed {exc}")
+        return "public_failed"
+
+
+def _dismiss_review_audience_dialog(driver, log_cb=None) -> bool:
+    """Review audience → Continue, rồi Update settings → Public → Save. Không bao giờ raise."""
+    def log(msg: str):
+        if log_cb:
+            try:
+                log_cb(msg)
+            except Exception:
+                pass
+        logger.info(msg)
+
+    step_js = r"""
+        function isVisible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 8 || r.height < 8) return false;
+            const st = window.getComputedStyle(el);
+            return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0;
+        }
+        function blob(el) {
+            return (((el && (el.innerText || el.textContent)) || '') + '').replace(/\s+/g, ' ').trim().toLowerCase();
+        }
+        function btnLabel(el) {
+            return (((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || el.textContent || '')) + '').replace(/\s+/g, ' ').trim().toLowerCase();
+        }
+        function isChecked(row) {
+            if (!row) return false;
+            const nodes = [row].concat(Array.from(row.querySelectorAll('[role="radio"], input[type="radio"]')));
+            return nodes.some(n => {
+                const aria = ((n.getAttribute && n.getAttribute('aria-checked')) || '').toLowerCase();
+                return aria === 'true' || n.checked === true || n.getAttribute && n.getAttribute('aria-pressed') === 'true';
+            });
+        }
+        const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).filter(isVisible);
+        const review = dialogs.find(d => {
+            const t = blob(d);
+            return t.includes('review audience') || t.includes('all video posts are now reels');
+        });
+        if (review) {
+            const btn = Array.from(review.querySelectorAll('div[role="button"], button')).find(b => {
+                if (!isVisible(b)) return false;
+                const label = btnLabel(b);
+                return label === 'continue' || label === 'tiếp tục' || label.startsWith('continue ') || label.startsWith('tiếp tục ');
+            });
+            if (!btn) return 'none';
+            btn.click();
+            return 'review';
+        }
+        function isSaveControl(el) {
+            const raw = ((el.innerText || el.textContent || '') + '').replace(/\s+/g, ' ').trim().toLowerCase();
+            const aria = ((el.getAttribute('aria-label') || '') + '').trim().toLowerCase();
+            return raw === 'save' || raw === 'lưu' || aria === 'save' || aria === 'lưu';
+        }
+        const settings = dialogs.find(d => {
+            const t = blob(d);
+            if (t.includes('who can see your future posts and reels')) return true;
+            if (d.querySelector('div[role="textbox"], div[contenteditable="true"]')) return false;
+            const hasChoice = t.includes('public') || t.includes('công khai');
+            const hasSave = Array.from(d.querySelectorAll('div[role="button"], button')).some(isSaveControl);
+            return hasChoice && hasSave;
+        });
+        if (!settings) return 'none';
+        function radioText(r) {
+            return (blob(r) + ' ' + ((r.getAttribute('aria-label') || '') + '')).toLowerCase();
+        }
+        function isPublicRadio(r) {
+            const t = radioText(r);
+            if (t.length > 240) return false;
+            if (t.includes('friend') || t.includes('bạn bè')) return false;
+            const en = t.includes('public') && (t.includes('anyone on or off') || t.includes('off facebook'));
+            const vi = t.includes('công khai');
+            return en || vi;
+        }
+        function isFriendsRadio(r) {
+            const t = radioText(r);
+            if (t.length > 240) return false;
+            return t.includes('friend') || t.includes('bạn bè');
+        }
+        const radios = Array.from(settings.querySelectorAll('[role="radio"]'));
+        let publicRadio = radios.find(isPublicRadio);
+        if (!publicRadio) {
+            const label = Array.from(settings.querySelectorAll('span, div')).find(n => {
+                const t = blob(n);
+                return t === 'public' || t === 'công khai';
+            });
+            let node = label;
+            while (node && node !== settings) {
+                if (node.getAttribute('role') === 'radio') {
+                    publicRadio = node;
+                    break;
+                }
+                const inner = node.querySelector('[role="radio"]');
+                if (inner) {
+                    publicRadio = inner;
+                    break;
+                }
+                node = node.parentElement;
+            }
+        }
+        if (!publicRadio || publicRadio.getAttribute('role') !== 'radio') return 'none';
+        const publicOn = (publicRadio.getAttribute('aria-checked') || '').toLowerCase() === 'true';
+        const friends = radios.find(isFriendsRadio);
+        const friendsOn = friends ? (friends.getAttribute('aria-checked') || '').toLowerCase() === 'true' : true;
+        if (!(publicOn && !friendsOn)) {
+            try { publicRadio.setAttribute('data-ada-public-radio', '1'); } catch (e) {}
+            return 'public_unconfirmed';
+        }
+        let save = Array.from(settings.querySelectorAll('div[role="button"], button')).find(isSaveControl);
+        if (!save) {
+            const label = Array.from(settings.querySelectorAll('span, div')).find(n => {
+                const t = blob(n);
+                return t === 'save' || t === 'lưu';
+            });
+            if (label) save = label.closest('div[role="button"], button') || label;
+        }
+        if (!save) return 'none';
+        try { publicRow.setAttribute('data-ada-audience-public', '1'); } catch (e) {}
+        try { save.setAttribute('data-ada-audience-save', '1'); } catch (e) {}
+        return 'settings_ready';
+    """
+    still_js = r"""
+        const kind = arguments[0];
+        function isVisible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            if (r.width < 8 || r.height < 8) return false;
+            const st = window.getComputedStyle(el);
+            return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity) !== 0;
+        }
+        function blob(el) {
+            return (((el && (el.innerText || el.textContent)) || '') + '').replace(/\s+/g, ' ').trim().toLowerCase();
+        }
+        return Array.from(document.querySelectorAll('div[role="dialog"]')).filter(isVisible).some(d => {
+            const t = blob(d);
+            if (kind === 'review') {
+                return t.includes('review audience') || t.includes('all video posts are now reels');
+            }
+            if (t.includes('who can see your future posts and reels') || t.includes('update settings')) return true;
+            if (d.querySelector('div[role="textbox"], div[contenteditable="true"]')) return false;
+            const hasChoice = t.includes('public') || t.includes('công khai');
+            const hasSave = Array.from(d.querySelectorAll('div[role="button"], button')).some(b => {
+                const raw = ((b.innerText || b.textContent || '') + '').replace(/\s+/g, ' ').trim().toLowerCase();
+                return raw === 'save' || raw === 'lưu';
+            });
+            return hasChoice && hasSave;
+        });
+    """
+
+    def _still(kind: str) -> bool:
+        try:
+            return bool(driver.execute_script(still_js, kind))
+        except Exception:
+            return False
+
+    acted = False
+    try:
+        for _ in range(3):
+            action = driver.execute_script(step_js)
+            if not action or action == "none" or action is False:
+                return True
+            if action == "review":
+                acted = True
+                deadline = time.time() + 3
+                while time.time() < deadline and _still("review"):
+                    time.sleep(0.25)
+                log("Đã đóng modal Review audience")
+                continue
+            if action == "settings_ready":
+                acted = True
+                if _click_update_settings_save(driver, log) == "closed":
+                    log("Đã chọn Public và lưu audience mặc định")
+                    continue
+                return False
+            if action == "public_unconfirmed":
+                if _select_update_settings_public(driver, log) != "confirmed":
+                    log("public_failed")
+                    return "public_failed"
+                continue
+            if action == "need_recheck":
+                log("public_failed")
+                return "public_failed"
+            return True
+        return True
+    except Exception:
+        return False
+
+
+def _require_audience_public(driver, log) -> None:
+    result = _dismiss_review_audience_dialog(driver, log_cb=log)
+    if result is False or result == "public_failed":
+        log("Không xác nhận được Public trong modal Update settings — dừng bài này")
+        raise RuntimeError("Không xác nhận được Public trong modal Update settings — dừng bài này")
 
 
 def _status_dismiss_notifications_dialog(driver, log_cb=None) -> bool:
@@ -4298,6 +4798,7 @@ def extract_status_post_url(
                         break
                     if sheet.get("hasCopy"):
                         _grant_clipboard_permission()
+                        focus_chrome_for_clipboard(driver, _log)
                         before_clip = _read_clipboard_os()
                         _log(
                             f"Extract(share): clipboard trước Copy "
@@ -5188,6 +5689,32 @@ def _snapshot_profile_reel_ids(driver, uid: Optional[str] = None) -> list:
         return []
 
 
+def focus_chrome_for_clipboard(driver, log_fn=None) -> None:
+    """
+    Copy link của Facebook chỉ ghi clipboard khi cửa sổ Chrome đang được focus.
+    App desktop giữ foreground (Tauri), nên bấm Copy đóng menu nhưng clipboard vẫn rỗng.
+    Gọi trong lúc đang giữ khóa clipboard — chỉ một luồng copy tại một thời điểm.
+    """
+    try:
+        from core.browser.driver import bring_chrome_to_front
+
+        bring_chrome_to_front(driver, os_focus=True)
+    except Exception as exc:
+        if log_fn:
+            log_fn(f"Không đưa Chrome lên trước khi Copy: {exc}")
+    try:
+        driver.execute_cdp_cmd("Emulation.setFocusEmulationEnabled", {"enabled": True})
+    except Exception:
+        pass
+    time.sleep(0.35)
+    if log_fn:
+        try:
+            focused = bool(driver.execute_script("return !!document.hasFocus();"))
+        except Exception:
+            focused = None
+        log_fn(f"Chrome focus trước Copy: hasFocus={focused}")
+
+
 def _read_windows_clipboard() -> Optional[str]:
     """Đọc clipboard Windows (text + HTML). Không gọi navigator.clipboard."""
     chunks: List[str] = []
@@ -5539,6 +6066,8 @@ def extract_reels_post_url(
             handles_before = list(driver.window_handles)
         except Exception:
             handles_before = []
+        # Popup bị chặn khi Chrome không phải cửa sổ trước (app desktop đang focus).
+        focus_chrome_for_clipboard(driver, _log)
         try:
             driver.execute_script("window.open(arguments[0], '_blank');", share_url)
         except Exception as e:
@@ -5725,53 +6254,55 @@ def extract_reels_post_url(
         _log(
             f"Share target via={marked.get('via')} preview={(marked.get('preview') or '')[:100]!r}"
         )
-        try:
-            btn = driver.find_element(By.CSS_SELECTOR, "[data-ada-reel-share='1']")
-            try:
-                driver.execute_script(
-                    "arguments[0].scrollIntoView({block:'center', inline:'nearest'});",
-                    btn,
-                )
-            except Exception:
-                pass
-            try:
-                btn.click()
-            except Exception:
-                driver.execute_script("arguments[0].click();", btn)
-            _log("Đã bấm Share một lần trên reel khớp.")
-        except Exception as e:
-            _log(f"Không bấm được Share: {e}")
+        _clip_locked = _CLIPBOARD_EXTRACT_LOCK.acquire(timeout=60)
+        if not _clip_locked:
+            _log("Không lấy được khóa clipboard trong 60s — dừng, không đoán link.")
             return None
-
         reel_id = None
         share_url = None
-        sheet_deadline = time.time() + 5.0
-        copied = False
-        while time.time() < sheet_deadline and not reel_id and not share_url:
+        try:
+            focus_chrome_for_clipboard(driver, _log)
             try:
-                sheet = driver.execute_script(js_read_sheet)
+                btn = driver.find_element(By.CSS_SELECTOR, "[data-ada-reel-share='1']")
+                try:
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'center', inline:'nearest'});",
+                        btn,
+                    )
+                except Exception:
+                    pass
+                try:
+                    btn.click()
+                except Exception:
+                    driver.execute_script("arguments[0].click();", btn)
+                _log("Đã bấm Share một lần trên reel khớp.")
             except Exception as e:
-                _log(f"Đọc bảng Share lỗi: {e}")
-                sheet = None
-            if isinstance(sheet, dict):
-                kind, val = _parse_reel_share_text(sheet.get("reelHref"))
-                if kind == "reel":
-                    reel_id = val
-                    _log(f"Lấy /reel/{{id}} từ DOM bảng Share: {val}")
-                    break
-                kind, val = _parse_reel_share_text(sheet.get("shareHref"))
-                if kind == "share":
-                    share_url = val
-                    _log(f"Lấy /share/r/ từ DOM bảng Share: {share_url}")
-                    break
-                if sheet.get("hasCopy") and not copied:
-                    copied = True
-                    _grant_clipboard()
-                    locked = _CLIPBOARD_EXTRACT_LOCK.acquire(timeout=60)
-                    if not locked:
-                        _log("Không lấy được khóa clipboard trong 60s — dừng, không đoán link.")
-                        return None
-                    try:
+                _log(f"Không bấm được Share: {e}")
+                return None
+
+            sheet_deadline = time.time() + 5.0
+            copied = False
+            while time.time() < sheet_deadline and not reel_id and not share_url:
+                try:
+                    sheet = driver.execute_script(js_read_sheet)
+                except Exception as e:
+                    _log(f"Đọc bảng Share lỗi: {e}")
+                    sheet = None
+                if isinstance(sheet, dict):
+                    kind, val = _parse_reel_share_text(sheet.get("reelHref"))
+                    if kind == "reel":
+                        reel_id = val
+                        _log(f"Lấy /reel/{{id}} từ DOM bảng Share: {val}")
+                        break
+                    kind, val = _parse_reel_share_text(sheet.get("shareHref"))
+                    if kind == "share":
+                        share_url = val
+                        _log(f"Lấy /share/r/ từ DOM bảng Share: {share_url}")
+                        break
+                    if sheet.get("hasCopy") and not copied:
+                        copied = True
+                        _grant_clipboard()
+                        focus_chrome_for_clipboard(driver, _log)
                         before = _read_windows_clipboard()
                         _log(f"Clipboard trước Copy (len={len(before or '')}).")
                         try:
@@ -5801,13 +6332,13 @@ def extract_reels_post_url(
                             _log(f"Lấy /share/r/ từ clipboard: {share_url}")
                             break
                         _log("Copy xong nhưng clipboard không có /reel/{id} hay /share/r/.")
-                    finally:
-                        try:
-                            _CLIPBOARD_EXTRACT_LOCK.release()
-                            _log("Đã nhả khóa clipboard.")
-                        except Exception:
-                            pass
-            time.sleep(0.4)
+                time.sleep(0.4)
+        finally:
+            try:
+                _CLIPBOARD_EXTRACT_LOCK.release()
+                _log("Đã nhả khóa clipboard.")
+            except Exception:
+                pass
 
         try:
             driver.execute_script(
@@ -6339,6 +6870,7 @@ def publish_status_post(
         except Exception:
             pass
     time.sleep(random.uniform(1.2, 1.8))
+    _require_audience_public(driver, log)
     check_account_health(driver)
     for _ in range(8):
         if is_composer_dialog_open(driver):
@@ -6362,6 +6894,7 @@ def publish_status_post(
         except Exception:
             pass
 
+        _require_audience_public(driver, log)
         for _ in range(6):
             if is_composer_dialog_open(driver):
                 composer_opened = True
@@ -6389,6 +6922,7 @@ def publish_status_post(
         except Exception:
             pass
 
+        _require_audience_public(driver, log)
         for _ in range(8):
             if is_composer_dialog_open(driver):
                 composer_opened = True
@@ -6399,6 +6933,7 @@ def publish_status_post(
         check_account_health(driver)
         raise RuntimeError("Không thể mở hộp thoại tạo bài viết trên Facebook.")
 
+    _require_audience_public(driver, log)
     # Gỡ Notifications + shell Create post trùng (KHÔNG đóng composer vừa mở / chưa gõ)
     _status_dismiss_notifications_dialog(driver, log_cb=log)
     for _ in range(3):
