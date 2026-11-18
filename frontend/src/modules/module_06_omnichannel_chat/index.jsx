@@ -239,288 +239,308 @@ export default function OmnichannelChatModule() {
       .finally(() => setLoadingMoreNotif(false));
   };
 
-  // Lắng nghe sự kiện Realtime (Tin nhắn & Thông báo mới) từ WebSocket Backend
+  // Lắng nghe sự kiện Realtime (Tin nhắn & Thông báo mới) từ WebSocket Backend (Local + VPS Webhook)
   useEffect(() => {
-    let ws = null;
-    let timer = null;
     let destroyed = false;
 
-    const connectWs = () => {
-      if (destroyed) return;
+    const handleWsMessage = (event) => {
       try {
-        // Desktop/Tauri: luôn loopback — tránh wss://tauri.localhost:28129
-        const isTauri =
-          typeof window !== "undefined" &&
-          Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__ || window.location?.hostname === "tauri.localhost");
-        const host = isTauri ? "127.0.0.1" : (typeof window !== "undefined" ? window.location.hostname : "127.0.0.1");
-        const proto = isTauri
-          ? "ws:"
-          : (typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:");
-        ws = new WebSocket(`${proto}//${host}:28129/api/facebook/ws/all`);
+        const payload = JSON.parse(event.data);
+        if (payload.type === "message" && payload.data) {
+          const msgData = payload.data;
+          const convId = `${msgData.page_id}_${msgData.sender_id}`;
+          // Bóc tiền tố "[image] ..." thành đính kèm, tránh hiện nguyên link dưới dạng text
+          const parsed = parseAttachmentText(msgData.text);
+          const incomingMsg = {
+            id: String(msgData.id || msgData.facebook_message_id),
+            facebookMessageId: msgData.facebook_message_id || undefined,
+            direction: msgData.direction === "outbound" ? "out" : "in",
+            text: parsed.text,
+            attachment: parsed.attachment,
+            createdAt: toUtcIso(msgData.created_at) || new Date().toISOString(),
+          };
 
-        ws.onopen = () => {
-          wsOpenRef.current = true;
-          timer = setInterval(() => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: "ping" }));
+          // Thêm tin nhắn mới vào cuộc hội thoại (chống trùng với tin optimistic mình vừa gửi)
+          setMessagesByConversation((all) => {
+            const currentList = all[convId] || [];
+            // Đã có đúng tin này theo id thật -> bỏ qua
+            if (currentList.some((m) => m.id === incomingMsg.id)) return all;
+            // Tin do mình vừa gửi (id local-..., cùng chiều & nội dung) -> gắn id thật thay vì thêm bản mới
+            if (incomingMsg.direction === "out") {
+              const idx = currentList.findIndex(
+                (m) =>
+                  String(m.id).startsWith("local-") &&
+                  m.direction === "out" &&
+                  (
+                    (m.text || "") === (incomingMsg.text || "") ||
+                    (m.attachment && incomingMsg.attachment)
+                  ),
+              );
+              if (idx !== -1) {
+                const next = currentList.slice();
+                const existingAtt = next[idx].attachment;
+                next[idx] = {
+                  ...next[idx],
+                  id: incomingMsg.id,
+                  facebookMessageId: incomingMsg.facebookMessageId || next[idx].facebookMessageId,
+                  status: undefined,
+                  attachment: existingAtt?.url
+                    ? {
+                        ...incomingMsg.attachment,
+                        url: existingAtt.url,
+                        name: existingAtt.name || incomingMsg.attachment?.name,
+                      }
+                    : incomingMsg.attachment,
+                };
+                return { ...all, [convId]: next };
+              }
             }
-          }, 25000);
-        };
+            if (incomingMsg.direction === "in") {
+              const updatedList = currentList.map((m) =>
+                m.direction === "out" ? { ...m, status: "seen", isRead: true } : m
+              );
+              return { ...all, [convId]: [...updatedList, incomingMsg] };
+            }
+            return { ...all, [convId]: [...currentList, incomingMsg] };
+          });
 
-        ws.onmessage = (event) => {
-          try {
-            const payload = JSON.parse(event.data);
-            if (payload.type === "message" && payload.data) {
-              const msgData = payload.data;
-              const convId = `${msgData.page_id}_${msgData.sender_id}`;
-              // Bóc tiền tố "[image] ..." thành đính kèm, tránh hiện nguyên link dưới dạng text
-              const parsed = parseAttachmentText(msgData.text);
-              const incomingMsg = {
-                id: String(msgData.id || msgData.facebook_message_id),
-                direction: msgData.direction === "outbound" ? "out" : "in",
-                text: parsed.text,
-                attachment: parsed.attachment,
-                createdAt: toUtcIso(msgData.created_at) || new Date().toISOString(),
+          if (activeConvRef.current === convId && msgData.direction === "inbound") {
+            if (!isMock) markConversationRead(convId).catch(() => {});
+          }
+
+          // Cập nhật thẻ hội thoại ở sidebar
+          setConversations((list) => {
+            const target = list.find((c) => c.id === convId);
+            const isCurrentActive = activeConvRef.current === convId;
+            const isOut = msgData.direction === "outbound";
+            const custName = msgData.sender_name || target?.customerName || `KH: ${String(msgData.sender_id).slice(0, 8)}`;
+            const rawSnippet = messagePreview(msgData.text) || attachmentLabel();
+            const lastMsgText = formatConversationSnippet(rawSnippet, isOut, custName);
+
+            if (target) {
+              const rest = list.filter((c) => c.id !== convId);
+              const updated = {
+                ...target,
+                lastMessage: lastMsgText,
+                updatedAt: incomingMsg.createdAt,
+                unread: isCurrentActive ? false : msgData.direction === "inbound",
+                replied: msgData.direction === "outbound",
               };
+              return [updated, ...rest];
+            } else {
+              const newConv = {
+                id: convId,
+                pageId: String(msgData.page_id),
+                senderId: String(msgData.sender_id),
+                customer: String(msgData.sender_id),
+                customerName: msgData.sender_name || `KH: ${String(msgData.sender_id).slice(0, 8)}`,
+                avatar: msgData.avatar_url || null,
+                lastMessage: lastMsgText,
+                updatedAt: incomingMsg.createdAt,
+                unread: !isCurrentActive && msgData.direction === "inbound",
+                replied: msgData.direction === "outbound",
+                tags: [],
+                starred: false,
+              };
+              return [newConv, ...list];
+            }
+          });
+        } else if (payload.type === "read" && payload.data) {
+          const { page_id, sender_id, watermark, mid } = payload.data;
+          const targetPageId = String(page_id || "");
+          const targetSenderId = String(sender_id || "");
+          const convId = `${targetPageId}_${targetSenderId}`;
 
-              // Thêm tin nhắn mới vào cuộc hội thoại (chống trùng với tin optimistic mình vừa gửi)
-              setMessagesByConversation((all) => {
-                const currentList = all[convId] || [];
-                // Đã có đúng tin này theo id thật -> bỏ qua
-                if (currentList.some((m) => m.id === incomingMsg.id)) return all;
-                // Tin do mình vừa gửi (id local-..., cùng chiều & nội dung) -> gắn id thật thay vì thêm bản mới
-                if (incomingMsg.direction === "out") {
-                  const idx = currentList.findIndex(
-                    (m) =>
-                      String(m.id).startsWith("local-") &&
-                      m.direction === "out" &&
-                      (
-                        (m.text || "") === (incomingMsg.text || "") ||
-                        (m.attachment && incomingMsg.attachment)
-                      ),
-                  );
-                  if (idx !== -1) {
-                    const next = currentList.slice();
-                    const existingAtt = next[idx].attachment;
-                    next[idx] = {
-                      ...next[idx],
-                      id: incomingMsg.id,
-                      status: undefined,
-                      attachment: existingAtt?.url
-                        ? {
-                            ...incomingMsg.attachment,
-                            url: existingAtt.url,
-                            name: existingAtt.name || incomingMsg.attachment?.name,
-                          }
-                        : incomingMsg.attachment,
-                    };
-                    return { ...all, [convId]: next };
-                  }
-                }
-                if (incomingMsg.direction === "in") {
-                  const updatedList = currentList.map((m) =>
-                    m.direction === "out" ? { ...m, status: "seen", isRead: true } : m
-                  );
-                  return { ...all, [convId]: [...updatedList, incomingMsg] };
-                }
-                return { ...all, [convId]: [...currentList, incomingMsg] };
-              });
+          setMessagesByConversation((all) => {
+            const matchedKey = Object.keys(all).find(
+              (k) => k === convId || (k.includes(targetPageId) && k.includes(targetSenderId))
+            ) || convId;
 
-              if (activeConvRef.current === convId && msgData.direction === "inbound") {
-                if (!isMock) markConversationRead(convId).catch(() => {});
+            const list = all[matchedKey];
+            if (!list || list.length === 0) return all;
+
+            const next = list.map((m) => {
+              if (m.direction === "out") {
+                const isTarget = mid ? String(m.id) === String(mid) : true;
+                if (isTarget) {
+                  return { ...m, status: "seen", isRead: true };
+                }
               }
-
-              // Cập nhật thẻ hội thoại ở sidebar
-              setConversations((list) => {
-                const target = list.find((c) => c.id === convId);
-                const isCurrentActive = activeConvRef.current === convId;
-                const isOut = msgData.direction === "outbound";
-                const custName = msgData.sender_name || target?.customerName || `KH: ${String(msgData.sender_id).slice(0, 8)}`;
-                const rawSnippet = messagePreview(msgData.text) || attachmentLabel();
-                const lastMsgText = formatConversationSnippet(rawSnippet, isOut, custName);
-
-                if (target) {
-                  const rest = list.filter((c) => c.id !== convId);
-                  const updated = {
-                    ...target,
-                    lastMessage: lastMsgText,
-                    updatedAt: incomingMsg.createdAt,
-                    unread: isCurrentActive ? false : msgData.direction === "inbound",
-                    replied: msgData.direction === "outbound",
-                  };
-                  return [updated, ...rest];
-                } else {
-                  const newConv = {
-                    id: convId,
-                    pageId: String(msgData.page_id),
-                    senderId: String(msgData.sender_id),
-                    customer: String(msgData.sender_id),
-                    customerName: msgData.sender_name || `KH: ${String(msgData.sender_id).slice(0, 8)}`,
-                    avatar: msgData.avatar_url || null,
-                    lastMessage: lastMsgText,
-                    updatedAt: incomingMsg.createdAt,
-                    unread: !isCurrentActive && msgData.direction === "inbound",
-                    replied: msgData.direction === "outbound",
-                    tags: [],
-                    starred: false,
-                  };
-                  return [newConv, ...list];
-                }
-              });
-            } else if (payload.type === "read" && payload.data) {
-              const { page_id, sender_id, watermark, mid } = payload.data;
-              const targetPageId = String(page_id || "");
-              const targetSenderId = String(sender_id || "");
-              const convId = `${targetPageId}_${targetSenderId}`;
-
-              setMessagesByConversation((all) => {
-                const matchedKey = Object.keys(all).find(
-                  (k) => k === convId || (k.includes(targetPageId) && k.includes(targetSenderId))
-                ) || convId;
-
-                const list = all[matchedKey];
-                if (!list || list.length === 0) return all;
-
-                const next = list.map((m) => {
-                  if (m.direction === "out") {
-                    const isTarget = mid ? String(m.id) === String(mid) : true;
-                    if (isTarget) {
-                      return { ...m, status: "seen", isRead: true };
-                    }
-                  }
-                  return m;
-                });
-                return { ...all, [matchedKey]: next };
-              });
-            } else if (payload.type === "reaction" && payload.data) {
-              const { facebook_message_id, reactions, reaction, id } = payload.data;
-              const emojiVal = reaction || reactions || null;
-              setMessagesByConversation((all) => {
-                let updated = false;
-                const nextAll = { ...all };
-                for (const [convId, list] of Object.entries(all)) {
-                  if (!Array.isArray(list)) continue;
-                  const idx = list.findIndex(
-                    (m) =>
-                      (facebook_message_id && (m.facebookMessageId === facebook_message_id || String(m.id) === String(facebook_message_id))) ||
-                      (id && String(m.id) === String(id))
-                  );
-                  if (idx !== -1) {
-                    const nextList = [...list];
-                    nextList[idx] = { ...nextList[idx], reaction: emojiVal };
-                    nextAll[convId] = nextList;
-                    updated = true;
-                    break;
-                  }
-                }
-                return updated ? nextAll : all;
-              });
-            } else if (payload.type === "comment_reaction" && payload.data) {
-              // Bắn CustomEvent lên window để NotificationDetail / CommentThread bắt được realtime
-              window.dispatchEvent(new CustomEvent("fb_comment_reaction", { detail: payload.data }));
-            } else if (payload.type === "notification_remove" && payload.data) {
-              invalidate("/api/facebook/notifications");
-              const { id, page_id: pid, was_unread, notification_type } = payload.data;
-              setNotifications((prev) => prev.filter((n) => String(n.id) !== String(id) && String(n.rawId) !== String(id)));
-              if (was_unread) {
-                const typeKey = notification_type || "reaction";
-                setNotifMeta((m) => {
-                  const currentTotal = typeof m.total === "number" ? m.total : 0;
-                  const currentUnread = (m.unreadCounts && m.unreadCounts[typeKey]) || 0;
-                  const currentPageUnread = (m.pageUnread && m.pageUnread[String(pid)]) || 0;
-                  return {
-                    ...m,
-                    total: Math.max(0, currentTotal - 1),
-                    unreadCounts: {
-                      ...m.unreadCounts,
-                      [typeKey]: Math.max(0, currentUnread - 1),
-                    },
-                    pageUnread: pid
-                      ? {
-                          ...m.pageUnread,
-                          [String(pid)]: Math.max(0, currentPageUnread - 1),
-                        }
-                      : m.pageUnread,
-                  };
-                });
-              }
-            } else if (payload.type === "notification" && payload.data) {
-              invalidate("/api/facebook/notifications");
-              const incomingNotif = mapNotification(payload.data);
-
-              // Phát CustomEvent fb_new_notification để NotificationDetail tự động tải lại nếu đang mở bài viết này
-              window.dispatchEvent(new CustomEvent("fb_new_notification", { detail: payload.data }));
-
-              // Danh sách giờ là kết quả lọc của Backend, nên chỉ chèn vào khi cái
-              // vừa tới đúng là thứ đang xem — không thì thông báo của Page khác
-              // sẽ nhảy vào giữa danh sách đã lọc.
-              const q = notifQueryRef.current || {};
-              const matchPage = !q.pageId || incomingNotif.pageId === q.pageId;
-              const matchType = !q.type || incomingNotif.type === q.type;
-              const matchFilter =
-                !q.filter || q.filter === "all"
-                  ? true
-                  : q.filter === "unread"
-                    ? incomingNotif.unread
-                    : !incomingNotif.replied;
-
-              if (matchPage && matchType && matchFilter) {
-                setNotifications((prev) => [incomingNotif, ...prev.filter((n) => n.id !== incomingNotif.id)]);
-              }
-
-              // Badge thì nhích bất kể đang xem tab nào, miễn là đúng Page đang lọc
-              if (incomingNotif.unread) {
-                const pid = String(incomingNotif.pageId || "");
-                setNotifMeta((m) => ({
-                  ...m,
-                  total: (m.total || 0) + 1,
-                  typeCounts: {
-                    ...m.typeCounts,
-                    [incomingNotif.type]: (m.typeCounts?.[incomingNotif.type] || 0) + 1,
-                  },
-                  unreadCounts: matchPage
-                    ? {
-                        ...m.unreadCounts,
-                        [incomingNotif.type]: (m.unreadCounts[incomingNotif.type] || 0) + 1,
-                      }
-                    : m.unreadCounts,
-                  pageUnread: pid
-                    ? {
-                        ...m.pageUnread,
-                        [pid]: (m.pageUnread[pid] || 0) + 1,
-                      }
-                    : m.pageUnread,
-                }));
+              return m;
+            });
+            return { ...all, [matchedKey]: next };
+          });
+        } else if (payload.type === "reaction" && payload.data) {
+          const { facebook_message_id, reactions, reaction, id } = payload.data;
+          const emojiVal = reaction || reactions || null;
+          setMessagesByConversation((all) => {
+            let updated = false;
+            const nextAll = { ...all };
+            for (const [convId, list] of Object.entries(all)) {
+              if (!Array.isArray(list)) continue;
+              const idx = list.findIndex(
+                (m) =>
+                  (facebook_message_id && (m.facebookMessageId === facebook_message_id || String(m.id) === String(facebook_message_id))) ||
+                  (id && String(m.id) === String(id))
+              );
+              if (idx !== -1) {
+                const nextList = [...list];
+                nextList[idx] = { ...nextList[idx], reaction: emojiVal };
+                nextAll[convId] = nextList;
+                updated = true;
+                break;
               }
             }
-          } catch (err) {
-            console.error("[WS Message Error]", err);
+            return updated ? nextAll : all;
+          });
+        } else if (payload.type === "comment_reaction" && payload.data) {
+          // Bắn CustomEvent lên window để NotificationDetail / CommentThread bắt được realtime
+          window.dispatchEvent(new CustomEvent("fb_comment_reaction", { detail: payload.data }));
+        } else if (payload.type === "notification_remove" && payload.data) {
+          invalidate("/api/facebook/notifications");
+          const { id, page_id: pid, was_unread, notification_type } = payload.data;
+          setNotifications((prev) => prev.filter((n) => String(n.id) !== String(id) && String(n.rawId) !== String(id)));
+          if (was_unread) {
+            const typeKey = notification_type || "reaction";
+            setNotifMeta((m) => {
+              const currentTotal = typeof m.total === "number" ? m.total : 0;
+              const currentUnread = (m.unreadCounts && m.unreadCounts[typeKey]) || 0;
+              const currentPageUnread = (m.pageUnread && m.pageUnread[String(pid)]) || 0;
+              return {
+                ...m,
+                total: Math.max(0, currentTotal - 1),
+                unreadCounts: {
+                  ...m.unreadCounts,
+                  [typeKey]: Math.max(0, currentUnread - 1),
+                },
+                pageUnread: pid
+                  ? {
+                      ...m.pageUnread,
+                      [String(pid)]: Math.max(0, currentPageUnread - 1),
+                    }
+                  : m.pageUnread,
+              };
+            });
           }
-        };
+        } else if (payload.type === "notification" && payload.data) {
+          invalidate("/api/facebook/notifications");
+          const incomingNotif = mapNotification(payload.data);
 
-        ws.onclose = () => {
-          wsOpenRef.current = false;
-          clearInterval(timer);
-          if (!destroyed) {
-            setTimeout(connectWs, 3000);
+          // Phát CustomEvent fb_new_notification để NotificationDetail tự động tải lại nếu đang mở bài viết này
+          window.dispatchEvent(new CustomEvent("fb_new_notification", { detail: payload.data }));
+
+          const q = notifQueryRef.current || {};
+          const matchPage = !q.pageId || incomingNotif.pageId === q.pageId;
+          const matchType = !q.type || incomingNotif.type === q.type;
+          const matchFilter =
+            !q.filter || q.filter === "all"
+              ? true
+              : q.filter === "unread"
+                ? incomingNotif.unread
+                : !incomingNotif.replied;
+
+          if (matchPage && matchType && matchFilter) {
+            setNotifications((prev) => [incomingNotif, ...prev.filter((n) => n.id !== incomingNotif.id)]);
           }
-        };
 
-        ws.onerror = () => {
-          if (ws) ws.close();
-        };
-      } catch (e) {
-        console.warn("[WS Connect Error]", e);
+          if (incomingNotif.unread) {
+            const pid = String(incomingNotif.pageId || "");
+            setNotifMeta((m) => ({
+              ...m,
+              total: (m.total || 0) + 1,
+              typeCounts: {
+                ...m.typeCounts,
+                [incomingNotif.type]: (m.typeCounts?.[incomingNotif.type] || 0) + 1,
+              },
+              unreadCounts: matchPage
+                ? {
+                    ...m.unreadCounts,
+                    [incomingNotif.type]: (m.unreadCounts[incomingNotif.type] || 0) + 1,
+                  }
+                : m.unreadCounts,
+              pageUnread: pid
+                ? {
+                    ...m.pageUnread,
+                    [pid]: (m.pageUnread[pid] || 0) + 1,
+                  }
+                : m.pageUnread,
+            }));
+          }
+        }
+      } catch (err) {
+        console.error("[WS Message Error]", err);
       }
     };
 
-    connectWs();
+    const createManagedSocket = (url, trackWebhookOpen = false) => {
+      let ws = null;
+      let timer = null;
+      let retryTimeout = null;
+
+      const connect = () => {
+        if (destroyed) return;
+        try {
+          ws = new WebSocket(url);
+          ws.onopen = () => {
+            if (trackWebhookOpen) wsOpenRef.current = true;
+            timer = setInterval(() => {
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "ping" }));
+              }
+            }, 25000);
+          };
+          ws.onmessage = handleWsMessage;
+          ws.onclose = () => {
+            if (trackWebhookOpen) wsOpenRef.current = false;
+            clearInterval(timer);
+            if (!destroyed) {
+              retryTimeout = setTimeout(connect, 3000);
+            }
+          };
+          ws.onerror = () => {
+            if (ws) ws.close();
+          };
+        } catch (e) {
+          console.warn("[WS Connect Error]", url, e);
+        }
+      };
+
+      connect();
+
+      return () => {
+        clearInterval(timer);
+        clearTimeout(retryTimeout);
+        if (ws) ws.close();
+      };
+    };
+
+    // 1. Kết nối tới Local Engine (127.0.0.1:28129) để nhận phản hồi tức thì từ thao tác local
+    const isTauri =
+      typeof window !== "undefined" &&
+      Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__ || window.location?.hostname === "tauri.localhost");
+    const host = isTauri ? "127.0.0.1" : (typeof window !== "undefined" ? window.location.hostname : "127.0.0.1");
+    const proto = isTauri
+      ? "ws:"
+      : (typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:");
+    const localWsUrl = `${proto}//${host}:28129/api/facebook/ws/all`;
+
+    // 2. Kết nối tới VPS Webhook Server (adagroupservice.com) để Desktop App nhận webhook Meta realtime không cần ngrok
+    const publicBase = (process.env.NEXT_PUBLIC_MEDIA_BASE_URL || "https://adagroupservice.com")
+      .trim()
+      .replace(/\/+$/, "");
+    const remoteWsUrl = publicBase
+      ? `${publicBase.replace(/^http/i, "ws")}/api/facebook/ws/all`
+      : "";
+
+    const hasDistinctRemote = Boolean(remoteWsUrl && remoteWsUrl !== localWsUrl);
+    const closeLocal = createManagedSocket(localWsUrl, !hasDistinctRemote);
+    const closeRemote = hasDistinctRemote ? createManagedSocket(remoteWsUrl, true) : () => {};
 
     return () => {
       destroyed = true;
       wsOpenRef.current = false;
-      clearInterval(timer);
-      if (ws) ws.close();
+      closeLocal();
+      closeRemote();
     };
   }, []);
 
@@ -767,9 +787,14 @@ export default function OmnichannelChatModule() {
     if (isMock) return;
     patchMessage(conversationId, message.id, { status: "sending" });
     sendMessage(conversationId, { text: message.text, attachment: message.attachment, replyToId: message.replyTo?.id })
-      // Giữ nguyên id local-... (KHÔNG gắn message_id của HTTP = Facebook mid), chỉ bỏ cờ "sending".
+      // Giữ nguyên id local-... (KHÔNG gắn message_id của HTTP = Facebook mid), chỉ bỏ cờ "sending" và lưu facebookMessageId.
       // WS echo dùng id DB (trùng với getMessages) sẽ tự reconcile tin local-... này -> tránh trùng.
-      .then(() => patchMessage(conversationId, message.id, { status: undefined }))
+      .then((res) =>
+        patchMessage(conversationId, message.id, {
+          status: undefined,
+          ...(res?.message_id ? { facebookMessageId: res.message_id } : {}),
+        }),
+      )
       .catch(() => patchMessage(conversationId, message.id, { status: "failed" }));
   };
 
@@ -936,17 +961,11 @@ export default function OmnichannelChatModule() {
       onSend={(payload) => handleSend(activeConversation.id, payload)}
       onRetry={(message) => deliver(activeConversation.id, message)}
       onReact={(messageId, emoji) => {
-        let targetMsg = null;
-        let nextEmoji = null;
+        const currentList = messagesByConversation[activeConversation.id] || [];
+        const targetMsg = currentList.find((m) => m.id === messageId) || null;
+        const nextEmoji = targetMsg?.reaction === emoji ? null : emoji;
         setThread(activeConversation.id, (list) =>
-          list.map((m) => {
-            if (m.id === messageId) {
-              targetMsg = m;
-              nextEmoji = m.reaction === emoji ? null : emoji;
-              return { ...m, reaction: nextEmoji };
-            }
-            return m;
-          }),
+          list.map((m) => (m.id === messageId ? { ...m, reaction: nextEmoji } : m)),
         );
         if (!isMock) {
           const apiMsgId = targetMsg?.facebookMessageId || messageId;

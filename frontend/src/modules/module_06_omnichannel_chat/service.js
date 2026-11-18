@@ -122,7 +122,7 @@ export function formatConversationSnippet(raw, isOutbound, customerName) {
  */
 export function friendlyFbError(message) {
   const m = String(message || "");
-  if (/token expired|revoked|session has expired|access token|oauthexception|authentication failed/i.test(m)) {
+  if (/token expired|revoked|session has expired|error validating access token|invalid oauth access token|authentication failed/i.test(m)) {
     return "Token Facebook đã hết hạn hoặc bị thu hồi. Hãy đồng bộ lại token cho tài khoản ở Quản lý tài khoản rồi thử lại.";
   }
   if (/econnrefused|local engine|không thể kết nối|network error|timeout/i.test(m)) {
