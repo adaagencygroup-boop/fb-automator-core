@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 
 import { toast } from "@/lib/toast";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useUnsavedChanges } from "@/components/UnsavedChangesContext";
 import { getAccounts } from "@/modules/module_02_account_manager/service";
 import {
@@ -849,6 +850,37 @@ export default function GroupCampaignWorkspace({ actionType = "POST" }) {
   const markDraftButtonEdit = (event) => {
     if (event.target.closest("button, [role='button']")) markDraftUserEdit();
   };
+
+  if (!draftReady) {
+    return (
+      <div className="space-y-3">
+        <PageHeader
+          heading={isComment ? "Spam Group – Bình luận" : "Spam Group – Đăng bài"}
+          desc={
+            isComment
+              ? "Tự động bình luận vào bài viết đầu tiên của các nhóm Facebook theo từ khoá hoặc từ file link nhóm."
+              : "Tự động tìm kiếm và đăng bài vào các hội nhóm Facebook theo từ khoá hoặc từ file link nhóm."
+          }
+        />
+        {[1, 2, 3].map((item) => (
+          <div
+            key={item}
+            className="space-y-3 rounded-xl border border-slate-200 bg-white p-5 shadow-xs"
+          >
+            <div className="flex items-center gap-3">
+              <Skeleton className="size-7 rounded-full" />
+              <div className="space-y-1.5">
+                <Skeleton className="h-4 w-44" />
+                <Skeleton className="h-3 w-72" />
+              </div>
+            </div>
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-20 w-full" />
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div

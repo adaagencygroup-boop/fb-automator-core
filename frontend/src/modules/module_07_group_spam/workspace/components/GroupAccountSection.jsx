@@ -12,6 +12,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { SectionCard, initialsOf } from "../../shared/components";
 import { AVATAR_COLORS } from "../../shared/constants";
 import { attachDragSelection } from "../../shared/drag-selection";
@@ -248,14 +249,32 @@ export default function GroupAccountSection({
                 </tr>
               )}
 
-              {accountsLoading && (
-                <tr>
-                  <td colSpan={5} className="px-4 py-10 text-center text-slate-400">
-                    <RefreshCw className="inline mr-2 size-4 animate-spin text-primary" />
-                    Đang tải tài khoản từ Module 2...
-                  </td>
-                </tr>
-              )}
+              {accountsLoading &&
+                Array.from({ length: 5 }, (_, idx) => (
+                  <tr key={`acc-skeleton-${idx}`}>
+                    <td className="px-3 py-2.5">
+                      <Skeleton className="size-4 rounded" />
+                    </td>
+                    <td className="px-2 py-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <Skeleton className="size-8 rounded-full" />
+                        <div className="space-y-1.5">
+                          <Skeleton className="h-3.5 w-32" />
+                          <Skeleton className="h-3 w-24" />
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <Skeleton className="h-5 w-16 rounded-full" />
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <Skeleton className="h-3.5 w-20" />
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <Skeleton className="h-3.5 w-16" />
+                    </td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>

@@ -12,6 +12,7 @@ import {
   Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -92,14 +93,24 @@ export default function CampaignTableSection({
         </TableHeader>
         <TableBody>
           {loading ? (
-            <TableRow>
-              <TableCell colSpan={8} className="py-12 text-center text-slate-400">
-                <div className="flex flex-col items-center justify-center">
-                  <RotateCcw className="size-6 animate-spin text-blue-600" />
-                  <p className="mt-3 text-xs font-medium">Đang tải danh sách chiến dịch...</p>
-                </div>
-              </TableCell>
-            </TableRow>
+            Array.from({ length: 5 }, (_, idx) => (
+              <TableRow key={`camp-skeleton-${idx}`}>
+                <TableCell><Skeleton className="h-4 w-12" /></TableCell>
+                <TableCell><Skeleton className="h-4 w-44" /></TableCell>
+                <TableCell><Skeleton className="h-4 w-16" /></TableCell>
+                <TableCell><Skeleton className="h-4 w-10" /></TableCell>
+                <TableCell><Skeleton className="h-4 w-10" /></TableCell>
+                <TableCell><Skeleton className="h-4 w-28" /></TableCell>
+                <TableCell><Skeleton className="h-6 w-24 rounded-full" /></TableCell>
+                <TableCell className="text-right">
+                  <div className="inline-flex items-center justify-end gap-3">
+                    <Skeleton className="size-5 rounded" />
+                    <Skeleton className="size-5 rounded" />
+                    <Skeleton className="size-5 rounded" />
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))
           ) : campaigns.length === 0 ? (
             <TableRow>
               <TableCell colSpan={8} className="py-12 text-center">
