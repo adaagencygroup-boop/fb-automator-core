@@ -6066,6 +6066,8 @@ def extract_reels_post_url(
             handles_before = list(driver.window_handles)
         except Exception:
             handles_before = []
+        # Popup bị chặn khi Chrome không phải cửa sổ trước (app desktop đang focus).
+        focus_chrome_for_clipboard(driver, _log)
         try:
             driver.execute_script("window.open(arguments[0], '_blank');", share_url)
         except Exception as e:
@@ -6252,53 +6254,54 @@ def extract_reels_post_url(
         _log(
             f"Share target via={marked.get('via')} preview={(marked.get('preview') or '')[:100]!r}"
         )
-        try:
-            btn = driver.find_element(By.CSS_SELECTOR, "[data-ada-reel-share='1']")
-            try:
-                driver.execute_script(
-                    "arguments[0].scrollIntoView({block:'center', inline:'nearest'});",
-                    btn,
-                )
-            except Exception:
-                pass
-            try:
-                btn.click()
-            except Exception:
-                driver.execute_script("arguments[0].click();", btn)
-            _log("Đã bấm Share một lần trên reel khớp.")
-        except Exception as e:
-            _log(f"Không bấm được Share: {e}")
+        _clip_locked = _CLIPBOARD_EXTRACT_LOCK.acquire(timeout=60)
+        if not _clip_locked:
+            _log("Không lấy được khóa clipboard trong 60s — dừng, không đoán link.")
             return None
-
         reel_id = None
         share_url = None
-        sheet_deadline = time.time() + 5.0
-        copied = False
-        while time.time() < sheet_deadline and not reel_id and not share_url:
+        try:
+            focus_chrome_for_clipboard(driver, _log)
             try:
-                sheet = driver.execute_script(js_read_sheet)
+                btn = driver.find_element(By.CSS_SELECTOR, "[data-ada-reel-share='1']")
+                try:
+                    driver.execute_script(
+                        "arguments[0].scrollIntoView({block:'center', inline:'nearest'});",
+                        btn,
+                    )
+                except Exception:
+                    pass
+                try:
+                    btn.click()
+                except Exception:
+                    driver.execute_script("arguments[0].click();", btn)
+                _log("Đã bấm Share một lần trên reel khớp.")
             except Exception as e:
-                _log(f"Đọc bảng Share lỗi: {e}")
-                sheet = None
-            if isinstance(sheet, dict):
-                kind, val = _parse_reel_share_text(sheet.get("reelHref"))
-                if kind == "reel":
-                    reel_id = val
-                    _log(f"Lấy /reel/{{id}} từ DOM bảng Share: {val}")
-                    break
-                kind, val = _parse_reel_share_text(sheet.get("shareHref"))
-                if kind == "share":
-                    share_url = val
-                    _log(f"Lấy /share/r/ từ DOM bảng Share: {share_url}")
-                    break
-                if sheet.get("hasCopy") and not copied:
-                    copied = True
-                    _grant_clipboard()
-                    locked = _CLIPBOARD_EXTRACT_LOCK.acquire(timeout=60)
-                    if not locked:
-                        _log("Không lấy được khóa clipboard trong 60s — dừng, không đoán link.")
-                        return None
-                    try:
+                _log(f"Không bấm được Share: {e}")
+                return None
+
+            sheet_deadline = time.time() + 5.0
+            copied = False
+            while time.time() < sheet_deadline and not reel_id and not share_url:
+                try:
+                    sheet = driver.execute_script(js_read_sheet)
+                except Exception as e:
+                    _log(f"Đọc bảng Share lỗi: {e}")
+                    sheet = None
+                if isinstance(sheet, dict):
+                    kind, val = _parse_reel_share_text(sheet.get("reelHref"))
+                    if kind == "reel":
+                        reel_id = val
+                        _log(f"Lấy /reel/{{id}} từ DOM bảng Share: {val}")
+                        break
+                    kind, val = _parse_reel_share_text(sheet.get("shareHref"))
+                    if kind == "share":
+                        share_url = val
+                        _log(f"Lấy /share/r/ từ DOM bảng Share: {share_url}")
+                        break
+                    if sheet.get("hasCopy") and not copied:
+                        copied = True
+                        _grant_clipboard()
                         focus_chrome_for_clipboard(driver, _log)
                         before = _read_windows_clipboard()
                         _log(f"Clipboard trước Copy (len={len(before or '')}).")
@@ -6329,13 +6332,13 @@ def extract_reels_post_url(
                             _log(f"Lấy /share/r/ từ clipboard: {share_url}")
                             break
                         _log("Copy xong nhưng clipboard không có /reel/{id} hay /share/r/.")
-                    finally:
-                        try:
-                            _CLIPBOARD_EXTRACT_LOCK.release()
-                            _log("Đã nhả khóa clipboard.")
-                        except Exception:
-                            pass
-            time.sleep(0.4)
+                time.sleep(0.4)
+        finally:
+            try:
+                _CLIPBOARD_EXTRACT_LOCK.release()
+                _log("Đã nhả khóa clipboard.")
+            except Exception:
+                pass
 
         try:
             driver.execute_script(
