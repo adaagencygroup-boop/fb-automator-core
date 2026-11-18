@@ -17,7 +17,7 @@ interface ModuleOption {
   key: string;
   name: string;
   enabled: boolean;
-  days: number;
+  days: number | string;
 }
 
 const DEFAULT_MODULES: Omit<ModuleOption, "enabled" | "days">[] = [
@@ -47,56 +47,84 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
 
   useEffect(() => {
     if (user) {
-      setBulkDaysInput("30");
       setError("");
       setCopiedHwid(false);
-      const userDays = user.days_remaining && user.days_remaining > 0 ? user.days_remaining : 30;
 
-      // Nếu user đã có cấu hình tính năng riêng từ DB, tải lên modal
-      if (user.features && Array.isArray(user.features) && user.features.length > 0) {
-        setModules(
-          DEFAULT_MODULES.map((m) => {
-            const found = user.features?.find((f) => f.key === m.key);
-            if (found) {
+      if (isExtend) {
+        setBulkDaysInput("0");
+        // Chế độ Gia hạn: Mặc định mỗi module được tích chọn là 0 ngày thêm (giữ nguyên hạn)
+        if (user.features && Array.isArray(user.features) && user.features.length > 0) {
+          setModules(
+            DEFAULT_MODULES.map((m) => {
+              const found = user.features?.find((f) => f.key === m.key);
+              const isEn = Boolean(found && found.is_enabled);
               return {
                 ...m,
-                enabled: found.is_enabled,
-                days: found.days_remaining > 0 ? found.days_remaining : found.days_granted || 30,
+                enabled: isEn,
+                days: 0,
               };
-            }
-            return {
+            })
+          );
+        } else {
+          setModules(
+            DEFAULT_MODULES.map((m) => ({
+              ...m,
+              enabled: true,
+              days: 0,
+            }))
+          );
+        }
+      } else {
+        setBulkDaysInput("30");
+        const userDays = user.days_remaining && user.days_remaining > 0 ? user.days_remaining : 30;
+
+        // Nếu user đã có cấu hình tính năng riêng từ DB, tải lên modal
+        if (user.features && Array.isArray(user.features) && user.features.length > 0) {
+          setModules(
+            DEFAULT_MODULES.map((m) => {
+              const found = user.features?.find((f) => f.key === m.key);
+              if (found) {
+                return {
+                  ...m,
+                  enabled: found.is_enabled,
+                  days: found.days_remaining > 0 ? found.days_remaining : found.days_granted || 30,
+                };
+              }
+              return {
+                ...m,
+                enabled: true,
+                days: userDays,
+              };
+            })
+          );
+        } else {
+          // Default: All 11 modules selected with user days
+          setModules(
+            DEFAULT_MODULES.map((m) => ({
               ...m,
               enabled: true,
               days: userDays,
-            };
-          })
-        );
-      } else {
-        // Default: All 11 modules selected with user days
-        setModules(
-          DEFAULT_MODULES.map((m) => ({
-            ...m,
-            enabled: true,
-            days: userDays,
-          }))
-        );
+            }))
+          );
+        }
       }
     }
-  }, [user]);
+  }, [user, isExtend]);
 
   if (!user) return null;
 
   const toggleModule = (id: number) => {
     const parsedBulk = parseInt(bulkDaysInput, 10);
-    const fallbackDays = !isNaN(parsedBulk) && parsedBulk > 0 ? parsedBulk : 30;
+    const fallbackDays = !isNaN(parsedBulk) ? (isExtend ? parsedBulk : Math.max(1, parsedBulk)) : (isExtend ? 0 : 30);
     setModules((prev) =>
       prev.map((m) => {
         if (m.id === id) {
           const nextEnabled = !m.enabled;
+          const currentDaysNum = typeof m.days === "number" ? m.days : parseInt(m.days, 10) || 0;
           return {
             ...m,
             enabled: nextEnabled,
-            days: nextEnabled ? (m.days > 0 ? m.days : fallbackDays) : 0,
+            days: nextEnabled ? (isExtend ? currentDaysNum : (currentDaysNum > 0 ? m.days : fallbackDays)) : 0,
           };
         }
         return m;
@@ -105,13 +133,20 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
   };
 
   const handleModuleDaysChange = (id: number, val: string) => {
+    // Cho phép nhập dấu trừ '-' hoặc rỗng khi đang gõ
+    if (val === "" || val === "-") {
+      setModules((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, days: val } : m))
+      );
+      return;
+    }
     const num = parseInt(val, 10);
     setModules((prev) =>
       prev.map((m) => {
         if (m.id === id) {
           return {
             ...m,
-            days: isNaN(num) ? 0 : Math.max(0, num),
+            days: isNaN(num) ? 0 : isExtend ? num : Math.max(0, num),
           };
         }
         return m;
@@ -121,7 +156,7 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
 
   const handleApplyBulkDays = () => {
     const parsed = parseInt(bulkDaysInput, 10);
-    const targetDays = !isNaN(parsed) && parsed > 0 ? parsed : 30;
+    const targetDays = !isNaN(parsed) ? (isExtend ? parsed : Math.max(1, parsed)) : (isExtend ? 0 : 30);
     setModules((prev) =>
       prev.map((m) => (m.enabled ? { ...m, days: targetDays } : m))
     );
@@ -129,7 +164,7 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
 
   const handleSelectAll = () => {
     const parsed = parseInt(bulkDaysInput, 10);
-    const targetDays = !isNaN(parsed) && parsed > 0 ? parsed : 30;
+    const targetDays = !isNaN(parsed) ? (isExtend ? parsed : Math.max(1, parsed)) : (isExtend ? 0 : 30);
     setModules((prev) =>
       prev.map((m) => ({
         ...m,
@@ -150,12 +185,24 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
   };
 
   const handleConfirm = async () => {
-    const activeModules = modules.filter((m) => m.enabled && m.days > 0);
+    const activeModules = modules.filter((m) => {
+      if (!m.enabled) return false;
+      const d = typeof m.days === "number" ? m.days : parseInt(m.days, 10) || 0;
+      return isExtend ? true : d > 0;
+    });
     if (activeModules.length === 0) {
-      setError("Vui lòng kích hoạt ít nhất một tính năng với số ngày lớn hơn 0!");
+      setError(
+        isExtend
+          ? "Vui lòng kích hoạt ít nhất một tính năng!"
+          : "Vui lòng kích hoạt ít nhất một tính năng với số ngày lớn hơn 0!"
+      );
       return;
     }
-    const maxDays = Math.max(...activeModules.map((m) => m.days));
+    const maxDays = Math.max(
+      ...activeModules.map((m) =>
+        typeof m.days === "number" ? m.days : parseInt(m.days, 10) || 0
+      )
+    );
 
     setLoadingApprove(true);
     setError("");
@@ -163,7 +210,7 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
       let successMsg = "";
       const featurePayload = modules.map((m) => ({
         key: m.key,
-        days: m.days,
+        days: typeof m.days === "number" ? m.days : parseInt(m.days, 10) || 0,
         enabled: m.enabled,
       }));
 
@@ -174,7 +221,7 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
           return;
         }
         await api.extendUser(user.id, maxDays, featurePayload);
-        successMsg = `Gia hạn thành công +${maxDays} ngày cho tài khoản ${user.username}!`;
+        successMsg = `Cập nhật thời hạn thành công (${maxDays >= 0 ? "+" : ""}${maxDays} ngày) cho tài khoản ${user.username}!`;
       } else {
         await api.approveUser(user.id, maxDays, featurePayload);
         successMsg = isRejected
@@ -434,15 +481,16 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
                   <div className="apm-bulk-input-box">
                     <input
                       type="number"
-                      min={1}
+                      min={isExtend ? -3650 : 1}
                       value={bulkDaysInput}
                       onChange={(e) => setBulkDaysInput(e.target.value)}
                       onBlur={() => {
-                        if (!bulkDaysInput || parseInt(bulkDaysInput, 10) <= 0 || isNaN(parseInt(bulkDaysInput, 10))) {
-                          setBulkDaysInput("30");
+                        const parsed = parseInt(bulkDaysInput, 10);
+                        if (!bulkDaysInput || isNaN(parsed) || (!isExtend && parsed <= 0)) {
+                          setBulkDaysInput(isExtend ? "0" : "30");
                         }
                       }}
-                      placeholder="30"
+                      placeholder={isExtend ? "0" : "30"}
                       className="apm-bulk-input"
                     />
                     <span className="apm-bulk-suffix">Ngày</span>
@@ -500,15 +548,23 @@ export default function ApprovalModal({ user, onClose, onSuccess, mode }: Props)
                       <div className="apm-module-item-right">
                         <input
                           type="number"
-                          min={0}
+                          min={isExtend ? -3650 : 0}
                           disabled={!m.enabled}
                           value={m.days}
                           onChange={(e) => handleModuleDaysChange(m.id, e.target.value)}
+                          onBlur={() => {
+                            if (m.days === "" || m.days === "-") {
+                              handleModuleDaysChange(m.id, "0");
+                            }
+                          }}
+                          placeholder={isExtend ? "+0" : "30"}
                           className={`apm-module-days-input ${
                             m.enabled ? "apm-module-days-input--active" : "apm-module-days-input--disabled"
                           }`}
                         />
-                        <span className="apm-module-unit">ngày</span>
+                        <span className="apm-module-unit">
+                          {isExtend ? (typeof m.days === "number" ? (m.days >= 0 ? `+${m.days} ngày` : `${m.days} ngày`) : "ngày") : "ngày"}
+                        </span>
                       </div>
                     </div>
                   ))}

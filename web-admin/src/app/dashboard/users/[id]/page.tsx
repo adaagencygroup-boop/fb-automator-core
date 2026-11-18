@@ -35,6 +35,8 @@ export default function UserDetailPage() {
   const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
   const [isApproveModalOpen, setIsApproveModalOpen] = useState(false);
   const [copiedHwid, setCopiedHwid] = useState(false);
+  const [logPage, setLogPage] = useState(1);
+  const [logPageSize, setLogPageSize] = useState(5);
 
   const loadUserDetail = async () => {
     if (!userId) return;
@@ -242,7 +244,7 @@ export default function UserDetailPage() {
       action = "Duyệt người dùng";
       info = log.change_detail || "Cấp license 30 ngày & cấu hình 8 tính năng";
       tone = "green";
-    } else if (log.action_type === "extend_license") {
+    } else if (log.action_type === "extend_license" || log.action_type === "extend_user") {
       action = "Gia hạn license";
       info = log.change_detail || "Gia hạn thời hạn sử dụng";
       tone = "green";
@@ -307,6 +309,26 @@ export default function UserDetailPage() {
   ];
 
   const logs = dbLogItems.length > 0 ? dbLogItems : baseLogs;
+
+  // Pagination for activity logs
+  const totalLogPages = Math.max(1, Math.ceil(logs.length / logPageSize));
+  const safeLogPage = Math.min(logPage, totalLogPages);
+  const pagedLogs = logs.slice((safeLogPage - 1) * logPageSize, safeLogPage * logPageSize);
+  const logRangeStart = logs.length === 0 ? 0 : (safeLogPage - 1) * logPageSize + 1;
+  const logRangeEnd = Math.min(safeLogPage * logPageSize, logs.length);
+
+  const getLogPageNumbers = (current: number, total: number): (number | string)[] => {
+    if (total <= 5) {
+      return Array.from({ length: total }, (_, i) => i + 1);
+    }
+    if (current <= 3) {
+      return [1, 2, 3, "...", total];
+    }
+    if (current >= total - 2) {
+      return [1, "...", total - 2, total - 1, total];
+    }
+    return [1, "...", current, "...", total];
+  };
 
   // Features list mapping from real DB data
   const activeFeaturesCount = user.features && user.features.length > 0
@@ -632,7 +654,7 @@ export default function UserDetailPage() {
                 </tr>
               </thead>
               <tbody>
-                {logs.map((item) => (
+                {pagedLogs.map((item) => (
                   <tr key={item.id}>
                     <td className="ud-act-time">{item.time}</td>
                     <td>
@@ -668,6 +690,82 @@ export default function UserDetailPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* Activity Log Pagination Footer */}
+          <div className="ud-activity-footer">
+            <p className="ud-activity-footer-text">
+              Hiển thị <span className="ud-activity-footer-strong">{logRangeStart}</span> đến{" "}
+              <span className="ud-activity-footer-strong">{logRangeEnd}</span>{" "}
+              của <span className="ud-activity-footer-strong">{logs.length}</span> sự kiện
+              {totalLogPages > 0 && (
+                <span className="ud-activity-footer-page-info">
+                  {" "}(Trang <span className="ud-activity-footer-strong">{safeLogPage} / {totalLogPages}</span>)
+                </span>
+              )}
+            </p>
+
+            <div className="ud-activity-footer-controls">
+              <div className="ud-activity-page-size">
+                <select
+                  value={logPageSize}
+                  onChange={(e) => {
+                    setLogPageSize(Number(e.target.value));
+                    setLogPage(1);
+                  }}
+                >
+                  {[5, 10, 20, 50].map((n) => (
+                    <option key={n} value={n}>
+                      {n} / trang
+                    </option>
+                  ))}
+                </select>
+                <img
+                  src="/icons/users-chevron-sm-down.svg"
+                  alt=""
+                  className="ud-activity-page-size-chevron"
+                />
+              </div>
+
+              <div className="ud-activity-pager">
+                <button
+                  type="button"
+                  disabled={safeLogPage <= 1}
+                  onClick={() => setLogPage(safeLogPage - 1)}
+                  className="ud-activity-pager-btn"
+                  title="Trang trước"
+                >
+                  <img src="/icons/users-chevron-left.svg" alt="" width={5} height={9} />
+                </button>
+                {getLogPageNumbers(safeLogPage, totalLogPages).map((p, idx) =>
+                  typeof p === "number" ? (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setLogPage(p)}
+                      className={`ud-activity-pager-btn ${
+                        p === safeLogPage ? "ud-activity-pager-btn--current" : ""
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ) : (
+                    <span key={`ellipsis-${idx}`} className="ud-activity-pager-ellipsis">
+                      ...
+                    </span>
+                  )
+                )}
+                <button
+                  type="button"
+                  disabled={safeLogPage >= totalLogPages}
+                  onClick={() => setLogPage(safeLogPage + 1)}
+                  className="ud-activity-pager-btn"
+                  title="Trang sau"
+                >
+                  <img src="/icons/users-chevron-right.svg" alt="" width={5} height={9} />
+                </button>
+              </div>
+            </div>
           </div>
         </div>
 

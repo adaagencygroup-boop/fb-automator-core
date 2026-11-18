@@ -25,6 +25,7 @@ interface AdminModalProps {
   onClose: () => void;
   onSuccess: (msg: string) => void;
   onDelete?: (user: User) => void;
+  hidePasswordFields?: boolean;
 }
 
 export function AdminModal({
@@ -33,6 +34,7 @@ export function AdminModal({
   onClose,
   onSuccess,
   onDelete,
+  hidePasswordFields = false,
 }: AdminModalProps) {
   const isEdit = editTarget !== null;
 
@@ -154,7 +156,7 @@ export function AdminModal({
           sessionStorage.setItem("pending_logout_modal", "true");
           await api.editUser(editTarget.id, {
             username: username.trim(),
-            status: status === "active" ? "approved" : "banned",
+            status: "approved",
             role: editTarget.role || "admin",
             ...(password ? { password } : {}),
           });
@@ -169,7 +171,7 @@ export function AdminModal({
 
         await api.editUser(editTarget.id, {
           username: username.trim(),
-          status: status === "active" ? "approved" : "banned",
+          status: "approved",
           role: editTarget.role || "admin",
           ...(password ? { password } : {}),
         });
@@ -180,7 +182,7 @@ export function AdminModal({
           password: password,
           contact_info: "",
           days: 3650,
-          status: status === "active" ? "approved" : "banned",
+          status: "approved",
           role: "admin",
         });
         onSuccess(`Đã thêm admin ${username.trim()}`);
@@ -228,17 +230,9 @@ export function AdminModal({
 
                 {/* Status Pill in Header */}
                 {isEdit && (
-                  <span
-                    className={`adm-header-status-pill ${
-                      status === "active"
-                        ? "adm-header-status-pill--active"
-                        : "adm-header-status-pill--locked"
-                    }`}
-                  >
+                  <span className="adm-header-status-pill adm-header-status-pill--active">
                     <span className="adm-header-status-dot" />
-                    <span>
-                      {status === "active" ? "Đang hoạt động" : "Tạm khóa"}
-                    </span>
+                    <span>Đang hoạt động</span>
                   </span>
                 )}
               </div>
@@ -318,169 +312,138 @@ export function AdminModal({
           </div>
 
           {/* Password Section */}
-          <div className="adm-form-group">
-            <div className="adm-form-row">
-              <div className="adm-form-group">
-                <label className="adm-form-label">
-                  {isEdit ? "Mật khẩu mới" : "Mật khẩu khởi tạo"}{" "}
-                  {!isEdit ? (
-                    <span className="adm-req">*</span>
-                  ) : (
-                    <span className="adm-form-hint" style={{ fontSize: "11px", fontWeight: "normal" }}>
-                      (để trống nếu không đổi)
+          {!hidePasswordFields && (
+            <div className="adm-form-group">
+              <div className="adm-form-row">
+                <div className="adm-form-group">
+                  <label className="adm-form-label">
+                    {isEdit ? "Mật khẩu mới" : "Mật khẩu khởi tạo"}{" "}
+                    {!isEdit ? (
+                      <span className="adm-req">*</span>
+                    ) : (
+                      <span className="adm-form-hint" style={{ fontSize: "11px", fontWeight: "normal" }}>
+                        (để trống nếu không đổi)
+                      </span>
+                    )}
+                  </label>
+                  <div
+                    className={`adm-input-wrap ${
+                      isPasswordInvalid ? "adm-input-wrap--error" : ""
+                    }`}
+                  >
+                    <span className="adm-input-icon">
+                      <IconLockField />
+                    </span>
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      className="adm-form-input"
+                      placeholder={
+                        isEdit
+                          ? "Để trống nếu không đổi mật khẩu"
+                          : "Nhập mật khẩu khởi tạo..."
+                      }
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      className="adm-input-toggle-btn"
+                      onClick={() => setShowPassword(!showPassword)}
+                      aria-label={
+                        showPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu"
+                      }
+                    >
+                      <IconEyeModal />
+                    </button>
+                  </div>
+                  {showPasswordError && (
+                    <span
+                      className="adm-match-text adm-match-text--error"
+                      style={{ fontSize: "11.5px", lineHeight: "1.4", marginTop: "4px", display: "flex", alignItems: "flex-start" }}
+                    >
+                      {!password.trim()
+                        ? "Vui lòng nhập mật khẩu khởi tạo."
+                        : validatePassword(password).message}
                     </span>
                   )}
-                </label>
-                <div
-                  className={`adm-input-wrap ${
-                    isPasswordInvalid ? "adm-input-wrap--error" : ""
-                  }`}
-                >
-                  <span className="adm-input-icon">
-                    <IconLockField />
-                  </span>
-                  <input
-                    type={showPassword ? "text" : "password"}
-                    className="adm-form-input"
-                    placeholder={
-                      isEdit
-                        ? "Để trống nếu không đổi mật khẩu"
-                        : "Nhập mật khẩu khởi tạo..."
-                    }
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    autoComplete="new-password"
-                  />
-                  <button
-                    type="button"
-                    className="adm-input-toggle-btn"
-                    onClick={() => setShowPassword(!showPassword)}
-                    aria-label={
-                      showPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu"
-                    }
-                  >
-                    <IconEyeModal />
-                  </button>
+                  {password && isValidPassword(password) && (
+                    <span
+                      className="adm-match-text adm-match-text--success"
+                      style={{ fontSize: "11.5px", marginTop: "4px", display: "flex", alignItems: "center" }}
+                    >
+                      <IconCheckCircle />
+                      Mật khẩu mạnh hợp lệ
+                    </span>
+                  )}
                 </div>
-                {showPasswordError && (
-                  <span
-                    className="adm-match-text adm-match-text--error"
-                    style={{ fontSize: "11.5px", lineHeight: "1.4", marginTop: "4px", display: "flex", alignItems: "flex-start" }}
-                  >
-                    {!password.trim()
-                      ? "Vui lòng nhập mật khẩu khởi tạo."
-                      : validatePassword(password).message}
-                  </span>
-                )}
-                {password && isValidPassword(password) && (
-                  <span
-                    className="adm-match-text adm-match-text--success"
-                    style={{ fontSize: "11.5px", marginTop: "4px", display: "flex", alignItems: "center" }}
-                  >
-                    <IconCheckCircle />
-                    Mật khẩu mạnh hợp lệ
-                  </span>
-                )}
-              </div>
 
-              <div className="adm-form-group">
-                <label className="adm-form-label">
-                  {isEdit ? "Xác nhận mật khẩu mới" : "Xác nhận mật khẩu"}{" "}
-                  {!isEdit && <span className="adm-req">*</span>}
-                </label>
-                <div className="adm-input-wrap">
-                  <span className="adm-input-icon">
-                    <IconRefreshLock />
-                  </span>
-                  <input
-                    type={showPassword ? "text" : "password"}
-                    className="adm-form-input"
-                    placeholder={
-                      isEdit
-                        ? "Nhập lại mật khẩu mới..."
-                        : "Nhập lại mật khẩu..."
-                    }
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    autoComplete="new-password"
-                    disabled={isEdit && !password}
-                  />
+                <div className="adm-form-group">
+                  <label className="adm-form-label">
+                    {isEdit ? "Xác nhận mật khẩu mới" : "Xác nhận mật khẩu"}{" "}
+                    {!isEdit && <span className="adm-req">*</span>}
+                  </label>
+                  <div className="adm-input-wrap">
+                    <span className="adm-input-icon">
+                      <IconRefreshLock />
+                    </span>
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      className="adm-form-input"
+                      placeholder={
+                        isEdit
+                          ? "Nhập lại mật khẩu mới..."
+                          : "Nhập lại mật khẩu..."
+                      }
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      autoComplete="new-password"
+                      disabled={isEdit && !password}
+                    />
+                  </div>
+                  {password &&
+                  confirmPassword &&
+                  password === confirmPassword ? (
+                    <span className="adm-match-text adm-match-text--success">
+                      <IconCheckCircle />
+                      Mật khẩu hoàn toàn khớp
+                    </span>
+                  ) : confirmPassword && password !== confirmPassword ? (
+                    <span className="adm-match-text adm-match-text--error">
+                      Mật khẩu không khớp
+                    </span>
+                  ) : null}
                 </div>
-                {password &&
-                confirmPassword &&
-                password === confirmPassword ? (
-                  <span className="adm-match-text adm-match-text--success">
-                    <IconCheckCircle />
-                    Mật khẩu hoàn toàn khớp
-                  </span>
-                ) : confirmPassword && password !== confirmPassword ? (
-                  <span className="adm-match-text adm-match-text--error">
-                    Mật khẩu không khớp
-                  </span>
-                ) : null}
               </div>
+              {isEdit && (
+                <span className="adm-form-hint" style={{ marginTop: "4px" }}>
+                  Lần cập nhật cuối:{" "}
+                  {fmtDate(
+                    editTarget?.created_at || new Date().toISOString()
+                  )}{" "}
+                  ({daysAgo} ngày trước)
+                </span>
+              )}
             </div>
-            {isEdit && (
-              <span className="adm-form-hint" style={{ marginTop: "4px" }}>
-                Lần cập nhật cuối:{" "}
-                {fmtDate(
-                  editTarget?.created_at || new Date().toISOString()
-                )}{" "}
-                ({daysAgo} ngày trước)
-              </span>
-            )}
-          </div>
+          )}
 
-          {/* Section: Status Selection */}
+          {/* Section: Status Selection (Admin accounts are always active) */}
           <div className="adm-form-group">
             <label className="adm-form-label">
-              Tùy chọn trạng thái tài khoản
+              Trạng thái tài khoản
             </label>
             <div className="adm-status-cards">
               {/* Active Card */}
-              <div
-                className={`adm-status-card${
-                  status === "active" ? " adm-status-card--active" : ""
-                }`}
-                onClick={() => setStatus("active")}
-              >
+              <div className="adm-status-card adm-status-card--active" style={{ cursor: "default" }}>
                 <span className="adm-status-radio">
-                  {status === "active" ? (
-                    <span className="adm-radio-dot" />
-                  ) : null}
+                  <span className="adm-radio-dot" />
                 </span>
                 <div className="adm-status-card-text">
                   <div className="adm-status-card-name">
                     ● Đang hoạt động
                   </div>
                   <div className="adm-status-card-desc">
-                    Đang kích hoạt, cho phép đăng nhập và thao tác API bình thường.
-                  </div>
-                </div>
-              </div>
-
-              {/* Locked / Suspended Card */}
-              <div
-                className={`adm-status-card${
-                  status === "locked" ? " adm-status-card--locked" : ""
-                }`}
-                onClick={() => setStatus("locked")}
-              >
-                <span className="adm-status-radio">
-                  {status === "locked" ? (
-                    <span className="adm-radio-dot adm-radio-dot--locked" />
-                  ) : (
-                    <span className="adm-status-radio-lock">
-                      <IconSuspendedLock />
-                    </span>
-                  )}
-                </span>
-                <div className="adm-status-card-text">
-                  <div className="adm-status-card-name">
-                    🔒 Tạm khóa
-                  </div>
-                  <div className="adm-status-card-desc">
-                    Tạm ngưng quyền truy cập, thu hồi toàn bộ token đăng nhập.
+                    Tài khoản quản trị viên luôn ở trạng thái kích hoạt và không thể bị khóa.
                   </div>
                 </div>
               </div>

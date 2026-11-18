@@ -343,11 +343,12 @@ export default function AdminProfilePage() {
         </button>
       </div>
 
-      {/* ── Edit Admin Modal Dialog (Reused from Admins page) ── */}
+      {/* ── Edit Admin Modal Dialog (Reused from Admins page, hiding password to enforce 1 single change-password entry) ── */}
       {editModalOpen && (
         <AdminModal
           isOpen={editModalOpen}
           editTarget={meAsUser}
+          hidePasswordFields={true}
           onClose={() => setEditModalOpen(false)}
           onSuccess={(msg) => {
             showToast(msg);
