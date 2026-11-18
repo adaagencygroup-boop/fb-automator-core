@@ -164,9 +164,10 @@ async def process_webhook_event(event: Dict[str, Any]):
                     s_url = sticker_url if sticker_url else "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b8/2021_Facebook_icon.svg/192px-2021_Facebook_icon.svg.png"
                     text = f"[image] {s_url}"
 
-                # Support incoming attachments (images/files) from customer
+                # Support incoming attachments (images/video/audio/files) from customer
+                # Giữ thẳng URL CDN của Facebook (không tải về ổ đĩa VPS để tránh đầy bộ nhớ)
                 attachments = message_obj.get("attachments", [])
-                if not text and attachments:
+                if attachments:
                     att = attachments[0]
                     att_type = str(att.get("type", "image")).lower()
                     payload = att.get("payload", {})
@@ -175,55 +176,15 @@ async def process_webhook_event(event: Dict[str, Any]):
 
                     if "audio" in att_type or "audioclip" in att_url_lower or any(att_url_lower.split("?")[0].endswith(ext) for ext in [".m4a", ".aac", ".mp3", ".wav", ".ogg"]):
                         att_type = "audio"
-
-                    if att_url and att_url.startswith("http"):
-                        import uuid
-                        import requests
-
-                        file_ext = ".bin"
-                        if att_type == "image": file_ext = ".jpg"
-                        elif att_type == "audio": file_ext = ".mp4"
-                        elif att_type == "video": file_ext = ".mp4"
-
-                        local_filename = f"fb_incoming_{uuid.uuid4().hex}{file_ext}"
-                        uploads_dir = str(UPLOADS_DIR)
-                        os.makedirs(uploads_dir, exist_ok=True)
-                        local_filepath = os.path.join(uploads_dir, local_filename)
-
-                        try:
-                            resp = await asyncio.to_thread(requests.get, att_url, timeout=15)
-                            if resp.status_code == 200:
-                                with open(local_filepath, "wb") as f:
-                                    f.write(resp.content)
-                                try:
-                                    from modules.module_06_omnichannel_chat.services.storage_service import upload_file_bytes
-                                    sb_url = await asyncio.to_thread(
-                                        upload_file_bytes,
-                                        resp.content,
-                                        local_filename,
-                                        resp.headers.get("content-type")
-                                    )
-                                    if sb_url:
-                                        att_url = sb_url
-                                    else:
-                                        att_url = f"/uploads/{local_filename}"
-                                except Exception as sb_err:
-                                    print(f"Luu file dinh kem that bai: {sb_err}")
-                                    att_url = f"/uploads/{local_filename}"
-                        except Exception as e:
-                            print(f"Error downloading incoming attachment: {e}")
+                    elif "video" in att_type or any(att_url_lower.split("?")[0].endswith(ext) for ext in [".mp4", ".mov", ".webm"]):
+                        att_type = "video"
 
                     if not att_url:
                         att_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b8/2021_Facebook_icon.svg/192px-2021_Facebook_icon.svg.png"
 
-                    if att_type == "image":
-                        text = f"[image] {att_url}"
-                    elif att_type == "audio":
-                        text = f"[audio] {att_url}"
-                    elif att_type in ("video", "file"):
-                        text = f"[file] {att_url}"
-                    else:
-                        text = f"[image] {att_url}"
+                    tag = att_type if att_type in ("image", "audio", "video", "file") else "image"
+                    att_text = f"[{tag}] {att_url}"
+                    text = f"{text}\n{att_text}" if (text and text.strip()) else att_text
 
                 if not text or not text.strip():
                     text = "📎 [Tin nhắn đính kèm]"
