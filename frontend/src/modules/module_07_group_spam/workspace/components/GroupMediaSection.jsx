@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/lib/toast";
+import { fetchGroupMediaBlobUrl } from "../../service";
 import { SectionCard, Field } from "../../shared/components";
 
 function LocalMediaPreviewItem({ file, index, onRemove, isLocked }) {
@@ -77,28 +78,59 @@ function LocalMediaPreviewItem({ file, index, onRemove, isLocked }) {
 }
 
 function CloudMediaPreviewItem({ item, index, onRemove, isLocked }) {
-  const itemUrl = typeof item === "string" ? item : (item.url || item.path || "");
+  const rawPath = typeof item === "string" ? item : (item.url || item.path || "");
   const itemName =
     (typeof item === "string"
-      ? item.split("/").pop().split("?")[0]
-      : item.name) || `Ảnh Cloud ${index + 1}`;
+      ? rawPath.split(/[\\/]/).pop().split("?")[0]
+      : item.name) || `Media #${index + 1}`;
+  const isRemote = /^(https?:|blob:|data:)/i.test(rawPath);
   const isVideo = /\.(mp4|mov|avi|mkv)$/i.test(itemName);
+  const [previewUrl, setPreviewUrl] = useState(() => (isRemote ? rawPath : ""));
+
+  useEffect(() => {
+    if (!rawPath) {
+      setPreviewUrl("");
+      return undefined;
+    }
+    if (isRemote) {
+      setPreviewUrl(rawPath);
+      return undefined;
+    }
+    let active = true;
+    let objectUrl = "";
+    fetchGroupMediaBlobUrl(rawPath)
+      .then((url) => {
+        if (!active) {
+          if (url) URL.revokeObjectURL(url);
+          return;
+        }
+        objectUrl = url;
+        setPreviewUrl(url);
+      })
+      .catch(() => {
+        if (active) setPreviewUrl("");
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [rawPath, isRemote]);
 
   return (
     <div className="group relative flex aspect-square min-h-28 flex-col overflow-hidden rounded-lg border border-emerald-200 bg-emerald-50/30 p-1.5 shadow-xs transition-all hover:border-emerald-400 hover:shadow-sm">
       <div className="relative min-h-0 w-full flex-1 overflow-hidden rounded-md bg-slate-100">
         {isVideo ? (
           <video
-            src={itemUrl}
+            src={previewUrl}
             muted
             playsInline
             controls
             className="h-full w-full object-cover"
             preload="metadata"
           />
-        ) : itemUrl ? (
+        ) : previewUrl ? (
           <img
-            src={itemUrl}
+            src={previewUrl}
             alt={itemName}
             className="h-full w-full object-cover"
             loading="lazy"
@@ -124,7 +156,7 @@ function CloudMediaPreviewItem({ item, index, onRemove, isLocked }) {
         )}
 
         <span className="absolute bottom-1 left-1 flex items-center gap-0.5 rounded bg-emerald-700/85 px-1 py-0.5 text-[8px] font-medium text-white backdrop-blur-xs">
-          <Cloud className="size-2.5" /> Supabase #{index + 1}
+          <Cloud className="size-2.5" /> {isRemote ? "Cloud" : "Local"} #{index + 1}
         </span>
       </div>
 
@@ -132,7 +164,9 @@ function CloudMediaPreviewItem({ item, index, onRemove, isLocked }) {
         <p className="truncate text-[10px] font-medium text-slate-700" title={itemName}>
           {itemName}
         </p>
-        <p className="text-[9px] text-emerald-600">Đã lưu trữ Cloud</p>
+        <p className="text-[9px] text-emerald-600">
+          {isRemote ? "Đã lưu trữ Cloud" : "Đã lưu trên máy"}
+        </p>
       </div>
     </div>
   );

@@ -44,13 +44,13 @@ def _is_remote_token(raw: str) -> bool:
 
 # xử lí đường dẫn media, đảm bảo nó hợp lệ và có định dạng được hỗ trợ
 def _safe_path(token: str) -> Path:
-    raw = str(token or "").strip().replace("\\", "/")
+    raw = str(token or "").strip().replace("\\", "/").lstrip("/")
     if not raw:
         raise MediaStorageError("Đường dẫn media trống")
-    file_name = Path(raw).name
-    if not file_name:
+    base_dir = UPLOAD_MEDIA_DIR.resolve()
+    candidate = (base_dir / raw).resolve()
+    if not candidate.is_relative_to(base_dir) or candidate == base_dir:
         raise MediaStorageError("Đường dẫn media không hợp lệ")
-    candidate = (UPLOAD_MEDIA_DIR / file_name).resolve()
     if candidate.suffix.lower() not in ALLOWED_EXTENSIONS:
         raise MediaStorageError("Định dạng media không được hỗ trợ")
     return candidate
@@ -147,21 +147,14 @@ def _read_validated_content(file: UploadFile, current_total_size: int) -> tuple[
 
 # lưu trữ tệp media upload vào thư mục cache chiến dịch và thư mục upload chính, thêm các đường dẫn tệp đã tạo vào danh sách created_local_files
 def _persist_media_file(
-    camp_cache_dir: Path,
+    camp_upload_dir: Path,
     saved_name: str,
     content: bytes,
     created_local_files: list[Path],
 ) -> None:
-    cached_path = camp_cache_dir / saved_name
-    cached_path.write_bytes(content)
-    created_local_files.append(cached_path)
-
-    local_backup = UPLOAD_MEDIA_DIR / saved_name
-    try:
-        local_backup.write_bytes(content)
-        created_local_files.append(local_backup)
-    except Exception:
-        pass
+    target_path = camp_upload_dir / saved_name
+    target_path.write_bytes(content)
+    created_local_files.append(target_path)
 
 # xóa các tệp đã tạo trong trường hợp xảy ra lỗi, đảm bảo rằng không còn tệp tạm thời nào còn lại trên đĩa
 def _cleanup_files(paths: list[Path]) -> None:
@@ -179,10 +172,9 @@ def save_uploaded_media(
 
     active_campaign_id = str(campaign_id or "").strip() or uuid.uuid4().hex
     UPLOAD_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-    MEDIA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-    camp_cache_dir = MEDIA_CACHE_DIR / active_campaign_id
-    camp_cache_dir.mkdir(parents=True, exist_ok=True)
+    camp_upload_dir = UPLOAD_MEDIA_DIR / active_campaign_id
+    camp_upload_dir.mkdir(parents=True, exist_ok=True)
 
     uploaded: list[dict[str, str | int | None]] = []
     created_local_files: list[Path] = []
@@ -193,12 +185,13 @@ def save_uploaded_media(
             extension = _validate_upload_metadata(file)
             content, size, total_size = _read_validated_content(file, total_size)
             saved_name = f"{uuid.uuid4().hex}{extension}"
-            _persist_media_file(camp_cache_dir, saved_name, content, created_local_files)
+            _persist_media_file(camp_upload_dir, saved_name, content, created_local_files)
+            relative_path = f"{active_campaign_id}/{saved_name}"
             uploaded.append({
                 "original_name": file.filename,
                 "saved_name": saved_name,
-                "path": saved_name,
-                "relative_path": saved_name,
+                "path": relative_path,
+                "relative_path": relative_path,
                 "url": None,
                 "size": size,
                 "campaign_id": active_campaign_id,
@@ -225,8 +218,13 @@ def list_stored_media(
 
     UPLOAD_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
     return [
-        {"name": path.name, "path": path.name, "relative_path": path.name, "size": path.stat().st_size}
-        for path in sorted(UPLOAD_MEDIA_DIR.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True)
+        {
+            "name": path.name,
+            "path": path.relative_to(UPLOAD_MEDIA_DIR).as_posix(),
+            "relative_path": path.relative_to(UPLOAD_MEDIA_DIR).as_posix(),
+            "size": path.stat().st_size,
+        }
+        for path in sorted(UPLOAD_MEDIA_DIR.rglob("*"), key=lambda item: item.stat().st_mtime, reverse=True)
         if path.is_file() and path.suffix.lower() in ALLOWED_EXTENSIONS
     ]
 
