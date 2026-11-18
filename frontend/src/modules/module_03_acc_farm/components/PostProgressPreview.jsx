@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { Eye, Lock, Film, Image as ImageIcon } from "lucide-react";
-import { mediaFileUrl } from "./PostImageModal";
+import { AuthedPostImage } from "./PostImageModal";
 
 /**
  * Locked read-only preview of post content while a publish session is running.
@@ -114,11 +114,7 @@ export function PostProgressPreview({
             <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-slate-100 text-slate-400">
               {/\.(jpe?g|png|webp|gif|bmp)$/i.test(mediaPath) ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={mediaFileUrl(mediaPath)}
-                  alt=""
-                  className="h-full w-full object-cover"
-                />
+                <AuthedPostImage path={mediaPath} className="h-full w-full object-cover" />
               ) : (
                 <Film size={22} />
               )}
@@ -146,7 +142,7 @@ export function PostProgressPreview({
                 title={p}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={mediaFileUrl(p)} alt="" className="h-full w-full object-cover" />
+                <AuthedPostImage path={p} className="h-full w-full object-cover" />
               </div>
             ))}
           </div>
