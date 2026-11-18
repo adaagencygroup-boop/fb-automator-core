@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
+import CustomSelect from "@/components/ui/custom-select";
 import { Search, Flag, Copy, Check, RefreshCw, Video, Bot, Film } from "lucide-react";
 import { getHistory, getHistoryStats, getTerminalLogs } from "../service";
 import Pagination from "@/components/ui/pagination";
@@ -78,38 +79,38 @@ function getActivityBadge(type) {
   const t = (type || "").toUpperCase();
   if (t === "TIKTOK") {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-normal border border-pink-200 bg-pink-50/70 text-pink-700 dark:border-pink-900/60 dark:bg-pink-950/30 dark:text-pink-400">
-        <Video className="w-3 h-3 text-pink-600 dark:text-pink-400" />
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal border border-pink-200 bg-pink-50/70 text-pink-700 dark:border-pink-900/60 dark:bg-pink-950/30 dark:text-pink-400">
+        <Video className="w-3 h-3 shrink-0 text-pink-600 dark:text-pink-400" />
         Tải Video TikTok
       </span>
     );
   }
   if (t === "YOUTUBE") {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-normal border border-red-200 bg-red-50/70 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-400">
-        <Film className="w-3 h-3 text-red-600 dark:text-red-400" />
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal border border-red-200 bg-red-50/70 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-400">
+        <Film className="w-3 h-3 shrink-0 text-red-600 dark:text-red-400" />
         Tải Video YouTube
       </span>
     );
   }
   if (t === "AI") {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-normal border border-blue-200 bg-blue-50/70 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-400">
-        <Bot className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal border border-blue-200 bg-blue-50/70 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-400">
+        <Bot className="w-3 h-3 shrink-0 text-blue-600 dark:text-blue-400" />
         Đăng Bài AI
       </span>
     );
   }
   if (t === "REEL" || t === "REELS") {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-normal border border-purple-200 bg-purple-50/70 text-purple-700 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-400">
-        <Film className="w-3 h-3 text-purple-600 dark:text-purple-400" />
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal border border-purple-200 bg-purple-50/70 text-purple-700 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-400">
+        <Film className="w-3 h-3 shrink-0 text-purple-600 dark:text-purple-400" />
         Đăng Video Reels
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-normal border border-border bg-muted/50 text-foreground">
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal border border-border bg-muted/50 text-foreground">
       {type || "Hoạt Động"}
     </span>
   );
@@ -140,6 +141,7 @@ export default function HistoryTab({ onSelectPost }) {
   });
   const [selectedDetail, setSelectedDetail] = useState(null);
   const [detailCopied, setDetailCopied] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
   const [terminalCopied, setTerminalCopied] = useState(false);
   const loadStats = async () => {
     const data = await getHistoryStats();
@@ -165,12 +167,12 @@ export default function HistoryTab({ onSelectPost }) {
   const paginatedItems = useMemo(() => {
     return historyItems.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   }, [historyItems, currentPage, pageSize]);
-  const handleCopyText = (text) => {
+  const handleCopyText = (text, setCopied = setDetailCopied) => {
     if (!text) return;
     try {
       navigator.clipboard.writeText(text);
-      setDetailCopied(true);
-      setTimeout(() => setDetailCopied(false), 2000);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch {}
   };
   const handleCopyTerminal = async () => {
@@ -239,25 +241,30 @@ export default function HistoryTab({ onSelectPost }) {
               ))}
             </div>
             <div className="flex items-center gap-2">
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="h-8 text-xs font-normal border border-input rounded px-2.5 bg-background text-foreground focus:outline-none">
-                <option value="ALL">Tất Cả Trạng Thái</option>
-                <option value="SUCCESS">Thành Công ✓</option>
-                <option value="FAILED">Thất Bại ✗</option>
-              </select>
+              <CustomSelect
+                value={statusFilter}
+                onChange={setStatusFilter}
+                size="sm"
+                className="w-40"
+                options={[
+                  { value: "ALL", label: "Tất Cả Trạng Thái" },
+                  { value: "SUCCESS", label: "Thành Công ✓" },
+                  { value: "FAILED", label: "Thất Bại ✗" },
+                ]}
+              />
               <div className="relative w-64">
                 <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />
                 <Input placeholder="Tìm Theo Tên Page, Nội Dung, ID..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="h-8 text-xs font-normal pl-8 rounded" />
               </div>
             </div>
           </div>
-          <div className="rounded border border-border overflow-hidden">
-            <Table>
+          <Table className="table-fixed min-w-[920px]">
               <TableHeader>
                 <TableRow className="bg-muted/50">
-                  <TableHead className="w-12 text-center text-xs font-medium">STT</TableHead>
+                  <TableHead className="w-14 text-center text-xs font-medium">STT</TableHead>
                   <TableHead className="text-xs font-medium w-36">Thời Gian</TableHead>
-                  <TableHead className="text-xs font-medium w-36 text-center">Hoạt Động</TableHead>
-                  <TableHead className="text-xs font-medium min-w-[150px]">Fanpage</TableHead>
+                  <TableHead className="text-xs font-medium w-40 text-center">Hoạt Động</TableHead>
+                  <TableHead className="text-xs font-medium w-44">Fanpage</TableHead>
                   <TableHead className="text-xs font-medium">Nội Dung Nhật Ký</TableHead>
                   <TableHead className="text-center text-xs font-medium w-28">Trạng Thái</TableHead>
                   <TableHead className="text-right text-xs font-medium pr-4 w-28">Thao Tác</TableHead>
@@ -291,22 +298,22 @@ export default function HistoryTab({ onSelectPost }) {
                           {getActivityBadge(it.post_type)}
                         </TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
                             <PageLogo avatar={it.avatar} name={it.page_name} />
-                            <div>
-                              <span className="text-xs font-medium text-foreground block truncate max-w-[150px]">{it.page_name || "Fanpage"}</span>
-                              <span className="text-[10px] text-muted-foreground font-mono">{it.account_name || (it.account_uid ? `UID: ${it.account_uid}` : "")}</span>
+                            <div className="min-w-0 flex-1">
+                              <span className="text-xs font-medium text-foreground block truncate">{it.page_name || "Fanpage"}</span>
+                              <span className="text-[10px] text-muted-foreground font-mono block truncate">{it.account_name || (it.account_uid ? `UID: ${it.account_uid}` : "")}</span>
                             </div>
                           </div>
                         </TableCell>
                         <TableCell>
-                          <div className="max-w-md space-y-0.5">
+                          <div className="w-full min-w-0 space-y-0.5">
                             <p className="text-xs font-medium text-foreground line-clamp-1">{msgTitle}</p>
                             {it.title && it.title !== msgTitle && (
                               <p className="text-[11px] text-muted-foreground line-clamp-1">{it.title}</p>
                             )}
                             {it.caption && it.caption !== it.title && (
-                              <span className="text-[10px] text-muted-foreground font-mono block truncate max-w-sm">ID / Chi Tiết: {it.caption}</span>
+                              <span className="text-[10px] text-muted-foreground font-mono block truncate">ID / Chi Tiết: {it.caption}</span>
                             )}
                           </div>
                         </TableCell>
@@ -322,17 +329,27 @@ export default function HistoryTab({ onSelectPost }) {
                 )}
               </TableBody>
             </Table>
-          </div>
           {historyItems.length > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2 px-1">
               <div className="flex items-center gap-2 text-xs font-normal text-muted-foreground">
                 <span>Hiển Thị</span>
-                <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }} className="h-7 text-xs font-normal border border-input rounded px-2 bg-background text-foreground focus:outline-none">
-                  <option value={10}>10</option>
-                  <option value={20}>20</option>
-                  <option value={50}>50</option>
-                  <option value={100}>100</option>
-                </select>
+                <CustomSelect
+                  value={pageSize}
+                  onChange={(val) => {
+                    setPageSize(Number(val));
+                    setCurrentPage(1);
+                  }}
+                  size="sm"
+                  direction="up"
+                  className="w-[72px]"
+                  buttonClassName="h-7 px-2"
+                  options={[
+                    { value: 10, label: "10" },
+                    { value: 20, label: "20" },
+                    { value: 50, label: "50" },
+                    { value: 100, label: "100" },
+                  ]}
+                />
                 <span>/ Trang (Tổng {historyItems.length} Bản Ghi)</span>
               </div>
               <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} />
@@ -371,12 +388,32 @@ export default function HistoryTab({ onSelectPost }) {
                   <p className="text-xs text-foreground leading-relaxed whitespace-pre-wrap">{selectedDetail.caption}</p>
                 </div>
               )}
-              {selectedDetail?.object_path && (
+              {selectedDetail?.post_url && (
+                <div className="pt-2 border-t border-border flex items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1 flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground">
+                    <span className="shrink-0">Link bài viết:</span>
+                    <a
+                      href={selectedDetail.post_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 dark:text-blue-400 hover:underline truncate"
+                      title={selectedDetail.post_url}
+                    >
+                      {selectedDetail.post_url}
+                    </a>
+                  </div>
+                  <button type="button" onClick={() => handleCopyText(selectedDetail.post_url, setLinkCopied)} className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 shrink-0 font-normal">
+                    {linkCopied ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+                    <span>{linkCopied ? "Đã Sao Chép" : "Sao Chép Đường Link"}</span>
+                  </button>
+                </div>
+              )}
+              {selectedDetail?.object_path && selectedDetail.object_path !== selectedDetail?.post_url && (
                 <div className="pt-2 border-t border-border flex items-center justify-between gap-2">
                   <span className="text-[11px] font-mono text-muted-foreground truncate" title={selectedDetail.object_path}>
                     Tệp: {selectedDetail.object_path}
                   </span>
-                  <button type="button" onClick={() => handleCopyText(selectedDetail.object_path)} className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 shrink-0 font-normal">
+                  <button type="button" onClick={() => handleCopyText(selectedDetail.object_path, setDetailCopied)} className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 shrink-0 font-normal">
                     {detailCopied ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
                     <span>{detailCopied ? "Đã Sao Chép" : "Sao Chép Đường Dẫn"}</span>
                   </button>
