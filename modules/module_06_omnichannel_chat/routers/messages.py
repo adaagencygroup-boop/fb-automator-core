@@ -408,19 +408,18 @@ async def send_attachment_file(
     local_file_url = f"/uploads/{quote(filename)}"  # ten file co dau cach/ngoac -> phai encode
     public_url = f"{PUBLIC_MEDIA_BASE_URL}{local_file_url}"
 
-    # ?u ti?n t?i l?n Supabase Storage n?u c? c?u h?nh
     try:
         from modules.module_06_omnichannel_chat.services.storage_service import upload_file_bytes
-        sb_url = await asyncio.to_thread(
+        stored_url = await asyncio.to_thread(
             upload_file_bytes,
             file_bytes,
             filename,
             file.content_type
         )
-        if sb_url:
-            public_url = sb_url
-    except Exception as sb_err:
-        print(f"[Supabase Storage Upload Warning] {sb_err}")
+        if stored_url:
+            public_url = stored_url
+    except Exception as store_err:
+        print(f"[Media Storage] {store_err}")
 
     try:
         res = await sync_service.send_attachment_by_url(
@@ -450,19 +449,18 @@ async def upload_media(
     local_file_url = f"/uploads/{quote(filename)}"  # ten file co dau cach/ngoac -> phai encode
     public_url = f"{PUBLIC_MEDIA_BASE_URL}{local_file_url}"
 
-    # ?u ti?n t?i l?n Supabase Storage n?u c? c?u h?nh
     try:
         from modules.module_06_omnichannel_chat.services.storage_service import upload_file_bytes
-        sb_url = await asyncio.to_thread(
+        stored_url = await asyncio.to_thread(
             upload_file_bytes,
             file_bytes,
             filename,
             file.content_type
         )
-        if sb_url:
-            public_url = sb_url
-    except Exception as sb_err:
-        print(f"[Supabase Storage Upload Warning] {sb_err}")
+        if stored_url:
+            public_url = stored_url
+    except Exception as store_err:
+        print(f"[Media Storage] {store_err}")
 
     return {"success": True, "url": public_url}
 

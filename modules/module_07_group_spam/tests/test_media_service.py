@@ -11,7 +11,7 @@ from modules.module_07_group_spam.app.services import media_service
 
 
 class MediaServiceTests(unittest.TestCase):
-    @patch.object(media_service, "is_supabase_storage_available", return_value=False)
+    @patch.object(media_service, "is_media_storage_available", return_value=False)
     def test_upload_returns_token_and_resolves_inside_upload_directory(self, _mock_storage):
         with tempfile.TemporaryDirectory() as directory, patch.object(
             media_service, "UPLOAD_MEDIA_DIR", Path(directory).resolve()
