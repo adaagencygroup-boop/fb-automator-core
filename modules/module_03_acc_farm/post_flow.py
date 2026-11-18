@@ -4590,76 +4590,8 @@ def extract_status_post_url(
             pass
 
     def _read_clipboard_os() -> Optional[str]:
-        """
-        Đọc clipboard Windows (text + HTML) — KHÔNG gọi navigator.clipboard
-        (tránh popup Chrome). Retry vì OpenClipboard hay bị lock ngắn.
-        """
-        chunks: List[str] = []
-
-        # --- win32clipboard ---
-        for _ in range(8):
-            try:
-                import win32clipboard  # type: ignore
-
-                win32clipboard.OpenClipboard()
-                try:
-                    if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT):
-                        data = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
-                        if isinstance(data, str) and data.strip():
-                            chunks.append(data.strip())
-                    try:
-                        cf_html = win32clipboard.RegisterClipboardFormat("HTML Format")
-                        if win32clipboard.IsClipboardFormatAvailable(cf_html):
-                            raw = win32clipboard.GetClipboardData(cf_html)
-                            if isinstance(raw, bytes):
-                                raw = raw.decode("utf-8", errors="ignore")
-                            if isinstance(raw, str) and raw.strip():
-                                chunks.append(raw.strip())
-                    except Exception:
-                        pass
-                finally:
-                    win32clipboard.CloseClipboard()
-                if chunks:
-                    break
-            except Exception:
-                time.sleep(0.15)
-
-        # --- ctypes fallback (không cần pywin32) ---
-        if not chunks:
-            try:
-                import ctypes
-                from ctypes import wintypes
-
-                user32 = ctypes.windll.user32
-                kernel32 = ctypes.windll.kernel32
-                CF_UNICODETEXT = 13
-                for _ in range(8):
-                    if not user32.OpenClipboard(0):
-                        time.sleep(0.15)
-                        continue
-                    try:
-                        handle = user32.GetClipboardData(CF_UNICODETEXT)
-                        if handle:
-                            ptr = kernel32.GlobalLock(handle)
-                            if ptr:
-                                try:
-                                    data = ctypes.wstring_at(ptr)
-                                    if data and data.strip():
-                                        chunks.append(data.strip())
-                                finally:
-                                    kernel32.GlobalUnlock(handle)
-                    finally:
-                        user32.CloseClipboard()
-                    if chunks:
-                        break
-                    time.sleep(0.15)
-            except Exception:
-                pass
-
-        if not chunks:
-            return None
-        # Gộp text+html để regex bắt URL trong HTML Format
-        return "\n".join(chunks)
+        """Đọc clipboard Windows. Engine không thấy thì nhờ PowerShell Get-Clipboard."""
+        return _read_windows_clipboard(_log)
 
     def _wait_clipboard_after_copy(before: Optional[str], timeout: float = 4.0) -> Optional[str]:
         """
@@ -5715,67 +5647,154 @@ def focus_chrome_for_clipboard(driver, log_fn=None) -> None:
         log_fn(f"Chrome focus trước Copy: hasFocus={focused}")
 
 
-def _read_windows_clipboard() -> Optional[str]:
-    """Đọc clipboard Windows (text + HTML). Không gọi navigator.clipboard."""
+_PS_CLIPBOARD_LOCK = threading.Lock()
+_PS_CLIPBOARD_NOT_BEFORE = 0.0
+
+
+def _clipboard_plain(data) -> str:
+    if isinstance(data, bytes):
+        data = data.decode("utf-8", errors="ignore")
+    if not isinstance(data, str):
+        return ""
+    return data.replace("\x00", " ").strip()
+
+
+def _read_clipboard_via_win32() -> tuple:
+    """(text hoặc None, ghi chú lỗi). Mở được mà không có chữ thì trả ngay, không chờ."""
+    last_error = ""
     chunks: List[str] = []
-    for _ in range(8):
+
+    def _take(data) -> None:
+        text = _clipboard_plain(data)
+        if text:
+            chunks.append(text)
+
+    for _ in range(3):
         try:
             import win32clipboard  # type: ignore
 
             win32clipboard.OpenClipboard()
             try:
                 if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT):
-                    data = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
-                    if isinstance(data, str) and data.strip():
-                        chunks.append(data.strip())
+                    _take(win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT))
+                try:
+                    if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_TEXT):
+                        _take(win32clipboard.GetClipboardData(win32clipboard.CF_TEXT))
+                except Exception:
+                    pass
                 try:
                     cf_html = win32clipboard.RegisterClipboardFormat("HTML Format")
                     if win32clipboard.IsClipboardFormatAvailable(cf_html):
-                        raw = win32clipboard.GetClipboardData(cf_html)
-                        if isinstance(raw, bytes):
-                            raw = raw.decode("utf-8", errors="ignore")
-                        if isinstance(raw, str) and raw.strip():
-                            chunks.append(raw.strip())
-                except Exception:
-                    pass
+                        _take(win32clipboard.GetClipboardData(cf_html))
+                except Exception as exc:
+                    last_error = f"html:{exc}"
             finally:
                 win32clipboard.CloseClipboard()
             if chunks:
-                break
-        except Exception:
+                return "\n".join(chunks), ""
+            return None, last_error or "win32: mở được clipboard nhưng không có text"
+        except Exception as exc:
+            last_error = f"win32:{exc}"
             time.sleep(0.15)
-    if not chunks:
-        try:
-            import ctypes
 
-            user32 = ctypes.windll.user32
-            kernel32 = ctypes.windll.kernel32
-            CF_UNICODETEXT = 13
-            for _ in range(8):
-                if not user32.OpenClipboard(0):
-                    time.sleep(0.15)
-                    continue
-                try:
-                    handle = user32.GetClipboardData(CF_UNICODETEXT)
-                    if handle:
-                        ptr = kernel32.GlobalLock(handle)
-                        if ptr:
-                            try:
-                                data = ctypes.wstring_at(ptr)
-                                if data and data.strip():
-                                    chunks.append(data.strip())
-                            finally:
-                                kernel32.GlobalUnlock(handle)
-                finally:
-                    user32.CloseClipboard()
-                if chunks:
-                    break
+    if os.name != "nt":
+        return None, last_error or "không phải Windows"
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        opened = False
+        for _ in range(3):
+            if not user32.OpenClipboard(0):
+                err = int(kernel32.GetLastError() or 0)
+                last_error = f"ctypes OpenClipboard GetLastError={err}"
                 time.sleep(0.15)
-        except Exception:
-            pass
-    if not chunks:
+                continue
+            opened = True
+            try:
+                handle = user32.GetClipboardData(13)
+                if not handle:
+                    err = int(kernel32.GetLastError() or 0)
+                    last_error = f"ctypes GetClipboardData GetLastError={err}"
+                else:
+                    ptr = kernel32.GlobalLock(handle)
+                    if ptr:
+                        try:
+                            _take(ctypes.wstring_at(ptr))
+                        finally:
+                            kernel32.GlobalUnlock(handle)
+            finally:
+                user32.CloseClipboard()
+            if chunks:
+                return "\n".join(chunks), ""
+            if opened:
+                return None, last_error or "ctypes: mở được clipboard nhưng không có text"
+    except Exception as exc:
+        last_error = f"{last_error}; ctypes:{exc}".strip("; ")
+    return None, last_error or "không đọc được clipboard"
+
+
+def _read_clipboard_via_powershell() -> tuple:
+    """Process mới đọc clipboard mà engine (không cửa sổ) thường không mở được."""
+    global _PS_CLIPBOARD_NOT_BEFORE
+    if os.name != "nt":
+        return None, "không phải Windows"
+    now = time.time()
+    with _PS_CLIPBOARD_LOCK:
+        if now < _PS_CLIPBOARD_NOT_BEFORE:
+            return None, "bỏ qua"
+        _PS_CLIPBOARD_NOT_BEFORE = now + 1.2
+    system_root = os.environ.get("SystemRoot") or r"C:\Windows"
+    powershell = os.path.join(system_root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    command = (
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
+        "Get-Clipboard -Raw"
+    )
+    try:
+        import subprocess
+
+        proc = subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            timeout=3,
+            creationflags=0x08000000,
+        )
+    except Exception as exc:
+        return None, f"Get-Clipboard lỗi: {exc}"
+    raw = proc.stdout or b""
+    if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
+        text = raw.decode("utf-16", errors="ignore")
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    text = text.replace("\x00", " ").strip()
+    if proc.returncode != 0 and not text:
+        err = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+        return None, f"Get-Clipboard exit={proc.returncode} {err[:160]}"
+    return (text or None), ""
+
+
+def _read_windows_clipboard(log_fn=None) -> Optional[str]:
+    """Đọc clipboard Windows. win32 rỗng thì đọc lại bằng PowerShell Get-Clipboard."""
+    text, err = _read_clipboard_via_win32()
+    if text:
+        return text
+    ps_text, ps_err = _read_clipboard_via_powershell()
+    if ps_err == "bỏ qua":
         return None
-    return "\n".join(chunks)
+    preview = (ps_text or "")[:180]
+    msg = (
+        f"Clipboard win32 không thấy text ({err}). "
+        f"Get-Clipboard len={len(ps_text or '')} {ps_err} preview={preview!r}"
+    )
+    if log_fn:
+        try:
+            log_fn(msg)
+        except Exception:
+            logger.info(msg)
+    else:
+        logger.info(msg)
+    return ps_text
 
 
 def _parse_reel_share_text(text: Optional[str]) -> tuple:
@@ -6303,7 +6322,7 @@ def extract_reels_post_url(
                         copied = True
                         _grant_clipboard()
                         focus_chrome_for_clipboard(driver, _log)
-                        before = _read_windows_clipboard()
+                        before = _read_windows_clipboard(_log)
                         _log(f"Clipboard trước Copy (len={len(before or '')}).")
                         try:
                             clicked = driver.execute_script(js_click_copy)
@@ -6314,7 +6333,7 @@ def extract_reels_post_url(
                         clip_deadline = time.time() + 4.0
                         clip = None
                         while time.time() < clip_deadline:
-                            raw = _read_windows_clipboard()
+                            raw = _read_windows_clipboard(_log)
                             if raw and raw != (before or ""):
                                 clip = raw
                                 kind, val = _parse_reel_share_text(raw)
