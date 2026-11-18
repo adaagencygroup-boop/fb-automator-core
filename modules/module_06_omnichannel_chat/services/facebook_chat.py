@@ -1,8 +1,9 @@
+import json
 import time
 import os
 import requests
 import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 from sqlalchemy.orm import Session
 
@@ -119,6 +120,213 @@ class FacebookChatService:
 
         return response_json
 
+    @staticmethod
+    def _extract_attachment_from_graph(att: Dict[str, Any], fallback_type: str = "file") -> Tuple[str, Optional[str]]:
+        img_data = att.get("image_data") if isinstance(att.get("image_data"), dict) else {}
+        video_data = att.get("video_data") if isinstance(att.get("video_data"), dict) else {}
+        audio_data = att.get("audio_data") if isinstance(att.get("audio_data"), dict) else {}
+        payload_data = att.get("payload") if isinstance(att.get("payload"), dict) else {}
+
+        att_url = (
+            att.get("file_url")
+            or img_data.get("url")
+            or img_data.get("preview_url")
+            or video_data.get("url")
+            or audio_data.get("url")
+            or payload_data.get("url")
+            or att.get("url")
+        )
+        mime = (att.get("mime_type") or att.get("type") or "").lower()
+        att_type = fallback_type
+        if "image" in mime or img_data:
+            att_type = "image"
+        elif "video" in mime or video_data:
+            att_type = "video"
+        elif "audio" in mime or audio_data:
+            att_type = "audio"
+        elif att.get("file_url"):
+            att_type = "file"
+        return att_type, att_url
+
+    async def _fetch_facebook_attachment_url(
+        self,
+        message_id: str,
+        page_access_token: str,
+        fallback_type: str = "file",
+    ) -> Tuple[str, Optional[str]]:
+        url = f"{FACEBOOK_BASE_URL}/{message_id}"
+        params = {
+            "fields": "attachments{id,mime_type,file_url,image_data,video_data,audio_data,type,name}",
+            "access_token": page_access_token,
+        }
+        for attempt in range(2):
+            try:
+                resp = await asyncio.to_thread(requests.get, url, params=params, timeout=15)
+                data = resp.json() if resp.content else {}
+                attachments = (data.get("attachments") or {}).get("data") or []
+                if attachments and isinstance(attachments, list):
+                    att_type, att_url = self._extract_attachment_from_graph(attachments[0], fallback_type)
+                    if att_url:
+                        return att_type, att_url
+            except Exception as e:
+                print(f"[Attachment CDN] Fetch failed for {message_id}: {e}")
+            if attempt == 0:
+                await asyncio.sleep(0.35)
+        return fallback_type, None
+
+    def _save_and_broadcast_attachment(
+        self,
+        page: Any,
+        page_id: str,
+        recipient_id: str,
+        message_id: str,
+        attachment_type: str,
+        media_url: str,
+        reply_to_message_id: Optional[str] = None,
+    ) -> None:
+        media_text = f"[{attachment_type}] {media_url}"
+        saved_msg = self.message_repo.save_message(
+            facebook_message_id=message_id,
+            page_id=page_id,
+            sender_id=recipient_id,
+            text=media_text,
+            timestamp=int(time.time() * 1000),
+            direction="outbound",
+            is_read=False,
+            reply_to_message_id=reply_to_message_id,
+        )
+
+        try:
+            self.conv_repo.upsert_conversation(
+                page_id=page_id,
+                customer_psid=recipient_id,
+                last_message=media_text,
+                last_message_at=saved_msg.created_at,
+                is_read=True,
+                is_replied=True,
+            )
+        except Exception as conv_err:
+            print(f"[Warning] Update conversation on attachment send error: {conv_err}")
+
+        asyncio.create_task(manager.broadcast_to_user(
+            page.facebook_user_id,
+            {
+                "type": "message",
+                "data": {
+                    "id": saved_msg.id,
+                    "facebook_message_id": saved_msg.facebook_message_id,
+                    "page_id": saved_msg.page_id,
+                    "sender_id": recipient_id,
+                    "text": saved_msg.text,
+                    "timestamp": int(saved_msg.created_at.timestamp() * 1000),
+                    "direction": "outbound",
+                    "reply_to_message_id": saved_msg.reply_to_message_id,
+                    "created_at": saved_msg.created_at.isoformat(),
+                },
+            },
+        ))
+
+    async def send_attachment_file(
+        self,
+        page_id: str,
+        recipient_id: str,
+        attachment_type: str,
+        file_bytes: bytes,
+        filename: str,
+        content_type: Optional[str] = None,
+        reply_to_message_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Gửi trực tiếp filedata lên Facebook Graph API (không lưu file trên ổ đĩa VPS/local)."""
+        page = self.page_repo.get_by_page_id(page_id)
+        if not page or not page.page_access_token:
+            raise ValueError(f"Page or page access token not found for Page ID {page_id}")
+
+        url = f"{FACEBOOK_BASE_URL}/me/messages"
+        form_data: Dict[str, str] = {
+            "recipient": json.dumps({"id": recipient_id}),
+            "message": json.dumps({
+                "attachment": {
+                    "type": attachment_type,
+                    "payload": {"is_reusable": True},
+                }
+            }),
+            "messaging_type": "RESPONSE",
+        }
+
+        if reply_to_message_id:
+            ref_msg = self.message_repo.get_by_id_or_fb_id(str(reply_to_message_id))
+            resolved_mid = ref_msg.facebook_message_id if (ref_msg and ref_msg.facebook_message_id) else reply_to_message_id
+            form_data["reply_to"] = json.dumps({"mid": resolved_mid})
+
+        params = {"access_token": page.page_access_token}
+        mime = content_type or "application/octet-stream"
+
+        def _post_multipart(data_payload: Dict[str, str]) -> Dict[str, Any]:
+            resp = requests.post(
+                url,
+                params=params,
+                data=data_payload,
+                files={"filedata": (filename or "attachment", file_bytes, mime)},
+                timeout=60,
+            )
+            return resp.json()
+
+        try:
+            response_json = await asyncio.to_thread(_post_multipart, form_data)
+            if "error" in response_json and "reply_to" in form_data:
+                del form_data["reply_to"]
+                response_json = await asyncio.to_thread(_post_multipart, form_data)
+        except Exception as e:
+            raise FacebookAPIError(f"Network error sending attachment file: {str(e)}")
+
+        self.auth_service.handle_api_errors(response_json)
+        message_id = response_json.get("message_id")
+        cdn_url = None
+
+        if message_id:
+            resolved_type, cdn_url = await self._fetch_facebook_attachment_url(
+                message_id, page.page_access_token, fallback_type=attachment_type
+            )
+            stored_url = cdn_url or f"facebook:{message_id}"
+            self._save_and_broadcast_attachment(
+                page=page,
+                page_id=page_id,
+                recipient_id=recipient_id,
+                message_id=message_id,
+                attachment_type=resolved_type,
+                media_url=stored_url,
+                reply_to_message_id=reply_to_message_id,
+            )
+
+        return {**response_json, "url": cdn_url}
+
+    async def refresh_message_media(self, message_id: str) -> Dict[str, Any]:
+        """Lấy lại URL CDN mới từ Facebook theo facebook_message_id khi link cũ hết hạn."""
+        msg = self.message_repo.get_by_id_or_fb_id(str(message_id))
+        if not msg or not msg.facebook_message_id:
+            raise ValueError("Message not found or missing facebook_message_id")
+
+        page = self.page_repo.get_by_page_id(msg.page_id)
+        if not page or not page.page_access_token:
+            raise ValueError(f"Page or page access token not found for Page ID {msg.page_id}")
+
+        resolved_type, fresh_url = await self._fetch_facebook_attachment_url(
+            msg.facebook_message_id, page.page_access_token
+        )
+        if not fresh_url:
+            raise FacebookAPIError("Could not resolve fresh attachment URL from Facebook")
+
+        msg.text = f"[{resolved_type}] {fresh_url}"
+        self.db.commit()
+        self.db.refresh(msg)
+        return {
+            "success": True,
+            "url": fresh_url,
+            "type": resolved_type,
+            "message_id": msg.id,
+            "facebook_message_id": msg.facebook_message_id,
+        }
+
     async def send_attachment_by_url(
         self,
         page_id: str,
@@ -175,47 +383,15 @@ class FacebookChatService:
         message_id = response_json.get("message_id")
 
         if message_id:
-            media_text = f"[{attachment_type}] {url_link}"
-            saved_msg = self.message_repo.save_message(
-                facebook_message_id=message_id,
+            self._save_and_broadcast_attachment(
+                page=page,
                 page_id=page_id,
-                sender_id=recipient_id,
-                text=media_text,
-                timestamp=int(time.time() * 1000),
-                direction="outbound",
-                is_read=False,
-                reply_to_message_id=reply_to_message_id
+                recipient_id=recipient_id,
+                message_id=message_id,
+                attachment_type=attachment_type,
+                media_url=url_link,
+                reply_to_message_id=reply_to_message_id,
             )
-
-            try:
-                self.conv_repo.upsert_conversation(
-                    page_id=page_id,
-                    customer_psid=recipient_id,
-                    last_message=media_text,
-                    last_message_at=saved_msg.created_at,
-                    is_read=True,
-                    is_replied=True
-                )
-            except Exception as conv_err:
-                print(f"[Warning] Update conversation on attachment send error: {conv_err}")
-
-            asyncio.create_task(manager.broadcast_to_user(
-                page.facebook_user_id,
-                {
-                    "type": "message",
-                    "data": {
-                        "id": saved_msg.id,
-                        "facebook_message_id": saved_msg.facebook_message_id,
-                        "page_id": saved_msg.page_id,
-                        "sender_id": recipient_id,
-                        "text": saved_msg.text,
-                        "timestamp": int(saved_msg.created_at.timestamp() * 1000),
-                        "direction": "outbound",
-                        "reply_to_message_id": saved_msg.reply_to_message_id,
-                        "created_at": saved_msg.created_at.isoformat()
-                    }
-                }
-            ))
 
         return response_json
 

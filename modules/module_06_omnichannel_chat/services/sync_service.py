@@ -452,6 +452,23 @@ class FacebookSyncService:
     async def send_attachment_by_url(self, page_id: str, recipient_id: str, attachment_type: str, url_link: str, reply_to_message_id: Optional[str] = None):
         return await self.chat_service.send_attachment_by_url(page_id, recipient_id, attachment_type, url_link, reply_to_message_id)
 
+    async def send_attachment_file(
+        self,
+        page_id: str,
+        recipient_id: str,
+        attachment_type: str,
+        file_bytes: bytes,
+        filename: str,
+        content_type: Optional[str] = None,
+        reply_to_message_id: Optional[str] = None,
+    ):
+        return await self.chat_service.send_attachment_file(
+            page_id, recipient_id, attachment_type, file_bytes, filename, content_type, reply_to_message_id
+        )
+
+    async def refresh_message_media(self, message_id: str):
+        return await self.chat_service.refresh_message_media(message_id)
+
     async def react_to_message(self, page_id: str, recipient_id: str, message_id: str, reaction: Optional[str]):
         return await self.chat_service.react_to_message(page_id, recipient_id, message_id, reaction)
 
