@@ -4798,6 +4798,7 @@ def extract_status_post_url(
                         break
                     if sheet.get("hasCopy"):
                         _grant_clipboard_permission()
+                        focus_chrome_for_clipboard(driver, _log)
                         before_clip = _read_clipboard_os()
                         _log(
                             f"Extract(share): clipboard trước Copy "
@@ -5688,6 +5689,32 @@ def _snapshot_profile_reel_ids(driver, uid: Optional[str] = None) -> list:
         return []
 
 
+def focus_chrome_for_clipboard(driver, log_fn=None) -> None:
+    """
+    Copy link của Facebook chỉ ghi clipboard khi cửa sổ Chrome đang được focus.
+    App desktop giữ foreground (Tauri), nên bấm Copy đóng menu nhưng clipboard vẫn rỗng.
+    Gọi trong lúc đang giữ khóa clipboard — chỉ một luồng copy tại một thời điểm.
+    """
+    try:
+        from core.browser.driver import bring_chrome_to_front
+
+        bring_chrome_to_front(driver, os_focus=True)
+    except Exception as exc:
+        if log_fn:
+            log_fn(f"Không đưa Chrome lên trước khi Copy: {exc}")
+    try:
+        driver.execute_cdp_cmd("Emulation.setFocusEmulationEnabled", {"enabled": True})
+    except Exception:
+        pass
+    time.sleep(0.35)
+    if log_fn:
+        try:
+            focused = bool(driver.execute_script("return !!document.hasFocus();"))
+        except Exception:
+            focused = None
+        log_fn(f"Chrome focus trước Copy: hasFocus={focused}")
+
+
 def _read_windows_clipboard() -> Optional[str]:
     """Đọc clipboard Windows (text + HTML). Không gọi navigator.clipboard."""
     chunks: List[str] = []
@@ -6272,6 +6299,7 @@ def extract_reels_post_url(
                         _log("Không lấy được khóa clipboard trong 60s — dừng, không đoán link.")
                         return None
                     try:
+                        focus_chrome_for_clipboard(driver, _log)
                         before = _read_windows_clipboard()
                         _log(f"Clipboard trước Copy (len={len(before or '')}).")
                         try:
