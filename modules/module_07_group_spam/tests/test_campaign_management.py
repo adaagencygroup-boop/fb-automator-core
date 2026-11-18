@@ -86,7 +86,7 @@ class FakeCloudDatabase:
         return []
 
     def execute(self, query, params=()):
-        if "UPDATE cloud_group_campaigns" in query:
+        if "DELETE FROM cloud_group_campaigns" in query:
             self.deleted = True
 
 

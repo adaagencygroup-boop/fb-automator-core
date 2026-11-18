@@ -142,10 +142,10 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
             if (active && chk) {
               if (chk.has_data) {
                 setHasDownloadedData(true);
-                try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch {}
+                try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
               } else if (chk.has_data === false && !(itemsRef.current || []).some((it) => it.status === "SUCCESS")) {
                 setHasDownloadedData(false);
-                try { localStorage.removeItem("fb_tiktok_has_data"); } catch {}
+                try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
               }
             }
           });
@@ -153,7 +153,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
         if (active) {
           addLog(`[${getUtc7Time()}] Đã Nạp Cấu Hình Tải Video TikTok Thành Công.`);
         }
-      } catch {}
+      } catch { }
       finally {
         if (active) {
           globalTikTokInitDone = true;
@@ -200,7 +200,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
       const numVideos = Math.max(1, parseInt(maxVideos, 10) || 1);
       localStorage.setItem("fb_tiktok_config", JSON.stringify({ downloadFolder, delaySec, maxVideos: numVideos, concurrency }));
       saveTikTokConfig({ download_folder: downloadFolder, max_videos: numVideos });
-    } catch {}
+    } catch { }
   }, [downloadFolder, delaySec, maxVideos, concurrency]);
   const handleSelectFolder = async () => {
     if (isPickingFolder || isActionLockedRef.current) return;
@@ -217,9 +217,9 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
         const hasData = Boolean(check && check.has_data);
         setHasDownloadedData(hasData);
         if (hasData) {
-          try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch {}
+          try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
         } else {
-          try { localStorage.removeItem("fb_tiktok_has_data"); } catch {}
+          try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
         }
         setDownloadFolder(res.folder);
         setSharedVideoFolder(res.folder);
@@ -236,7 +236,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
   };
   const handleFolderFileChange = async (e) => {
     setHasDownloadedData(false);
-    try { localStorage.removeItem("fb_tiktok_has_data"); } catch {}
+    try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
     const files = e.target.files;
     if (files && files.length > 0) {
       const first = files[0];
@@ -247,9 +247,9 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
         const hasData = Boolean(check && check.has_data);
         setHasDownloadedData(hasData);
         if (hasData) {
-          try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch {}
+          try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
         } else {
-          try { localStorage.removeItem("fb_tiktok_has_data"); } catch {}
+          try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
         }
         setDownloadFolder(rootPart);
         setFolderError(false);
@@ -306,7 +306,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
         const updated = list.map((p) => (String(p.page_id || p.id) === String(pageId) ? { ...p, tiktok_keyword: keyword, tiktok_url: link } : p));
         localStorage.setItem("fb_pages_cache", JSON.stringify(updated));
       }
-    } catch {}
+    } catch { }
   };
   const triggerDebouncedSave = (pageId, keyword, link) => {
     if (saveTimerMapRef.current[pageId]) {
@@ -357,9 +357,9 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
       const hasData = Boolean(check && check.has_data);
       setHasDownloadedData(hasData);
       if (!hasData) {
-        try { localStorage.removeItem("fb_tiktok_has_data"); } catch {}
+        try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
       } else {
-        try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch {}
+        try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
       }
     }
   };
@@ -386,9 +386,9 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
       const hasData = Boolean(check && check.has_data);
       setHasDownloadedData(hasData);
       if (!hasData) {
-        try { localStorage.removeItem("fb_tiktok_has_data"); } catch {}
+        try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
       } else {
-        try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch {}
+        try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
       }
     }
   };
@@ -466,12 +466,12 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
             setIsRunning(false);
             if (statusData.items.some((x) => x.status === "SUCCESS")) {
               setHasDownloadedData(true);
-              try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch {}
+              try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
             } else if (downloadFolder && downloadFolder.trim()) {
               checkFolderData(downloadFolder).then((chk) => {
                 if (chk && chk.has_data) {
                   setHasDownloadedData(true);
-                  try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch {}
+                  try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
                 }
               });
             }
@@ -591,12 +591,12 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
             setIsRunning(false);
             if (statusData.items.some((x) => x.status === "SUCCESS")) {
               setHasDownloadedData(true);
-              try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch {}
+              try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
             } else if (downloadFolder && downloadFolder.trim()) {
               checkFolderData(downloadFolder).then((chk) => {
                 if (chk && chk.has_data) {
                   setHasDownloadedData(true);
-                  try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch {}
+                  try { localStorage.setItem("fb_tiktok_has_data", "true"); } catch { }
                 }
               });
             }
@@ -646,7 +646,7 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
       const res = await clearAllVideos("TIKTOK", downloadFolder);
       if (res && (res.success || res.deleted_count !== undefined)) {
         setHasDownloadedData(false);
-        try { localStorage.removeItem("fb_tiktok_has_data"); } catch {}
+        try { localStorage.removeItem("fb_tiktok_has_data"); } catch { }
         setItems((prev) => prev.map((p) => ({ ...p, status: "PENDING", message: "" })));
         addLog(`[${getUtc7Time()}] Đã Xóa Sạch Toàn Bộ Video TikTok Đã Tải Khỏi Ổ Đĩa (${res.deleted_count || 0} Tệp). Thư Mục Đã Được Mở Khóa.`);
         alert("Đã Xóa Sạch Toàn Bộ Video Đã Tải Thành Công!");
@@ -712,13 +712,12 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
         </CardHeader>
         <CardContent className="p-4 space-y-3">
           {(isConfigLoading || isAuthChecking || openingLogin || !authStatus.connected) && (
-            <div className={`flex items-center justify-between p-2.5 rounded-lg border text-xs font-normal ${
-              isConfigLoading
+            <div className={`flex items-center justify-between p-2.5 rounded-lg border text-xs font-normal ${isConfigLoading
                 ? "border-blue-200 bg-blue-50/60 dark:border-blue-900/40 dark:bg-blue-950/20 text-blue-700 dark:text-blue-300"
                 : (isAuthChecking || openingLogin)
-                ? "border-amber-300 bg-amber-50/70 dark:border-amber-900/60 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300"
-                : "border-amber-300 bg-amber-50/70 dark:border-amber-900/60 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300"
-            }`}>
+                  ? "border-amber-300 bg-amber-50/70 dark:border-amber-900/60 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300"
+                  : "border-amber-300 bg-amber-50/70 dark:border-amber-900/60 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300"
+              }`}>
               <div className="flex items-center gap-2">
                 {isConfigLoading ? (
                   <Loader2 className="w-4 h-4 animate-spin shrink-0 text-blue-600" />
@@ -731,10 +730,10 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                   {isConfigLoading
                     ? "Đang Nạp Cấu Hình Tải Video TikTok Từ Hệ Thống... Vui Lòng Đợi Trong Giây Lát."
                     : isAuthChecking
-                    ? "Đang Kiểm Tra Trạng Thái Đăng Nhập Tài Khoản TikTok..."
-                    : openingLogin
-                    ? "Đang Chờ Đăng Nhập Tài Khoản TikTok Trên Trình Duyệt Chrome... Vui Lòng Hoàn Tất Đăng Nhập."
-                    : "Chưa Đăng Nhập Tài Khoản TikTok. Nút Kích Hoạt Tải Video Bắt Buộc Phải Có Tài Khoản TikTok Đăng Nhập."}
+                      ? "Đang Kiểm Tra Trạng Thái Đăng Nhập Tài Khoản TikTok..."
+                      : openingLogin
+                        ? "Đang Chờ Đăng Nhập Tài Khoản TikTok Trên Trình Duyệt Chrome... Vui Lòng Hoàn Tất Đăng Nhập."
+                        : "Chưa Đăng Nhập Tài Khoản TikTok. Nút Kích Hoạt Tải Video Bắt Buộc Phải Có Tài Khoản TikTok Đăng Nhập."}
                 </span>
               </div>
               {!isConfigLoading && !isAuthChecking && !openingLogin && !authStatus.connected && (
@@ -923,11 +922,10 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                                 type="button"
                                 disabled={isRunning || isStarting}
                                 onClick={() => handleOpenEditModal(it)}
-                                className={`h-7 px-1.5 shrink-0 text-xs font-normal shadow-none gap-0.5 ${
-                                  (it.keyword || "").split(/[\n,;]+/).filter(Boolean).length > 1
+                                className={`h-7 px-1.5 shrink-0 text-xs font-normal shadow-none gap-0.5 ${(it.keyword || "").split(/[\n,;]+/).filter(Boolean).length > 1
                                     ? "text-blue-600 border-blue-200 bg-blue-50/50 hover:bg-blue-100 dark:border-blue-800 dark:text-blue-400"
                                     : "text-muted-foreground hover:text-blue-600 hover:border-blue-300 dark:hover:border-blue-800"
-                                }`}
+                                  }`}
                                 title="Mở Cửa Sổ Nhập Từ Khóa & Link"
                               >
                                 {(() => {
@@ -966,11 +964,10 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                                 type="button"
                                 disabled={isRunning || isStarting}
                                 onClick={() => handleOpenEditModal(it)}
-                                className={`h-7 px-1.5 shrink-0 text-xs font-normal shadow-none gap-0.5 ${
-                                  (it.link || "").split(/[\n,;]+/).filter(Boolean).length > 1
+                                className={`h-7 px-1.5 shrink-0 text-xs font-normal shadow-none gap-0.5 ${(it.link || "").split(/[\n,;]+/).filter(Boolean).length > 1
                                     ? "text-blue-600 border-blue-200 bg-blue-50/50 hover:bg-blue-100 dark:border-blue-800 dark:text-blue-400"
                                     : "text-muted-foreground hover:text-blue-600 hover:border-blue-300 dark:hover:border-blue-800"
-                                }`}
+                                  }`}
                                 title="Mở Cửa Sổ Nhập Link & Từ Khóa"
                               >
                                 {(() => {
@@ -1043,10 +1040,10 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                       {isConfigLoading
                         ? "Nút Kích Hoạt Đang Bị Khóa Vì Hệ Thống Đang Nạp Cấu Hình."
                         : (isAuthChecking || openingLogin)
-                        ? "Nút Kích Hoạt Đang Bị Khóa Vì Đang Chờ Đăng Nhập TikTok."
-                        : !authStatus.connected
-                        ? "Nút Kích Hoạt Đang Bị Khóa Vì Chưa Đăng Nhập Tài Khoản TikTok (Bắt Buộc Đăng Nhập Để Kích Hoạt)."
-                        : "Nút Kích Hoạt Đang Bị Khóa Vì Chưa Cài Đặt Thư Mục Lưu Video (Bắt Buộc Chọn Thư Mục Lưu)."}
+                          ? "Nút Kích Hoạt Đang Bị Khóa Vì Đang Chờ Đăng Nhập TikTok."
+                          : !authStatus.connected
+                            ? "Nút Kích Hoạt Đang Bị Khóa Vì Chưa Đăng Nhập Tài Khoản TikTok (Bắt Buộc Đăng Nhập Để Kích Hoạt)."
+                            : "Nút Kích Hoạt Đang Bị Khóa Vì Chưa Cài Đặt Thư Mục Lưu Video (Bắt Buộc Chọn Thư Mục Lưu)."}
                     </span>
                   </div>
                 )}
@@ -1110,15 +1107,14 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                 return (
                   <div
                     key={i}
-                    className={`px-2.5 py-1.5 rounded border text-[11px] font-normal flex items-start gap-2 leading-relaxed transition-colors ${
-                      isSuccess
+                    className={`px-2.5 py-1.5 rounded border text-[11px] font-normal flex items-start gap-2 leading-relaxed transition-colors ${isSuccess
                         ? "bg-emerald-50/70 dark:bg-emerald-950/20 text-emerald-900 dark:text-emerald-300 border-emerald-200/80 dark:border-emerald-800/40"
                         : isError
-                        ? "bg-rose-50/70 dark:bg-rose-950/20 text-rose-900 dark:text-rose-300 border-rose-200/80 dark:border-rose-800/40"
-                        : isWarning
-                        ? "bg-amber-50/70 dark:bg-amber-950/20 text-amber-900 dark:text-amber-300 border-amber-200/80 dark:border-amber-800/40"
-                        : "bg-slate-50/80 dark:bg-zinc-900/60 text-slate-800 dark:text-zinc-200 border-slate-200/80 dark:border-zinc-800"
-                    }`}
+                          ? "bg-rose-50/70 dark:bg-rose-950/20 text-rose-900 dark:text-rose-300 border-rose-200/80 dark:border-rose-800/40"
+                          : isWarning
+                            ? "bg-amber-50/70 dark:bg-amber-950/20 text-amber-900 dark:text-amber-300 border-amber-200/80 dark:border-amber-800/40"
+                            : "bg-slate-50/80 dark:bg-zinc-900/60 text-slate-800 dark:text-zinc-200 border-slate-200/80 dark:border-zinc-800"
+                      }`}
                   >
                     <span className={`select-none font-normal shrink-0 ${isSuccess ? "text-[#27c93f]" : isError ? "text-[#ff5f56]" : isWarning ? "text-[#eab308]" : "text-slate-400"}`}>➜</span>
                     {timePart && (
@@ -1126,15 +1122,14 @@ export default function TikTokDownloadTab({ pages = [], loading = false, onPageU
                         [{timePart}]
                       </span>
                     )}
-                    <span className={`px-1 py-0.2 rounded text-[9.5px] font-normal shrink-0 uppercase tracking-tight ${
-                      isSuccess
+                    <span className={`px-1 py-0.2 rounded text-[9.5px] font-normal shrink-0 uppercase tracking-tight ${isSuccess
                         ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300"
                         : isError
-                        ? "bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300"
-                        : isWarning
-                        ? "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300"
-                        : "bg-slate-200 text-slate-700 dark:bg-zinc-800 dark:text-zinc-300"
-                    }`}>
+                          ? "bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300"
+                          : isWarning
+                            ? "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300"
+                            : "bg-slate-200 text-slate-700 dark:bg-zinc-800 dark:text-zinc-300"
+                      }`}>
                       {isSuccess ? "Thành Công" : isError ? "Thất Bại" : isWarning ? "Đang Chạy" : "Thông Tin"}
                     </span>
                     <span className="flex-1 font-normal break-words">{bodyPart}</span>

@@ -128,16 +128,11 @@ async def list_campaigns(
 
     items = []
     for row in rows:
-        st = row.get("latest_status") or "CHƯA CHẠY"
-        # Status filtering in memory if status filter selected
+        raw_status = str(row.get("latest_status") or "").upper()
+        st = "COMPLETED" if raw_status == "COMPLETED" else "FAILED"
         if status != "ALL":
-            if status == "COMPLETED" and st != "COMPLETED":
-                continue
-            if status == "STOPPED" and st != "STOPPED":
-                continue
-            if status == "FAILED" and st != "FAILED":
-                continue
-            if status == "RUNNING" and st not in {"RUNNING", "QUEUED", "SCHEDULED"}:
+            normalized_filter = "COMPLETED" if str(status).upper() in {"COMPLETED", "SUCCESS"} else "FAILED"
+            if st != normalized_filter:
                 continue
 
         items.append({
@@ -286,8 +281,8 @@ async def delete_campaign(
     campaign_id: str,
     owner: str | None = Depends(scoped_owner),
 ):
-    """Xóa mềm chiến dịch: ẩn khỏi danh sách nhưng giữ lịch sử tác vụ (CAMP-DEL-01)."""
-    where = "campaign_id = ? AND deleted_at IS NULL"
+    """Xóa cứng chiến dịch và toàn bộ lịch sử chạy/log liên quan (cascade)."""
+    where = "campaign_id = ?"
     params: list[Any] = [campaign_id]
     if owner:
         where += " AND owner_key = ?"
@@ -305,16 +300,13 @@ async def delete_campaign(
         delete_where += " AND owner_key = ?"
         delete_params.append(owner)
     db.execute(
-        "UPDATE cloud_group_campaigns "
-        "SET deleted_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC', "
-        "updated_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC' "
-        f"WHERE {delete_where}",
+        f"DELETE FROM cloud_group_campaigns WHERE {delete_where}",
         tuple(delete_params),
     )
 
     return {
         "success": True,
-        "message": f"Đã xóa mềm chiến dịch \"{campaign['name']}\"",
+        "message": f"Đã xóa vĩnh viễn chiến dịch \"{campaign['name']}\"",
         "campaign_id": campaign_id,
     }
 
