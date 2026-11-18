@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/lib/toast";
+import { PageHeader, StatCard } from "../shared/components";
 import { getGroupHistoryRecords, openGroupHistoryRecord } from "../service";
 
 const taskStatusLabel = (status) => ({
@@ -206,10 +207,7 @@ export default function GroupHistoryModule() {
     setOpeningRecordId(item.id);
     try {
       const response = await openGroupHistoryRecord(item.id);
-      toast.success(
-        response?.message || `Đang mở bài bằng tài khoản ${item.account_uid}`,
-        "ĐANG MỞ CHROME PROFILE",
-      );
+      toast.success(response?.message || `Đang mở bài bằng tài khoản ${item.account_uid}`, "ĐANG MỞ CHROME PROFILE");
     } catch (error) {
       toast.error(error.message || "Không thể mở bài bằng Chrome profile của tài khoản", "LỖI MỞ BÀI");
     } finally {
@@ -220,92 +218,44 @@ export default function GroupHistoryModule() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3.5">
-          <div className="flex size-11 shrink-0 items-center justify-center rounded-full border border-blue-100 bg-blue-50 text-primary">
-            <Clock className="size-6 text-primary" />
-          </div>
-          <div>
-            <h1 className="font-heading text-xl font-bold tracking-tight text-slate-800">
-              Lịch sử hoạt động Spam Group
-            </h1>
-            <p className="mt-0.5 text-xs text-slate-400">
-              Tra cứu lịch sử đăng bài và bình luận trong các nhóm Facebook, theo dõi kết quả xác minh và liên kết bài viết liên quan.
-            </p>
-          </div>
-        </div>
-
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={handleExportCSV}
-          disabled={!records.length}
-          className="border-slate-200 text-xs text-slate-700 hover:bg-slate-50"
-        >
-          <Download className="mr-1.5 size-3.5" /> Xuất file CSV
-        </Button>
-      </div>
+      <PageHeader
+        heading="Lịch sử hoạt động Spam Group"
+        desc="Tra cứu lịch sử đăng bài và bình luận trong các nhóm Facebook, theo dõi kết quả xác minh và liên kết bài viết liên quan."
+        button={{
+          label: "Xuất file CSV",
+          icon: <Download className="mr-1.5 size-3.5" />,
+          variant: "outline",
+          disabled: !records.length,
+          onClick: handleExportCSV,
+          className: "border-slate-200 text-sm py-3 px-4 text-slate-700 hover:bg-slate-50",
+        }}
+      />
 
       {/* 3 Thẻ thống kê (Chương 3 SRS - tính theo đúng bộ lọc) */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        {/* Thẻ 1: Tổng tác vụ */}
-        <Card className="border-slate-200 bg-white p-5 shadow-xs">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Tổng tác vụ
-            </p>
-            <span className="flex size-7 items-center justify-center rounded-lg bg-blue-50 text-primary">
-              <Layers className="size-4" />
-            </span>
-          </div>
-          <p className="mt-2 text-2xl font-bold text-slate-800">{stats.total}</p>
-          <p className="mt-1 text-[11px] text-slate-400">
-            Khớp với bộ lọc hiện tại
-          </p>
-        </Card>
-
-        {/* Thẻ 2: Thành công */}
-        <Card className="border-slate-200 bg-white p-5 shadow-xs">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold uppercase tracking-wider text-emerald-600">
-              Thành công
-            </p>
-            <span className="flex size-7 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
-              <CheckCircle2 className="size-4" />
-            </span>
-          </div>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-800">{stats.success}</span>
-            <span className="text-xs font-bold text-emerald-600">
-              ({stats.success_rate})
-            </span>
-          </div>
-          <p className="mt-1 text-[11px] text-slate-400">
-            Tác vụ đã hoàn tất và xác nhận
-          </p>
-        </Card>
-
-        {/* Thẻ 3: Thất bại */}
-        <Card className="border-slate-200 bg-white p-5 shadow-xs">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold uppercase tracking-wider text-rose-500">
-              Thất bại
-            </p>
-            <span className="flex size-7 items-center justify-center rounded-lg bg-rose-50 text-rose-500">
-              <XCircle className="size-4" />
-            </span>
-          </div>
-          <div className="mt-2 flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-800">{stats.failed}</span>
-            <span className="text-xs font-bold text-rose-500">
-              ({stats.failed_rate})
-            </span>
-          </div>
-          <p className="mt-1 text-[11px] text-slate-400">
-            Bị giới hạn hoặc phát sinh lỗi
-          </p>
-        </Card>
+        <StatCard
+          title="Tổng tác vụ"
+          value={stats.total}
+          description="Khớp với bộ lọc hiện tại"
+          icon={<Layers className="size-4" />}
+          tone="primary"
+        />
+        <StatCard
+          title="Thành công"
+          value={stats.success}
+          badge={`(${stats.success_rate})`}
+          description="Tác vụ đã hoàn tất và xác nhận"
+          icon={<CheckCircle2 className="size-4" />}
+          tone="emerald"
+        />
+        <StatCard
+          title="Thất bại"
+          value={stats.failed}
+          badge={`(${stats.failed_rate})`}
+          description="Bị giới hạn hoặc phát sinh lỗi"
+          icon={<XCircle className="size-4" />}
+          tone="rose"
+        />
       </div>
 
       {/* Bộ lọc tìm kiếm (Chương 3 SRS 3.2.1) */}
@@ -501,11 +451,10 @@ export default function GroupHistoryModule() {
                     </td>
                     <td className="px-3 py-3">
                       <span
-                        className={`inline-flex rounded px-2 py-0.5 text-[10px] font-bold ${
-                          item.action_type === "POST"
-                            ? "bg-blue-50 text-blue-700 border border-blue-200"
-                            : "bg-purple-50 text-purple-700 border border-purple-200"
-                        }`}
+                        className={`inline-flex rounded px-2 py-0.5 text-[10px] font-bold ${item.action_type === "POST"
+                          ? "bg-blue-50 text-blue-700 border border-blue-200"
+                          : "bg-purple-50 text-purple-700 border border-purple-200"
+                          }`}
                       >
                         {item.action_type === "POST" ? "Đăng bài" : "Bình luận"}
                       </span>
@@ -550,7 +499,7 @@ export default function GroupHistoryModule() {
                       {item.result}
                     </td>
                     <td className="px-3 py-3 text-right">
-                      {item.result_url ? (
+                      {item.status !== "FAILED" && item.result_url ? (
                         <button
                           type="button"
                           onClick={() => handleOpenResult(item)}
@@ -558,18 +507,10 @@ export default function GroupHistoryModule() {
                           className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-primary shadow-2xs hover:bg-slate-50"
                           title={`Mở bằng Chrome profile của UID ${item.account_uid}`}
                         >
-                          {openingRecordId === item.id ? (
-                            <RotateCcw className="size-3 animate-spin" />
-                          ) : (
-                            <ExternalLink className="size-3" />
-                          )}
+                          {openingRecordId === item.id ? <RotateCcw className="size-3 animate-spin" /> : <ExternalLink className="size-3" />}
                           <span>{openingRecordId === item.id ? "Đang mở" : "Mở bài viết"}</span>
                         </button>
-                      ) : (
-                        <span className="text-[10px] italic text-slate-300" title="Không có liên kết được lưu">
-                          Không có liên kết
-                        </span>
-                      )}
+                      ) : null}
                     </td>
                   </tr>
                 ))

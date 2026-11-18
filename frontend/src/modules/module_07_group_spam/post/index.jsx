@@ -17,7 +17,7 @@ import {
   uploadGroupMedia,
 } from "../service";
 import { INITIAL_POST } from "../shared/constants";
-import { normalizeAccount } from "../shared/components";
+import { PageHeader, normalizeAccount } from "../shared/components";
 import useSavedApis from "../shared/useSavedApis";
 import CampaignInfoSection from "./components/CampaignInfoSection";
 import GroupAccountSection from "./components/GroupAccountSection";
@@ -856,25 +856,23 @@ export default function GroupPostModule({ actionType = "POST" }) {
 
   return (
     <div
-      className="space-y-6"
+      className="space-y-3"
       onClickCapture={markDraftButtonEdit}
       onChangeCapture={markDraftUserEdit}
       onInputCapture={markDraftUserEdit}
     >
       {/* Header */}
-      <div>
-        <h1 className="font-heading text-2xl font-bold tracking-tight text-slate-800 uppercase">
-          {isComment ? "Spam Group – Bình luận" : "Spam Group – Đăng bài"}
-        </h1>
-        <p className="mt-1 text-sm text-slate-400">
-          {isComment
+      <PageHeader
+        heading={isComment ? "Spam Group – Bình luận" : "Spam Group – Đăng bài"}
+        desc={
+          isComment
             ? "Tự động bình luận vào bài viết đầu tiên của các nhóm Facebook theo từ khoá hoặc từ file link nhóm."
-            : "Tự động tìm kiếm và đăng bài vào các hội nhóm Facebook theo từ khoá hoặc từ file link nhóm."}
-        </p>
-      </div>
+            : "Tự động tìm kiếm và đăng bài vào các hội nhóm Facebook theo từ khoá hoặc từ file link nhóm."
+        }
+      />
 
       {/* Bước 1: Tạo chiến dịch */}
-      <div inert={isCampaignActive} aria-disabled={isCampaignActive} className={isCampaignActive ? "opacity-60" : undefined}>
+      <div inert={isCampaignActive} aria-disabled={isCampaignActive} className={`space-y-3 ${isCampaignActive ? "opacity-60" : ""}`}>
       <CampaignInfoSection
         campaignName={campaignName}
         setCampaignName={setCampaignName}
