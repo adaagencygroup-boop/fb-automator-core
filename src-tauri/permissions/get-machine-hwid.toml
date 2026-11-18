@@ -1,4 +1,0 @@
-[[permission]]
-identifier = "allow-get-machine-hwid"
-description = "Đọc HWID máy local cho màn đăng nhập, không chờ Local Engine"
-commands.allow = ["get_machine_hwid"]
