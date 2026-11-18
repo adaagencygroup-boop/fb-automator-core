@@ -4,7 +4,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
-const rootPkg = require(path.resolve(__dirname, "../package.json"));
+const rootPkg = require(path.resolve(__dirname, "../tauri/package.json"));
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

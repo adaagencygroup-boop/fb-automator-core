@@ -3,7 +3,7 @@
 .venv
 venv
 frontend
-src-tauri
+tauri
 devops
 **/__pycache__
 **/*.pyc
