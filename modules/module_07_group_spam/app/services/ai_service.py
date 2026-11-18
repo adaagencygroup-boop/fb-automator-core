@@ -186,11 +186,6 @@ PROVIDERS: dict[str, AIProvider] = {
 }
 
 
-def register_provider(name: str, provider: AIProvider) -> None:
-    """Đăng ký thêm AI provider mới mà không cần sửa call_model hay test_connection."""
-    PROVIDERS[name.strip().lower()] = provider
-
-
 def _get_provider(provider_name: str) -> AIProvider:
     return PROVIDERS.get(provider_name, PROVIDERS["gemini"])
 

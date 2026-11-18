@@ -1,7 +1,7 @@
 "use client";
 
-import GroupPostModule from "../post";
+import GroupCampaignWorkspace from "../workspace";
 
 export default function GroupCommentModule() {
-  return <GroupPostModule actionType="COMMENT" />;
+  return <GroupCampaignWorkspace actionType="COMMENT" />;
 }

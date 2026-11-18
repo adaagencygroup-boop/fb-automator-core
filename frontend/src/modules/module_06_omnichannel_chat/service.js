@@ -122,7 +122,7 @@ export function formatConversationSnippet(raw, isOutbound, customerName) {
  */
 export function friendlyFbError(message) {
   const m = String(message || "");
-  if (/token expired|revoked|session has expired|access token|oauthexception|authentication failed/i.test(m)) {
+  if (/token expired|revoked|session has expired|error validating access token|invalid oauth access token|authentication failed/i.test(m)) {
     return "Token Facebook đã hết hạn hoặc bị thu hồi. Hãy đồng bộ lại token cho tài khoản ở Quản lý tài khoản rồi thử lại.";
   }
   if (/econnrefused|local engine|không thể kết nối|network error|timeout/i.test(m)) {
@@ -574,14 +574,19 @@ export async function replyToComment(objectId, pageId, text, attachmentUrl) {
   });
 }
 
-/** Tải tệp/ảnh lên server lấy URL công khai */
+/** Tải tệp/ảnh lên server lấy URL công khai (dùng cho bình luận cần attachment_url) */
 export async function uploadMedia(file) {
   const form = new FormData();
   form.append("file", file);
-  const res = await api.post("/api/facebook/upload-media", form, {
+  const res = await api.post(mediaApiUrl("/api/facebook/upload-media"), form, {
     headers: { "Content-Type": undefined },
   });
   return res?.url;
+}
+
+/** Lấy lại URL CDN mới từ Facebook khi link ảnh/video cũ hết hạn */
+export async function refreshMessageMedia(messageId) {
+  return api.post(`/api/facebook/messages/${encodeURIComponent(messageId)}/refresh-media`);
 }
 
 /** Trả lời riêng (vào hộp thư) cho người bình luận */

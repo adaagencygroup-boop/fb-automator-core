@@ -63,7 +63,6 @@ class CloudHistoryStore:
                         name = EXCLUDED.name,
                         description = EXCLUDED.description,
                         action_type = EXCLUDED.action_type,
-                        deleted_at = NULL,
                         updated_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
                     WHERE cloud_group_campaigns.owner_key = EXCLUDED.owner_key
                     """,
@@ -82,7 +81,7 @@ class CloudHistoryStore:
                         (run_id, campaign_id, run_number, owner_key, campaign_name,
                          action_type, config_json, status, total_planned,
                          total_success, total_failed, total_skipped, synced_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, 'QUEUED',
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, 'FAILED',
                             0, 0, 0, 0, CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
                     """,
                     (
@@ -128,7 +127,6 @@ class CloudHistoryStore:
                     name = EXCLUDED.name,
                     description = EXCLUDED.description,
                     action_type = EXCLUDED.action_type,
-                    deleted_at = NULL,
                     updated_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
                 WHERE cloud_group_campaigns.owner_key = EXCLUDED.owner_key
                 RETURNING campaign_id
@@ -172,7 +170,8 @@ class CloudHistoryStore:
                     metadata["run_id"], metadata["campaign_id"],
                     metadata["run_number"], metadata["owner_key"],
                     metadata["campaign_name"], metadata["action_type"],
-                    metadata["config_json"], metadata["status"],
+                    metadata["config_json"],
+                    "COMPLETED" if str(metadata.get("status") or "").upper() == "COMPLETED" else "FAILED",
                     metadata["total_planned"], metadata["total_success"],
                     metadata["total_failed"], metadata["total_skipped"],
                     metadata["started_at"], metadata["finished_at"],

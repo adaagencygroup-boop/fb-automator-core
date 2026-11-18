@@ -1,3 +1,5 @@
+
+
 """Đăng một bài lên Fanpage bằng composer Facebook.
 
 Các bước bấm khung viết, nhập chữ, gắn ảnh và bấm Đăng được lấy từ
@@ -8,8 +10,10 @@ import io
 import logging
 import os
 import random
+import re
 import threading
 import time
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from selenium import webdriver
 from selenium.webdriver.common.action_chains import ActionChains
@@ -360,7 +364,8 @@ def post_on_page(driver: webdriver.Chrome, page_url: str, post_content: str, ima
             _pause(2.0, 3.0, should_stop, deadline)
             dismiss_not_now(driver)
         _pause(2.0, 3.0, should_stop, deadline)
-        return True
+        post_url = _extract_published_post_url(driver, page_url, post_content, page_id, should_stop, deadline)
+        return post_url or True
     except PostInterrupted as exc:
         if exc.kind == "stopped":
             _close_composer(driver)
@@ -428,4 +433,169 @@ def _click_final_post(driver: webdriver.Chrome, should_stop=None, deadline=None)
 
     logger.warning("Hết thời gian chờ [aria-label=Post] (đã thử Next %s lần)", next_clicks)
     return False
+
+
+_FIND_POST_LINK_JS = r"""
+const snippet = (arguments[0] || "").trim().toLowerCase();
+const norm = (s) => String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+const isPostHref = (raw) => {
+  if (!raw || typeof raw !== "string") return false;
+  const h = raw.trim();
+  if (!h || h.startsWith("javascript:")) return false;
+  if (/\/(posts|videos|reel|reels)\//i.test(h)) return true;
+  if (/(?:permalink|story)\.php\?[^"']*story_fbid=/i.test(h)) return true;
+  if (/\/share\/[pvr]\//i.test(h)) return true;
+  if (/\/photo\/?\?[^"']*fbid=/i.test(h)) return true;
+  if (/pfbid[A-Za-z0-9]{10,}/i.test(h) && !/profile\.php\?id=\d+$/i.test(h)) return true;
+  return false;
+};
+
+// 1. Check toast / notification link ("View post" / "Xem bài viết")
+for (const a of Array.from(document.querySelectorAll("a[href]"))) {
+  const txt = norm(a.innerText || a.textContent || a.getAttribute("aria-label"));
+  const href = a.href || a.getAttribute("href") || "";
+  if ((txt.includes("view post") || txt.includes("xem bài viết")) && isPostHref(href)) {
+    return href;
+  }
+}
+
+// 2. Find matching article cards on the page feed
+const findCard = (el) => {
+  let cur = el;
+  for (let i = 0; i < 8 && cur; i++) {
+    if (cur.getAttribute && cur.getAttribute("role") === "article") return cur;
+    if (cur.hasAttribute && cur.hasAttribute("aria-posinset")) return cur;
+    if (cur.querySelector && cur.querySelector("[data-ad-rendering-role='story_message'], [data-ad-preview='message']")) return cur;
+    cur = cur.parentElement;
+  }
+  return el;
+};
+
+const cards = [];
+const seen = new Set();
+const pushCard = (el) => {
+  if (!el) return;
+  const c = findCard(el);
+  if (!c || seen.has(c)) return;
+  if (c.closest && c.closest('[role="dialog"]')) return;
+  seen.add(c);
+  cards.push(c);
+};
+
+Array.from(document.querySelectorAll('[role="article"], div[data-pagelet*="FeedUnit"], [data-ad-rendering-role="story_message"], [data-ad-preview="message"]')).forEach(pushCard);
+
+let targetCards = cards.slice(0, 5);
+if (snippet && snippet.length >= 8) {
+  const shortHint = snippet.slice(0, Math.min(40, snippet.length));
+  const matched = targetCards.filter((c) => norm(c.innerText || c.textContent).includes(shortHint));
+  if (matched.length > 0) targetCards = matched;
+}
+
+// Trigger hover/focus on links inside target cards so Comet populates lazy hrefs
+for (const card of targetCards) {
+  for (const a of Array.from(card.querySelectorAll("a"))) {
+    try {
+      a.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+      a.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+      a.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+      a.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
+    } catch (e) {}
+  }
+}
+
+for (const card of targetCards) {
+  for (const a of Array.from(card.querySelectorAll("a[href]"))) {
+    const href = a.href || a.getAttribute("href") || "";
+    if (isPostHref(href)) return href;
+  }
+}
+return "";
+"""
+
+
+def _clean_post_permalink(raw_url: str) -> str:
+    if not raw_url:
+        return ""
+    raw = str(raw_url).split("#", 1)[0].strip()
+    if raw.startswith("/"):
+        raw = f"https://www.facebook.com{raw}"
+    try:
+        parsed = urlparse(raw)
+        path = (parsed.path or "").rstrip("/")
+        qs = parse_qs(parsed.query)
+        if "permalink.php" in path or "story.php" in path:
+            params = {}
+            for k in ("story_fbid", "id", "fbid"):
+                if k in qs and qs[k]:
+                    params[k] = qs[k][0]
+            if params.get("story_fbid") or params.get("fbid"):
+                name = "permalink.php" if "permalink.php" in path else "story.php"
+                return f"https://www.facebook.com/{name}?{urlencode(params)}"
+            return ""
+        if "/photo" in path and qs.get("fbid"):
+            return f"https://www.facebook.com/photo/?fbid={qs['fbid'][0]}"
+        if any(seg in path for seg in ("/posts/", "/videos/", "/reel/", "/reels/", "/share/p/", "/share/v/", "/share/r/")):
+            return f"https://www.facebook.com{path}"
+        m_pfbid = re.search(r"(pfbid[A-Za-z0-9]+)", raw)
+        if m_pfbid:
+            return f"https://www.facebook.com/{m_pfbid.group(1)}"
+    except Exception:
+        pass
+    return ""
+
+
+def _extract_published_post_url(driver: webdriver.Chrome, page_url: str, post_content: str, page_id: str, should_stop, deadline) -> str:
+    """Lấy đường link bài viết vừa đăng trên Fanpage (DOM feed hoặc Share -> Copy link)."""
+    snippet = re.sub(r"\s+", " ", (post_content or "").strip())[:60]
+
+    def _scan_dom(wait_secs: float) -> str:
+        end_t = min(deadline, time.monotonic() + wait_secs)
+        while time.monotonic() < end_t:
+            if should_stop():
+                return ""
+            try:
+                raw_href = driver.execute_script(_FIND_POST_LINK_JS, snippet)
+                cleaned = _clean_post_permalink(raw_href)
+                if cleaned:
+                    return cleaned
+            except Exception:
+                pass
+            time.sleep(0.8)
+        return ""
+
+    found = _scan_dom(5.0)
+    if found:
+        logger.info("Đã lấy được link bài viết từ DOM: %s", found)
+        return found
+
+    try:
+        from modules.module_03_acc_farm.post_flow import extract_status_post_url
+
+        res = extract_status_post_url(
+            driver,
+            uid=page_id,
+            content_hint=post_content,
+            status_text=post_content,
+            poll_seconds=6.0,
+        )
+        if res and getattr(res, "is_permalink", False) and getattr(res, "url", None):
+            logger.info("Đã lấy được link bài viết qua Share: %s", res.url)
+            return str(res.url)
+    except Exception as exc:
+        logger.debug("Không lấy được link bài viết qua Share: %s", exc)
+
+    # Nếu feed chưa tự cập nhật bài mới, tải lại trang Page rồi quét lần nữa
+    if not should_stop() and time.monotonic() + 6.0 < deadline:
+        try:
+            driver.get(page_url)
+            _pause(2.0, 3.0, should_stop, deadline)
+            found = _scan_dom(4.0)
+            if found:
+                logger.info("Đã lấy được link bài viết sau khi tải lại Page: %s", found)
+                return found
+        except Exception:
+            pass
+    return ""
+
 

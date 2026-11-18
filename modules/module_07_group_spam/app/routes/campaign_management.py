@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from core.database.connection import db
 from modules.module_02_account_manager.api.router import scoped_owner
 from ..services.campaign import _friendly_automation_error
+from ..services.local_media import delete_campaign_media
 
 router = APIRouter(tags=["Module 07: Campaigns & History"])
 
@@ -43,11 +44,11 @@ async def list_campaigns(
     from_date: str | None = Query(None, description="Từ ngày (YYYY-MM-DD)"),
     to_date: str | None = Query(None, description="Đến ngày (YYYY-MM-DD)"),
     action_type: str = Query("ALL", description="Loại tác vụ: ALL, POST, COMMENT"),
-    status: str = Query("ALL", description="Trạng thái: ALL, COMPLETED, STOPPED, FAILED, RUNNING"),
+    status: str = Query("ALL", description="Trạng thái: ALL, COMPLETED, FAILED"),
     owner: str | None = Depends(scoped_owner),
 ):
     """Lấy danh sách các chiến dịch đã lưu và thực thi."""
-    where_clauses = ["c.deleted_at IS NULL"]
+    where_clauses = ["1=1"]
     params: list[Any] = []
 
     if owner:
@@ -128,16 +129,11 @@ async def list_campaigns(
 
     items = []
     for row in rows:
-        st = row.get("latest_status") or "CHƯA CHẠY"
-        # Status filtering in memory if status filter selected
+        raw_status = str(row.get("latest_status") or "").upper()
+        st = "COMPLETED" if raw_status == "COMPLETED" else "FAILED"
         if status != "ALL":
-            if status == "COMPLETED" and st != "COMPLETED":
-                continue
-            if status == "STOPPED" and st != "STOPPED":
-                continue
-            if status == "FAILED" and st != "FAILED":
-                continue
-            if status == "RUNNING" and st not in {"RUNNING", "QUEUED", "SCHEDULED"}:
+            normalized_filter = "COMPLETED" if str(status).upper() in {"COMPLETED", "SUCCESS"} else "FAILED"
+            if st != normalized_filter:
                 continue
 
         items.append({
@@ -243,7 +239,7 @@ async def get_campaign_rerun_config(
     owner: str | None = Depends(scoped_owner),
 ):
     """Nạp cấu hình của lượt chạy trước cho chức năng Chạy lại (CAMP-RUN-01)."""
-    where = "campaign_id = ? AND deleted_at IS NULL"
+    where = "campaign_id = ?"
     params: list[Any] = [campaign_id]
     if owner:
         where += " AND owner_key = ?"
@@ -286,8 +282,8 @@ async def delete_campaign(
     campaign_id: str,
     owner: str | None = Depends(scoped_owner),
 ):
-    """Xóa mềm chiến dịch: ẩn khỏi danh sách nhưng giữ lịch sử tác vụ (CAMP-DEL-01)."""
-    where = "campaign_id = ? AND deleted_at IS NULL"
+    """Xóa cứng chiến dịch và toàn bộ lịch sử chạy/log liên quan (cascade)."""
+    where = "campaign_id = ?"
     params: list[Any] = [campaign_id]
     if owner:
         where += " AND owner_key = ?"
@@ -305,16 +301,14 @@ async def delete_campaign(
         delete_where += " AND owner_key = ?"
         delete_params.append(owner)
     db.execute(
-        "UPDATE cloud_group_campaigns "
-        "SET deleted_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC', "
-        "updated_at = CURRENT_TIMESTAMP AT TIME ZONE 'UTC' "
-        f"WHERE {delete_where}",
+        f"DELETE FROM cloud_group_campaigns WHERE {delete_where}",
         tuple(delete_params),
     )
+    delete_campaign_media(campaign_id)
 
     return {
         "success": True,
-        "message": f"Đã xóa mềm chiến dịch \"{campaign['name']}\"",
+        "message": f"Đã xóa vĩnh viễn chiến dịch \"{campaign['name']}\"",
         "campaign_id": campaign_id,
     }
 
@@ -405,7 +399,7 @@ async def get_group_history_records(
     }
 
     # 2. Danh sách chiến dịch để đổ vào dropdown filter
-    campaign_filter = "deleted_at IS NULL"
+    campaign_filter = "1=1"
     campaign_filter_params: tuple[Any, ...] = ()
     if owner:
         campaign_filter += " AND owner_key = ?"

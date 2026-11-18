@@ -1,7 +1,7 @@
-from config.constants import DATA_DIR
+from config.constants import UPLOADS_DIR
 
-UPLOAD_MEDIA_DIR = (DATA_DIR / "module_07_group_spam" / "uploads").resolve()
-MEDIA_CACHE_DIR = (DATA_DIR / "module_07_group_spam" / "cache").resolve()
+UPLOAD_MEDIA_DIR = (UPLOADS_DIR / "module_07_group_spam").resolve()
+MEDIA_CACHE_DIR = UPLOAD_MEDIA_DIR
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4", ".mov", ".avi", ".mkv"}
 ALLOWED_MIME_PREFIXES = ("image/", "video/")
 MAX_FILE_COUNT = 20

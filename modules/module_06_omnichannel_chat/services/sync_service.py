@@ -452,6 +452,23 @@ class FacebookSyncService:
     async def send_attachment_by_url(self, page_id: str, recipient_id: str, attachment_type: str, url_link: str, reply_to_message_id: Optional[str] = None):
         return await self.chat_service.send_attachment_by_url(page_id, recipient_id, attachment_type, url_link, reply_to_message_id)
 
+    async def send_attachment_file(
+        self,
+        page_id: str,
+        recipient_id: str,
+        attachment_type: str,
+        file_bytes: bytes,
+        filename: str,
+        content_type: Optional[str] = None,
+        reply_to_message_id: Optional[str] = None,
+    ):
+        return await self.chat_service.send_attachment_file(
+            page_id, recipient_id, attachment_type, file_bytes, filename, content_type, reply_to_message_id
+        )
+
+    async def refresh_message_media(self, message_id: str):
+        return await self.chat_service.refresh_message_media(message_id)
+
     async def react_to_message(self, page_id: str, recipient_id: str, message_id: str, reaction: Optional[str]):
         return await self.chat_service.react_to_message(page_id, recipient_id, message_id, reaction)
 
@@ -526,27 +543,15 @@ def _update_env_media_url(public_url: str):
 
 
 def sync_app_webhook(force: bool = False) -> Dict[str, Any]:
-    """Tự động phát hiện ngrok và đồng bộ Webhook URL của Facebook App lên Meta Graph API & cập nhật .env"""
+    """Đồng bộ Webhook URL lên Meta Graph API theo domain cấu hình trong .env (PUBLIC_MEDIA_BASE_URL)."""
     global _last_synced_url
-    public_url = None
-    try:
-        r = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=2).json()
-        tunnels = r.get("tunnels", [])
-        for t in tunnels:
-            u = t.get("public_url")
-            if u and u.startswith("https://"):
-                public_url = u
-                break
-    except Exception:
-        pass
+    public_url = (
+        os.getenv("PUBLIC_MEDIA_BASE_URL") or os.getenv("NEXT_PUBLIC_MEDIA_BASE_URL") or ""
+    ).strip().rstrip("/")
 
-    if not public_url:
-        public_url = os.getenv("PUBLIC_MEDIA_BASE_URL") or os.getenv("NEXT_PUBLIC_MEDIA_BASE_URL")
+    if not public_url or not public_url.startswith("https://"):
+        return {"status": "skipped", "reason": "PUBLIC_MEDIA_BASE_URL not configured with https://"}
 
-    if not public_url:
-        return {"status": "skipped", "reason": "No public URL found"}
-
-    public_url = public_url.rstrip("/")
     target_callback = f"{public_url}/api/facebook/webhook"
 
     if not force and _last_synced_url == public_url:
@@ -571,10 +576,9 @@ def sync_app_webhook(force: bool = False) -> Dict[str, Any]:
 
             if curr_callback == target_callback:
                 _last_synced_url = public_url
-                _update_env_media_url(public_url)
                 return {"status": "already_synced", "public_url": public_url}
 
-        print(f"[Facebook Webhook] Phat hien ngrok URL moi: {public_url}. Dang tu dong dong bo Webhook len Meta...")
+        print(f"[Facebook Webhook] Dang dong bo Webhook URL tu .env len Meta: {target_callback}...")
         requests.post(sub_url, data={
             "object": "page",
             "callback_url": target_callback,
@@ -592,7 +596,6 @@ def sync_app_webhook(force: bool = False) -> Dict[str, Any]:
         }, timeout=10)
 
         _last_synced_url = public_url
-        _update_env_media_url(public_url)
         print(f"[Facebook Webhook] DA DONG BO THANH CONG Webhook URL len Meta: {target_callback}")
         return {"status": "success", "public_url": public_url, "callback_url": target_callback}
     except Exception as e:
@@ -600,21 +603,12 @@ def sync_app_webhook(force: bool = False) -> Dict[str, Any]:
         return {"status": "error", "message": str(e)}
 
 
-async def watch_and_sync_webhook_loop(poll_interval: int = 10):
-    """Vong lap chay ngam tu dong:
-    - O moi truong Local/Dev: Tham do ngrok local API (cong 4040) moi 10s.
-      Bat ky luc nao chay lai 'ngrok http 28129', he thong se tu dong bat URL ngrok moi va cap nhat Meta.
-    - O moi truong Deploy/Production (co ten mien rieng co dinh): Tu dong dong bo ten mien that len Meta va giu on dinh, khong can ngrok.
-    """
-    print("[Facebook Webhook] Da kich hoat tien trinh tu dong theo doi Webhook -> Meta.")
+async def watch_and_sync_webhook_loop(poll_interval: int = 3600):
+    """Đồng bộ Webhook URL từ biến môi trường PUBLIC_MEDIA_BASE_URL lên Meta và kiểm tra định kỳ."""
+    print("[Facebook Webhook] Da kich hoat tien trinh tu dong dong bo Webhook (.env) -> Meta.")
     while True:
         try:
             await asyncio.to_thread(sync_app_webhook)
-            prod_url = os.getenv("PUBLIC_MEDIA_BASE_URL", "")
-            if prod_url.startswith("https://") and "ngrok" not in prod_url and "localtunnel" not in prod_url:
-                # O moi truong production co ten mien that, giu on dinh va chi kiem tra 1 tieng/lan
-                await asyncio.sleep(3600)
-                continue
         except Exception:
             pass
         await asyncio.sleep(poll_interval)

@@ -78,6 +78,7 @@ const NEVER_CACHE = [
   /\/status(\?|$)/,
   /\/sync-status(\?|$)/,                // getSyncStatus (module 06)
   /\/api\/post\/status/,                // module 03 đăng bài
+  /\/api\/post\/media\/file/,           // file ảnh nhị phân, không cache JSON
   /\/api\/pages\/jobs\//,               // getJobStatus (module 05) — job đăng bài
   /\/sync-jobs\//,                      // module 05 job đồng bộ page
   /\/api\/pages\/tiktok\/auth-status/,  // getTikTokAuthStatus (module 05)

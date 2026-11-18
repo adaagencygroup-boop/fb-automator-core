@@ -1,1 +1,1 @@
-export { default } from "../post/components/CampaignInfoSection";
+export { default } from "../workspace/components/CampaignInfoSection";

@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import CustomSelect from "@/components/ui/custom-select";
 import { Search, Flag, Copy, Check, RefreshCw, Video, Bot, Film } from "lucide-react";
-import { getHistory, getHistoryStats, getTerminalLogs } from "../service";
+import { getHistory, getHistoryStats } from "../service";
 import Pagination from "@/components/ui/pagination";
 function PageLogo({ avatar, name }) {
   const [hasError, setHasError] = useState(false);
@@ -79,39 +79,39 @@ function getActivityBadge(type) {
   const t = (type || "").toUpperCase();
   if (t === "TIKTOK") {
     return (
-      <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal border border-pink-200 bg-pink-50/70 text-pink-700 dark:border-pink-900/60 dark:bg-pink-950/30 dark:text-pink-400">
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal max-w-full border border-pink-200 bg-pink-50/70 text-pink-700 dark:border-pink-900/60 dark:bg-pink-950/30 dark:text-pink-400">
         <Video className="w-3 h-3 shrink-0 text-pink-600 dark:text-pink-400" />
-        Tải Video TikTok
+        <span className="truncate">Tải Video TikTok</span>
       </span>
     );
   }
   if (t === "YOUTUBE") {
     return (
-      <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal border border-red-200 bg-red-50/70 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-400">
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal max-w-full border border-red-200 bg-red-50/70 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-400">
         <Film className="w-3 h-3 shrink-0 text-red-600 dark:text-red-400" />
-        Tải Video YouTube
+        <span className="truncate">Tải Video YouTube</span>
       </span>
     );
   }
   if (t === "AI") {
     return (
-      <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal border border-blue-200 bg-blue-50/70 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-400">
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal max-w-full border border-blue-200 bg-blue-50/70 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-400">
         <Bot className="w-3 h-3 shrink-0 text-blue-600 dark:text-blue-400" />
-        Đăng Bài AI
+        <span className="truncate">Đăng Bài AI</span>
       </span>
     );
   }
   if (t === "REEL" || t === "REELS") {
     return (
-      <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal border border-purple-200 bg-purple-50/70 text-purple-700 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-400">
+      <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal max-w-full border border-purple-200 bg-purple-50/70 text-purple-700 dark:border-purple-900/60 dark:bg-purple-950/30 dark:text-purple-400">
         <Film className="w-3 h-3 shrink-0 text-purple-600 dark:text-purple-400" />
-        Đăng Video Reels
+        <span className="truncate">Đăng Video Reels</span>
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal border border-border bg-muted/50 text-foreground">
-      {type || "Hoạt Động"}
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap px-2 py-0.5 rounded text-[11px] font-normal max-w-full border border-border bg-muted/50 text-foreground">
+      <span className="truncate">{type || "Hoạt Động"}</span>
     </span>
   );
 }
@@ -142,26 +142,39 @@ export default function HistoryTab({ onSelectPost }) {
   const [selectedDetail, setSelectedDetail] = useState(null);
   const [detailCopied, setDetailCopied] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
-  const [terminalCopied, setTerminalCopied] = useState(false);
-  const loadStats = async () => {
-    const data = await getHistoryStats();
+  const [refreshing, setRefreshing] = useState(false);
+  const loadStats = async (fresh = true) => {
+    const data = await getHistoryStats(fresh);
     if (data) setStats(data);
   };
-  const loadHistory = async () => {
+  const loadHistory = async (fresh = true) => {
     setLoading(true);
     try {
-      const data = await getHistory(activeTab === "ALL" ? "" : activeTab, searchTerm, statusFilter);
+      const data = await getHistory(activeTab === "ALL" ? "" : activeTab, searchTerm, statusFilter, 200, 0, fresh);
       setHistoryItems(Array.isArray(data) ? data : []);
     } finally {
       setLoading(false);
     }
   };
+  const handleRefresh = async () => {
+    if (loading || refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        loadStats(true),
+        loadHistory(true),
+        new Promise((resolve) => setTimeout(resolve, 500))
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
   useEffect(() => {
-    loadStats();
+    loadStats(true);
   }, []);
   useEffect(() => {
     setCurrentPage(1);
-    loadHistory();
+    loadHistory(true);
   }, [activeTab, statusFilter, searchTerm]);
   const totalPages = Math.max(1, Math.ceil(historyItems.length / pageSize));
   const paginatedItems = useMemo(() => {
@@ -173,15 +186,6 @@ export default function HistoryTab({ onSelectPost }) {
       navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {}
-  };
-  const handleCopyTerminal = async () => {
-    try {
-      const res = await getTerminalLogs("ALL", 500);
-      const textToCopy = res && res.full_text ? res.full_text : "Chưa Có Dữ Liệu Terminal Mới.";
-      await navigator.clipboard.writeText(textToCopy);
-      setTerminalCopied(true);
-      setTimeout(() => setTerminalCopied(false), 2000);
     } catch {}
   };
   const statList = [
@@ -199,12 +203,9 @@ export default function HistoryTab({ onSelectPost }) {
           <p className="text-xs text-muted-foreground">Theo Dõi Chi Tiết Toàn Bộ Lịch Sử Đăng Bài AI, Reels Và Tải Video TikTok, YouTube.</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={handleCopyTerminal} className="gap-1.5 h-8 text-xs font-normal border border-border hover:bg-muted text-foreground rounded shadow-none">
-            {terminalCopied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-muted-foreground" />}
-            <span>{terminalCopied ? "Đã Sao Chép Log!" : "Sao Chép Terminal Log"}</span>
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => { loadStats(); loadHistory(); }} disabled={loading} className="gap-1.5 h-8 text-xs font-normal border border-border hover:bg-muted text-foreground rounded shadow-none">
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Làm Mới
+          <Button size="sm" variant="outline" onClick={handleRefresh} disabled={loading || refreshing} className="gap-1.5 h-8 text-xs font-normal border border-border hover:bg-muted text-foreground rounded shadow-none">
+            <RefreshCw className={`w-3.5 h-3.5 transition-transform ${(loading || refreshing) ? "animate-spin" : ""}`} />
+            <span>{refreshing ? "Đang Làm Mới..." : "Làm Mới"}</span>
           </Button>
         </div>
       </div>
@@ -258,16 +259,16 @@ export default function HistoryTab({ onSelectPost }) {
               </div>
             </div>
           </div>
-          <Table className="table-fixed min-w-[920px]">
+          <Table className="table-fixed w-full">
               <TableHeader>
                 <TableRow className="bg-muted/50">
-                  <TableHead className="w-14 text-center text-xs font-medium">STT</TableHead>
-                  <TableHead className="text-xs font-medium w-36">Thời Gian</TableHead>
-                  <TableHead className="text-xs font-medium w-40 text-center">Hoạt Động</TableHead>
-                  <TableHead className="text-xs font-medium w-44">Fanpage</TableHead>
-                  <TableHead className="text-xs font-medium">Nội Dung Nhật Ký</TableHead>
-                  <TableHead className="text-center text-xs font-medium w-28">Trạng Thái</TableHead>
-                  <TableHead className="text-right text-xs font-medium pr-4 w-28">Thao Tác</TableHead>
+                  <TableHead className="w-[5%] text-center text-xs font-medium px-2">STT</TableHead>
+                  <TableHead className="w-[15%] text-xs font-medium px-2">Thời Gian</TableHead>
+                  <TableHead className="w-[15%] text-xs font-medium text-center px-2">Hoạt Động</TableHead>
+                  <TableHead className="w-[18%] text-xs font-medium px-2">Fanpage</TableHead>
+                  <TableHead className="w-[23%] text-xs font-medium px-2">Nội Dung Nhật Ký</TableHead>
+                  <TableHead className="w-[12%] text-center text-xs font-medium px-2">Trạng Thái</TableHead>
+                  <TableHead className="w-[12%] text-right text-xs font-medium pr-3 pl-2">Thao Tác</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -288,40 +289,43 @@ export default function HistoryTab({ onSelectPost }) {
                   paginatedItems.map((it, idx) => {
                     const rowNum = (currentPage - 1) * pageSize + idx + 1;
                     const msgTitle = formatLogMessage(it);
+                    const accInfo = it.account_name || (it.account_uid ? `UID: ${it.account_uid}` : "");
                     return (
                       <TableRow key={`hist_${it.post_type || 'act'}_${it.id || rowNum}_${idx}`} className="hover:bg-muted/30">
-                        <TableCell className="text-center text-xs font-mono text-muted-foreground">{rowNum}</TableCell>
-                        <TableCell className="text-xs font-mono text-muted-foreground whitespace-nowrap">
+                        <TableCell className="text-center text-xs font-mono text-muted-foreground px-2 truncate">{rowNum}</TableCell>
+                        <TableCell className="text-xs font-mono text-muted-foreground px-2 truncate" title={formatDateTimeUtc7(it.posted_at)}>
                           {formatDateTimeUtc7(it.posted_at)}
                         </TableCell>
-                        <TableCell className="text-center">
+                        <TableCell className="text-center px-2 overflow-hidden">
                           {getActivityBadge(it.post_type)}
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="px-2 overflow-hidden">
                           <div className="flex items-center gap-2 min-w-0">
                             <PageLogo avatar={it.avatar} name={it.page_name} />
                             <div className="min-w-0 flex-1">
-                              <span className="text-xs font-medium text-foreground block truncate">{it.page_name || "Fanpage"}</span>
-                              <span className="text-[10px] text-muted-foreground font-mono block truncate">{it.account_name || (it.account_uid ? `UID: ${it.account_uid}` : "")}</span>
+                              <span className="text-xs font-medium text-foreground block truncate" title={it.page_name || "Fanpage"}>{it.page_name || "Fanpage"}</span>
+                              {accInfo && (
+                                <span className="text-[10px] text-muted-foreground font-mono block truncate" title={accInfo}>{accInfo}</span>
+                              )}
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="px-2 overflow-hidden">
                           <div className="w-full min-w-0 space-y-0.5">
-                            <p className="text-xs font-medium text-foreground line-clamp-1">{msgTitle}</p>
+                            <p className="text-xs font-medium text-foreground truncate" title={msgTitle}>{msgTitle}</p>
                             {it.title && it.title !== msgTitle && (
-                              <p className="text-[11px] text-muted-foreground line-clamp-1">{it.title}</p>
+                              <p className="text-[11px] text-muted-foreground truncate" title={it.title}>{it.title}</p>
                             )}
                             {it.caption && it.caption !== it.title && (
-                              <span className="text-[10px] text-muted-foreground font-mono block truncate">ID / Chi Tiết: {it.caption}</span>
+                              <span className="text-[10px] text-muted-foreground font-mono block truncate" title={`ID / Chi Tiết: ${it.caption}`}>ID / Chi Tiết: {it.caption}</span>
                             )}
                           </div>
                         </TableCell>
-                        <TableCell className="text-center">
+                        <TableCell className="text-center px-2 overflow-hidden">
                           {getStatusBadge(it.status)}
                         </TableCell>
-                        <TableCell className="text-right pr-4">
-                          <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs font-normal border border-border hover:bg-muted text-foreground rounded shadow-none" onClick={() => setSelectedDetail(it)}>Xem Chi Tiết</Button>
+                        <TableCell className="text-right pr-3 pl-2 overflow-hidden">
+                          <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs font-normal border border-border hover:bg-muted text-foreground rounded shadow-none max-w-full truncate" onClick={() => setSelectedDetail(it)}>Xem Chi Tiết</Button>
                         </TableCell>
                       </TableRow>
                     );

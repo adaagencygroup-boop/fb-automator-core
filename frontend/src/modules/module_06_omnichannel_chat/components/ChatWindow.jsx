@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import {
   Image as ImageIcon,
@@ -20,7 +21,7 @@ import {
 } from "lucide-react";
 import { MaskIcon } from "@/components/icons/MaskIcon";
 import { CONVERSATION_TAGS, REACTIONS, REPLY_WINDOW_MS } from "../constants";
-import { displayMediaUrl } from "../service";
+import { displayMediaUrl, refreshMessageMedia } from "../service";
 import { useVoiceRecorder } from "../hooks/useVoiceRecorder";
 import EmojiPickerPanel from "./EmojiPickerPanel";
 import GiphyPicker from "./GiphyPicker";
@@ -190,15 +191,18 @@ const previewOf = (m) =>
 /* ------------------------------------------------------------------ */
 
 /** Nút mở menu / bảng chọn nhỏ; tự đóng khi bấm ra ngoài hoặc nhấn Esc */
-function Dropdown({ trigger, children, panelClassName, label }) {
+function Dropdown({ trigger, children, panelClassName, label, usePortal = false, alignRight = false }) {
   const [open, setOpen] = useState(false);
+  const [portalPos, setPortalPos] = useState(null);
   const rootRef = useRef(null);
+  const panelRef = useRef(null);
   const close = useCallback(() => setOpen(false), []);
 
   useEffect(() => {
     if (!open) return undefined;
     const onPointerDown = (e) => {
-      if (!rootRef.current?.contains(e.target)) close();
+      if (rootRef.current?.contains(e.target) || panelRef.current?.contains(e.target)) return;
+      close();
     };
     const onKeyDown = (e) => {
       if (e.key === "Escape") close();
@@ -211,21 +215,61 @@ function Dropdown({ trigger, children, panelClassName, label }) {
     };
   }, [open, close]);
 
+  useLayoutEffect(() => {
+    if (!open || !usePortal || typeof window === "undefined") {
+      setPortalPos(null);
+      return;
+    }
+    const updatePosition = () => {
+      const triggerEl = rootRef.current;
+      const panelEl = panelRef.current;
+      if (!triggerEl || !panelEl) return;
+      const rect = triggerEl.getBoundingClientRect();
+      const pw = panelEl.offsetWidth || 220;
+      const ph = panelEl.offsetHeight || 44;
+
+      // Ưu tiên mở lên trên nếu phía dưới bị chật (vd. tin nhắn cuối sát thanh cảnh báo / khung nhập)
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const openUp = spaceBelow < ph + 64 && rect.top >= ph + 12;
+      const top = openUp
+        ? Math.max(8, rect.top - ph - 6)
+        : Math.min(window.innerHeight - ph - 8, rect.bottom + 6);
+
+      const rawLeft = alignRight ? rect.right - pw : rect.left;
+      const left = Math.max(8, Math.min(window.innerWidth - pw - 8, rawLeft));
+      setPortalPos({ top, left });
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, usePortal, alignRight]);
+
+  const panelNode = open ? (
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-label={label}
+      style={usePortal ? (portalPos ? { top: portalPos.top, left: portalPos.left } : { top: -9999, left: -9999 }) : undefined}
+      className={cn(
+        usePortal
+          ? "fixed z-[9999] bg-white border border-slate-200 rounded-xl shadow-lg shadow-slate-900/15"
+          : "absolute z-30 bg-white border border-slate-200 rounded-xl shadow-lg shadow-slate-900/10",
+        panelClassName,
+      )}
+    >
+      {children(close)}
+    </div>
+  ) : null;
+
   return (
     <div ref={rootRef} className="relative">
       {trigger({ open, toggle: () => setOpen((o) => !o) })}
-      {open && (
-        <div
-          role="dialog"
-          aria-label={label}
-          className={cn(
-            "absolute z-30 bg-white border border-slate-200 rounded-xl shadow-lg shadow-slate-900/10",
-            panelClassName,
-          )}
-        >
-          {children(close)}
-        </div>
-      )}
+      {open && (usePortal && typeof document !== "undefined" ? createPortal(panelNode, document.body) : panelNode)}
     </div>
   );
 }
@@ -446,7 +490,9 @@ function MessageActions({ message, outgoing, onReply, onReact }) {
     >
       <Dropdown
         label="Tuỳ chọn tin nhắn"
-        panelClassName={cn("top-full mt-1 w-40 p-1.5", outgoing ? "right-0" : "left-0")}
+        usePortal
+        alignRight={outgoing}
+        panelClassName="w-40 p-1.5"
         trigger={({ open, toggle }) => (
           <IconButton label="Khác" aria-expanded={open} onClick={toggle} className={btn}>
             <Icon name="moreDots" />
@@ -481,7 +527,9 @@ function MessageActions({ message, outgoing, onReply, onReact }) {
       </IconButton>
       <Dropdown
         label="Bày tỏ cảm xúc"
-        panelClassName={cn("top-full mt-1 rounded-full px-1.5 py-1 flex gap-0.5", outgoing ? "right-0" : "left-0")}
+        usePortal
+        alignRight={outgoing}
+        panelClassName="rounded-full px-1.5 py-1 flex gap-0.5"
         trigger={({ open, toggle }) => (
           <IconButton label="Bày tỏ cảm xúc" aria-expanded={open} onClick={toggle} className={btn}>
             <Icon name="react" />
@@ -516,25 +564,47 @@ function MessageActions({ message, outgoing, onReply, onReact }) {
 
 function MessageBody({ message, outgoing, radius }) {
   const { attachment } = message;
-  // Hiển thị qua engine local thay vì URL tunnel (ngrok chặn request từ trình duyệt)
-  const mediaUrl = attachment ? displayMediaUrl(attachment.url) : "";
+  const [refreshedUrl, setRefreshedUrl] = useState(null);
+  const refreshTriedRef = useRef(false);
+
+  useEffect(() => {
+    setRefreshedUrl(null);
+    refreshTriedRef.current = false;
+  }, [message.id, attachment?.url]);
+
+  const mediaUrl = refreshedUrl || (attachment ? displayMediaUrl(attachment.url) : "");
+  const handleMediaError = async () => {
+    if (refreshTriedRef.current) return;
+    const raw = String(attachment?.url || "");
+    if (!raw || raw.startsWith("blob:") || raw.startsWith("data:")) return;
+    const targetId = message.facebookMessageId || message.id;
+    if (!targetId) return;
+    refreshTriedRef.current = true;
+    try {
+      const res = await refreshMessageMedia(targetId);
+      if (res?.url) setRefreshedUrl(res.url);
+    } catch {
+      // Bỏ qua nếu tin quá cũ hoặc token không còn quyền
+    }
+  };
+
   const bubbleColor = outgoing ? "bg-[#5821F5] text-white" : "bg-[#F0F2F5] text-[#050505]";
   return (
     <>
       {attachment?.type === "image" && (
         <a href={mediaUrl} target="_blank" rel="noreferrer" className={cn("block overflow-hidden border border-slate-200", radius, FOCUS)}>
           {/* eslint-disable-next-line @next/next/no-img-element -- ảnh khách gửi / ảnh tạm khi chọn tệp */}
-          <img src={mediaUrl} alt={attachment.name || "Hình ảnh"} className="block max-h-60 max-w-full object-cover bg-slate-100" />
+          <img src={mediaUrl} alt={attachment.name || "Hình ảnh"} referrerPolicy="no-referrer" onError={handleMediaError} className="block max-h-60 max-w-full object-cover bg-slate-100" />
         </a>
       )}
       {attachment?.type === "audio" && (
         <div className={cn("px-2 py-2", bubbleColor, radius)}>
-          <audio src={mediaUrl} controls preload="metadata" className="block h-9 w-56 max-w-full" />
+          <audio src={mediaUrl} controls preload="metadata" onError={handleMediaError} className="block h-9 w-56 max-w-full" />
         </div>
       )}
       {attachment?.type === "video" && (
         <div className={cn("overflow-hidden border border-slate-200", radius)}>
-          <video src={mediaUrl} controls preload="metadata" className="block max-h-60 max-w-full bg-slate-900" />
+          <video src={mediaUrl} controls preload="metadata" onError={handleMediaError} className="block max-h-60 max-w-full bg-slate-900" />
         </div>
       )}
       {attachment && !["image", "audio", "video"].includes(attachment.type) && (

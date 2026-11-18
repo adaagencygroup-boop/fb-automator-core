@@ -397,39 +397,18 @@ async def send_attachment_file(
     db: Session = Depends(get_db)
 ):
     sync_service = FacebookSyncService(db)
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    filename = f"{int(time.time())}_{file.filename}"
-    filepath = os.path.join(UPLOAD_DIR, filename)
-
     file_bytes = await file.read()
-    with open(filepath, "wb") as buffer:
-        buffer.write(file_bytes)
-
-    local_file_url = f"/uploads/{quote(filename)}"  # ten file co dau cach/ngoac -> phai encode
-    public_url = f"{PUBLIC_MEDIA_BASE_URL}{local_file_url}"
-
     try:
-        from modules.module_06_omnichannel_chat.services.storage_service import upload_file_bytes
-        stored_url = await asyncio.to_thread(
-            upload_file_bytes,
-            file_bytes,
-            filename,
-            file.content_type
-        )
-        if stored_url:
-            public_url = stored_url
-    except Exception as store_err:
-        print(f"[Media Storage] {store_err}")
-
-    try:
-        res = await sync_service.send_attachment_by_url(
+        res = await sync_service.send_attachment_file(
             page_id=page_id,
             recipient_id=recipient_id,
             attachment_type=attachment_type,
-            url_link=public_url,
-            reply_to_message_id=reply_to_message_id
+            file_bytes=file_bytes,
+            filename=file.filename or "attachment",
+            content_type=file.content_type,
+            reply_to_message_id=reply_to_message_id,
         )
-        return {"success": True, "data": res, "url": public_url}
+        return {"success": True, "data": res, "url": res.get("url")}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -485,6 +464,20 @@ async def send_attachment_url(
         return {"success": True, "data": res}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/messages/{message_id}/refresh-media")
+async def refresh_message_media(
+    message_id: str,
+    db: Session = Depends(get_db)
+):
+    sync_service = FacebookSyncService(db)
+    try:
+        return await sync_service.refresh_message_media(message_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/messages/{message_id}/react")
 async def react_message(
