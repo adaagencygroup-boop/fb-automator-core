@@ -14,6 +14,8 @@ import { usePersistentBoolean } from "@/lib/usePersistentBoolean";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { MiniProgress } from "@/components/MiniProgress";
 import { UnsavedChangesProvider, useUnsavedChanges } from "@/components/UnsavedChangesContext";
+import { canAccessNav, nextLicenseExpiry } from "@/lib/module-access.mjs";
+import ModuleLockedView from "@/components/ModuleLockedView";
 
 // Khung "Nhật ký hệ thống realtime" ở cuối màn hình — đang ẩn. Đổi thành true để hiện lại.
 const SHOW_SYSTEM_LOG = false;
@@ -50,6 +52,18 @@ function Workspace({ session, children }) {
     return () => window.removeEventListener("beforeunload", warnBeforeClose);
   }, []);
   const activeTab = findNavItemByPath(pathname)?.id ?? null;
+  const [licenseTick, setLicenseTick] = useState(0);
+  const licenseNow = Date.now();
+  const { user } = session;
+  const moduleAllowed = canAccessNav(user, activeTab, licenseNow);
+
+  useEffect(() => {
+    const now = Date.now();
+    const expiry = nextLicenseExpiry(user, now);
+    if (expiry === null) return undefined;
+    const timer = setTimeout(() => setLicenseTick((tick) => tick + 1), Math.min(expiry - now + 1, 2147483647));
+    return () => clearTimeout(timer);
+  }, [user, licenseTick]);
 
   const [engineOnline, setEngineOnline] = useState(false);
   const [logs, setLogs] = useState([]);
@@ -98,7 +112,6 @@ function Workspace({ session, children }) {
   }, []);
 
   const goTo = (navId) => requestNavigation(() => router.push(pathOf(findNavItem(navId).item)));
-  const { user } = session;
 
   return (
     <div className="flex h-screen w-screen bg-background text-foreground antialiased overflow-hidden">
@@ -118,14 +131,14 @@ function Workspace({ session, children }) {
                 if (e.target instanceof Element && e.target.closest("a")) setDrawerOpen(false);
               }}
             >
-            <Sidebar activeTab={activeTab} open onNavigate={(event, path) => {
+            <Sidebar activeTab={activeTab} user={user} now={licenseNow} open onNavigate={(event, path) => {
               if (!requestNavigation(() => router.push(path))) event.preventDefault();
             }} />
             </div>
           </>
         )
       ) : (
-        <Sidebar activeTab={activeTab} open={sidebarOpen} onNavigate={(event, path) => {
+        <Sidebar activeTab={activeTab} user={user} now={licenseNow} open={sidebarOpen} onNavigate={(event, path) => {
           if (!requestNavigation(() => router.push(path))) event.preventDefault();
         }} />
       )}
@@ -134,6 +147,7 @@ function Workspace({ session, children }) {
         <Header
           activeTab={activeTab}
           user={{
+            id: user.id,
             name: user.username,
             initials: String(user.username || "?").slice(0, 2).toUpperCase(),
           }}
@@ -145,17 +159,11 @@ function Workspace({ session, children }) {
           onLogout={session.logout}
         />
 
-        <main className={`flex-1 overflow-y-auto p-6 ${["dashboard", "profile"].includes(activeTab) ? "bg-[#f7f8ff]" : "bg-background"}`}>
-          {user.modules_unlocked || ["dashboard", "profile"].includes(activeTab) ? (
+        <main className={`flex-1 overflow-y-auto p-6 ${!moduleAllowed || ["dashboard", "profile"].includes(activeTab) ? "bg-[#f7f8ff]" : "bg-background"}`}>
+          {moduleAllowed ? (
             <SessionContext.Provider value={session}>{children}</SessionContext.Provider>
           ) : (
-            <div className="mx-auto max-w-lg rounded-xl border border-border bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-bold tracking-tight text-sky-600">Chưa mở được các module</h2>
-              <p className="mt-2 text-sm leading-5 text-slate-500">
-                Tài khoản {user.username} đang ở trạng thái {user.status}. Cần admin duyệt hoặc gia hạn thì mới vào được 9
-                module.
-              </p>
-            </div>
+            <ModuleLockedView user={user} navId={activeTab} now={licenseNow} />
           )}
         </main>
 

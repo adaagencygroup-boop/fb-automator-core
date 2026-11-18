@@ -311,7 +311,7 @@ export default function AuthGate({ children }) {
       return <AuthStatusScreen status={screen} onBack={backToLogin} />;
     }
 
-    return <RegisterScreen onLogin={() => setScreen("login")} onRegistered={() => setScreen("pending")} />;
+    return <RegisterScreen onLogin={() => setScreen("login")} onRegistered={(_username, status) => status === "approved" ? loadMe() : setScreen("pending")} />;
   }
 
   const isAdmin = ["admin", "ADMIN"].includes(user.role);

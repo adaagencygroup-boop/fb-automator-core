@@ -4,7 +4,7 @@ Module 5 schema trên PostgreSQL production.
 pages            Fanpage đang quản lý, gắn account_uid (Module 2) và từ khóa AI/TikTok/YouTube.
 posting_history  Kết quả từng bài AI hoặc Reels. Bảng này cũng có group_id cho module khác, không được siết page_id thành NOT NULL.
 posting_progress Video Reels đã đăng tới đâu (last_object_path). last_folder_index là số cũ từ tool desktop.
-downloaded_videos ID đã tải thành công, chống trùng. object_path là đường dẫn trong bucket page-videos.
+downloaded_videos ID đã tải thành công, chống trùng. object_path là đường dẫn file trên máy chạy engine.
 download_logs    Nhật ký từng lần tải, gồm cả lần thất bại.
 page_jobs        Một lần bấm Kích hoạt (AI, REEL, TIKTOK, YOUTUBE).
 page_job_items   Trạng thái của từng Page trong job đó.

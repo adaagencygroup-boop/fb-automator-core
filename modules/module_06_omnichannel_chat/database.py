@@ -34,6 +34,13 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
+def init_models() -> None:
+    """Tạo bảng chat (v_pages, v_messages, ...) trên Postgres mới."""
+    import modules.module_06_omnichannel_chat.models  # noqa: F401
+
+    Base.metadata.create_all(bind=engine)
+
+
 def get_db():
     """FastAPI Dependency để cấp phát DB session."""
     db = SessionLocal()

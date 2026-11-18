@@ -181,6 +181,7 @@ export default function SystemNotificationsPage() {
     try {
       await api.markAllRead();
       setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+      window.dispatchEvent(new CustomEvent("notifications_updated"));
     } catch (e) {
       console.error(e);
     }
@@ -193,6 +194,7 @@ export default function SystemNotificationsPage() {
       setNotifications((prev) =>
         prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
       );
+      window.dispatchEvent(new CustomEvent("notifications_updated"));
     } catch (e) {
       console.error(e);
     }
@@ -207,6 +209,7 @@ export default function SystemNotificationsPage() {
         setNotifications((prev) =>
           prev.map((n) => (n.id === item.id ? { ...n, is_read: true } : n))
         );
+        window.dispatchEvent(new CustomEvent("notifications_updated"));
       } catch (e) {
         console.error("Lỗi cập nhật trạng thái đã đọc:", e);
       }
@@ -224,6 +227,7 @@ export default function SystemNotificationsPage() {
       if (viewingItem?.id === id) {
         setViewingItem(null);
       }
+      window.dispatchEvent(new CustomEvent("notifications_updated"));
     } catch (e: any) {
       console.error("Lỗi khi xóa thông báo:", e);
       alert(e?.message || "Không thể xóa thông báo. Vui lòng thử lại!");
@@ -244,6 +248,7 @@ export default function SystemNotificationsPage() {
         setViewingItem(null);
       }
       setSelectedIds([]);
+      window.dispatchEvent(new CustomEvent("notifications_updated"));
     } catch (e: any) {
       console.error("Lỗi khi xóa nhiều thông báo:", e);
       alert(e?.message || "Không thể xóa các thông báo đã chọn. Vui lòng thử lại!");

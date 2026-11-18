@@ -11,10 +11,52 @@ from modules.module_07_group_spam.app.services.group_source import (
     parse_group_file_content,
     search_facebook_groups,
     get_sample_template,
+    parse_group_activity,
+    read_group_activity_from_about,
+    collect_group_search_results,
 )
 
 
 class GroupSourceUnitTests(unittest.TestCase):
+    def test_search_keeps_results_that_disappear_after_scrolling(self):
+        class Driver:
+            def __init__(self):
+                self.position = 0
+
+            def execute_script(self, script):
+                if script.startswith("window.scrollTo"):
+                    self.position += 1
+                    return None
+                pages = [
+                    [{"url": "group-a"}],
+                    [{"url": "group-b"}],
+                    [{"url": "group-c"}],
+                ]
+                return pages[self.position]
+
+        with patch("modules.module_07_group_spam.app.services.group_source.time.sleep"):
+            results = collect_group_search_results(Driver(), "extract", 2, 10)
+        self.assertEqual([item["url"] for item in results], ["group-a", "group-b", "group-c"])
+
+    def test_activity_is_read_from_group_about_when_search_card_has_no_count(self):
+        class Driver:
+            def __init__(self):
+                self.url = ""
+
+            def get(self, url):
+                self.url = url
+
+            def execute_script(self, _script):
+                return "Hoạt động\nHôm nay có 1 bài viết mới\n15 trong tháng trước"
+
+        driver = Driver()
+        self.assertEqual(
+            read_group_activity_from_about(driver, "helloyovn"),
+            "1 bài viết hôm nay",
+        )
+        self.assertEqual(driver.url, "https://www.facebook.com/groups/helloyovn/about/")
+        self.assertIsNone(parse_group_activity("Công khai · 13K thành viên"))
+
     def test_clean_group_url(self):
         # Tách query parameters '?' như FaceBook_Post_Group.py
         url1 = "https://www.facebook.com/groups/vieclamonline2024?ref=share&mibextid=wwXIfr"
@@ -66,6 +108,29 @@ class GroupSourceUnitTests(unittest.TestCase):
             results = search_facebook_groups("việc làm", max_results=3)
         self.assertEqual(len(results), 3)
         self.assertTrue(all("url" in r and "key" in r for r in results))
+
+    def test_private_filter_scans_beyond_first_public_results(self):
+        public_groups = [
+            {"key": f"group_public_{index}", "name": f"Liên quân {index}",
+             "url": f"facebook.com/groups/public{index}", "uid": f"public{index}",
+             "frequency": "90+ bài viết/ngày", "members": "100K", "mem_num": 100,
+             "privacy": "public", "membership_status": "not_joined"}
+            for index in range(20)
+        ]
+        private_group = {
+            "key": "group_private", "name": "Liên quân riêng tư",
+            "url": "facebook.com/groups/private123", "uid": "private123",
+            "frequency": "90+ bài viết/ngày", "members": "100K", "mem_num": 100,
+            "privacy": "private", "membership_status": "not_joined",
+        }
+        with patch(
+            "modules.module_07_group_spam.app.services.group_source.search_facebook_via_browser",
+            return_value=[*public_groups, private_group],
+        ) as scan:
+            results = search_facebook_groups("liên quân", max_results=10, group_type="private")
+
+        self.assertEqual([group["uid"] for group in results], ["private123"])
+        self.assertEqual(scan.call_args.args[2], 200)
 
     def test_search_removes_unrelated_browser_groups_and_cleans_name(self):
         scraped = [

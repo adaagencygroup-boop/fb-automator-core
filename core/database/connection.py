@@ -39,7 +39,7 @@ class DatabaseManager:
                 connect_timeout=10,
             )
             self._is_postgres = True
-            print("[Database] Connected successfully to Supabase PostgreSQL!")
+            print("[Database] Connected successfully to PostgreSQL!")
         except Exception as e:
             raise RuntimeError(f"Không kết nối được PostgreSQL production: {e}") from e
 

@@ -49,8 +49,7 @@ export function RegisterForm({
             Đăng ký tài khoản mới
           </h2>
           <p className="auth-form-description">
-            Vui lòng điền thông tin bên dưới để thiết lập quyền truy cập phần
-            mềm
+            Đăng ký để dùng miễn phí Quản lý tài khoản Facebook trong 30 ngày.
           </p>
         </div>
 

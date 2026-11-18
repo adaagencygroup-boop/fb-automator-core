@@ -144,6 +144,12 @@ def _init_remaining_schemas():
         )
 
         init_page_models()
+    with startup_step("Module 06 omnichannel chat"):
+        from modules.module_06_omnichannel_chat.database import (
+            init_models as init_chat_models,
+        )
+
+        init_chat_models()
     with startup_step("Module 07 group posting"):
         from modules.module_07_group_spam.app.models import init_models as init_group_models
 
@@ -163,6 +169,9 @@ def _init_remaining_schemas():
 async def _finish_engine_startup(fast_startup: bool):
     if not fast_startup:
         await asyncio.to_thread(_init_remaining_schemas)
+    else:
+        # Fast startup skips schema checks, but account API sessions still need a bind.
+        await asyncio.to_thread(initialize_accounts)
     with startup_step("Backend module imports"):
         loaded = load_backend_modules()
     print(
@@ -234,10 +243,22 @@ from modules.module_06_omnichannel_chat.routers import all_routers as module_06_
 for r in module_06_routers:
     app.include_router(r)
 
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 uploads_dir = str(UPLOADS_DIR)
 os.makedirs(uploads_dir, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+
+
+@app.get("/media/{bucket}/{object_path:path}")
+async def serve_stored_object(bucket: str, object_path: str):
+    """Facebook và trình duyệt lấy ảnh/video đã lưu trong PostgreSQL."""
+    from core.storage.postgres_objects import read_object
+
+    found = await anyio.to_thread.run_sync(read_object, bucket, unquote(object_path))
+    if not found or not found.get("data"):
+        raise HTTPException(status_code=404, detail="Không có file")
+    return Response(content=found["data"], media_type=found["content_type"] or "application/octet-stream")
 
 _PUBLIC_API = {
     "/api/health",
@@ -278,7 +299,6 @@ class LicenseMiddleware:
             and path.startswith("/api/")
             and path not in _PUBLIC_API
             and not path.startswith("/api/v1/")
-            and not path.startswith("/api/post")
         ):
             headers = {
                 key.decode("latin1").lower(): value.decode("latin1")
@@ -346,6 +366,14 @@ if farm_router:
     app.include_router(farm_router)
 if post_router:
     app.include_router(post_router)
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+
+    Instrumentator(should_group_status_codes=False).instrument(app).expose(
+        app, endpoint="/metrics", include_in_schema=False
+    )
+except ImportError:
+    pass
 @app.get("/api/health")
 async def health_check():
     """async: không phụ thuộc threadpool — luôn trả lời được khi Engine còn sống."""

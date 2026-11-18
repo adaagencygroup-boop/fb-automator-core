@@ -17,7 +17,7 @@ from typing import Any, Callable
 
 from modules.module_02_account_manager.context import owner_scope
 from ..core.constants import BLOCK_TAGS, TERMINAL_STATES, LogLevel
-from .supabase_storage import download_or_cache_media, upload_local_file_to_supabase
+from .local_media import download_or_cache_media, upload_local_media
 from ..schemas.request import AccountDTO, GroupDTO
 from ..schemas.response import GroupResponse
 
@@ -1178,19 +1178,7 @@ class FacebookGroupPoster:
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", article)
         self._raise_if_cancelled()
 
-        permalink = driver.current_url or url
-        try:
-            post_links = article.find_elements(
-                By.XPATH,
-                ".//a[contains(@href,'/posts/') or contains(@href,'/permalink/') or "
-                "contains(@href,'story_fbid=')]",
-            )
-            permalink = next(
-                (link.get_attribute("href") for link in post_links if link.get_attribute("href")),
-                permalink,
-            )
-        except Exception:
-            pass
+        permalink = self._extract_group_post_permalink(article, url)
 
         if auto_like:
             try:
@@ -1511,45 +1499,94 @@ class FacebookGroupPoster:
             raise RuntimeError("Facebook đang giới hạn thao tác bình luận của tài khoản")
 
         current_article = resolve_article() or article
+        permalink = self._extract_group_post_permalink(current_article, url) or permalink
         if self._comment_is_pending(current_article, content):
             return {
                 "status": "PENDING_APPROVAL",
                 "message": "Bình luận đang chờ quản trị viên duyệt; chưa có link trực tiếp",
-                "result_url": None,
+                "result_url": permalink,
             }
         comment_link = self._extract_comment_share_link(current_article, content)
         if not comment_link and self._comment_is_pending(resolve_article() or article, content):
             return {
                 "status": "PENDING_APPROVAL",
                 "message": "Bình luận đang chờ quản trị viên duyệt; chưa có link trực tiếp",
-                "result_url": None,
+                "result_url": self._extract_group_post_permalink(resolve_article() or article, url) or permalink,
             }
         if not comment_link:
             self.log("WARNING", f"[{self.account['uid']}] Đã gửi bình luận nhưng chưa lấy được link trực tiếp")
         return {
             "status": "SUCCESS",
             "message": "Bình luận bài viết đầu tiên thành công",
-            "result_url": comment_link or str(permalink),
+            "result_url": comment_link or permalink or url,
             "comment_link_captured": bool(comment_link),
         }
+
+    def _extract_group_post_permalink(self, anchor, group_url: str) -> str | None:
+        """Find the parent post URL near a comment editor or comment article."""
+        from urllib.parse import parse_qs, urlsplit
+
+        group_match = re.search(r"/groups/([^/?#]+)", group_url)
+        if not group_match:
+            return None
+        group_id = group_match.group(1)
+
+        def normalize(href: str) -> str | None:
+            try:
+                parsed = urlsplit(href)
+                if (parsed.hostname or "").lower() not in {"facebook.com", "www.facebook.com", "web.facebook.com"}:
+                    return None
+                match = re.search(rf"/groups/{re.escape(group_id)}/(posts|permalink)/(\d+)", parsed.path)
+                if match:
+                    return f"https://www.facebook.com/groups/{group_id}/{match.group(1)}/{match.group(2)}/"
+                query = parse_qs(parsed.query)
+                post_id = (query.get("story_fbid") or query.get("multi_permalinks") or [""])[0]
+                if not post_id:
+                    photo_set = (query.get("set") or [""])[0]
+                    post_id = photo_set.removeprefix("gm.") if photo_set.startswith("gm.") else ""
+                if post_id.isdigit():
+                    return f"https://www.facebook.com/groups/{group_id}/posts/{post_id}/"
+            except Exception:
+                pass
+            return None
+
+        try:
+            candidates = self.driver.execute_script(
+                """
+                let node = arguments[0];
+                for (let depth = 0; node && depth < 32; depth++, node = node.parentElement) {
+                  const links = [...node.querySelectorAll('a[href]')].map(link => link.href)
+                    .filter(href => /\\/(posts|permalink)\\/|story_fbid=|multi_permalinks=|set=gm\\./.test(href));
+                  if (links.length) return links;
+                  if (node.matches('main, body, [role="feed"]')) break;
+                }
+                return [];
+                """,
+                anchor,
+            ) or []
+            return next((url for href in candidates if (url := normalize(href))), None)
+        except Exception:
+            return None
 
     def _comment_is_pending(self, root_article, content: str) -> bool:
         """Recognize a submitted comment awaiting group moderation."""
         try:
             return bool(self.driver.execute_script(
                 """
-                const root = arguments[0] || document;
+                const roots = [arguments[0], document].filter(Boolean);
                 const expected = String(arguments[1] || '').replace(/\\s+/g, ' ').trim();
                 if (!expected) return false;
                 const pending = /\\bPending\\b|đang chờ|chờ phê duyệt|awaiting approval/i;
-                for (const node of root.querySelectorAll('div, span, p')) {
-                  if (!node.getClientRects().length) continue;
-                  if (String(node.innerText || '').replace(/\\s+/g, ' ').trim() !== expected) continue;
-                  let parent = node.parentElement;
-                  for (let depth = 0; parent && depth < 7; depth++, parent = parent.parentElement) {
-                    const text = String(parent.innerText || '').replace(/\\s+/g, ' ').trim();
-                    if (text.length > 350) break;
-                    if (pending.test(text)) return true;
+                for (const root of roots) {
+                  for (const node of root.querySelectorAll('div, span, p')) {
+                    if (!node.getClientRects().length) continue;
+                    if (String(node.innerText || '').replace(/\\s+/g, ' ').trim() !== expected) continue;
+                    let parent = node.parentElement;
+                    for (let depth = 0; parent && depth < 7; depth++, parent = parent.parentElement) {
+                      const text = String(parent.innerText || '').replace(/\\s+/g, ' ').trim();
+                      if (text.length > 350) break;
+                      if (pending.test(text)) return true;
+                    }
                   }
                 }
                 return false;
@@ -2011,11 +2048,11 @@ class CampaignManager:
                         self._record_result(job, account, group, result)
                         completed_actions.add(index)
 
-                        # Chạy xong luồng của 1 task vụ thì đồng bộ media của task đó lên Supabase Storage
+                        # Chạy xong một task thì giữ media của task đó trên máy
                         if result.get("status") == "SUCCESS" and local_media:
                             for m_path in local_media:
                                 try:
-                                    upload_local_file_to_supabase(m_path, job.campaign_id or job.id)
+                                    upload_local_media(m_path, job.campaign_id or job.id)
                                 except Exception as up_err:
                                     job.log("WARNING", f"Không thể lưu media sau task: {up_err}")
                     except InterruptedError:
@@ -2171,7 +2208,7 @@ class CampaignManager:
                 job.log("SUCCESS", f"[{uid}] Đã lưu link bình luận vào database: {target_url}")
 
     def _persist_final_results(self, job: CampaignJob) -> None:
-        """Finalize the PostgreSQL run summary and ensure campaign media is stored in Supabase Storage."""
+        """Finalize the PostgreSQL run summary and keep campaign media on the local machine."""
         if job.status not in {"COMPLETED", "PARTIAL", "STOPPED", "CANCELLED", "FAILED"}:
             job.status = "FAILED"
 
@@ -2181,7 +2218,7 @@ class CampaignManager:
                 cloud_media: list[str] = []
                 for item in raw_media:
                     try:
-                        res = upload_local_file_to_supabase(item, job.campaign_id or job.id)
+                        res = upload_local_media(item, job.campaign_id or job.id)
                         cloud_url = res.get("url") or res.get("path") or str(item)
                         cloud_media.append(cloud_url)
                     except Exception as exc:
