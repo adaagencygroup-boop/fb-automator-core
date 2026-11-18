@@ -594,7 +594,7 @@ function MessageBody({ message, outgoing, radius }) {
       {attachment?.type === "image" && (
         <a href={mediaUrl} target="_blank" rel="noreferrer" className={cn("block overflow-hidden border border-slate-200", radius, FOCUS)}>
           {/* eslint-disable-next-line @next/next/no-img-element -- ảnh khách gửi / ảnh tạm khi chọn tệp */}
-          <img src={mediaUrl} alt={attachment.name || "Hình ảnh"} onError={handleMediaError} className="block max-h-60 max-w-full object-cover bg-slate-100" />
+          <img src={mediaUrl} alt={attachment.name || "Hình ảnh"} referrerPolicy="no-referrer" onError={handleMediaError} className="block max-h-60 max-w-full object-cover bg-slate-100" />
         </a>
       )}
       {attachment?.type === "audio" && (
