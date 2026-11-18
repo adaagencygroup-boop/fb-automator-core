@@ -1,36 +1,29 @@
-name: Build Desktop Installer (Tauri + Python Sidecar)
-
+name: Build Desktop Installer
 on:
   workflow_dispatch:
   push:
     tags:
       - "v*"
-
 permissions:
   contents: write
-
-# Chỉ acc được phép mới build/release từ tag v* hoặc workflow_dispatch.
-# Set repo variable RELEASE_ALLOWED_ACTOR = GitHub username (vd: peterphenikaa).
-# Fallback cứng bên dưới nếu chưa tạo variable.
 jobs:
-  authorize-release:
-    name: Authorize releaser
-    runs-on: ubuntu-22.04
+  authorizeRelease:
+    name: Authorize Releaser
+    runs-on: ubuntu-26.04
     steps:
-      - name: Check actor
+      - name: Check Actor
         env:
           ACTOR: ${{ github.actor }}
           ALLOWED: ${{ vars.RELEASE_ALLOWED_ACTOR || 'peterphenikaa' }}
         run: |
-          echo "Actor=$ACTOR allowed=$ALLOWED"
+          echo "Actor=$ACTOR Allowed=$ALLOWED"
           if [ "$ACTOR" != "$ALLOWED" ]; then
-            echo "::error::Chỉ @$ALLOWED được chạy desktop release (tag/workflow_dispatch). Actor hiện tại: @$ACTOR"
+            echo "::error::Chỉ @$ALLOWED Dc Chạy Desktop Release (Tag/Workflow Dispatch). Actor Hiện Tại: @$ACTOR"
             exit 1
           fi
-
-  build-desktop:
+  buildDesktop:
     name: Build ${{ matrix.platform }} Application
-    needs: authorize-release
+    needs: authorizeRelease
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -39,75 +32,61 @@ jobs:
           - platform: Windows
             runner: windows-latest
             config: src-tauri/tauri.conf.json
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Setup Rust Stable
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Node.js 20
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: |
             tauri/package-lock.json
             frontend/package-lock.json
-
-      - name: Setup Python 3.11
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: "pip"
-
-      - name: Install Python Dependencies & PyInstaller
+      - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          # Tránh PyInstaller đóng gói simplejson dở (requests → JSONDecodeError)
           python -m pip uninstall -y simplejson || true
-
       - name: Install Root & Frontend Dependencies
         run: |
           npm --prefix tauri ci
           npm --prefix frontend ci
-
-      - name: Test Native Packaging and Storage
+      - name: Test Native Packaging & Storage
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: python -m unittest discover -s tauri -p test_desktop_packaging.py
-
-      # Windows Release phải nhúng .env (DATABASE_URL) vào local_engine —
-      # không commit .env; lấy từ GitHub Secret DESKTOP_ENV_FILE.
-      - name: Write desktop .env for Windows sidecar bundle
+        run: python -m unittest discover -s tauri -p test.py
+      - name: Write Desktop .env For Windows Sidecar Bundle
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           DESKTOP_ENV_FILE: ${{ secrets.DESKTOP_ENV_FILE }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:DESKTOP_ENV_FILE)) {
-            throw "Thiếu GitHub Secret DESKTOP_ENV_FILE — paste nguyên nội dung file .env production vào secret này."
+            throw "Thiếu GitHub Secret DESKTOP_ENV_FILE — Paste Nguyên Nội Dung File .env Production Vào Secret Này"
           }
           if ($env:DESKTOP_ENV_FILE -notmatch 'DATABASE_URL\s*=\s*.*postgresql') {
-            throw "DESKTOP_ENV_FILE phải có DATABASE_URL=postgresql://..."
+            throw "DESKTOP_ENV_FILE Phải Có DATABASE_URL=postgresql://..."
           }
-          # UTF-8 không BOM — dotenv/PyInstaller đọc ổn định trên Windows
           [System.IO.File]::WriteAllText(
             (Join-Path $pwd ".env"),
             $env:DESKTOP_ENV_FILE.Trim() + "`n",
             [System.Text.UTF8Encoding]::new($false)
           )
-          Write-Host "Wrote .env for PyInstaller (DATABASE_URL postgresql OK)"
-
+          Write-Host "Wrote .env For PyInstaller (DATABASE_URL PostgreSQL OK)"
       - name: Build Python Sidecar Binary
         run: |
           python scripts/build_sidecar.py
         env:
           PYTHONUTF8: "1"
           PYTHONIOENCODING: utf-8
-
       - name: Build Tauri Desktop Package
         run: |
           npm --prefix tauri run tauri:build -- --config ${{ matrix.config }}
@@ -118,7 +97,6 @@ jobs:
           PYTHONIOENCODING: utf-8
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-
       - name: Upload Installer Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -131,28 +109,24 @@ jobs:
             tauri/src-tauri/target/release/bundle/nsis/*.exe
             tauri/src-tauri/target/release/bundle/nsis/*.sig
             tauri/src-tauri/target/release/bundle/nsis/*.zip
-
-  publish-release:
+  publishRelease:
     name: Publish GitHub Release + latest.json
-    needs: build-desktop
+    needs: buildDesktop
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Setup Python 3.11
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
+          python-version: "3.12"
       - name: Download All Installer Artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-artifacts
           pattern: FB-Automator-*-Installer
           merge-multiple: true
-
       - name: Build latest.json
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -160,22 +134,20 @@ jobs:
             --version "$VERSION" \
             --tag "$GITHUB_REF_NAME" \
             --repo "${{ github.repository }}" \
-            --notes "Desktop release $GITHUB_REF_NAME" \
+            --notes "Desktop Release $GITHUB_REF_NAME" \
             --artifact-dir release-artifacts \
             --out latest.json
           echo "---- latest.json ----"
           cat latest.json
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: FB Page Automator ${{ github.ref_name }}
           body: |
-            Desktop build from tag `${{ github.ref_name }}`.
-
-            - Installer assets attached below
-            - `latest.json` is consumed by the in-app Tauri updater
+            Desktop Build From Tag `${{ github.ref_name }}`
+            - Installer Assets Attached Below
+            - `latest.json` Is Consumed By The In-App Tauri Updater
           files: |
             latest.json
             release-artifacts/**

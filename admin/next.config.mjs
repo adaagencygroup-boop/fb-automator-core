@@ -1,5 +1,4 @@
-const VPS_TARGET = process.env.NEXT_PUBLIC_VPS_API_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:28129";
-
+const VPS = process.env.NEXT_PUBLIC_URL?.trim().replace(/\/$/, "") || "http://127.0.0.1:28129";
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -8,7 +7,7 @@ const nextConfig = {
     return [
       {
         source: "/api/v1/:path*",
-        destination: `${VPS_TARGET}/api/v1/:path*`,
+        destination: `${VPS}/api/v1/:path*`,
       },
     ];
   },
@@ -36,5 +35,4 @@ const nextConfig = {
     "localhost:3001"
   ],
 };
-
 export default nextConfig;

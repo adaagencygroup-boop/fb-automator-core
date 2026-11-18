@@ -1,5 +1,5 @@
 export function getVpsBase(): string {
-  const fromEnv = process.env.NEXT_PUBLIC_VPS_API_URL?.trim().replace(/\/$/, "");
+  const fromEnv = process.env.NEXT_PUBLIC_URL?.trim().replace(/\/$/, "");
   if (fromEnv) return fromEnv;
   if (typeof window !== "undefined" && ["localhost", "127.0.0.1"].includes(window.location.hostname)) {
     return `${window.location.protocol}//${window.location.hostname}:28129`;

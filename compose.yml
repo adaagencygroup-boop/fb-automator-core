@@ -9,11 +9,12 @@ services:
     environment:
       ENGINE_HOST: 0.0.0.0
       ENGINE_PORT: "28129"
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://admin.adagroupservice.com,https://adagroupservice.com,https://www.adagroupservice.com}
     volumes:
+      - downloads:/app/downloads
       - storage:/app/uploads
       - data:/app/data
-      - downloads:/app/downloads
       - logs:/app/logs
     ports:
       - "127.0.0.1:28129:28129"
@@ -26,7 +27,7 @@ services:
           cpus: '1.2'
           memory: 768M
         reservations:
-          cpus: '0.3'
+          cpus: '0.2'
           memory: 256M
     networks:
       - net
@@ -36,12 +37,12 @@ services:
       context: ./admin
       target: runner
       args:
-        NEXT_PUBLIC_VPS_API_URL: ${nextPublicApiUrl:-https://admin.adagroupservice.com}
+        NEXT_PUBLIC_URL: ${NEXT_PUBLIC_URL:-https://admin.adagroupservice.com}
     container_name: admin
     restart: always
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_VPS_API_URL: ${nextPublicApiUrl:-http://app:28129}
+      NEXT_PUBLIC_URL: ${NEXT_PUBLIC_URL:-http://app:28129}
       NODE_OPTIONS: "--max-old-space-size=256"
     depends_on:
       - app
@@ -79,8 +80,8 @@ services:
       - .env
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${dbUsername}
-      POSTGRES_PASSWORD: ${dbPassword}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     command:
       - postgres
       - -c
@@ -117,7 +118,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.3'
+          cpus: '0.4'
           memory: 128M
         reservations:
           cpus: '0.05'
@@ -169,7 +170,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.3'
+          cpus: '0.4'
           memory: 256M
         reservations:
           cpus: '0.05'
@@ -211,7 +212,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.3'
+          cpus: '0.4'
           memory: 256M
         reservations:
           cpus: '0.05'

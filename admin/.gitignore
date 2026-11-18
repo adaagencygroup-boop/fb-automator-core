@@ -1,4 +1,5 @@
-node_modules
 .next
+node_modules
 AGENTS.md
 CLAUDE.md
+next-env.d.ts

@@ -1,7 +1,11 @@
-node_modules
 .next
-out
-.git
+node_modules
+.dockerignore
+.env
+.env.*
+.gitignore
+Dockerfile
+next-env.d.ts
+*.log
 *.md
-.env*.local
-npm-debug.log*
+*.tsbuildinfo

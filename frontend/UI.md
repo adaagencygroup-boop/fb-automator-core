@@ -336,4 +336,3 @@ Khi xây dựng màn hình hoặc module mới, lập trình viên cần tự ki
 5. [ ] **Huy hiệu trạng thái**: Dùng đúng các biến thể `<Badge>` theo trạng thái (`success`, `warning`, `destructive`, `info`)
 6. [ ] **Nút bấm**: Dùng `<Button>` có variant phù hợp (`default` cho nút chính, `subtle` cho bảng, `outline` cho nút phụ)
 7. [ ] **Đăng ký Module**: Đăng ký module vào `src/modules/index.js` để tự động hiển thị tab trên Sidebar
-

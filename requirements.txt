@@ -1,54 +1,28 @@
-# Facebook Automator Core - Requirements
-# Python >= 3.11
-
-# Worker threads (QThread signals) — không còn desktop GUI
-PyQt5>=5.15.10
-
-# REST API & Sidecar Engine
-fastapi>=0.110.0
-uvicorn[standard]>=0.28.0
-python-multipart>=0.0.9
-prometheus-fastapi-instrumentator>=7.0.0
-
-# HTTP & Network
-requests>=2.31.0
-urllib3>=2.0.0
-curl_cffi>=0.7.0
-
-# Video & Media Downloader
-yt-dlp>=2024.8.0
-Pillow>=10.0.0
-
-# AI Content Generation
-google-genai>=0.1.1
-google-generativeai>=0.8.0
-
-# Search & Scraping
-duckduckgo_search>=6.0.0
-beautifulsoup4>=4.12.0
-
-# Browser Automation & Security
-playwright>=1.40.0
-selenium>=4.25,<5
-webdriver-manager>=4.0.2,<5
-pyotp>=2.9.0,<3
-pycryptodome>=3.21.0
-cryptography>=42
-httpx>=0.28,<1
-
-# Google Sheets Logging (Optional)
-gspread>=6.0.0
-oauth2client>=4.1.3
-
-# Utilities & Database
-pydantic>=2.7.0
-bcrypt>=4.1.0
-PyJWT>=2.8.0
-psycopg2-binary>=2.9.5
-psycopg[binary]>=3.3,<4
-sqlalchemy>=2.0.35,<2.1
-psutil>=5.9.0
-python-dotenv>=1.0.0
-
-# Desktop Sidecar Build
-pyinstaller>=6,<7
+prometheus-fastapi-instrumentator
+duckduckgo_search
+uvicorn[standard]
+webdriver-manager
+python-multipart
+psycopg2-binary
+beautifulsoup4
+imageio-ffmpeg
+python-dotenv
+cryptography
+google-genai
+google-auth
+pyinstaller
+sqlalchemy
+curl_cffi
+pydantic
+requests
+selenium
+fastapi
+gspread
+urllib3
+Pillow
+bcrypt
+psutil
+yt-dlp
+PyJWT
+httpx
+pyotp

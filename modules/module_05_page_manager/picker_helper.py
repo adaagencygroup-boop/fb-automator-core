@@ -120,34 +120,6 @@ def pick_folder_win32(initial_dir="", title="Chọn thư mục video"):
         ole32.CoUninitialize()
 
 
-def pick_folder_qt(initial_dir="", title="Chọn thư mục video"):
-    from PyQt5.QtWidgets import QApplication, QFileDialog
-    from PyQt5.QtCore import Qt, QCoreApplication
-
-    if not QCoreApplication.instance():
-        QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-        QCoreApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-
-    app = QApplication.instance()
-    if not app:
-        app = QApplication([sys.argv[0]])
-
-    init = initial_dir if (initial_dir and os.path.exists(initial_dir)) else ""
-    dialog_title = title.strip() if (title and title.strip()) else "Chọn thư mục video"
-
-    dialog = QFileDialog(None, dialog_title, init)
-    dialog.setFileMode(QFileDialog.DirectoryOnly)
-    dialog.setOption(QFileDialog.ShowDirsOnly, True)
-    dialog.setOption(QFileDialog.DontResolveSymlinks, True)
-    dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowStaysOnTopHint)
-
-    if dialog.exec_() == QFileDialog.Accepted:
-        selected = dialog.selectedFiles()
-        if selected and selected[0]:
-            return os.path.normpath(selected[0])
-    return ""
-
-
 def pick_folder_powershell(initial_dir="", title="Chọn thư mục video") -> str:
     """
     Mở hộp thoại FolderBrowserDialog native qua PowerShell độc lập (STA thread).

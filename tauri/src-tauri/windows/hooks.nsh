@@ -1,6 +1,3 @@
-; Kill sidecar + app trước khi NSIS ghi đè local_engine\_internal\*.pyd
-; (bản cũ không gọi prepare_for_update → chỉ hook này cứu được update in-place)
-
 !macro NSIS_HOOK_PREINSTALL
   DetailPrint "Stopping FB_Page_Automator / local_engine before file copy..."
   nsExec::ExecToLog 'taskkill /F /IM local_engine.exe /T'

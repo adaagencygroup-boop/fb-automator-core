@@ -1,16 +1,10 @@
 FROM python:3.12-bookworm
-ENV PYTHONDONTWRITEBYTECODE=1 \
-  PYTHONUNBUFFERED=1 \
-  PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 LABEL org.opencontainers.image.source="https://github.com/adaagencygroup-boop/fb-automator-core"
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends libpq5 ffmpeg postgresql-client \
-  && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 ffmpeg postgresql-client && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt /app/requirements.txt
-RUN grep -iEv '^(pyqt|pyinstaller)' requirements.txt > requirements.docker.txt \
-  && pip install --no-cache-dir -r requirements.docker.txt \
-  && rm -f requirements.docker.txt
+RUN grep -iEv '^pyinstaller' requirements.txt > requirements.docker.txt && pip install --no-cache-dir -r requirements.docker.txt && rm -f requirements.docker.txt
 COPY . /app
 RUN mkdir -p /app/data /app/logs /app/downloads /app/uploads
 EXPOSE 28129

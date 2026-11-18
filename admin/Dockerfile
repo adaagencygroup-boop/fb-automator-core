@@ -8,8 +8,8 @@ COPY --from=deps /app/package.json ./package.json
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN sed -i '/"fb-automator-core"/d' package.json
-ARG NEXT_PUBLIC_VPS_API_URL=https://admin.adagroupservice.com
-ENV NEXT_PUBLIC_VPS_API_URL=${NEXT_PUBLIC_VPS_API_URL}
+ARG NEXT_PUBLIC_URL=https://admin.adagroupservice.com
+ENV NEXT_PUBLIC_URL=${NEXT_PUBLIC_URL}
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV WATCHPACK_POLLING=true
 ENV CHOKIDAR_USEPOLLING=true
@@ -22,8 +22,8 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN sed -i '/"fb-automator-core"/d' package.json
-ARG NEXT_PUBLIC_VPS_API_URL=https://admin.adagroupservice.com
-ENV NEXT_PUBLIC_VPS_API_URL=${NEXT_PUBLIC_VPS_API_URL}
+ARG NEXT_PUBLIC_URL=https://admin.adagroupservice.com
+ENV NEXT_PUBLIC_URL=${NEXT_PUBLIC_URL}
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 FROM node:24-alpine AS runner

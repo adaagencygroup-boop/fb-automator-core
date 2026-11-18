@@ -28,7 +28,9 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["fbautomator"]
+        "schemes": [
+          "fbautomator"
+        ]
       }
     },
     "updater": {
