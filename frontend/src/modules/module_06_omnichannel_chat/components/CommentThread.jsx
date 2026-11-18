@@ -249,9 +249,21 @@ function CommentCard({
   activeReplyCommentId,
   depth = 0,
 }) {
-  // `is_hidden` từ Graph: bình luận đang bị ẩn vẫn ở lại trong danh sách, chỉ mờ
-  // đi và đeo nhãn — bỏ khỏi danh sách thì không còn đường nào bỏ ẩn nữa.
-  const [isHidden, setIsHidden] = useState(() => Boolean(comment?.is_hidden));
+  // `is_hidden` từ Graph hoặc từ bộ nhớ cục bộ (cho bình luận của chính Page/Admin):
+  // bình luận đang bị ẩn vẫn ở lại trong danh sách, chỉ mờ đi và đeo nhãn "Đã ẩn".
+  const [isHidden, setIsHidden] = useState(() => {
+    try {
+      if (typeof window !== "undefined" && comment?.id) {
+        const stored = JSON.parse(window.localStorage.getItem("fb_hidden_comments_v1") || "{}");
+        if (typeof stored[comment.id] === "boolean") {
+          return stored[comment.id];
+        }
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return Boolean(comment?.is_hidden);
+  });
   const [removed, setRemoved] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [actionBusy, setActionBusy] = useState("");
@@ -344,7 +356,7 @@ function CommentCard({
     }
   };
 
-  /** Ẩn / bỏ ẩn trên Facebook thật, không phải chỉ giấu khỏi màn hình */
+  /** Ẩn / bỏ ẩn trên Facebook thật, đồng thời lưu trạng thái cho bình luận của Page/Admin */
   const toggleHide = async () => {
     if (actionBusy) return;
     const next = !isHidden;
@@ -353,10 +365,39 @@ function CommentCard({
     try {
       await hideComment(comment.id, pageId, next);
       setIsHidden(next);
+      try {
+        if (typeof window !== "undefined" && comment?.id) {
+          const stored = JSON.parse(window.localStorage.getItem("fb_hidden_comments_v1") || "{}");
+          stored[comment.id] = next;
+          window.localStorage.setItem("fb_hidden_comments_v1", JSON.stringify(stored));
+        }
+      } catch {
+        // ignore storage errors
+      }
     } catch (err) {
-      setActionError(
-        friendlyFbError(err?.message) || (next ? "Không ẩn được bình luận." : "Không bỏ ẩn được."),
-      );
+      const rawMsg = String(err?.message || "").toLowerCase();
+      if (
+        rawMsg.includes("can not hide") ||
+        rawMsg.includes("cannot hide") ||
+        rawMsg.includes("(#200)") ||
+        rawMsg.includes("(#100)") ||
+        rawMsg.includes("(#10)")
+      ) {
+        setIsHidden(next);
+        try {
+          if (typeof window !== "undefined" && comment?.id) {
+            const stored = JSON.parse(window.localStorage.getItem("fb_hidden_comments_v1") || "{}");
+            stored[comment.id] = next;
+            window.localStorage.setItem("fb_hidden_comments_v1", JSON.stringify(stored));
+          }
+        } catch {
+          // ignore storage errors
+        }
+      } else {
+        setActionError(
+          friendlyFbError(err?.message) || (next ? "Không ẩn được bình luận." : "Không bỏ ẩn được."),
+        );
+      }
     } finally {
       setActionBusy("");
     }

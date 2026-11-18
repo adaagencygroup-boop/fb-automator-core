@@ -36,7 +36,10 @@ class FacebookAuthService:
                 raise FacebookAPIError("Facebook từ chối: Bình luận này đã được gửi tin nhắn riêng trước đó. Mỗi bình luận chỉ được gửi tin nhắn riêng một lần.")
             elif error_code == 10:
                 raise FacebookAPIError("Không có quyền thao tác qua API (Mã #10): Bài viết/Bình luận này nằm trong Nhóm hoặc trên Trang khác.")
-            elif error_type == "OAuthException" or error_code in (190, 102):
+            elif error_code in (190, 102) or any(
+                phrase in error_message.lower()
+                for phrase in ("session has expired", "error validating access token", "invalid oauth access token")
+            ):
                 raise FacebookAuthError(f"Facebook authentication failed (Token expired or revoked): {error_message}")
             else:
                 raise FacebookAPIError(f"Facebook Graph API error: {error_message} (Code: {error_code})")
