@@ -117,6 +117,7 @@
   padding: 24px;
   gap: 24px;
   width: 100%;
+  flex: 1;
   min-height: 337px;
   background: #FFFFFF;
   border: 1px solid rgba(226, 232, 240, 0.8);
@@ -496,7 +497,8 @@
   padding: 20px;
   gap: 16px;
   width: 100%;
-  height: 247px;
+  min-height: 247px;
+  height: auto;
   background: #FFFFFF;
   border: 1px solid rgba(226, 232, 240, 0.8);
   box-shadow: 0px 1px 2px rgba(0, 0, 0, 0.05);
@@ -551,6 +553,63 @@
 .ue-btn-danger-soft:hover {
   background: #FFE4E6;
   border-color: #FDA4AF;
+}
+
+.ue-action-card-header {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #F1F5F9;
+}
+
+.ue-action-blue-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: #2563EB;
+}
+
+.ue-btn-action-renew,
+.ue-btn-action-reset {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+  padding: 10px 16px;
+  gap: 8px;
+  width: 100%;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ue-btn-action-renew {
+  background: #2563EB;
+  border: 1px solid #2563EB;
+  color: #FFFFFF;
+}
+
+.ue-btn-action-renew:hover {
+  background: #1D4ED8;
+  border-color: #1D4ED8;
+}
+
+.ue-btn-action-reset {
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  color: #0F172A;
+}
+
+.ue-btn-action-reset:hover {
+  background: #F1F5F9;
+  border-color: #CBD5E1;
 }
 
 /* Section 3: Feature Allocation */
