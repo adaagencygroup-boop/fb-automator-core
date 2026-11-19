@@ -34,6 +34,8 @@ import { normalizeAccount, initialsOf } from "@/modules/module_07_group_spam/sha
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import { SelectAccountsModal } from "../shared/SelectPagesModal";
 import SavePageListModal from "../shared/SavePageListModal";
+import { getSessionUserId } from "@/services/sessionIdentity.mjs";
+import { loadInputDraft, saveInputDraft } from "./inputDraft.mjs";
 import {
   searchPages,
   searchPagesByHashtag,
@@ -204,21 +206,36 @@ export default function PageScannerSearch() {
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [modalUids, setModalUids] = useState([]);
 
+  /* Nháp ô nhập (tab / link đã dán / file đã kiểm tra) — chuyển màn rồi quay lại vẫn còn */
+  const [draft] = useState(() => loadInputDraft(getSessionUserId()) || {});
+
   /* Source */
-  const [sourceMode, setSourceMode] = useState("keyword");
+  const [sourceMode, setSourceMode] = useState(draft.sourceMode || "keyword");
   /** Chip hỗn hợp: từ khóa thường + #hashtag (mức 3) */
   const [keywords, setKeywords] = useState([]);
   const [searchMode] = useState("NGACH"); // chỉ tìm theo hashtag
   const [campaignId, setCampaignId] = useState(null);
   const [maxFollowers, setMaxFollowers] = useState("");
   const [topN, setTopN] = useState(""); // Top N sau lọc — khác max_results
-  const [pasteContent, setPasteContent] = useState("");
-  const [uploadResult, setUploadResult] = useState(null);
-  const [uploadFile, setUploadFile] = useState(null); // File gốc — chỉ lưu DB khi bấm Bắt đầu
-  const [uploadFileMeta, setUploadFileMeta] = useState(null);
-  const [uploadPreviewRows, setUploadPreviewRows] = useState([]);
-  const [uploadFilterTab, setUploadFilterTab] = useState("ALL");
+  const [pasteContent, setPasteContent] = useState(draft.pasteContent || "");
+  const [uploadResult, setUploadResult] = useState(draft.uploadResult ?? null);
+  const [uploadFile, setUploadFile] = useState(draft.uploadFile ?? null); // File gốc — chỉ lưu DB khi bấm Bắt đầu
+  const [uploadFileMeta, setUploadFileMeta] = useState(draft.uploadFileMeta ?? null);
+  const [uploadPreviewRows, setUploadPreviewRows] = useState(draft.uploadPreviewRows || []);
+  const [uploadFilterTab, setUploadFilterTab] = useState(draft.uploadFilterTab || "ALL");
   const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    saveInputDraft(getSessionUserId(), {
+      sourceMode,
+      pasteContent,
+      uploadFile,
+      uploadFileMeta,
+      uploadPreviewRows,
+      uploadResult,
+      uploadFilterTab,
+    });
+  }, [sourceMode, pasteContent, uploadFile, uploadFileMeta, uploadPreviewRows, uploadResult, uploadFilterTab]);
 
   const pastePreviewRows = useMemo(
     () => parseRawLinesToPreview(pasteContent),
