@@ -79,8 +79,6 @@ function mergeKeywords(current, next) {
 
 function mapGroupRow(g) {
   const type = g?.type === "private" ? "private" : g?.type === "public" ? "public" : g?.type || "unknown";
-  let note = g?.note || "—";
-  if (type === "private" && (!note || note === "—")) note = "not_joined";
   let members = g?.members || "";
   let membersCount = Number(g?.members_count) || 0;
   if ((!members || members === "—") && g?.members_count != null) {
@@ -115,7 +113,6 @@ function mapGroupRow(g) {
     membersCount,
     url: g.url || String(g.href || "").replace(/^https?:\/\/(www\.)?/, ""),
     href: g.href || "",
-    note,
   };
 }
 
@@ -146,8 +143,6 @@ export default function GroupScanInfoPage() {
   const [rotateAfter, setRotateAfter] = useState(50);
   const [delayMin, setDelayMin] = useState(5);
   const [delayMax, setDelayMax] = useState(10);
-  const [publicOnly, setPublicOnly] = useState(false);
-  const [privateOnly, setPrivateOnly] = useState(false);
   const [minMembers, setMinMembers] = useState(1000);
   const [minMembersEnabled, setMinMembersEnabled] = useState(true);
 
@@ -158,10 +153,8 @@ export default function GroupScanInfoPage() {
   const [aborting, setAborting] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [resultQuery, setResultQuery] = useState("");
-  const [filterType, setFilterType] = useState("all");
   const [filterMembers, setFilterMembers] = useState("all");
   const [filterKeyword, setFilterKeyword] = useState("all");
-  const [filterNote, setFilterNote] = useState("all");
   const [results, setResults] = useState([]);
   const [keywordStats, setKeywordStats] = useState(() => ({ ...KEYWORD_STATS_SEED }));
   const [selectedRows, setSelectedRows] = useState(() => new Set());
@@ -598,10 +591,11 @@ export default function GroupScanInfoPage() {
       keywords: payloadKeywords,
       delay_min: Math.max(0, Number(delayMin) || 0),
       delay_max: Math.max(Number(delayMin) || 0, Number(delayMax) || 0),
-      public_only: Boolean(publicOnly),
-      private_only: Boolean(privateOnly),
+      // Luồng quét chỉ lấy nhóm Public và không tham gia nhóm (backend cũng ép như vậy).
+      public_only: true,
+      private_only: false,
       min_members: minMembersEnabled ? Math.max(0, Number(minMembers) || 0) : null,
-      auto_join: true,
+      auto_join: false,
       force: true,
     };
   };
@@ -616,10 +610,8 @@ export default function GroupScanInfoPage() {
 
     const tick = async () => {
       try {
-        const status = await getCheckStatus({
-          jobId: checkJobId || undefined,
-          uid: selectedUids[0] || undefined,
-        });
+        // Chỉ theo job_id: đổi danh sách nick lúc đang chạy không được reset vòng poll.
+        const status = await getCheckStatus({ jobId: checkJobId });
         if (stopped || !status) return;
 
         const remoteLogs = Array.isArray(status.logs) ? status.logs : [];
@@ -700,7 +692,7 @@ export default function GroupScanInfoPage() {
       stopped = true;
       clearInterval(timer);
     };
-  }, [checkJobId, running, selectedUids]);
+  }, [checkJobId, running]);
 
   const startRun = async () => {
     if (runState === "running") {
@@ -899,7 +891,6 @@ export default function GroupScanInfoPage() {
   const filteredResults = useMemo(() => {
     const q = resultQuery.trim().toLowerCase();
     return results.filter((row) => {
-      if (filterType !== "all" && row.type !== filterType) return false;
       if (filterMembers !== "all") {
         const count = row.membersCount || 0;
         if (filterMembers === "under50k" && count >= 50000) return false;
@@ -910,22 +901,10 @@ export default function GroupScanInfoPage() {
         const kw = String(row.keyword || "").trim().toLowerCase();
         if (kw !== filterKeyword.trim().toLowerCase()) return false;
       }
-      if (filterNote !== "all") {
-        const n = String(row.note || "—").toLowerCase();
-        if (filterNote === "joined") {
-          if (n !== "joined" && !n.includes("đã tham gia")) return false;
-        } else if (filterNote === "pending") {
-          if (n !== "pending" && !n.includes("đang chờ")) return false;
-        } else if (filterNote === "not_joined") {
-          if (n !== "not_joined" && !n.includes("chưa vào")) return false;
-        } else if (filterNote === "none") {
-          if (n !== "—" && n !== "") return false;
-        }
-      }
       if (!q) return true;
       return `${row.name || ""} ${row.url || ""} ${row.keyword || ""}`.toLowerCase().includes(q);
     });
-  }, [results, resultQuery, filterType, filterMembers, filterKeyword, filterNote]);
+  }, [results, resultQuery, filterMembers, filterKeyword]);
 
   const exportFile = async (format = "xlsx") => {
     const rows = selectedRows.size
@@ -937,13 +916,7 @@ export default function GroupScanInfoPage() {
     }
     try {
       const typeLabel = (t) => (t === "private" ? "Riêng tư" : "Công khai");
-      const noteLabel = (n) => {
-        if (n === "not_joined" || n === "Chưa vào nhóm") return "Chưa vào nhóm";
-        if (n === "joined" || n === "Đã tham gia") return "Đã tham gia";
-        if (n === "pending" || String(n).includes("Đang chờ")) return "Đang chờ QTV duyệt";
-        return n && n !== "—" ? n : "";
-      };
-      const headers = ["STT", "Từ khóa", "Tên nhóm", "Loại nhóm", "Thành viên", "URL nhóm", "Ghi chú"];
+      const headers = ["STT", "Từ khóa", "Tên nhóm", "Loại nhóm", "Thành viên", "URL nhóm"];
       const dataRows = rows.map((row, index) => [
         index + 1,
         row.keyword || "",
@@ -951,7 +924,6 @@ export default function GroupScanInfoPage() {
         typeLabel(row.type),
         row.members || "",
         row.href || (row.url ? `https://${String(row.url).replace(/^https?:\/\//, "")}` : ""),
-        noteLabel(row.note),
       ]);
 
       const now = new Date();
@@ -1091,34 +1063,6 @@ export default function GroupScanInfoPage() {
             onDelayMinChange={setDelayMin}
             delayMax={delayMax}
             onDelayMaxChange={setDelayMax}
-            publicOnly={publicOnly}
-            onPublicOnlyChange={(val) => {
-              const on = Boolean(val);
-              setPublicOnly(on);
-              const both = on && privateOnly;
-              const none = !on && !privateOnly;
-              toast.info(
-                both || none
-                  ? "Đang quét cả công khai và riêng tư."
-                  : on
-                    ? "Đã bật: chỉ quét nhóm công khai (Public)."
-                    : "Đã tắt lọc công khai — chỉ còn lọc riêng tư.",
-              );
-            }}
-            privateOnly={privateOnly}
-            onPrivateOnlyChange={(val) => {
-              const on = Boolean(val);
-              setPrivateOnly(on);
-              const both = on && publicOnly;
-              const none = !on && !publicOnly;
-              toast.info(
-                both || none
-                  ? "Đang quét cả công khai và riêng tư."
-                  : on
-                    ? "Đã bật: chỉ quét nhóm riêng tư (Private) — ghi chú Chưa vào nhóm."
-                    : "Đã tắt lọc riêng tư — chỉ còn lọc công khai.",
-              );
-            }}
             minMembersEnabled={minMembersEnabled}
             onMinMembersEnabledChange={(val) => {
               const on = Boolean(val);
@@ -1200,15 +1144,11 @@ export default function GroupScanInfoPage() {
           selectedRows={selectedRows}
           resultQuery={resultQuery}
           onResultQueryChange={setResultQuery}
-          filterType={filterType}
-          onFilterTypeChange={setFilterType}
           filterMembers={filterMembers}
           onFilterMembersChange={setFilterMembers}
           filterKeyword={filterKeyword}
           onFilterKeywordChange={setFilterKeyword}
           keywordOptions={keywordOptions}
-          filterNote={filterNote}
-          onFilterNoteChange={setFilterNote}
           allVisibleSelected={allVisibleSelected}
           onToggleAllRows={toggleAllRows}
           onToggleRow={(id, checked) => {

@@ -27,8 +27,13 @@ export default function SessionDetailModal({
 
   if (!mounted || !isOpen || !session) return null;
 
-  // If previous tab was 'logs', fallback to 'overview'
-  const currentTab = detailModalTab === "results" ? "results" : "overview";
+  const currentTab = ["results", "logs"].includes(detailModalTab) ? detailModalTab : "overview";
+  const sessionLogs = Array.isArray(session.logs) ? session.logs : [];
+  const LOG_TONE = {
+    SUCCESS: "text-emerald-400",
+    WARNING: "text-amber-400",
+    ERROR: "text-rose-400",
+  };
 
   return createPortal(
     <div
@@ -68,7 +73,7 @@ export default function SessionDetailModal({
           </button>
         </div>
 
-        {/* Modal Nav Tabs (Logs tab removed) */}
+        {/* Modal Nav Tabs */}
         <div className="flex items-center gap-6 px-6 border-b border-slate-100 bg-white text-xs font-semibold">
           <button
             type="button"
@@ -91,6 +96,17 @@ export default function SessionDetailModal({
             }`}
           >
             Dữ liệu mẫu ({session.sampleResults?.length || 0})
+          </button>
+          <button
+            type="button"
+            onClick={() => onTabChange("logs")}
+            className={`py-3.5 border-b-2 transition-colors cursor-pointer ${
+              currentTab === "logs"
+                ? "border-[#2563EB] text-[#2563EB]"
+                : "border-transparent text-slate-500 hover:text-slate-900"
+            }`}
+          >
+            Nhật ký ({sessionLogs.length})
           </button>
         </div>
 
@@ -180,12 +196,50 @@ export default function SessionDetailModal({
             </div>
           )}
 
+          {/* TAB 3: LOGS */}
+          {currentTab === "logs" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                <span className="text-xs font-semibold text-slate-500">
+                  Nhật ký thực thi đã lưu của phiên ({sessionLogs.length} dòng cuối):
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(
+                      sessionLogs.map((l) => `[${l.time || ""}] [${l.level || ""}] ${l.message || ""}`).join("\n")
+                    );
+                    toast.success("Đã copy nhật ký vào Clipboard!");
+                  }}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#2563EB] hover:underline cursor-pointer"
+                >
+                  <Copy className="size-3" />
+                  <span>Copy nhật ký</span>
+                </button>
+              </div>
+              <div className="max-h-[380px] overflow-y-auto rounded-xl bg-[#0F172A] p-3 font-mono text-[11px] leading-5">
+                {sessionLogs.length === 0 ? (
+                  <p className="text-slate-400">Chưa có nhật ký cho phiên này.</p>
+                ) : (
+                  sessionLogs.map((line, idx) => (
+                    <div key={idx} className="flex gap-2">
+                      <span className="shrink-0 text-slate-500">{line.time || "--:--:--"}</span>
+                      <span className={`break-words ${LOG_TONE[String(line.level || "").toUpperCase()] || "text-slate-300"}`}>
+                        {line.message}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
           {/* TAB 2: SAMPLE RESULTS */}
           {currentTab === "results" && (
             <div className="space-y-3">
               <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                 <span className="text-xs font-semibold text-slate-500">
-                  Hiển thị mẫu các nhóm đã trích xuất được trong phiên:
+                  Hiển thị mẫu {session.progress?.unit || "kết quả"} đã trích xuất được trong phiên:
                 </span>
                 <button
                   type="button"
@@ -225,7 +279,7 @@ export default function SessionDetailModal({
                         </span>
                       </div>
                       {(res.url || res.href) && (
-                        <a
+                        <a title="Mở trên Facebook"
                           href={res.url || res.href}
                           target="_blank"
                           rel="noreferrer"

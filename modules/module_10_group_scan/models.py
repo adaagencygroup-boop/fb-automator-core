@@ -112,33 +112,6 @@ DDL_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_scanned_group_members_owner_grp ON scanned_group_members (owner_username, group_id);",
     "CREATE INDEX IF NOT EXISTS idx_scanned_group_members_uid ON scanned_group_members (owner_username, member_uid);",
     "CREATE INDEX IF NOT EXISTS idx_scanned_group_members_time ON scanned_group_members (owner_username, scanned_at DESC);",
-    """
-    CREATE TABLE IF NOT EXISTS scanned_group_posts (
-        id SERIAL PRIMARY KEY,
-        owner_username VARCHAR(100) NOT NULL,
-        group_id VARCHAR(255) NOT NULL,
-        group_name VARCHAR(500),
-        group_url TEXT,
-        post_id VARCHAR(100) NOT NULL,
-        post_url TEXT NOT NULL,
-        content TEXT,
-        author_name VARCHAR(500),
-        author_uid VARCHAR(100),
-        author_url TEXT,
-        likes_count INTEGER DEFAULT 0,
-        comments_count INTEGER DEFAULT 0,
-        shares_count INTEGER DEFAULT 0,
-        posted_at VARCHAR(100),
-        is_pinned BOOLEAN DEFAULT FALSE,
-        session_id VARCHAR(64),
-        scanned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT uq_scanned_group_posts UNIQUE (owner_username, group_id, post_id)
-    );
-    """,
-    "CREATE INDEX IF NOT EXISTS idx_scanned_group_posts_owner_grp ON scanned_group_posts (owner_username, group_id);",
-    "CREATE INDEX IF NOT EXISTS idx_scanned_group_posts_post_id ON scanned_group_posts (owner_username, post_id);",
-    "CREATE INDEX IF NOT EXISTS idx_scanned_group_posts_time ON scanned_group_posts (owner_username, scanned_at DESC);",
 ]
 
 
@@ -208,6 +181,11 @@ def init_models() -> None:
         db.execute("ALTER TABLE scanned_groups ADD COLUMN IF NOT EXISTS note VARCHAR(50) DEFAULT '—';")
     except Exception as exc:
         print(f"[Module 10 DB] add note column error: {exc}")
+    # Nhật ký thật của phiên quét (JSON, tối đa vài trăm dòng cuối)
+    try:
+        db.execute("ALTER TABLE scanned_group_sessions ADD COLUMN IF NOT EXISTS logs TEXT;")
+    except Exception as exc:
+        print(f"[Module 10 DB] add logs column error: {exc}")
 
     _normalize_existing_keywords()
     _sync_keywords_to_categories()
@@ -498,35 +476,50 @@ def list_all_scanned_groups(
     }
 
 
-def delete_scanned_group(owner: Optional[str], group_id_or_id: Any) -> bool:
-    owner = (owner or "").strip()
-    if not owner or not group_id_or_id:
-        return False
-    val = str(group_id_or_id).strip()
-    if val.isdigit():
+def resolve_scanned_group_id(owner: str, group_id_or_id: Any) -> str:
+    """Nhận ID tự tăng của DB, ID nhóm Facebook (số dài hoặc slug) hoặc URL → group_id đã lưu.
+
+    ID nhóm Facebook cũng toàn chữ số, nên chuỗi số được thử như ID tự tăng trước,
+    không có thì coi là ID nhóm.
+    """
+    val = str(group_id_or_id or "").strip()
+    if not val:
+        return ""
+    if "/groups/" in val:
+        return normalize_group_id(val)
+    if val.isdigit() and len(val) < 10:
         row = db.fetch_one(
             "SELECT group_id FROM scanned_groups WHERE owner_username = ? AND id = ?",
             (owner, int(val)),
         )
         if row and row.get("group_id"):
-            db.execute(
-                "DELETE FROM scanned_group_keywords WHERE owner_username = ? AND group_id = ?",
-                (owner, row["group_id"]),
-            )
-        db.execute(
-            "DELETE FROM scanned_groups WHERE owner_username = ? AND id = ?",
-            (owner, int(val)),
+            return str(row["group_id"])
+    return val.lower()
+
+
+def delete_scanned_group(owner: Optional[str], group_id_or_id: Any) -> bool:
+    """Xoá nhóm cùng liên kết từ khóa / danh mục. True nếu thực sự xoá được."""
+    owner = (owner or "").strip()
+    if not owner or not group_id_or_id:
+        return False
+    gid = resolve_scanned_group_id(owner, group_id_or_id)
+    if not gid:
+        return False
+    with db.session() as cur:
+        cur.execute(
+            "DELETE FROM scanned_groups WHERE owner_username = %s AND group_id = %s",
+            (owner, gid),
         )
-    else:
-        db.execute(
-            "DELETE FROM scanned_group_keywords WHERE owner_username = ? AND group_id = ?",
-            (owner, val),
+        deleted = cur.rowcount
+        cur.execute(
+            "DELETE FROM scanned_group_keywords WHERE owner_username = %s AND group_id = %s",
+            (owner, gid),
         )
-        db.execute(
-            "DELETE FROM scanned_groups WHERE owner_username = ? AND group_id = ?",
-            (owner, val),
+        cur.execute(
+            "DELETE FROM scanned_group_category_groups WHERE owner_username = %s AND group_id = %s",
+            (owner, gid),
         )
-    return True
+    return deleted > 0
 
 
 def delete_scanned_groups_bulk(owner: Optional[str], ids: list[Any]) -> int:
@@ -711,6 +704,7 @@ def update_scan_session(
     total_found: Optional[int] = None,
     status: Optional[str] = None,
     finished: bool = False,
+    logs: Optional[list[dict[str, Any]]] = None,
 ) -> bool:
     if not session_id:
         return False
@@ -724,6 +718,11 @@ def update_scan_session(
         params.append(str(status))
     if finished:
         updates.append("finished_at = CURRENT_TIMESTAMP")
+    if logs is not None:
+        from modules.module_10_group_scan.scan_common import session_log_entries
+
+        updates.append("logs = ?")
+        params.append(json.dumps(session_log_entries(logs), ensure_ascii=False))
     if not updates:
         return False
     params.append(session_id)
@@ -741,6 +740,110 @@ def update_scan_session(
 def add_session_log(session_id: str, level: str, message: str) -> None:
     """Không lưu log chi tiết vào database để tối ưu hiệu năng và dung lượng."""
     return
+
+
+_SESSION_UNITS = {"GROUP_INFO": "nhóm", "GROUP_MEMBERS": "thành viên", "GROUP_POSTS": "bài viết"}
+
+_STATUS_TEXT = {
+    "SUCCESS": ("SUCCESS", "Phiên quét hoàn tất"),
+    "FAILED": ("ERROR", "Phiên quét gặp lỗi"),
+    "ERROR": ("ERROR", "Phiên quét gặp lỗi"),
+    "ABORTED": ("WARNING", "Phiên quét đã bị dừng"),
+}
+
+
+def _fmt_dt(value: Any, fmt: str = "%d/%m/%Y %H:%M:%S") -> str:
+    return value.strftime(fmt) if hasattr(value, "strftime") else ""
+
+
+def _legacy_session_logs(status: str, start_str: str, end_str: str, total: int, unit: str) -> list[dict[str, str]]:
+    """Phiên tạo trước khi có cột logs: chỉ dựng từ dữ liệu thật đã lưu, nói rõ là không có log chi tiết."""
+    rows = [{
+        "time": start_str.split(" ")[-1] if start_str else "",
+        "level": "INFO",
+        "message": "Phiên này không có nhật ký chi tiết (được tạo trước khi hệ thống lưu log).",
+    }]
+    if status == "RUNNING":
+        rows.append({"time": "", "level": "INFO", "message": f"Phiên đang chạy — đã thu thập {total} {unit}."})
+    else:
+        level, text = _STATUS_TEXT.get(status, ("INFO", f"Trạng thái: {status or '—'}"))
+        rows.append({
+            "time": end_str.split(" ")[-1] if end_str else "",
+            "level": level,
+            "message": f"{text}. Thu thập được {total} {unit}.",
+        })
+    return rows
+
+
+def _batch_session_samples(owner: str, rows: list[dict[str, Any]], per_session: int = 10) -> dict[str, list[dict[str, Any]]]:
+    """Mẫu kết quả cho nhiều phiên bằng tối đa 3 truy vấn (không N+1)."""
+    samples: dict[str, list[dict[str, Any]]] = {}
+    member_ids = [r["session_id"] for r in rows if r.get("scan_type") == "GROUP_MEMBERS" and r.get("session_id")]
+    keyword_sessions = {
+        r["session_id"]: [normalize_keyword(w) for w in str(r.get("target") or "").split(",") if w.strip()]
+        for r in rows
+        if (r.get("scan_type") or "GROUP_INFO") == "GROUP_INFO"
+        and (r.get("target_type") or "keywords") == "keywords"
+        and r.get("session_id")
+    }
+
+    if member_ids:
+        found = db.fetch_all(
+            """
+            SELECT session_id, member_uid, member_name, profile_url, group_name, role FROM (
+                SELECT m.*, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY id DESC) AS rn
+                FROM scanned_group_members m
+                WHERE owner_username = ? AND session_id = ANY(?)
+            ) t WHERE rn <= ?
+            """,
+            (owner, member_ids, per_session),
+        )
+        for r in found:
+            samples.setdefault(r["session_id"], []).append({
+                "id": r.get("member_uid"),
+                "name": r.get("member_name") or r.get("member_uid"),
+                "members": f"{r.get('group_name') or ''} · {r.get('role') or 'member'}",
+                "url": r.get("profile_url") or f"https://www.facebook.com/{r.get('member_uid')}",
+            })
+
+    all_words = sorted({w for words in keyword_sessions.values() for w in words if w})
+    if all_words:
+        found = db.fetch_all(
+            """
+            SELECT keyword, group_id, group_url, group_name, privacy, members_label FROM (
+                SELECT k.keyword, g.group_id, g.group_url, g.group_name, g.privacy, g.members_label,
+                       ROW_NUMBER() OVER (PARTITION BY k.keyword ORDER BY k.found_at DESC) AS rn
+                FROM scanned_group_keywords k
+                JOIN scanned_groups g ON g.owner_username = k.owner_username AND g.group_id = k.group_id
+                WHERE k.owner_username = ? AND k.keyword = ANY(?)
+            ) t WHERE rn <= ?
+            """,
+            (owner, all_words, per_session),
+        )
+        by_word: dict[str, list[dict[str, Any]]] = {}
+        for r in found:
+            by_word.setdefault(r["keyword"], []).append(r)
+        for sid, words in keyword_sessions.items():
+            seen: set[str] = set()
+            picked: list[dict[str, Any]] = []
+            for word in words:
+                for r in by_word.get(word, []):
+                    gid = str(r.get("group_id") or "")
+                    if gid in seen or len(picked) >= per_session:
+                        continue
+                    seen.add(gid)
+                    href = normalize_group_url(r.get("group_url") or "") or f"https://www.facebook.com/groups/{gid}"
+                    privacy = r.get("privacy")
+                    picked.append({
+                        "id": href,
+                        "name": r.get("group_name") or gid,
+                        "privacy": "Công khai" if privacy == "public" else "Riêng tư" if privacy == "private" else "Không rõ",
+                        "members": f"{r.get('members_label') or '—'} TV",
+                        "url": href,
+                    })
+            if picked:
+                samples[sid] = picked
+    return samples
 
 
 def list_scan_sessions(
@@ -780,7 +883,7 @@ def list_scan_sessions(
         f"""
         SELECT id, session_id, owner_username, scan_type, title, target,
                target_type, source_uid, account_name, total_found, target_count,
-               status, config, started_at, finished_at, created_at
+               status, config, logs, started_at, finished_at, created_at
         FROM scanned_group_sessions
         WHERE {where_clause}
         ORDER BY created_at DESC
@@ -789,65 +892,64 @@ def list_scan_sessions(
         tuple(params + [max(1, int(limit)), max(0, int(offset))]),
     )
 
+    try:
+        samples = _batch_session_samples(owner, rows)
+    except Exception as exc:
+        print(f"[Module 10 DB] session samples error: {exc}")
+        samples = {}
+
     out = []
     for r in rows:
         sid = r.get("session_id") or ""
+        stype = r.get("scan_type") or "GROUP_INFO"
+        unit = _SESSION_UNITS.get(stype, "kết quả")
+        sstatus = str(r.get("status") or "SUCCESS").upper()
         started = r.get("started_at")
         finished = r.get("finished_at")
-        start_str = (
-            started.strftime("%d/%m/%Y %H:%M:%S")
-            if hasattr(started, "strftime")
-            else str(started or "")
-        )
-        end_str = (
-            finished.strftime("%d/%m/%Y %H:%M:%S")
-            if hasattr(finished, "strftime")
-            else "—"
-        )
+        start_str = _fmt_dt(started)
+        end_str = _fmt_dt(finished) or "—"
 
         duration_str = "—"
-        if started and finished and hasattr(finished, "__sub__") and hasattr(started, "year"):
-            try:
-                diff = finished - started
-                sec = int(diff.total_seconds())
-                if sec >= 60:
-                    duration_str = f"{sec // 60}m {sec % 60}s"
-                else:
-                    duration_str = f"{sec}s"
-            except Exception:
-                duration_str = "—"
+        if hasattr(started, "year") and hasattr(finished, "year"):
+            sec = max(0, int((finished - started).total_seconds()))
+            duration_str = f"{sec // 60}m {sec % 60}s" if sec >= 60 else f"{sec}s"
 
         cfg_raw = r.get("config") or "{}"
         try:
-            cfg = json.loads(cfg_raw) if isinstance(cfg_raw, str) else cfg_raw
+            cfg = json.loads(cfg_raw) if isinstance(cfg_raw, str) else dict(cfg_raw or {})
         except Exception:
             cfg = {}
-
         target_words = [w.strip() for w in str(r.get("target") or "").split(",") if w.strip()]
-        sample_results = []
-        if target_words:
-            sample_results = list_groups_for_keywords(owner, target_words, limit=10)
+        if stype == "GROUP_INFO":
+            config_out = {
+                "delay": cfg.get("delay") or "5 - 10s",
+                "privacy": cfg.get("privacy") or "Tất cả",
+                "minMembers": cfg.get("minMembers") or "—",
+                "maxKeywords": cfg.get("maxKeywords") or len(target_words) or 1,
+            }
+            if "autoJoin" in cfg:
+                config_out["autoJoin"] = "Bật" if cfg.get("autoJoin") else "Tắt"
+        else:
+            config_out = {k: v for k, v in cfg.items() if v is not None}
 
-        logs_list = [
-            {
-                "time": start_str.split(" ")[-1] if " " in start_str else "00:00:00",
-                "level": "INFO",
-                "message": f"Bắt đầu phiên quét {sid}",
-            },
-            {
-                "time": end_str.split(" ")[-1] if " " in end_str else "00:00:00",
-                "level": "SUCCESS",
-                "message": f"Hoàn tất quét. Thu thập được {r.get('total_found') or len(sample_results)} kết quả.",
-            },
-        ]
+        total_cnt = int(r.get("total_found") or 0)
+        target_cnt = int(r.get("target_count") or 0) or max(total_cnt, 1)
+        pct = min(100, int((total_cnt / target_cnt) * 100)) if target_cnt > 0 else 0
 
-        total_cnt = int(r.get("total_found") or len(sample_results))
-        target_cnt = int(r.get("target_count") or max(total_cnt, 30))
-        pct = 100 if target_cnt <= 0 else min(100, int((total_cnt / target_cnt) * 100))
+        logs_list: list[dict[str, Any]] = []
+        raw_logs = r.get("logs")
+        if raw_logs:
+            try:
+                parsed = json.loads(raw_logs) if isinstance(raw_logs, str) else raw_logs
+                logs_list = [row for row in parsed if isinstance(row, dict)]
+            except Exception:
+                logs_list = []
+        if not logs_list:
+            logs_list = _legacy_session_logs(sstatus, start_str, "" if end_str == "—" else end_str, total_cnt, unit)
 
         out.append({
             "id": sid,
-            "type": r.get("scan_type") or "GROUP_INFO",
+            "type": stype,
             "title": r.get("title") or "Quét thông tin nhóm",
             "target": r.get("target") or "—",
             "targetType": r.get("target_type") or "keywords",
@@ -861,40 +963,15 @@ def list_scan_sessions(
                 "collected": total_cnt,
                 "target": target_cnt,
                 "percentage": pct,
-                "unit": "nhóm",
+                "unit": unit,
             },
             "startTime": start_str,
             "endTime": end_str,
             "duration": duration_str,
-            "status": r.get("status") or "SUCCESS",
-            "config": {
-                "delay": cfg.get("delay") or "5 - 10s",
-                "privacy": cfg.get("privacy") or "Tất cả",
-                "minMembers": cfg.get("minMembers") or "—",
-                "maxKeywords": cfg.get("maxKeywords") or len(target_words) or 1,
-            },
-            "logs": logs_list or [
-                {
-                    "time": start_str.split(" ")[-1] if " " in start_str else "00:00:00",
-                    "level": "INFO",
-                    "message": f"Bắt đầu phiên quét {sid}",
-                },
-                {
-                    "time": end_str.split(" ")[-1] if " " in end_str else "00:00:00",
-                    "level": "SUCCESS",
-                    "message": f"Hoàn tất quét. Thu thập được {total_cnt} nhóm vào CSDL.",
-                },
-            ],
-            "sampleResults": [
-                {
-                    "id": sr.get("id") or sr.get("url"),
-                    "name": sr.get("name"),
-                    "privacy": "Công khai" if sr.get("type") == "public" else "Riêng tư",
-                    "members": f"{sr.get('members')} TV",
-                    "url": sr.get("href") or f"https://{sr.get('url')}",
-                }
-                for sr in sample_results
-            ],
+            "status": sstatus,
+            "config": config_out,
+            "logs": logs_list,
+            "sampleResults": samples.get(sid, []),
         })
 
     return out
@@ -1060,17 +1137,9 @@ def move_groups_to_category(owner: Optional[str], target_category_name: str, gro
 
     moved_count = 0
     for gid_raw in group_ids:
-        gid_str = str(gid_raw).strip()
-        actual_gid = gid_str
-        if gid_str.isdigit():
-            row = db.fetch_one(
-                "SELECT group_id FROM scanned_groups WHERE owner_username = ? AND id = ?",
-                (owner, int(gid_str)),
-            )
-            if row and row.get("group_id"):
-                actual_gid = row["group_id"]
-        elif "/groups/" in gid_str:
-            actual_gid = normalize_group_id(gid_str)
+        actual_gid = resolve_scanned_group_id(owner, gid_raw)
+        if not actual_gid:
+            continue
 
         try:
             db.execute(
@@ -1454,325 +1523,3 @@ def delete_scanned_group_members_bulk(owner: str, member_ids: list[int]) -> int:
         if delete_scanned_group_member(owner, mid):
             deleted += 1
     return deleted
-
-
-# =========================================================================
-# PHÂN HỆ 10.3: REPO BÀI VIẾT NHÓM (scanned_group_posts)
-# =========================================================================
-
-
-def upsert_scanned_group_post(
-    owner: str,
-    group_id: str,
-    post: dict[str, Any],
-    *,
-    group_name: str = "",
-    group_url: str = "",
-    session_id: str = "",
-) -> bool:
-    owner = (owner or "").strip()
-    group_id = normalize_group_id(group_id)
-    post_id = str(post.get("post_id") or post.get("postId") or "").strip()
-    if not owner or not group_id or not post_id:
-        return False
-
-    post_url = str(post.get("post_url") or post.get("postUrl") or f"https://www.facebook.com/groups/{group_id}/posts/{post_id}/").strip()
-    content = str(post.get("content") or "").strip()
-    author_name = str(post.get("author_name") or post.get("authorName") or "Ẩn danh").strip()
-    author_uid = str(post.get("author_uid") or post.get("authorUid") or "").strip()
-    author_url = str(post.get("author_url") or post.get("authorUrl") or (f"https://www.facebook.com/{author_uid}" if author_uid else "")).strip()
-    likes_count = int(post.get("likes_count") or post.get("likes") or 0)
-    comments_count = int(post.get("comments_count") or post.get("comments") or 0)
-    shares_count = int(post.get("shares_count") or post.get("shares") or 0)
-    posted_at = str(post.get("posted_at") or post.get("postedTime") or "").strip()
-    is_pinned = bool(post.get("is_pinned") or post.get("isPinned") or False)
-
-    try:
-        row = db.fetch_one(
-            "SELECT id FROM scanned_group_posts WHERE owner_username = ? AND group_id = ? AND post_id = ?",
-            (owner, group_id, post_id),
-        )
-        if row:
-            db.execute(
-                """
-                UPDATE scanned_group_posts
-                SET content = ?, author_name = ?, author_uid = ?, author_url = ?,
-                    likes_count = ?, comments_count = ?, shares_count = ?,
-                    posted_at = ?, is_pinned = ?,
-                    group_name = COALESCE(NULLIF(?, ''), group_name),
-                    scanned_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (
-                    content, author_name, author_uid, author_url,
-                    likes_count, comments_count, shares_count,
-                    posted_at, is_pinned,
-                    group_name, row["id"],
-                ),
-            )
-            return False
-        else:
-            db.execute(
-                """
-                INSERT INTO scanned_group_posts (
-                    owner_username, group_id, group_name, group_url,
-                    post_id, post_url, content, author_name, author_uid, author_url,
-                    likes_count, comments_count, shares_count, posted_at, is_pinned,
-                    session_id, scanned_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ON CONFLICT (owner_username, group_id, post_id) DO UPDATE
-                SET content = EXCLUDED.content,
-                    likes_count = EXCLUDED.likes_count,
-                    comments_count = EXCLUDED.comments_count,
-                    shares_count = EXCLUDED.shares_count,
-                    scanned_at = CURRENT_TIMESTAMP
-                """,
-                (
-                    owner, group_id, group_name, group_url,
-                    post_id, post_url, content, author_name, author_uid, author_url,
-                    likes_count, comments_count, shares_count, posted_at, is_pinned,
-                    session_id,
-                ),
-            )
-            return True
-    except Exception as exc:
-        print(f"[Module 10 DB] upsert_scanned_group_post error: {exc}")
-        return False
-
-
-def list_known_post_ids(owner: str, group_id: Optional[str] = None) -> set[str]:
-    owner = (owner or "").strip()
-    if not owner:
-        return set()
-    if group_id:
-        rows = db.fetch_all(
-            "SELECT post_id FROM scanned_group_posts WHERE owner_username = ? AND group_id = ?",
-            (owner, normalize_group_id(group_id)),
-        )
-    else:
-        rows = db.fetch_all(
-            "SELECT DISTINCT post_id FROM scanned_group_posts WHERE owner_username = ?",
-            (owner,),
-        )
-    return {str(r.get("post_id") or "").strip() for r in rows if r.get("post_id")}
-
-
-def list_scanned_group_posts(
-    owner: str,
-    *,
-    group_id: Optional[str] = None,
-    category_id: Optional[str] = None,
-    search: Optional[str] = None,
-    min_likes: Optional[int] = None,
-    min_comments: Optional[int] = None,
-    min_shares: Optional[int] = None,
-    sort_by: Optional[str] = None,
-    page: int = 1,
-    page_size: int = 50,
-) -> tuple[list[dict[str, Any]], int]:
-    owner = (owner or "").strip()
-    if not owner:
-        return [], 0
-
-    where_clauses = ["p.owner_username = ?"]
-    params: list[Any] = [owner]
-
-    if group_id and str(group_id).strip():
-        where_clauses.append("p.group_id = ?")
-        params.append(normalize_group_id(str(group_id).strip()))
-
-    if category_id and str(category_id).strip() and str(category_id).strip() != "cat-all":
-        cat_raw = str(category_id).strip()
-        cat_name = cat_raw.replace("cat-", "")
-        row_c = db.fetch_one(
-            "SELECT name FROM scanned_group_categories WHERE owner_username = ? AND (id::text = ? OR name = ?)",
-            (owner, cat_name, cat_name),
-        )
-        target_name = row_c["name"] if row_c else cat_name
-        where_clauses.append(
-            """
-            p.group_id IN (
-                SELECT group_id FROM scanned_group_category_groups
-                WHERE owner_username = ? AND lower(category_name) = lower(?)
-            )
-            """
-        )
-        params.extend([owner, target_name])
-
-    if search and str(search).strip():
-        term = f"%{str(search).strip().lower()}%"
-        where_clauses.append("(lower(p.content) LIKE ? OR lower(p.post_id) LIKE ? OR lower(p.author_name) LIKE ? OR lower(p.group_name) LIKE ?)")
-        params.extend([term, term, term, term])
-
-    if min_likes is not None and min_likes > 0:
-        where_clauses.append("p.likes_count >= ?")
-        params.append(min_likes)
-
-    if min_comments is not None and min_comments > 0:
-        where_clauses.append("p.comments_count >= ?")
-        params.append(min_comments)
-
-    if min_shares is not None and min_shares > 0:
-        where_clauses.append("p.shares_count >= ?")
-        params.append(min_shares)
-
-    where_sql = " AND ".join(where_clauses)
-
-    count_row = db.fetch_one(
-        f"SELECT COUNT(*) AS total FROM scanned_group_posts p WHERE {where_sql}",
-        tuple(params),
-    )
-    total = int(count_row.get("total") or 0) if count_row else 0
-
-    # BR-GPS-05.2: Công thức xếp hạng Tương tác cao nhất: Like + (Comment * 2) + (Share * 3)
-    order_sql = "p.scanned_at DESC, p.id DESC"
-    if sort_by == "engagement":
-        order_sql = "(p.likes_count + (p.comments_count * 2) + (p.shares_count * 3)) DESC, p.scanned_at DESC"
-    elif sort_by == "likes":
-        order_sql = "p.likes_count DESC, p.scanned_at DESC"
-    elif sort_by == "comments":
-        order_sql = "p.comments_count DESC, p.scanned_at DESC"
-    elif sort_by == "shares":
-        order_sql = "p.shares_count DESC, p.scanned_at DESC"
-    elif sort_by == "latest":
-        order_sql = "p.scanned_at DESC, p.id DESC"
-
-    select_sql = f"""
-        SELECT p.id, p.group_id, p.group_name, p.group_url,
-               p.post_id, p.post_url, p.content, p.author_name, p.author_uid, p.author_url,
-               p.likes_count, p.comments_count, p.shares_count, p.posted_at, p.is_pinned,
-               p.session_id, p.scanned_at
-        FROM scanned_group_posts p
-        WHERE {where_sql}
-        ORDER BY {order_sql}
-        LIMIT ? OFFSET ?
-    """
-    exec_params = list(params)
-    exec_params.extend([max(1, int(page_size)), max(0, (int(page) - 1) * int(page_size))])
-    rows = db.fetch_all(select_sql, tuple(exec_params))
-
-    items = []
-    for r in rows:
-        scanned_at_str = ""
-        if r.get("scanned_at"):
-            try:
-                scanned_at_str = r["scanned_at"].strftime("%d/%m/%Y %H:%M:%S")
-            except Exception:
-                scanned_at_str = str(r["scanned_at"])
-        items.append({
-            "id": r["id"],
-            "group_id": r["group_id"],
-            "group_name": r["group_name"] or r["group_id"],
-            "group_url": r["group_url"] or f"https://www.facebook.com/groups/{r['group_id']}",
-            "post_id": r["post_id"],
-            "postId": r["post_id"],
-            "post_url": r["post_url"] or f"https://www.facebook.com/groups/{r['group_id']}/posts/{r['post_id']}/",
-            "content": r["content"] or "",
-            "author_name": r["author_name"] or "Ẩn danh",
-            "author_uid": r["author_uid"] or "",
-            "author_url": r["author_url"] or "",
-            "likes_count": r["likes_count"] or 0,
-            "likes": r["likes_count"] or 0,
-            "comments_count": r["comments_count"] or 0,
-            "comments": r["comments_count"] or 0,
-            "shares_count": r["shares_count"] or 0,
-            "shares": r["shares_count"] or 0,
-            "engagement_score": (r["likes_count"] or 0) + (r["comments_count"] or 0) * 2 + (r["shares_count"] or 0) * 3,
-            "posted_at": r["posted_at"] or "",
-            "postedTime": r["posted_at"] or "",
-            "is_pinned": bool(r.get("is_pinned")),
-            "session_id": r["session_id"] or "",
-            "scanned_at": scanned_at_str,
-        })
-    return items, total
-
-
-def get_group_posts_summary(owner: str) -> dict[str, Any]:
-    owner = (owner or "").strip()
-    if not owner:
-        return {"total_posts": 0, "total_groups": 0, "total_likes": 0, "total_comments": 0}
-    row = db.fetch_one(
-        """
-        SELECT COUNT(*) AS total_posts,
-               COUNT(DISTINCT group_id) AS total_groups,
-               COALESCE(SUM(likes_count), 0) AS total_likes,
-               COALESCE(SUM(comments_count), 0) AS total_comments
-        FROM scanned_group_posts
-        WHERE owner_username = ?
-        """,
-        (owner,),
-    )
-    if not row:
-        return {"total_posts": 0, "total_groups": 0, "total_likes": 0, "total_comments": 0}
-    return {
-        "total_posts": int(row.get("total_posts") or 0),
-        "total_groups": int(row.get("total_groups") or 0),
-        "total_likes": int(row.get("total_likes") or 0),
-        "total_comments": int(row.get("total_comments") or 0),
-    }
-
-
-def list_groups_with_post_counts(owner: str) -> list[dict[str, Any]]:
-    """Danh sách các nhóm đã có bài viết quét được, kèm số bài (phục vụ cây thư mục cột trái UC-GPS-06)."""
-    owner = (owner or "").strip()
-    if not owner:
-        return []
-    rows = db.fetch_all(
-        """
-        SELECT p.group_id,
-               COALESCE(MAX(p.group_name), p.group_id) AS group_name,
-               COALESCE(MAX(p.group_url), 'https://www.facebook.com/groups/' || p.group_id) AS group_url,
-               COUNT(*) AS post_count,
-               MAX(p.scanned_at) AS last_scanned_at
-        FROM scanned_group_posts p
-        WHERE p.owner_username = ?
-        GROUP BY p.group_id
-        ORDER BY post_count DESC, last_scanned_at DESC
-        """,
-        (owner,),
-    )
-    items = []
-    for r in rows:
-        last_str = ""
-        if r.get("last_scanned_at"):
-            try:
-                last_str = r["last_scanned_at"].strftime("%d/%m/%Y %H:%M")
-            except Exception:
-                last_str = str(r["last_scanned_at"])
-        items.append({
-            "id": r["group_id"],
-            "group_id": r["group_id"],
-            "name": r["group_name"] or r["group_id"],
-            "url": r["group_url"],
-            "post_count": int(r.get("post_count") or 0),
-            "last_scanned_at": last_str,
-        })
-    return items
-
-
-def delete_scanned_group_post(owner: str, post_id_pk: int) -> bool:
-    owner = (owner or "").strip()
-    if not owner or not post_id_pk:
-        return False
-    try:
-        db.execute(
-            "DELETE FROM scanned_group_posts WHERE owner_username = ? AND id = ?",
-            (owner, int(post_id_pk)),
-        )
-        return True
-    except Exception as exc:
-        print(f"[Module 10 DB] delete post {post_id_pk} error: {exc}")
-        return False
-
-
-def delete_scanned_group_posts_bulk(owner: str, post_ids_pk: list[int]) -> int:
-    owner = (owner or "").strip()
-    if not owner or not post_ids_pk:
-        return 0
-    deleted = 0
-    for pid in post_ids_pk:
-        if delete_scanned_group_post(owner, pid):
-            deleted += 1
-    return deleted
-
-

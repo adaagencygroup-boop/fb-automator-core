@@ -39,9 +39,7 @@ export default function GroupScanListPage() {
 
   // Bộ lọc bên phải
   const [tableSearch, setTableSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState("all");
   const [membersFilter, setMembersFilter] = useState("all");
-  const [noteFilter, setNoteFilter] = useState("all");
 
   // Selection
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -162,17 +160,12 @@ export default function GroupScanListPage() {
   const stats = useMemo(() => {
     const totalGroups = categoryGroups.length;
     let totalMembersCount = 0;
-    let nonModerated = 0; // Công khai
-    let moderated = 0; // Riêng tư
+    let largestGroup = 0;
 
     categoryGroups.forEach((g) => {
       if (g.membersCount) {
         totalMembersCount += g.membersCount;
-      }
-      if (g.type === "public") {
-        nonModerated += 1;
-      } else {
-        moderated += 1;
+        largestGroup = Math.max(largestGroup, g.membersCount);
       }
     });
 
@@ -181,8 +174,8 @@ export default function GroupScanListPage() {
     return {
       totalGroups,
       totalMembersFormatted: formatNumber(totalMembersCount),
-      nonModerated,
-      moderated,
+      averageMembersFormatted: formatNumber(totalGroups ? Math.round(totalMembersCount / totalGroups) : 0),
+      largestGroupFormatted: formatNumber(largestGroup),
     };
   }, [categoryGroups]);
 
@@ -199,12 +192,6 @@ export default function GroupScanListPage() {
         if (!matchName && !matchKey && !matchUrl && !matchGid) return false;
       }
 
-      // 2. Filter Loại nhóm
-      if (typeFilter !== "all") {
-        if (typeFilter === "public" && g.type !== "public") return false;
-        if (typeFilter === "private" && g.type !== "private") return false;
-      }
-
       // 3. Filter Thành viên
       if (membersFilter !== "all") {
         const count = g.membersCount || 0;
@@ -214,23 +201,9 @@ export default function GroupScanListPage() {
         if (membersFilter === "over200k" && count <= 200000) return false;
       }
 
-      // 4. Filter Ghi chú
-      if (noteFilter !== "all") {
-        const note = (g.note || "—").toLowerCase();
-        if (noteFilter === "joined") {
-          if (!note.includes("đã tham gia") && note !== "joined") return false;
-        } else if (noteFilter === "pending") {
-          if (!note.includes("đang chờ") && note !== "pending") return false;
-        } else if (noteFilter === "not_joined") {
-          if (!note.includes("chưa vào") && note !== "not_joined") return false;
-        } else if (noteFilter === "none") {
-          if (note !== "—" && note !== "") return false;
-        }
-      }
-
       return true;
     });
-  }, [categoryGroups, tableSearch, typeFilter, membersFilter, noteFilter]);
+  }, [categoryGroups, tableSearch, membersFilter]);
 
   // Pagination calculation
   const totalItems = filteredGroups.length;
@@ -396,14 +369,7 @@ export default function GroupScanListPage() {
     }
     try {
       const typeLabel = (t) => (t === "private" ? "Riêng tư" : "Công khai");
-      const noteLabel = (n) => {
-        if (!n || n === "—") return "—";
-        if (n === "joined" || n === "Đã tham gia") return "Đã tham gia";
-        if (n === "pending" || String(n).includes("Đang chờ")) return "Đang chờ QTV duyệt";
-        if (n === "not_joined" || n === "Chưa vào nhóm") return "Chưa vào nhóm";
-        return n;
-      };
-      const headers = ["STT", "Từ khóa", "Tên nhóm", "Loại nhóm", "Thành viên", "URL nhóm", "Ghi chú"];
+      const headers = ["STT", "Từ khóa", "Tên nhóm", "Loại nhóm", "Thành viên", "URL nhóm"];
       const dataRows = rows.map((g, index) => [
         index + 1,
         g.keyword || "",
@@ -411,7 +377,6 @@ export default function GroupScanListPage() {
         typeLabel(g.type),
         g.members || "",
         g.url || g.href || "",
-        noteLabel(g.note),
       ]);
 
       const now = new Date();
@@ -531,19 +496,9 @@ export default function GroupScanListPage() {
               setTableSearch(val);
               setPage(1);
             }}
-            typeFilter={typeFilter}
-            onTypeFilterChange={(val) => {
-              setTypeFilter(val);
-              setPage(1);
-            }}
             membersFilter={membersFilter}
             onMembersFilterChange={(val) => {
               setMembersFilter(val);
-              setPage(1);
-            }}
-            noteFilter={noteFilter}
-            onNoteFilterChange={(val) => {
-              setNoteFilter(val);
               setPage(1);
             }}
             selectedCount={selectedIds.size}

@@ -352,7 +352,7 @@ export default function HistoryDataTable({
                       Chưa có phiên quét nào được ghi nhận
                     </p>
                     <p className="text-xs text-slate-400">
-                      Các phiên quét nhóm, thành viên và bài viết sẽ hiển thị tại đây sau khi thực thi.
+                      Các phiên quét nhóm và thành viên sẽ hiển thị tại đây sau khi thực thi.
                     </p>
                   </div>
                 </td>

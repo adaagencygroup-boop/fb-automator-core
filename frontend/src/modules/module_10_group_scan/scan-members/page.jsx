@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback } from "react";
 import {
+  Pause,
   Play,
   Square,
 } from "lucide-react";
@@ -11,9 +12,9 @@ import GroupPickerModal from "../components/GroupPickerModal";
 import {
   controlMemberScan,
   getMemberScanStatus,
+  getActiveMemberScan,
   getScanAccounts,
   getScanCategories,
-  getScannedGroups,
   getScannedMembers,
   startMemberScan,
 } from "../service";
@@ -87,7 +88,6 @@ export default function GroupScanMembersPage() {
 
   // --- Group Selection State ---
   const [selectedGroups, setSelectedGroups] = useState([]);
-  const [, setAvailableGroups] = useState([]);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
 
   // Load available groups & categories from Database
@@ -96,56 +96,6 @@ export default function GroupScanMembersPage() {
   const [members, setMembers] = useState([]);
 
   const loadCategoriesAndGroups = useCallback(async () => {
-    try {
-      const res = await getScannedGroups();
-      const list = res?.groups || [];
-      setAvailableGroups(
-        list.map((g, idx) => {
-          const rawGid = String(g.group_id || g.uid || "");
-          const dbId = g.id;
-          let realGid = "";
-          let rawUrl = String(g.url || g.href || "");
-          if (rawUrl.includes("/groups/")) {
-            const parts = rawUrl.split("/groups/")[1].split("/")[0].split("?")[0].trim();
-            if (parts && !/^\d{1,7}$/.test(parts)) {
-              realGid = parts;
-            }
-          }
-          if (!realGid) {
-            if (rawGid && !/^\d{1,7}$/.test(rawGid)) {
-              realGid = rawGid;
-            }
-          }
-          let realUrl = "";
-          if (rawUrl && !/\/groups\/\d{1,7}(?:[/?#]|$)/.test(rawUrl)) {
-            realUrl = rawUrl;
-          } else if (realGid && !/^\d{1,7}$/.test(realGid)) {
-            realUrl = `https://www.facebook.com/groups/${realGid}`;
-          }
-
-          return {
-            id: realGid || String(dbId || idx),
-            groupId: realGid,
-            group_id: realGid,
-            dbId: dbId,
-            stt: String(idx + 1).padStart(2, "0"),
-            name: g.name || g.group_name || realGid || `Nhóm #${dbId}`,
-            uid: realGid,
-            tag: (g.name || "FB").slice(0, 2).toUpperCase(),
-            tagBg: "bg-[#DBEAFE]",
-            tagText: "text-[#2563EB]",
-            type: g.type === "private" ? "private" : "public",
-            typeLabel: g.type === "private" ? "Riêng tư" : "Công khai",
-            members: g.members || "—",
-            memberCount: g.membersCount || 0,
-            url: realUrl,
-          };
-        })
-      );
-    } catch {
-      setAvailableGroups([]);
-    }
-
     try {
       const data = await getScanCategories();
       const cats = Array.isArray(data) ? data : [];
@@ -193,12 +143,12 @@ export default function GroupScanMembersPage() {
   // --- Section 2: Config Steppers & Checkboxes ---
   const [minDelay, setMinDelay] = useState(5);
   const [maxDelay, setMaxDelay] = useState(10);
-  const [switchAccThreshold, setSwitchAccThreshold] = useState(50);
+  const [switchAccThreshold, setSwitchAccThreshold] = useState(5);
   const [membersLimit, setMembersLimit] = useState(50);
 
   const [skipAdmin, setSkipAdmin] = useState(true);
   const [autoDedupe, setAutoDedupe] = useState(true);
-  const [newMembersOnly, setNewMembersOnly] = useState(true);
+  const [newMembersOnly, setNewMembersOnly] = useState(false);
 
   // --- Section 4: Master-Detail Category & Members ---
   const [categorySearch, setCategorySearch] = useState("");
@@ -218,17 +168,37 @@ export default function GroupScanMembersPage() {
   ]);
   const [isExecuting, setIsExecuting] = useState(false);
   const [activeJobId, setActiveJobId] = useState(null);
+  const [isPaused, setIsPaused] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const [controlBusy, setControlBusy] = useState(false);
   const [copiedLog, setCopiedLog] = useState(false);
+
+  // Mở lại trang / F5 trong lúc Engine đang quét → gắn lại vào phiên đó thay vì báo IDLE.
+  useEffect(() => {
+    let cancelled = false;
+    getActiveMemberScan()
+      .then((res) => {
+        if (cancelled || !res?.job_id) return;
+        setActiveJobId(res.job_id);
+        setIsExecuting(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Polling Live Status
   useEffect(() => {
     if (!isExecuting || !activeJobId) return;
+    let notFound = 0;
 
     const interval = setInterval(async () => {
       try {
         const res = await getMemberScanStatus({ jobId: activeJobId });
         const job = res?.job;
         if (!job) return;
+        notFound = 0;
 
         if (Array.isArray(job.logs) && job.logs.length > 0) {
           setLogs(job.logs);
@@ -238,9 +208,14 @@ export default function GroupScanMembersPage() {
           setMembers(job.members);
         }
 
+        setIsPaused(job.status === "paused");
+        setIsStopping(job.status === "stopping");
+
         if (job.status === "done" || job.status === "aborted" || job.status === "error") {
           setIsExecuting(false);
           setActiveJobId(null);
+          setIsPaused(false);
+          setIsStopping(false);
           if (job.status === "done") {
             toast.success(`Đã hoàn thành phiên quét! Thu thập được ${job.total_members_scanned || 0} thành viên.`);
             if (selectedCategory) loadDatabaseMembers(selectedCategory);
@@ -250,8 +225,18 @@ export default function GroupScanMembersPage() {
             toast.error(job.error || "Phiên quét gặp sự cố!");
           }
         }
-      } catch {
-        // Polling error ignored
+      } catch (err) {
+        // Chỉ thôi theo dõi khi Engine xác nhận không còn phiên (404 liên tiếp); lỗi mạng thì poll tiếp.
+        if (err?.status === 404) {
+          notFound += 1;
+          if (notFound === 5) {
+            setIsExecuting(false);
+            setActiveJobId(null);
+            setIsPaused(false);
+            setIsStopping(false);
+            toast.info("Phiên quét không còn trên máy chủ (có thể Engine vừa restart).");
+          }
+        }
       }
     }, 1500);
 
@@ -265,17 +250,40 @@ export default function GroupScanMembersPage() {
   };
 
   // Handle Execute Toggle
+  // Dừng: gửi lệnh rồi tiếp tục poll tới khi worker báo kết thúc (để thấy log cuối).
+  const handleStop = async () => {
+    if (!activeJobId || isStopping || controlBusy) return;
+    setControlBusy(true);
+    try {
+      await controlMemberScan({ jobId: activeJobId, action: "abort" });
+      setIsStopping(true);
+      toast.info("Đang dừng — chờ lưu dữ liệu và đóng trình duyệt...");
+    } catch (err) {
+      // Lệnh dừng không tới được phiên: KHÔNG tự coi là đã dừng (Engine có thể vẫn đang quét).
+      toast.error(err?.message || "Không gửi được lệnh dừng — bấm Dừng lại lần nữa.");
+    } finally {
+      setControlBusy(false);
+    }
+  };
+
+  const handlePauseResume = async () => {
+    if (!activeJobId || isStopping || controlBusy) return;
+    const action = isPaused ? "resume" : "pause";
+    setControlBusy(true);
+    try {
+      await controlMemberScan({ jobId: activeJobId, action });
+      setIsPaused(action === "pause");
+      toast.info(action === "pause" ? "Đã tạm dừng phiên quét." : "Đang tiếp tục quét...");
+    } catch (err) {
+      toast.error(err?.message || "Không gửi được lệnh điều khiển.");
+    } finally {
+      setControlBusy(false);
+    }
+  };
+
   const handleToggleExecution = async () => {
     if (isExecuting) {
-      if (activeJobId) {
-        try {
-          await controlMemberScan({ jobId: activeJobId, action: "abort" });
-        } catch {
-          // ignore
-        }
-      }
-      setIsExecuting(false);
-      toast.info("Đã dừng tiến trình quét thành viên nhóm.");
+      await handleStop();
     } else {
       if (selectedUids.length === 0) {
         toast.error("Vui lòng chọn ít nhất một tài khoản thực thi!");
@@ -518,26 +526,38 @@ export default function GroupScanMembersPage() {
           onRemoveGroup={handleRemoveGroup}
         />
 
-        {/* BIG PRIMARY ACTION BUTTON: BẮT ĐẦU THỰC THI */}
-        <button
-          type="button"
-          onClick={handleToggleExecution}
-          className={`inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl text-sm font-bold tracking-wide text-white transition-colors shadow-sm ${
-            isExecuting ? "bg-[#DC2626] hover:bg-rose-700" : "bg-[#2563EB] hover:bg-blue-600"
-          }`}
-        >
-          {isExecuting ? (
-            <>
+        {/* BIG PRIMARY ACTION BUTTON: BẮT ĐẦU / TẠM DỪNG / DỪNG */}
+        {isExecuting ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={handlePauseResume}
+              disabled={isStopping || controlBusy || !activeJobId}
+              className="inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl bg-[#F59E0B] text-sm font-bold tracking-wide text-white shadow-sm transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isPaused ? <Play className="size-4 fill-white" /> : <Pause className="size-4 fill-white" />}
+              <span>{isPaused ? "TIẾP TỤC QUÉT" : "TẠM DỪNG"}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleStop}
+              disabled={isStopping || controlBusy}
+              className="inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl bg-[#DC2626] text-sm font-bold tracking-wide text-white shadow-sm transition-colors hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
               <Square className="size-4 fill-white" />
-              <span>DỪNG THỰC THI QUÉT</span>
-            </>
-          ) : (
-            <>
-              <Play className="size-4 fill-white" />
-              <span>BẮT ĐẦU THỰC THI</span>
-            </>
-          )}
-        </button>
+              <span>{isStopping ? "ĐANG DỪNG..." : "DỪNG THỰC THI QUÉT"}</span>
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={handleToggleExecution}
+            className="inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl bg-[#2563EB] text-sm font-bold tracking-wide text-white shadow-sm transition-colors hover:bg-blue-600"
+          >
+            <Play className="size-4 fill-white" />
+            <span>BẮT ĐẦU THỰC THI</span>
+          </button>
+        )}
 
         {/* SECTION 4: Kết quả quét thành viên (Master-Detail 2 cột) */}
         <LiveMemberResultSection

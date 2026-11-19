@@ -211,7 +211,7 @@ export default function AdvancedScanFilterCard({
             className="size-4 text-[#2563EB] rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
           />
           <span className="text-xs font-medium text-[#334155]">
-            Chỉ quét thành viên mới tham gia gần đây
+            Chỉ quét thành viên mới tham gia trong 30 ngày gần đây
           </span>
         </label>
       </div>

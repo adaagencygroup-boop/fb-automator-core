@@ -215,7 +215,7 @@ export default function LiveMemberResultSection({
                             rel="noreferrer"
                             className="inline-flex items-center gap-1 font-mono text-[11px] text-[#2563EB] hover:underline"
                           >
-                            <span>{member.shortUid}</span>
+                            <span title={member.uid || undefined}>{member.shortUid}</span>
                             <ExternalLink className="size-3 text-[#2563EB]" />
                           </a>
                         </td>

@@ -121,7 +121,7 @@ export default function SaveSharedGroupModal({
               Lưu vào danh sách nhóm chung
             </h3>
           </div>
-          <button
+          <button title="Đóng"
             type="button"
             onClick={onClose}
             className="size-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"

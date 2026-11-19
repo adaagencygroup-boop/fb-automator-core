@@ -1,10 +1,59 @@
 "use client";
 
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { IconInfo } from "../../components/icons";
 
-const inputClass =
-  "h-8 rounded-lg border border-[#E2E8F0] bg-white px-2 text-center text-xs font-bold text-[#0F172A] outline-none focus:border-[#2563EB] disabled:bg-slate-100";
+/** Backend giới hạn cứng 200 nhóm / từ khóa (HARD_MAX_GROUPS). */
+const QUOTA_MIN = 1;
+const QUOTA_MAX = 200;
+
+const arrowClass =
+  "flex h-3.5 w-5 items-center justify-center rounded text-[#5B6478] hover:bg-[#DBE4FF] hover:text-[#1B45A3] disabled:opacity-30 disabled:hover:bg-transparent";
+
+/** Ô số có mũi tên lên / xuống — cùng kiểu với SuffixInput của Module 04. */
+function QuotaInput({ value, onChange, label }) {
+  const current = Number(value);
+  const clamp = (n) => Math.max(QUOTA_MIN, Math.min(QUOTA_MAX, n));
+  const bump = (delta) => onChange(clamp((Number.isFinite(current) ? current : QUOTA_MIN) + delta));
+
+  return (
+    <div className="flex h-8 w-20 items-center rounded-lg border border-[#E2E8F0] bg-white pl-2 pr-0.5 focus-within:border-[#2563EB]">
+      <input
+        type="number"
+        inputMode="numeric"
+        min={QUOTA_MIN}
+        max={QUOTA_MAX}
+        value={value}
+        aria-label={label}
+        onChange={(event) => onChange(clamp(Number(event.target.value) || QUOTA_MIN))}
+        className="min-w-0 flex-1 bg-transparent text-center text-xs font-bold text-[#0F172A] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      />
+      <span className="flex shrink-0 flex-col">
+        <button
+          type="button"
+          tabIndex={-1}
+          disabled={current >= QUOTA_MAX}
+          onClick={() => bump(1)}
+          aria-label="Tăng số nhóm"
+          className={arrowClass}
+        >
+          <ChevronUp className="size-3" strokeWidth={2.5} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          tabIndex={-1}
+          disabled={current <= QUOTA_MIN}
+          onClick={() => bump(-1)}
+          aria-label="Giảm số nhóm"
+          className={arrowClass}
+        >
+          <ChevronDown className="size-3" strokeWidth={2.5} aria-hidden="true" />
+        </button>
+      </span>
+    </div>
+  );
+}
 
 export default function ScanTargetConfigCard({
   method,
@@ -24,10 +73,6 @@ export default function ScanTargetConfigCard({
   onDelayMinChange,
   delayMax,
   onDelayMaxChange,
-  publicOnly,
-  onPublicOnlyChange,
-  privateOnly,
-  onPrivateOnlyChange,
   minMembersEnabled,
   onMinMembersEnabledChange,
   minMembers,
@@ -64,15 +109,10 @@ export default function ScanTargetConfigCard({
                   >
                     <span className="truncate text-xs font-medium text-[#0F172A]">{word}</span>
                     <div className="flex items-center gap-1.5 shrink-0">
-                      <input
-                        type="number"
-                        min={1}
-                        max={5000}
+                      <QuotaInput
                         value={quotas[word] ?? 30}
-                        onChange={(event) =>
-                          onQuotaChange(word, Math.max(1, Math.min(5000, Number(event.target.value) || 1)))
-                        }
-                        className={`${inputClass} w-16`}
+                        onChange={(val) => onQuotaChange(word, val)}
+                        label={`Số nhóm cần quét cho từ khóa ${word}`}
                       />
                       <span className="text-[11px] text-[#94A3B8]">nhóm</span>
                     </div>
@@ -186,21 +226,10 @@ export default function ScanTargetConfigCard({
           </div>
         </div>
 
-        <label className="flex cursor-pointer items-center gap-2 text-xs text-[#0F172A]">
-          <Checkbox
-            checked={publicOnly}
-            onCheckedChange={onPublicOnlyChange}
-          />
-          Chỉ quét nhóm đang ở chế độ công khai
-        </label>
-
-        <label className="flex cursor-pointer items-center gap-2 text-xs text-[#0F172A]">
-          <Checkbox
-            checked={privateOnly}
-            onCheckedChange={onPrivateOnlyChange}
-          />
-          Chỉ quét nhóm đang ở chế độ riêng tư
-        </label>
+        <div className="flex items-start gap-2 rounded-lg border border-[#BFDBFE] bg-[#EFF6FF] px-3 py-2 text-[11px] leading-5 text-[#1E40AF]">
+          <IconInfo className="mt-0.5" />
+          <span>Chỉ quét nhóm <b>công khai</b>. Nhóm riêng tư được bỏ qua và tài khoản không tham gia nhóm nào.</span>
+        </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2">
           <label className="flex cursor-pointer items-center gap-2 text-xs text-[#0F172A]">
