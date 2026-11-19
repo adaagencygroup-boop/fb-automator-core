@@ -43,24 +43,11 @@ function formatTV(count) {
   return count.toLocaleString("vi-VN") + " TV";
 }
 
-const TYPE_FILTER_OPTIONS = [
-  { value: "all", label: "Loại nhóm: Tất cả" },
-  { value: "public", label: "Công khai" },
-  { value: "private", label: "Riêng tư" },
-];
-
 const MEMBERS_FILTER_OPTIONS = [
   { value: "all", label: "Thành viên: Tất cả" },
   { value: "under50k", label: "Dưới 50K" },
   { value: "50k_200k", label: "50K - 200K" },
   { value: "over200k", label: "Trên 200K" },
-];
-
-const NOTE_FILTER_OPTIONS = [
-  { value: "all", label: "Ghi chú: Tất cả" },
-  { value: "joined", label: "Đã tham gia" },
-  { value: "pending", label: "Đang chờ" },
-  { value: "none", label: "Chưa tham gia" },
 ];
 
 const PAGE_SIZE_OPTIONS = [
@@ -89,9 +76,7 @@ export default function GroupPickerModal({
 
   // Filter toolbar states
   const [tableSearch, setTableSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState("all");
   const [membersFilter, setMembersFilter] = useState("all");
-  const [noteFilter, setNoteFilter] = useState("all");
 
   // Selection state (Set of group IDs)
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -115,7 +100,7 @@ export default function GroupPickerModal({
     if (open) {
       const initialSet = new Set(
         (selectedGroups || [])
-          .flatMap((g) => [g.id, g.group_id, g.groupId, g.uid, g.dbId])
+          .map((g) => g.group_id || g.groupId || g.uid || g.id || g.dbId)
           .filter(Boolean)
           .map(String)
       );
@@ -191,7 +176,6 @@ export default function GroupPickerModal({
           url: realUrl,
           href: realUrl,
           keyword: g.keyword || g.category_name || "",
-          note: g.note || (g.joined ? "Đã tham gia" : "—"),
         };
       });
 
@@ -309,12 +293,6 @@ export default function GroupPickerModal({
         if (!matchName && !matchKey && !matchUrl && !matchGid) return false;
       }
 
-      // 2. Filter Loại nhóm
-      if (typeFilter !== "all") {
-        if (typeFilter === "public" && g.type !== "public") return false;
-        if (typeFilter === "private" && g.type !== "private") return false;
-      }
-
       // 3. Filter Thành viên
       if (membersFilter !== "all") {
         const count = g.membersCount || 0;
@@ -323,17 +301,9 @@ export default function GroupPickerModal({
         if (membersFilter === "over200k" && count <= 200000) return false;
       }
 
-      // 4. Filter Ghi chú
-      if (noteFilter !== "all") {
-        const note = g.note || "—";
-        if (noteFilter === "joined" && !note.includes("Đã tham gia")) return false;
-        if (noteFilter === "pending" && !note.includes("Đang chờ")) return false;
-        if (noteFilter === "none" && note !== "—") return false;
-      }
-
       return true;
     });
-  }, [categoryGroups, tableSearch, typeFilter, membersFilter, noteFilter]);
+  }, [categoryGroups, tableSearch, membersFilter]);
 
   // Pagination calculation
   const totalItems = filteredGroups.length;
@@ -517,7 +487,6 @@ export default function GroupPickerModal({
         url: g.url || (g.group_id && !/^\d{1,7}$/.test(g.group_id) ? `https://www.facebook.com/groups/${g.group_id}` : ""),
         href: g.url || (g.group_id && !/^\d{1,7}$/.test(g.group_id) ? `https://www.facebook.com/groups/${g.group_id}` : ""),
         keyword: g.keyword,
-        note: g.note,
       }));
 
     if (onConfirm) {
@@ -734,17 +703,6 @@ export default function GroupPickerModal({
                     />
                   </div>
 
-                  <div className="w-full sm:w-auto shrink-0 min-w-[130px]">
-                    <CustomSelect
-                      value={typeFilter}
-                      onChange={(val) => {
-                        setTypeFilter(val);
-                        setPage(1);
-                      }}
-                      options={TYPE_FILTER_OPTIONS}
-                      size="sm"
-                    />
-                  </div>
 
                   <div className="w-full sm:w-auto shrink-0 min-w-[135px]">
                     <CustomSelect
@@ -758,17 +716,6 @@ export default function GroupPickerModal({
                     />
                   </div>
 
-                  <div className="w-full sm:w-auto shrink-0 min-w-[135px]">
-                    <CustomSelect
-                      value={noteFilter}
-                      onChange={(val) => {
-                        setNoteFilter(val);
-                        setPage(1);
-                      }}
-                      options={NOTE_FILTER_OPTIONS}
-                      size="sm"
-                    />
-                  </div>
                 </div>
 
                 {/* Blue Selection Banner - Chỉ hiển thị khi có ít nhất 1 nhóm được chọn */}
@@ -844,7 +791,6 @@ export default function GroupPickerModal({
                           <th className="w-24 px-3 py-2.5 text-center">LOẠI NHÓM</th>
                           <th className="w-28 px-3 py-2.5 text-right">THÀNH VIÊN</th>
                           <th className="w-56 px-3 py-2.5">LIÊN KẾT / URL NHÓM</th>
-                          <th className="w-28 px-3 py-2.5 text-center">GHI CHÚ</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#F1F5F9] bg-white">
@@ -912,15 +858,6 @@ export default function GroupPickerModal({
                                   <span className="truncate">{group.url}</span>
                                   <ExternalLink className="size-3 shrink-0 text-slate-400" />
                                 </a>
-                              </td>
-                              <td className="px-3 py-2.5 text-center">
-                                {group.note && group.note.includes("Đã tham gia") ? (
-                                  <span className="inline-flex items-center justify-center rounded bg-[#EFF6FF] border border-[#BFDBFE] px-2 py-0.5 text-[11px] font-semibold text-[#2563EB]">
-                                    Đã tham gia
-                                  </span>
-                                ) : (
-                                  <span className="text-slate-400">—</span>
-                                )}
                               </td>
                             </tr>
                           );

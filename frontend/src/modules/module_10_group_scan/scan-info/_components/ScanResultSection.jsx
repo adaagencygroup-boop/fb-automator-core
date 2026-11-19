@@ -10,24 +10,11 @@ import {
   IconSearch,
 } from "../../components/icons";
 
-const RESULT_TYPE_OPTIONS = [
-  { value: "all", label: "Loại nhóm: Tất cả" },
-  { value: "public", label: "Công khai" },
-  { value: "private", label: "Riêng tư" },
-];
-
 const RESULT_MEMBERS_OPTIONS = [
   { value: "all", label: "Thành viên: Tất cả" },
   { value: "under50k", label: "Dưới 50.000" },
   { value: "50k_200k", label: "50.000 - 200.000" },
   { value: "over200k", label: "Trên 200.000" },
-];
-
-const RESULT_NOTE_OPTIONS = [
-  { value: "all", label: "Ghi chú: Tất cả" },
-  { value: "not_joined", label: "Chưa vào nhóm" },
-  { value: "joined", label: "Đã tham gia" },
-  { value: "pending", label: "Đang chờ QTV duyệt" },
 ];
 
 export function TypeBadge({ type }) {
@@ -45,31 +32,6 @@ export function TypeBadge({ type }) {
   );
 }
 
-export function NoteBadge({ note }) {
-  if (note === "joined" || note === "Đã tham gia") {
-    return (
-      <span className="inline-flex whitespace-nowrap rounded-full bg-[#DBEAFE] px-2 py-0.5 text-[10px] font-semibold text-[#1D4ED8]">
-        Đã tham gia
-      </span>
-    );
-  }
-  if (note === "pending" || note === "Đang chờ QTV duyệt" || (typeof note === "string" && note.includes("Đang chờ"))) {
-    return (
-      <span className="inline-flex whitespace-nowrap rounded-full bg-[#FFEDD5] px-2 py-0.5 text-[10px] font-semibold text-[#C2410C]">
-        Đang chờ QTV duyệt
-      </span>
-    );
-  }
-  if (note === "not_joined" || note === "Chưa vào nhóm") {
-    return (
-      <span className="inline-flex whitespace-nowrap rounded-full bg-[#FEE2E2] px-2 py-0.5 text-[10px] font-semibold text-[#B91C1C]">
-        Chưa vào nhóm
-      </span>
-    );
-  }
-  return <span className="text-[11px] text-[#94A3B8]">{note || "—"}</span>;
-}
-
 export default function ScanResultSection({
   results,
   filteredResults,
@@ -80,15 +42,11 @@ export default function ScanResultSection({
   selectedRows,
   resultQuery,
   onResultQueryChange,
-  filterType,
-  onFilterTypeChange,
   filterMembers,
   onFilterMembersChange,
   filterKeyword,
   onFilterKeywordChange,
   keywordOptions,
-  filterNote,
-  onFilterNoteChange,
   allVisibleSelected,
   onToggleAllRows,
   onToggleRow,
@@ -193,15 +151,6 @@ export default function ScanResultSection({
         </div>
         <div className="w-full sm:w-auto sm:flex-1 sm:min-w-[130px]">
           <CustomSelect
-            value={filterType}
-            onChange={onFilterTypeChange}
-            options={RESULT_TYPE_OPTIONS}
-            size="sm"
-            className="w-full"
-          />
-        </div>
-        <div className="w-full sm:w-auto sm:flex-1 sm:min-w-[130px]">
-          <CustomSelect
             value={filterMembers}
             onChange={onFilterMembersChange}
             options={RESULT_MEMBERS_OPTIONS}
@@ -214,15 +163,6 @@ export default function ScanResultSection({
             value={filterKeyword}
             onChange={onFilterKeywordChange}
             options={keywordOptions}
-            size="sm"
-            className="w-full"
-          />
-        </div>
-        <div className="w-full sm:w-auto sm:flex-1 sm:min-w-[130px]">
-          <CustomSelect
-            value={filterNote}
-            onChange={onFilterNoteChange}
-            options={RESULT_NOTE_OPTIONS}
             size="sm"
             className="w-full"
           />
@@ -242,13 +182,12 @@ export default function ScanResultSection({
               <th className="whitespace-nowrap px-3 py-2.5">Loại nhóm</th>
               <th className="px-3 py-2.5">Thành viên</th>
               <th className="px-3 py-2.5">Liên kết / URL nhóm</th>
-              <th className="px-3 py-2.5">Ghi chú</th>
             </tr>
           </thead>
           <tbody>
             {filteredResults.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-14 text-center text-sm text-[#94A3B8]">
+                <td colSpan={7} className="px-4 py-14 text-center text-sm text-[#94A3B8]">
                   Chưa có kết quả. Chọn tài khoản và bấm Bắt đầu khi luồng quét đã nối.
                 </td>
               </tr>
@@ -278,9 +217,6 @@ export default function ScanResultSection({
                       {row.url}
                       <IconExternal color="#2563EB" />
                     </a>
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <NoteBadge note={row.note} />
                   </td>
                 </tr>
               ))

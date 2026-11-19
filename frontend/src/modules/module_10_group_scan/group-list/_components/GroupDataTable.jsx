@@ -60,9 +60,6 @@ export default function GroupDataTable({
               <th className="px-3 py-2 text-[11px] font-bold uppercase text-[#475569]">
                 LIÊN KẾT / URL NHÓM
               </th>
-              <th className="px-3 py-2 text-[11px] font-bold uppercase text-[#475569]">
-                GHI CHÚ
-              </th>
               <th className="w-20 px-3 py-2 text-center text-[11px] font-bold uppercase text-[#475569]">
                 THAO TÁC
               </th>
@@ -71,7 +68,7 @@ export default function GroupDataTable({
           <tbody className="divide-y divide-[#F1F5F9]">
             {loading ? (
               <tr>
-                <td colSpan={9} className="py-12 text-center text-xs text-slate-500">
+                <td colSpan={8} className="py-12 text-center text-xs text-slate-500">
                   <div className="flex items-center justify-center gap-2">
                     <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
                     <span>Đang tải danh sách nhóm từ Database...</span>
@@ -81,7 +78,7 @@ export default function GroupDataTable({
             ) : paginatedGroups.length === 0 ? (
               <tr>
                 <td
-                  colSpan={9}
+                  colSpan={8}
                   className="py-12 text-center text-xs text-slate-400"
                 >
                   Không tìm thấy nhóm nào phù hợp trong danh mục này.
@@ -151,25 +148,6 @@ export default function GroupDataTable({
                         <span className="truncate">{g.url || g.href}</span>
                         <ExternalLink className="w-3 h-3 shrink-0 text-[#94A3B8]" />
                       </a>
-                    </td>
-
-                    {/* GHI CHÚ */}
-                    <td className="px-3 py-4 text-xs">
-                      {g.note === "joined" || g.note === "Đã tham gia" ? (
-                        <span className="inline-flex items-center px-2.5 py-1 rounded-[10px] text-[11px] font-medium bg-[#EFF6FF] border border-[#BFDBFE] text-[#1D4ED8]">
-                          Đã tham gia
-                        </span>
-                      ) : g.note === "pending" || g.note === "Đang chờ QTV duyệt" || (typeof g.note === "string" && g.note.includes("Đang chờ")) ? (
-                        <span className="inline-flex items-center px-2.5 py-1 rounded-[10px] text-[11px] font-medium bg-[#FFFBEB] border border-[#FDE68A] text-[#B45309]">
-                          Đang chờ QTV duyệt
-                        </span>
-                      ) : g.note === "not_joined" || g.note === "Chưa vào nhóm" ? (
-                        <span className="inline-flex items-center px-2.5 py-1 rounded-[10px] text-[11px] font-medium bg-[#FEF2F2] border border-[#FECACA] text-[#DC2626]">
-                          Chưa vào nhóm
-                        </span>
-                      ) : (
-                        <span className="text-[#94A3B8]">{g.note || "—"}</span>
-                      )}
                     </td>
 
                     {/* THAO TÁC ĐƠN LẺ (UC-GIS-10) */}

@@ -17,6 +17,17 @@ import time
 import uuid
 from typing import Any, Optional
 
+from modules.module_10_group_scan.scan_common import (
+    TERMINAL_STATUSES,
+    close_account_session,
+    interruptible_sleep,
+    is_post_older_than_days,
+    open_account_session,
+    prune_jobs,
+    resolve_group_identity,
+    wait_while_paused,
+)
+
 logger = logging.getLogger(__name__)
 
 _post_jobs: dict[str, dict[str, Any]] = {}
@@ -38,6 +49,12 @@ return (() => {
     return href;
   };
   const gidFromLoc = () => (location.pathname.match(/\\/groups\\/([^/]+)/) || [])[1] || '';
+  // URL đang mở có thể dùng slug (tên nhóm) trong khi link bài dùng ID số → khi đó không so được.
+  const sameGroup = (part, gid) => {
+    if (!gid) return true;
+    if (String(part).toLowerCase() === String(gid).toLowerCase()) return true;
+    return !/^\\d+$/.test(String(gid));
+  };
   const permalinkUrl = (gid, id) => {
     if (!gid || !id) return '';
     // Chuẩn user cần: /groups/{gid}/permalink/{id}/
@@ -54,16 +71,11 @@ return (() => {
       .replace(/\\\\u002F/g, '/')
       .replace(/%2F/gi, '/')
       .replace(/\\\\u00253D/g, '=');
-    let m = raw.match(/\\/groups\\/[^/]+\\/(?:posts|permalink)\\/(pfbid[\\w]+|\\d+)/i);
-    if (m) return { id: m[1], url: permalinkUrl(gid, m[1]), source: 'href-path' };
-    m = raw.match(/[?&]multi_permalinks=(\\d{6,})/i);
-    if (m) return { id: m[1], url: permalinkUrl(gid, m[1]), source: 'href-multi' };
-    m = raw.match(/[?&]story_fbid=(\\d{6,})/i);
-    if (m) return { id: m[1], url: permalinkUrl(gid, m[1]), source: 'href-story' };
-    m = raw.match(/permalink\\.php\\?[^#]*story_fbid=(\\d{6,})/i);
-    if (m) return { id: m[1], url: permalinkUrl(gid, m[1]), source: 'href-php' };
-    m = raw.match(/\\/(?:posts|permalink)\\/(pfbid[\\w]+|\\d+)/i);
-    if (m) return { id: m[1], url: permalinkUrl(gid, m[1]), source: 'href-loose' };
+    // Chỉ nhận link bài của CHÍNH nhóm đang quét (tránh bài được share từ nhóm khác).
+    let m = raw.match(/\\/groups\\/([^/?#]+)\\/(?:posts|permalink)\\/(pfbid[\\w]+|\\d{6,})/i);
+    if (m && sameGroup(m[1], gid)) return { id: m[2], url: permalinkUrl(gid, m[2]), source: 'href-path' };
+    m = raw.match(/\\/groups\\/([^/?#]+)\\/?\\?[^#]*multi_permalinks=(\\d{6,})/i);
+    if (m && sameGroup(m[1], gid)) return { id: m[2], url: permalinkUrl(gid, m[2]), source: 'href-multi' };
     return null;
   };
 
@@ -103,52 +115,18 @@ return (() => {
   const extractIdFromHtml = (html, gid, banned) => {
     if (!html) return null;
     const text = decodeHtmlBlob(html);
-    const patterns = [
-      [/\\/groups\\/[^/"'\\\\]+\\/(?:posts|permalink)\\/(pfbid[\\w]+|\\d+)/i, 'html-path'],
-      [/multi_permalinks(?:=|%3D)(\\d{6,})/i, 'html-multi'],
-      [/"top_level_post_id"\\s*:\\s*"(\\d{6,})"/i, 'json-top'],
-      [/"post_id"\\s*:\\s*"(\\d{10,})"/i, 'json-post'],
-      [/"story_fbid"\\s*:\\s*"(\\d{6,})"/i, 'json-story'],
-      [/story_fbid(?:=|%3D)(\\d{6,})/i, 'html-story'],
-      [/"id"\\s*:\\s*"(pfbid[\\w]+)"/i, 'json-pfbid'],
-      [/subscription_target_id["\\s:]+["']?(\\d{10,})/i, 'json-sub'],
-      [/"legacy_story_id"[\\s:]+"(\\d{10,})"/i, 'json-legacy'],
-    ];
-    for (const [re, source] of patterns) {
-      const m = text.match(re);
-      if (!m) continue;
-      const id = m[1];
-      if (!id || banned.has(String(id))) continue;
-      if (/^\\d+$/.test(id) && id.length < 10) continue;
-      return { id, url: permalinkUrl(gid, id), source };
-    }
-    return null;
-  };
-
-  // Heuristic: ID số dài trong HTML khung bài, không phải user/group id
-  const extractNumericCandidate = (html, gid, banned) => {
-    const text = decodeHtmlBlob(html);
-    const counts = new Map();
-    const re = /\\b(\\d{14,18})\\b/g;
+    // Chỉ các dấu hiệu chắc chắn là ID của CHÍNH bài này. Không đoán theo "số dài nhất / xuất hiện nhiều nhất":
+    // cách đó từng lấy nhầm ID ảnh / số rác (vd 5018518518518518) → link bài không mở được.
+    const pathRe = /\\/groups\\/([^/"'\\\\?#]+)\\/(?:posts|permalink)\\/(pfbid[\\w]+|\\d{6,})/ig;
     let m;
-    while ((m = re.exec(text)) !== null) {
-      const id = m[1];
-      if (banned.has(id) || id === String(gid)) continue;
-      counts.set(id, (counts.get(id) || 0) + 1);
-    }
-    if (!counts.size) return null;
-    // Ưu tiên ID xuất hiện nhiều lần; nếu hòa thì ID dài hơn
-    let best = null;
-    let bestScore = -1;
-    for (const [id, cnt] of counts.entries()) {
-      const score = cnt * 10 + id.length;
-      if (score > bestScore) {
-        bestScore = score;
-        best = id;
+    while ((m = pathRe.exec(text)) !== null) {
+      if (sameGroup(m[1], gid) && !banned.has(String(m[2]))) {
+        return { id: m[2], url: permalinkUrl(gid, m[2]), source: 'html-path' };
       }
     }
-    if (!best) return null;
-    return { id: best, url: permalinkUrl(gid, best), source: 'numeric-heuristic' };
+    m = text.match(/"top_level_post_id"\\s*:\\s*"(\\d{10,})"/i);
+    if (m && !banned.has(String(m[1]))) return { id: m[1], url: permalinkUrl(gid, m[1]), source: 'json-top' };
+    return null;
   };
 
   const resolveTimeLink = (scope, gid) => {
@@ -193,13 +171,6 @@ return (() => {
     if (found) return { ...found, samples };
     if (scope !== root) {
       found = extractIdFromHtml(root.outerHTML || root.innerHTML || '', gid, banned);
-      if (found) return { ...found, samples };
-    }
-
-    found = extractNumericCandidate(htmlScope, gid, banned);
-    if (found) return { ...found, samples };
-    if (scope !== root) {
-      found = extractNumericCandidate(root.outerHTML || root.innerHTML || '', gid, banned);
       if (found) return { ...found, samples };
     }
 
@@ -258,17 +229,42 @@ return (() => {
     return { likes, comments, shares };
   };
 
+  const TIME_RE = new RegExp(
+    '^(' +
+      '\\\\d+\\\\s*(giây|phút|giờ|tiếng|ngày|tuần|tháng|năm|secs?|mins?|hrs?|days?|wks?|weeks?|mos?|months?|yrs?|years?|s|m|h|d|w|y)(?=$|[\\\\s·,.])' +
+      '|vừa xong|just now|hôm qua|yesterday|một ngày|a day' +
+      '|\\\\d{1,2}\\\\s*tháng\\\\s*\\\\d{1,2}' +
+      '|\\\\d{1,2}\\\\/\\\\d{1,2}' +
+      '|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\\\.?\\\\s+\\\\d{1,2}' +
+      '|\\\\d{1,2}\\\\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*' +
+    ')',
+    'i'
+  );
+
   const postedTimeFrom = (root) => {
     const scope = scopeForLinks(root);
     const candidates = scope.querySelectorAll('a[href], span, abbr');
     for (const el of candidates) {
       const t = clean(el.getAttribute('title') || el.innerText || '');
-      if (!t || t.length > 32) continue;
-      if (/^(\\d+\\s*(giây|phút|giờ|ngày|tuần|tháng|năm|s|m|h|d|w)|vừa xong|yesterday|yesterday|một ngày|a day|\\d+\\s*days?)/i.test(t)) {
-        return t;
-      }
+      if (!t || t.length > 40) continue;
+      if (TIME_RE.test(t)) return t;
     }
     return '';
+  };
+
+  const PINNED_RE = /(pinned post|bài viết đã ghim|bài viết được ghim|đã ghim|pinned by|ghim bởi)/i;
+  const FEATURED_RE = /^(featured|nổi bật|đáng chú ý)$/i;
+  const pinnedFrom = (root, content) => {
+    const scope = scopeForLinks(root);
+    for (const el of scope.querySelectorAll('[aria-label]')) {
+      if (PINNED_RE.test(el.getAttribute('aria-label') || '')) return true;
+    }
+    // Chỉ xét phần đầu bài (trước nội dung), tránh khớp chữ trong thân bài.
+    let head = scope.innerText || '';
+    const cut = content ? head.indexOf(content.slice(0, 30)) : -1;
+    head = cut > 0 ? head.slice(0, cut) : head.slice(0, 200);
+    if (PINNED_RE.test(head)) return true;
+    return head.split('\\n').some((line) => FEATURED_RE.test(clean(line)));
   };
 
   const roots = Array.from(document.querySelectorAll('[aria-posinset]'));
@@ -307,9 +303,13 @@ return (() => {
         postUrl = permalinkUrl(gid, postId);
       }
       withPerm += 1;
+      root.removeAttribute('data-fbscan-missing');
+      root.setAttribute('data-fbscan-done', '1');
     } else {
-      // Không lưu link giả ?scan_post= nữa — bỏ bài nếu không ra được permalink thật
+      // Chưa có link thật (Facebook chỉ gắn link vào mốc thời gian khi rê chuột):
+      // đánh dấu để Python rê chuột thật rồi đọc lại; tuyệt đối không lưu link đoán.
       withFallback += 1;
+      root.setAttribute('data-fbscan-missing', '1');
       continue;
     }
     idSources[idSource] = (idSources[idSource] || 0) + 1;
@@ -329,7 +329,7 @@ return (() => {
       comments: metrics.comments,
       shares: metrics.shares,
       postedTime: postedTimeFrom(root),
-      isPinned: false,
+      isPinned: pinnedFrom(root, content),
       posinset: pos,
       idSource,
     });
@@ -340,7 +340,7 @@ return (() => {
   return {
     posts,
     debug: {
-      scrapeVersion: 11,
+      scrapeVersion: 12,
       ready: true,
       roots: roots.length,
       found: posts.length,
@@ -384,6 +384,110 @@ SCROLL_POSTS_JS = """
   return { type: 'window' };
 })();
 """
+
+
+# Facebook chỉ gắn link bài (/groups/{gid}/posts/{id}/) vào mốc thời gian SAU khi rê chuột.
+# Chọn các thẻ <a> ở phần đầu bài (không phải tên tác giả / nội dung / ảnh) để rê chuột.
+_PERMALINK_ANCHORS_FN = r"""
+const fbscanAnchors = (root) => {
+  let scope = root;
+  for (let i = 0; i < 10 && scope; i++) {
+    if (scope.getAttribute && scope.getAttribute('role') === 'article') break;
+    scope = scope.parentElement;
+  }
+  scope = scope || root;
+  const story = scope.querySelector('[data-ad-rendering-role="story_message"]');
+  const prof = scope.querySelector('[data-ad-rendering-role="profile_name"]');
+  const out = [];
+  for (const a of scope.querySelectorAll('a')) {
+    if (story && story.contains(a)) continue;
+    if (prof && prof.contains(a)) continue;
+    if (a.querySelector('img, image, video')) continue;
+    const href = a.getAttribute('href') || '';
+    if (/\/(user|hashtag|photo|watch|reel)s?\/|profile\.php|l\.facebook\.com|\/stories\//i.test(href)) continue;
+    if (href && !/^#|\/posts\/|\/permalink\/|__cft__|^\/groups\/|facebook\.com\/groups\//i.test(href)) continue;
+    const text = (a.innerText || a.textContent || '').trim();
+    if (text.length > 40) continue;
+    out.push(a);
+    if (out.length >= 4) break;
+  }
+  return out;
+};
+"""
+
+HOVER_PERMALINK_JS = r"""
+return (() => {
+""" + _PERMALINK_ANCHORS_FN + r"""
+  let hovered = 0;
+  for (const root of document.querySelectorAll('[aria-posinset]')) {
+    if (root.getAttribute('data-fbscan-done') === '1') continue;
+    for (const a of fbscanAnchors(root)) {
+      for (const type of ['pointerover', 'pointerenter', 'mouseover', 'mouseenter', 'mousemove']) {
+        try { a.dispatchEvent(new MouseEvent(type, { bubbles: type !== 'mouseenter' && type !== 'pointerenter' })); } catch (e) {}
+      }
+      try { a.focus({ preventScroll: true }); } catch (e) {}
+      hovered += 1;
+    }
+  }
+  return hovered;
+})();
+"""
+
+PERMALINK_ANCHORS_JS = r"""
+""" + _PERMALINK_ANCHORS_FN + r"""
+return fbscanAnchors(arguments[0]);
+"""
+
+HOVER_WAIT_SEC = 0.8
+REAL_HOVER_MAX_POSTS = 4
+
+
+def _scrape_posts_with_hover(driver) -> Any:
+    """Đọc feed sau khi đã rê chuột lên mốc thời gian để Facebook gắn link bài thật.
+
+    1) Rê chuột giả lập (JS) lên mọi bài → chờ → đọc DOM.
+    2) Bài vẫn chưa có link → rê chuột thật (Selenium) vài bài → chờ → đọc lại và gộp.
+    """
+    try:
+        if driver.execute_script(HOVER_PERMALINK_JS):
+            time.sleep(HOVER_WAIT_SEC)
+    except Exception as exc:
+        if _is_browser_dead_error(exc):
+            raise
+    payload = driver.execute_script(SCRAPE_POSTS_JS)
+    missing = int(((payload or {}).get("debug") or {}).get("withFallback") or 0) if isinstance(payload, dict) else 0
+    if not missing:
+        return payload
+    try:
+        from selenium.webdriver.common.action_chains import ActionChains
+        from selenium.webdriver.common.by import By
+
+        hovered = 0
+        for root in driver.find_elements(By.CSS_SELECTOR, '[data-fbscan-missing="1"]')[:REAL_HOVER_MAX_POSTS]:
+            for anchor in (driver.execute_script(PERMALINK_ANCHORS_JS, root) or [])[:3]:
+                try:
+                    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", anchor)
+                    ActionChains(driver).move_to_element(anchor).pause(0.25).perform()
+                    hovered += 1
+                except Exception:
+                    continue
+        if not hovered:
+            return payload
+        time.sleep(HOVER_WAIT_SEC)
+        again = driver.execute_script(SCRAPE_POSTS_JS)
+    except Exception as exc:
+        if _is_browser_dead_error(exc):
+            raise
+        return payload
+    if not isinstance(again, dict):
+        return payload
+    merged = {str(p.get("postId")): p for p in (payload.get("posts") or []) if isinstance(p, dict)}
+    for p in again.get("posts") or []:
+        if isinstance(p, dict) and str(p.get("postId")) not in merged:
+            merged[str(p.get("postId"))] = p
+    debug = dict(again.get("debug") or {})
+    debug["realHovered"] = hovered
+    return {"posts": sorted(merged.values(), key=lambda p: p.get("posinset") or 0), "debug": debug}
 
 
 def _now_str() -> str:
@@ -490,29 +594,35 @@ def _get_post_control(job_id: str) -> str:
         return (_post_jobs.get(job_id) or {}).get("control") or "run"
 
 
-def set_post_scan_control(job_id: str, action: str) -> bool:
+def set_post_scan_control(job_id: str, action: str, owner: Optional[str] = None) -> bool:
     action_clean = (action or "").strip().lower()
     if action_clean not in {"pause", "resume", "abort"}:
         return False
     with _post_jobs_lock:
         job = _post_jobs.get(job_id)
-        if not job:
+        if not job or job.get("owner") != owner:
             return False
-        job["control"] = action_clean
+        if job.get("status") in TERMINAL_STATUSES:
+            return False
         if action_clean == "pause":
+            job["control"] = "pause"
             job["status"] = "paused"
         elif action_clean == "resume":
+            job["control"] = "run"
             job["status"] = "running"
-        elif action_clean == "abort":
-            job["status"] = "aborted"
-    _append_post_log(job_id, f"Lệnh điều khiển nhận được: {action_clean.upper()}", "warn")
+        else:
+            # Worker tự đặt trạng thái cuối (aborted) khi đã lưu xong.
+            job["control"] = "abort"
+            job["status"] = "stopping"
+    labels = {"pause": "TẠM DỪNG", "resume": "TIẾP TỤC", "abort": "DỪNG"}
+    _append_post_log(job_id, f"Lệnh điều khiển nhận được: {labels[action_clean]}", "warn")
     return True
 
 
-def get_post_scan_status(job_id: str) -> Optional[dict[str, Any]]:
+def get_post_scan_status(job_id: str, owner: Optional[str] = None) -> Optional[dict[str, Any]]:
     with _post_jobs_lock:
         job = _post_jobs.get(job_id)
-        if not job:
+        if not job or job.get("owner") != owner:
             return None
         return {
             "job_id": job_id,
@@ -533,20 +643,8 @@ def get_post_scan_status(job_id: str) -> Optional[dict[str, Any]]:
 
 
 def _is_post_older_than_days(posted_time_str: str, max_days: int) -> bool:
-    if not posted_time_str or max_days <= 0:
-        return False
-    raw = posted_time_str.lower().strip()
-    if any(k in raw for k in ["vừa xong", "phút", "m", "giờ", "h", "tiếng"]):
-        return False
-    m_days = re.search(r"(\d+)\s*(?:ngày|d|days?)", raw)
-    if m_days:
-        return int(m_days.group(1)) > max_days
-    m_weeks = re.search(r"(\d+)\s*(?:tuần|w|weeks?)", raw)
-    if m_weeks:
-        return int(m_weeks.group(1)) * 7 > max_days
-    if any(k in raw for k in ["tháng", "năm", "mo", "yr", "year"]):
-        return True
-    return False
+    """Giữ tên cũ cho code gọi ngoài; logic nằm ở scan_common."""
+    return is_post_older_than_days(posted_time_str, max_days)
 
 
 def start_post_scan(
@@ -562,6 +660,8 @@ def start_post_scan(
     skip_pinned_posts: bool = True,
     auto_dedupe_posts: bool = True,
 ) -> dict[str, Any]:
+    uids = [str(u).strip() for u in (uids or []) if str(u).strip()]
+    uids = list(dict.fromkeys(uids))
     if not uids:
         raise ValueError("Vui lòng chọn ít nhất 1 tài khoản thực thi")
     if not groups:
@@ -569,6 +669,7 @@ def start_post_scan(
     if len(groups) > 20:
         raise ValueError("Số lượng nhóm trong một phiên không được vượt quá 20 nhóm")
 
+    prune_jobs(_post_jobs, _post_jobs_lock)
     job_id = f"GPS-{int(time.time())}-{uuid.uuid4().hex[:6]}"
 
     dmin = max(1.0, min(3600.0, float(delay_min)))
@@ -620,7 +721,6 @@ def start_post_scan(
                 "days_limit": days_z,
                 "skip_pinned_posts": skip_pinned_posts,
                 "auto_dedupe_posts": auto_dedupe_posts,
-                "scrape_ready": SCRAPE_POSTS_READY,
             },
             ensure_ascii=False,
         )
@@ -662,91 +762,68 @@ def start_post_scan(
     }
 
 
-def _resolve_group_identity(grp: dict[str, Any]) -> tuple[str, str, str]:
-    """Trả về (group_id, group_name, raw_url) hợp lệ Facebook."""
-    raw_url = str(grp.get("url") or grp.get("group_url") or grp.get("href") or "").strip()
-    group_id = str(grp.get("group_id") or grp.get("groupId") or grp.get("uid") or "").strip()
-    group_name = str(grp.get("name") or grp.get("group_name") or "").strip()
-    raw_id = str(grp.get("id") or grp.get("dbId") or "").strip()
+OLD_POST_STREAK_STOP = 5
 
-    url_slug = ""
-    if raw_url and "/groups/" in raw_url:
-        url_slug = raw_url.split("/groups/")[-1].split("/")[0].split("?")[0].strip()
 
-    is_group_id_db_id = bool(group_id.isdigit() and len(group_id) < 8)
-    is_slug_db_id = bool(url_slug.isdigit() and len(url_slug) < 8)
-    is_raw_id_valid = bool(raw_id.isdigit())
-    need_db_lookup = (
-        is_group_id_db_id
-        or is_slug_db_id
-        or not group_id
-        or not raw_url
-        or (raw_id and group_id == raw_id and is_raw_id_valid)
-    )
-
-    if need_db_lookup:
-        try:
-            from core.database.connection import db
-
-            lookup_int = (
-                int(raw_id)
-                if is_raw_id_valid
-                else (
-                    int(group_id)
-                    if is_group_id_db_id
-                    else (int(url_slug) if is_slug_db_id else -1)
-                )
-            )
-            db_fallback = None
-            if lookup_int > 0:
-                db_fallback = db.fetch_one(
-                    "SELECT group_id, group_url, group_name FROM scanned_groups WHERE id = ?",
-                    (lookup_int,),
-                )
-            if not db_fallback and group_id and not is_group_id_db_id:
-                db_fallback = db.fetch_one(
-                    "SELECT group_id, group_url, group_name FROM scanned_groups WHERE group_id = ?",
-                    (group_id,),
-                )
-            if db_fallback:
-                real_gid = str(db_fallback.get("group_id") or "").strip()
-                real_url = str(db_fallback.get("group_url") or "").strip()
-                real_name = str(db_fallback.get("group_name") or "").strip()
-                if real_gid and not (real_gid.isdigit() and len(real_gid) < 8):
-                    group_id = real_gid
-                if real_url:
-                    raw_url = real_url
-                if real_name and not group_name:
-                    group_name = real_name
-        except Exception as exc:
-            logger.warning("Failed to lookup real group_id: %s", exc)
-
-    if (not group_id or (group_id.isdigit() and len(group_id) < 8)) and raw_url and "/groups/" in raw_url:
-        candidate_slug = raw_url.split("/groups/")[-1].split("/")[0].split("?")[0].strip()
-        if candidate_slug and not (candidate_slug.isdigit() and len(candidate_slug) < 8):
-            group_id = candidate_slug
-
-    if raw_url and re.search(r"/groups/\d{1,7}(?:[/?#]|$)", raw_url):
-        if group_id and not (group_id.isdigit() and len(group_id) < 8):
-            raw_url = f"https://www.facebook.com/groups/{group_id}"
-        else:
-            raw_url = ""
-
-    if not group_name:
-        group_name = group_id or "Nhóm Facebook"
-    return group_id, group_name, raw_url
+def filter_post_rows(
+    raw_items: list[dict[str, Any]],
+    *,
+    group_id: str,
+    group_seen: set[str],
+    cross_seen: set[str],
+    skip_pinned: bool,
+    auto_dedupe: bool,
+    days_limit: int,
+    remaining: int,
+    stats: dict[str, int],
+    today=None,
+) -> list[dict[str, Any]]:
+    """Lọc một lượt DOM bài viết. Luôn bỏ trùng trong cùng nhóm; `auto_dedupe` bỏ thêm bài
+    đã có trong CSDL. stats["old_streak"] đếm số bài cũ liên tiếp (feed xếp theo thời gian)."""
+    kept: list[dict[str, Any]] = []
+    for raw in raw_items or []:
+        if len(kept) >= remaining:
+            break
+        item = _normalize_post_item(raw, group_id)
+        if not item:
+            continue
+        pid = str(item.get("postId") or "").strip()
+        if not pid or pid in group_seen:
+            continue
+        group_seen.add(pid)
+        pinned = bool(item.get("isPinned"))
+        if skip_pinned and pinned:
+            stats["pinned"] = stats.get("pinned", 0) + 1
+            continue
+        if days_limit > 0 and is_post_older_than_days(item.get("postedTime") or "", days_limit, today=today):
+            stats["old"] = stats.get("old", 0) + 1
+            if not pinned:
+                stats["old_streak"] = stats.get("old_streak", 0) + 1
+            continue
+        if not pinned:
+            stats["old_streak"] = 0
+        if auto_dedupe and pid in cross_seen:
+            stats["dup"] = stats.get("dup", 0) + 1
+            continue
+        cross_seen.add(pid)
+        kept.append(item)
+    return kept
 
 
 def _run_post_scan_worker(job_id: str) -> None:
-    from modules.module_02_account_manager.automation import (
-        create_driver,
-        ensure_logged_in,
-        get_profile_lock,
-        human_sleep,
-    )
-    from modules.module_02_account_manager.database.connection import SessionLocal
-    from modules.module_02_account_manager.database.repository import AccountRepository as Repo
-    from modules.module_02_account_manager.security.encryption import decrypt_secret
+    from modules.module_02_account_manager.context import owner_scope
+
+    with _post_jobs_lock:
+        job = _post_jobs.get(job_id)
+        owner = job.get("owner") if job else None
+    if not job:
+        return
+    # Khoá profile + thư mục Chrome của Module 02 phụ thuộc owner hiện tại.
+    with owner_scope(owner):
+        _post_scan_body(job_id)
+
+
+def _post_scan_body(job_id: str) -> None:
     from modules.module_10_group_scan.models import (
         list_known_post_ids,
         update_scan_session,
@@ -754,9 +831,7 @@ def _run_post_scan_worker(job_id: str) -> None:
     )
 
     with _post_jobs_lock:
-        job = _post_jobs.get(job_id)
-        if not job:
-            return
+        job = _post_jobs[job_id]
         owner = job["owner"]
         uids = list(job["uids"])
         target_groups = list(job["target_groups"])
@@ -768,380 +843,214 @@ def _run_post_scan_worker(job_id: str) -> None:
         skip_pinned_posts = job["skip_pinned_posts"]
         auto_dedupe_posts = job["auto_dedupe_posts"]
 
-    _append_post_log(
-        job_id,
-        f"Khởi động phiên quét bài viết cho {len(target_groups)} nhóm với {len(uids)} tài khoản.",
-        "success",
-    )
+    def log(message: str, level: str = "info") -> None:
+        _append_post_log(job_id, message, level)
 
-    known_db_posts: set[str] = set()
-    if SCRAPE_POSTS_READY and auto_dedupe_posts:
+    def control() -> str:
+        return _get_post_control(job_id)
+
+    def stop_requested() -> bool:
+        return control() == "abort"
+
+    def handle_pause() -> bool:
+        if control() != "pause":
+            return control() == "abort"
+        log("⏸️ Đã tạm dừng. Bấm Tiếp tục để chạy tiếp.", "warn")
+        if wait_while_paused(control):
+            if control() == "pause":
+                log("⚠️ Tạm dừng quá 2 giờ — tự kết thúc phiên.", "warn")
+                _set_post_job(job_id, control="abort")
+            return True
+        log("▶️ Tiếp tục quét…", "info")
+        return False
+
+    log(f"Khởi động phiên quét bài viết cho {len(target_groups)} nhóm với {len(uids)} tài khoản.", "success")
+
+    cross_seen: set[str] = set()
+    if auto_dedupe_posts:
         try:
-            known_db_posts = list_known_post_ids(owner)
-            _append_post_log(
-                job_id,
-                f"Đã nạp {len(known_db_posts)} Post ID từ CSDL để lọc trùng chéo.",
-                "info",
-            )
+            cross_seen = set(list_known_post_ids(owner))
+            log(f"Đã nạp {len(cross_seen)} Post ID từ CSDL để lọc trùng chéo.", "info")
         except Exception as exc:
-            _append_post_log(job_id, f"Lỗi khi đọc Post ID CSDL: {exc}", "warn")
+            log(f"Lỗi khi đọc Post ID CSDL: {exc}", "warn")
 
-    seen_session_posts: set[str] = set(known_db_posts)
-    all_scanned_posts: list[dict[str, Any]] = []
-    keep_browser_open = False  # True khi chỉ test vào nick+nhóm, không tự tắt Chrome
-
+    all_scanned: list[dict[str, Any]] = []
+    session: Optional[dict[str, Any]] = None
     account_index = 0
-    driver = None
-    current_uid = None
-    profile_lock = None
-    posts_scanned_with_acc = 0
+    posts_with_acc = 0
+    final_status = "done"
+    error_text = ""
 
-    def close_current_driver(*, force: bool = False):
-        """force=True: quit Chrome + nhả lock. force=False + keep_browser_open: giữ Chrome, vẫn nhả lock."""
-        nonlocal driver, profile_lock, current_uid, keep_browser_open
-        if keep_browser_open and not force:
-            # Chrome detach giữ mở cho user tự tắt — nhưng phải nhả lock
-            # nếu không lần Start sau sẽ báo "tài khoản đang bận".
-            driver = None
-            if profile_lock:
-                try:
-                    profile_lock.release()
-                except Exception:
-                    pass
-                profile_lock = None
-            current_uid = None
-            return
-        if driver:
+    def rotate() -> bool:
+        """Mở nick kế tiếp; nick cũ chỉ bị đóng khi nick mới đã vào được."""
+        nonlocal session, account_index, posts_with_acc
+        if session is not None and len(uids) <= 1:
+            posts_with_acc = 0
+            return True
+        exclude = {session["uid"]} if session else set()
+        fresh = open_account_session(
+            uids, account_index, owner=owner, scope="group-posts", log=log,
+            exclude=exclude, should_stop=stop_requested,
+        )
+        if fresh:
+            close_account_session(session)
+            session = fresh
+            account_index = fresh["next_index"]
+            posts_with_acc = 0
+            _set_post_job(job_id, current_account=fresh["uid"])
+            return True
+        if session is not None:
+            log("⚠️ Không đổi được sang nick khác — tiếp tục dùng nick hiện tại.", "warn")
+            posts_with_acc = 0
+            return True
+        return False
+
+    def open_group(group_url: str, group_id: str, group_name: str) -> bool:
+        driver = session["driver"]
+        target_url = f"{group_url}/?sorting_setting=CHRONOLOGICAL"
+        try:
+            driver.get(target_url)
+        except Exception as exc:
+            log(f"Lỗi truy cập {target_url}: {exc}", "warn")
             try:
-                driver.quit()
+                driver.get(f"{group_url}/")
             except Exception:
-                pass
-            driver = None
-        if profile_lock:
-            try:
-                profile_lock.release()
-            except Exception:
-                pass
-            profile_lock = None
-        current_uid = None
+                return False
+        if interruptible_sleep(random.uniform(5.0, 7.0), control):
+            return False
+        try:
+            sample = driver.execute_script(
+                "return (document.body ? document.body.innerText : '').slice(0, 500).toLowerCase();"
+            ) or ""
+            if "this page isn't available" in sample or "trang này hiện không khả dụng" in sample:
+                log("URL sắp xếp theo thời gian không mở được, chuyển trang thảo luận chung…", "warn")
+                driver.get(f"{group_url}/")
+                interruptible_sleep(random.uniform(3.5, 5.0), control)
+        except Exception:
+            pass
+        landed = ""
+        try:
+            landed = str(driver.current_url or "")
+        except Exception:
+            pass
+        if group_id and group_id.lower() in landed.lower():
+            log(f"[OK] Đã vào nhóm «{group_name}» (ID={group_id}).", "success")
+        else:
+            log(f"[WARN] URL hiện tại có thể lệch nhóm: {landed or '(trống)'} | kỳ vọng ID={group_id}", "warn")
+        return True
 
     try:
         for grp_idx, grp in enumerate(target_groups):
-            ctrl = _get_post_control(job_id)
-            if ctrl == "abort":
-                _append_post_log(job_id, "Nhận tín hiệu DỪNG KHẨN CẤP. Ngừng toàn bộ tác vụ.", "warn")
-                break
-            while ctrl == "pause":
-                _append_post_log(job_id, "Tiến trình đang TẠM DỪNG. Chờ lệnh tiếp tục...", "info")
-                time.sleep(2)
-                ctrl = _get_post_control(job_id)
-                if ctrl == "abort":
-                    break
-            if ctrl == "abort":
+            if handle_pause():
                 break
 
-            group_id, group_name, raw_url = _resolve_group_identity(grp)
-            raw_id = str(grp.get("id") or grp.get("dbId") or "").strip()
-
-            if (group_id.isdigit() and len(group_id) < 8) or (not group_id and not raw_url):
-                _append_post_log(
-                    job_id,
-                    f"⚠️ Bỏ qua nhóm «{group_name or 'ID ' + (group_id or raw_id)}»: "
-                    f"Không tìm thấy đường dẫn Facebook hợp lệ trong CSDL (ID {group_id or raw_id}).",
-                    "warn",
-                )
+            group_id, group_name, group_url = resolve_group_identity(grp, owner)
+            if not group_id:
+                log(f"⚠️ Bỏ qua nhóm «{group_name}»: không tìm thấy đường dẫn Facebook hợp lệ.", "warn")
                 continue
-
             _set_post_job(job_id, current_group=group_name)
 
-            need_switch_account = (
-                driver is None
-                or current_uid is None
-                or posts_scanned_with_acc >= switch_acc_threshold
-            )
-
-            if need_switch_account:
-                if driver:
-                    _append_post_log(
-                        job_id,
-                        f"[ROTATE] Đã quét {posts_scanned_with_acc} bài với nick {current_uid}. Đổi tài khoản...",
-                        "info",
-                    )
-                    close_current_driver(force=True)
-
-                current_uid = uids[account_index % len(uids)]
-                account_index += 1
-                posts_scanned_with_acc = 0
-                _set_post_job(job_id, current_account=current_uid)
-                _append_post_log(job_id, f"Mở trình duyệt với tài khoản UID: {current_uid}...", "info")
-
-                try:
-                    profile_lock = get_profile_lock(current_uid)
-                    acquired = False
-                    for wait_try in range(3):
-                        if profile_lock.acquire(timeout=15):
-                            acquired = True
-                            break
-                        _append_post_log(
-                            job_id,
-                            f"Tài khoản {current_uid} đang bận (thử {wait_try + 1}/3, chờ lock)...",
-                            "warn",
-                        )
-                    if not acquired:
-                        _append_post_log(
-                            job_id,
-                            f"Bỏ qua nick {current_uid}: profile vẫn bận. "
-                            "Hãy đóng hết Chrome profile nick này rồi Start lại.",
-                            "error",
-                        )
-                        profile_lock = None
-                        continue
-                except Exception as exc:
-                    _append_post_log(job_id, f"Lỗi khóa profile {current_uid}: {exc}", "error")
-                    profile_lock = None
-                    continue
-
-                db_sess = SessionLocal()
-                try:
-                    account_obj = Repo.get_by_uid(db_sess, current_uid, owner_username=owner)
-                    if not account_obj:
-                        from modules.module_02_account_manager.database.models import Account
-
-                        account_obj = db_sess.query(Account).filter(Account.uid == current_uid).first()
-                    if not account_obj:
-                        _append_post_log(job_id, f"Không tìm thấy tài khoản {current_uid} trong Module 02.", "error")
-                        close_current_driver(force=True)
-                        continue
-                    cookie = account_obj.cookie or ""
-                    proxy = account_obj.proxy
-                    password = decrypt_secret(account_obj.password or "")
-                    two_fa = decrypt_secret(account_obj.two_fa or "")
-                    if (account_obj.password or account_obj.two_fa) and not password and not two_fa and cookie:
-                        _append_post_log(
-                            job_id,
-                            f"⚠️ [{current_uid}] Không giải mã mật khẩu — dùng cookie phiên đã lưu.",
-                            "warn",
-                        )
-                finally:
-                    db_sess.close()
-
-                try:
-                    driver = create_driver(
-                        current_uid,
-                        headless=False,
-                        detach=True,
-                        proxy=proxy,
-                        scope="group-posts",
-                        verify_egress=False,
-                    )
-                    login_res = ensure_logged_in(
-                        driver,
-                        uid=current_uid,
-                        password=password,
-                        two_fa=two_fa,
-                        cookie=cookie,
-                    )
-                    if not login_res.get("success"):
-                        _append_post_log(
-                            job_id,
-                            f"[ERROR] {current_uid} checkpoint/đăng nhập lỗi: {login_res.get('error')}. Đổi nick...",
-                            "error",
-                        )
-                        close_current_driver(force=True)
-                        continue
-                    _append_post_log(
-                        job_id,
-                        f"[OK] Đã vào nick UID {current_uid} (đăng nhập thành công).",
-                        "success",
-                    )
-                except Exception as exc:
-                    _append_post_log(job_id, f"Lỗi khởi tạo Chrome cho {current_uid}: {exc}", "error")
-                    close_current_driver(force=True)
-                    continue
-
-            base_group_url = (
-                raw_url
-                if (raw_url and "/groups/" in raw_url and not re.search(r"/groups/\d{1,7}(?:[/?#]|$)", raw_url))
-                else f"https://www.facebook.com/groups/{group_id}"
-            ).rstrip("/")
-            target_url = f"{base_group_url}/?sorting_setting=CHRONOLOGICAL"
-            _append_post_log(
-                job_id,
-                f"[{grp_idx + 1}/{len(target_groups)}] Đang vào nhóm đã chọn: «{group_name}» | ID={group_id} | URL={target_url}",
-                "info",
-            )
-
-            try:
-                driver.get(target_url)
-                human_sleep(5.0, 7.0)
-            except Exception as exc:
-                _append_post_log(job_id, f"Lỗi truy cập {target_url}: {exc}", "warn")
-                try:
-                    target_url = f"{base_group_url}/"
-                    driver.get(target_url)
-                    human_sleep(5.0, 7.0)
-                except Exception:
-                    continue
-
-            try:
-                page_text_sample = (
-                    driver.execute_script(
-                        "return (document.body ? document.body.innerText : '').slice(0, 500).toLowerCase();"
-                    )
-                    or ""
-                )
-                if "this page isn't available" in page_text_sample or "trang này hiện không khả dụng" in page_text_sample:
-                    _append_post_log(job_id, "URL sort không mở được, chuyển trang thảo luận chung...", "warn")
-                    target_url = f"{base_group_url}/"
-                    driver.get(target_url)
-                    human_sleep(3.5, 5.0)
-            except Exception:
-                pass
-
-            landed_url = ""
-            try:
-                landed_url = str(getattr(driver, "current_url", "") or "")
-            except Exception:
-                landed_url = ""
-            if group_id and group_id in landed_url:
-                _append_post_log(
-                    job_id,
-                    f"[OK] Đã vào đúng nhóm «{group_name}» (ID={group_id}). URL hiện tại: {landed_url}",
-                    "success",
-                )
-            else:
-                _append_post_log(
-                    job_id,
-                    f"[WARN] Đã mở trình duyệt nhưng URL hiện tại có thể lệch nhóm: {landed_url or '(trống)'} | kỳ vọng ID={group_id}",
-                    "warn",
-                )
-
-            # Luôn giữ Chrome mở sau phiên — user tự tắt
-            keep_browser_open = True
-
-            # Chế độ test: chỉ vào nick + nhóm, giữ browser mở, không scrape / không tự tắt
-            if not SCRAPE_POSTS_READY:
-                keep_browser_open = True
-                _set_post_job(job_id, groups_done=grp_idx + 1, status="holding")
-                _append_post_log(
-                    job_id,
-                    f"Browser đang giữ mở tại nhóm «{group_name}». Bấm Dừng khi xong kiểm tra.",
-                    "success",
-                )
-                while True:
-                    ctrl = _get_post_control(job_id)
-                    if ctrl == "abort":
+            if session is None or posts_with_acc >= switch_acc_threshold:
+                if session is not None:
+                    log(f"[ROTATE] Nick {session['uid']} đã quét {posts_with_acc} bài — đổi nick…", "info")
+                if not rotate():
+                    if stop_requested():
                         break
-                    while ctrl == "pause":
-                        time.sleep(2)
-                        ctrl = _get_post_control(job_id)
-                        if ctrl == "abort":
-                            break
-                    if ctrl == "abort":
-                        break
-                    time.sleep(2)
-                break
+                    error_text = "Không có tài khoản nào trong pool mở được Chrome và đăng nhập Facebook."
+                    log(f"❌ {error_text}", "error")
+                    final_status = "error"
+                    break
+
+            log(f"[{grp_idx + 1}/{len(target_groups)}] Vào nhóm «{group_name}» bằng nick {session['uid']}…", "info")
+            if not open_group(group_url, group_id, group_name):
+                if stop_requested():
+                    break
+                continue
 
             group_posts: list[dict[str, Any]] = []
-            max_scroll_rounds = 40
-            scroll_stuck_count = 0
-            prev_found_count = 0
-            checkpoint_buffer: list[dict[str, Any]] = []
+            group_seen: set[str] = set()
+            stats: dict[str, int] = {}
+            buffer: list[dict[str, Any]] = []
+            stuck_rounds = 0
+            stopped = False
+            first_round = True
 
-            for _scroll_round in range(max_scroll_rounds):
-                ctrl = _get_post_control(job_id)
-                if ctrl == "abort":
-                    break
-                while ctrl == "pause":
-                    time.sleep(2)
-                    ctrl = _get_post_control(job_id)
-                    if ctrl == "abort":
-                        break
-                if ctrl == "abort":
-                    break
+            def flush() -> None:
+                if not buffer:
+                    return
+                saved = 0
+                for rec in buffer:
+                    if upsert_scanned_group_post(
+                        owner=owner, group_id=group_id, post=rec,
+                        group_name=group_name, group_url=group_url, session_id=job_id,
+                    ):
+                        saved += 1
+                log(f"[Checkpoint] Lưu {saved}/{len(buffer)} bài mới của «{group_name}» vào CSDL.", "info")
+                buffer.clear()
 
+            for _round in range(60):
+                if handle_pause():
+                    stopped = True
+                    break
                 if len(group_posts) >= posts_limit:
-                    _append_post_log(
-                        job_id,
-                        f"Đã đạt hạn mức {posts_limit} bài viết cho nhóm «{group_name}».",
-                        "success",
-                    )
+                    log(f"Đã đạt hạn mức {posts_limit} bài cho nhóm «{group_name}».", "success")
                     break
 
+                driver = session["driver"]
                 if not _driver_alive(driver):
-                    _append_post_log(
-                        job_id,
-                        "Chrome đã bị đóng thủ công. Dừng phiên quét.",
-                        "warn",
-                    )
-                    _set_post_job(job_id, control="abort", status="aborted")
+                    log("Chrome đã bị đóng thủ công. Dừng phiên quét.", "warn")
+                    _set_post_job(job_id, control="abort")
+                    stopped = True
                     break
 
                 try:
-                    scrape_payload = driver.execute_script(SCRAPE_POSTS_JS)
+                    payload = _scrape_posts_with_hover(driver)
                 except Exception as exc:
                     if _is_browser_dead_error(exc):
-                        _append_post_log(
-                            job_id,
-                            "Chrome đã đóng / mất session. Dừng phiên quét.",
-                            "warn",
-                        )
-                        _set_post_job(job_id, control="abort", status="aborted")
+                        log("Chrome đã đóng / mất session. Dừng phiên quét.", "warn")
+                        _set_post_job(job_id, control="abort")
+                        stopped = True
                         break
-                    _append_post_log(job_id, f"Lỗi chạy SCRAPE_POSTS_JS: {exc}", "warn")
-                    scrape_payload = None
+                    log(f"Lỗi chạy SCRAPE_POSTS_JS: {exc}", "warn")
+                    payload = None
 
+                raw_items: list[dict[str, Any]] = []
                 debug_info: dict[str, Any] = {}
-                if scrape_payload is None:
-                    raw_items = []
-                elif isinstance(scrape_payload, list):
-                    raw_items = scrape_payload
-                elif isinstance(scrape_payload, dict):
-                    raw_items = scrape_payload.get("posts") or []
-                    debug_info = scrape_payload.get("debug") or {}
-                else:
-                    raw_items = []
-
-                if _scroll_round == 0:
-                    _append_post_log(
-                        job_id,
-                        (
-                            f"DOM bài viết v{debug_info.get('scrapeVersion', '?')}: "
-                            f"roots={debug_info.get('roots', '?')}, "
-                            f"msg={debug_info.get('withMessage', '?')}, "
-                            f"name={debug_info.get('withName', '?')}, "
-                            f"perm={debug_info.get('withPerm', '?')}, "
-                            f"fallback={debug_info.get('withFallback', '?')}, "
-                            f"found={debug_info.get('found', len(raw_items))}, "
-                            f"sources={debug_info.get('idSources', {})}"
-                        ),
+                if isinstance(payload, dict):
+                    raw_items = payload.get("posts") or []
+                    debug_info = payload.get("debug") or {}
+                elif isinstance(payload, list):
+                    raw_items = payload
+                if first_round:
+                    first_round = False
+                    log(
+                        f"DOM bài viết v{debug_info.get('scrapeVersion', '?')}: roots={debug_info.get('roots', '?')}, "
+                        f"có link={debug_info.get('withPerm', '?')}, chưa lấy được link={debug_info.get('withFallback', '?')}, "
+                        f"nguồn ID={debug_info.get('idSources', {})}",
                         "info" if raw_items else "warn",
                     )
 
-                new_in_round = 0
-                for item in raw_items:
-                    item = _normalize_post_item(item, group_id)
-                    if not item:
-                        continue
-                    pid = str(item.get("postId") or "").strip()
-                    if not pid:
-                        continue
-                    if skip_pinned_posts and item.get("isPinned"):
-                        continue
-                    if auto_dedupe_posts and pid in seen_session_posts:
-                        continue
-                    posted_time_raw = str(item.get("postedTime") or "").strip()
-                    if days_limit > 0 and _is_post_older_than_days(posted_time_raw, days_limit):
-                        continue
-
-                    seen_session_posts.add(pid)
-                    post_record = {
+                seen_before = len(group_seen)
+                kept = filter_post_rows(
+                    raw_items,
+                    group_id=group_id,
+                    group_seen=group_seen,
+                    cross_seen=cross_seen,
+                    skip_pinned=skip_pinned_posts,
+                    auto_dedupe=auto_dedupe_posts,
+                    days_limit=days_limit,
+                    remaining=posts_limit - len(group_posts),
+                    stats=stats,
+                )
+                for item in kept:
+                    posted = str(item.get("postedTime") or "").strip()
+                    rec = {
                         "group_id": group_id,
                         "group_name": group_name,
-                        "group_url": f"https://www.facebook.com/groups/{group_id}",
-                        "post_id": pid,
-                        "postId": pid,
-                        "post_url": item.get("postUrl") or item.get("post_url") or "",
+                        "group_url": group_url,
+                        "post_id": item["postId"],
+                        "postId": item["postId"],
+                        "post_url": item.get("postUrl") or "",
                         "content": item.get("content") or "",
                         "author_name": item.get("authorName") or "Ẩn danh",
                         "author_uid": item.get("authorUid") or "",
@@ -1152,81 +1061,53 @@ def _run_post_scan_worker(job_id: str) -> None:
                         "comments_count": item.get("comments") or 0,
                         "shares": item.get("shares") or 0,
                         "shares_count": item.get("shares") or 0,
-                        "posted_at": posted_time_raw,
-                        "postedTime": posted_time_raw,
+                        "posted_at": posted,
+                        "postedTime": posted,
                         "is_pinned": bool(item.get("isPinned")),
                         "session_id": job_id,
                     }
-                    group_posts.append(post_record)
-                    checkpoint_buffer.append(post_record)
-                    new_in_round += 1
-                    posts_scanned_with_acc += 1
-                    if len(group_posts) >= posts_limit:
-                        break
+                    group_posts.append(rec)
+                    buffer.append(rec)
+                posts_with_acc += len(kept)
 
                 with _post_jobs_lock:
                     if job_id in _post_jobs:
-                        _post_jobs[job_id]["posts"] = list(all_scanned_posts + group_posts)
+                        _post_jobs[job_id]["posts"] = all_scanned + group_posts
+                if len(buffer) >= 10:
+                    flush()
 
-                if len(checkpoint_buffer) >= 10:
-                    saved_batch = 0
-                    for p_rec in checkpoint_buffer:
-                        if upsert_scanned_group_post(
-                            owner=owner,
-                            group_id=group_id,
-                            post=p_rec,
-                            group_name=group_name,
-                            group_url=p_rec["group_url"],
-                            session_id=job_id,
-                        ):
-                            saved_batch += 1
-                    _append_post_log(
-                        job_id,
-                        f"[Checkpoint] Đã lưu {saved_batch} bài của «{group_name}» vào CSDL.",
-                        "info",
-                    )
-                    checkpoint_buffer.clear()
+                if kept:
+                    last = group_posts[-1]
+                    snippet = (last["content"][:45] + "...") if len(last["content"]) > 45 else (last["content"] or "Ảnh/Video")
+                    log(f"Thu thập: «{snippet}» | Nhóm: {len(group_posts)}/{posts_limit}.", "success")
 
-                if new_in_round > 0:
-                    last_p = group_posts[-1]
-                    snippet = (
-                        (last_p["content"][:45] + "...")
-                        if len(last_p["content"]) > 45
-                        else (last_p["content"] or "Ảnh/Video")
-                    )
-                    _append_post_log(
-                        job_id,
-                        f"Thu thập: «{snippet}» | Tổng nhóm: {len(group_posts)}/{posts_limit}.",
-                        "success",
-                    )
-                    scroll_stuck_count = 0
-                else:
-                    if len(group_posts) == prev_found_count:
-                        scroll_stuck_count += 1
-                        if scroll_stuck_count >= 10:
-                            _append_post_log(
-                                job_id,
-                                f"Đã cuộn đến cuối danh sách bài viết nhóm «{group_name}».",
-                                "info",
-                            )
-                            break
-                    else:
-                        scroll_stuck_count = 0
-
-                prev_found_count = len(group_posts)
-
-                if posts_scanned_with_acc >= switch_acc_threshold and len(uids) > 1:
-                    _append_post_log(
-                        job_id,
-                        f"[ROTATE] Nick {current_uid} đạt {switch_acc_threshold} bài. Đổi tài khoản...",
-                        "info",
-                    )
-                    close_current_driver(force=True)
-                    current_uid = uids[account_index % len(uids)]
-                    account_index += 1
-                    posts_scanned_with_acc = 0
-                    _set_post_job(job_id, current_account=current_uid)
+                if days_limit > 0 and stats.get("old_streak", 0) >= OLD_POST_STREAK_STOP:
+                    log(f"Gặp {OLD_POST_STREAK_STOP} bài liên tiếp cũ hơn {days_limit} ngày — dừng cuộn nhóm «{group_name}».", "info")
                     break
+
+                if len(group_seen) > seen_before:
+                    stuck_rounds = 0
+                else:
+                    stuck_rounds += 1
+                    if stuck_rounds >= 10:
+                        log(f"Đã cuộn hết bài viết nhóm «{group_name}».", "info")
+                        break
+
+                if posts_with_acc >= switch_acc_threshold and len(uids) > 1 and len(group_posts) < posts_limit:
+                    log(f"[ROTATE] Nick {session['uid']} đạt {switch_acc_threshold} bài — đổi nick và quét tiếp nhóm này.", "info")
+                    flush()
+                    old_uid = session["uid"]
+                    rotate()
+                    if stop_requested():
+                        stopped = True
+                        break
+                    if session["uid"] != old_uid:
+                        if not open_group(group_url, group_id, group_name):
+                            stopped = stop_requested()
+                            break
+                        stuck_rounds = 0
+                        first_round = True
+                        continue
 
                 try:
                     driver.execute_script(SCROLL_POSTS_JS)
@@ -1235,62 +1116,59 @@ def _run_post_scan_worker(job_id: str) -> None:
                         driver.execute_script("window.scrollBy(0, 1200);")
                     except Exception:
                         pass
+                if interruptible_sleep(random.uniform(dmin, dmax) * random.uniform(0.4, 0.6), control):
+                    stopped = True
+                    break
 
-                sleep_sec = random.uniform(dmin, dmax)
-                human_sleep(sleep_sec * 0.4, sleep_sec * 0.6)
-
-            if checkpoint_buffer:
-                for p_rec in checkpoint_buffer:
-                    upsert_scanned_group_post(
-                        owner=owner,
-                        group_id=group_id,
-                        post=p_rec,
-                        group_name=group_name,
-                        group_url=p_rec["group_url"],
-                        session_id=job_id,
-                    )
-                checkpoint_buffer.clear()
-
-            all_scanned_posts.extend(group_posts)
-            _set_post_job(job_id, groups_done=grp_idx + 1, posts=list(all_scanned_posts))
-            _append_post_log(
-                job_id,
-                f"Hoàn thành nhóm «{group_name}» với {len(group_posts)} bài viết thu thập được.",
+            flush()
+            all_scanned.extend(group_posts)
+            _set_post_job(job_id, groups_done=grp_idx + 1, posts=list(all_scanned))
+            skipped = []
+            if stats.get("pinned"):
+                skipped.append(f"{stats['pinned']} bài ghim")
+            if stats.get("old"):
+                skipped.append(f"{stats['old']} bài cũ hơn {days_limit} ngày")
+            if stats.get("dup"):
+                skipped.append(f"{stats['dup']} trùng")
+            log(
+                f"Hoàn thành nhóm «{group_name}»: {len(group_posts)} bài viết"
+                + (f" (bỏ {', '.join(skipped)})" if skipped else "") + ".",
                 "success",
             )
+            if stopped or stop_requested():
+                break
 
             if grp_idx < len(target_groups) - 1:
                 group_delay = random.uniform(dmin, dmax)
-                _append_post_log(
-                    job_id,
-                    f"Nghỉ {group_delay:.1f}s trước khi chuyển nhóm kế tiếp...",
-                    "info",
-                )
-                time.sleep(group_delay)
+                log(f"Nghỉ {group_delay:.1f}s trước khi chuyển nhóm kế tiếp…", "info")
+                if interruptible_sleep(group_delay, control):
+                    break
 
-        final_status = "aborted" if _get_post_control(job_id) == "abort" else "done"
-        keep_browser_open = True
-        _set_post_job(job_id, status=final_status, finished_at=time.time())
-        _append_post_log(
-            job_id,
-            f"Phiên quét bài viết hoàn tất. Tổng thu thập: {len(all_scanned_posts)} bài viết. Browser giữ mở — tự tắt khi xong.",
+        if final_status != "error" and stop_requested():
+            final_status = "aborted"
+    except Exception as exc:
+        logger.exception("Post scan worker uncaught exception: %s", exc)
+        final_status = "error"
+        error_text = str(exc)
+        log(f"Lỗi nghiêm trọng trong phiên quét: {exc}", "error")
+    finally:
+        # Giữ Chrome mở để người dùng xem lại nhóm; vẫn nhả khoá profile.
+        close_account_session(session, quit_browser=False)
+        log(
+            f"Phiên quét bài viết kết thúc ({final_status}). Tổng thu thập: {len(all_scanned)} bài viết.",
             "success" if final_status == "done" else "warn",
         )
+        _set_post_job(job_id, status=final_status, error=error_text, finished_at=time.time(),
+                      posts=list(all_scanned))
+        with _post_jobs_lock:
+            logs_snapshot = list((_post_jobs.get(job_id) or {}).get("logs") or [])
         try:
             update_scan_session(
                 job_id,
-                total_found=len(all_scanned_posts),
-                status="SUCCESS" if final_status == "done" else "ABORTED",
+                total_found=len(all_scanned),
+                status={"done": "SUCCESS", "aborted": "ABORTED"}.get(final_status, "FAILED"),
                 finished=True,
+                logs=logs_snapshot,
             )
         except Exception as exc:
             logger.debug("Update post scan session error: %s", exc)
-
-    except Exception as exc:
-        logger.exception("Post scan worker uncaught exception: %s", exc)
-        _set_post_job(job_id, status="error", error=str(exc))
-        _append_post_log(job_id, f"Lỗi nghiêm trọng trong phiên quét: {exc}", "error")
-        keep_browser_open = True
-    finally:
-        # Không tự tắt Chrome — user tự đóng
-        close_current_driver(force=False)

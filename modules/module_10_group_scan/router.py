@@ -42,6 +42,7 @@ from modules.module_10_group_scan.models import (
     delete_scanned_group_posts_bulk,
     get_group_members_summary,
     get_group_posts_summary,
+    category_post_counts,
     keyword_counts,
     list_all_scanned_groups,
     list_groups_for_keywords,
@@ -93,8 +94,9 @@ class CheckKeywordRequest(BaseModel):
     )
     delay_min: float = Field(5, ge=0, le=3600, description="Nghỉ tối thiểu giữa 2 từ khóa (giây)")
     delay_max: float = Field(10, ge=0, le=3600, description="Nghỉ tối đa giữa 2 từ khóa (giây)")
-    public_only: bool = Field(False, description="True = chỉ giữ nhóm Public / Công khai")
-    private_only: bool = Field(False, description="True = chỉ giữ nhóm Private / Riêng tư")
+    # Giữ field cho client cũ; luồng quét luôn chỉ lấy nhóm Public (xem start_keyword_check).
+    public_only: bool = Field(True, description="Bỏ qua — luôn chỉ quét nhóm Public")
+    private_only: bool = Field(False, description="Bỏ qua — không quét nhóm Private")
     min_members: Optional[int] = Field(
         None,
         ge=0,
@@ -105,10 +107,7 @@ class CheckKeywordRequest(BaseModel):
         True,
         description="True = hủy job cũ bị kẹt (tắt browser/mất kết nối) rồi chạy lại",
     )
-    auto_join: bool = Field(
-        True,
-        description="True = Tự động tham gia nhóm khi quét và trả lời câu hỏi nhóm riêng tư",
-    )
+    auto_join: bool = Field(False, description="Bỏ qua — luồng quét không tham gia nhóm")
     rotate_after: int = Field(
         50,
         ge=1,
@@ -223,25 +222,28 @@ def check_keyword(body: CheckKeywordRequest, db: Session = Depends(get_db)):
         raise HTTPException(422, "Thiếu từ khóa")
 
     owner = owner_context.get() or get_owner_username()
+    # Pool nick: chỉ giữ nick của owner, còn sống và đã đăng nhập Module 2.
+    # Nick đầu bị lỗi không chặn cả phiên nếu còn nick khác dùng được.
+    requested = list(dict.fromkeys(str(u).strip() for u in (body.uids or [uid]) if str(u).strip()))
+    ready_uids: list[str] = []
+    problems: list[str] = []
+    for candidate in requested:
+        account = Repo.get_by_uid(db, candidate, owner_username=owner)
+        if not account:
+            problems.append(f"{candidate}: không tìm thấy")
+        elif _status(account) == "die":
+            problems.append(f"{candidate}: DIE")
+        elif _login_status(account) != "logged_in":
+            problems.append(f"{candidate}: chưa đăng nhập Module 2")
+        else:
+            ready_uids.append(candidate)
+    if not ready_uids:
+        raise HTTPException(400, "Không có tài khoản nào dùng được để quét — " + "; ".join(problems))
+    uid = ready_uids[0]
     account = Repo.get_by_uid(db, uid, owner_username=owner)
-    if not account:
-        raise HTTPException(404, f"Không tìm thấy tài khoản {uid}")
-
-    login = _login_status(account)
-    status = _status(account)
-    if status == "die":
-        raise HTTPException(400, "Tài khoản đang DIE — không dùng để quét")
-    if login != "logged_in":
-        raise HTTPException(400, "Tài khoản chưa đăng nhập Module 2 — hãy login trước")
 
     delay_min = float(body.delay_min)
     delay_max = max(delay_min, float(body.delay_max))
-    public_only = bool(body.public_only)
-    private_only = bool(body.private_only)
-    # Tick cả hai = quét cả công khai + riêng tư
-    if public_only and private_only:
-        public_only = False
-        private_only = False
     min_members = body.min_members if body.min_members and body.min_members > 0 else None
 
     # Đảm bảo mỗi từ khóa tạo thành 1 DANH MỤC trong bảng scanned_group_categories (bỏ qua liên kết URL)
@@ -254,9 +256,8 @@ def check_keyword(body: CheckKeywordRequest, db: Session = Depends(get_db)):
             except Exception as exc:
                 print(f"[Module 10 Router] auto create category error: {exc}")
 
-    auto_join = bool(getattr(body, "auto_join", True))
     rotate_after = max(1, int(getattr(body, "rotate_after", 50) or 50))
-    all_uids = list(body.uids) if body.uids else [uid]
+    all_uids = ready_uids
     try:
         result = start_keyword_check(
             owner=owner,
@@ -266,11 +267,11 @@ def check_keyword(body: CheckKeywordRequest, db: Session = Depends(get_db)):
             keywords=items,
             delay_min=delay_min,
             delay_max=delay_max,
-            public_only=public_only,
-            private_only=private_only,
+            public_only=True,
+            private_only=False,
             min_members=min_members,
             force=bool(body.force),
-            auto_join=auto_join,
+            auto_join=False,
         )
     except RuntimeError as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -357,8 +358,9 @@ def lookup_keywords(body: LookupKeywordsRequest):
 @router.post("/job-control", dependencies=[Depends(scoped_owner)])
 def job_control(body: JobControlRequest):
     """Tạm dừng (sau từ khóa hiện tại) / dừng khẩn cấp / resume flag."""
+    owner = owner_context.get() or get_owner_username()
     try:
-        return set_job_control(body.job_id, body.action)
+        return set_job_control(body.job_id, body.action, owner=owner)
     except ValueError as exc:
         raise HTTPException(404 if "Không tìm thấy" in str(exc) else 422, str(exc)) from exc
 
@@ -366,7 +368,8 @@ def job_control(body: JobControlRequest):
 @router.get("/check-status", dependencies=[Depends(scoped_owner)])
 def check_status(job_id: Optional[str] = None, uid: Optional[str] = None):
     """Poll tiến trình / log / danh sách nhóm của lần quét gần nhất."""
-    status = get_check_status(job_id=job_id, uid=uid)
+    owner = owner_context.get() or get_owner_username()
+    status = get_check_status(job_id=job_id, uid=uid, owner=owner)
     if not status:
         raise HTTPException(404, "Không tìm thấy job quét")
     return status
@@ -566,11 +569,11 @@ class StartMemberScanRequest(BaseModel):
     groups: list[dict[str, Any]] = Field(..., min_length=1, description="Danh sách nhóm mục tiêu (tối đa 20)")
     delay_min: float = Field(5.0, ge=1.0, le=3600.0)
     delay_max: float = Field(10.0, ge=1.0, le=3600.0)
-    switch_acc_threshold: int = Field(50, ge=1, le=1000)
+    switch_acc_threshold: int = Field(5, ge=1, le=1000, description="Đổi nick sau N nhóm")
     members_limit: int = Field(50, ge=1, le=1000)
     skip_admin: bool = Field(True)
     auto_dedupe: bool = Field(True)
-    new_members_only: bool = Field(True)
+    new_members_only: bool = Field(False, description="Chỉ giữ thành viên tham gia trong 30 ngày gần đây")
 
     @model_validator(mode="after")
     def validate_rules(self):
@@ -616,10 +619,11 @@ def post_start_member_scan(body: StartMemberScanRequest):
         raise HTTPException(500, f"Lỗi khởi chạy phiên quét thành viên: {exc}")
 
 
-@router.get("/members/status")
+@router.get("/members/status", dependencies=[Depends(scoped_owner)])
 def get_member_scan_status_endpoint(job_id: str):
     """Poll trạng thái, logs thời gian thực và danh sách thành viên đang quét."""
-    status_data = get_member_scan_status(job_id)
+    owner = owner_context.get() or get_owner_username()
+    status_data = get_member_scan_status(job_id, owner=owner)
     if not status_data:
         raise HTTPException(404, "Không tìm thấy phiên quét hoặc phiên đã kết thúc")
     return {"ok": True, "job": status_data}
@@ -628,7 +632,8 @@ def get_member_scan_status_endpoint(job_id: str):
 @router.post("/members/control", dependencies=[Depends(scoped_owner)])
 def post_member_scan_control(body: MemberJobControlRequest):
     """Tạm dừng / Tiếp tục / Hủy khẩn cấp phiên quét thành viên."""
-    ok = set_member_scan_control(body.job_id, body.action)
+    owner = owner_context.get() or get_owner_username()
+    ok = set_member_scan_control(body.job_id, body.action, owner=owner)
     if not ok:
         raise HTTPException(400, f"Không thể gửi lệnh '{body.action}' tới phiên quét")
     return {"ok": True, "action": body.action}
@@ -759,10 +764,11 @@ def post_start_post_scan(body: StartPostScanRequest):
         raise HTTPException(500, f"Lỗi khởi chạy phiên quét bài viết: {exc}")
 
 
-@router.get("/posts/status")
+@router.get("/posts/status", dependencies=[Depends(scoped_owner)])
 def get_post_scan_status_endpoint(job_id: str):
     """Poll trạng thái, logs thời gian thực và bài viết đang quét."""
-    status_data = get_post_scan_status(job_id)
+    owner = owner_context.get() or get_owner_username()
+    status_data = get_post_scan_status(job_id, owner=owner)
     if not status_data:
         raise HTTPException(404, "Không tìm thấy phiên quét hoặc phiên đã kết thúc")
     return {"ok": True, "job": status_data}
@@ -771,7 +777,8 @@ def get_post_scan_status_endpoint(job_id: str):
 @router.post("/posts/control", dependencies=[Depends(scoped_owner)])
 def post_post_scan_control(body: PostJobControlRequest):
     """Tạm dừng / Tiếp tục / Hủy khẩn cấp phiên quét bài viết."""
-    ok = set_post_scan_control(body.job_id, body.action)
+    owner = owner_context.get() or get_owner_username()
+    ok = set_post_scan_control(body.job_id, body.action, owner=owner)
     if not ok:
         raise HTTPException(400, f"Không thể gửi lệnh '{body.action}' tới phiên quét")
     return {"ok": True, "action": body.action}
@@ -822,7 +829,7 @@ def get_posts_summary_endpoint():
     if not owner:
         raise HTTPException(401, "Chưa đăng nhập")
     summary = get_group_posts_summary(owner)
-    return {"ok": True, **summary}
+    return {"ok": True, **summary, "category_counts": category_post_counts(owner)}
 
 
 @router.get("/posts/groups", dependencies=[Depends(scoped_owner)])

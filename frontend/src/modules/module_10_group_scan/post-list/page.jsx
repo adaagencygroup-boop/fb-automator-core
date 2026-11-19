@@ -123,7 +123,7 @@ export default function GroupScanPostListPage() {
     }
     setIsLoadingPosts(true);
     try {
-      const res = await getScannedPosts({ group_id: groupId, limit: 1000 });
+      const res = await getScannedPosts({ group_id: groupId, page_size: 1000 });
       const rawPosts = res?.posts || [];
       const formatted = rawPosts.map((p, idx) => ({
         id: p.id,

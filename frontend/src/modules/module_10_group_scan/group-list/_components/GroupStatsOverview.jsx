@@ -23,23 +23,23 @@ export default function GroupStatsOverview({ stats }) {
         </span>
       </div>
 
-      {/* Card 3: Không kiểm duyệt */}
+      {/* Card 3: Trung bình thành viên / nhóm */}
       <div className="bg-[#F8FAFC]/70 border border-[#E2E8F0]/80 rounded-xl p-3.5 text-center flex flex-col items-center justify-center gap-1.5 h-[90px]">
         <span className="text-xs font-medium text-[#64748B]">
-          Không kiểm duyệt
+          TB thành viên / nhóm
         </span>
         <span className="text-2xl font-bold text-[#0F172A] leading-8">
-          {stats.nonModerated}
+          {stats.averageMembersFormatted}
         </span>
       </div>
 
-      {/* Card 4: Có kiểm duyệt */}
+      {/* Card 4: Nhóm lớn nhất */}
       <div className="bg-[#F8FAFC]/70 border border-[#E2E8F0]/80 rounded-xl p-3.5 text-center flex flex-col items-center justify-center gap-1.5 h-[90px]">
         <span className="text-xs font-medium text-[#64748B]">
-          Có kiểm duyệt
+          Nhóm lớn nhất (TV)
         </span>
         <span className="text-2xl font-bold text-[#0F172A] leading-8">
-          {stats.moderated}
+          {stats.largestGroupFormatted}
         </span>
       </div>
     </div>

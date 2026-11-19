@@ -15,25 +15,11 @@ import {
 } from "lucide-react";
 import CustomSelect from "@/components/ui/custom-select";
 
-const TYPE_FILTER_OPTIONS = [
-  { value: "all", label: "Loại nhóm: Tất cả" },
-  { value: "public", label: "Công khai" },
-  { value: "private", label: "Riêng tư" },
-];
-
 const MEMBERS_FILTER_OPTIONS = [
   { value: "all", label: "Thành viên: Tất cả" },
   { value: "under50k", label: "Dưới 50.000" },
   { value: "50k_200k", label: "50.000 - 200.000" },
   { value: "over200k", label: "Trên 200.000" },
-];
-
-const NOTE_FILTER_OPTIONS = [
-  { value: "all", label: "Ghi chú: Tất cả" },
-  { value: "joined", label: "Đã tham gia" },
-  { value: "pending", label: "Đang chờ QTV duyệt" },
-  { value: "not_joined", label: "Chưa vào nhóm" },
-  { value: "none", label: "Chưa có ghi chú" },
 ];
 
 export default function GroupTableToolbar({
@@ -43,12 +29,8 @@ export default function GroupTableToolbar({
   onOpenEditModal,
   tableSearch,
   onTableSearchChange,
-  typeFilter,
-  onTypeFilterChange,
   membersFilter,
   onMembersFilterChange,
-  noteFilter,
-  onNoteFilterChange,
   selectedCount = 0,
   totalFilteredCount = 0,
   onToggleSelectAll,
@@ -165,17 +147,6 @@ export default function GroupTableToolbar({
           />
         </div>
 
-        {/* Filter: Loại nhóm */}
-        <div className="w-full sm:w-auto shrink-0 min-w-[140px]">
-          <CustomSelect
-            value={typeFilter}
-            onChange={onTypeFilterChange}
-            options={TYPE_FILTER_OPTIONS}
-            size="sm"
-            buttonClassName="h-[34px]"
-          />
-        </div>
-
         {/* Filter: Thành viên */}
         <div className="w-full sm:w-auto shrink-0 min-w-[150px]">
           <CustomSelect
@@ -187,16 +158,6 @@ export default function GroupTableToolbar({
           />
         </div>
 
-        {/* Filter: Ghi chú */}
-        <div className="w-full sm:w-auto shrink-0 min-w-[150px]">
-          <CustomSelect
-            value={noteFilter}
-            onChange={onNoteFilterChange}
-            options={NOTE_FILTER_OPTIONS}
-            size="sm"
-            buttonClassName="h-[34px]"
-          />
-        </div>
       </div>
 
       {/* Batch Action Bar - Chỉ hiển thị khi có ít nhất 1 nhóm được tích chọn */}

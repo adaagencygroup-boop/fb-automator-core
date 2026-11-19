@@ -23,7 +23,7 @@ export default function GroupPreviewSection({
               </span>
             </div>
             <p className="text-xs text-[#94A3B8]">
-              Kiểm tra thông tin quyền riêng tư và quy mô thành viên trước khi tiến hành quét
+              Kiểm tra loại nhóm và quy mô thành viên trước khi tiến hành quét
             </p>
           </div>
         </div>

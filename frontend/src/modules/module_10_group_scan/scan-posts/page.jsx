@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
+  Pause,
   Play,
   Square,
 } from "lucide-react";
@@ -12,8 +13,8 @@ import {
   controlPostScan,
   getPostScanStatus,
   getScanAccounts,
+  getPostsSummary,
   getScanCategories,
-  getScannedGroups,
   getScannedPosts,
   startPostScan,
 } from "../service";
@@ -87,75 +88,26 @@ export default function GroupScanPostsPage() {
 
   // Group selection state
   const [selectedGroups, setSelectedGroups] = useState([]);
-  const [, setAvailableGroups] = useState([]);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
 
   // Load available groups & categories from Database
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState("");
   const [posts, setPosts] = useState([]);
+  const isExecutingRef = useRef(false);
 
   const loadCategoriesAndGroups = useCallback(async () => {
     try {
-      const res = await getScannedGroups();
-      const list = res?.groups || [];
-      setAvailableGroups(
-        list.map((g, idx) => {
-          const rawGid = String(g.group_id || g.uid || "");
-          const dbId = g.id;
-          let realGid = "";
-          let rawUrl = String(g.url || g.href || "");
-          if (rawUrl.includes("/groups/")) {
-            const parts = rawUrl.split("/groups/")[1].split("/")[0].split("?")[0].trim();
-            if (parts && !/^\d{1,7}$/.test(parts)) {
-              realGid = parts;
-            }
-          }
-          if (!realGid) {
-            if (rawGid && !/^\d{1,7}$/.test(rawGid)) {
-              realGid = rawGid;
-            }
-          }
-          let realUrl = "";
-          if (rawUrl && !/\/groups\/\d{1,7}(?:[/?#]|$)/.test(rawUrl)) {
-            realUrl = rawUrl;
-          } else if (realGid && !/^\d{1,7}$/.test(realGid)) {
-            realUrl = `https://www.facebook.com/groups/${realGid}`;
-          }
-
-          return {
-            id: realGid || String(dbId || idx),
-            groupId: realGid,
-            group_id: realGid,
-            dbId: dbId,
-            stt: String(idx + 1).padStart(2, "0"),
-            name: g.name || g.group_name || realGid || `Nhóm #${dbId}`,
-            uid: realGid,
-            tag: (g.name || "FB").slice(0, 2).toUpperCase(),
-            tagBg: "bg-[#DBEAFE]",
-            tagText: "text-[#2563EB]",
-            type: g.type === "private" ? "private" : "public",
-            typeLabel: g.type === "private" ? "Riêng tư" : "Công khai",
-            members: g.members || "—",
-            memberCount: g.membersCount || 0,
-            url: realUrl,
-          };
-        })
-      );
-    } catch {
-      setAvailableGroups([]);
-    }
-
-    try {
-      const data = await getScanCategories();
+      const [data, summary] = await Promise.all([getScanCategories(), getPostsSummary()]);
       const cats = Array.isArray(data) ? data : [];
+      const postCounts = summary?.category_counts || {};
       setCategories(
         cats.map((c) => ({
           id: c.id,
           name: c.name,
           fullName: c.name,
           memberSummary: `${c.count || 0} Nhóm`,
-          postCount: 0,
+          postCount: Number(postCounts[String(c.name || "").toLowerCase()] || 0),
         }))
       );
       if (cats.length > 0) {
@@ -175,7 +127,7 @@ export default function GroupScanPostsPage() {
   // Nạp bài viết đã lưu từ CSDL
   const loadDatabasePosts = useCallback(async (catId) => {
     try {
-      const res = await getScannedPosts({ category_id: catId, page_size: 100 });
+      const res = await getScannedPosts({ category_id: catId, page_size: 1000 });
       if (res?.posts && Array.isArray(res.posts)) {
         setPosts(res.posts);
       }
@@ -185,7 +137,7 @@ export default function GroupScanPostsPage() {
   }, []);
 
   useEffect(() => {
-    if (selectedCategory) {
+    if (selectedCategory && !isExecutingRef.current) {
       loadDatabasePosts(selectedCategory);
     }
   }, [selectedCategory, loadDatabasePosts]);
@@ -214,7 +166,13 @@ export default function GroupScanPostsPage() {
 
   // Execution & Logs
   const [isExecuting, setIsExecuting] = useState(false);
+  useEffect(() => {
+    isExecutingRef.current = isExecuting;
+  }, [isExecuting]);
   const [activeJobId, setActiveJobId] = useState(null);
+  const [isPaused, setIsPaused] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const [controlBusy, setControlBusy] = useState(false);
   const [logs, setLogs] = useState([
     {
       time: "—",
@@ -236,9 +194,11 @@ export default function GroupScanPostsPage() {
       finishedToast = true;
       setIsExecuting(false);
       setActiveJobId(null);
+      setIsPaused(false);
+      setIsStopping(false);
       if (kind === "done") {
         toast.success(`Đã hoàn thành phiên quét! Thu thập được ${job?.total_posts_scanned || 0} bài viết.`);
-        if (selectedCategory) loadDatabasePosts(selectedCategory);
+        loadCategoriesAndGroups();
       } else if (kind === "aborted") {
         toast.info("Phiên quét bài viết đã dừng lại.");
       } else if (kind === "error") {
@@ -271,6 +231,8 @@ export default function GroupScanPostsPage() {
         }
 
         const st = String(job.status || "").toLowerCase();
+        setIsPaused(st === "paused");
+        setIsStopping(st === "stopping");
         if (st === "done" || st === "aborted" || st === "error") {
           finishUi(st, job);
         }
@@ -286,7 +248,7 @@ export default function GroupScanPostsPage() {
     }, 1500);
 
     return () => clearInterval(interval);
-  }, [isExecuting, activeJobId, selectedCategory, loadDatabasePosts]);
+  }, [isExecuting, activeJobId, loadCategoriesAndGroups]);
 
   // Remove Group handler
   const handleRemoveGroup = (groupId) => {
@@ -295,17 +257,42 @@ export default function GroupScanPostsPage() {
   };
 
   // Toggle Execution
+  // Dừng: gửi lệnh rồi tiếp tục poll tới khi worker báo kết thúc (để thấy log cuối).
+  const handleStop = async () => {
+    if (!activeJobId || isStopping || controlBusy) return;
+    setControlBusy(true);
+    try {
+      await controlPostScan({ jobId: activeJobId, action: "abort" });
+      setIsStopping(true);
+      toast.info("Đang dừng — chờ lưu dữ liệu vào CSDL...");
+    } catch {
+      setIsExecuting(false);
+      setActiveJobId(null);
+      setIsPaused(false);
+      toast.info("Phiên quét không còn chạy trên Engine.");
+    } finally {
+      setControlBusy(false);
+    }
+  };
+
+  const handlePauseResume = async () => {
+    if (!activeJobId || isStopping || controlBusy) return;
+    const action = isPaused ? "resume" : "pause";
+    setControlBusy(true);
+    try {
+      await controlPostScan({ jobId: activeJobId, action });
+      setIsPaused(action === "pause");
+      toast.info(action === "pause" ? "Đã tạm dừng phiên quét." : "Đang tiếp tục quét...");
+    } catch (err) {
+      toast.error(err?.message || "Không gửi được lệnh điều khiển.");
+    } finally {
+      setControlBusy(false);
+    }
+  };
+
   const handleToggleExecution = async () => {
     if (isExecuting) {
-      if (activeJobId) {
-        try {
-          await controlPostScan({ jobId: activeJobId, action: "abort" });
-        } catch {
-          // ignore
-        }
-      }
-      setIsExecuting(false);
-      toast.info("Đã dừng tiến trình quét bài viết nhóm.");
+      await handleStop();
     } else {
       if (selectedUids.length === 0) {
         toast.error("Vui lòng chọn ít nhất một tài khoản thực thi!");
@@ -400,9 +387,9 @@ export default function GroupScanPostsPage() {
       const l = Number(p.likes_count ?? p.likes ?? 0);
       const c = Number(p.comments_count ?? p.comments ?? 0);
       const s = Number(p.shares_count ?? p.shares ?? 0);
-      const matchLike = !minLikeFilter || minLikeFilter === "0" || l >= Number(minLikeFilter);
-      const matchCmt = !minCmtFilter || minCmtFilter === "0" || c >= Number(minCmtFilter);
-      const matchShare = !minShareFilter || minShareFilter === "0" || s >= Number(minShareFilter);
+      const matchLike = !minLikeFilter || minLikeFilter === "0" || l > Number(minLikeFilter);
+      const matchCmt = !minCmtFilter || minCmtFilter === "0" || c > Number(minCmtFilter);
+      const matchShare = !minShareFilter || minShareFilter === "0" || s > Number(minShareFilter);
       return matchQuery && matchLike && matchCmt && matchShare;
     });
 
@@ -417,6 +404,20 @@ export default function GroupScanPostsPage() {
       result.sort((a, b) => Number(b.likes || b.likes_count || 0) - Number(a.likes || a.likes_count || 0));
     } else if (sortOption === "most_comments") {
       result.sort((a, b) => Number(b.comments || b.comments_count || 0) - Number(a.comments || a.comments_count || 0));
+    } else if (sortOption === "latest") {
+      // ID bài số của Facebook tăng theo thời gian đăng; ID dạng pfbid… để cuối.
+      const idOf = (p) => {
+        const raw = String(p.post_id || p.postId || "");
+        return /^[0-9]+$/.test(raw) ? BigInt(raw) : null;
+      };
+      result.sort((a, b) => {
+        const x = idOf(a);
+        const y = idOf(b);
+        if (x === null && y === null) return 0;
+        if (x === null) return 1;
+        if (y === null) return -1;
+        return x === y ? 0 : y > x ? 1 : -1;
+      });
     }
 
     return result;
@@ -424,6 +425,14 @@ export default function GroupScanPostsPage() {
 
   const pageSize = 15;
   const totalPages = Math.max(1, Math.ceil(filteredPosts.length / pageSize));
+
+  // Đổi bộ lọc / danh mục → về trang 1; danh sách ngắn lại → không đứng ở trang trống.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [postSearch, minLikeFilter, minCmtFilter, minShareFilter, sortOption, selectedCategory]);
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
   const paginatedPosts = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
     return filteredPosts.slice(start, start + pageSize).map((p, idx) => {
@@ -444,7 +453,7 @@ export default function GroupScanPostsPage() {
         likesStr: Number(p.likes_count ?? p.likes ?? 0).toLocaleString("vi-VN"),
         comments: Number(p.comments_count ?? p.comments ?? 0),
         shares: Number(p.shares_count ?? p.shares ?? 0),
-        postedTime: p.posted_at || p.postedTime || "Vừa xong",
+        postedTime: p.posted_at || p.postedTime || "—",
       };
     });
   }, [filteredPosts, currentPage, pageSize]);
@@ -611,26 +620,38 @@ export default function GroupScanPostsPage() {
           onRemoveGroup={handleRemoveGroup}
         />
 
-        {/* BIG PRIMARY ACTION BUTTON: BẮT ĐẦU THỰC THI */}
-        <button
-          type="button"
-          onClick={handleToggleExecution}
-          className={`inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl text-sm font-bold tracking-wide text-white transition-colors shadow-sm ${
-            isExecuting ? "bg-[#DC2626] hover:bg-rose-700" : "bg-[#1877F2] hover:bg-blue-600"
-          }`}
-        >
-          {isExecuting ? (
-            <>
+        {/* BIG PRIMARY ACTION BUTTON: BẮT ĐẦU / TẠM DỪNG / DỪNG */}
+        {isExecuting ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={handlePauseResume}
+              disabled={isStopping || controlBusy || !activeJobId}
+              className="inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl bg-[#F59E0B] text-sm font-bold tracking-wide text-white shadow-sm transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isPaused ? <Play className="size-4 fill-white" /> : <Pause className="size-4 fill-white" />}
+              <span>{isPaused ? "TIẾP TỤC QUÉT" : "TẠM DỪNG"}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleStop}
+              disabled={isStopping || controlBusy}
+              className="inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl bg-[#DC2626] text-sm font-bold tracking-wide text-white shadow-sm transition-colors hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
               <Square className="size-4 fill-white" />
-              <span>DỪNG THỰC THI QUÉT</span>
-            </>
-          ) : (
-            <>
-              <Play className="size-4 fill-white" />
-              <span>BẮT ĐẦU THỰC THI</span>
-            </>
-          )}
-        </button>
+              <span>{isStopping ? "ĐANG DỪNG..." : "DỪNG THỰC THI QUÉT"}</span>
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={handleToggleExecution}
+            className="inline-flex h-11 w-full items-center justify-center gap-2.5 rounded-xl bg-[#1877F2] text-sm font-bold tracking-wide text-white shadow-sm transition-colors hover:bg-blue-600"
+          >
+            <Play className="size-4 fill-white" />
+            <span>BẮT ĐẦU THỰC THI</span>
+          </button>
+        )}
 
         {/* SECTION 4: Kết quả quét bài viết (Master-Detail 2 cột) */}
         <LivePostResultSection
