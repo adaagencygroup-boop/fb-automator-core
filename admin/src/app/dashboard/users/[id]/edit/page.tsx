@@ -3,11 +3,12 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { api, User, ActivityLog, getCurrentAdminUser } from "@/lib/api";
+import { api, User, getCurrentAdminUser } from "@/lib/api";
 import { ACCOUNT_FEATURE, withAccountLicense, featureChanges } from "@/lib/account-license";
 import { LogoutNoticeModal } from "@/components/LogoutNoticeModal";
+import ApprovalModal from "@/components/ApprovalModal";
 import { isValidPhoneNumber, isValidPassword, validatePassword } from "@/lib/validation";
-import { RotateCw, Copy, Check, Eye, EyeOff, Ban, Trash2 } from "lucide-react";
+import { RotateCw, Copy, Check, Eye, EyeOff, Ban, Trash2, Zap } from "lucide-react";
 import "./user-edit.css";
 
 // 11 Core features
@@ -38,9 +39,10 @@ export default function UserEditPage() {
   const userId = params?.id ? Number(params.id) : null;
 
   const [user, setUser] = useState<User | null>(null);
-  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
+  const [isApproveModalOpen, setIsApproveModalOpen] = useState(false);
   const [copiedHwid, setCopiedHwid] = useState(false);
 
   // Form states
@@ -67,10 +69,7 @@ export default function UserEditPage() {
   const loadUserData = async () => {
     if (!userId) return;
     try {
-      const [users, logsData] = await Promise.all([
-        api.getUsers(),
-        api.getActivityLogs(100).catch(() => [] as ActivityLog[]),
-      ]);
+      const users = await api.getUsers();
       const found = users.find((u) => u.id === userId);
       if (found) {
         setUser(found);
@@ -94,13 +93,6 @@ export default function UserEditPage() {
               return { ...df, checked: df.key === ACCOUNT_FEATURE, days: 0 };
             })
           );
-        }
-
-        if (logsData) {
-          const userLogs = logsData.filter(
-            (l) => l.target_uid === userId || l.target_username === found.username
-          );
-          setActivityLogs(userLogs);
         }
       }
     } catch (e) {
@@ -525,12 +517,41 @@ export default function UserEditPage() {
 
             {/* Bottom Card: Hành động */}
             <div className="ue-danger-card">
-              <h3 className="ue-danger-title">Hành động</h3>
+              <div className="ue-action-card-header">
+                <h3 className="ue-danger-title">Hành động</h3>
+                <span className="ue-action-blue-dot" />
+              </div>
               <p className="ue-danger-desc">
-                Thao tác trực tiếp trạng thái cấp phép cho tài khoản này.
+                Thao tác trực tiếp quyền hạn, thiết bị HWID và trạng thái cấp phép cho tài khoản này.
               </p>
 
               <div className="ue-danger-btn-group">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (user.status === "pending") {
+                      setIsApproveModalOpen(true);
+                    } else {
+                      setIsExtendModalOpen(true);
+                    }
+                  }}
+                  disabled={actionLoading}
+                  className="ue-btn-action-renew"
+                >
+                  <Zap className="w-4 h-4 fill-white stroke-none" />
+                  <span>Gia hạn license</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleResetHwid}
+                  disabled={actionLoading}
+                  className="ue-btn-action-reset"
+                >
+                  <RotateCw className="w-4 h-4 text-blue-600" />
+                  <span>Reset HWID</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={handleBanToggle}
@@ -548,7 +569,7 @@ export default function UserEditPage() {
                   className="ue-btn-danger-soft"
                 >
                   <Trash2 className="w-4 h-4 text-[#BE123C]" />
-                  <span>Xoá vĩnh viễn tài khoản</span>
+                  <span>Xoá tài khoản</span>
                 </button>
               </div>
             </div>
@@ -597,140 +618,6 @@ export default function UserEditPage() {
             ))}
           </div>
         </div>
-
-        {/* Section 4: ActivityLogTable */}
-        <div className="ue-activity-card">
-          <div className="ue-activity-header">
-            <div className="ue-activity-title-group">
-              <div className="ue-activity-icon-box">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <circle cx="8" cy="8" r="6" stroke="#2563EB" strokeWidth="1.33333"/>
-                  <path d="M8 5V8L10 10" stroke="#2563EB" strokeWidth="1.33333" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              </div>
-              <h3 className="ue-activity-title">Lịch sử hoạt động</h3>
-            </div>
-            <span className="ue-activity-count-badge">
-              {activityLogs.length > 0 ? `${activityLogs.length} sự kiện ghi nhận` : "3 sự kiện ghi nhận"}
-            </span>
-          </div>
-
-          <div className="ue-activity-table-wrap">
-            <table className="ue-table">
-              <thead>
-                <tr>
-                  <th style={{ width: "20%" }}>THỜI GIAN</th>
-                  <th style={{ width: "25%" }}>HÀNH ĐỘNG</th>
-                  <th style={{ width: "35%" }}>THÔNG TIN CHI TIẾT</th>
-                  <th style={{ width: "20%" }} className="text-right">NGƯỜI THỰC HIỆN</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activityLogs.length > 0 ? (
-                  activityLogs.map((log, index) => {
-                    const actionType = log.action_type || "";
-                    const isApprove = actionType.toLowerCase().includes("approve") || actionType.toLowerCase().includes("duyệt");
-                    const isReset = actionType.toLowerCase().includes("reset") || actionType.toLowerCase().includes("hwid");
-                    const isRegister = actionType.toLowerCase().includes("register") || actionType.toLowerCase().includes("đăng ký");
-                    const badgeClass = isApprove ? "approved" : isReset ? "reset" : isRegister ? "registered" : "registered";
-
-                    const actionLabel = isApprove
-                      ? "Duyệt người dùng"
-                      : isReset
-                      ? "Reset HWID"
-                      : isRegister
-                      ? "Đăng ký tài khoản"
-                      : actionType;
-
-                    return (
-                      <tr key={log.id || index}>
-                        <td style={{ color: "#64748B", fontWeight: 500 }}>
-                          {formatUtcDateTime(log.created_at)}
-                        </td>
-                        <td>
-                          <span className={`ue-log-badge ${badgeClass}`}>
-                            <span className="dot" />
-                            <span>{actionLabel}</span>
-                          </span>
-                        </td>
-                        <td style={{ color: "#475569" }}>
-                          {log.change_detail || log.note || log.ip_address || "—"}
-                        </td>
-                        <td className="text-right">
-                          {log.admin_username ? (
-                            <span className="ue-admin-tag">
-                              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <circle cx="6" cy="4" r="2.5" stroke="#2563EB" strokeWidth="1"/>
-                                <path d="M2 10C2 8 3.8 6.5 6 6.5C8.2 6.5 10 8 10 10" stroke="#2563EB" strokeWidth="1" strokeLinecap="round"/>
-                              </svg>
-                              <span>{log.admin_username}</span>
-                            </span>
-                          ) : (
-                            <span style={{ color: "#94A3B8" }}>—</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })
-                ) : (
-                  <>
-                    <tr>
-                      <td style={{ color: "#64748B", fontWeight: 500 }}>01/12/2026 10:30</td>
-                      <td>
-                        <span className="ue-log-badge registered">
-                          <span className="dot" />
-                          <span>Đăng ký tài khoản</span>
-                        </span>
-                      </td>
-                      <td style={{ color: "#475569" }}>Tạo tài khoản mới từ form người dùng</td>
-                      <td className="text-right" style={{ color: "#94A3B8" }}>—</td>
-                    </tr>
-                    <tr>
-                      <td style={{ color: "#64748B", fontWeight: 500 }}>05/12/2026 14:20</td>
-                      <td>
-                        <span className="ue-log-badge approved">
-                          <span className="dot" />
-                          <span>Duyệt người dùng</span>
-                        </span>
-                      </td>
-                      <td style={{ color: "#475569" }}>Cấp license 30 ngày dùng thử</td>
-                      <td className="text-right">
-                        <span className="ue-admin-tag">
-                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <circle cx="6" cy="4" r="2.5" stroke="#2563EB" strokeWidth="1"/>
-                            <path d="M2 10C2 8 3.8 6.5 6 6.5C8.2 6.5 10 8 10 10" stroke="#2563EB" strokeWidth="1" strokeLinecap="round"/>
-                          </svg>
-                          <span>admin</span>
-                        </span>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style={{ color: "#64748B", fontWeight: 500 }}>10/12/2026 09:15</td>
-                      <td>
-                        <span className="ue-log-badge reset">
-                          <span className="dot" />
-                          <span>Reset HWID</span>
-                        </span>
-                      </td>
-                      <td style={{ color: "#475569" }}>
-                        HWID mới: <span style={{ color: "#2563EB" }}>XYZ789...</span>
-                      </td>
-                      <td className="text-right">
-                        <span className="ue-admin-tag">
-                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <circle cx="6" cy="4" r="2.5" stroke="#2563EB" strokeWidth="1"/>
-                            <path d="M2 10C2 8 3.8 6.5 6 6.5C8.2 6.5 10 8 10 10" stroke="#2563EB" strokeWidth="1" strokeLinecap="round"/>
-                          </svg>
-                          <span>admin</span>
-                        </span>
-                      </td>
-                    </tr>
-                  </>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
       </div>
 
       {/* MainFooter */}
@@ -747,6 +634,16 @@ export default function UserEditPage() {
           </a>
         </div>
       </footer>
+
+      <ApprovalModal
+        user={isExtendModalOpen || isApproveModalOpen ? user : null}
+        mode={isExtendModalOpen ? "extend" : "approve"}
+        onClose={() => {
+          setIsExtendModalOpen(false);
+          setIsApproveModalOpen(false);
+        }}
+        onSuccess={loadUserData}
+      />
     </div>
   );
 }

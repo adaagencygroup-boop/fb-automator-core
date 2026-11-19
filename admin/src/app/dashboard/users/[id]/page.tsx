@@ -1,11 +1,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api, User, ActivityLog } from "@/lib/api";
-import { RotateCw, Zap, Trash2, CheckCircle2 } from "lucide-react";
-import ApprovalModal from "@/components/ApprovalModal";
+import { RotateCw, CheckCircle2 } from "lucide-react";
 import "./user-detail.css";
 
 // 11 module features list matching system specifications
@@ -25,15 +24,11 @@ const SYSTEM_MODULES = [
 
 export default function UserDetailPage() {
   const params = useParams();
-  const router = useRouter();
   const userId = params?.id ? Number(params.id) : null;
 
   const [user, setUser] = useState<User | null>(null);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [isExtendModalOpen, setIsExtendModalOpen] = useState(false);
-  const [isApproveModalOpen, setIsApproveModalOpen] = useState(false);
   const [copiedHwid, setCopiedHwid] = useState(false);
   const [logPage, setLogPage] = useState(1);
   const [logPageSize, setLogPageSize] = useState(5);
@@ -95,72 +90,6 @@ export default function UserDetailPage() {
     navigator.clipboard.writeText(hwidStr);
     setCopiedHwid(true);
     setTimeout(() => setCopiedHwid(false), 2000);
-  };
-
-  const handleResetHwid = async () => {
-    if (!confirm(`Reset HWID của ${user.username}? Thiết bị hiện tại sẽ bị hủy liên kết.`)) return;
-    setActionLoading(true);
-    try {
-      await api.resetHwid(user.id);
-      window.dispatchEvent(
-        new CustomEvent("app_toast", {
-          detail: { msg: `Đã reset HWID cho tài khoản ${user.username}`, type: "success" },
-        })
-      );
-      await loadUserDetail();
-    } catch (e: any) {
-      alert(e.message || "Lỗi khi reset HWID");
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleBan = async () => {
-    if (!confirm(`Khóa tài khoản ${user.username}?`)) return;
-    setActionLoading(true);
-    try {
-      await api.banUser(user.id);
-      window.dispatchEvent(
-        new CustomEvent("app_toast", {
-          detail: { msg: `Đã khóa tài khoản ${user.username}`, type: "success" },
-        })
-      );
-      await loadUserDetail();
-    } catch (e: any) {
-      alert(e.message || "Lỗi khi khóa tài khoản");
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleUnban = async () => {
-    if (!confirm(`Mở khóa tài khoản ${user.username}?`)) return;
-    setActionLoading(true);
-    try {
-      await api.unbanUser(user.id);
-      window.dispatchEvent(
-        new CustomEvent("app_toast", {
-          detail: { msg: `Đã mở khóa tài khoản ${user.username}`, type: "success" },
-        })
-      );
-      await loadUserDetail();
-    } catch (e: any) {
-      alert(e.message || "Lỗi khi mở khóa");
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!confirm(`CẢNH BÁO: XÓA VĨNH VIỄN tài khoản ${user.username}? Thao tác này không thể hoàn tác.`)) return;
-    setActionLoading(true);
-    try {
-      await api.deleteUser(user.id);
-      router.push("/dashboard/users");
-    } catch (e: any) {
-      alert(e.message || "Lỗi khi xóa tài khoản");
-      setActionLoading(false);
-    }
   };
 
   const formatUtcDateTime = (dateStr?: string | null): string => {
@@ -459,84 +388,6 @@ export default function UserDetailPage() {
               </div>
             </div>
           </div>
-
-          {/* Card 2: Hành động (Action Card) */}
-          <div className="ud-action-card">
-            <div className="ud-action-card-header">
-              <h3 className="ud-action-card-title">Hành động</h3>
-              <span className="ud-action-blue-dot" />
-            </div>
-
-            <p className="ud-action-desc">
-              Thao tác trực tiếp quyền hạn, thiết bị HWID và trạng thái cấp phép cho tài khoản này.
-            </p>
-
-            <div className="ud-action-buttons-stack">
-              <button
-                type="button"
-                onClick={() => {
-                  if (user.status === "pending") {
-                    setIsApproveModalOpen(true);
-                  } else {
-                    setIsExtendModalOpen(true);
-                  }
-                }}
-                disabled={actionLoading}
-                className="ud-btn-action ud-btn-action--renew"
-              >
-                <Zap className="w-4 h-4 fill-white stroke-none" />
-                <span>Gia hạn license</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleResetHwid}
-                disabled={actionLoading}
-                className="ud-btn-action ud-btn-action--reset"
-              >
-                <RotateCw className="w-4 h-4 text-blue-600" />
-                <span>Reset HWID</span>
-              </button>
-
-              {user.status === "banned" ? (
-                <button
-                  type="button"
-                  onClick={handleUnban}
-                  disabled={actionLoading}
-                  className="ud-btn-action ud-btn-action--lock"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                    <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
-                  </svg>
-                  <span>Mở khóa người dùng</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleBan}
-                  disabled={actionLoading}
-                  className="ud-btn-action ud-btn-action--lock"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10"/>
-                    <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
-                  </svg>
-                  <span>Khóa người dùng</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={handleDelete}
-                disabled={actionLoading}
-                className="ud-btn-action ud-btn-action--delete"
-              >
-                <Trash2 className="w-4 h-4 text-[#DC2626]" />
-                <span>Xoá tài khoản</span>
-              </button>
-            </div>
-          </div>
         </div>
 
         {/* Middle Section: TÍNH NĂNG ĐÃ ĐĂNG KÝ & THỜI HẠN SỬ DỤNG Table */}
@@ -774,17 +625,6 @@ export default function UserDetailPage() {
           © 2026 FB Tool Admin Control Center. All rights reserved.
         </div>
       </div>
-
-      {/* Approval / Extension Modal */}
-      <ApprovalModal
-        user={isExtendModalOpen || isApproveModalOpen ? user : null}
-        mode={isExtendModalOpen ? "extend" : "approve"}
-        onClose={() => {
-          setIsExtendModalOpen(false);
-          setIsApproveModalOpen(false);
-        }}
-        onSuccess={loadUserDetail}
-      />
     </div>
   );
 }
