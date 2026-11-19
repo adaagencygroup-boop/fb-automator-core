@@ -6,6 +6,7 @@ ngày: published_text thô + published_at parse (nullable).
 from __future__ import annotations
 
 import logging
+import random
 import re
 import threading
 import time
@@ -97,18 +98,35 @@ for (const node of nodes) {
     }
   }
 
-  const textBits = [];
-  const msgs = node.querySelectorAll('[data-ad-preview="message"], [data-ad-comet-preview="message"], div[dir="auto"]');
-  for (const m of Array.from(msgs).slice(0, 3)) {
-    const t = (m.innerText || '').trim();
-    if (t && t.length > 2 && t.length < 2000) textBits.push(t);
+  // Caption: gom ứng viên để Python chọn (pick_caption). Không lấy "3 div đầu tiên" — hay dính tên Page / header.
+  const textCandidates = [];
+  const seenText = new Set();
+  const pushCand = (text, source) => {
+    const t = (text || '').replace(/ /g, ' ').trim();
+    if (!t || t.length < 3 || seenText.has(t)) return;
+    seenText.add(t);
+    textCandidates.push({ text: t.slice(0, 5000), source });
+  };
+  for (const m of Array.from(node.querySelectorAll('[data-ad-preview="message"], [data-ad-comet-preview="message"]'))) {
+    pushCand(m.innerText, 'message');
   }
-  const content = textBits.join('\n').slice(0, 1500) || null;
+  const nestedArticles = Array.from(node.querySelectorAll('[role="article"]')).filter((a) => a !== node);
+  for (const b of Array.from(node.querySelectorAll('div[dir="auto"], span[dir="auto"]'))) {
+    if (textCandidates.length >= 15) break;
+    // Header (tên Page, thời gian), nút, thanh tương tác, bình luận → không phải caption
+    if (b.closest('h1, h2, h3, h4, strong, a, [role="button"], [role="toolbar"], ul')) continue;
+    if (nestedArticles.some((a) => a.contains(b))) continue;
+    // Chỉ lấy khối ngoài cùng, tránh trùng cha/con
+    const parentBlock = b.parentElement && b.parentElement.closest('div[dir="auto"], span[dir="auto"]');
+    if (parentBlock && node.contains(parentBlock)) continue;
+    pushCand(b.innerText, 'block');
+  }
+  const hasText = textCandidates.length > 0;
 
   let postType = 'text';
   if (/\/(reel|reels)\b/i.test(postUrl) || node.querySelector('video')) postType = 'video';
   else if (/\/(photo|photos)\b/i.test(postUrl) || node.querySelector('img[src*="scontent"]')) {
-    if (postType !== 'video') postType = node.querySelector('video') ? 'video' : (content ? 'text' : 'photo');
+    if (postType !== 'video') postType = node.querySelector('video') ? 'video' : (hasText ? 'text' : 'photo');
     if (/\/photo/i.test(postUrl)) postType = 'photo';
   }
   if (/\/videos?\b/i.test(postUrl)) postType = 'video';
@@ -249,7 +267,7 @@ for (const node of nodes) {
 
   out.push({
     post_url: postUrl.split('#')[0],
-    content,
+    text_candidates: textCandidates,
     post_type: postType,
     published_text: publishedText,
     published_utime: publishedUtime,
@@ -263,6 +281,155 @@ for (const node of nodes) {
 }
 return out;
 """
+
+
+# Bấm "Xem thêm" để mở caption bị thu gọn — chỉ mở rộng chữ trên giao diện (không like/follow/bình luận).
+# Bỏ qua nút là link có href (bấm sẽ chuyển trang). arguments[0] = selector vùng được bấm.
+_EXPAND_SEE_MORE_JS = r"""
+const scopes = Array.from(document.querySelectorAll(arguments[0] || '[role="article"]'));
+const label = /^(xem thêm|see more)$/i;
+const done = new Set();
+let clicked = 0;
+for (const scope of scopes) {
+  for (const el of Array.from(scope.querySelectorAll('[role="button"], span, div[tabindex="0"]'))) {
+    if (clicked >= 25) return clicked;
+    const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
+    if (!label.test(t)) continue;
+    const target = el.closest('[role="button"]') || el;
+    if (done.has(target) || target.closest('a[href]')) continue;
+    done.add(target);
+    const r = target.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    try { target.click(); clicked++; } catch (e) {}
+  }
+}
+return clicked;
+"""
+
+# Trang reel / video: meta og + các khối chữ của reel ĐANG hiện (FB tải sẵn reel kế tiếp trong DOM)
+_READ_REEL_CAPTION_JS = r"""
+const meta = (p) => {
+  const m = document.querySelector('meta[property="' + p + '"]');
+  return m ? (m.getAttribute('content') || '') : '';
+};
+const out = [];
+const push = (text, source) => {
+  const t = (text || '').replace(/ /g, ' ').trim();
+  if (t && t.length >= 3) out.push({ text: t.slice(0, 5000), source });
+};
+push(meta('og:description'), 'meta');
+push(meta('og:title'), 'meta');
+const visible = (el) => {
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight;
+};
+const freeText = (b) => !b.closest('h1, h2, h3, h4, strong, a, [role="button"], ul');
+const hasTextBlock = (n) => Array.from(n.querySelectorAll('div[dir="auto"], span[dir="auto"]'))
+  .some((b) => freeText(b) && (b.innerText || '').trim().length >= 10);
+let scope = null;
+const vids = Array.from(document.querySelectorAll('video')).filter(visible);
+if (vids.length) {
+  let n = vids[0].parentElement;
+  for (let i = 0; i < 15 && n; i++, n = n.parentElement) {
+    if (hasTextBlock(n)) { scope = n; break; }
+  }
+}
+if (!scope) scope = document.querySelector('[role="main"]') || document.body;
+const nested = Array.from(scope.querySelectorAll('[role="article"]'));
+for (const b of Array.from(scope.querySelectorAll('div[dir="auto"], span[dir="auto"]'))) {
+  if (out.length >= 25) break;
+  if (!freeText(b) || nested.some((a) => a.contains(b)) || !visible(b)) continue;
+  const parentBlock = b.parentElement && b.parentElement.closest('div[dir="auto"], span[dir="auto"]');
+  if (parentBlock && scope.contains(parentBlock)) continue;
+  push(b.innerText, 'block');
+}
+return {
+  candidates: out,
+  url: location.href,
+  title: document.title,
+  scope_text: (scope.innerText || '').slice(0, 3000),
+};
+"""
+
+_CONTENT_READY_JS = r"""
+const m = document.querySelector('[role="main"]');
+return !!document.querySelector('video') || !!(m && (m.innerText || '').trim().length > 30);
+"""
+
+CAPTION_MAX_LEN = 5000
+# Reel / video có caption ngắn hơn ngưỡng này → mở bài để lấy caption đầy đủ
+SHORT_CAPTION_LEN = 40
+
+_SEE_MORE_TAIL_RE = re.compile(r"(?:…|\.{3})?\s*(?:xem thêm|see more|ẩn bớt|see less)\s*$", re.IGNORECASE)
+_CAPTION_NOISE_RE = re.compile(
+    r"^(?:xem thêm|see more|ẩn bớt|see less|theo dõi|follow|thích|like|bình luận|comment|chia sẻ|share|"
+    r"gửi|send|reels?|facebook|watch|video|âm thanh gốc.*|original audio.*)$",
+    re.IGNORECASE,
+)
+# og:description kiểu "1,2K views, 30 reactions | Facebook Watch Videos from X: <caption>"
+_META_PREFIX_RES = (
+    re.compile(r"^.*?(?:facebook watch videos from|video từ|reels? (?:from|của))[^:]{0,100}:\s*", re.IGNORECASE),
+    re.compile(
+        r"^(?:[\d.,]+\s*[KkMmNn]?\s*(?:views?|lượt xem|reactions?|likes?|lượt thích|comments?|bình luận|shares?|"
+        r"lượt chia sẻ)[,·\s]*)+[|:·-]?\s*",
+        re.IGNORECASE,
+    ),
+)
+_META_SUFFIX_RE = re.compile(r"\s*[|\-–]\s*facebook\s*$", re.IGNORECASE)
+
+
+def clean_caption(text: Optional[str], source: str = "block") -> Optional[str]:
+    """Gom khoảng trắng / dòng trống, bỏ đuôi 'Xem thêm', cắt CAPTION_MAX_LEN."""
+    if not text:
+        return None
+    lines: List[str] = []
+    for line in str(text).replace(" ", " ").splitlines():
+        line = re.sub(r"[ \t]+", " ", line).strip()
+        if not line and (not lines or not lines[-1]):
+            continue
+        lines.append(line)
+    out = "\n".join(lines).strip()
+    out = _SEE_MORE_TAIL_RE.sub("", out).strip()
+    if source == "meta":
+        for pattern in _META_PREFIX_RES:
+            out = pattern.sub("", out, count=1).strip()
+        out = _META_SUFFIX_RE.sub("", out).strip()
+    return out[:CAPTION_MAX_LEN] or None
+
+
+def pick_caption(candidates: Optional[List[Any]], exclude: Tuple[str, ...] = ()) -> Optional[str]:
+    """
+    Chọn caption từ ứng viên {text, source}:
+    - Có khung message của bài → lấy khung đó (dài nhất).
+    - Không có → ứng viên dài nhất (block / meta), bỏ tên Page và nhãn giao diện.
+    """
+    excluded = {str(e).strip().lower() for e in exclude if e and str(e).strip()}
+    best_message: Optional[str] = None
+    best_other: Optional[str] = None
+    for cand in candidates or []:
+        if isinstance(cand, dict):
+            text, source = cand.get("text"), str(cand.get("source") or "block")
+        else:
+            text, source = cand, "block"
+        cleaned = clean_caption(text, source)
+        if not cleaned or len(cleaned) < 3:
+            continue
+        if cleaned.lower() in excluded or _CAPTION_NOISE_RE.match(cleaned):
+            continue
+        if source == "message":
+            if best_message is None or len(cleaned) > len(best_message):
+                best_message = cleaned
+        elif best_other is None or len(cleaned) > len(best_other):
+            best_other = cleaned
+    return best_message or best_other
+
+
+def needs_full_caption(post: Dict[str, Any]) -> bool:
+    """Reel / video mà caption rỗng hoặc quá ngắn → cần mở bài để đọc đủ."""
+    url = str(post.get("post_url") or "")
+    is_video = bool(re.search(r"/(?:reels?|videos?|watch)\b", url, re.IGNORECASE)) or \
+        str(post.get("post_type") or "").lower() == "video"
+    return is_video and len((post.get("content") or "").strip()) < SHORT_CAPTION_LEN
 
 
 def post_type_matches(post_type: Optional[str], allowed: List[str]) -> bool:
@@ -305,7 +472,30 @@ def _sanitize_engagement_text(text: Optional[str]) -> Optional[str]:
     return t
 
 
-def extract_posts_batch(driver) -> List[Dict[str, Any]]:
+def expand_see_more(driver, scope_selector: str = '[role="article"]') -> int:
+    """Bấm 'Xem thêm' trong vùng chỉ định. Nếu lỡ chuyển trang thì quay lại."""
+    try:
+        before = driver.current_url
+    except Exception:
+        before = None
+    try:
+        clicked = int(driver.execute_script(_EXPAND_SEE_MORE_JS, scope_selector) or 0)
+    except Exception as exc:
+        logger.debug(f"[POST_SCAN] expand see more: {exc}")
+        return 0
+    if clicked:
+        time.sleep(0.5)
+        try:
+            if before and driver.current_url != before:
+                driver.back()
+                time.sleep(1.5)
+        except Exception:
+            pass
+    return clicked
+
+
+def extract_posts_batch(driver, exclude_names: Tuple[str, ...] = ()) -> List[Dict[str, Any]]:
+    expand_see_more(driver)
     try:
         raw = driver.execute_script(_EXTRACT_POSTS_JS) or []
     except Exception as exc:
@@ -337,7 +527,7 @@ def extract_posts_batch(driver) -> List[Dict[str, Any]]:
             {
                 "post_key": key,
                 "post_url": url,
-                "content": r.get("content"),
+                "content": pick_caption(r.get("text_candidates"), exclude=exclude_names),
                 "post_type": r.get("post_type") or "text",
                 "published_text": pub_text,  # thô — không ghi đè bằng giá trị đoán
                 "published_at": pub_at,
@@ -350,6 +540,14 @@ def extract_posts_batch(driver) -> List[Dict[str, Any]]:
             }
         )
     return out
+
+
+# Quét lại: chỉ thay nội dung khi bản mới dài hơn (caption đầy đủ thắng bản bị cắt / sai như "BUILDER")
+_LONGER_CONTENT_SQL = (
+    "CASE WHEN EXCLUDED.content IS NOT NULL"
+    " AND LENGTH(EXCLUDED.content) > LENGTH(COALESCE(scanned_posts.content, ''))"
+    " THEN EXCLUDED.content ELSE scanned_posts.content END"
+)
 
 
 def upsert_posts_batch(
@@ -367,7 +565,7 @@ def upsert_posts_batch(
             continue
         try:
             res = db.fetch_one(
-                """
+                f"""
                 INSERT INTO scanned_posts (
                     owner_key, page_key, post_key, post_url, published_at, published_text,
                     content, post_type, reaction_count, comment_count, share_count,
@@ -377,7 +575,7 @@ def upsert_posts_batch(
                 )
                 ON CONFLICT (owner_key, page_key, post_key) DO UPDATE
                 SET post_url = EXCLUDED.post_url,
-                    content = COALESCE(EXCLUDED.content, scanned_posts.content),
+                    content = {_LONGER_CONTENT_SQL},
                     post_type = COALESCE(EXCLUDED.post_type, scanned_posts.post_type),
                     reaction_count = GREATEST(COALESCE(scanned_posts.reaction_count,0), EXCLUDED.reaction_count),
                     comment_count = GREATEST(COALESCE(scanned_posts.comment_count,0), EXCLUDED.comment_count),
@@ -413,7 +611,7 @@ def upsert_posts_batch(
             logger.debug(f"[POST_SCAN] upsert: {exc}")
             try:
                 db.execute(
-                    """
+                    f"""
                     INSERT INTO scanned_posts (
                         owner_key, page_key, post_key, post_url, published_text,
                         content, post_type, reaction_count, comment_count, share_count,
@@ -421,7 +619,7 @@ def upsert_posts_batch(
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
                     ON CONFLICT (owner_key, page_key, post_key) DO UPDATE
                     SET last_session_id = EXCLUDED.last_session_id,
-                        content = COALESCE(EXCLUDED.content, scanned_posts.content),
+                        content = {_LONGER_CONTENT_SQL},
                         updated_at = NOW()
                     """,
                     (
@@ -478,6 +676,136 @@ def _is_checkpoint_url(driver) -> bool:
     except Exception:
         return False
     return "/checkpoint/" in cur or "/login" in cur
+
+
+def fetch_full_caption(
+    driver,
+    url: str,
+    stop_event: threading.Event,
+    exclude_names: Tuple[str, ...] = (),
+) -> Tuple[Optional[str], Dict[str, Any]]:
+    """Mở trang reel / video, bấm 'Xem thêm', đọc caption. Trả (caption, dữ liệu thô để debug)."""
+    try:
+        driver.get(url)
+    except Exception as exc:
+        # Timeout tải trang: DOM thường đã có nội dung — vẫn đọc tiếp
+        logger.debug(f"[POST_SCAN] open {url}: {exc}")
+    deadline = time.time() + 6.0
+    while time.time() < deadline and not stop_event.is_set():
+        try:
+            if driver.execute_script(_CONTENT_READY_JS):
+                break
+        except Exception:
+            pass
+        time.sleep(0.4)
+    if _is_checkpoint_url(driver):
+        return None, {"checkpoint": True, "url": url}
+    stop_event.wait(1.0)  # phần caption tải sau khung video
+    expand_see_more(driver, '[role="main"], [role="dialog"]')
+    try:
+        raw = driver.execute_script(_READ_REEL_CAPTION_JS) or {}
+    except Exception as exc:
+        raw = {"error": str(exc)[:300]}
+    raw["requested_url"] = url
+    return pick_caption(raw.get("candidates"), exclude=exclude_names), raw
+
+
+def dump_caption_debug(post_key: str, raw: Dict[str, Any], caption: Optional[str]) -> Optional[str]:
+    """Không đọc được caption → ghi text thô ra logs/post_caption_debug/ để chỉnh selector theo DOM thật."""
+    try:
+        from config.paths import runtime_root
+
+        folder = runtime_root() / "logs" / "post_caption_debug"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{re.sub(r'[^A-Za-z0-9._-]+', '_', post_key)[:100] or 'post'}.txt"
+        parts = [
+            f"post_key: {post_key}",
+            f"requested_url: {raw.get('requested_url')}",
+            f"current_url: {raw.get('url')}",
+            f"title: {raw.get('title')}",
+            f"picked_caption: {caption!r}",
+            f"error: {raw.get('error')}",
+            "\n===== CANDIDATES =====",
+        ]
+        for cand in raw.get("candidates") or []:
+            parts.append(f"--- [{cand.get('source')}]\n{cand.get('text')}")
+        parts.append("\n===== SCOPE TEXT =====\n" + str(raw.get("scope_text") or ""))
+        path.write_text("\n".join(parts), encoding="utf-8")
+        return str(path)
+    except Exception as exc:
+        logger.debug(f"[POST_SCAN] dump caption {post_key}: {exc}")
+        return None
+
+
+def fill_missing_captions(
+    driver,
+    owner_key: str,
+    page_key: str,
+    post_keys: Set[str],
+    session_id: int,
+    stop_event: threading.Event,
+    exclude_names: Tuple[str, ...] = (),
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Reel / video thấy trong lượt quét Page này (cả bài đã có trong kho) mà caption rỗng / quá ngắn
+    → mở từng bài lấy caption đầy đủ. Bài cũ lưu sai (vd chỉ "BUILDER") cũng được sửa khi quét lại.
+    """
+    result = {"todo": 0, "checked": 0, "updated": 0, "stopped": False, "checkpoint": False}
+    if not post_keys:
+        return result
+    rows = db.fetch_all(
+        """
+        SELECT post_key, post_url, post_type, content FROM scanned_posts
+        WHERE owner_key = %s AND page_key = %s AND post_key = ANY(%s)
+        """,
+        (owner_key, page_key, list(post_keys)),
+    ) or []
+    todo = [r for r in rows if needs_full_caption(r)][: max(1, int(limit))]
+    result["todo"] = len(todo)
+    if not todo:
+        return result
+    append_session_log(
+        session_id,
+        f"{page_key}: {len(todo)} reel/video thiếu caption — mở từng bài để lấy caption đầy đủ",
+        "info",
+    )
+    for i, row in enumerate(todo):
+        if stop_event.is_set() or _wait_if_paused(session_id, stop_event):
+            result["stopped"] = True
+            break
+        caption, raw = fetch_full_caption(driver, row["post_url"], stop_event, exclude_names)
+        if raw.get("checkpoint"):
+            result["checkpoint"] = True
+            break
+        result["checked"] += 1
+        old = (row.get("content") or "").strip()
+        if caption and len(caption) > len(old):
+            db.execute(
+                """
+                UPDATE scanned_posts SET content = %s, updated_at = NOW()
+                WHERE owner_key = %s AND page_key = %s AND post_key = %s
+                """,
+                (caption, owner_key, page_key, row["post_key"]),
+            )
+            result["updated"] += 1
+            append_session_log(
+                session_id,
+                f"[{i + 1}/{len(todo)}] {row['post_key']}: lấy được caption {len(caption)} ký tự",
+                "success",
+            )
+        else:
+            path = dump_caption_debug(row["post_key"], raw, caption)
+            append_session_log(
+                session_id,
+                f"[{i + 1}/{len(todo)}] {row['post_key']}: không đọc được caption đầy đủ"
+                f"{f' — text thô: {path}' if path else ''}",
+                "warn",
+            )
+        if i < len(todo) - 1 and sleep_page_delay(random.uniform(1.5, 3.0), stop_event):
+            result["stopped"] = True
+            break
+    return result
 
 
 def run_post_scan_flow(
@@ -662,7 +990,7 @@ def run_post_scan_flow(
                     stop_reason = "USER_STOPPED"
                     break
 
-                batch = extract_posts_batch(driver)
+                batch = extract_posts_batch(driver, exclude_names=(page_name,) if page_name else ())
                 new_items = []
                 fresh_known = 0  # bài đã có trong kho, LẦN ĐẦU hiện ra ở lượt quét Page này, trong khoảng ngày
                 for item in batch:
@@ -750,6 +1078,35 @@ def run_post_scan_flow(
                     human_sleep(0.2, 0.5)
                 except Exception:
                     pass
+
+            # Reel / video caption trên feed thiếu → mở từng bài lấy caption đầy đủ
+            if stop_reason not in ("USER_STOPPED", "CHECKPOINT"):
+                cap = fill_missing_captions(
+                    driver,
+                    owner_key,
+                    page_key,
+                    page_seen,
+                    session_id,
+                    stop_event,
+                    exclude_names=(page_name,) if page_name else (),
+                    limit=max_posts_per_page,
+                )
+                if cap["todo"]:
+                    append_session_log(
+                        session_id,
+                        f"{page_key}: caption reel/video — cập nhật {cap['updated']}/{cap['todo']}",
+                        "success" if cap["updated"] else "warn",
+                    )
+                if cap["stopped"]:
+                    stop_reason = "USER_STOPPED"
+                elif cap["checkpoint"]:
+                    append_session_log(session_id, f"{page_key}: checkpoint/login khi mở reel", "error")
+                    if rotate_on_checkpoint and rotation.rotate("checkpoint/login", mark_dead=True):
+                        driver = rotation.driver
+                        pages_quota_left = _quota_left()
+                    else:
+                        stop_reason = "CHECKPOINT"
+                        error_message = "Checkpoint/login khi mở reel"
 
             bump_account_usage(rotation.uid, "POST_SCAN", 1)
             pages_quota_left -= 1
