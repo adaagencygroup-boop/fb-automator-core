@@ -226,6 +226,27 @@ DDL_STATEMENTS = [
         CONSTRAINT uq_page_key_aliases UNIQUE (owner_key, alias_key)
     );
     """,
+    # Danh mục page do người dùng lưu ("Lưu vào danh sách page chung")
+    """
+    CREATE TABLE IF NOT EXISTS page_list_categories (
+        id SERIAL PRIMARY KEY,
+        owner_key VARCHAR(100),
+        name VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    """,
+    # Chỉ lưu page_key — thông tin page luôn đọc mới nhất từ scanned_pages
+    """
+    CREATE TABLE IF NOT EXISTS page_list_category_pages (
+        id SERIAL PRIMARY KEY,
+        category_id INT NOT NULL REFERENCES page_list_categories(id) ON DELETE CASCADE,
+        owner_key VARCHAR(100),
+        page_key VARCHAR(255) NOT NULL,
+        added_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_page_list_category_pages UNIQUE (category_id, page_key)
+    );
+    """,
 ]
 
 INDEX_STATEMENTS = [
@@ -248,6 +269,8 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_scanned_posts_last_session ON scanned_posts (last_session_id);",
     "CREATE INDEX IF NOT EXISTS idx_account_usage_lookup ON page_scanner_account_usage (account_uid, usage_date);",
     "CREATE INDEX IF NOT EXISTS idx_page_key_aliases_canon ON page_key_aliases (owner_key, canonical_key);",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_page_list_categories_owner_name ON page_list_categories (owner_key, LOWER(name));",
+    "CREATE INDEX IF NOT EXISTS idx_page_list_category_pages_page ON page_list_category_pages (owner_key, page_key);",
 ]
 
 MIGRATION_STATEMENTS = [

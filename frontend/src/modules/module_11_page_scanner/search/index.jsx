@@ -33,6 +33,7 @@ import { getAccounts } from "@/modules/module_02_account_manager/service";
 import { normalizeAccount, initialsOf } from "@/modules/module_07_group_spam/shared/components";
 import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import { SelectAccountsModal } from "../shared/SelectPagesModal";
+import SavePageListModal from "../shared/SavePageListModal";
 import {
   searchPages,
   searchPagesByHashtag,
@@ -46,7 +47,6 @@ import {
   getScanSessionDetail,
   getScannedPages,
   getActiveCampaign,
-  savePageList,
 } from "../service";
 import {
   isHashtagChip,
@@ -263,6 +263,7 @@ export default function PageScannerSearch() {
   const [resultSearch, setResultSearch] = useState("");
   const [filterKeyword, setFilterKeyword] = useState("ALL");
   const [selectedPageKeys, setSelectedPageKeys] = useState([]);
+  const [saveListKeys, setSaveListKeys] = useState(null); // != null → mở modal "Lưu vào danh sách page chung"
   const [loadingResults, setLoadingResults] = useState(false);
   const [sortDir, setSortDir] = useState("desc");
 
@@ -1104,17 +1105,27 @@ export default function PageScannerSearch() {
     toast.success(`Đã xuất ${rowsSrc.length.toLocaleString("vi-VN")} page ra file CSV.`);
   };
 
-  /* "Lưu danh sách": có tick → các page đã tick (ở mọi trang); không tick → toàn bộ kết quả đang lọc của đợt */
+  /* "Lưu danh sách": có tick → các page đã tick (ở mọi trang); không tick → toàn bộ kết quả đang lọc của đợt.
+     Mở modal chọn / tạo danh mục (lưu DB). */
   const handleSaveList = () => {
     const all = filteredAllRef.current;
     const picked = selectedPageKeys.length ? all.filter((p) => selectedPageKeys.includes(p.page_key)) : all;
-    if (!picked.length) {
+    const keys = [...new Set(picked.map((p) => p.page_key).filter(Boolean))];
+    if (!keys.length) {
       toast.warning("Không có page để lưu.");
       return;
     }
-    const entry = savePageList({ pages: picked });
-    toast.success(`Đã lưu ${entry.count} page vào danh sách "${entry.name}".`);
-    pushLog(`Lưu danh sách: ${entry.count} page.`, "success");
+    setSaveListKeys(keys);
+  };
+
+  const handleListSaved = (res) => {
+    const name = res?.category?.name || "";
+    pushLog(
+      `Lưu danh sách: ${res?.added ?? 0} page → «${name}»` +
+        (res?.skipped_existing ? ` · ${res.skipped_existing} page đã có` : "") +
+        (res?.not_found ? ` · ${res.not_found} page chưa có trong kho` : ""),
+      "success",
+    );
   };
 
   /* Đổi lọc / sắp xếp → lọc lại trên pool đã tải (không cần gọi lại API) */
@@ -2068,6 +2079,13 @@ export default function PageScannerSearch() {
         loading={accountsLoading}
         selectedUids={selectedUids}
         onConfirm={(uids) => setSelectedUids(uids)}
+      />
+
+      <SavePageListModal
+        isOpen={saveListKeys !== null}
+        onClose={() => setSaveListKeys(null)}
+        pageKeys={saveListKeys || []}
+        onSaved={handleListSaved}
       />
     </div>
   );

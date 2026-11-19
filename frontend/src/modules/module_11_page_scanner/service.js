@@ -1,8 +1,8 @@
 import api from "@/services/api";
 import { API_BASE } from "@/config/constants";
 
-const SAVED_LISTS_KEY = "fb-automator.page-scanner.saved-lists";
-export const SAVED_LISTS_EVENT = "fb-automator.page-scanner.saved-lists-changed";
+/** Bắn sau mỗi lần đổi danh mục page để các màn đang mở tự tải lại (không lưu gì trong trình duyệt). */
+export const PAGE_LISTS_EVENT = "fb-automator.page-scanner.page-lists-changed";
 
 // ── SOURCE: KEYWORD SEARCH ──
 export async function searchPages(payload) {
@@ -210,34 +210,41 @@ export async function deletePageFollowers(payload) {
   return api.delete("/api/page-scanner/followers", { data: payload });
 }
 
-export function deleteSavedPageList(id) {
-  const lists = loadSavedPageLists().filter((l) => l.id !== id);
-  localStorage.setItem(SAVED_LISTS_KEY, JSON.stringify(lists));
-  window.dispatchEvent(new Event(SAVED_LISTS_EVENT));
-  return lists;
+// ── DANH MỤC PAGE ĐÃ LƯU (DB: page_list_categories) ──
+function notifyPageListsChanged() {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(PAGE_LISTS_EVENT));
 }
 
-// ── LƯU DANH SÁCH (local, chờ API danh sách page) ──
-export function loadSavedPageLists() {
-  try {
-    const raw = localStorage.getItem(SAVED_LISTS_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+/** [{ id, name, page_count, created_at, updated_at }] — mới dùng gần nhất trước. */
+export async function getPageLists() {
+  const res = await api.get("/api/page-scanner/page-lists");
+  return res?.items || [];
 }
 
-export function savePageList({ name, pages }) {
-  const lists = loadSavedPageLists();
-  const entry = {
-    id: `list_${Date.now()}`,
-    name: name || `Danh sách ${new Date().toLocaleString("vi-VN")}`,
-    created_at: new Date().toISOString(),
-    count: pages.length,
-    pages,
-  };
-  lists.unshift(entry);
-  localStorage.setItem(SAVED_LISTS_KEY, JSON.stringify(lists.slice(0, 50)));
-  window.dispatchEvent(new Event(SAVED_LISTS_EVENT));
-  return entry;
+/** Tạo danh mục (trùng tên → trả danh mục cũ): { id, name, created }. */
+export async function createPageList(name) {
+  const res = await api.post("/api/page-scanner/page-lists", { name });
+  notifyPageListsChanged();
+  return res;
+}
+
+export async function deletePageList(id) {
+  const res = await api.delete(`/api/page-scanner/page-lists/${id}`);
+  notifyPageListsChanged();
+  return res;
+}
+
+/**
+ * Lưu page (theo page_key) vào danh mục có sẵn (categoryId) hoặc theo tên (chưa có thì tạo).
+ * → { category: { id, name, page_count }, created, added, skipped_existing, not_found, message }
+ */
+export async function savePagesToList({ categoryId, categoryName, pageKeys, deduplicate = true }) {
+  const res = await api.post("/api/page-scanner/page-lists/save", {
+    category_id: categoryId ?? null,
+    category_name: categoryName || null,
+    page_keys: pageKeys,
+    deduplicate,
+  });
+  notifyPageListsChanged();
+  return res;
 }
