@@ -23,9 +23,10 @@ import { AVATAR_COLORS } from "@/modules/module_07_group_spam/shared/constants";
 import {
   getScannedPages,
   getSearchKeywords,
-  savePageList,
+  createPageList,
+  deletePageList,
+  savePagesToList,
   deleteScannedPages,
-  deleteSavedPageList,
 } from "../service";
 import {
   ListPageHeader,
@@ -38,7 +39,8 @@ import {
   MasterDetail,
   Checkbox,
 } from "../_listLayout";
-import { useSavedPageLists } from "../shared/useSavedPageLists";
+import { usePageLists } from "../shared/usePageLists";
+import SavePageListModal from "../shared/SavePageListModal";
 import { runDelete } from "../_shared";
 
 const ALL_ID = "__all__";
@@ -94,7 +96,8 @@ export default function PageScannerListPages() {
   const [selectedKeys, setSelectedKeys] = useState([]);
 
   const [keywords, setKeywords] = useState([]);
-  const lists = useSavedPageLists();
+  const { lists } = usePageLists();
+  const [moveKeys, setMoveKeys] = useState(null); // != null → mở modal "Chuyển vào danh mục"
   const [sideSearch, setSideSearch] = useState("");
   const [activeId, setActiveId] = useState(ALL_ID);
   const [infoFilter, setInfoFilter] = useState("ALL");
@@ -119,7 +122,7 @@ export default function PageScannerListPages() {
   const activeList = useMemo(() => {
     if (!activeId.startsWith(LIST_PREFIX)) return null;
     const id = activeId.slice(LIST_PREFIX.length);
-    return lists.find((l) => l.id === id) || null;
+    return lists.find((l) => String(l.id) === id) || { id: Number(id), name: "Danh mục" };
   }, [activeId, lists]);
 
   const filteredKeywords = useMemo(() => {
@@ -146,36 +149,21 @@ export default function PageScannerListPages() {
     (p = 1, overrideId) => {
       const id = overrideId ?? activeId;
       const sourceKw = resolveSourceKeyword(id);
-      const listId = id?.startsWith(LIST_PREFIX) ? id.slice(LIST_PREFIX.length) : null;
-      const list = listId ? lists.find((l) => l.id === listId) : null;
+      const listId = id?.startsWith(LIST_PREFIX) ? Number(id.slice(LIST_PREFIX.length)) : null;
 
-      const request = list?.pages
-        ? Promise.resolve({ items: list.pages })
-        : getScannedPages({
-            page: p,
-            page_size: pageSize,
-            keyword: keyword.trim() || undefined,
-            source_keyword: sourceKw,
-            sort_by: "followers",
-            sort_dir: "desc",
-          });
+      const request = getScannedPages({
+        page: p,
+        page_size: pageSize,
+        keyword: keyword.trim() || undefined,
+        source_keyword: sourceKw,
+        list_id: Number.isFinite(listId) ? listId : undefined,
+        sort_by: "followers",
+        sort_dir: "desc",
+      });
 
       return request.then((data) => {
         let rows = data.items || [];
         let tot = data.total || 0;
-        if (list?.pages) {
-          const q = keyword.trim().toLowerCase();
-          if (q) {
-            rows = rows.filter((r) =>
-              `${r.page_name || ""} ${r.page_key || ""} ${r.phone || ""} ${r.email || ""}`
-                .toLowerCase()
-                .includes(q),
-            );
-          }
-          tot = rows.length;
-          const start = (p - 1) * pageSize;
-          rows = rows.slice(start, start + pageSize);
-        }
 
         // Guard: backend cũ bỏ qua source_keyword → lọc client theo tag/từ khóa
         if (sourceKw && rows.length) {
@@ -209,7 +197,7 @@ export default function PageScannerListPages() {
         setLoading(false);
       });
     },
-    [pageSize, keyword, activeId, lists, resolveSourceKeyword],
+    [pageSize, keyword, activeId, resolveSourceKeyword],
   );
 
   useEffect(() => {
@@ -272,36 +260,30 @@ export default function PageScannerListPages() {
     toast.success("Đã xuất CSV.");
   };
 
-  const handleCreateList = () => {
+  const handleCreateList = async () => {
     const name = window.prompt("Tên danh mục mới?");
     if (!name?.trim()) return;
-    const pages = selectedKeys.length
-      ? items.filter((r) => selectedKeys.includes(r.page_key))
-      : [];
-    const entry = savePageList({ name: name.trim(), pages });
-    selectSource(`${LIST_PREFIX}${entry.id}`);
-    toast.success(`Đã tạo danh mục “${entry.name}”`);
+    try {
+      const cat = await createPageList(name.trim());
+      if (selectedKeys.length) {
+        await savePagesToList({ categoryId: cat.id, pageKeys: selectedKeys });
+      }
+      selectSource(`${LIST_PREFIX}${cat.id}`);
+      toast.success(cat.created ? `Đã tạo danh mục “${cat.name}”` : `Danh mục “${cat.name}” đã có — đã mở danh mục này.`);
+    } catch (err) {
+      toast.error(`Lỗi tạo danh mục: ${err.message}`);
+    }
   };
 
+  /* "Chuyển vào danh mục": mở modal chọn / tạo danh mục cho các page đang tick */
   const handleMoveToList = () => {
     if (!selectedKeys.length) return;
-    const name = window.prompt("Chuyển vào danh mục (tên mới hoặc để trống = danh mục đang chọn)?");
-    if (name === null) return;
-    const pages = items.filter((r) => selectedKeys.includes(r.page_key));
-    if (name.trim()) {
-      savePageList({ name: name.trim(), pages });
-    } else if (activeList) {
-      const merged = [...(activeList.pages || [])];
-      const seen = new Set(merged.map((p) => p.page_key));
-      pages.forEach((p) => {
-        if (!seen.has(p.page_key)) merged.push(p);
-      });
-      savePageList({ name: activeList.name, pages: merged });
-    } else {
-      toast.warning("Chọn danh mục đích hoặc nhập tên mới.");
-      return;
-    }
-    toast.success("Đã cập nhật danh mục.");
+    setMoveKeys([...selectedKeys]);
+  };
+
+  const handleMoved = (res) => {
+    setSelectedKeys([]);
+    if (activeList && res?.category?.id === activeList.id) reload(page);
   };
 
   const handleRefresh = async () => {
@@ -321,14 +303,19 @@ export default function PageScannerListPages() {
     reload(page);
   };
 
-  const handleDeleteCategory = () => {
-    if (activeList) {
-      deleteSavedPageList(activeList.id);
-      setActiveId(ALL_ID);
-      toast.success(`Đã xóa danh mục "${activeList.name}".`);
+  const handleDeleteCategory = async () => {
+    if (!activeList) {
+      toast.info("Chọn một danh mục đã lưu ở cột trái để xóa.");
       return;
     }
-    toast.info("Chọn một danh mục đã lưu ở cột trái để xóa.");
+    if (!window.confirm(`Xóa danh mục "${activeList.name}"? (Các page trong kho vẫn giữ nguyên.)`)) return;
+    try {
+      await deletePageList(activeList.id);
+      selectSource(ALL_ID);
+      toast.success(`Đã xóa danh mục "${activeList.name}".`);
+    } catch (err) {
+      toast.error(`Lỗi xóa danh mục: ${err.message}`);
+    }
   };
 
   const filteredItems = useMemo(() => {
@@ -418,8 +405,8 @@ export default function PageScannerListPages() {
                 active={activeId === `${LIST_PREFIX}${l.id}`}
                 onClick={() => selectSource(`${LIST_PREFIX}${l.id}`)}
                 title={l.name}
-                subtitle={`${l.count || l.pages?.length || 0} page`}
-                badge={(l.count || l.pages?.length || 0).toLocaleString("vi-VN")}
+                subtitle={`${(l.page_count || 0).toLocaleString("vi-VN")} page`}
+                badge={(l.page_count || 0).toLocaleString("vi-VN")}
               />
             ))}
 
@@ -687,6 +674,13 @@ export default function PageScannerListPages() {
           <ListPagination page={page} pageSize={pageSize} total={total} onPageChange={(p) => reload(p)} />
         </Card>
       </MasterDetail>
+
+      <SavePageListModal
+        isOpen={moveKeys !== null}
+        onClose={() => setMoveKeys(null)}
+        pageKeys={moveKeys || []}
+        onSaved={handleMoved}
+      />
     </div>
   );
 }

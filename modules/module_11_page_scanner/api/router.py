@@ -683,6 +683,7 @@ async def list_scanned_pages(
         None, description="Lọc page thuộc phiên DISCOVERY có đúng từ khóa/hashtag này"
     ),
     keyword: Optional[str] = Query(None, description="Tìm theo tên hoặc url"),
+    list_id: Optional[int] = Query(None, description="Lọc page trong danh mục đã lưu (page_list_categories.id)"),
     relevance_status: Optional[str] = Query(None, description="Lọc theo độ liên quan (RELEVANT, REVIEW, EXCLUDED)"),
     min_followers: Optional[int] = Query(None, ge=0, description="Lọc hiển thị: follower tối thiểu"),
     sort_by: str = Query("followers", description="followers | created | default"),
@@ -847,6 +848,13 @@ async def list_scanned_pages(
     else:
         params = [owner]
         where_conds = ["owner_key = %s"]
+
+        if list_id is not None:
+            where_conds.append(
+                "page_key IN (SELECT page_key FROM page_list_category_pages"
+                " WHERE owner_key = %s AND category_id = %s)"
+            )
+            params.extend([owner, int(list_id)])
 
         if keyword:
             where_conds.append(
@@ -1692,6 +1700,13 @@ async def delete_scanned_pages(item: DeletePagesInput):
         (owner, keys),
         "page",
     )
+    try:
+        db.execute(
+            "DELETE FROM page_list_category_pages WHERE owner_key = %s AND page_key = ANY(%s)",
+            (owner, keys),
+        )
+    except Exception as exc:  # page đã xoá khỏi kho; mục danh mục mồ côi không hiện (JOIN) nên chỉ log
+        logger.warning(f"[PageScanner] dọn danh mục page sau khi xoá page lỗi: {exc}")
     return {"deleted": deleted, "requested": len(keys)}
 
 
@@ -1729,3 +1744,162 @@ async def delete_scanned_followers(item: DeleteFollowersInput):
         "followers",
     )
     return {"deleted": deleted, "requested": len(ids)}
+
+
+# ── DANH MỤC PAGE ĐÃ LƯU ("Lưu vào danh sách page chung") ──
+# Viết `def` (không async): FastAPI chạy trong threadpool nên truy vấn DB không chặn event loop.
+
+class PageListCreateInput(BaseModel):
+    name: str = Field(..., max_length=255)
+
+
+class PageListSaveInput(BaseModel):
+    category_id: Optional[int] = None
+    category_name: Optional[str] = Field(None, max_length=255)
+    page_keys: List[str] = Field(default_factory=list)
+    deduplicate: bool = True
+
+
+# Chỉ đếm page còn trong kho (page đã xoá khỏi scanned_pages thì không tính)
+_PAGE_LIST_COUNT_SQL = """
+    SELECT COUNT(*) FROM page_list_category_pages cp
+    JOIN scanned_pages sp ON sp.owner_key = cp.owner_key AND sp.page_key = cp.page_key
+    WHERE cp.category_id = c.id
+"""
+
+
+def _clean_list_name(name: Any) -> str:
+    return " ".join(str(name or "").split())[:255]
+
+
+def _find_or_create_page_list(cur, owner: str, name: str) -> tuple:
+    """(danh mục {id, name}, created) — tên so khớp không phân biệt hoa thường."""
+    find_sql = "SELECT id, name FROM page_list_categories WHERE owner_key = %s AND LOWER(name) = LOWER(%s)"
+    cur.execute(find_sql, (owner, name))
+    row = cur.fetchone()
+    if row:
+        return dict(row), False
+    cur.execute(
+        "INSERT INTO page_list_categories (owner_key, name) VALUES (%s, %s)"
+        " ON CONFLICT DO NOTHING RETURNING id, name",
+        (owner, name),
+    )
+    row = cur.fetchone()
+    if row:
+        return dict(row), True
+    cur.execute(find_sql, (owner, name))  # vừa bị tạo song song
+    return dict(cur.fetchone()), False
+
+
+@router.get("/page-lists")
+def list_page_lists():
+    """Danh mục page đã lưu của owner + số page hiện có."""
+    owner = _get_owner()
+    rows = db.fetch_all(
+        f"""
+        SELECT c.id, c.name, c.created_at, c.updated_at, ({_PAGE_LIST_COUNT_SQL}) AS page_count
+        FROM page_list_categories c
+        WHERE c.owner_key = %s
+        ORDER BY c.updated_at DESC, c.id DESC
+        """,
+        (owner,),
+    ) or []
+    for r in rows:
+        r["page_count"] = int(r.get("page_count") or 0)
+    return {"items": rows}
+
+
+@router.post("/page-lists")
+def create_page_list(item: PageListCreateInput):
+    """Tạo danh mục (trùng tên → trả danh mục cũ)."""
+    owner = _get_owner()
+    name = _clean_list_name(item.name)
+    if not name:
+        raise HTTPException(status_code=422, detail="Tên danh mục không được để trống.")
+    with db.session() as cur:
+        cat, created = _find_or_create_page_list(cur, owner, name)
+    return {**cat, "created": created}
+
+
+@router.delete("/page-lists/{list_id}")
+def delete_page_list(list_id: int):
+    """Xoá danh mục (các page trong kho vẫn giữ nguyên)."""
+    owner = _get_owner()
+    row = db.fetch_one(
+        "DELETE FROM page_list_categories WHERE owner_key = %s AND id = %s RETURNING id, name",
+        (owner, list_id),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Không tìm thấy danh mục.")
+    return {"deleted": True, **row}
+
+
+@router.post("/page-lists/save")
+def save_pages_to_list(item: PageListSaveInput):
+    """
+    Lưu page (theo page_key trong kho scanned_pages) vào danh mục có sẵn (category_id)
+    hoặc theo tên (chưa có thì tạo). Không bao giờ nhân đôi page trong 1 danh mục:
+    deduplicate=True → bỏ qua page đã có; False → đưa page đã có lên đầu (added_at mới).
+    """
+    owner = _get_owner()
+    keys = list(dict.fromkeys(str(k).strip() for k in (item.page_keys or []) if str(k).strip()))
+    if not keys:
+        raise HTTPException(status_code=422, detail="Chưa có page nào để lưu.")
+    name = _clean_list_name(item.category_name)
+    if item.category_id is None and not name:
+        raise HTTPException(status_code=422, detail="Vui lòng chọn hoặc nhập tên danh mục.")
+
+    conflict_sql = "DO NOTHING" if item.deduplicate else "DO UPDATE SET added_at = NOW()"
+    with db.session() as cur:
+        if item.category_id is not None:
+            cur.execute(
+                "SELECT id, name FROM page_list_categories WHERE owner_key = %s AND id = %s",
+                (owner, item.category_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Không tìm thấy danh mục.")
+            cat, created = dict(row), False
+        else:
+            cat, created = _find_or_create_page_list(cur, owner, name)
+
+        cur.execute(
+            f"""
+            WITH found AS (
+                SELECT page_key FROM scanned_pages WHERE owner_key = %s AND page_key = ANY(%s)
+            ), ins AS (
+                INSERT INTO page_list_category_pages (category_id, owner_key, page_key)
+                SELECT %s, %s, page_key FROM found
+                ON CONFLICT (category_id, page_key) {conflict_sql}
+                RETURNING (xmax = 0) AS inserted
+            )
+            SELECT (SELECT COUNT(*) FROM found) AS found,
+                   (SELECT COUNT(*) FROM ins WHERE inserted) AS added
+            """,
+            (owner, keys, cat["id"], owner),
+        )
+        stats = cur.fetchone() or {}
+        cur.execute(
+            f"UPDATE page_list_categories c SET updated_at = NOW() WHERE c.id = %s"
+            f" RETURNING ({_PAGE_LIST_COUNT_SQL}) AS page_count",
+            (cat["id"],),
+        )
+        count_row = cur.fetchone() or {}
+
+    found = int(stats.get("found") or 0)
+    added = int(stats.get("added") or 0)
+    existing = found - added
+    not_found = len(keys) - found
+    parts = [f"Đã lưu {added} page vào danh mục «{cat['name']}»"]
+    if existing:
+        parts.append(f"bỏ qua {existing} page đã có" if item.deduplicate else f"cập nhật {existing} page đã có")
+    if not_found:
+        parts.append(f"{not_found} page chưa có trong kho")
+    return {
+        "category": {**cat, "page_count": int(count_row.get("page_count") or 0)},
+        "created": created,
+        "added": added,
+        "skipped_existing": existing,
+        "not_found": not_found,
+        "message": " · ".join(parts) + ".",
+    }
