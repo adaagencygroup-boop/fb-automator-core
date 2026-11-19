@@ -1081,7 +1081,7 @@ export default function PageScannerSearch() {
       return;
     }
     const headers = [
-      "STT", "Từ khóa", "Tên Page", "Link Page", "Followers", "SĐT", "Email", "Website", "Vị trí / Địa chỉ", "Tích xanh",
+      "STT", "Từ khóa", "Tên Page", "Link Page", "Followers", "SĐT", "Email", "Website", "Vị trí / Địa chỉ",
     ];
     const rows = rowsSrc.map((p, i) => [
       i + 1,
@@ -1093,7 +1093,6 @@ export default function PageScannerSearch() {
       p.email || "",
       p.website || "",
       p.address || "",
-      p.is_verified === true ? "Có" : "",
     ]);
     const blob = new Blob(["\uFEFF" + toCsv(headers, rows)], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
