@@ -13,6 +13,7 @@ google-auth
 pyinstaller
 sqlalchemy
 curl_cffi
+pywebpush
 pydantic
 requests
 selenium

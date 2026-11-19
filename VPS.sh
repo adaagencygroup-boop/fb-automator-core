@@ -19,6 +19,5 @@ echo "VPS Cleanup Complete"
 docker compose build --parallel=false app landing admin
 docker compose up -d app landing admin
 docker compose restart nginx
-docker system prune -a -f
-docker builder prune -a -f
+echo "docker system prune -a -f && docker builder prune -a -f"
 docker compose ps
