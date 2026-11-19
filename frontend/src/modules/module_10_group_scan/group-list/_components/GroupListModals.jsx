@@ -57,7 +57,7 @@ export default function GroupListModals({
                 <FolderPlus className="w-4 h-4 text-blue-600" />
                 <span>Thêm danh mục mới</span>
               </h3>
-              <button
+              <button title="Đóng"
                 type="button"
                 onClick={onCloseAddCatModal}
                 className="p-1 rounded hover:bg-slate-100 text-slate-400"
@@ -113,7 +113,7 @@ export default function GroupListModals({
                 <Pencil className="w-4 h-4 text-blue-600" />
                 <span>Chỉnh sửa danh mục</span>
               </h3>
-              <button
+              <button title="Đóng"
                 type="button"
                 onClick={onCloseEditCatModal}
                 className="p-1 rounded hover:bg-slate-100 text-slate-400"
@@ -202,7 +202,7 @@ export default function GroupListModals({
                 <FolderInput className="w-4 h-4 text-blue-600" />
                 <span>Chuyển {selectedCount} nhóm sang danh mục khác</span>
               </h3>
-              <button
+              <button title="Đóng"
                 type="button"
                 onClick={onCloseMoveModal}
                 className="p-1 rounded hover:bg-slate-100 text-slate-400"

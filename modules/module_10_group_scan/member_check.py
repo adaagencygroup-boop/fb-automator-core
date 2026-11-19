@@ -555,6 +555,17 @@ def get_member_scan_status(job_id: str, owner: Optional[str] = None) -> Optional
         }
 
 
+def get_active_member_job(owner: Optional[str]) -> Optional[str]:
+    """Job quét thành viên đang chạy gần nhất của owner — để giao diện gắn lại sau khi tải lại trang."""
+    with _member_jobs_lock:
+        active = [
+            (job.get("started_at") or 0, jid)
+            for jid, job in _member_jobs.items()
+            if job.get("owner") == owner and job.get("status") not in TERMINAL_STATUSES
+        ]
+    return max(active)[1] if active else None
+
+
 def start_member_scan(
     owner: str,
     uids: list[str],

@@ -83,6 +83,7 @@ const NEVER_CACHE = [
   /\/sync-jobs\//,                      // module 05 job đồng bộ page
   /\/api\/pages\/tiktok\/auth-status/,  // getTikTokAuthStatus (module 05)
   /\/api\/group-scan\/check-status/,    // module 10
+  /\/api\/group-scan\/members\/active/, // module 10 — phiên quét đang chạy
   /\/seeding\/campaigns\/[^/?]+(\?|$)/, // getSeedingCampaignDetail (module 08)
   /\/scan\/sessions\/[^/?]+(\?|$)/,     // getScanSessionDetail (module 10)
   /\/api\/v1\/auth\//,                  // đăng nhập, refresh, /me — danh tính không được cache

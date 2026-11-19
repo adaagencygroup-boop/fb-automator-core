@@ -29,7 +29,7 @@ export default function CreateCategoryModal({
             <Folder className="size-5 text-blue-600" />
             Thêm mới danh mục nhóm
           </h3>
-          <button
+          <button title="Đóng"
             type="button"
             onClick={onClose}
             className="text-slate-400 hover:text-slate-600"

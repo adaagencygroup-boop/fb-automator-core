@@ -141,6 +141,7 @@ export default function GroupDataTable({
                     <td className="px-3 py-4">
                       <a
                         href={g.url || g.href}
+                        title={g.url || g.href}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 text-xs font-medium text-[#2563EB] hover:underline max-w-[190px] truncate"

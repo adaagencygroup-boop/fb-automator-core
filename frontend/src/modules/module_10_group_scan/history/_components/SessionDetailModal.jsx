@@ -279,7 +279,7 @@ export default function SessionDetailModal({
                         </span>
                       </div>
                       {(res.url || res.href) && (
-                        <a
+                        <a title="Mở trên Facebook"
                           href={res.url || res.href}
                           target="_blank"
                           rel="noreferrer"

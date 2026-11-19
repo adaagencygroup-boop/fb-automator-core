@@ -402,7 +402,7 @@ export default function AccountMethodCard({
                     <p className="text-[11px] text-[#64748B]">{fileData.size}</p>
                   </div>
                 </div>
-                <button
+                <button title="Xóa tệp"
                   type="button"
                   onClick={onClearFile}
                   className="rounded p-1 text-[#94A3B8] hover:text-[#EF4444] hover:bg-rose-50 transition-colors"

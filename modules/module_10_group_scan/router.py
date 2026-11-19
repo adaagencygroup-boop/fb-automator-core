@@ -20,14 +20,10 @@ from modules.module_10_group_scan.keyword_check import (
     start_keyword_check,
 )
 from modules.module_10_group_scan.member_check import (
+    get_active_member_job,
     get_member_scan_status,
     set_member_scan_control,
     start_member_scan,
-)
-from modules.module_10_group_scan.post_check import (
-    get_post_scan_status,
-    set_post_scan_control,
-    start_post_scan,
 )
 from modules.module_10_group_scan.models import (
     create_scan_category,
@@ -38,19 +34,13 @@ from modules.module_10_group_scan.models import (
     delete_scanned_groups_bulk,
     delete_scanned_group_member,
     delete_scanned_group_members_bulk,
-    delete_scanned_group_post,
-    delete_scanned_group_posts_bulk,
     get_group_members_summary,
-    get_group_posts_summary,
-    category_post_counts,
     keyword_counts,
     list_all_scanned_groups,
     list_groups_for_keywords,
-    list_groups_with_post_counts,
     list_scan_categories,
     list_scan_sessions,
     list_scanned_group_members,
-    list_scanned_group_posts,
     move_groups_to_category,
     normalize_keyword,
     save_groups_to_category,
@@ -629,6 +619,13 @@ def get_member_scan_status_endpoint(job_id: str):
     return {"ok": True, "job": status_data}
 
 
+@router.get("/members/active", dependencies=[Depends(scoped_owner)])
+def get_active_member_scan_endpoint():
+    """Phiên quét thành viên đang chạy (nếu có) — giao diện gắn lại sau khi tải lại trang."""
+    owner = owner_context.get() or get_owner_username()
+    return {"ok": True, "job_id": get_active_member_job(owner)}
+
+
 @router.post("/members/control", dependencies=[Depends(scoped_owner)])
 def post_member_scan_control(body: MemberJobControlRequest):
     """Tạm dừng / Tiếp tục / Hủy khẩn cấp phiên quét thành viên."""
@@ -702,164 +699,3 @@ def delete_scanned_members_bulk_endpoint(body: BulkDeleteMembersRequest):
         raise HTTPException(401, "Chưa đăng nhập")
     deleted_count = delete_scanned_group_members_bulk(owner, body.ids)
     return {"ok": True, "deleted_count": deleted_count}
-
-
-# =========================================================================
-# PHÂN HỆ 10.3: QUÉT BÀI VIẾT NHÓM & QUẢN LÝ KHO BÀI VIẾT
-# =========================================================================
-
-
-class StartPostScanRequest(BaseModel):
-    uids: list[str] = Field(..., min_length=1, description="Danh sách UID tài khoản thực thi")
-    groups: list[dict[str, Any]] = Field(..., min_length=1, description="Danh sách nhóm mục tiêu (tối đa 20)")
-    delay_min: float = Field(5.0, ge=1.0, le=3600.0)
-    delay_max: float = Field(10.0, ge=1.0, le=3600.0)
-    switch_acc_threshold: int = Field(50, ge=1, le=100)
-    posts_limit: int = Field(50, ge=1, le=100)
-    days_limit: int = Field(7, ge=0, le=365, description="0 = không lọc theo ngày")
-    skip_pinned_posts: bool = Field(True)
-    auto_dedupe_posts: bool = Field(True)
-
-    @model_validator(mode="after")
-    def validate_rules(self):
-        if self.delay_max < self.delay_min:
-            raise ValueError("Thời gian trễ tối đa phải lớn hơn hoặc bằng thời gian tối thiểu")
-        if len(self.groups) > 20:
-            raise ValueError("Số lượng nhóm mục tiêu trong một phiên quét không được vượt quá 20 nhóm")
-        return self
-
-
-class PostJobControlRequest(BaseModel):
-    job_id: str = Field(..., min_length=1)
-    action: str = Field(..., pattern="^(pause|resume|abort)$")
-
-
-class BulkDeletePostsRequest(BaseModel):
-    ids: list[int] = Field(..., min_length=1)
-
-
-@router.post("/posts/start", dependencies=[Depends(scoped_owner)])
-def post_start_post_scan(body: StartPostScanRequest):
-    """Khởi chạy phiên quét bài viết nhóm (UC-GPS-01 -> UC-GPS-04)."""
-    owner = owner_context.get() or get_owner_username()
-    if not owner:
-        raise HTTPException(401, "Chưa đăng nhập")
-    try:
-        res = start_post_scan(
-            owner=owner,
-            uids=body.uids,
-            groups=body.groups,
-            delay_min=body.delay_min,
-            delay_max=body.delay_max,
-            switch_acc_threshold=body.switch_acc_threshold,
-            posts_limit=body.posts_limit,
-            days_limit=body.days_limit,
-            skip_pinned_posts=body.skip_pinned_posts,
-            auto_dedupe_posts=body.auto_dedupe_posts,
-        )
-        return {"ok": True, **res}
-    except ValueError as val_err:
-        raise HTTPException(400, str(val_err))
-    except Exception as exc:
-        raise HTTPException(500, f"Lỗi khởi chạy phiên quét bài viết: {exc}")
-
-
-@router.get("/posts/status", dependencies=[Depends(scoped_owner)])
-def get_post_scan_status_endpoint(job_id: str):
-    """Poll trạng thái, logs thời gian thực và bài viết đang quét."""
-    owner = owner_context.get() or get_owner_username()
-    status_data = get_post_scan_status(job_id, owner=owner)
-    if not status_data:
-        raise HTTPException(404, "Không tìm thấy phiên quét hoặc phiên đã kết thúc")
-    return {"ok": True, "job": status_data}
-
-
-@router.post("/posts/control", dependencies=[Depends(scoped_owner)])
-def post_post_scan_control(body: PostJobControlRequest):
-    """Tạm dừng / Tiếp tục / Hủy khẩn cấp phiên quét bài viết."""
-    owner = owner_context.get() or get_owner_username()
-    ok = set_post_scan_control(body.job_id, body.action, owner=owner)
-    if not ok:
-        raise HTTPException(400, f"Không thể gửi lệnh '{body.action}' tới phiên quét")
-    return {"ok": True, "action": body.action}
-
-
-@router.get("/posts", dependencies=[Depends(scoped_owner)])
-def get_scanned_posts_endpoint(
-    group_id: Optional[str] = None,
-    category_id: Optional[str] = None,
-    search: Optional[str] = None,
-    min_likes: Optional[int] = None,
-    min_comments: Optional[int] = None,
-    min_shares: Optional[int] = None,
-    sort_by: Optional[str] = None,
-    page: int = 1,
-    page_size: int = 50,
-):
-    """Lấy danh sách bài viết nhóm đã lưu trữ trong CSDL (UC-GPS-05, UC-GPS-06)."""
-    owner = owner_context.get() or get_owner_username()
-    if not owner:
-        raise HTTPException(401, "Chưa đăng nhập")
-
-    items, total = list_scanned_group_posts(
-        owner=owner,
-        group_id=group_id,
-        category_id=category_id,
-        search=search,
-        min_likes=min_likes,
-        min_comments=min_comments,
-        min_shares=min_shares,
-        sort_by=sort_by,
-        page=page,
-        page_size=page_size,
-    )
-    return {
-        "ok": True,
-        "posts": items,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-    }
-
-
-@router.get("/posts/summary", dependencies=[Depends(scoped_owner)])
-def get_posts_summary_endpoint():
-    """Lấy thống kê tổng quan (KPI cards) cho kho bài viết."""
-    owner = owner_context.get() or get_owner_username()
-    if not owner:
-        raise HTTPException(401, "Chưa đăng nhập")
-    summary = get_group_posts_summary(owner)
-    return {"ok": True, **summary, "category_counts": category_post_counts(owner)}
-
-
-@router.get("/posts/groups", dependencies=[Depends(scoped_owner)])
-def get_posts_groups_endpoint():
-    """Lấy danh sách các nhóm đã có bài viết (cột trái UC-GPS-06)."""
-    owner = owner_context.get() or get_owner_username()
-    if not owner:
-        raise HTTPException(401, "Chưa đăng nhập")
-    groups = list_groups_with_post_counts(owner)
-    return {"ok": True, "groups": groups}
-
-
-@router.delete("/posts/{id}", dependencies=[Depends(scoped_owner)])
-def delete_scanned_post_endpoint(id: int):
-    """Xóa 1 bài viết khỏi CSDL."""
-    owner = owner_context.get() or get_owner_username()
-    if not owner:
-        raise HTTPException(401, "Chưa đăng nhập")
-    ok = delete_scanned_group_post(owner, id)
-    return {"ok": ok, "id": id}
-
-
-@router.post("/posts/delete-bulk", dependencies=[Depends(scoped_owner)])
-def delete_scanned_posts_bulk_endpoint(body: BulkDeletePostsRequest):
-    """Xóa hàng loạt bài viết khỏi CSDL."""
-    owner = owner_context.get() or get_owner_username()
-    if not owner:
-        raise HTTPException(401, "Chưa đăng nhập")
-    deleted_count = delete_scanned_group_posts_bulk(owner, body.ids)
-    return {"ok": True, "deleted_count": deleted_count}
-
-
-

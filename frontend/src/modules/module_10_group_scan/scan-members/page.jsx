@@ -12,6 +12,7 @@ import GroupPickerModal from "../components/GroupPickerModal";
 import {
   controlMemberScan,
   getMemberScanStatus,
+  getActiveMemberScan,
   getScanAccounts,
   getScanCategories,
   getScannedMembers,
@@ -172,15 +173,32 @@ export default function GroupScanMembersPage() {
   const [controlBusy, setControlBusy] = useState(false);
   const [copiedLog, setCopiedLog] = useState(false);
 
+  // Mở lại trang / F5 trong lúc Engine đang quét → gắn lại vào phiên đó thay vì báo IDLE.
+  useEffect(() => {
+    let cancelled = false;
+    getActiveMemberScan()
+      .then((res) => {
+        if (cancelled || !res?.job_id) return;
+        setActiveJobId(res.job_id);
+        setIsExecuting(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Polling Live Status
   useEffect(() => {
     if (!isExecuting || !activeJobId) return;
+    let notFound = 0;
 
     const interval = setInterval(async () => {
       try {
         const res = await getMemberScanStatus({ jobId: activeJobId });
         const job = res?.job;
         if (!job) return;
+        notFound = 0;
 
         if (Array.isArray(job.logs) && job.logs.length > 0) {
           setLogs(job.logs);
@@ -207,8 +225,18 @@ export default function GroupScanMembersPage() {
             toast.error(job.error || "Phiên quét gặp sự cố!");
           }
         }
-      } catch {
-        // Polling error ignored
+      } catch (err) {
+        // Chỉ thôi theo dõi khi Engine xác nhận không còn phiên (404 liên tiếp); lỗi mạng thì poll tiếp.
+        if (err?.status === 404) {
+          notFound += 1;
+          if (notFound === 5) {
+            setIsExecuting(false);
+            setActiveJobId(null);
+            setIsPaused(false);
+            setIsStopping(false);
+            toast.info("Phiên quét không còn trên máy chủ (có thể Engine vừa restart).");
+          }
+        }
       }
     }, 1500);
 
@@ -230,12 +258,9 @@ export default function GroupScanMembersPage() {
       await controlMemberScan({ jobId: activeJobId, action: "abort" });
       setIsStopping(true);
       toast.info("Đang dừng — chờ lưu dữ liệu và đóng trình duyệt...");
-    } catch {
-      // Job không còn trên Engine: trả UI về trạng thái rảnh.
-      setIsExecuting(false);
-      setActiveJobId(null);
-      setIsPaused(false);
-      toast.info("Phiên quét không còn chạy trên Engine.");
+    } catch (err) {
+      // Lệnh dừng không tới được phiên: KHÔNG tự coi là đã dừng (Engine có thể vẫn đang quét).
+      toast.error(err?.message || "Không gửi được lệnh dừng — bấm Dừng lại lần nữa.");
     } finally {
       setControlBusy(false);
     }

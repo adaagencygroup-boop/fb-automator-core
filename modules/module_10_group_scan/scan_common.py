@@ -404,7 +404,7 @@ def fb_time_age_days(raw: Any, *, today: Optional[date] = None) -> Optional[floa
         return None
     today = today or datetime.now().date()
 
-    if re.search(r"vừa xong|just now|mới đây|bây giờ", text):
+    if re.search(r"vừa xong|just now|mới đây|bây giờ|few (?:seconds?|secs?|minutes?|mins?)|vài (?:giây|phút)", text):
         return 0.0
     if re.search(r"hôm qua|yesterday", text):
         return 1.0
@@ -427,11 +427,3 @@ def fb_time_age_days(raw: Any, *, today: Optional[date] = None) -> Optional[floa
     if found:
         return float((today - found).days)
     return None
-
-
-def is_post_older_than_days(posted_time: Any, max_days: int, *, today: Optional[date] = None) -> bool:
-    """True khi đọc được mốc thời gian và bài cũ hơn `max_days` ngày (0 = không lọc)."""
-    if not max_days or max_days <= 0:
-        return False
-    age = fb_time_age_days(posted_time, today=today)
-    return age is not None and age > max_days

@@ -257,13 +257,6 @@ export const NAV_ITEMS = [
         icon: icon("icon_nav_fb_accounts", 16.5417, 14.1667),
       },
       {
-        id: "scan.posts",
-        label: "Quét bài viết nhóm",
-        description: "Thu thập bài viết trong các nhóm đã chọn.",
-        moduleId: "scan",
-        icon: icon("icon_nav_post_facebook", 14, 14),
-      },
-      {
         id: "scan.list",
         label: "Danh sách nhóm quét",
         description: "Kho nhóm đã quét được, dùng lại cho các luồng khác.",
@@ -276,13 +269,6 @@ export const NAV_ITEMS = [
         description: "Kho thành viên đã quét từ nhóm.",
         moduleId: "scan",
         icon: icon("icon_nav_seeding_profile", 16, 13),
-      },
-      {
-        id: "scan.post_list",
-        label: "Danh sách bài viết quét",
-        description: "Kho bài viết đã quét từ nhóm.",
-        moduleId: "scan",
-        icon: icon("icon_nav_seeding_post", 16, 16),
       },
       {
         id: "scan.history",

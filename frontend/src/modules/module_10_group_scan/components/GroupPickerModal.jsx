@@ -497,10 +497,7 @@ export default function GroupPickerModal({
 
   if (!open || !mounted) return null;
 
-  const subtitleText =
-    targetType === "members"
-      ? "Lựa chọn các nhóm Facebook từ danh sách đã thu thập trước đó để tiến hành quét thành viên mục tiêu"
-      : "Lựa chọn các nhóm Facebook từ danh sách đã thu thập trước đó để tiến hành quét bài viết mục tiêu";
+  const subtitleText = "Lựa chọn các nhóm Facebook từ danh sách đã thu thập trước đó để tiến hành quét thành viên mục tiêu";
 
   const modalContent = (
     <div
@@ -525,7 +522,7 @@ export default function GroupPickerModal({
               <p className="text-xs text-[#64748B] mt-0.5">{subtitleText}</p>
             </div>
           </div>
-          <button
+          <button title="Đóng"
             type="button"
             onClick={onClose}
             className="text-slate-400 hover:text-slate-600 p-2 rounded-xl hover:bg-slate-100 transition-colors"
@@ -851,6 +848,7 @@ export default function GroupPickerModal({
                               >
                                 <a
                                   href={group.url}
+                                  title={group.url}
                                   target="_blank"
                                   rel="noreferrer"
                                   className="inline-flex items-center gap-1 text-[#2563EB] hover:underline truncate max-w-full text-xs"

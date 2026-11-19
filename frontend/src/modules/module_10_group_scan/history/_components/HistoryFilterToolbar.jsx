@@ -8,7 +8,6 @@ export const FILTER_TYPE_OPTIONS = [
   { value: "ALL", label: "Tất cả loại quét" },
   { value: "GROUP_INFO", label: "Quét thông tin nhóm" },
   { value: "MEMBERS", label: "Quét thành viên nhóm" },
-  { value: "POSTS", label: "Quét bài viết nhóm" },
 ];
 
 export const FILTER_STATUS_OPTIONS = [

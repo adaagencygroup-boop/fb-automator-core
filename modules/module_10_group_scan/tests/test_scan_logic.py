@@ -30,7 +30,7 @@ if "core.database.connection" not in sys.modules:
     _fake_conn.db = _FakeDB()
     sys.modules["core.database.connection"] = _fake_conn
 
-from modules.module_10_group_scan import keyword_check, member_check, models, post_check, scan_common  # noqa: E402
+from modules.module_10_group_scan import keyword_check, member_check, models, scan_common  # noqa: E402
 
 TODAY = date(2026, 11, 19)
 
@@ -94,11 +94,11 @@ class FakeDriver:
     def execute_script(self, js, *args):
         if self.quit_called:
             raise RuntimeError("invalid session id")
-        if js is post_check.SCRAPE_POSTS_JS or js is member_check.SCRAPE_MEMBERS_JS:
+        if js is member_check.SCRAPE_MEMBERS_JS:
             items = self.feeds.get(self._group(), [])[: self.visible]
             key = "posts" if self.kind == "posts" else "members"
             return {key: [dict(i) for i in items], "debug": {"scrapeVersion": "test"}}
-        if js in (post_check.SCROLL_POSTS_JS, member_check.SCROLL_MEMBERS_JS):
+        if js is member_check.SCROLL_MEMBERS_JS:
             self.visible += self.page
             return {"type": "container"}
         return None
@@ -108,20 +108,6 @@ class FakeDriver:
 
     def quit(self):
         self.quit_called = True
-
-
-def post_feed(gid, n, *, age="2 giờ", start=0, pinned=()):
-    return [
-        {
-            "postId": f"{gid_num(gid)}{i:06d}",
-            "postUrl": f"https://www.facebook.com/groups/{gid}/permalink/{gid_num(gid)}{i:06d}/",
-            "content": f"Bài {i} của {gid}",
-            "authorName": "A",
-            "postedTime": age if not callable(age) else age(i),
-            "isPinned": i in pinned,
-        }
-        for i in range(start, start + n)
-    ]
 
 
 def gid_num(gid):
@@ -224,19 +210,6 @@ class TimeParsingTests(unittest.TestCase):
         self.assertIsNone(self.age(""))
         self.assertIsNone(self.age("Bài viết mới"))
         self.assertIsNone(self.age("Thứ Hai"))
-
-    def test_older_than(self):
-        old = scan_common.is_post_older_than_days
-        # Các ca mà hàm cũ trả sai (coi là bài mới):
-        self.assertTrue(old("1 năm", 7, today=TODAY))
-        self.assertTrue(old("3 tháng", 7, today=TODAY))
-        self.assertTrue(old("March 3", 7, today=TODAY))
-        self.assertTrue(old("2 mos", 7, today=TODAY))
-        self.assertFalse(old("3 giờ", 7, today=TODAY))
-        self.assertFalse(old("7 ngày", 7, today=TODAY))
-        self.assertTrue(old("8 ngày", 7, today=TODAY))
-        self.assertFalse(old("1 năm", 0, today=TODAY))  # 0 = tắt lọc
-        self.assertFalse(old("không rõ", 7, today=TODAY))  # không đọc được thì giữ lại
 
 
 # ---------------------------------------------------------------------------
@@ -422,21 +395,10 @@ class RowFilterTests(unittest.TestCase):
         self.assertEqual([r["uid"] for r in kept], ["4"])
         self.assertEqual(stats, {"admin": 2, "old": 1, "unknown_join": 1, "dup": 1})
 
-    def test_post_filters_and_old_streak(self):
-        feed = post_feed("g1", 4, pinned=(0,), age=lambda i: "3 giờ" if i < 2 else "2 tháng")
-        stats = {}
-        kept = post_check.filter_post_rows(
-            feed + feed, group_id="g1", group_seen=set(), cross_seen=set(), skip_pinned=True,
-            auto_dedupe=False, days_limit=7, remaining=50, stats=stats, today=TODAY,
-        )
-        self.assertEqual([k["content"] for k in kept], ["Bài 1 của g1"])
-        self.assertEqual(stats["pinned"], 1)
-        self.assertEqual(stats["old"], 2)
-        self.assertEqual(stats["old_streak"], 2)
 
 
 # ---------------------------------------------------------------------------
-# Worker quét bài viết (10.3)
+# Worker quét thành viên dùng chung khung test
 # ---------------------------------------------------------------------------
 
 
@@ -447,18 +409,10 @@ class _WorkerCase(unittest.TestCase):
         patches = [
             mock.patch.object(models, "create_scan_session", lambda **k: True),
             mock.patch.object(models, "update_scan_session", lambda sid, **k: self.session_updates.append((sid, k))),
-            mock.patch.object(models, "list_known_post_ids", lambda owner, group_id=None: set()),
             mock.patch.object(models, "list_known_member_uids", lambda owner, group_id=None: set()),
-            mock.patch.object(models, "upsert_scanned_group_post", lambda **k: self.saved.append(k) or True),
             mock.patch.object(models, "upsert_scanned_group_member", lambda **k: self.saved.append(k) or True),
-            mock.patch.object(post_check, "threading", types.SimpleNamespace(Thread=SyncThread, Lock=threading.Lock)),
             mock.patch.object(member_check, "threading", types.SimpleNamespace(Thread=SyncThread, Lock=threading.Lock)),
-            mock.patch.object(post_check, "interruptible_sleep", no_sleep),
             mock.patch.object(member_check, "interruptible_sleep", no_sleep),
-            mock.patch.object(
-                post_check, "resolve_group_identity",
-                lambda grp, owner: (grp["group_id"], grp["name"], f"https://www.facebook.com/groups/{grp['group_id']}"),
-            ),
             mock.patch.object(
                 member_check, "resolve_group_identity",
                 lambda grp, owner: (grp["group_id"], grp["name"], f"https://www.facebook.com/groups/{grp['group_id']}"),
@@ -467,80 +421,6 @@ class _WorkerCase(unittest.TestCase):
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
-
-
-class PostWorkerTests(_WorkerCase):
-    def run_scan(self, pool, groups, feeds, **kw):
-        fake_pool = FakePool(feeds, bad=kw.pop("bad", ()), kind="posts", page=kw.pop("page", 3))
-        with mock.patch.object(post_check, "open_account_session", fake_pool):
-            res = post_check.start_post_scan("alice", pool, groups, delay_min=1, delay_max=1, **kw)
-        job = post_check.get_post_scan_status(res["job_id"], owner="alice")
-        return job, fake_pool
-
-    def test_no_duplicates_when_dedupe_off(self):
-        feeds = {"g1": post_feed("g1", 12)}
-        job, _ = self.run_scan(["a"], [{"group_id": "g1", "name": "G1"}], feeds,
-                               posts_limit=10, auto_dedupe_posts=False, days_limit=0, switch_acc_threshold=100)
-        ids = [p["post_id"] for p in job["posts"]]
-        self.assertEqual(job["status"], "done")
-        self.assertEqual(len(ids), 10)
-        self.assertEqual(len(set(ids)), 10)
-
-    def test_rotation_continues_same_group_and_never_skips_accounts(self):
-        feeds = {"g1": post_feed("g1", 10), "g2": post_feed("g2", 10)}
-        groups = [{"group_id": "g1", "name": "G1"}, {"group_id": "g2", "name": "G2"}]
-        job, pool = self.run_scan(["a", "b", "c"], groups, feeds,
-                                  posts_limit=10, switch_acc_threshold=4, days_limit=0)
-        self.assertEqual(job["status"], "done")
-        per_group = {}
-        for p in job["posts"]:
-            per_group.setdefault(p["group_id"], set()).add(p["post_id"])
-        self.assertEqual({g: len(v) for g, v in per_group.items()}, {"g1": 10, "g2": 10})
-        # Thứ tự mở nick đúng vòng a→b→c→a…, không nhảy cóc.
-        expected = ["a", "b", "c"] * 3
-        self.assertEqual(pool.opened, expected[: len(pool.opened)])
-        self.assertGreaterEqual(len(pool.opened), 4)
-        # Nick cũ bị đóng khi đổi; nick cuối được giữ Chrome mở (nhưng đã nhả khoá).
-        for driver in pool.drivers[:-1]:
-            self.assertTrue(driver.quit_called)
-        self.assertFalse(pool.drivers[-1].quit_called)
-
-    def test_broken_first_account_does_not_drop_group(self):
-        feeds = {"g1": post_feed("g1", 5)}
-        job, pool = self.run_scan(["bad", "good"], [{"group_id": "g1", "name": "G1"}], feeds,
-                                  bad=("bad",), posts_limit=5, days_limit=0)
-        self.assertEqual(pool.opened, ["good"])
-        self.assertEqual(len(job["posts"]), 5)
-
-    def test_no_working_account_is_an_error(self):
-        job, _ = self.run_scan(["bad"], [{"group_id": "g1", "name": "G1"}], {}, bad=("bad",))
-        self.assertEqual(job["status"], "error")
-        self.assertIn("Không có tài khoản", job["error"])
-        self.assertEqual(self.session_updates[-1][1]["status"], "FAILED")
-
-    def test_days_filter_and_pinned(self):
-        feed = post_feed("g1", 30, pinned=(0,), age=lambda i: "1 giờ" if i < 6 else "3 tháng")
-        job, _ = self.run_scan(["a"], [{"group_id": "g1", "name": "G1"}], {"g1": feed},
-                               posts_limit=50, days_limit=7, skip_pinned_posts=True)
-        contents = [p["content"] for p in job["posts"]]
-        self.assertEqual(contents, [f"Bài {i} của g1" for i in range(1, 6)])
-        self.assertTrue(any("bài liên tiếp cũ hơn" in l["message"] for l in job["logs"]))
-
-    def test_session_finishes_with_real_logs(self):
-        self.run_scan(["a"], [{"group_id": "g1", "name": "G1"}], {"g1": post_feed("g1", 3)}, posts_limit=3, days_limit=0)
-        sid, kwargs = self.session_updates[-1]
-        self.assertEqual(kwargs["status"], "SUCCESS")
-        self.assertTrue(kwargs["finished"])
-        self.assertTrue(any("Hoàn thành nhóm" in l["message"] for l in kwargs["logs"]))
-
-    def test_status_and_control_are_owner_scoped(self):
-        job, _ = self.run_scan(["a"], [{"group_id": "g1", "name": "G1"}], {"g1": post_feed("g1", 2)}, posts_limit=2)
-        jid = job["job_id"]
-        self.assertIsNone(post_check.get_post_scan_status(jid, owner="mallory"))
-        self.assertIsNone(post_check.get_post_scan_status(jid))
-        self.assertFalse(post_check.set_post_scan_control(jid, "abort", owner="mallory"))
-        # Job đã kết thúc thì không nhận lệnh nữa.
-        self.assertFalse(post_check.set_post_scan_control(jid, "pause", owner="alice"))
 
 
 # ---------------------------------------------------------------------------

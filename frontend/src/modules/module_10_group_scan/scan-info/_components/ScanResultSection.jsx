@@ -210,6 +210,7 @@ export default function ScanResultSection({
                   <td className="px-3 py-2.5">
                     <a
                       href={`https://${row.url}`}
+                      title={`https://${row.url}`}
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex items-center gap-1 text-[#2563EB] hover:underline"
