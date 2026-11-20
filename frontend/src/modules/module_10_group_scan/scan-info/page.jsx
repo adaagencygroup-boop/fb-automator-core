@@ -15,15 +15,19 @@ import {
   clearKeywordCheck,
   controlScanJob,
   createScanCategory,
+  getActiveKeywordCapacity,
   getCheckStatus,
+  getKeywordCapacityStatus,
   getScanAccounts,
-  lookupKeywords,
   startGroupScan,
+  startKeywordCapacity,
+  stopKeywordCapacity,
 } from "../service";
 import AccountMethodCard from "./_components/AccountMethodCard";
 import ScanTargetConfigCard from "./_components/ScanTargetConfigCard";
 import ScanResultSection from "./_components/ScanResultSection";
 import LiveLogConsole from "./_components/LiveLogConsole";
+import ModulePageHeader from "../components/ModulePageHeader";
 
 const KEYWORD_STATS_SEED = {};
 
@@ -116,6 +120,34 @@ function mapGroupRow(g) {
   };
 }
 
+const fmtNum = (n) => Number(n || 0).toLocaleString("vi-VN");
+
+/** Ô "Số nhóm quét được" của 1 từ khóa từ kết quả Kiểm tra (đang cuộn hoặc đã lưu DB). */
+function capacityCell(row) {
+  const started = row?.count !== null && row?.count !== undefined;
+  if (!started) return { count: "…", detail: "", status: row?.status || "idle" };
+  const total = Number(row.total) || 0;
+  const ok = Number(row.count) || 0;
+  const fresh = Number(row.fresh) || 0;
+  const filtered = Math.max(0, total - ok); // riêng tư / ít thành viên / không rõ số thành viên
+  const inDb = Math.max(0, ok - fresh); // qua bộ lọc nhưng đã quét trước đó
+  return {
+    count: `${fmtNum(ok)} nhóm`,
+    detail: [
+      `Facebook trả ${fmtNum(total)} nhóm`,
+      filtered ? `bỏ ${fmtNum(filtered)} (riêng tư / ít thành viên)` : null,
+      inDb ? `${fmtNum(inDb)} đã có trong DB → còn ${fmtNum(fresh)} nhóm mới` : "chưa nhóm nào có trong DB",
+      row.reason ? `Dừng vì: ${row.reason}` : null,
+      row.checked_at ? `Kiểm tra lúc ${row.checked_at}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    status: row.status || "done",
+    cached: Boolean(row.cached),
+  };
+}
+
+
 export default function GroupScanInfoPage() {
   const [accounts, setAccounts] = useState([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
@@ -148,6 +180,8 @@ export default function GroupScanInfoPage() {
 
   const [runState, setRunState] = useState("idle"); // idle | running | paused
   const [checkJobId, setCheckJobId] = useState("");
+  const [capacityJobId, setCapacityJobId] = useState(""); // phiên Kiểm tra từ khóa đang chạy
+  const checkingKeywords = Boolean(capacityJobId);
   const running = runState === "running" || runState === "paused";
   const [pausing, setPausing] = useState(false);
   const [aborting, setAborting] = useState(false);
@@ -216,10 +250,11 @@ export default function GroupScanInfoPage() {
     setLogs((current) => [...current.slice(-120), { time, thread: "Thread-01", text, tone }]);
   }, []);
 
-  const loadAccounts = useCallback(async () => {
+  // fresh=true (nút Làm mới): bỏ cache để thấy ngay trạng thái Live / đăng nhập mới nhất.
+  const loadAccounts = useCallback(async ({ fresh = false } = {}) => {
     setAccountsLoading(true);
     try {
-      const data = await getScanAccounts();
+      const data = await getScanAccounts({ fresh });
       const rows = (Array.isArray(data) ? data : data?.accounts || []).map(normalizeAccount);
       setAccounts(rows);
       setSelectedUids((current) => {
@@ -228,10 +263,12 @@ export default function GroupScanInfoPage() {
         if (kept.length) return kept;
         return rows.filter(isScanReady).slice(0, 5).map((acc) => acc.uid);
       });
+      return true;
     } catch (error) {
       toast.error(error.message || "Không tải được tài khoản Module 2.");
       setAccounts([]);
       setSelectedUids([]);
+      return false;
     } finally {
       setAccountsLoading(false);
     }
@@ -515,48 +552,136 @@ export default function GroupScanInfoPage() {
     [fileData],
   );
 
-  /** Kiểm tra = đọc DB: số nhóm đã quét / từ khóa + fill bảng kết quả (không mở Chrome). */
-  const runKeywordCheck = async () => {
-    const committed = keywordInput.trim() ? commitKeywords(keywordInput, { quiet: true }) : [];
-    const wordList = mergeKeywords(keywords, committed);
+  /**
+   * Kiểm tra = mở Chrome bằng nick đã chọn, tìm nhóm theo từng từ khóa, cuộn tới khi Facebook
+   * hết kết quả → từ khóa đó quét được TỐI ĐA bao nhiêu nhóm (theo bộ lọc công khai / số thành viên).
+   */
+  // recheckWords: "Kiểm tra lại" từng từ khóa → bỏ kết quả đã lưu, cuộn Facebook lại.
+  const runKeywordCheck = async (recheckWords = null) => {
+    if (capacityJobId) {
+      toast.info("Đang kiểm tra từ khóa — chờ xong hoặc bấm Dừng kiểm tra.");
+      return;
+    }
+    const force = Array.isArray(recheckWords) && recheckWords.length > 0;
+    let wordList;
+    if (force) {
+      wordList = recheckWords;
+    } else {
+      const committed = keywordInput.trim() ? commitKeywords(keywordInput, { quiet: true }) : [];
+      wordList = mergeKeywords(keywords, committed);
+    }
     if (!wordList.length) {
       toast.warning("Nhập / thêm ít nhất một từ khóa rồi bấm Kiểm tra.");
       return;
     }
-
     try {
-      const res = await lookupKeywords(wordList, { includeGroups: true });
-      const stats = res?.keyword_stats || {};
+      const res = await startKeywordCapacity({
+        uids: selectedUids,
+        keywords: wordList,
+        publicOnly: true,
+        minMembers: minMembersEnabled ? Math.max(0, Number(minMembers) || 0) : null,
+        force,
+      });
+      const cached = res?.cached || {};
+      const pending = Array.isArray(res?.keywords) ? res.keywords : [];
       setKeywordStats((current) => {
         const next = { ...current };
-        wordList.forEach((word) => {
-          const row = stats[word] || {};
-          const n = Number(row.count) || 0;
-          next[word] = {
-            count: n > 0 ? String(n) : "—",
-            status: n > 0 ? "done" : "ready",
-          };
+        Object.entries(cached).forEach(([word, row]) => {
+          next[word] = capacityCell(row);
+        });
+        pending.forEach((word) => {
+          next[word] = { count: "…", detail: "", status: "idle" };
         });
         return next;
       });
-
-      const loadedGroups = Array.isArray(res?.groups) ? res.groups : [];
-      setResults(loadedGroups.map(mapGroupRow));
-
-      toast.success(res?.message || `Đã kiểm tra ${wordList.length} từ khóa từ DB.`);
-      pushLog(res?.message || `Kiểm tra DB: ${wordList.length} từ khóa.`, "success");
-      wordList.forEach((word) => {
-        const n = Number(stats[word]?.count) || 0;
-        pushLog(
-          n > 0 ? `  «${word}»: đã lưu ${n} nhóm.` : `  «${word}»: chưa có nhóm trong DB.`,
-          n > 0 ? "success" : "info",
-        );
-      });
+      const cachedCount = Object.keys(cached).length;
+      if (cachedCount) {
+        pushLog(`Lấy kết quả đã lưu của ${cachedCount} từ khóa (không cần quét lại).`, "success");
+      }
+      if (res?.job_id) {
+        setCapacityJobId(res.job_id);
+        pushLog(`Kiểm tra ${pending.length} từ khóa mới: cuộn hết kết quả Facebook để đếm số nhóm quét được tối đa…`, "info");
+        toast.info("Đang mở Chrome kiểm tra từ khóa — có thể mất vài phút mỗi từ khóa.");
+      } else {
+        toast.success("Đã điền kết quả Kiểm tra đã lưu. Bấm \"Kiểm tra lại\" ở từ khóa nếu muốn quét mới.");
+      }
     } catch (error) {
-      toast.error(error.message || "Không đọc được dữ liệu từ khóa từ DB.");
-      pushLog(error.message || "Kiểm tra DB thất bại.", "error");
+      if (/tài khoản/i.test(error?.message || "")) setPickerOpen(true);
+      toast.error(error.message || "Không bắt đầu kiểm tra được.");
+      pushLog(error.message || "Kiểm tra từ khóa thất bại.", "error");
     }
   };
+
+  const stopKeywordCheck = async () => {
+    if (!capacityJobId) return;
+    try {
+      await stopKeywordCapacity(capacityJobId);
+      toast.info("Đang dừng kiểm tra…");
+    } catch (error) {
+      toast.error(error.message || "Không dừng được phiên kiểm tra.");
+    }
+  };
+
+  // Tải lại trang giữa lúc đang Kiểm tra → gắn lại vào phiên đó.
+  useEffect(() => {
+    let cancelled = false;
+    getActiveKeywordCapacity()
+      .then((res) => {
+        if (!cancelled && res?.job_id) setCapacityJobId(res.job_id);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Theo dõi tiến độ Kiểm tra: số nhóm từng từ khóa + log.
+  useEffect(() => {
+    if (!capacityJobId) return undefined;
+    let stopped = false;
+    let lastLogCount = 0;
+    let notFound = 0;
+    const tick = async () => {
+      try {
+        const res = await getKeywordCapacityStatus(capacityJobId);
+        const job = res?.job;
+        if (stopped || !job) return;
+        notFound = 0;
+        const remoteLogs = Array.isArray(job.logs) ? job.logs : [];
+        if (remoteLogs.length > lastLogCount) {
+          const fresh = remoteLogs.slice(lastLogCount);
+          lastLogCount = remoteLogs.length;
+          setLogs((current) => [...current, ...fresh].slice(-150));
+        }
+        const stats = job.keyword_stats || {};
+        setKeywordStats((current) => {
+          const next = { ...current };
+          Object.entries(stats).forEach(([word, row]) => {
+            next[word] = capacityCell(row);
+          });
+          return next;
+        });
+        if (["done", "aborted", "error"].includes(job.status)) {
+          stopped = true;
+          setCapacityJobId("");
+          if (job.status === "done") toast.success("Đã kiểm tra xong số nhóm quét được của các từ khóa.");
+          else if (job.status === "aborted") toast.warning("Đã dừng kiểm tra từ khóa.");
+          else toast.error(job.error || "Kiểm tra từ khóa gặp lỗi.");
+        }
+      } catch (err) {
+        if (err?.status === 404 && ++notFound >= 5) {
+          stopped = true;
+          setCapacityJobId("");
+        }
+      }
+    };
+    tick();
+    const timer = setInterval(tick, 2000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [capacityJobId]);
 
   const buildScanBody = (wordList = []) => {
     let payloadKeywords = [];
@@ -1004,6 +1129,7 @@ export default function GroupScanInfoPage() {
         }
       `}</style>
       <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
+        <ModulePageHeader navId="scan.info" />
         <div className="grid items-stretch gap-5 xl:grid-cols-2">
           {/* Card 1: Chọn tài khoản & Thiết lập phiên quét */}
           <AccountMethodCard
@@ -1015,7 +1141,10 @@ export default function GroupScanInfoPage() {
             keywordInput={keywordInput}
             onKeywordInputChange={setKeywordInput}
             onAddKeywords={addKeywords}
-            onRunKeywordCheck={runKeywordCheck}
+            onRunKeywordCheck={() => runKeywordCheck()}
+            onRecheckKeyword={(word) => runKeywordCheck([word])}
+            checkingKeywords={checkingKeywords}
+            onStopKeywordCheck={stopKeywordCheck}
             running={running}
             keywords={keywords}
             onRemoveKeyword={removeKeyword}
@@ -1083,7 +1212,8 @@ export default function GroupScanInfoPage() {
           <button
             type="button"
             onClick={handlePrimaryAction}
-            disabled={runState === "running" || pausing || aborting || resuming}
+            disabled={runState === "running" || pausing || aborting || resuming || checkingKeywords}
+            title={checkingKeywords ? "Đang kiểm tra từ khóa — chờ xong hoặc dừng kiểm tra trước" : undefined}
             className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#2563EB] text-sm font-bold tracking-wide text-white hover:bg-blue-600 disabled:opacity-60"
           >
             {runState === "running" || resuming ? (
@@ -1099,6 +1229,8 @@ export default function GroupScanInfoPage() {
               ? "TIẾP TỤC QUÉT"
               : "BẮT ĐẦU THỰC THI"}
           </button>
+          {/* Tạm dừng / Dừng khẩn cấp chỉ hiện khi đã bấm Bắt đầu thực thi (đang chạy hoặc tạm dừng). */}
+          {(running || pausing || aborting || resuming) && (
           <div className="grid gap-3 sm:grid-cols-2">
             <button
               type="button"
@@ -1119,6 +1251,7 @@ export default function GroupScanInfoPage() {
               {aborting ? "ĐANG DỪNG KHẨN CẤP…" : "DỪNG KHẨN CẤP"}
             </button>
           </div>
+          )}
         </div>
 
         {/* Card 3: Kết quả quét */}

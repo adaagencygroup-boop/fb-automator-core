@@ -77,11 +77,11 @@ function formatProxy(raw = "") {
   return p || "—";
 }
 
-/** Nick đã đăng nhập Module 2. Die thì không cho chọn. */
+/** Nick dùng được để quét: trạng thái Live VÀ đã đăng nhập ở Module 2. */
 export function isScanReady(account) {
   const status = String(account.status || "").toLowerCase();
   const login = String(account.login_status || "").toLowerCase();
-  if (status === "die") return false;
+  if (status !== "live") return false;
   return login === "logged_in" || login === "success";
 }
 
@@ -110,6 +110,7 @@ export default function AccountSelectModal({
   const [now, setNow] = useState(null);
 
   const [draft, setDraft] = useState(() => new Set(selectedUids));
+  const [showPickError, setShowPickError] = useState(false);
 
   // Tải danh mục từ Module 2
   const categoryList = useAccountCategories(open);
@@ -163,13 +164,17 @@ export default function AccountSelectModal({
     if (open) {
       setDraft(new Set(selectedUids));
       setNow(Date.now());
+      setShowPickError(false);
     }
   }, [open, selectedUids]);
+
+  // Chỉ hiển thị nick Live + đã đăng nhập; nick chưa đăng nhập / die không đưa vào danh sách.
+  const readyAccounts = useMemo(() => accounts.filter(isScanReady), [accounts]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     const currentNow = now ?? Date.now();
-    return accounts.filter((acc) => {
+    return readyAccounts.filter((acc) => {
       const accCategory = acc.category_id != null ? categoriesById.get(acc.category_id) : null;
       const catName = (accCategory?.name || acc.category_name || acc.category || "").toLowerCase();
 
@@ -197,15 +202,15 @@ export default function AccountSelectModal({
       }
       return true;
     });
-  }, [accounts, query, categoryFilter, nurtureFilter, categoriesById, now]);
+  }, [readyAccounts, query, categoryFilter, nurtureFilter, categoriesById, now]);
 
-  const readyRows = useMemo(() => {
-    return filtered.filter(isScanReady);
-  }, [filtered]);
-
-  const totalLiveAvailable = useMemo(() => {
-    return accounts.filter(isScanReady).length;
-  }, [accounts]);
+  const readyRows = filtered;
+  const totalLiveAvailable = readyAccounts.length;
+  // Lựa chọn cũ có thể chứa nick nay đã die / mất đăng nhập → chỉ tính & xác nhận nick hợp lệ.
+  const readyDraft = useMemo(() => {
+    const ok = new Set(readyAccounts.map((acc) => acc.uid));
+    return [...draft].filter((uid) => ok.has(uid));
+  }, [draft, readyAccounts]);
 
   const allReadyChecked = readyRows.length > 0 && readyRows.every((acc) => draft.has(acc.uid));
 
@@ -238,10 +243,23 @@ export default function AccountSelectModal({
     }
   };
 
+  // Làm mới: đưa bộ lọc về mặc định + tải lại danh sách tài khoản & danh mục từ máy chủ (bỏ cache).
   const handleRefresh = async () => {
+    setQuery("");
+    setCategoryFilter("all");
+    setNurtureFilter("all");
+    setShowPickError(false);
+    setNow(Date.now());
     categoryList.refresh?.();
     if (onRefresh) {
-      await onRefresh();
+      let ok = true;
+      try {
+        ok = (await onRefresh({ fresh: true })) !== false;
+      } catch {
+        ok = false;
+      }
+      if (ok) toast.success("Đã làm mới danh sách tài khoản.");
+      else toast.error("Không tải lại được danh sách tài khoản.");
     }
   };
 
@@ -258,7 +276,7 @@ export default function AccountSelectModal({
               <div className="inline-flex items-center gap-1.5 rounded-full bg-[#EFF6FF] px-3 py-1 text-xs font-semibold text-[#2563EB] border border-[#BFDBFE]">
                 <span className="size-2 rounded-full bg-[#2563EB]" />
                 <span>
-                  Đã chọn: {draft.size} / {totalLiveAvailable || accounts.length} tài khoản khả dụng
+                  Đã chọn: {readyDraft.length} / {totalLiveAvailable} tài khoản khả dụng
                 </span>
               </div>
             </div>
@@ -357,7 +375,9 @@ export default function AccountSelectModal({
               ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="py-16 text-center text-sm text-slate-400">
-                    Không tìm thấy tài khoản phù hợp với điều kiện lọc.
+                    {readyAccounts.length === 0
+                      ? "Chưa có tài khoản nào Live và đã đăng nhập. Vào Quản lý tài khoản Facebook để đăng nhập tài khoản trước."
+                      : "Không tìm thấy tài khoản phù hợp với điều kiện lọc."}
                   </td>
                 </tr>
               ) : (
@@ -508,9 +528,19 @@ export default function AccountSelectModal({
         {/* BOTTOM ACTION BAR */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-3.5 border-t border-slate-100 bg-white">
           <p className="text-xs sm:text-sm text-slate-500">
+            {showPickError && readyDraft.length === 0 && (
+              <span role="alert" className="block font-semibold text-[#DC2626]">
+                Vui lòng chọn ít nhất 1 tài khoản để thực thi quét.
+              </span>
+            )}
             Hiển thị <span className="font-semibold text-slate-800">{filtered.length}</span> tài khoản
-            {filtered.length !== accounts.length && (
-              <span className="text-slate-400"> (lọc từ {accounts.length} tài khoản)</span>
+            {filtered.length !== readyAccounts.length && (
+              <span className="text-slate-400"> (lọc từ {readyAccounts.length} tài khoản)</span>
+            )}
+            {accounts.length > readyAccounts.length && (
+              <span className="text-slate-400">
+                {" "}· Ẩn {accounts.length - readyAccounts.length} tài khoản chưa đăng nhập / không Live
+              </span>
             )}
           </p>
 
@@ -525,13 +555,19 @@ export default function AccountSelectModal({
             <button
               type="button"
               onClick={() => {
-                onConfirm([...draft]);
+                // Chưa tick tài khoản nào → cảnh báo, giữ nguyên modal để người dùng chọn.
+                if (readyDraft.length === 0) {
+                  setShowPickError(true);
+                  toast.warning("Vui lòng chọn ít nhất 1 tài khoản để thực thi quét.");
+                  return;
+                }
+                onConfirm(readyDraft);
                 onOpenChange(false);
               }}
               className="h-10 px-5 rounded-xl bg-[#0052CC] hover:bg-blue-700 text-sm font-bold text-white transition-colors flex items-center gap-2 shadow-sm"
             >
               <Check className="size-4" strokeWidth={2.5} />
-              <span>Xác nhận chọn ({draft.size} tài khoản)</span>
+              <span>Xác nhận chọn ({readyDraft.length} tài khoản)</span>
             </button>
           </div>
         </div>

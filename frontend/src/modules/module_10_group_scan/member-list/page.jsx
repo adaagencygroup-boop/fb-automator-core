@@ -15,6 +15,7 @@ import MemberCategorySidebar from "./_components/MemberCategorySidebar";
 import MemberTableToolbar from "./_components/MemberTableToolbar";
 import MemberDataTable from "./_components/MemberDataTable";
 import CreateCategoryModal from "./_components/CreateCategoryModal";
+import ModulePageHeader from "../components/ModulePageHeader";
 
 const FRIEND_FILTER_OPTIONS = [
   { value: "all", label: "Tất cả số bạn bè" },
@@ -263,6 +264,7 @@ export default function GroupScanMemberListPage() {
 
   return (
     <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
+      <ModulePageHeader navId="scan.member_list" />
       {/* Master Workspace Card */}
       <section className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
         {/* Card Header Bar */}

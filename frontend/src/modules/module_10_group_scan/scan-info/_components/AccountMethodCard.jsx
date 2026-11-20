@@ -43,6 +43,20 @@ export function KeywordStatusBadge({ status }) {
       </span>
     );
   }
+  if (status === "stopped") {
+    return (
+      <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+        Đã dừng
+      </span>
+    );
+  }
+  if (status === "error") {
+    return (
+      <span className="inline-flex rounded-full bg-[#FEE2E2] px-2 py-0.5 text-[10px] font-semibold text-[#B91C1C]">
+        Lỗi
+      </span>
+    );
+  }
   return (
     <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
       Chờ quét
@@ -61,6 +75,9 @@ export default function AccountMethodCard({
   onKeywordInputChange,
   onAddKeywords,
   onRunKeywordCheck,
+  checkingKeywords = false,
+  onStopKeywordCheck,
+  onRecheckKeyword,
   running = false,
   keywords,
   onRemoveKeyword,
@@ -173,14 +190,27 @@ export default function AccountMethodCard({
               >
                 Thêm
               </button>
-              <button
-                type="button"
-                onClick={onRunKeywordCheck}
-                disabled={running}
-                className="inline-flex h-7 items-center gap-1.5 rounded-md bg-[#2563EB] px-3 text-[11px] font-bold text-white hover:bg-blue-600 disabled:opacity-60 shrink-0 shadow-2xs transition-colors"
-              >
-                Kiểm tra
-              </button>
+              {checkingKeywords ? (
+                <button
+                  type="button"
+                  onClick={onStopKeywordCheck}
+                  title="Dừng kiểm tra và đóng trình duyệt"
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-[#FECACA] bg-white px-3 text-[11px] font-bold text-[#DC2626] hover:bg-rose-50 shrink-0 shadow-2xs transition-colors"
+                >
+                  <span className="size-3 animate-spin rounded-full border-2 border-[#DC2626] border-t-transparent" />
+                  Đang kiểm tra… Dừng
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onRunKeywordCheck}
+                  disabled={running}
+                  title="Mở Chrome, cuộn hết kết quả tìm nhóm để đếm số nhóm quét được tối đa của từng từ khóa"
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md bg-[#2563EB] px-3 text-[11px] font-bold text-white hover:bg-blue-600 disabled:opacity-60 shrink-0 shadow-2xs transition-colors"
+                >
+                  Kiểm tra
+                </button>
+              )}
             </div>
 
             {/* Danh sách thẻ từ khóa */}
@@ -215,8 +245,8 @@ export default function AccountMethodCard({
             <div className="flex items-center justify-between px-0.5">
               <p className="text-[11px] text-[#94A3B8]">
                 {keywords.length
-                  ? `Đã thêm ${keywords.length} từ khóa. Bấm Kiểm tra để điền bảng bên dưới.`
-                  : "Nhập xong Enter / Thêm / dấu phẩy → thẻ. Kiểm tra = xác nhận vào bảng."}
+                  ? `Đã thêm ${keywords.length} từ khóa. Bấm Kiểm tra để xem mỗi từ khóa quét được tối đa bao nhiêu nhóm.`
+                  : "Nhập xong Enter / Thêm / dấu phẩy → thẻ. Kiểm tra = đếm số nhóm quét được tối đa trên Facebook."}
               </p>
               {keywords.length > 5 && (
                 <span className="text-[10px] text-blue-600 font-medium shrink-0 ml-2">
@@ -249,9 +279,25 @@ export default function AccountMethodCard({
                     return (
                       <tr key={word} className="hover:bg-slate-50/60 transition-colors">
                         <td className="px-3 py-2.5 font-medium text-[#0F172A]">{word}</td>
-                        <td className="px-3 py-2.5 tabular-nums text-[#64748B]">{stat.count}</td>
+                        <td className="px-3 py-2.5 tabular-nums text-[#64748B]">
+                          <span className="font-semibold text-[#0F172A]">{stat.count}</span>
+                          {stat.detail && (
+                            <span className="block text-[10px] font-normal text-[#94A3B8]">{stat.detail}</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2.5">
                           <KeywordStatusBadge status={stat.status} />
+                          {onRecheckKeyword && ["done", "stopped", "error"].includes(stat.status) && (
+                            <button
+                              type="button"
+                              disabled={checkingKeywords || running}
+                              onClick={() => onRecheckKeyword(word)}
+                              title="Bỏ kết quả đã lưu, mở Chrome cuộn lại kết quả Facebook của từ khóa này"
+                              className="mt-1 block text-[10px] font-semibold text-[#2563EB] hover:underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
+                            >
+                              Kiểm tra lại
+                            </button>
+                          )}
                         </td>
                       </tr>
                     );

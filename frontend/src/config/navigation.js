@@ -245,7 +245,7 @@ export const NAV_ITEMS = [
       {
         id: "scan.info",
         label: "Quét thông tin nhóm",
-        description: "Tìm kiếm và thu thập thông tin nhóm theo từ khóa, link hoặc tệp.",
+        description: "Tìm kiếm và thu thập thông tin về các nhóm Facebook theo từ khóa, link hoặc tệp dữ liệu",
         moduleId: "scan",
         icon: icon("icon_nav_group_post", 16, 16),
       },

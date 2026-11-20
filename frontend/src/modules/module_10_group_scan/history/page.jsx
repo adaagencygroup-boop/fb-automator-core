@@ -11,6 +11,7 @@ import {
 import HistoryFilterToolbar from "./_components/HistoryFilterToolbar";
 import HistoryDataTable from "./_components/HistoryDataTable";
 import SessionDetailModal from "./_components/SessionDetailModal";
+import ModulePageHeader from "../components/ModulePageHeader";
 
 function parseSessionDate(startTime) {
   if (!startTime) return null;
@@ -212,6 +213,7 @@ export default function GroupScanHistoryPage() {
 
   return (
     <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
+      <ModulePageHeader navId="scan.history" />
       {/* 1. TOP FILTER BAR */}
       <HistoryFilterToolbar
         searchQuery={searchQuery}

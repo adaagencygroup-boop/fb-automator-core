@@ -23,6 +23,7 @@ import AdvancedScanFilterCard from "./_components/AdvancedScanFilterCard";
 import GroupPreviewSection from "./_components/GroupPreviewSection";
 import LiveMemberResultSection from "./_components/LiveMemberResultSection";
 import LiveLogConsole from "./_components/LiveLogConsole";
+import ModulePageHeader from "../components/ModulePageHeader";
 
 function normalizeAccount(raw) {
   const status = String(raw.status || "").toLowerCase();
@@ -47,10 +48,11 @@ export default function GroupScanMembersPage() {
   const [selectedUids, setSelectedUids] = useState([]);
 
   // Load accounts from Module 2 API
-  const loadAccounts = useCallback(async () => {
+  // fresh=true (nút Làm mới): bỏ cache để thấy ngay trạng thái Live / đăng nhập mới nhất.
+  const loadAccounts = useCallback(async ({ fresh = false } = {}) => {
     setAccountsLoading(true);
     try {
-      const res = await getScanAccounts();
+      const res = await getScanAccounts({ fresh });
       const rawList = Array.isArray(res)
         ? res
         : Array.isArray(res?.accounts)
@@ -64,12 +66,14 @@ export default function GroupScanMembersPage() {
         const readyUids = list.filter(isScanReady).map((acc) => acc.uid);
         const kept = current.filter((uid) => readyUids.includes(uid));
         if (kept.length > 0) return kept;
-        if (readyUids.length > 0) return readyUids.slice(0, 5);
-        return list.slice(0, 5).map((a) => a.uid);
+        // Chỉ tự chọn nick Live + đã đăng nhập; không có nick nào sẵn sàng thì để trống.
+        return readyUids.slice(0, 5);
       });
+      return true;
     } catch {
       setModuleAccounts([]);
       setSelectedUids([]);
+      return false;
     } finally {
       setAccountsLoading(false);
     }
@@ -489,6 +493,7 @@ export default function GroupScanMembersPage() {
         }
       `}</style>
       <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
+        <ModulePageHeader navId="scan.members" />
         {/* SECTION 1 & SECTION 2: 2 Column Configuration Grids */}
         <div className="grid items-stretch gap-5 xl:grid-cols-2">
           {/* Card 1: Chọn tài khoản & Nhóm quét */}

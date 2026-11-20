@@ -19,6 +19,12 @@ from modules.module_10_group_scan.keyword_check import (
     set_job_control,
     start_keyword_check,
 )
+from modules.module_10_group_scan.keyword_capacity import (
+    get_active_capacity_job,
+    get_capacity_status,
+    start_capacity_check,
+    stop_capacity_check,
+)
 from modules.module_10_group_scan.member_check import (
     get_active_member_job,
     get_member_scan_status,
@@ -293,6 +299,59 @@ def check_clear(body: ClearCheckRequest):
         raise HTTPException(422, "Thiếu UID")
     released = clear_pending_for_uid(owner=owner, uid=uid, reason="manual-clear")
     return {"ok": True, "uid": uid, "released": released}
+
+
+class KeywordCapacityRequest(BaseModel):
+    uids: list[str] = Field(default_factory=list)  # không cần khi mọi từ khóa đã có kết quả lưu
+    keywords: list[str] = Field(..., min_length=1)
+    public_only: bool = True
+    min_members: Optional[int] = Field(None, ge=0)
+    force: bool = False  # Kiểm tra lại: bỏ qua kết quả đã lưu, cuộn Facebook lại từ đầu
+
+
+class KeywordCapacityStopRequest(BaseModel):
+    job_id: str = Field(..., min_length=1)
+
+
+@router.post("/keyword-capacity/start", dependencies=[Depends(scoped_owner)])
+def start_keyword_capacity(body: KeywordCapacityRequest):
+    """Nút Kiểm tra: mở Chrome, cuộn hết kết quả tìm nhóm của từng từ khóa và đếm số nhóm quét được tối đa."""
+    owner = owner_context.get() or get_owner_username()
+    if not owner:
+        raise HTTPException(401, "Chưa đăng nhập")
+    try:
+        res = start_capacity_check(
+            owner, body.uids, body.keywords,
+            public_only=body.public_only, min_members=body.min_members or None, force=body.force,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    return {"ok": True, **res}
+
+
+@router.get("/keyword-capacity/status", dependencies=[Depends(scoped_owner)])
+def keyword_capacity_status(job_id: str):
+    owner = owner_context.get() or get_owner_username()
+    data = get_capacity_status(job_id, owner)
+    if not data:
+        raise HTTPException(404, "Không tìm thấy phiên kiểm tra từ khóa")
+    return {"ok": True, "job": data}
+
+
+@router.get("/keyword-capacity/active", dependencies=[Depends(scoped_owner)])
+def keyword_capacity_active():
+    owner = owner_context.get() or get_owner_username()
+    return {"ok": True, "job_id": get_active_capacity_job(owner)}
+
+
+@router.post("/keyword-capacity/stop", dependencies=[Depends(scoped_owner)])
+def keyword_capacity_stop(body: KeywordCapacityStopRequest):
+    owner = owner_context.get() or get_owner_username()
+    if not stop_capacity_check(body.job_id, owner):
+        raise HTTPException(400, "Phiên kiểm tra không còn chạy")
+    return {"ok": True}
 
 
 @router.post("/lookup-keywords", dependencies=[Depends(scoped_owner)])

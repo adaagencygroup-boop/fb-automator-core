@@ -16,6 +16,7 @@ import GroupStatsOverview from "./_components/GroupStatsOverview";
 import GroupTableToolbar from "./_components/GroupTableToolbar";
 import GroupDataTable from "./_components/GroupDataTable";
 import GroupListModals from "./_components/GroupListModals";
+import ModulePageHeader from "../components/ModulePageHeader";
 
 export default function GroupScanListPage() {
   const [mounted, setMounted] = useState(false);
@@ -461,6 +462,7 @@ export default function GroupScanListPage() {
 
   return (
     <div className="-m-6 min-h-full space-y-5 bg-[#F4F7FC] p-6">
+      <ModulePageHeader navId="scan.list" />
       {/* MAIN LAYOUT: LEFT FOLDER PANEL & RIGHT DETAIL SECTION */}
       <div className="flex flex-col lg:flex-row gap-5 items-start w-full">
         {/* LEFT COLUMN: DANH SÁCH DANH MỤC */}

@@ -996,51 +996,9 @@ def _scrape_group_direct(
     return item
 
 
-def _scrape_groups_from_results(
-    driver,
-    keyword: str,
-    job_id: str,
-    human_sleep,
-    max_groups: int,
-    already: Optional[list[dict[str, Any]]] = None,
-    *,
-    public_only: bool = False,
-    private_only: bool = False,
-    min_members: Optional[int] = None,
-    owner: Optional[str] = None,
-    source_uid: Optional[str] = None,
-    known_group_ids: Optional[set[str]] = None,
-    delay_min: float = 0.0,
-    delay_max: float = 0.0,
-    stat_offset: int = 0,
-    display_limit: Optional[int] = None,
-) -> list[dict[str, Any]]:
-    """Quét kết quả tìm kiếm tới khi đủ `max_groups` nhóm MỚI.
-
-    `stat_offset` / `display_limit`: khi một từ khóa được quét qua nhiều lượt (đổi nick giữa chừng),
-    log và bảng thống kê vẫn hiển thị tổng của cả từ khóa.
-    """
-    from selenium.webdriver.common.by import By
-
-    from modules.module_10_group_scan.models import (
-        normalize_group_id,
-        upsert_scanned_group,
-    )
-
-    found: list[dict[str, Any]] = []
-    seen: set[str] = {str(g.get("href") or g.get("id") or "") for g in (already or [])}
-    known = set(known_group_ids or set())
-    limit = _clamp_limit(max_groups)
-    # Có lọc / bỏ trùng DB → cuộn nhiều hơn
-    max_rounds = 16 if (public_only or private_only or (min_members and min_members > 0) or known) else 8
-    skipped = 0
-    skipped_dup = 0
-
-    def _aborted() -> bool:
-        return _get_control(job_id) == "abort"
-
-    # Đọc meta: "Public · 463K members · 90+ posts a day" — gom theo URL, bỏ "Profile photo of"
-    js = """
+# Đọc kết quả tìm kiếm nhóm: href + tên + meta ("Public · 463K members · 90+ posts a day"),
+# gom theo URL, bỏ "Profile photo of". Dùng chung cho luồng quét và luồng Kiểm tra từ khóa.
+GROUP_RESULTS_JS = """
     const root =
       document.querySelector('[aria-label="Search results"][role="main"]') ||
       document.querySelector('[aria-label="Search results"]') ||
@@ -1097,7 +1055,53 @@ def _scrape_groups_from_results(
       byHref.set(href, prev);
     }
     return Array.from(byHref.values());
+"""
+
+
+def _scrape_groups_from_results(
+    driver,
+    keyword: str,
+    job_id: str,
+    human_sleep,
+    max_groups: int,
+    already: Optional[list[dict[str, Any]]] = None,
+    *,
+    public_only: bool = False,
+    private_only: bool = False,
+    min_members: Optional[int] = None,
+    owner: Optional[str] = None,
+    source_uid: Optional[str] = None,
+    known_group_ids: Optional[set[str]] = None,
+    delay_min: float = 0.0,
+    delay_max: float = 0.0,
+    stat_offset: int = 0,
+    display_limit: Optional[int] = None,
+) -> list[dict[str, Any]]:
+    """Quét kết quả tìm kiếm tới khi đủ `max_groups` nhóm MỚI.
+
+    `stat_offset` / `display_limit`: khi một từ khóa được quét qua nhiều lượt (đổi nick giữa chừng),
+    log và bảng thống kê vẫn hiển thị tổng của cả từ khóa.
     """
+    from selenium.webdriver.common.by import By
+
+    from modules.module_10_group_scan.models import (
+        normalize_group_id,
+        upsert_scanned_group,
+    )
+
+    found: list[dict[str, Any]] = []
+    seen: set[str] = {str(g.get("href") or g.get("id") or "") for g in (already or [])}
+    known = set(known_group_ids or set())
+    limit = _clamp_limit(max_groups)
+    # Có lọc / bỏ trùng DB → cuộn nhiều hơn
+    max_rounds = 16 if (public_only or private_only or (min_members and min_members > 0) or known) else 8
+    skipped = 0
+    skipped_dup = 0
+
+    def _aborted() -> bool:
+        return _get_control(job_id) == "abort"
+
+    js = GROUP_RESULTS_JS
 
     for round_idx in range(max_rounds):
         if _aborted():

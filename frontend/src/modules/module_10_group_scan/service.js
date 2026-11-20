@@ -1,9 +1,36 @@
 import api from "@/services/api";
 import { getAccounts as getModule2Accounts } from "@/modules/module_02_account_manager/service";
 
-/** Tài khoản Module 2 — nguồn chính để chọn nick quét nhóm. */
-export async function getScanAccounts() {
-  return getModule2Accounts();
+/** Tài khoản Module 2 — nguồn chính để chọn nick quét nhóm.
+ *  fresh: bỏ qua cache FE, lấy trạng thái Live / đăng nhập mới nhất (nút "Làm mới"). */
+export async function getScanAccounts({ fresh = false } = {}) {
+  if (!fresh) return getModule2Accounts();
+  const data = await api.get("/api/accounts", { fresh: true });
+  return Array.isArray(data) ? data : data?.accounts || [];
+}
+
+/** Nút Kiểm tra: mở Chrome, cuộn hết kết quả tìm nhóm của từng từ khóa và đếm số nhóm quét được tối đa. */
+export async function startKeywordCapacity({ uids, keywords, publicOnly = true, minMembers = null, force = false }) {
+  return api.post("/api/group-scan/keyword-capacity/start", {
+    uids,
+    keywords,
+    public_only: publicOnly,
+    min_members: minMembers,
+    force,
+  });
+}
+
+export async function getKeywordCapacityStatus(jobId) {
+  return api.get("/api/group-scan/keyword-capacity/status", { params: { job_id: jobId } });
+}
+
+export async function stopKeywordCapacity(jobId) {
+  return api.post("/api/group-scan/keyword-capacity/stop", { job_id: jobId });
+}
+
+/** Phiên Kiểm tra từ khóa đang chạy (để gắn lại sau khi tải lại trang). */
+export async function getActiveKeywordCapacity() {
+  return api.get("/api/group-scan/keyword-capacity/active");
 }
 
 /** Endpoint khung Module 10 (health / thống kê sẵn sàng). */

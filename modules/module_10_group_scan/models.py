@@ -112,6 +112,21 @@ DDL_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_scanned_group_members_owner_grp ON scanned_group_members (owner_username, group_id);",
     "CREATE INDEX IF NOT EXISTS idx_scanned_group_members_uid ON scanned_group_members (owner_username, member_uid);",
     "CREATE INDEX IF NOT EXISTS idx_scanned_group_members_time ON scanned_group_members (owner_username, scanned_at DESC);",
+    # Kết quả nút "Kiểm tra" (cuộn hết kết quả tìm nhóm của 1 từ khóa). Lưu danh sách nhóm thấy được
+    # (id, công khai/riêng tư, số thành viên) để lần sau điền ngay và tính lại theo bộ lọc / DB hiện tại.
+    """
+    CREATE TABLE IF NOT EXISTS scanned_keyword_capacity (
+        id SERIAL PRIMARY KEY,
+        owner_username VARCHAR(100) NOT NULL,
+        keyword VARCHAR(255) NOT NULL,
+        total INTEGER NOT NULL DEFAULT 0,
+        groups TEXT,
+        reason TEXT,
+        source_uid VARCHAR(100),
+        checked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_scanned_keyword_capacity UNIQUE (owner_username, keyword)
+    );
+    """,
 ]
 
 
@@ -1523,3 +1538,72 @@ def delete_scanned_group_members_bulk(owner: str, member_ids: list[int]) -> int:
         if delete_scanned_group_member(owner, mid):
             deleted += 1
     return deleted
+
+
+# =========================================================================
+# KẾT QUẢ "KIỂM TRA" TỪ KHÓA (scanned_keyword_capacity)
+# =========================================================================
+
+
+def save_keyword_capacity(
+    owner: str,
+    keyword: str,
+    groups: list[dict[str, Any]],
+    *,
+    reason: str = "",
+    source_uid: str = "",
+) -> bool:
+    """Lưu / ghi đè kết quả Kiểm tra của 1 từ khóa. groups = [{id, type, members}]."""
+    word = normalize_keyword(keyword)
+    if not owner or not word:
+        return False
+    try:
+        db.execute(
+            """
+            INSERT INTO scanned_keyword_capacity (owner_username, keyword, total, groups, reason, source_uid, checked_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT (owner_username, keyword) DO UPDATE SET
+                total = EXCLUDED.total, groups = EXCLUDED.groups, reason = EXCLUDED.reason,
+                source_uid = EXCLUDED.source_uid, checked_at = CURRENT_TIMESTAMP
+            """,
+            (owner, word, len(groups or []), json.dumps(groups or [], ensure_ascii=False), reason or "", source_uid or ""),
+        )
+        return True
+    except Exception as exc:
+        print(f"[Module 10 DB] save_keyword_capacity error: {exc}")
+        return False
+
+
+def get_keyword_capacity(owner: Optional[str], keywords: list[str]) -> dict[str, dict[str, Any]]:
+    """Kết quả Kiểm tra đã lưu: {keyword: {groups, total, reason, checked_at}}."""
+    words = [w for w in dict.fromkeys(normalize_keyword(k) for k in (keywords or [])) if w]
+    if not owner or not words:
+        return {}
+    try:
+        rows = db.fetch_all(
+            "SELECT keyword, total, groups, reason, checked_at FROM scanned_keyword_capacity "
+            "WHERE owner_username = ? AND keyword = ANY(?)",
+            (owner, words),
+        )
+    except Exception as exc:
+        print(f"[Module 10 DB] get_keyword_capacity error: {exc}")
+        return {}
+    from datetime import datetime
+
+    utc_offset = datetime.now().astimezone().utcoffset()  # CURRENT_TIMESTAMP của DB là giờ UTC
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        try:
+            groups = json.loads(r.get("groups") or "[]")
+        except Exception:
+            groups = []
+        checked = r.get("checked_at")
+        if hasattr(checked, "strftime") and utc_offset:
+            checked = checked + utc_offset
+        out[r["keyword"]] = {
+            "groups": groups if isinstance(groups, list) else [],
+            "total": int(r.get("total") or 0),
+            "reason": r.get("reason") or "",
+            "checked_at": checked.strftime("%H:%M %d/%m/%Y") if hasattr(checked, "strftime") else str(checked or ""),
+        }
+    return out
