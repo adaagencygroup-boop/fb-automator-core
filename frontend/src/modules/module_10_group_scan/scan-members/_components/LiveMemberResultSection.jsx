@@ -4,12 +4,6 @@ import { Download, Search, ExternalLink } from "lucide-react";
 import Pagination from "@/components/ui/pagination";
 import CustomSelect from "@/components/ui/custom-select";
 
-const FRIEND_FILTER_OPTIONS = [
-  { value: "all", label: "Tất cả số bạn bè" },
-  { value: "under500", label: "Dưới 500 bạn bè" },
-  { value: "over500", label: "Trên 500 bạn bè" },
-];
-
 export default function LiveMemberResultSection({
   categories,
   selectedCategory,
@@ -19,8 +13,6 @@ export default function LiveMemberResultSection({
   currentCategoryData,
   memberSearch,
   onMemberSearchChange,
-  friendFilter,
-  onFriendFilterChange,
   onExportAll,
   onExportGroup,
   members,
@@ -134,17 +126,6 @@ export default function LiveMemberResultSection({
                 />
               </div>
 
-              {/* Filter Friends */}
-              <div className="w-36 shrink-0">
-                <CustomSelect
-                  value={friendFilter}
-                  onChange={onFriendFilterChange}
-                  options={FRIEND_FILTER_OPTIONS}
-                  size="sm"
-                  buttonClassName="h-7 text-xs"
-                />
-              </div>
-
               {/* Button Xuất nhóm */}
               <button
                 type="button"
@@ -173,14 +154,13 @@ export default function LiveMemberResultSection({
                   <th className="py-2.5 px-3 text-center w-12">STT</th>
                   <th className="py-2.5 px-3">Họ và tên</th>
                   <th className="py-2.5 px-3">Profile Link / UID</th>
-                  <th className="py-2.5 px-3 w-28">Số bạn bè</th>
-                  <th className="py-2.5 px-3 text-right w-24">Thời gian</th>
+                  <th className="py-2.5 px-3 text-right w-40 whitespace-nowrap">Thời gian quét</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#F1F5F9]">
                 {members.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="text-center py-10 text-xs text-slate-400">
+                    <td colSpan={5} className="text-center py-10 text-xs text-slate-400">
                       Chưa có thành viên nào được quét trong danh mục này.
                     </td>
                   </tr>
@@ -219,10 +199,7 @@ export default function LiveMemberResultSection({
                             <ExternalLink className="size-3 text-[#2563EB]" />
                           </a>
                         </td>
-                        <td className="py-2 px-3 font-medium text-xs text-[#334155]">
-                          {member.friends}
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono text-[11px] text-[#94A3B8]">
+                        <td className="py-2 px-3 text-right font-mono text-[11px] text-[#94A3B8] whitespace-nowrap">
                           {member.time}
                         </td>
                       </tr>

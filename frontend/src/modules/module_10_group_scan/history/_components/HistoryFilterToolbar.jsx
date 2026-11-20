@@ -13,6 +13,7 @@ export const FILTER_TYPE_OPTIONS = [
 export const FILTER_STATUS_OPTIONS = [
   { value: "ALL", label: "Tất cả trạng thái" },
   { value: "SUCCESS", label: "Hoàn thành" },
+  { value: "STOPPED", label: "Đã dừng / gián đoạn" },
   { value: "FAILED", label: "Lỗi" },
 ];
 

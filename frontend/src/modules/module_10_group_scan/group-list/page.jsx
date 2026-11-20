@@ -16,6 +16,7 @@ import GroupStatsOverview from "./_components/GroupStatsOverview";
 import GroupTableToolbar from "./_components/GroupTableToolbar";
 import GroupDataTable from "./_components/GroupDataTable";
 import GroupListModals from "./_components/GroupListModals";
+import { downloadTable, groupExportTable, safeFileName } from "../utils/exportTable";
 import ModulePageHeader from "../components/ModulePageHeader";
 
 export default function GroupScanListPage() {
@@ -369,60 +370,10 @@ export default function GroupScanListPage() {
       return;
     }
     try {
-      const typeLabel = (t) => (t === "private" ? "Riêng tư" : "Công khai");
-      const headers = ["STT", "Từ khóa", "Tên nhóm", "Loại nhóm", "Thành viên", "URL nhóm"];
-      const dataRows = rows.map((g, index) => [
-        index + 1,
-        g.keyword || "",
-        g.name || "",
-        typeLabel(g.type),
-        g.members || "",
-        g.url || g.href || "",
-      ]);
-
-      const now = new Date();
-      const pad = (n) => String(n).padStart(2, "0");
-      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
-      const fileName = `GroupInfo_${stamp}.${format}`;
-
-      if (format === "csv") {
-        const escapeCsv = (val) => {
-          const str = String(val == null ? "" : val);
-          if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
-            return `"${str.replace(/"/g, '""')}"`;
-          }
-          return str;
-        };
-        const csvContent = "\uFEFF" + [
-          headers.map(escapeCsv).join(","),
-          ...dataRows.map((r) => r.map(escapeCsv).join(",")),
-        ].join("\r\n");
-        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      } else {
-        const XLSX = await import("xlsx");
-        const sheet = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
-        sheet["!cols"] = [
-          { wch: 6 },
-          { wch: 22 },
-          { wch: 36 },
-          { wch: 14 },
-          { wch: 14 },
-          { wch: 48 },
-          { wch: 20 },
-        ];
-        const book = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(book, sheet, "Kho nhom");
-        XLSX.writeFile(book, fileName);
-      }
-      toast.success(`Đã xuất thành công file báo cáo: ${fileName}`);
+      const table = groupExportTable(rows);
+      const catName = activeCategory?.id && activeCategory.id !== "cat-all" ? activeCategory.name : "Tat_ca";
+      const fileName = await downloadTable({ format, baseName: `Danh_sach_nhom_${safeFileName(catName)}`, sheetName: "Nhom", ...table });
+      toast.success(`Đã xuất ${rows.length} nhóm ra file: ${fileName}`);
     } catch (err) {
       toast.error("Xuất báo cáo thất bại: " + (err.message || "Lỗi"));
     }

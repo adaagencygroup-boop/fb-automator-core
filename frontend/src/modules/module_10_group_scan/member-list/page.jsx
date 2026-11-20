@@ -15,14 +15,9 @@ import MemberCategorySidebar from "./_components/MemberCategorySidebar";
 import MemberTableToolbar from "./_components/MemberTableToolbar";
 import MemberDataTable from "./_components/MemberDataTable";
 import CreateCategoryModal from "./_components/CreateCategoryModal";
+import { downloadTable, memberExportTable, safeFileName } from "../utils/exportTable";
 import ModulePageHeader from "../components/ModulePageHeader";
 
-const FRIEND_FILTER_OPTIONS = [
-  { value: "all", label: "Tất cả số bạn bè" },
-  { value: "under500", label: "Dưới 500 bạn bè" },
-  { value: "500to2000", label: "500 - 2.000 bạn bè" },
-  { value: "over2000", label: "Trên 2.000 bạn bè" },
-];
 
 export default function GroupScanMemberListPage() {
   // Categories state
@@ -37,7 +32,6 @@ export default function GroupScanMemberListPage() {
   const [loading, setLoading] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [memberSearch, setMemberSearch] = useState("");
-  const [friendFilter, setFriendFilter] = useState("all");
   const [selectedMemberIds, setSelectedMemberIds] = useState(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 15;
@@ -74,7 +68,6 @@ export default function GroupScanMemberListPage() {
       const res = await getScannedMembers({
         category_id: selectedCatId,
         search: memberSearch,
-        friend_filter: friendFilter,
         page: currentPage,
         page_size: pageSize,
       });
@@ -85,7 +78,6 @@ export default function GroupScanMemberListPage() {
             id: m.id,
             stt: String((currentPage - 1) * pageSize + idx + 1).padStart(2, "0"),
             shortUid: m.uid ? (m.uid.length > 15 ? `${m.uid.slice(0, 6)}...${m.uid.slice(-4)}` : m.uid) : "—",
-            friends: (m.friend_count || m.friendCount) ? `${(m.friend_count || m.friendCount).toLocaleString("vi-VN")} bạn` : "—",
             time: m.scanned_at || "Vừa xong",
           }))
         );
@@ -100,7 +92,7 @@ export default function GroupScanMemberListPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedCatId, memberSearch, friendFilter, currentPage, pageSize]);
+  }, [selectedCatId, memberSearch, currentPage, pageSize]);
 
   useEffect(() => {
     loadCategories();
@@ -177,40 +169,23 @@ export default function GroupScanMemberListPage() {
     }
   };
 
-  // Actions & Exports (UC-GMS-06)
-  const exportMembersCsv = (memberList, title = "MemberScraping") => {
+  // Xuất Excel thành viên — luôn lấy ĐỦ từ máy chủ (bảng chỉ tải từng trang).
+  const exportMembers = async (memberList, baseName) => {
     if (!memberList || memberList.length === 0) {
       toast.warning("Chưa có thành viên nào để xuất!");
       return;
     }
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, "0");
-    const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
-    const filename = `${title}_${ts}.csv`;
+    try {
+      const fileName = await downloadTable({ format: "xlsx", baseName, sheetName: "Thanh vien", ...memberExportTable(memberList) });
+      toast.success(`Đã xuất ${memberList.length} thành viên ra file: ${fileName}`);
+    } catch (err) {
+      toast.error("Xuất file thất bại: " + (err?.message || "Lỗi"));
+    }
+  };
 
-    const headers = ["STT", "Họ tên", "UID Facebook", "Nhóm", "Link cá nhân", "Số bạn bè", "Vai trò", "Thời gian quét"];
-    const rows = memberList.map((m, idx) => [
-      idx + 1,
-      `"${(m.name || "").replace(/"/g, '""')}"`,
-      `\t${m.uid}`, // Tab prefix to preserve text in Excel
-      `"${(m.group_name || m.group_id || "").replace(/"/g, '""')}"`,
-      `"${(m.profile_url || `https://www.facebook.com/${m.uid}`).replace(/"/g, '""')}"`,
-      m.friend_count ?? m.friendCount ?? 0,
-      m.role === "admin" ? "Quản trị viên" : m.role === "moderator" ? "Kiểm duyệt viên" : "Thành viên",
-      `"${m.scanned_at || ""}"`,
-    ]);
-
-    const csvContent = "\uFEFF" + [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    link.setAttribute("download", filename);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    toast.success(`Đã xuất ${memberList.length} thành viên ra tệp: ${filename}`);
+  const fetchAllMembers = async (params = {}) => {
+    const res = await getScannedMembers({ ...params, page: 1, page_size: 100000 }, { fresh: true });
+    return res?.members || [];
   };
 
   const handleRefresh = async () => {
@@ -221,17 +196,20 @@ export default function GroupScanMemberListPage() {
 
   const handleExportAll = async () => {
     try {
-      const res = await getScannedMembers({ page_size: 5000 });
-      const allMembers = res?.members || [];
-      exportMembersCsv(allMembers, "MemberScraping_All");
+      exportMembers(await fetchAllMembers(), "Thanh_vien_tat_ca");
     } catch {
       toast.error("Không thể tải toàn bộ danh sách để xuất file!");
     }
   };
 
-  const handleExportGroup = () => {
-    const catName = currentCategory?.fullName || currentCategory?.name || "Category";
-    exportMembersCsv(members, `MemberScraping_${catName.replace(/[^a-zA-Z0-9]/g, "_")}`);
+  const handleExportGroup = async () => {
+    const catName = currentCategory?.fullName || currentCategory?.name || "Danh_muc";
+    try {
+      const list = await fetchAllMembers({ category_id: selectedCatId, search: memberSearch });
+      exportMembers(list, `Thanh_vien_${safeFileName(catName)}`);
+    } catch {
+      toast.error("Không thể tải danh sách thành viên của nhóm để xuất file!");
+    }
   };
 
   const handleExportSelected = () => {
@@ -240,7 +218,7 @@ export default function GroupScanMemberListPage() {
       return;
     }
     const selectedList = members.filter((m) => selectedMemberIds.has(m.id));
-    exportMembersCsv(selectedList, "MemberScraping_Selected");
+    exportMembers(selectedList, "Thanh_vien_da_chon");
   };
 
   // Create Category
@@ -323,12 +301,6 @@ export default function GroupScanMemberListPage() {
                 setMemberSearch(val);
                 setCurrentPage(1);
               }}
-              friendFilter={friendFilter}
-              onFriendFilterChange={(val) => {
-                setFriendFilter(val);
-                setCurrentPage(1);
-              }}
-              friendFilterOptions={FRIEND_FILTER_OPTIONS}
               selectedMemberIds={selectedMemberIds}
               onExportGroup={handleExportGroup}
               onExportSelected={handleExportSelected}

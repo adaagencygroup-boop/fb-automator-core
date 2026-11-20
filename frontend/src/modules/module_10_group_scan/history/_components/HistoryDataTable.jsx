@@ -11,7 +11,6 @@ import {
   Layers,
   Search,
   Users,
-  FileText,
 } from "lucide-react";
 
 /* -------------------------------------------------------------------------- */
@@ -34,14 +33,6 @@ export function renderTypeBadge(type) {
         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-purple-50 text-purple-700 border border-purple-200">
           <Users className="size-3" />
           <span>Quét thành viên nhóm</span>
-        </span>
-      );
-    case "POSTS":
-    case "GROUP_POSTS":
-      return (
-        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-          <FileText className="size-3" />
-          <span>Quét bài viết nhóm</span>
         </span>
       );
     default:
@@ -69,8 +60,6 @@ export function renderTaskTypePill(item) {
   let label = "Quét thông tin nhóm";
   if (type.includes("MEMBER") || type.includes("FOLLOWER") || title.includes("thành viên")) {
     label = "Quét thành viên nhóm";
-  } else if (type.includes("POST") || title.includes("bài viết")) {
-    label = "Quét bài viết nhóm";
   } else {
     label = "Quét thông tin nhóm";
   }
@@ -136,7 +125,7 @@ export function renderTarget(item) {
     );
   }
 
-  // 4. Target is Group name (Quét thành viên hoặc bài viết của nhóm)
+  // 4. Target is Group name (Quét thành viên của nhóm)
   return (
     <div className="flex items-center gap-1.5 text-xs">
       <span className="text-slate-500 font-medium shrink-0">Nhóm:</span>
@@ -164,14 +153,6 @@ export function renderCollectedResult(item) {
     );
   }
 
-  // Posts scan -> bài viết
-  if (type.includes("POST")) {
-    return (
-      <span className="text-[#00875A] font-bold text-xs whitespace-nowrap">
-        {collected.toLocaleString("vi-VN")} bài viết
-      </span>
-    );
-  }
 
   // Group Info scan -> Nhóm
   if (isFailed && target > 0) {
@@ -243,7 +224,16 @@ export function renderStatusPill(status) {
       </span>
     );
   }
-  if (s === "FAILED" || s === "ERROR" || s === "ABORTED") {
+  if (s === "ABORTED" || s === "INTERRUPTED") {
+    // ABORTED: người dùng bấm dừng. INTERRUPTED: Engine khởi động lại giữa lúc quét.
+    return (
+      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
+        <span className="size-1.5 rounded-full bg-amber-500" />
+        <span>{s === "ABORTED" ? "Đã dừng" : "Bị gián đoạn"}</span>
+      </span>
+    );
+  }
+  if (s === "FAILED" || s === "ERROR") {
     return (
       <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-[#FEE2E2] text-[#DC2626] border border-[#FECDD3] whitespace-nowrap">
         <span className="size-1.5 rounded-full bg-[#DC2626]" />

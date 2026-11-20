@@ -20,6 +20,7 @@ from modules.module_10_group_scan.scan_common import (
     TERMINAL_STATUSES,
     close_account_session,
     fb_time_age_days,
+    format_join_date,
     interruptible_sleep,
     open_account_session,
     prune_jobs,
@@ -48,14 +49,6 @@ return (() => {
     }
     if (n.length > 80) return '';
     return n;
-  };
-
-  const parseFriends = (text) => {
-    if (!text) return 0;
-    const m = text.match(/([0-9.,]+)\\s*(?:bạn bè|friends|bạn chung|mutual friends)/i);
-    if (!m) return 0;
-    const numStr = m[1].replace(/\\./g, '').replace(/,/g, '');
-    return parseInt(numStr, 10) || 0;
   };
 
   const extractUid = (href) => {
@@ -171,7 +164,6 @@ return (() => {
       ...payload,
       name: betterName ? payload.name : prev.name,
       avatarUrl: payload.avatarUrl || prev.avatarUrl,
-      friendCount: payload.friendCount || prev.friendCount,
       joinedText: payload.joinedText || prev.joinedText,
       role: payload.role && payload.role !== 'member' ? payload.role : prev.role,
       isAdmin: payload.isAdmin || prev.isAdmin,
@@ -203,7 +195,6 @@ return (() => {
       if (!name) continue;
 
       const rowText = row ? (row.innerText || row.textContent || '') : '';
-      const friendCount = parseFriends(rowText);
       const roleInfo = roleFromRow(row);
       const joinedText = joinedFromRow(rowText);
 
@@ -212,7 +203,6 @@ return (() => {
         name,
         href: href.startsWith('http') ? href.split('?')[0] : ('https://www.facebook.com' + href.split('?')[0]),
         avatarUrl,
-        friendCount,
         joinedText,
         role: roleInfo.role,
         isAdmin: roleInfo.isAdmin,
@@ -430,7 +420,6 @@ def _scrape_members_via_selenium(driver) -> list[dict[str, Any]]:
                 "name": name,
                 "href": href.split("?")[0],
                 "avatarUrl": "",
-                "friendCount": 0,
                 "role": "member",
                 "isAdmin": False,
                 "isMod": False,
@@ -462,7 +451,6 @@ def _scrape_members_via_selenium(driver) -> list[dict[str, Any]]:
                 "name": name,
                 "href": href.split("?")[0],
                 "avatarUrl": "",
-                "friendCount": 0,
                 "role": "member",
                 "isAdmin": False,
                 "isMod": False,
@@ -953,10 +941,9 @@ def _member_scan_body(job_id: str) -> None:
                         "name": item["name"],
                         "profile_url": item.get("href") or f"https://www.facebook.com/{item['uid']}",
                         "avatar_url": item.get("avatarUrl") or "",
-                        "friend_count": item.get("friendCount") or 0,
-                        "friendCount": item.get("friendCount") or 0,
                         "role": item.get("role") or "member",
-                        "joined_date": item.get("joinedText") or "",
+                        # "Joined on Monday" → "16/11/2026" (không đọc được thì giữ chữ gốc).
+                        "joined_date": format_join_date(item.get("joinedText")),
                         "session_id": job_id,
                     }
                     group_members.append(rec)

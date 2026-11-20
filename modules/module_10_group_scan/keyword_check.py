@@ -18,6 +18,7 @@ from urllib.parse import quote, urlparse, urlunparse
 
 from modules.module_10_group_scan.scan_common import (
     close_account_session,
+    is_browser_dead_error,
     open_account_session,
     prune_jobs,
 )
@@ -1082,36 +1083,48 @@ def _scrape_groups_from_results(
     `stat_offset` / `display_limit`: khi một từ khóa được quét qua nhiều lượt (đổi nick giữa chừng),
     log và bảng thống kê vẫn hiển thị tổng của cả từ khóa.
     """
-    from selenium.webdriver.common.by import By
-
     from modules.module_10_group_scan.models import (
         normalize_group_id,
         upsert_scanned_group,
+    )
+
+    from modules.module_10_group_scan.keyword_capacity import (
+        MAX_LOADING_WAITS,
+        MAX_ROUNDS,
+        NO_GROWTH_ROUNDS,
+        _END_OF_RESULTS_JS,
+        _NUDGE_JS,
+        _scroll_results,
     )
 
     found: list[dict[str, Any]] = []
     seen: set[str] = {str(g.get("href") or g.get("id") or "") for g in (already or [])}
     known = set(known_group_ids or set())
     limit = _clamp_limit(max_groups)
-    # Có lọc / bỏ trùng DB → cuộn nhiều hơn
-    max_rounds = 16 if (public_only or private_only or (min_members and min_members > 0) or known) else 8
     skipped = 0
     skipped_dup = 0
+    # Cuộn giống hệt nút Kiểm tra: chỉ dừng khi NO_GROWTH_ROUNDS lượt liền Facebook không hiện nhóm mới
+    # (đang tải thì chờ thêm), để số nhóm quét thật khớp với số Kiểm tra báo.
+    idle = 0
+    loading_waits = 0
 
     def _aborted() -> bool:
         return _get_control(job_id) == "abort"
 
     js = GROUP_RESULTS_JS
 
-    for round_idx in range(max_rounds):
+    for round_idx in range(MAX_ROUNDS):
         if _aborted():
             _append_log(job_id, f"🛑 Dừng khẩn cấp giữa lúc quét «{keyword}».", "warn")
             break
         if len(found) >= limit:
             break
+        seen_before = len(seen)
         try:
             rows = driver.execute_script(js) or []
         except Exception as exc:
+            if is_browser_dead_error(exc):
+                raise
             _append_log(job_id, f"⚠️ Lỗi đọc DOM kết quả: {exc}", "warn")
             rows = []
 
@@ -1231,27 +1244,52 @@ def _scrape_groups_from_results(
             return found
 
         try:
-            roots = []
-            for xpath in RESULTS_ROOT_LOCATORS:
-                roots.extend(driver.find_elements(By.XPATH, xpath))
-            root = next((el for el in roots if el.is_displayed()), None)
-            if root is not None:
-                driver.execute_script(
-                    "arguments[0].scrollTop = arguments[0].scrollHeight; window.scrollBy(0, 900);",
-                    root,
+            flags = driver.execute_script(_END_OF_RESULTS_JS) or {}
+        except Exception as exc:
+            if is_browser_dead_error(exc):
+                raise
+            flags = {}
+        if flags.get("blocked"):
+            _append_log(job_id, f"⚠️ «{keyword}»: Facebook tạm chặn hoặc yêu cầu xác minh tài khoản — dừng từ khóa này.", "warn")
+            break
+        if len(seen) > seen_before:
+            idle = 0
+            loading_waits = 0
+        elif flags.get("loading") and loading_waits < MAX_LOADING_WAITS:
+            loading_waits += 1  # Facebook đang tải lô tiếp theo → chờ, chưa tính là hết
+        else:
+            idle += 1
+        if flags.get("end") and idle >= 2:
+            _append_log(job_id, f"ℹ️ «{keyword}»: Facebook báo đã hết kết quả tìm kiếm.", "info")
+            break
+        if idle >= NO_GROWTH_ROUNDS:
+            _append_log(job_id, f"ℹ️ «{keyword}»: Facebook không hiện thêm nhóm nào nữa.", "info")
+            break
+
+        _scroll_results(driver)
+        if idle:
+            # Chưa ra nhóm mới: lắc cuộn để Facebook tải tiếp, chờ lâu hơn.
+            try:
+                driver.execute_script(_NUDGE_JS)
+            except Exception:
+                pass
+            human_sleep(2.5, 4.0)
+            if idle in (1, 4, 7):
+                _append_log(
+                    job_id,
+                    f"… «{keyword}» chưa thấy nhóm mới ({idle}/{NO_GROWTH_ROUNDS}) — cuộn lại để Facebook tải tiếp, "
+                    f"giữ {len(found)}/{limit}.",
+                    "info",
                 )
-            else:
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        except Exception:
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        human_sleep(1.2, 2.0)
-        _append_log(
-            job_id,
-            f"… «{keyword}» cuộn thêm (lần {round_idx + 1}), giữ {len(found)}/{limit}"
-            + (f", bỏ {skipped}" if skipped else "")
-            + ".",
-            "info",
-        )
+        else:
+            human_sleep(1.6, 2.6)
+            _append_log(
+                job_id,
+                f"… «{keyword}» cuộn xuống tải thêm nhóm, giữ {len(found)}/{limit}"
+                + (f", bỏ {skipped}" if skipped else "")
+                + ".",
+                "info",
+            )
 
     if skipped or skipped_dup:
         _append_log(
@@ -1584,10 +1622,16 @@ def _check_keywords_on_account(
                     return
                 _append_log(job_id, f"🏁 Xong «{keyword}»: {len(collected)}/{limit} nhóm.", "success")
             except Exception as exc:
-                logger.exception("[%s] keyword «%s» failed", uid, keyword)
                 if collected:
                     all_groups.extend(collected[:limit])
                     _set_job(job_id, groups=list(all_groups))
+                if is_browser_dead_error(exc):
+                    # Chrome bị tắt tay / mất kết nối: dừng cả phiên, không thử từ khóa tiếp theo.
+                    _update_keyword_stat(job_id, keyword, count=len(collected), status="stopped")
+                    _append_log(job_id, f"🛑 Chrome đã bị đóng — dừng quét. Đã lưu {len(all_groups)} nhóm.", "warn")
+                    _set_job(job_id, groups=list(all_groups), status="aborted", error="Chrome đã bị đóng")
+                    return
+                logger.exception("[%s] keyword «%s» failed", uid, keyword)
                 _update_keyword_stat(job_id, keyword, status="error")
                 _append_log(job_id, f"❌ «{keyword}» lỗi: {exc}", "error")
                 if _get_control(job_id) == "abort":

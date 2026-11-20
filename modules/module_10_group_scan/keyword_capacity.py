@@ -7,7 +7,7 @@ Chỉ đếm — không lưu nhóm vào DB, không tham gia nhóm.
 Mỗi từ khóa báo 3 con số:
   total    — tổng nhóm Facebook trả về cho từ khóa
   count    — số nhóm qua bộ lọc hiện tại (chỉ công khai, ≥ N thành viên) = số quét được tối đa
-  fresh    — trong `count`, số nhóm CHƯA có trong DB (Bắt đầu thực thi sẽ bỏ trùng DB)
+  fresh    — trong `count`, số nhóm chưa có trong Danh sách nhóm quét (Bắt đầu thực thi bỏ qua nhóm đã có)
 """
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from modules.module_10_group_scan.scan_common import (
     TERMINAL_STATUSES,
     close_account_session,
     interruptible_sleep,
+    is_browser_dead_error,
     open_account_session,
     prune_jobs,
 )
@@ -262,14 +263,18 @@ def count_keyword_groups(
     total = count = fresh = 0
     idle = 0
     loading_waits = 0
-    reason = f"cuộn thêm {NO_GROWTH_ROUNDS} lượt không ra nhóm mới — Facebook đã hết kết quả"
+    reason = "đã xem hết — Facebook không hiện thêm nhóm nào nữa"
+    complete = True
     for round_idx in range(1, MAX_ROUNDS + 1):
         if should_stop():
-            reason = "dừng theo yêu cầu"
+            reason = "dừng giữa chừng theo yêu cầu (chưa xem hết)"
+            complete = False
             break
         try:
             rows = driver.execute_script(GROUP_RESULTS_JS) or []
         except Exception as exc:
+            if is_browser_dead_error(exc):
+                raise
             log(f"⚠️ Lỗi đọc kết quả: {exc}", "warn")
             rows = []
         added = 0
@@ -292,10 +297,13 @@ def count_keyword_groups(
             on_progress(total=total, count=count, fresh=fresh)
         try:
             flags = driver.execute_script(_END_OF_RESULTS_JS) or {}
-        except Exception:
+        except Exception as exc:
+            if is_browser_dead_error(exc):
+                raise
             flags = {}
         if flags.get("blocked"):
-            reason = "Facebook tạm chặn / yêu cầu xác minh tài khoản"
+            reason = "dừng sớm — Facebook tạm chặn hoặc yêu cầu xác minh tài khoản (chưa xem hết)"
+            complete = False
             log(f"⚠️ «{keyword}»: {reason} — dừng đếm từ khóa này.", "warn")
             break
         if added:
@@ -311,7 +319,7 @@ def count_keyword_groups(
                 log(f"… «{keyword}» {idle} lượt chưa ra nhóm mới — cuộn lại để Facebook tải tiếp…", "info")
         # "Hết kết quả" chỉ tin khi đã có ít nhất 2 lượt liên tiếp không ra nhóm mới.
         if flags.get("end") and idle >= 2:
-            reason = "Facebook báo đã hết kết quả"
+            reason = "đã xem hết — Facebook báo hết kết quả"
             break
         if idle >= NO_GROWTH_ROUNDS:
             break
@@ -326,8 +334,9 @@ def count_keyword_groups(
         else:
             sleep(1.6, 2.6)
     else:
-        reason = f"đạt giới hạn {MAX_ROUNDS} lượt cuộn"
-    return {"total": total, "count": count, "fresh": fresh, "reason": reason, "groups": groups}
+        reason = "dừng để an toàn — kết quả quá dài (có thể còn nhóm chưa xem)"
+        complete = False
+    return {"total": total, "count": count, "fresh": fresh, "reason": reason, "groups": groups, "complete": complete}
 
 
 def summarize_groups(
@@ -419,7 +428,7 @@ def _body(job_id: str) -> None:
                     sleep=lambda a, b: interruptible_sleep(random.uniform(a, b), lambda: _control(job_id)),
                 )
             except Exception as exc:
-                if "invalid session" in str(exc).lower() or "no such window" in str(exc).lower():
+                if is_browser_dead_error(exc):
                     log("Chrome đã bị đóng — dừng kiểm tra.", "warn")
                     final = "aborted"
                     break
@@ -430,12 +439,12 @@ def _body(job_id: str) -> None:
             _set_stat(job_id, word, status="done", reason=res["reason"],
                       **{k: res[k] for k in ("total", "count", "fresh")})
             # Chỉ lưu khi đã cuộn trọn vẹn (không lưu kết quả dở dang do dừng tay / Facebook chặn).
-            if not stop() and "chặn" not in res["reason"] and "dừng" not in res["reason"]:
+            if res.get("complete") and not stop():
                 if save_keyword_capacity(owner, word, res["groups"], reason=res["reason"], source_uid=session["uid"]):
                     _set_stat(job_id, word, checked_at=time.strftime("%H:%M %d/%m/%Y"))
             log(
                 f"🏁 «{word}»: quét được tối đa {res['count']} nhóm "
-                f"({res['fresh']} chưa có trong DB) / {res['total']} kết quả — {res['reason']}.",
+                f"({res['fresh']} nhóm chưa quét) trong {res['total']} nhóm Facebook tìm thấy — {res['reason']}.",
                 "success",
             )
             if stop():

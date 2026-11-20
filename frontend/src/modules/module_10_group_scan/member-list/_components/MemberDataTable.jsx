@@ -37,15 +37,14 @@ export default function MemberDataTable({
               <th className="py-2.5 px-2 text-center w-12">STT</th>
               <th className="py-2.5 px-3">TÊN THÀNH VIÊN</th>
               <th className="py-2.5 px-3">UID</th>
-              <th className="py-2.5 px-3">BẠN BÈ</th>
-              <th className="py-2.5 px-3">THỜI GIAN QUÉT</th>
+              <th className="py-2.5 px-3 whitespace-nowrap">THỜI GIAN QUÉT</th>
               <th className="py-2.5 px-3 text-right w-14">THAO TÁC</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[#F1F5F9]">
             {loading ? (
               <tr>
-                <td colSpan={7} className="text-center py-12 text-slate-400">
+                <td colSpan={6} className="text-center py-12 text-slate-400">
                   <div className="flex flex-col items-center justify-center gap-2">
                     <Loader2 className="size-5 animate-spin text-blue-600" />
                     <span>Đang nạp thành viên từ CSDL...</span>
@@ -54,7 +53,7 @@ export default function MemberDataTable({
               </tr>
             ) : members.length === 0 ? (
               <tr>
-                <td colSpan={7} className="text-center py-10 text-slate-400">
+                <td colSpan={6} className="text-center py-10 text-slate-400">
                   Chưa có thành viên nào phù hợp tiêu chí lọc.
                 </td>
               </tr>
@@ -100,10 +99,7 @@ export default function MemberDataTable({
                         <ExternalLink className="size-3 text-[#2563EB]" />
                       </a>
                     </td>
-                    <td className="py-2 px-3 font-semibold text-xs text-[#334155]">
-                      {member.friends}
-                    </td>
-                    <td className="py-2 px-3 font-mono text-[11px] text-[#64748B]">
+                    <td className="py-2 px-3 font-mono text-[11px] text-[#64748B] whitespace-nowrap">
                       {member.time}
                     </td>
                     <td className="py-2 px-3 text-right">

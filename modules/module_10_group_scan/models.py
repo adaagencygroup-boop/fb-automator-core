@@ -8,9 +8,14 @@ import json
 import re
 import time
 from typing import Any, Optional
-from urllib.parse import urlparse
 
 from core.database.connection import db
+
+# Thời điểm Engine hiện tại khởi động (giờ UTC như CURRENT_TIMESTAMP của DB) — để nhận ra phiên
+# RUNNING của Engine cũ (đã chết khi restart) mà không đụng phiên đang chạy thật.
+from datetime import datetime as _dt, timezone as _tz
+
+_ENGINE_STARTED_UTC = _dt.now(_tz.utc).replace(tzinfo=None)
 
 DDL_STATEMENTS = [
     """
@@ -298,75 +303,6 @@ def list_known_group_ids(owner: Optional[str]) -> set[str]:
     return {str(r.get("group_id") or "").lower() for r in rows if r.get("group_id")}
 
 
-def keyword_counts(owner: Optional[str], keywords: list[str]) -> dict[str, int]:
-    """Số nhóm đã lưu theo từng từ khóa (bảng liên kết)."""
-    owner = (owner or "").strip()
-    out = {str(k).strip(): 0 for k in keywords if str(k).strip()}
-    if not owner or not out:
-        return out
-    for word in list(out.keys()):
-        row = db.fetch_one(
-            """
-            SELECT COUNT(*) AS cnt
-            FROM scanned_group_keywords
-            WHERE owner_username = ? AND keyword = ?
-            """,
-            (owner, normalize_keyword(word)),
-        )
-        out[word] = int((row or {}).get("cnt") or 0)
-    return out
-
-
-def list_groups_for_keywords(
-    owner: Optional[str],
-    keywords: list[str],
-    *,
-    limit: int = 500,
-) -> list[dict[str, Any]]:
-    owner = (owner or "").strip()
-    words = [str(k).strip() for k in keywords if str(k).strip()]
-    if not owner or not words:
-        return []
-    # Lấy theo từng keyword rồi gộp (tránh SQL IN động phức tạp)
-    by_id: dict[str, dict[str, Any]] = {}
-    for word in words:
-        rows = db.fetch_all(
-            """
-            SELECT g.group_id, g.group_url, g.group_name, g.privacy,
-                   g.members_label, g.members_count, k.keyword, g.source_uid,
-                   g.last_seen_at, g.note
-            FROM scanned_group_keywords k
-            JOIN scanned_groups g
-              ON g.owner_username = k.owner_username AND g.group_id = k.group_id
-            WHERE k.owner_username = ? AND k.keyword = ?
-            ORDER BY k.found_at DESC
-            LIMIT ?
-            """,
-            (owner, normalize_keyword(word), max(1, min(2000, int(limit)))),
-        )
-        for row in rows:
-            gid = str(row.get("group_id") or "")
-            if not gid or gid in by_id:
-                continue
-            href = normalize_group_url(row.get("group_url") or "")
-            privacy = row.get("privacy") or "unknown"
-            note_val = row.get("note")
-            if not note_val or note_val == "—":
-                note_val = "not_joined" if privacy == "private" else "—"
-            by_id[gid] = {
-                "id": href or gid,
-                "keyword": word,
-                "name": row.get("group_name") or gid,
-                "type": privacy,
-                "members": row.get("members_label") or "—",
-                "members_count": row.get("members_count"),
-                "url": (href or "").replace("https://www.", "").replace("https://", ""),
-                "href": href,
-                "note": note_val,
-            }
-    return list(by_id.values())
-
-
 def list_all_scanned_groups(
     owner: Optional[str],
     *,
@@ -447,7 +383,7 @@ def list_all_scanned_groups(
         privacy_val = r.get("privacy") or "unknown"
         created_dt = r.get("created_at")
         created_str = (
-            created_dt.strftime("%d/%m/%Y %H:%M")
+            _to_local(created_dt).strftime("%d/%m/%Y %H:%M")
             if hasattr(created_dt, "strftime")
             else str(created_dt or "")
         )
@@ -757,18 +693,30 @@ def add_session_log(session_id: str, level: str, message: str) -> None:
     return
 
 
-_SESSION_UNITS = {"GROUP_INFO": "nhóm", "GROUP_MEMBERS": "thành viên", "GROUP_POSTS": "bài viết"}
+_SESSION_UNITS = {"GROUP_INFO": "nhóm", "GROUP_MEMBERS": "thành viên"}
 
 _STATUS_TEXT = {
     "SUCCESS": ("SUCCESS", "Phiên quét hoàn tất"),
     "FAILED": ("ERROR", "Phiên quét gặp lỗi"),
     "ERROR": ("ERROR", "Phiên quét gặp lỗi"),
     "ABORTED": ("WARNING", "Phiên quét đã bị dừng"),
+    "INTERRUPTED": ("WARNING", "Phiên quét bị gián đoạn do Engine khởi động lại — các mục đã quét trước đó vẫn được lưu"),
 }
 
 
+def _to_local(value: Any) -> Any:
+    """CURRENT_TIMESTAMP của Postgres lưu giờ UTC (TIMESTAMP không múi giờ) → đổi sang giờ máy để hiển thị."""
+    if not hasattr(value, "strftime"):
+        return value
+    from datetime import timezone
+
+    if getattr(value, "tzinfo", None) is not None:
+        return value.astimezone().replace(tzinfo=None)
+    return value.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+
+
 def _fmt_dt(value: Any, fmt: str = "%d/%m/%Y %H:%M:%S") -> str:
-    return value.strftime(fmt) if hasattr(value, "strftime") else ""
+    return _to_local(value).strftime(fmt) if hasattr(value, "strftime") else ""
 
 
 def _legacy_session_logs(status: str, start_str: str, end_str: str, total: int, unit: str) -> list[dict[str, str]]:
@@ -861,6 +809,30 @@ def _batch_session_samples(owner: str, rows: list[dict[str, Any]], per_session: 
     return samples
 
 
+def mark_interrupted_sessions(owner: Optional[str]) -> int:
+    """Phiên còn RUNNING nhưng bắt đầu TRƯỚC khi Engine hiện tại khởi động thì chắc chắn đã chết
+    (job chỉ sống trong RAM) → đánh dấu INTERRUPTED. Không bao giờ đụng phiên đang chạy thật,
+    vì phiên của Engine này luôn bắt đầu sau _ENGINE_STARTED_UTC."""
+    owner = (owner or "").strip()
+    if not owner:
+        return 0
+    try:
+        stale = db.fetch_all(
+            "SELECT session_id FROM scanned_group_sessions "
+            "WHERE owner_username = ? AND status IN ('RUNNING', 'PENDING', 'PAUSED') AND started_at < ?",
+            (owner, _ENGINE_STARTED_UTC),
+        )
+        for row in stale:
+            db.execute(
+                "UPDATE scanned_group_sessions SET status = 'INTERRUPTED' WHERE owner_username = ? AND session_id = ?",
+                (owner, row["session_id"]),
+            )
+        return len(stale)
+    except Exception as exc:
+        print(f"[Module 10 DB] mark_interrupted_sessions error: {exc}")
+        return 0
+
+
 def list_scan_sessions(
     owner: Optional[str],
     *,
@@ -873,6 +845,7 @@ def list_scan_sessions(
     owner = (owner or "").strip()
     if not owner:
         return []
+    mark_interrupted_sessions(owner)
 
     conditions = ["owner_username = ?"]
     params: list[Any] = [owner]
@@ -1314,7 +1287,6 @@ def upsert_scanned_group_member(
     name = str(member.get("name") or member.get("member_name") or uid).strip()
     profile_url = str(member.get("profile_url") or member.get("href") or f"https://www.facebook.com/{uid}").strip()
     avatar_url = str(member.get("avatar_url") or "").strip()
-    friend_count = int(member.get("friend_count") or member.get("friendCount") or 0)
     role = str(member.get("role") or "member").strip().lower()
     if member.get("isAdmin"):
         role = "admin"
@@ -1331,12 +1303,13 @@ def upsert_scanned_group_member(
             db.execute(
                 """
                 UPDATE scanned_group_members
-                SET member_name = ?, profile_url = ?, avatar_url = ?, friend_count = ?, role = ?,
+                SET member_name = ?, profile_url = ?, avatar_url = ?, role = ?,
                     group_name = COALESCE(NULLIF(?, ''), group_name),
+                    joined_date = COALESCE(NULLIF(?, ''), joined_date),
                     scanned_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (name, profile_url, avatar_url, friend_count, role, group_name, row["id"]),
+                (name, profile_url, avatar_url, role, group_name, joined_date, row["id"]),
             )
             return False
         else:
@@ -1345,20 +1318,20 @@ def upsert_scanned_group_member(
                 INSERT INTO scanned_group_members (
                     owner_username, group_id, group_name, group_url,
                     member_uid, member_name, profile_url, avatar_url,
-                    friend_count, role, joined_date, session_id,
+                    role, joined_date, session_id,
                     scanned_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT (owner_username, group_id, member_uid) DO UPDATE
                 SET member_name = EXCLUDED.member_name,
                     profile_url = EXCLUDED.profile_url,
-                    friend_count = EXCLUDED.friend_count,
                     role = EXCLUDED.role,
+                    joined_date = COALESCE(NULLIF(EXCLUDED.joined_date, ''), scanned_group_members.joined_date),
                     scanned_at = CURRENT_TIMESTAMP
                 """,
                 (
                     owner, group_id, group_name, group_url,
                     uid, name, profile_url, avatar_url,
-                    friend_count, role, joined_date, session_id,
+                    role, joined_date, session_id,
                 ),
             )
             return True
@@ -1390,7 +1363,6 @@ def list_scanned_group_members(
     group_id: Optional[str] = None,
     category_id: Optional[str] = None,
     search: Optional[str] = None,
-    friend_filter: Optional[str] = None,
     role: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
@@ -1434,14 +1406,6 @@ def list_scanned_group_members(
         where_clauses.append("m.role = ?")
         params.append(role.strip().lower())
 
-    if friend_filter and friend_filter != "all":
-        if friend_filter == "under500":
-            where_clauses.append("m.friend_count <= 500")
-        elif friend_filter in {"500to2000", "50k_200k"}:
-            where_clauses.append("m.friend_count > 500 AND m.friend_count <= 2000")
-        elif friend_filter in {"over2000", "over500"}:
-            where_clauses.append("m.friend_count > 500")
-
     where_sql = " AND ".join(where_clauses)
 
     count_row = db.fetch_one(
@@ -1453,7 +1417,7 @@ def list_scanned_group_members(
     select_sql = f"""
         SELECT m.id, m.group_id, m.group_name, m.group_url,
                m.member_uid, m.member_name, m.profile_url, m.avatar_url,
-               m.friend_count, m.role, m.joined_date, m.session_id,
+               m.role, m.joined_date, m.session_id,
                m.scanned_at
         FROM scanned_group_members m
         WHERE {where_sql}
@@ -1469,7 +1433,7 @@ def list_scanned_group_members(
         scanned_at_str = ""
         if r.get("scanned_at"):
             try:
-                scanned_at_str = r["scanned_at"].strftime("%d/%m/%Y %H:%M:%S")
+                scanned_at_str = _to_local(r["scanned_at"]).strftime("%d/%m/%Y %H:%M:%S")
             except Exception:
                 scanned_at_str = str(r["scanned_at"])
         items.append({
@@ -1481,8 +1445,6 @@ def list_scanned_group_members(
             "name": r["member_name"] or r["member_uid"],
             "profile_url": r["profile_url"] or f"https://www.facebook.com/{r['member_uid']}",
             "avatar_url": r["avatar_url"] or "",
-            "friend_count": r["friend_count"] or 0,
-            "friendCount": r["friend_count"] or 0,
             "role": r["role"] or "member",
             "joined_date": r["joined_date"] or "",
             "session_id": r["session_id"] or "",
@@ -1588,18 +1550,13 @@ def get_keyword_capacity(owner: Optional[str], keywords: list[str]) -> dict[str,
     except Exception as exc:
         print(f"[Module 10 DB] get_keyword_capacity error: {exc}")
         return {}
-    from datetime import datetime
-
-    utc_offset = datetime.now().astimezone().utcoffset()  # CURRENT_TIMESTAMP của DB là giờ UTC
     out: dict[str, dict[str, Any]] = {}
     for r in rows:
         try:
             groups = json.loads(r.get("groups") or "[]")
         except Exception:
             groups = []
-        checked = r.get("checked_at")
-        if hasattr(checked, "strftime") and utc_offset:
-            checked = checked + utc_offset
+        checked = _to_local(r.get("checked_at"))
         out[r["keyword"]] = {
             "groups": groups if isinstance(groups, list) else [],
             "total": int(r.get("total") or 0),

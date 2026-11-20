@@ -1,7 +1,6 @@
 """API Module 10 — Quét thông tin nhóm. Tài khoản lấy từ Module 2."""
 from __future__ import annotations
 
-import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -41,14 +40,11 @@ from modules.module_10_group_scan.models import (
     delete_scanned_group_member,
     delete_scanned_group_members_bulk,
     get_group_members_summary,
-    keyword_counts,
     list_all_scanned_groups,
-    list_groups_for_keywords,
     list_scan_categories,
     list_scan_sessions,
     list_scanned_group_members,
     move_groups_to_category,
-    normalize_keyword,
     save_groups_to_category,
     update_scan_category,
 )
@@ -131,12 +127,6 @@ class ClearCheckRequest(BaseModel):
 class JobControlRequest(BaseModel):
     job_id: str = Field(..., min_length=1)
     action: str = Field(..., description="pause | resume | abort")
-
-
-class LookupKeywordsRequest(BaseModel):
-    """Kiểm tra: đọc số nhóm đã lưu theo từ khóa + danh sách nhóm từ DB."""
-    keywords: list[str] = Field(..., min_length=1, description="Danh sách từ khóa cần kiểm tra")
-    include_groups: bool = Field(True, description="True = trả luôn danh sách nhóm đã lưu")
 
 
 @router.get("/health")
@@ -352,56 +342,6 @@ def keyword_capacity_stop(body: KeywordCapacityStopRequest):
     if not stop_capacity_check(body.job_id, owner):
         raise HTTPException(400, "Phiên kiểm tra không còn chạy")
     return {"ok": True}
-
-
-@router.post("/lookup-keywords", dependencies=[Depends(scoped_owner)])
-def lookup_keywords(body: LookupKeywordsRequest):
-    """
-    Nút Kiểm tra: lấy số nhóm đã quét theo từng từ khóa từ Supabase
-    (không mở Chrome). Fill bảng trạng thái + optionally bảng kết quả.
-    """
-    owner = owner_context.get() or get_owner_username()
-    if not owner:
-        raise HTTPException(401, "Chưa đăng nhập")
-    words = []
-    seen = set()
-    for raw in body.keywords or []:
-        w = re.sub(r"\s+", " ", str(raw or "").strip())
-        key = normalize_keyword(w)
-        if not w or not key or key in seen:
-            continue
-        seen.add(key)
-        words.append(w)
-    if not words:
-        raise HTTPException(422, "Thiếu từ khóa")
-
-    counts = keyword_counts(owner, words)
-    stats = {}
-    for word in words:
-        n = int(counts.get(word) or 0)
-        stats[word] = {
-            "count": n,
-            "status": "done" if n > 0 else "ready",
-        }
-
-    groups = []
-    if body.include_groups:
-        groups = list_groups_for_keywords(owner, words, limit=500)
-
-    total = sum(int(counts.get(w) or 0) for w in words)
-    return {
-        "ok": True,
-        "owner": owner,
-        "keywords": words,
-        "keyword_stats": stats,
-        "groups": groups,
-        "total_groups": total,
-        "message": (
-            f"Đã kiểm tra {len(words)} từ khóa — tổng {total} nhóm đã lưu trong DB."
-            if total
-            else f"Đã kiểm tra {len(words)} từ khóa — chưa có nhóm nào trong DB (bấm Bắt đầu để quét)."
-        ),
-    }
 
 
 @router.post("/job-control", dependencies=[Depends(scoped_owner)])
@@ -700,7 +640,6 @@ def get_scanned_members_endpoint(
     group_id: Optional[str] = None,
     category_id: Optional[str] = None,
     search: Optional[str] = None,
-    friend_filter: Optional[str] = None,
     role: Optional[str] = None,
     page: int = 1,
     page_size: int = 50,
@@ -716,7 +655,6 @@ def get_scanned_members_endpoint(
         group_id=group_id,
         category_id=category_id,
         search=search,
-        friend_filter=friend_filter,
         role=role,
         limit=page_size,
         offset=offset,

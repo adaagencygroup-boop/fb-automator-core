@@ -27,6 +27,7 @@ import AccountMethodCard from "./_components/AccountMethodCard";
 import ScanTargetConfigCard from "./_components/ScanTargetConfigCard";
 import ScanResultSection from "./_components/ScanResultSection";
 import LiveLogConsole from "./_components/LiveLogConsole";
+import { downloadTable, groupExportTable } from "../utils/exportTable";
 import ModulePageHeader from "../components/ModulePageHeader";
 
 const KEYWORD_STATS_SEED = {};
@@ -134,11 +135,13 @@ function capacityCell(row) {
   return {
     count: `${fmtNum(ok)} nhóm`,
     detail: [
-      `Facebook trả ${fmtNum(total)} nhóm`,
-      filtered ? `bỏ ${fmtNum(filtered)} (riêng tư / ít thành viên)` : null,
-      inDb ? `${fmtNum(inDb)} đã có trong DB → còn ${fmtNum(fresh)} nhóm mới` : "chưa nhóm nào có trong DB",
-      row.reason ? `Dừng vì: ${row.reason}` : null,
-      row.checked_at ? `Kiểm tra lúc ${row.checked_at}` : null,
+      `Facebook tìm thấy ${fmtNum(total)} nhóm`,
+      filtered ? `loại ${fmtNum(filtered)} nhóm riêng tư hoặc ít thành viên` : null,
+      inDb
+        ? `${fmtNum(inDb)} nhóm đã có trong Danh sách nhóm quét, còn ${fmtNum(fresh)} nhóm chưa quét`
+        : "tất cả đều là nhóm chưa quét",
+      row.reason || null,
+      row.checked_at ? `kiểm tra lúc ${row.checked_at}` : null,
     ]
       .filter(Boolean)
       .join(" · "),
@@ -670,8 +673,24 @@ export default function GroupScanInfoPage() {
         }
       } catch (err) {
         if (err?.status === 404 && ++notFound >= 5) {
+          // Phiên không còn trên Engine (Engine khởi động lại / tắt) → không để từ khóa treo "Đang quét".
           stopped = true;
           setCapacityJobId("");
+          setKeywordStats((current) => {
+            const next = { ...current };
+            Object.entries(next).forEach(([word, row]) => {
+              if (row?.status === "running" || row?.status === "idle") {
+                next[word] = {
+                  ...row,
+                  status: "stopped",
+                  detail: [row.detail, "bị gián đoạn — chưa xem hết, bấm Kiểm tra lại"].filter(Boolean).join(" · "),
+                };
+              }
+            });
+            return next;
+          });
+          toast.warning("Phiên kiểm tra bị gián đoạn (Engine vừa khởi động lại). Bấm Kiểm tra lại cho từ khóa đó.");
+          pushLog("Phiên kiểm tra bị gián đoạn — Engine vừa khởi động lại. Kết quả dở dang không được lưu.", "warn");
         }
       }
     };
@@ -731,6 +750,7 @@ export default function GroupScanInfoPage() {
     let stopped = false;
     let lastLogCount = 0;
     let finishedNotified = false;
+    let notFound = 0;
     let timer;
 
     const tick = async () => {
@@ -738,6 +758,7 @@ export default function GroupScanInfoPage() {
         // Chỉ theo job_id: đổi danh sách nick lúc đang chạy không được reset vòng poll.
         const status = await getCheckStatus({ jobId: checkJobId });
         if (stopped || !status) return;
+        notFound = 0;
 
         const remoteLogs = Array.isArray(status.logs) ? status.logs : [];
         if (remoteLogs.length > lastLogCount) {
@@ -762,6 +783,7 @@ export default function GroupScanInfoPage() {
               let st = "idle";
               if (row?.status === "running") st = "running";
               else if (row?.status === "done") st = "done";
+              else if (row?.status === "stopped" || row?.status === "error") st = row.status;
               else if (status.status === "paused" && row?.status === "idle") st = "paused";
               next[word] = {
                 count: String(row?.count ?? (st === "running" ? "…" : "—")),
@@ -806,8 +828,26 @@ export default function GroupScanInfoPage() {
           setResuming(false);
           if (timer) clearInterval(timer);
         }
-      } catch {
-        /* poll im lặng */
+      } catch (err) {
+        // Lỗi mạng thoáng qua: poll tiếp. Engine xác nhận không còn phiên (404 liên tiếp) → kết thúc UI.
+        if (err?.status === 404 && ++notFound >= 5 && !finishedNotified) {
+          finishedNotified = true;
+          stopped = true;
+          clearInterval(timer);
+          setRunState("idle");
+          setPausing(false);
+          setAborting(false);
+          setResuming(false);
+          setKeywordStats((current) => {
+            const next = { ...current };
+            Object.entries(next).forEach(([word, row]) => {
+              if (row?.status === "running") next[word] = { ...row, status: "stopped" };
+            });
+            return next;
+          });
+          toast.warning("Phiên quét bị gián đoạn (Engine vừa khởi động lại). Nhóm đã quét được vẫn được lưu.");
+          pushLog("Phiên quét bị gián đoạn — Engine vừa khởi động lại. Các nhóm đã quét trước đó vẫn nằm trong danh sách.", "warn");
+        }
       }
     };
 
@@ -1040,60 +1080,9 @@ export default function GroupScanInfoPage() {
       return;
     }
     try {
-      const typeLabel = (t) => (t === "private" ? "Riêng tư" : "Công khai");
-      const headers = ["STT", "Từ khóa", "Tên nhóm", "Loại nhóm", "Thành viên", "URL nhóm"];
-      const dataRows = rows.map((row, index) => [
-        index + 1,
-        row.keyword || "",
-        row.name || "",
-        typeLabel(row.type),
-        row.members || "",
-        row.href || (row.url ? `https://${String(row.url).replace(/^https?:\/\//, "")}` : ""),
-      ]);
-
-      const now = new Date();
-      const pad = (n) => String(n).padStart(2, "0");
-      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
-      const fileName = `GroupInfo_${stamp}.${format}`;
-
-      if (format === "csv") {
-        const escapeCsv = (val) => {
-          const str = String(val == null ? "" : val);
-          if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
-            return `"${str.replace(/"/g, '""')}"`;
-          }
-          return str;
-        };
-        const csvContent = "\uFEFF" + [
-          headers.map(escapeCsv).join(","),
-          ...dataRows.map((r) => r.map(escapeCsv).join(",")),
-        ].join("\r\n");
-        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      } else {
-        const XLSX = await import("xlsx");
-        const sheet = XLSX.utils.aoa_to_sheet([headers, ...dataRows]);
-        sheet["!cols"] = [
-          { wch: 6 },
-          { wch: 22 },
-          { wch: 36 },
-          { wch: 14 },
-          { wch: 14 },
-          { wch: 48 },
-          { wch: 20 },
-        ];
-        const book = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(book, sheet, "Kho nhom");
-        XLSX.writeFile(book, fileName);
-      }
-      toast.success(`Đã xuất thành công file báo cáo: ${fileName}`);
+      const table = groupExportTable(rows);
+      const fileName = await downloadTable({ format, baseName: "Ket_qua_quet_nhom", sheetName: "Nhom", ...table });
+      toast.success(`Đã xuất ${rows.length} nhóm ra file: ${fileName}`);
       pushLog(`Xuất file thành công: ${rows.length} nhóm → ${fileName}`, "success");
     } catch (error) {
       toast.error(error.message || "Xuất file thất bại.");

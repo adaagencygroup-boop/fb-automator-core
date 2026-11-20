@@ -315,6 +315,19 @@ def open_account_session(
     return None
 
 
+_BROWSER_DEAD_MARKERS = (
+    "invalid session id", "no such window", "target window already closed", "chrome not reachable",
+    "disconnected", "session deleted", "max retries exceeded", "connection refused",
+    "failed to establish a new connection", "web view not found",
+)
+
+
+def is_browser_dead_error(exc: BaseException) -> bool:
+    """Lỗi do Chrome bị tắt tay / mất kết nối chromedriver → phải dừng phiên ngay, không thử tiếp."""
+    text = f"{type(exc).__name__} {exc}".lower()
+    return any(marker in text for marker in _BROWSER_DEAD_MARKERS)
+
+
 def close_account_session(session: Optional[dict[str, Any]], *, quit_browser: bool = True) -> None:
     """Đóng Chrome (tuỳ chọn) và luôn nhả khoá profile."""
     if not session:
@@ -397,6 +410,46 @@ def _absolute_date(text: str, today: date) -> Optional[date]:
     return result
 
 
+_WEEKDAYS = [
+    (0, r"monday|thứ hai|thứ 2|t2"),
+    (1, r"tuesday|thứ ba|thứ 3|t3"),
+    (2, r"wednesday|thứ tư|thứ 4|t4"),
+    (3, r"thursday|thứ năm|thứ 5|t5"),
+    (4, r"friday|thứ sáu|thứ 6|t6"),
+    (5, r"saturday|thứ bảy|thứ 7|t7"),
+    (6, r"sunday|chủ nhật|cn"),
+]
+
+
+def _weekday_of(text: str) -> Optional[int]:
+    """0 = thứ Hai … 6 = Chủ nhật. Chỉ nhận khi có ngữ cảnh thời gian ("Joined on Monday",
+    "last Saturday", "Đã tham gia vào Thứ Hai") và KHÔNG có ngày/tháng cụ thể đi kèm —
+    chữ "Thứ Hai" đứng một mình (tiêu đề, tên) không phải mốc thời gian."""
+    if re.search(r"\d{1,2}\s*(?:/|tháng)\s*\d{1,2}|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d", text):
+        return None
+    if not re.search(r"joined|tham gia|\blast\b|\bon\b|\bat\b|lúc|vào|tuần trước|tuần này", text):
+        return None
+    for idx, pattern in _WEEKDAYS:
+        if re.search(rf"(?<![\w])(?:{pattern})(?![\w])", text):
+            return idx
+    return None
+
+
+def fb_time_to_date(raw: Any, *, today: Optional[date] = None) -> Optional[date]:
+    """Mốc thời gian Facebook → ngày cụ thể ("Joined on Monday" → 16/11/2026). None nếu không đọc được."""
+    from datetime import timedelta
+
+    today = today or datetime.now().date()
+    age = fb_time_age_days(raw, today=today)
+    return None if age is None else today - timedelta(days=int(age))
+
+
+def format_join_date(raw: Any, *, today: Optional[date] = None) -> str:
+    """Ngày tham gia nhóm để lưu / hiển thị: "dd/mm/yyyy"; không đọc được thì giữ chữ gốc."""
+    found = fb_time_to_date(raw, today=today)
+    return found.strftime("%d/%m/%Y") if found else str(raw or "").strip()
+
+
 def fb_time_age_days(raw: Any, *, today: Optional[date] = None) -> Optional[float]:
     """Tuổi (ngày) của một mốc thời gian Facebook; None nếu không đọc được."""
     text = re.sub(r"\s+", " ", str(raw or "")).strip().lower()
@@ -410,6 +463,15 @@ def fb_time_age_days(raw: Any, *, today: Optional[date] = None) -> Optional[floa
         return 1.0
     if re.search(r"hôm nay|today", text):
         return 0.0
+    # "Gần đây" / "Recently" / "New member": Facebook chỉ hiện cho người vừa tham gia.
+    if re.search(r"gần đây|recently|new member|thành viên mới|mới tham gia", text):
+        return 0.0
+
+    # "Joined on Monday", "Joined last Saturday", "Đã tham gia vào Thứ Hai", "Chủ nhật":
+    # Facebook dùng tên thứ cho mốc trong vòng 1 tuần → lần gần nhất của thứ đó.
+    weekday = _weekday_of(text)
+    if weekday is not None:
+        return float((today.weekday() - weekday) % 7 or 7)
 
     # "5 tháng 3" là ngày tuyệt đối — phải xét trước dạng tương đối "5 tháng".
     if re.search(r"\d{1,2}\s*tháng\s*\d{1,2}", text) or re.search(r"\d{1,2}/\d{1,2}", text):

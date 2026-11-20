@@ -11,6 +11,7 @@ import {
 import HistoryFilterToolbar from "./_components/HistoryFilterToolbar";
 import HistoryDataTable from "./_components/HistoryDataTable";
 import SessionDetailModal from "./_components/SessionDetailModal";
+import { fileStamp } from "../utils/exportTable";
 import ModulePageHeader from "../components/ModulePageHeader";
 
 function parseSessionDate(startTime) {
@@ -93,10 +94,8 @@ export default function GroupScanHistoryPage() {
         const t = (item.type || "").toUpperCase();
         if (filterType === "MEMBERS") {
           if (!t.includes("MEMBER") && !t.includes("FOLLOWER")) return false;
-        } else if (filterType === "POSTS") {
-          if (!t.includes("POST")) return false;
         } else if (filterType === "GROUP_INFO") {
-          if (!t.includes("INFO") && (t.includes("POST") || t.includes("MEMBER"))) return false;
+          if (!t.includes("INFO") && t.includes("MEMBER")) return false;
         } else if (t !== filterType) {
           return false;
         }
@@ -108,7 +107,9 @@ export default function GroupScanHistoryPage() {
         if (filterStatus === "SUCCESS") {
           if (s !== "SUCCESS" && s !== "COMPLETED" && s !== "DONE") return false;
         } else if (filterStatus === "FAILED") {
-          if (s !== "FAILED" && s !== "ERROR" && s !== "ABORTED") return false;
+          if (s !== "FAILED" && s !== "ERROR") return false;
+        } else if (filterStatus === "STOPPED") {
+          if (s !== "ABORTED" && s !== "INTERRUPTED") return false;
         } else if (s !== filterStatus) {
           return false;
         }
@@ -168,9 +169,6 @@ export default function GroupScanHistoryPage() {
         if (type.includes("MEMBER") || type.includes("FOLLOWER")) {
           taskType = "Quét thành viên nhóm";
           unit = "UID";
-        } else if (type.includes("POST")) {
-          taskType = "Quét bài viết nhóm";
-          unit = "bài viết";
         }
 
         const status = (item.status || "").toUpperCase();
@@ -181,6 +179,10 @@ export default function GroupScanHistoryPage() {
             ? "Đang chạy"
             : status === "PAUSED"
             ? "Tạm dừng"
+            : status === "ABORTED"
+            ? "Đã dừng"
+            : status === "INTERRUPTED"
+            ? "Bị gián đoạn"
             : "Lỗi";
 
         return {
@@ -200,7 +202,7 @@ export default function GroupScanHistoryPage() {
       XLSX.utils.book_append_sheet(workbook, worksheet, "LichSuQuetNhom");
       XLSX.writeFile(
         workbook,
-        `Bao_Cao_Lich_Su_Quet_Nhom_${new Date().toISOString().slice(0, 10)}.xlsx`
+        `Lich_su_quet_nhom_${fileStamp()}.xlsx`
       );
       toast.success(
         `Xuất thành công ${dataToExport.length} phiên quét ra file Excel!`

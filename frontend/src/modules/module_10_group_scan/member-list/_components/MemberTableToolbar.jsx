@@ -2,15 +2,11 @@
 
 import React from "react";
 import { Download, Search, Trash2 } from "lucide-react";
-import CustomSelect from "@/components/ui/custom-select";
 
 export default function MemberTableToolbar({
   currentCategory,
   memberSearch,
   onMemberSearchChange,
-  friendFilter,
-  onFriendFilterChange,
-  friendFilterOptions = [],
   selectedMemberIds,
   onExportGroup,
   onExportSelected,
@@ -53,17 +49,6 @@ export default function MemberTableToolbar({
             value={memberSearch}
             onChange={(e) => onMemberSearchChange(e.target.value)}
             className="w-full h-7 pl-8 pr-3 text-xs text-slate-800 border border-[#E2E8F0] bg-white rounded-lg outline-none focus:border-[#2563EB]"
-          />
-        </div>
-
-        {/* Friend Count Filter */}
-        <div className="w-full sm:w-auto shrink-0 min-w-[170px]">
-          <CustomSelect
-            value={friendFilter}
-            onChange={onFriendFilterChange}
-            options={friendFilterOptions}
-            size="sm"
-            buttonClassName="h-7 text-xs"
           />
         </div>
       </div>

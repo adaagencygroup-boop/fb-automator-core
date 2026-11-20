@@ -61,7 +61,6 @@ export default function GroupPickerModal({
   onClose,
   selectedGroups = [],
   onConfirm,
-  targetType = "posts", // "posts" | "members"
 }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {

@@ -33,15 +33,6 @@ export async function getActiveKeywordCapacity() {
   return api.get("/api/group-scan/keyword-capacity/active");
 }
 
-/** Endpoint khung Module 10 (health / thống kê sẵn sàng). */
-export async function getGroupScanHealth() {
-  return api.get("/api/group-scan/health");
-}
-
-export async function getReadyAccountsSummary() {
-  return api.get("/api/group-scan/accounts");
-}
-
 /**
  * Bắt đầu thực thi: mở Chrome, quét lần lượt nhiều từ khóa.
  * Gửi cả `keyword` (từ khóa đầu) để tương thích Engine cũ còn validate field required.
@@ -67,11 +58,6 @@ export async function startGroupScan(payload) {
   });
 }
 
-/** @deprecated alias — dùng startGroupScan */
-export async function checkKeyword(payload) {
-  return startGroupScan(payload);
-}
-
 export async function clearKeywordCheck(uid) {
   return api.post("/api/group-scan/check-clear", { uid });
 }
@@ -79,14 +65,6 @@ export async function clearKeywordCheck(uid) {
 /** pause | resume | abort */
 export async function controlScanJob({ jobId, action }) {
   return api.post("/api/group-scan/job-control", { job_id: jobId, action });
-}
-
-/** Kiểm tra: đọc số nhóm / danh sách đã lưu theo từ khóa từ DB (không mở Chrome). */
-export async function lookupKeywords(keywords, { includeGroups = true } = {}) {
-  return api.post("/api/group-scan/lookup-keywords", {
-    keywords,
-    include_groups: includeGroups,
-  });
 }
 
 /** Poll log + danh sách nhóm đã quét được. */
@@ -130,15 +108,6 @@ export async function getScannedGroups(params = {}) {
     return await api.get("/api/group-scan/groups", { params });
   } catch {
     return { groups: [], total: 0, keywords: [] };
-  }
-}
-
-/** Xóa 1 nhóm đã quét khỏi Database */
-export async function deleteScannedGroup(id) {
-  try {
-    return await api.delete(`/api/group-scan/groups/${id}`);
-  } catch {
-    return null;
   }
 }
 
@@ -242,9 +211,10 @@ export async function getActiveMemberScan() {
 }
 
 /** Lấy danh sách thành viên nhóm đã quét từ Database */
-export async function getScannedMembers(params = {}) {
+// fresh: bỏ cache FE (dùng khi xuất file ngay sau khi quét để không xuất danh sách cũ).
+export async function getScannedMembers(params = {}, { fresh = false } = {}) {
   try {
-    return await api.get("/api/group-scan/members", { params });
+    return await api.get("/api/group-scan/members", { params, fresh });
   } catch {
     return { ok: false, members: [], total: 0 };
   }
