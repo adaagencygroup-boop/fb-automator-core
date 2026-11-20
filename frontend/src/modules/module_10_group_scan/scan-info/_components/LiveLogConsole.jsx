@@ -37,7 +37,7 @@ export default function LiveLogConsole({
               <span className="size-2.5 rounded-full bg-emerald-500" />
             </div>
             <span className="font-mono text-xs font-semibold text-slate-300">
-              Live Automation Log Console [Thread-01]
+              Live Automation Log Console
             </span>
           </div>
         </div>

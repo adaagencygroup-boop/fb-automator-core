@@ -7,10 +7,8 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import CustomSelect from "@/components/ui/custom-select";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import { formatVietnamDateTime } from "@/lib/date-utils";
 import { useAccountCategories } from "@/modules/module_02_account_manager/hooks/useAccountCategories";
 import { categoryLabelStyle } from "@/modules/module_02_account_manager/components/CategorySelect";
-import { farmingDays } from "@/modules/module_02_account_manager/utils/farming-days.mjs";
 
 const AVATAR_COLORS = ["#1877F2", "#0084FF", "#087A62", "#4F46E5", "#0284C7"];
 
@@ -85,16 +83,6 @@ export function isScanReady(account) {
   return login === "logged_in" || login === "success";
 }
 
-function getFarmingDays(acc, currentNow) {
-  if (currentNow === null) return null;
-  const days = farmingDays(acc.first_login_at, currentNow);
-  if (days !== null) return days;
-  if (acc.nurture_days != null && !isNaN(Number(acc.nurture_days))) {
-    return Number(acc.nurture_days);
-  }
-  return null;
-}
-
 export default function AccountSelectModal({
   open,
   onOpenChange,
@@ -106,8 +94,6 @@ export default function AccountSelectModal({
 }) {
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
-  const [nurtureFilter, setNurtureFilter] = useState("all");
-  const [now, setNow] = useState(null);
 
   const [draft, setDraft] = useState(() => new Set(selectedUids));
   const [showPickError, setShowPickError] = useState(false);
@@ -144,26 +130,9 @@ export default function AccountSelectModal({
     return list;
   }, [categoryList.categories]);
 
-  const nurtureOptions = useMemo(
-    () => [
-      { value: "all", label: "Tất cả thời gian nuôi" },
-      { value: "under7", label: "Dưới 7 ngày" },
-      { value: "7_15", label: "7 - 15 ngày" },
-      { value: "15_30", label: "15 - 30 ngày" },
-      { value: "over30", label: "Trên 30 ngày" },
-      { value: "over60", label: "Trên 60 ngày" },
-    ],
-    []
-  );
-
-  useEffect(() => {
-    setNow(Date.now());
-  }, []);
-
   useEffect(() => {
     if (open) {
       setDraft(new Set(selectedUids));
-      setNow(Date.now());
       setShowPickError(false);
     }
   }, [open, selectedUids]);
@@ -173,7 +142,6 @@ export default function AccountSelectModal({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const currentNow = now ?? Date.now();
     return readyAccounts.filter((acc) => {
       const accCategory = acc.category_id != null ? categoriesById.get(acc.category_id) : null;
       const catName = (accCategory?.name || acc.category_name || acc.category || "").toLowerCase();
@@ -191,18 +159,9 @@ export default function AccountSelectModal({
         }
       }
 
-      if (nurtureFilter !== "all") {
-        const days = getFarmingDays(acc, currentNow);
-        if (days === null) return false;
-        if (nurtureFilter === "under7" && days >= 7) return false;
-        if (nurtureFilter === "7_15" && (days < 7 || days > 15)) return false;
-        if (nurtureFilter === "15_30" && (days < 15 || days > 30)) return false;
-        if (nurtureFilter === "over30" && days <= 30) return false;
-        if (nurtureFilter === "over60" && days <= 60) return false;
-      }
       return true;
     });
-  }, [readyAccounts, query, categoryFilter, nurtureFilter, categoriesById, now]);
+  }, [readyAccounts, query, categoryFilter, categoriesById]);
 
   const readyRows = filtered;
   const totalLiveAvailable = readyAccounts.length;
@@ -247,9 +206,7 @@ export default function AccountSelectModal({
   const handleRefresh = async () => {
     setQuery("");
     setCategoryFilter("all");
-    setNurtureFilter("all");
     setShowPickError(false);
-    setNow(Date.now());
     categoryList.refresh?.();
     if (onRefresh) {
       let ok = true;
@@ -311,17 +268,6 @@ export default function AccountSelectModal({
             dropdownClassName="!rounded-xl shadow-xl border-slate-200 z-50"
           />
 
-          {/* Nurture Time Dropdown */}
-          <CustomSelect
-            value={nurtureFilter}
-            onChange={setNurtureFilter}
-            options={nurtureOptions}
-            size="lg"
-            className="w-full sm:w-[200px]"
-            buttonClassName="!rounded-xl border-slate-200 text-xs sm:text-sm text-slate-700 bg-white"
-            dropdownClassName="!rounded-xl shadow-xl border-slate-200 z-50"
-          />
-
           {/* Refresh Button */}
           {onRefresh && (
             <button
@@ -359,13 +305,12 @@ export default function AccountSelectModal({
                 <th className="py-3 text-slate-500 font-bold bg-white">TRẠNG THÁI TK</th>
                 <th className="py-3 text-slate-500 font-bold bg-white">ĐĂNG NHẬP</th>
                 <th className="py-3 text-slate-500 font-bold bg-white">PROXY GẮN KÈM</th>
-                <th className="py-3 pr-3 text-right text-slate-500 font-bold bg-white">THỜI GIAN NUÔI</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
               {loading && accounts.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-16 text-center text-sm text-slate-500">
+                  <td colSpan={8} className="py-16 text-center text-sm text-slate-500">
                     <div className="flex items-center justify-center gap-2">
                       <Loader2 className="size-4 animate-spin text-blue-600" />
                       <span>Đang tải danh sách tài khoản Module 2...</span>
@@ -374,7 +319,7 @@ export default function AccountSelectModal({
                 </tr>
               ) : filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-16 text-center text-sm text-slate-400">
+                  <td colSpan={8} className="py-16 text-center text-sm text-slate-400">
                     {readyAccounts.length === 0
                       ? "Chưa có tài khoản nào Live và đã đăng nhập. Vào Quản lý tài khoản Facebook để đăng nhập tài khoản trước."
                       : "Không tìm thấy tài khoản phù hợp với điều kiện lọc."}
@@ -396,9 +341,6 @@ export default function AccountSelectModal({
                     acc.category_name ||
                     acc.category ||
                     (acc.category_id != null ? `Danh mục #${acc.category_id}` : null);
-
-                  // Thời gian nuôi từ Module 2
-                  const days = getFarmingDays(acc, now);
 
                   return (
                     <tr
@@ -506,16 +448,6 @@ export default function AccountSelectModal({
                         >
                           {formatProxy(acc.proxy)}
                         </span>
-                      </td>
-                      <td
-                        className="py-3.5 pr-3 text-right text-xs font-medium text-slate-700 tabular-nums"
-                        title={
-                          acc.first_login_at
-                            ? `Bắt đầu nuôi: ${formatVietnamDateTime(acc.first_login_at).full}`
-                            : "Chưa ghi nhận ngày bắt đầu nuôi"
-                        }
-                      >
-                        {days === null ? "—" : `${days} ngày`}
                       </td>
                     </tr>
                   );

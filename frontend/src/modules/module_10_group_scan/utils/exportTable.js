@@ -62,7 +62,75 @@ export async function downloadTable({ format = "xlsx", baseName, headers, rows, 
   return fileName;
 }
 
-const ROLE_LABEL = { admin: "Quản trị viên", moderator: "Kiểm duyệt viên" };
+/**
+ * File mẫu cho "Tải tệp link nhóm". Ví dụ & hướng dẫn nằm ở dòng bắt đầu bằng # (txt/csv)
+ * hoặc ở sheet "Huong dan" (xlsx) — khi tải lên không bị hiểu nhầm là link cần quét.
+ */
+export const LINK_TEMPLATE_HEADERS = ["STT", "Link nhóm Facebook", "Tên nhóm (không bắt buộc)"];
+// Không dùng dấu phẩy / chấm phẩy: dòng hướng dẫn trong .csv phải bắt đầu bằng # (không bọc nháy)
+// để khi tải lên được bỏ qua, và Excel không tách nó ra nhiều cột.
+export const LINK_TEMPLATE_GUIDE = [
+  "Mỗi dòng 1 nhóm. Chỉ cột Link nhóm Facebook là bắt buộc – các cột khác để ghi nhớ và có thể bỏ trống.",
+  "Link nhận được: facebook.com/groups/123456789012345 – facebook.com/groups/ten-nhom – m.facebook.com/groups/... – hoặc chỉ ID số của nhóm.",
+  "Link trùng tự bỏ – dòng không có link nhóm báo Sai định dạng – tối đa 1.000 link mỗi tệp.",
+  "Chỉ quét nhóm công khai đủ số thành viên theo cài đặt – nhóm đã có trong Danh sách nhóm quét được cập nhật lại thông tin.",
+];
+
+function saveBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/** Nội dung file mẫu dạng chữ (txt / csv). */
+export function buildLinkTemplateText(format) {
+  const guide = LINK_TEMPLATE_GUIDE.map((line) => `# ${line}`);
+  if (format === "csv") {
+    return "﻿" + [...guide, LINK_TEMPLATE_HEADERS.join(",")].join("\r\n") + "\r\n";
+  }
+  return [...guide, "# Dán link nhóm bên dưới – mỗi dòng 1 link:", ""].join("\r\n");
+}
+
+/** Workbook mẫu: sheet 1 để nhập (đọc khi tải lên), sheet 2 hướng dẫn + ví dụ. */
+export function buildLinkTemplateWorkbook(XLSX) {
+  const input = XLSX.utils.aoa_to_sheet([LINK_TEMPLATE_HEADERS]);
+  input["!cols"] = [{ wch: 6 }, { wch: 60 }, { wch: 36 }];
+  const guide = XLSX.utils.aoa_to_sheet([
+    ["Hướng dẫn"],
+    ...LINK_TEMPLATE_GUIDE.map((l) => [l]),
+    [],
+    ["Ví dụ cách điền ở sheet Link nhom:"],
+    LINK_TEMPLATE_HEADERS,
+    ["1", "https://www.facebook.com/groups/123456789012345", "Nhóm A"],
+    ["2", "https://www.facebook.com/groups/ten-nhom-cua-ban", ""],
+    ["3", "123456789012345", "Chỉ cần ID số"],
+  ]);
+  guide["!cols"] = [{ wch: 110 }, { wch: 50 }, { wch: 20 }];
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, input, "Link nhom");
+  XLSX.utils.book_append_sheet(book, guide, "Huong dan");
+  return book;
+}
+
+/** Tải file mẫu. format: "xlsx" | "csv" | "txt". */
+export async function downloadLinkTemplate(format = "xlsx") {
+  const fileName = `Mau_link_nhom.${format}`;
+  if (format === "xlsx") {
+    const XLSX = await import("xlsx");
+    XLSX.writeFile(buildLinkTemplateWorkbook(XLSX), fileName);
+  } else {
+    const type = format === "csv" ? "text/csv;charset=utf-8;" : "text/plain;charset=utf-8;";
+    saveBlob(new Blob([buildLinkTemplateText(format)], { type }), fileName);
+  }
+  return fileName;
+}
+
+const ROLE_LABEL ={ admin: "Quản trị viên", moderator: "Kiểm duyệt viên" };
 
 /** Bảng thành viên dùng chung cho trang Quét thành viên & Danh sách thành viên quét. */
 export function memberExportTable(members) {

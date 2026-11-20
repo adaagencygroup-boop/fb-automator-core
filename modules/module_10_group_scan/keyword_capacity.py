@@ -1,6 +1,6 @@
 """
 Kiểm tra sức chứa từ khóa (nút "Kiểm tra" ở trang Quét thông tin nhóm):
-mở Chrome bằng 1 nick đã chọn, tìm nhóm theo từng từ khóa, cuộn tới khi Facebook
+mỗi nick đã chọn mở 1 Chrome (song song, tối đa 5), tìm nhóm theo từng từ khóa, cuộn tới khi Facebook
 không trả thêm kết quả, rồi đếm xem từ khóa đó quét được TỐI ĐA bao nhiêu nhóm.
 
 Chỉ đếm — không lưu nhóm vào DB, không tham gia nhóm.
@@ -20,6 +20,7 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 from modules.module_10_group_scan.scan_common import (
+    FairQueue,
     TERMINAL_STATUSES,
     close_account_session,
     interruptible_sleep,
@@ -62,6 +63,8 @@ return links.length;
 
 _jobs: dict[str, dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
+# Nhãn luồng trên log ("Kiểm tra 1", "Kiểm tra 2"…) — mỗi Chrome kiểm tra song song là một luồng.
+_thread_label = threading.local()
 
 
 def _now() -> str:
@@ -74,7 +77,7 @@ def _log(job_id: str, text: str, tone: str = "info") -> None:
         if job is None:
             return
         logs = job.setdefault("logs", [])
-        logs.append({"time": _now(), "thread": "Kiểm tra", "text": text, "tone": tone})
+        logs.append({"time": _now(), "thread": getattr(_thread_label, "name", "Kiểm tra"), "text": text, "tone": tone})
         if len(logs) > LOG_LIMIT:
             del logs[: len(logs) - LOG_LIMIT]
 
@@ -378,6 +381,12 @@ def cached_capacity_stats(
 
 
 def _body(job_id: str) -> None:
+    """Kiểm tra song song giống Bắt đầu thực thi: mỗi nick 1 Chrome, các Chrome lần lượt lấy từ khóa
+    trong hàng đợi chung. Số Chrome = min(số nick, số từ khóa, 5); 1 nick không bao giờ mở 2 Chrome."""
+    from collections import deque
+
+    from modules.module_02_account_manager.context import owner_scope
+    from modules.module_10_group_scan.keyword_check import BROWSER_STAGGER_SEC, MAX_PARALLEL_BROWSERS
     from modules.module_10_group_scan.models import list_known_group_ids, save_keyword_capacity
 
     with _jobs_lock:
@@ -394,74 +403,138 @@ def _body(job_id: str) -> None:
     def stop() -> bool:
         return _control(job_id) == "abort"
 
-    session = None
+    workers = max(1, min(len(pool), len(words), MAX_PARALLEL_BROWSERS))
+    nick_queue = deque(pool)
+    word_queue = FairQueue(enumerate(words, 1), workers)  # chia đều, phần dư cho Chrome xong trước
+    queue_lock = threading.Lock()
+    state = {"opened": 0, "uids": []}
+
+    def take(queue):
+        with queue_lock:
+            return queue.popleft() if queue else None
+
+    def check_word(driver, nick: str, idx: int, word: str, known: set) -> bool:
+        """Kiểm tra 1 từ khóa. Trả False khi Chrome đã chết (luồng phải dừng)."""
+        _set_stat(job_id, word, status="running", count=0, total=0, fresh=0, uid=nick)
+        log(f"▶️ [{idx}/{len(words)}] Nick {nick}: «{word}» — đang cuộn kết quả tìm nhóm…", "info")
+        try:
+            res = count_keyword_groups(
+                driver, word, public_only=public_only, min_members=min_members, known_ids=known,
+                should_stop=stop,
+                on_progress=lambda **kw: _set_stat(job_id, word, **kw),
+                log=log,
+                sleep=lambda a, b: interruptible_sleep(random.uniform(a, b), lambda: _control(job_id)),
+            )
+        except Exception as exc:
+            if is_browser_dead_error(exc):
+                _set_stat(job_id, word, status="stopped")
+                log(f"🛑 Chrome của nick {nick} đã bị đóng — dừng «{word}».", "warn")
+                return False
+            logger.exception("capacity check «%s» failed", word)
+            _set_stat(job_id, word, status="error")
+            log(f"❌ «{word}» lỗi: {exc}", "error")
+            return True
+        _set_stat(job_id, word, status="stopped" if stop() else "done", reason=res["reason"],
+                  **{k: res[k] for k in ("total", "count", "fresh")})
+        # Chỉ lưu khi đã cuộn trọn vẹn (không lưu kết quả dở dang do dừng tay / Facebook chặn).
+        if res.get("complete") and not stop():
+            if save_keyword_capacity(owner, word, res["groups"], reason=res["reason"], source_uid=nick):
+                _set_stat(job_id, word, checked_at=time.strftime("%H:%M %d/%m/%Y"))
+        log(
+            f"🏁 «{word}»: quét được tối đa {res['count']} nhóm "
+            f"({res['fresh']} nhóm chưa quét) trong {res['total']} nhóm Facebook tìm thấy — {res['reason']}.",
+            "success",
+        )
+        return True
+
+    def run_worker(n: int, known: set) -> None:
+        _thread_label.name = f"Kiểm tra {n}"
+        session = None
+        taken = 0
+        try:
+            # Mở Chrome lệch nhau vài giây để máy không bị dồn tải cùng lúc.
+            if n > 1 and interruptible_sleep((n - 1) * BROWSER_STAGGER_SEC, lambda: _control(job_id)):
+                return
+            while session is None:
+                if stop():
+                    return
+                if not word_queue.has_work(taken):
+                    return  # luồng khác đã kiểm tra hết từ khóa
+                nick = take(nick_queue)
+                if nick is None:
+                    log("⚠️ Không còn nick nào mở được Chrome cho luồng này.", "warn")
+                    return
+                session = open_account_session([nick], 0, owner=owner, scope="group-scan", log=log,
+                                               lock_timeout=8, should_stop=stop)
+            nick = session["uid"]
+            with queue_lock:
+                state["opened"] += 1
+                state["uids"].append(nick)
+                _set(job_id, uid=", ".join(state["uids"]))
+            first = True
+            while not stop():
+                nxt = word_queue.take(taken)
+                if nxt is None:
+                    return
+                taken += 1
+                idx, word = nxt
+                if not first and interruptible_sleep(random.uniform(2.0, 4.0), lambda: _control(job_id)):
+                    word_queue.put_back(nxt)
+                    return
+                if not check_word(session["driver"], nick, idx, word, known):
+                    return
+                first = False
+        except Exception as exc:
+            if is_browser_dead_error(exc):
+                log("🛑 Chrome đã bị đóng — luồng này dừng.", "warn")
+            else:
+                logger.exception("capacity worker %s crashed", job_id)
+                log(f"❌ Luồng kiểm tra lỗi: {exc}", "error")
+        finally:
+            word_queue.release(taken)  # dừng sớm → phần chưa làm chuyển cho Chrome khác
+            try:
+                close_account_session(session, quit_browser=True)
+            except Exception as exc:
+                logger.warning("close capacity browser failed: %s", exc)
+
+    def run_worker_scoped(n: int, known: set) -> None:
+        with owner_scope(owner):
+            run_worker(n, known)
+
     final, error = "done", ""
     try:
         filt = "chỉ nhóm công khai" if public_only else "mọi loại nhóm"
         if min_members:
             filt += f", ≥ {min_members:,} thành viên".replace(",", ".")
-        log(f"🔎 Kiểm tra {len(words)} từ khóa ({filt}) — cuộn tới khi Facebook hết kết quả.", "info")
-        session = open_account_session(pool, 0, owner=owner, scope="group-scan", log=log,
-                                       lock_timeout=8, should_stop=stop)
-        if not session:
-            final = "aborted" if stop() else "error"
-            error = "" if stop() else "Không tài khoản nào mở được Chrome và đăng nhập Facebook."
-            if error:
-                log(f"❌ {error}", "error")
-            return
-        _set(job_id, uid=session["uid"])
-        driver = session["driver"]
+        mode = (
+            "1 Chrome kiểm tra lần lượt (mỗi nick chỉ mở 1 Chrome)"
+            if workers == 1 and len(words) > 1
+            else f"mở {workers} Chrome song song, mỗi Chrome kiểm tra 1 từ khóa"
+        )
+        log(f"🔎 Kiểm tra {len(words)} từ khóa với {len(pool)} nick → {mode} ({filt}) — "
+            "cuộn tới khi Facebook hết kết quả.", "info")
         known = list_known_group_ids(owner)
-
-        for idx, word in enumerate(words, 1):
-            if stop():
-                final = "aborted"
-                break
-            _set_stat(job_id, word, status="running", count=0, total=0, fresh=0)
-            log(f"▶️ [{idx}/{len(words)}] «{word}» — đang cuộn kết quả tìm nhóm…", "info")
-            try:
-                res = count_keyword_groups(
-                    driver, word, public_only=public_only, min_members=min_members, known_ids=known,
-                    should_stop=stop,
-                    on_progress=lambda **kw: _set_stat(job_id, word, **kw),
-                    log=log,
-                    sleep=lambda a, b: interruptible_sleep(random.uniform(a, b), lambda: _control(job_id)),
-                )
-            except Exception as exc:
-                if is_browser_dead_error(exc):
-                    log("Chrome đã bị đóng — dừng kiểm tra.", "warn")
-                    final = "aborted"
-                    break
-                logger.exception("capacity check «%s» failed", word)
-                _set_stat(job_id, word, status="error")
-                log(f"❌ «{word}» lỗi: {exc}", "error")
-                continue
-            _set_stat(job_id, word, status="done", reason=res["reason"],
-                      **{k: res[k] for k in ("total", "count", "fresh")})
-            # Chỉ lưu khi đã cuộn trọn vẹn (không lưu kết quả dở dang do dừng tay / Facebook chặn).
-            if res.get("complete") and not stop():
-                if save_keyword_capacity(owner, word, res["groups"], reason=res["reason"], source_uid=session["uid"]):
-                    _set_stat(job_id, word, checked_at=time.strftime("%H:%M %d/%m/%Y"))
-            log(
-                f"🏁 «{word}»: quét được tối đa {res['count']} nhóm "
-                f"({res['fresh']} nhóm chưa quét) trong {res['total']} nhóm Facebook tìm thấy — {res['reason']}.",
-                "success",
-            )
-            if stop():
-                final = "aborted"
-                break
-            if idx < len(words) and interruptible_sleep(random.uniform(2.0, 4.0), lambda: _control(job_id)):
-                final = "aborted"
-                break
+        threads = [
+            threading.Thread(target=run_worker_scoped, args=(n, known), daemon=True, name=f"kw-capacity-{job_id}-{n}")
+            for n in range(1, workers + 1)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        if stop():
+            final = "aborted"
+        elif state["opened"] == 0:
+            final, error = "error", "Không tài khoản nào mở được Chrome và đăng nhập Facebook."
+            log(f"❌ {error}", "error")
+        elif word_queue.remaining():
+            final = "aborted"
+            log(f"⚠️ {len(word_queue.remaining())} từ khóa chưa kiểm tra vì Chrome đã bị đóng.", "warn")
     except Exception as exc:
         logger.exception("capacity job %s crashed", job_id)
         final, error = "error", str(exc)
         log(f"❌ Lỗi kiểm tra từ khóa: {exc}", "error")
     finally:
-        try:
-            close_account_session(session, quit_browser=True)
-        except Exception as exc:
-            logger.warning("close capacity browser failed: %s", exc)
         with _jobs_lock:
             job = _jobs.get(job_id)
             if job is not None:

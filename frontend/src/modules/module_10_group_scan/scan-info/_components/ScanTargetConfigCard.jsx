@@ -67,8 +67,6 @@ export default function ScanTargetConfigCard({
   fileQuotas,
   onFileQuotaChange,
   fileData,
-  rotateAfter,
-  onRotateAfterChange,
   delayMin,
   onDelayMinChange,
   delayMax,
@@ -133,39 +131,6 @@ export default function ScanTargetConfigCard({
       )}
 
       <div className={`space-y-3.5 ${method === "keyword" ? "border-t border-[#F1F5F9] pt-4" : ""}`}>
-        {/* Stepper 1: Switch Account Threshold */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs font-medium text-[#334155]">
-            Đổi tài khoản mới khi quét được:
-          </span>
-          <div className="flex items-center gap-2">
-            <div className="flex items-center rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] h-7">
-              <button
-                type="button"
-                onClick={() => onRotateAfterChange(Math.max(5, rotateAfter - 5))}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-l-lg font-medium"
-              >
-                -
-              </button>
-              <input
-                type="number"
-                value={rotateAfter}
-                onChange={(event) => onRotateAfterChange(Math.max(1, Number(event.target.value) || 1))}
-                className="w-10 text-center text-xs font-bold text-[#1E293B] bg-transparent outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                title="Tự động xoay vòng tài khoản trong Bot Pool khi đạt hạn ngạch"
-              />
-              <button
-                type="button"
-                onClick={() => onRotateAfterChange(rotateAfter + 5)}
-                className="w-6 h-full flex items-center justify-center text-xs text-[#64748B] hover:bg-slate-200 rounded-r-lg font-medium"
-              >
-                +
-              </button>
-            </div>
-            <span className="text-xs text-[#64748B]">nhóm / tài khoản</span>
-          </div>
-        </div>
-
         {/* Stepper 2: Delay interval */}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs font-medium text-[#334155]">

@@ -6,7 +6,9 @@ dọn job cũ trong RAM, chuẩn hoá log để lưu lịch sử, đọc mốc t
 from __future__ import annotations
 
 import re
+import threading
 import time
+from collections import deque
 from datetime import date, datetime
 from typing import Any, Callable, Iterable, Optional
 
@@ -489,3 +491,50 @@ def fb_time_age_days(raw: Any, *, today: Optional[date] = None) -> Optional[floa
     if found:
         return float((today - found).days)
     return None
+
+
+class FairQueue:
+    """Chia việc đều cho các Chrome chạy song song.
+
+    Mỗi luồng được `len(items) // workers` việc; phần dư (`len % workers`) để luồng nào xong phần của mình
+    trước thì làm tiếp. Ví dụ 2 nick: 4 nhóm → 2/2; 5 nhóm → 2/2 rồi nhóm thứ 5 cho nick xong trước.
+    Luồng dừng sớm (nick không mở được, Chrome bị đóng) trả lại phần chưa làm để luồng khác làm thay.
+    """
+
+    def __init__(self, items: Iterable[Any], workers: int):
+        self._items = deque(items)
+        workers = max(1, int(workers))
+        self._base = len(self._items) // workers
+        self._extra = len(self._items) % workers
+        self._lock = threading.Lock()
+
+    def has_work(self, taken: int = 0) -> bool:
+        with self._lock:
+            return bool(self._items) and (taken < self._base or self._extra > 0)
+
+    def take(self, taken: int) -> Any:
+        """Lấy việc tiếp theo cho luồng đã làm `taken` việc; None khi luồng này hết phần."""
+        with self._lock:
+            if not self._items:
+                return None
+            if taken >= self._base:
+                if self._extra <= 0:
+                    return None
+                self._extra -= 1
+            return self._items.popleft()
+
+    def put_back(self, item: Any) -> None:
+        """Trả lại việc vừa lấy mà chưa làm (bị dừng giữa lúc nghỉ) — thành phần dư cho luồng khác."""
+        with self._lock:
+            self._items.appendleft(item)
+            self._extra += 1
+
+    def release(self, taken: int) -> None:
+        """Luồng kết thúc: phần chưa làm (nếu dừng sớm) chuyển thành phần dư cho luồng còn chạy."""
+        with self._lock:
+            if taken < self._base:
+                self._extra += self._base - taken
+
+    def remaining(self) -> list[Any]:
+        with self._lock:
+            return list(self._items)

@@ -13,6 +13,7 @@ from modules.module_02_account_manager.database.connection import get_db
 from modules.module_02_account_manager.database.repository import AccountRepository as Repo
 from modules.module_04_page_creator.routes import get_owner_username
 from modules.module_10_group_scan.keyword_check import (
+    _is_direct_group_link,
     clear_pending_for_uid,
     get_check_status,
     set_job_control,
@@ -266,18 +267,13 @@ def check_keyword(body: CheckKeywordRequest, db: Session = Depends(get_db)):
 
     words = result.get("keywords") or [result.get("keyword")]
     limits = result.get("keyword_limits") or {}
-    bits = [f"«{w}»×{limits.get(w, '?')}" for w in words[:5]]
-    label = ", ".join(bits)
-    if len(words) > 5:
-        label += f" (+{len(words) - 5})"
-    return {
-        **result,
-        "profile_name": account.profile_name or "",
-        "message": (
-            f"[scan-v2] Nick {uid}: {len(words)} từ khóa ({label}), "
-            f"nghỉ {delay_min:.0f}–{delay_max:.0f}s giữa các lần."
-        ),
-    }
+    if all(_is_direct_group_link(str(w or "")) for w in words):
+        message = f"Đã nhận {len(words)} link nhóm, nghỉ {delay_min:.0f}–{delay_max:.0f}s giữa các link."
+    else:
+        bits = [f"«{w}»×{limits.get(w, '?')}" for w in words[:5]]
+        label = ", ".join(bits) + (f" (+{len(words) - 5})" if len(words) > 5 else "")
+        message = f"Đã nhận {len(words)} từ khóa ({label}), nghỉ {delay_min:.0f}–{delay_max:.0f}s giữa các lần."
+    return {**result, "profile_name": account.profile_name or "", "message": message}
 
 
 @router.post("/check-clear", dependencies=[Depends(scoped_owner)])

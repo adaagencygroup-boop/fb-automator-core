@@ -13,10 +13,12 @@ import re
 import threading
 import time
 import uuid
+from collections import deque
 from typing import Any, Optional
 from urllib.parse import quote, urlparse, urlunparse
 
 from modules.module_10_group_scan.scan_common import (
+    FairQueue,
     close_account_session,
     is_browser_dead_error,
     open_account_session,
@@ -24,6 +26,9 @@ from modules.module_10_group_scan.scan_common import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Nhãn luồng hiện trên log ([Thread-01], [Thread-02]…) — mỗi Chrome quét song song là một luồng.
+_thread_label = threading.local()
 
 DEFAULT_MAX_GROUPS = 30
 HARD_MAX_GROUPS = 200
@@ -154,7 +159,7 @@ def get_check_status(
 def _append_log(job_id: str, text: str, tone: str = "info") -> None:
     line = {
         "time": time.strftime("%H:%M:%S"),
-        "thread": "Thread-01",
+        "thread": getattr(_thread_label, "name", "Thread-01"),
         "text": text,
         "tone": tone,
     }
@@ -174,6 +179,26 @@ def _append_log(job_id: str, text: str, tone: str = "info") -> None:
     except Exception:
         pass
 
+
+
+def _job_groups(job_id: str) -> list[dict[str, Any]]:
+    with _jobs_lock:
+        return list((_jobs.get(job_id) or {}).get("groups") or [])
+
+
+def _add_job_groups(job_id: str, items: list[dict[str, Any]]) -> int:
+    """Thêm nhóm vào kết quả chung của job (nhiều luồng ghi cùng lúc) — trả tổng số nhóm."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            return 0
+        groups = job.setdefault("groups", [])
+        have = {g.get("href") for g in groups}
+        for g in items:
+            if g and g.get("href") not in have:
+                groups.append(g)
+                have.add(g.get("href"))
+        return len(groups)
 
 
 def _set_job(job_id: str, **fields) -> None:
@@ -826,14 +851,15 @@ def _scrape_group_direct(
     if not clean_url:
         clean_url = target_url
     gid = normalize_group_id(clean_url)
-    if known_group_ids and gid and gid in known_group_ids:
-        _append_log(job_id, f"⏭️ Bỏ trùng DB: {clean_url}", "info")
-        return None
+    # Link do người dùng tự nhập: luôn mở ra lấy thông tin mới — nhóm đã có trong danh sách thì cập nhật lại,
+    # không bỏ qua như khi quét theo từ khóa.
 
     try:
         driver.get(clean_url)
         human_sleep(2.5, 4.0)
     except Exception as exc:
+        if is_browser_dead_error(exc):
+            raise  # Chrome đã tắt → luồng dừng, không thử tiếp từng link trên trình duyệt chết
         _append_log(job_id, f"⚠️ Không tải được link {clean_url}: {exc}", "warn")
         return None
 
@@ -986,14 +1012,23 @@ def _scrape_group_direct(
         "note": "—",
     }
 
+    is_new = True
     try:
-        upsert_scanned_group(owner=owner, keyword="DirectLink", group=item, source_uid=source_uid)
+        is_new = upsert_scanned_group(owner=owner, keyword="DirectLink", group=item, source_uid=source_uid)
         if gid and known_group_ids is not None:
             known_group_ids.add(gid)
     except Exception as exc:
         _append_log(job_id, f"⚠️ Lỗi lưu nhóm vào DB: {exc}", "warn")
 
-    _append_log(job_id, f"✅ Đã quét: {cleaned_name} ({privacy.upper()} · {members_label})", "success")
+    if is_new:
+        _append_log(job_id, f"✅ Đã quét: {cleaned_name} ({privacy.upper()} · {members_label})", "success")
+    else:
+        _append_log(
+            job_id,
+            f"♻️ {cleaned_name} đã có trong Danh sách nhóm quét — đã cập nhật lại thông tin "
+            f"({privacy.upper()} · {members_label}).",
+            "success",
+        )
     return item
 
 
@@ -1107,6 +1142,9 @@ def _scrape_groups_from_results(
     # (đang tải thì chờ thêm), để số nhóm quét thật khớp với số Kiểm tra báo.
     idle = 0
     loading_waits = 0
+    # Nhóm đã thấy trên trang lần này (kể cả nhóm đã lấy ở nick trước). Sau khi đổi nick phải cuộn lại qua
+    # các nhóm cũ — những lượt đó vẫn là Facebook đang tải thêm, không được tính là "hết kết quả".
+    page_seen: set[str] = set()
 
     def _aborted() -> bool:
         return _get_control(job_id) == "abort"
@@ -1119,7 +1157,7 @@ def _scrape_groups_from_results(
             break
         if len(found) >= limit:
             break
-        seen_before = len(seen)
+        page_before = len(page_seen)
         try:
             rows = driver.execute_script(js) or []
         except Exception as exc:
@@ -1134,7 +1172,10 @@ def _scrape_groups_from_results(
             if _handle_pause_if_requested(job_id, context_label=keyword):
                 return found
             url = _normalize_group_url(row.get("href") or "")
-            if not _is_group_profile_url(url) or url in seen:
+            if not _is_group_profile_url(url):
+                continue
+            page_seen.add(url)
+            if url in seen:
                 continue
             seen.add(url)
 
@@ -1207,13 +1248,10 @@ def _scrape_groups_from_results(
                 f"➕ [{stat_offset + len(found)}/{display_limit or limit}] «{keyword}» {name} · {meta_info.get('type')} · {mem} — {url}",
                 "success",
             )
-            with _jobs_lock:
-                job = _jobs.get(job_id)
-                if job is not None:
-                    job["groups"] = list(already or []) + list(found)
+            total_found = _add_job_groups(job_id, [item])
             try:
                 from modules.module_10_group_scan.models import update_scan_session
-                update_scan_session(job_id, total_found=len(already or []) + len(found))
+                update_scan_session(job_id, total_found=total_found)
             except Exception:
                 pass
             _update_keyword_stat(job_id, keyword, count=stat_offset + len(found), status="running")
@@ -1252,7 +1290,7 @@ def _scrape_groups_from_results(
         if flags.get("blocked"):
             _append_log(job_id, f"⚠️ «{keyword}»: Facebook tạm chặn hoặc yêu cầu xác minh tài khoản — dừng từ khóa này.", "warn")
             break
-        if len(seen) > seen_before:
+        if len(page_seen) > page_before:
             idle = 0
             loading_waits = 0
         elif flags.get("loading") and loading_waits < MAX_LOADING_WAITS:
@@ -1399,6 +1437,32 @@ def _search_and_open_groups(
         _append_log(job_id, f"⚠️ «{keyword}» chưa thấy Search results — vẫn thử quét /groups/…", "warn")
 
 
+MAX_PARALLEL_BROWSERS = 5
+BROWSER_STAGGER_SEC = 3.0
+
+
+def _is_direct_group_link(keyword: str) -> bool:
+    return (
+        keyword.startswith("http")
+        or "/groups/" in keyword
+        or "fb.com/" in keyword
+        or "facebook.com/" in keyword
+    )
+
+
+def _wait_interruptible(job_id: str, seconds: float, *, pause_label: str = "") -> bool:
+    """Chờ `seconds` giây; trả True nếu bị Dừng khẩn cấp (kể cả khi đang tạm dừng)."""
+    end_at = time.time() + max(0.0, seconds)
+    while time.time() < end_at:
+        control = _get_control(job_id)
+        if control == "abort":
+            return True
+        if control in {"pause", "pause_after", "paused"}:
+            return _handle_pause_if_requested(job_id, context_label=pause_label)
+        time.sleep(min(0.5, max(0.0, end_at - time.time())))
+    return _get_control(job_id) == "abort"
+
+
 def _check_keywords_on_account(
     uid: str,
     items: list[dict[str, Any]],
@@ -1411,8 +1475,14 @@ def _check_keywords_on_account(
     private_only: bool = False,
     min_members: Optional[int] = None,
     uids: Optional[list[str]] = None,
-    rotate_after: int = 50,
+    rotate_after: Optional[int] = None,  # không còn dùng — giữ để client cũ gửi lên không lỗi
 ) -> None:
+    """Quét song song: mỗi nick mở 1 Chrome, các Chrome lần lượt lấy từ khóa trong hàng đợi chung.
+
+    Số Chrome = min(số nick, số từ khóa, MAX_PARALLEL_BROWSERS). Một nick không bao giờ mở 2 Chrome
+    (Chrome không cho 2 cửa sổ dùng chung profile, và Facebook dễ nghi ngờ) → 1 nick + nhiều từ khóa
+    thì quét lần lượt; nick dư (nhiều nick hơn từ khóa) không mở, chỉ dùng thay khi nick khác lỗi.
+    """
     if not owner:
         with _jobs_lock:
             owner = (_jobs.get(job_id) or {}).get("owner")
@@ -1421,261 +1491,231 @@ def _check_keywords_on_account(
         human_type,
         wait_and_find,
     )
+    from modules.module_02_account_manager.context import owner_scope
+    from modules.module_10_group_scan.models import list_known_group_ids, normalize_group_id
 
-    pool_uids = list(dict.fromkeys(str(u).strip() for u in (uids or []) if str(u).strip()))
-    if not pool_uids:
-        pool_uids = [uid]
-    start_idx = pool_uids.index(uid) if uid in pool_uids else 0
-
-    def log(message: str, level: str = "info") -> None:
-        _append_log(job_id, message, "warn" if level == "warn" else level)
+    pool = list(dict.fromkeys(str(u).strip() for u in (uids or []) if str(u).strip())) or [str(uid)]
+    if uid in pool:
+        pool.remove(uid)
+        pool.insert(0, uid)
+    workers = max(1, min(len(pool), len(items), MAX_PARALLEL_BROWSERS))
+    nick_queue: deque = deque(pool)
+    # Chia đều: mỗi Chrome len(items)//workers việc, phần dư cho Chrome xong phần mình trước.
+    item_queue = FairQueue(enumerate(items), workers)
+    queue_lock = threading.Lock()
+    state = {"opened": 0}
 
     def stop_requested() -> bool:
         return _get_control(job_id) == "abort"
 
-    all_groups: list[dict[str, Any]] = []
-    last_switched_count = 0
-    session: Optional[dict[str, Any]] = None
+    def log(message: str, level: str = "info") -> None:
+        _append_log(job_id, message, "warn" if level == "warn" else level)
+
+    def take(queue: deque):
+        with queue_lock:
+            return queue.popleft() if queue else None
+
     try:
-        _append_log(job_id, f"🌐 Đang mở Chrome (session Module 2), pool {len(pool_uids)} nick…", "info")
-        session = open_account_session(
-            pool_uids, start_idx, owner=owner, scope="group-scan", log=log,
-            lock_timeout=8, should_stop=stop_requested,
-        )
-        if not session:
-            msg = "Không nick nào trong pool mở được Chrome và đăng nhập Facebook"
-            _append_log(job_id, f"❌ {msg}.", "error")
-            _set_job(job_id, status="aborted" if stop_requested() else "error", error=msg)
-            return
-        uid = session["uid"]
-        _set_job(job_id, uid=uid)
-        driver = session["driver"]
-
-        from modules.module_10_group_scan.models import list_known_group_ids, normalize_group_id
-
         known_ids = list_known_group_ids(owner)
+    except Exception as exc:
+        logger.warning("list_known_group_ids failed: %s", exc)
+        known_ids = set()
+    _append_log(job_id, f"🗄️ DB: đã có {len(known_ids)} nhóm của owner — sẽ bỏ trùng khi quét.", "info")
+
+    filter_bits = []
+    if public_only:
+        filter_bits.append("chỉ Public")
+    if private_only:
+        filter_bits.append("chỉ Private")
+    if min_members:
+        filter_bits.append(f">={min_members} thành viên")
+    filter_txt = f", lọc: {', '.join(filter_bits)}" if filter_bits else ""
+    all_links = all(_is_direct_group_link(it["keyword"]) for it in items)
+    noun = "link nhóm" if all_links else "từ khóa"
+    if workers > 1:
+        mode = f"mở {workers} Chrome song song, mỗi Chrome làm 1 {noun} một lúc"
+    elif len(items) > 1:
+        mode = "1 Chrome làm lần lượt (mỗi nick chỉ mở 1 Chrome)"
+    else:
+        mode = "mở 1 Chrome"
+    spare = len(pool) - workers
+    if all_links:
+        plan = f"mở từng link lấy thông tin nhóm (nhóm đã có thì cập nhật lại), nghỉ {delay_min:.0f}–{delay_max:.0f}s giữa các link"
+    else:
+        plan = "hạn mức: " + ", ".join(f"«{it['keyword']}»×{it['limit']}" for it in items) + (
+            f" (nghỉ {delay_min:.0f}–{delay_max:.0f}s)"
+        )
+    _append_log(
+        job_id,
+        f"🚀 {len(items)} {noun}, {len(pool)} nick → {mode}"
+        + (f"; {spare} nick dự phòng" if spare > 0 else "")
+        + f". {plan[0].upper()}{plan[1:]}{filter_txt}, chỉ lấy nhóm Public, KHÔNG tham gia nhóm.",
+        "info",
+    )
+
+    def scan_item(driver, nick: str, idx: int, item: dict[str, Any], reset_home: bool) -> bool:
+        """Quét 1 từ khóa / 1 link. Trả False khi Chrome đã chết (luồng phải dừng)."""
+        keyword = item["keyword"]
+        limit = _clamp_limit(item.get("limit"))
+        is_link = _is_direct_group_link(keyword)
+        _update_keyword_stat(job_id, keyword, status="running", count=0, limit=1 if is_link else limit, uid=nick)
         _append_log(
             job_id,
-            f"🗄️ DB: đã có {len(known_ids)} nhóm của owner — sẽ bỏ trùng khi quét.",
+            f"▶️ [{idx + 1}/{len(items)}] Nick {nick} mở link nhóm {keyword}"
+            if is_link
+            else f"▶️ [{idx + 1}/{len(items)}] Nick {nick} quét «{keyword}» — dừng khi đủ {limit} nhóm mới (bỏ trùng DB).",
             "info",
         )
-
-        filter_bits = []
-        if public_only:
-            filter_bits.append("chỉ Public")
-        if private_only:
-            filter_bits.append("chỉ Private")
-        if min_members:
-            filter_bits.append(f">={min_members} thành viên")
-        filter_txt = f", lọc: {', '.join(filter_bits)}" if filter_bits else " (không lọc Public/Private/members)"
-        plan = ", ".join(f"«{it['keyword']}»×{it['limit']}" for it in items)
-        _append_log(
-            job_id,
-            f"✅ [{uid}] Session OK [scan-v2]. {len(items)} từ khóa: {plan} "
-            f"(delay {delay_min:.0f}–{delay_max:.0f}s){filter_txt}"
-            ", chỉ lấy nhóm Public, KHÔNG tham gia nhóm.",
-            "success",
-        )
-
+        collected: list[dict[str, Any]] = []
         try:
-            current = (driver.current_url or "").lower()
-        except Exception:
-            current = ""
-        if "facebook.com" not in current:
-            driver.get("https://www.facebook.com/")
-            human_sleep(2.0, 3.0)
-
-        def since_switch(extra: int = 0) -> int:
-            return len(all_groups) + extra - last_switched_count
-
-        def maybe_rotate(extra: int = 0) -> bool:
-            """Đổi nick khi đã quét đủ `rotate_after` nhóm (kể cả giữa một từ khóa).
-            Mở nick mới TRƯỚC; chỉ đóng nick cũ khi nick mới đã đăng nhập được.
-            Trả True nếu đã sang nick mới (khi đó phải tìm kiếm lại từ khóa)."""
-            nonlocal session, driver, uid, last_switched_count
-            if len(pool_uids) <= 1 or since_switch(extra) < rotate_after:
-                return False
-            _append_log(
-                job_id,
-                f"🔄 Nick {uid} đã quét {since_switch(extra)} nhóm (ngưỡng {rotate_after}) — đổi sang nick khác trong pool…",
-                "info",
+            if is_link:
+                group = _scrape_group_direct(
+                    driver, keyword, job_id, human_sleep,
+                    public_only=public_only, private_only=private_only, min_members=min_members,
+                    owner=owner, source_uid=nick, known_group_ids=known_ids,
+                )
+                collected = [group] if group else []
+                _add_job_groups(job_id, collected)
+            else:
+                _search_and_open_groups(
+                    driver, keyword, job_id, wait_and_find, human_sleep, human_type, reset_home=reset_home,
+                )
+                if not stop_requested():
+                    collected = _scrape_groups_from_results(
+                        driver, keyword, job_id, human_sleep,
+                        max_groups=limit,
+                        already=_job_groups(job_id),
+                        public_only=public_only, private_only=private_only, min_members=min_members,
+                        owner=owner, source_uid=nick, known_group_ids=known_ids,
+                        delay_min=delay_min, delay_max=delay_max,
+                        display_limit=limit,
+                    )
+            for g in collected:
+                gid = normalize_group_id(g.get("href") or "")
+                if gid:
+                    known_ids.add(gid)
+            collected = collected[:limit]
+            _add_job_groups(job_id, collected)  # bỏ trùng theo href — nhóm đã thêm lúc quét không bị đếm 2 lần
+            stopped = stop_requested()
+            _update_keyword_stat(
+                job_id, keyword, count=len(collected), status="stopped" if stopped else "done",
+                limit=1 if is_link else limit,
             )
-            next_start = (pool_uids.index(uid) + 1) % len(pool_uids)
-            fresh = open_account_session(
-                pool_uids, next_start, owner=owner, scope="group-scan", log=log,
-                exclude={uid}, lock_timeout=8, should_stop=stop_requested,
-            )
-            # Dù đổi được hay không, đếm lại từ đầu để không thử đổi liên tục khi pool đang bận.
-            last_switched_count = len(all_groups) + extra
-            if not fresh:
-                _append_log(job_id, f"⚠️ Không đổi được nick — tiếp tục bằng nick {uid}.", "warn")
+            if not stopped and not is_link:  # link: _scrape_group_direct đã ghi kết quả
+                _append_log(job_id, f"🏁 Xong «{keyword}»: {len(collected)}/{limit} nhóm.", "success")
+            return True
+        except Exception as exc:
+            if is_browser_dead_error(exc):
+                _update_keyword_stat(job_id, keyword, status="stopped")
+                _append_log(job_id, f"🛑 Chrome của nick {nick} đã bị đóng — dừng «{keyword}».", "warn")
                 return False
-            close_account_session(session)
-            session = fresh
-            driver = fresh["driver"]
-            uid = fresh["uid"]
-            _set_job(job_id, uid=uid)
-            _append_log(job_id, f"✅ [{uid}] Tiếp tục quét bằng nick mới.", "success")
+            logger.exception("[%s] keyword «%s» failed", nick, keyword)
+            _update_keyword_stat(job_id, keyword, status="error")
+            _append_log(job_id, f"❌ «{keyword}» lỗi: {exc}", "error")
             return True
 
-        def abort_now(message: str) -> None:
-            _append_log(job_id, message, "warn")
-            _set_job(job_id, groups=list(all_groups), status="aborted", error="Dừng khẩn cấp")
-
-        for idx, item in enumerate(items):
-            if _get_control(job_id) == "abort":
-                abort_now("🛑 Dừng khẩn cấp — không chạy từ khóa còn lại.")
+    def run_worker(n: int) -> None:
+        _thread_label.name = f"Thread-{n:02d}"
+        session = None
+        taken = 0
+        try:
+            # Mở Chrome lệch nhau vài giây để máy không bị dồn tải cùng lúc.
+            if n > 1 and _wait_interruptible(job_id, (n - 1) * BROWSER_STAGGER_SEC):
                 return
-            if _handle_pause_if_requested(job_id, context_label=item.get("keyword") or ""):
-                return
-
-            keyword = item["keyword"]
-            limit = _clamp_limit(item.get("limit"))
-            _update_keyword_stat(job_id, keyword, status="running", count=0, limit=limit)
-            _append_log(
-                job_id,
-                f"▶️ [{idx + 1}/{len(items)}] Quét «{keyword}» — DỪNG KHI ĐỦ {limit} nhóm MỚI (bỏ trùng DB).",
-                "info",
-            )
-
-            is_direct_url = (
-                keyword.startswith("http")
-                or "/groups/" in keyword
-                or "fb.com/" in keyword
-                or "facebook.com/" in keyword
-            )
-
-            collected: list[dict[str, Any]] = []
-            try:
-                if is_direct_url:
-                    maybe_rotate()
-                    group_item = _scrape_group_direct(
-                        driver,
-                        keyword,
-                        job_id,
-                        human_sleep,
-                        public_only=public_only,
-                        private_only=private_only,
-                        min_members=min_members,
-                        owner=owner,
-                        source_uid=uid,
-                        known_group_ids=known_ids,
-                    )
-                    collected = [group_item] if group_item else []
-                else:
-                    searched_with = None
-                    while len(collected) < limit:
-                        if _get_control(job_id) == "abort":
-                            break
-                        maybe_rotate(len(collected))
-                        if searched_with is not driver:
-                            # Từ khóa 2+ hoặc nick mới → về home rồi vào lại ô Search
-                            _search_and_open_groups(
-                                driver,
-                                keyword,
-                                job_id,
-                                wait_and_find,
-                                human_sleep,
-                                human_type,
-                                reset_home=(idx > 0 or bool(collected)),
-                            )
-                            searched_with = driver
-                        if _get_control(job_id) == "abort":
-                            break
-                        remaining = limit - len(collected)
-                        want = remaining
-                        if len(pool_uids) > 1:
-                            want = max(1, min(remaining, rotate_after - since_switch(len(collected))))
-                        batch = _scrape_groups_from_results(
-                            driver,
-                            keyword,
-                            job_id,
-                            human_sleep,
-                            max_groups=want,
-                            already=all_groups + collected,
-                            public_only=public_only,
-                            private_only=private_only,
-                            min_members=min_members,
-                            owner=owner,
-                            source_uid=uid,
-                            known_group_ids=known_ids,
-                            delay_min=delay_min,
-                            delay_max=delay_max,
-                            stat_offset=len(collected),
-                            display_limit=limit,
-                        )
-                        for g in batch:
-                            gid = normalize_group_id(g.get("href") or "")
-                            if gid:
-                                known_ids.add(gid)
-                        collected.extend(batch)
-                        if len(batch) < want:
-                            break  # hết kết quả tìm kiếm cho từ khóa này
-
-                # Siết cứng hạn mức (phòng DOM trả thừa)
-                collected = collected[:limit]
-                all_groups.extend(collected)
-                _set_job(job_id, groups=list(all_groups))
-                _update_keyword_stat(job_id, keyword, count=len(collected), status="done", limit=limit)
-                if _get_control(job_id) == "abort":
-                    abort_now(f"🛑 Dừng khẩn cấp sau «{keyword}» ({len(collected)} nhóm).")
+            while session is None:
+                if stop_requested():
                     return
-                _append_log(job_id, f"🏁 Xong «{keyword}»: {len(collected)}/{limit} nhóm.", "success")
-            except Exception as exc:
-                if collected:
-                    all_groups.extend(collected[:limit])
-                    _set_job(job_id, groups=list(all_groups))
-                if is_browser_dead_error(exc):
-                    # Chrome bị tắt tay / mất kết nối: dừng cả phiên, không thử từ khóa tiếp theo.
-                    _update_keyword_stat(job_id, keyword, count=len(collected), status="stopped")
-                    _append_log(job_id, f"🛑 Chrome đã bị đóng — dừng quét. Đã lưu {len(all_groups)} nhóm.", "warn")
-                    _set_job(job_id, groups=list(all_groups), status="aborted", error="Chrome đã bị đóng")
+                if not item_queue.has_work(taken):
+                    return  # luồng khác đã làm hết
+                nick = take(nick_queue)
+                if nick is None:
+                    _append_log(job_id, "⚠️ Không còn nick nào mở được Chrome cho luồng này.", "warn")
                     return
-                logger.exception("[%s] keyword «%s» failed", uid, keyword)
-                _update_keyword_stat(job_id, keyword, status="error")
-                _append_log(job_id, f"❌ «{keyword}» lỗi: {exc}", "error")
-                if _get_control(job_id) == "abort":
-                    _set_job(job_id, groups=list(all_groups), status="aborted", error="Dừng khẩn cấp")
-                    return
-                if idx >= len(items) - 1:
-                    raise
-
-            # Tạm dừng: xong từ khóa hiện tại → chờ Tiếp tục hoặc Dừng khẩn cấp
-            if _handle_pause_if_requested(job_id, context_label=f"Xong «{keyword}»"):
-                return
-
-            if idx < len(items) - 1:
-                next_kw = items[idx + 1]["keyword"]
-                wait_sec = random.uniform(delay_min, delay_max) if delay_max > 0 else 0.0
-                end_at = time.time() + wait_sec
-                _append_log(
-                    job_id,
-                    f"➡️ Tiếp theo «{next_kw}» (hạn {items[idx + 1]['limit']})"
-                    + (f" — nghỉ {wait_sec:.1f}s…" if wait_sec > 0 else " — chuyển ngay…"),
-                    "info",
+                _append_log(job_id, f"🌐 Nick {nick}: đang mở Chrome…", "info")
+                session = open_account_session(
+                    [nick], 0, owner=owner, scope="group-scan", log=log,
+                    lock_timeout=8, should_stop=stop_requested,
                 )
-                while time.time() < end_at:
-                    if _get_control(job_id) == "abort":
-                        abort_now("🛑 Dừng khẩn cấp trong lúc nghỉ giữa từ khóa.")
-                        return
-                    if _get_control(job_id) in {"pause", "pause_after", "paused"}:
-                        if _handle_pause_if_requested(job_id, context_label=f"Nghỉ trước «{next_kw}»"):
-                            return
-                        break
-                    time.sleep(min(0.5, max(0.0, end_at - time.time())))
+            nick = session["uid"]
+            driver = session["driver"]
+            with queue_lock:
+                state["opened"] += 1
+            try:
+                current = (driver.current_url or "").lower()
+            except Exception:
+                current = ""
+            if "facebook.com" not in current:
+                driver.get("https://www.facebook.com/")
+                human_sleep(2.0, 3.0)
+            _append_log(job_id, f"✅ Nick {nick} sẵn sàng quét.", "success")
 
-        _set_job(job_id, groups=list(all_groups), status="done")
-        _append_log(
-            job_id,
-            f"🏁 Hoàn tất {len(items)} từ khóa — tổng {len(all_groups)} nhóm.",
-            "success",
-        )
-    except Exception as exc:
-        logger.exception("[%s] keyword check failed", uid)
-        _append_log(job_id, f"❌ Kiểm tra từ khóa lỗi: {exc}", "error")
-        _set_job(job_id, status="error", error=str(exc), groups=list(all_groups))
-    finally:
-        # Quét xong / dừng / lỗi: đóng Chrome và nhả khoá profile.
-        if session:
-            _append_log(job_id, f"🔒 Đóng Chrome của nick {session.get('uid')}.", "info")
-        close_account_session(session)
+            first = True
+            while True:
+                if stop_requested():
+                    return
+                if _handle_pause_if_requested(job_id, context_label=f"nick {nick}"):
+                    return
+                nxt = item_queue.take(taken)
+                if nxt is None:
+                    return
+                taken += 1
+                idx, item = nxt
+                if not first and delay_max > 0:
+                    wait_sec = random.uniform(delay_min, delay_max)
+                    _append_log(
+                        job_id, f"➡️ Nick {nick}: tiếp theo «{item['keyword']}» — nghỉ {wait_sec:.1f}s…", "info",
+                    )
+                    if _wait_interruptible(job_id, wait_sec, pause_label=f"Nghỉ trước «{item['keyword']}»"):
+                        item_queue.put_back(nxt)
+                        return
+                if not scan_item(driver, nick, idx, item, reset_home=not first):
+                    return
+                first = False
+        except Exception as exc:
+            if is_browser_dead_error(exc):
+                _append_log(job_id, "🛑 Chrome đã bị đóng — luồng này dừng.", "warn")
+            else:
+                logger.exception("[%s] group scan worker failed", job_id)
+                _append_log(job_id, f"❌ Luồng quét lỗi: {exc}", "error")
+        finally:
+            item_queue.release(taken)  # dừng sớm → phần chưa làm chuyển cho Chrome khác
+            if session:
+                _append_log(job_id, f"🔒 Đóng Chrome của nick {session.get('uid')}.", "info")
+            close_account_session(session)
+
+    def run_worker_scoped(n: int) -> None:
+        with owner_scope(owner):
+            run_worker(n)
+
+    threads = [
+        threading.Thread(target=run_worker_scoped, args=(n,), daemon=True, name=f"group-scan-check-{job_id}-{n}")
+        for n in range(1, workers + 1)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        if hasattr(t, "join"):
+            t.join()
+
+    total = len(_job_groups(job_id))
+    leftover = item_queue.remaining()
+    for _, item in leftover:
+        _update_keyword_stat(job_id, item["keyword"], status="stopped")
+    if stop_requested():
+        _append_log(job_id, f"🛑 Đã dừng khẩn cấp — đã lưu {total} nhóm.", "warn")
+        _set_job(job_id, status="aborted", error="Dừng khẩn cấp")
+        return
+    with _jobs_lock:
+        if (_jobs.get(job_id) or {}).get("status") == "aborted":
+            return  # bị dừng trong lúc tạm dừng / tạm dừng quá 2 giờ
+    if state["opened"] == 0:
+        msg = "Không nick nào mở được Chrome và đăng nhập Facebook"
+        _append_log(job_id, f"❌ {msg}.", "error")
+        _set_job(job_id, status="error", error=msg)
+        return
+    if leftover:
+        _append_log(job_id, f"⚠️ {len(leftover)} từ khóa chưa quét vì Chrome đã bị đóng.", "warn")
+        _set_job(job_id, status="aborted", error="Chrome đã bị đóng")
+        return
+    _set_job(job_id, status="done")
+    _append_log(job_id, f"🏁 Hoàn tất {len(items)} {noun} — tổng {total} nhóm.", "success")

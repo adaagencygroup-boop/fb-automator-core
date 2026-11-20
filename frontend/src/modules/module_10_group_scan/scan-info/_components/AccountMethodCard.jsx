@@ -1,12 +1,29 @@
 "use client";
 
-import { Users, Trash2, CloudUpload, X } from "lucide-react";
+import { Users, Trash2, CloudUpload, X, Download } from "lucide-react";
+import { toast } from "@/lib/toast";
+import { downloadLinkTemplate } from "../../utils/exportTable";
 import {
   IconClose,
   IconTags,
   IconLink,
   IconUpload,
 } from "../../components/icons";
+
+const TEMPLATE_FORMATS = [
+  { id: "xlsx", label: "Excel" },
+  { id: "csv", label: "CSV" },
+  { id: "txt", label: "TXT" },
+];
+
+async function handleDownloadTemplate(format) {
+  try {
+    const name = await downloadLinkTemplate(format);
+    toast.success(`Đã tải file mẫu ${name} — điền link nhóm rồi tải lên lại.`);
+  } catch (err) {
+    toast.error("Không tải được file mẫu: " + (err?.message || "lỗi không xác định"));
+  }
+}
 
 const METHOD_TABS = [
   { id: "keyword", label: "Theo từ khóa", Icon: IconTags },
@@ -415,8 +432,23 @@ export default function AccountMethodCard({
       {/* Tab File */}
       {method === "file" && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between pb-1">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
             <span className="text-xs font-bold text-[#0F172A]">Tải tệp danh sách liên kết nhóm</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-[#64748B]">Tải file mẫu:</span>
+              {TEMPLATE_FORMATS.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => handleDownloadTemplate(f.id)}
+                  title={`Tải file mẫu .${f.id} — điền link nhóm vào rồi tải lên`}
+                  className="inline-flex items-center gap-1 rounded-lg border border-[#E2E8F0] bg-white px-2 py-1 text-[11px] font-semibold text-[#2563EB] hover:bg-[#EFF6FF] transition-colors"
+                >
+                  <Download className="size-3" />
+                  {f.label}
+                </button>
+              ))}
+            </div>
           </div>
           <label className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-[#CBD5E1] rounded-2xl bg-white hover:bg-[#F8FAFC] transition-colors cursor-pointer group">
             <input
@@ -432,7 +464,7 @@ export default function AccountMethodCard({
               <p className="text-xs text-[#0F172A] font-semibold">
                 Kéo thả file vào đây hoặc <span className="text-[#2563EB] hover:underline">Duyệt tìm tệp</span>
               </p>
-              <p className="text-[11px] text-[#64748B]">Hỗ trợ .txt, .csv, .xlsx, .xls (chỉ chấp nhận liên kết nhóm Facebook, mỗi dòng 1 link https://www.facebook.com/groups/...)</p>
+              <p className="text-[11px] text-[#64748B]">Hỗ trợ .txt, .csv, .xlsx, .xls — mỗi dòng 1 link nhóm (https://www.facebook.com/groups/...). Chưa rõ định dạng? Tải file mẫu ở trên.</p>
             </div>
           </label>
 
