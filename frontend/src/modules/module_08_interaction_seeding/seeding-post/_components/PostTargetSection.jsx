@@ -1,10 +1,11 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
-import { FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink, Copy, AlertCircle } from "lucide-react";
+import { FileSpreadsheet, RotateCcw, CheckCircle2, Trash2, ExternalLink, Copy, AlertCircle, Link2 } from "lucide-react";
 import ConfirmDialog from "@/components/ui/confirm-dialog";
 import { toast } from "@/components/ui/toast";
 import ExcelImportModal from "../../_components/ExcelImportModal";
+import PostSourcePicker from "./PostSourcePicker";
 import { seedingApi } from "../../service";
 import {
   normalizeTargetUrl,
@@ -25,6 +26,7 @@ export default function PostTargetSection({
 }) {
   const [textInput, setTextInput] = useState("");
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
+  const [isPostSourceOpen, setIsPostSourceOpen] = useState(false);
   const [dbHistoryTargets, setDbHistoryTargets] = useState([]);
 
   // Tải danh sách toàn bộ mục tiêu trong DB (bao gồm cả các link đã chạy) để kiểm tra trùng lặp thời gian thực
@@ -285,7 +287,7 @@ export default function PostTargetSection({
   return (
     <div className="bg-white rounded-2xl border border-gray-200/90 shadow-sm p-6 space-y-5">
       {/* Step Header */}
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <span className="w-6 h-6 rounded-full bg-rose-500 text-white text-xs font-bold flex items-center justify-center shrink-0">
             1
@@ -295,24 +297,38 @@ export default function PostTargetSection({
           </h2>
         </div>
 
-        <button
-          type="button"
-          onClick={() => {
-            if (isRunning) return;
-            setIsExcelModalOpen(true);
-          }}
-          disabled={isRunning}
-          title={isRunning ? "Đang chạy seeding, không thể import từ file" : "Import danh sách link từ tệp Excel"}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all shadow-sm shrink-0 ${
-            isRunning
-              ? "bg-gray-100 text-gray-400 border-gray-200 opacity-60 cursor-not-allowed select-none"
-              : "bg-emerald-50 hover:bg-emerald-100/80 text-emerald-700 border-emerald-200/70 active:scale-95 cursor-pointer"
-          }`}
-        >
-          <FileSpreadsheet className={`w-3.5 h-3.5 ${isRunning ? "text-gray-400" : "text-emerald-600"}`} />
-          Import từ file (Excel)
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setIsExcelModalOpen(true)}
+            disabled={isRunning}
+            title={isRunning ? "Đang chạy seeding, không thể import từ file" : "Import danh sách link từ tệp Excel"}
+            className="flex items-center gap-2 rounded-xl border border-emerald-200/70 bg-emerald-50 px-3.5 py-2 text-xs font-semibold text-emerald-700 shadow-sm hover:bg-emerald-100/80 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <FileSpreadsheet className="size-3.5" aria-hidden="true" />
+            Import từ file (Excel)
+          </button>
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            onClick={() => setIsPostSourceOpen(true)}
+            disabled={isRunning}
+            className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-2 text-left text-xs font-semibold text-blue-700 shadow-sm hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Link2 className="size-3.5 shrink-0" aria-hidden="true" />
+            Lấy bài viết từ page/ trang cá nhân
+          </button>
+        </div>
       </div>
+
+      {isPostSourceOpen && (
+        <PostSourcePicker
+          existingTargets={allKnownTargets}
+          onAddTargets={onAddTargets}
+          onClose={() => setIsPostSourceOpen(false)}
+          disabled={isRunning}
+        />
+      )}
 
       {/* Input Textarea Area */}
       <div className="space-y-3">

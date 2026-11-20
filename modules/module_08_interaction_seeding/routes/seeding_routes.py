@@ -13,8 +13,10 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta, timezone
+from threading import Event
 from typing import Any
 
+import anyio
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -23,8 +25,10 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from selenium.common.exceptions import WebDriverException
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
@@ -41,6 +45,7 @@ from modules.module_08_interaction_seeding.models.seeding_models import vn_now
 from modules.module_02_account_manager.services import events as m2_events
 from modules.module_02_account_manager.services.browser_service import HWID
 from modules.module_08_interaction_seeding.automation import FacebookSeedingBot
+from modules.module_08_interaction_seeding.automation.seeding_post_flow_v2 import SourceScanError, scan_source_posts
 from modules.module_08_interaction_seeding.models import (
     SeedingCampaign,
     SeedingCampaignTarget,
@@ -579,6 +584,47 @@ def list_seeding_targets(
             for idx, t in enumerate(targets)
         ],
     }
+
+
+class PostSourceRequest(BaseModel):
+    source_url: str = Field(min_length=1, max_length=2048)
+
+
+@router.post("/targets/scan-post-source")
+async def scan_post_source(
+    payload: PostSourceRequest,
+    request: Request,
+    response: Response,
+    authorization: str | None = Header(None),
+):
+    from modules.module_auth.service import bearer_user
+
+    user = await anyio.to_thread.run_sync(lambda: bearer_user(authorization, request=request))
+    stop = Event()
+
+    async def watch_disconnect():
+        while not await request.is_disconnected():
+            await anyio.sleep(0.25)
+        stop.set()
+
+    failure = None
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(watch_disconnect)
+        try:
+            posts = await anyio.to_thread.run_sync(scan_source_posts, payload.source_url, str(user["id"]), stop)
+        except (WebDriverException, RuntimeError) as exc:
+            failure = exc
+        finally:
+            stop.set()
+            tasks.cancel_scope.cancel()
+
+    if isinstance(failure, SourceScanError):
+        raise HTTPException(failure.status_code, str(failure))
+    if failure is not None:
+        logger.warning("Không thể quét nguồn bài viết: %s", type(failure).__name__)
+        raise HTTPException(502, "Không thể mở hoặc quét Facebook bằng Chrome. Vui lòng kiểm tra phiên đăng nhập và thử lại.")
+    response.headers["Cache-Control"] = "no-store"
+    return {"items": posts}
 
 
 @router.post("/targets/validate")
